@@ -11,6 +11,7 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
 {
     private readonly MaterialEditorViewModel _owner;
     public TextureSlot Model { get; }
+    public MaterialBindingViewModel? Binding { get; set; }
 
     [ObservableProperty] private string _editedPath;
     [ObservableProperty] private bool _unresolved;
@@ -27,6 +28,7 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
     public string SamplerName => Model.SamplerName;
     public bool IsDiffuse => Model.IsDiffuse;
     public bool IsDirty => Model.IsDirty;
+    public bool CanRemove => Model.IsRemovable;
     public bool HasThumbnail => Thumbnail is not null;
 
     partial void OnThumbnailChanged(Bitmap? value) => OnPropertyChanged(nameof(HasThumbnail));
@@ -66,6 +68,7 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
     [RelayCommand] private void Open() => _owner.OpenTexture?.Invoke(EditedPath);
     [RelayCommand] private async Task CopyPath() => await _owner.Copy(EditedPath);
     [RelayCommand] private async Task Replace() { if (_owner.ReplaceTextureAsset is { } r) await r(this); }
+    [RelayCommand] private void Remove() => Binding?.RemoveSlot(this);
 }
 
 public sealed partial class MaterialParameterViewModel : ViewModelBase
@@ -120,7 +123,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     public MaterialBindingViewModel(MaterialBinding model, MaterialEditorViewModel owner)
     {
         Model = model;
-        foreach (var s in model.Slots) Slots.Add(new TextureSlotViewModel(s, owner));
+        Owner = owner;
+        foreach (var s in model.Slots) Slots.Add(new TextureSlotViewModel(s, owner) { Binding = this });
         foreach (var p in model.Parameters) Parameters.Add(new MaterialParameterViewModel(p, owner));
     }
 
@@ -129,7 +133,26 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     public string AssignedTo => Model.AssignedTo;
     public bool HasAssignment => !string.IsNullOrEmpty(Model.AssignedTo);
     public bool HasParameters => Parameters.Count > 0;
+    public bool CanEditSamplers => Model.CanEditSamplers;
     public bool IsDirty => Model.IsDirty;
+
+    [RelayCommand]
+    private void AddSampler()
+    {
+        var slot = Model.AddSampler("New_Texture", Model.Diffuse?.Path ?? "");
+        if (slot is null) return;
+        Slots.Add(new TextureSlotViewModel(slot, Owner!) { Binding = this });
+        RaiseDirty();
+        Owner!.NotifyChanged();
+    }
+
+    public void RemoveSlot(TextureSlotViewModel slot)
+    {
+        if (!Model.RemoveSampler(slot.Model)) return;
+        Slots.Remove(slot);
+        RaiseDirty();
+        Owner!.NotifyChanged();
+    }
 
     public void RaiseDirty()
     {

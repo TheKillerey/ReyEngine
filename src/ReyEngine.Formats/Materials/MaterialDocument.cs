@@ -3,6 +3,8 @@ using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.Meta;
 
+// M10: array/struct element editing — see MaterialBinding.AddSampler/RemoveSampler + BinTreeCloner.
+
 namespace ReyEngine.Formats.Materials;
 
 public enum MaterialSourceKind { ChampionSkin, MapMaterials }
@@ -119,17 +121,20 @@ public sealed class MaterialDocument
             string shader = resolve(o.ClassHash) ?? "StaticMaterialDef";
 
             var slots = new List<TextureSlot>();
+            uint nameFieldHash = 0, pathFieldHash = 0;
             foreach (var el in samplers.Elements)
             {
                 if (el is not BinTreeStruct s) continue;
                 // League sampler structs: 'TextureName' holds the sampler name (e.g. Diffuse_Texture),
                 // 'texturePath' holds the .tex path. (Some schemas fall back to samplerName/textureName.)
+                if (nameFieldHash == 0) nameFieldHash = FieldHash(s.Properties, "TextureName", "samplerName");
+                if (pathFieldHash == 0) pathFieldHash = FieldHash(s.Properties, "texturePath", "textureName");
                 string sampler = (Field(s.Properties, "TextureName") as BinTreeString)?.Value
                                  ?? (Field(s.Properties, "samplerName") as BinTreeString)?.Value ?? "(sampler)";
                 var pathProp = (Field(s.Properties, "texturePath") as BinTreeString)
                                ?? (Field(s.Properties, "textureName") as BinTreeString);
                 if (pathProp is null) continue;
-                slots.Add(new TextureSlot(sampler, pathProp));
+                slots.Add(new TextureSlot(sampler, pathProp, el));
             }
 
             var parameters = new List<MaterialParameter>();
@@ -145,7 +150,12 @@ public sealed class MaterialDocument
                 : Array.Empty<string>();
             bool isDefault = defaultMaterialHash == pathHash;
 
-            materials.Add(new MaterialBinding(name, shader, subs, isDefault, slots, parameters));
+            materials.Add(new MaterialBinding(name, shader, subs, isDefault, slots, parameters)
+            {
+                SamplerContainer = samplers,
+                NameFieldHash = nameFieldHash,
+                PathFieldHash = pathFieldHash,
+            });
         }
 
         return new MaterialDocument(tree, champion ? MaterialSourceKind.ChampionSkin : MaterialSourceKind.MapMaterials, materials);
@@ -157,32 +167,85 @@ public sealed class MaterialDocument
         if (props.TryGetValue(HashAlgorithms.Fnv1a(name), out p)) return p;
         return null;
     }
+
+    private static uint FieldHash(IReadOnlyDictionary<uint, BinTreeProperty> props, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            uint h1 = HashAlgorithms.Fnv1aRaw(name);
+            if (props.ContainsKey(h1)) return h1;
+            uint h2 = HashAlgorithms.Fnv1a(name);
+            if (props.ContainsKey(h2)) return h2;
+        }
+        return 0;
+    }
 }
 
 public sealed class MaterialBinding
 {
+    private readonly List<TextureSlot> _slots;
+
     public string Name { get; }
     public string ShaderName { get; }
     public IReadOnlyList<string> Submeshes { get; }
     public bool IsDefault { get; }
-    public IReadOnlyList<TextureSlot> Slots { get; }
+    public IReadOnlyList<TextureSlot> Slots => _slots;
     public IReadOnlyList<MaterialParameter> Parameters { get; }
 
+    // Set for StaticMaterialDef bindings — enables add/remove of sampler slots (M10).
+    internal BinTreeContainer? SamplerContainer { get; init; }
+    internal uint NameFieldHash { get; init; }
+    internal uint PathFieldHash { get; init; }
+
     public MaterialBinding(string name, string shaderName, IReadOnlyList<string> submeshes, bool isDefault,
-        IReadOnlyList<TextureSlot> slots, IReadOnlyList<MaterialParameter> parameters)
+        List<TextureSlot> slots, IReadOnlyList<MaterialParameter> parameters)
     {
         Name = name; ShaderName = shaderName; Submeshes = submeshes; IsDefault = isDefault;
-        Slots = slots; Parameters = parameters;
+        _slots = slots; Parameters = parameters;
     }
 
     /// <summary>Display string for the submesh(es)/group this material drives.</summary>
     public string AssignedTo => Submeshes.Count > 0 ? string.Join(", ", Submeshes) : (IsDefault ? "(base mesh)" : "");
 
     /// <summary>The diffuse/albedo slot if present, else the first texture slot.</summary>
-    public TextureSlot? Diffuse => Slots.FirstOrDefault(s => s.IsDiffuse) ?? Slots.FirstOrDefault();
+    public TextureSlot? Diffuse => _slots.FirstOrDefault(s => s.IsDiffuse) ?? _slots.FirstOrDefault();
 
-    public bool IsDirty => Slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty);
-    public void Revert() { foreach (var s in Slots) s.Revert(); foreach (var p in Parameters) p.Revert(); }
+    public bool IsDirty => _structurallyEdited || _slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty);
+    private bool _structurallyEdited;
+
+    /// <summary>True when this material exposes editable sampler slots that can be added/removed.</summary>
+    public bool CanEditSamplers => SamplerContainer is not null && SamplerContainer.Elements.Count > 0 && PathFieldHash != 0;
+
+    /// <summary>Add a sampler slot by cloning an existing one (keeps the schema) and setting its name + path.</summary>
+    public TextureSlot? AddSampler(string samplerName, string path)
+    {
+        if (SamplerContainer is null || PathFieldHash == 0) return null;
+        if (SamplerContainer.Elements.FirstOrDefault() is not { } proto) return null;
+
+        var clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
+        if (clone.Properties.TryGetValue(PathFieldHash, out var p) && p is BinTreeString pathStr)
+            pathStr.Value = path;
+        else return null;
+        if (NameFieldHash != 0 && clone.Properties.TryGetValue(NameFieldHash, out var n) && n is BinTreeString nameStr)
+            nameStr.Value = samplerName;
+
+        SamplerContainer.Add(clone);
+        var slot = new TextureSlot(samplerName, (BinTreeString)clone.Properties[PathFieldHash], clone);
+        _slots.Add(slot);
+        _structurallyEdited = true;
+        return slot;
+    }
+
+    public bool RemoveSampler(TextureSlot slot)
+    {
+        if (SamplerContainer is null || slot.Element is null) return false;
+        if (!SamplerContainer.Remove(slot.Element)) return false;
+        _slots.Remove(slot);
+        _structurallyEdited = true;
+        return true;
+    }
+
+    public void Revert() { foreach (var s in _slots) s.Revert(); foreach (var p in Parameters) p.Revert(); }
 }
 
 /// <summary>One texture sampler slot whose path is an editable live BinTree string.</summary>
@@ -194,14 +257,19 @@ public sealed class TextureSlot
     public string SamplerName { get; }
     public string OriginalPath { get; }
 
-    public TextureSlot(string samplerName, BinTreeString prop)
+    /// <summary>The underlying sampler element (struct), for removal. Null for inline/default slots.</summary>
+    internal BinTreeProperty? Element { get; }
+
+    public TextureSlot(string samplerName, BinTreeString prop, BinTreeProperty? element = null)
     {
         SamplerName = samplerName;
         _prop = prop;
         OriginalPath = prop.Value;
+        Element = element;
     }
 
     public string Path => _prop.Value;
+    public bool IsRemovable => Element is not null;
     public void SetPath(string path) => _prop.Value = path ?? "";
     public void Revert() => _prop.Value = OriginalPath;
     public bool IsDirty => !string.Equals(_prop.Value, OriginalPath, StringComparison.Ordinal);

@@ -336,6 +336,7 @@
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                   <Button Classes="tool" Content="Copy name" Command="{Binding CopyNameCommand}" />
                                   <Button Classes="tool" Content="Revert material" Command="{Binding RevertCommand}" />
+                                  <Button Classes="tool" Content="+ Add Sampler" Command="{Binding AddSamplerCommand}" IsVisible="{Binding CanEditSamplers}" />
                                 </StackPanel>
 
                                 <ItemsControl ItemsSource="{Binding Slots}">
@@ -360,6 +361,7 @@
                                           <Button Classes="tool" Content="Open" Command="{Binding OpenCommand}" />
                                           <Button Classes="tool" Content="Copy" Command="{Binding CopyPathCommand}" />
                                           <Button Classes="tool" Content="Replace Texture…" Command="{Binding ReplaceCommand}" />
+                                          <Button Classes="tool" Content="✕" Command="{Binding RemoveCommand}" IsVisible="{Binding CanRemove}" ToolTip.Tip="Remove this sampler" />
                                         </StackPanel>
                                         <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="3" Padding="3" HorizontalAlignment="Left" IsVisible="{Binding HasThumbnail}">
                                           <Image Source="{Binding Thumbnail}" Stretch="Uniform" MaxHeight="96" MaxWidth="96" />

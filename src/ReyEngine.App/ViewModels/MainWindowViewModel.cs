@@ -927,7 +927,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     [RelayCommand]
     private void ImportNewAsset() =>
-        _log.Warn("Project", "Adding brand-new chunks needs a TOC rebuild — planned for a later milestone. Use Replace on an existing asset for now.");
+        _log.Warn("Project", "Adding brand-new chunks isn't supported: WAD v3.4 stores a separate subchunk table that can't be safely relocated without risking corruption. Use Replace on an existing asset, or repoint a material to an existing texture path.");
 
     [RelayCommand]
     private async Task ExportModified()

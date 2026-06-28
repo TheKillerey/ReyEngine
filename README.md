@@ -5,16 +5,16 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M9 complete.** Proper **League material/sampler resolution** — every champion submesh now
-> renders with its *own* material's diffuse (reading `StaticMaterialDef` sampler values + `materialOverride`
-> bindings), fixing the bug where Aatrox showed a single texture on the whole model. The Material Editor and
-> the viewport now share one correct resolver, so edits/Apply reflect per-submesh. On top of M8 Material
-> Editor, M7 `.bin` editing, M6 animation, M5 build pipeline, M1–M4 preview. Verified: Aatrox resolves **4
-> distinct** textures (body / wings / sword / banner) and renders them correctly.
+> Status: **M10 complete.** Adds **array/struct element editing** to the `.bin`/material system: you can now
+> **add and remove texture sampler slots** on a material (cloning an existing sampler so the schema stays
+> valid), on top of M9's correct per-submesh material resolution and M7/M8 editing. Verified end-to-end on
+> Aatrox: add a sampler → save override → build → reopen → the new sampler parses back.
 >
-> *Scope note:* this loads League's **material** system (samplers + per-submesh binding); it does **not**
-> emulate League's HLSL shaders (techniques/passes/blend modes). Secondary samplers (mask/gradient) are
-> parsed + editable but not blended in the preview.
+> *Scope notes:* (1) **Adding brand-new WAD chunks** (importing files at new paths) was investigated and
+> deliberately **not shipped** — WAD v3.4 stores a separate subchunk table that can't be safely relocated
+> when the chunk TOC grows, and a wrong write corrupts the archive; replacing existing chunks stays fully
+> supported. (2) ReyEngine loads League's **material/sampler** system, not its HLSL shaders; secondary
+> samplers (mask/gradient/emissive) are parsed + editable but not blended in the preview.
 
 ---
 
@@ -62,8 +62,8 @@ ReyEngine.sln
 │   ├─ Animation/             # AnimationClip, AnimationDecoder, SkinnedMeshAnimator (CPU skinning, M6)
 │   ├─ Materials/             # MaterialDocument (editable slots + params, M8); ChampionMaterialResolver
 │   │                         #   (per-submesh diffuse via StaticMaterialDef samplers + materialOverride, M9)
-│   ├─ Meta/                  # BinDocument (read-only tree), SkinMaterialExtractor (M4);
-│   │                         #   BinEditorDocument + BinValueEditor (editable primitives, re-serialize via LeagueToolkit, M7)
+│   ├─ Meta/                  # BinDocument (read-only tree); BinEditorDocument + BinValueEditor (editable
+│   │                         #   primitives, re-serialize via LeagueToolkit, M7); BinTreeCloner (deep-copy for add/dup, M10)
 │   └─ MapGeo/                # MapGeoAsset, MapGeoDecoder (M4) — reuses the mesh renderer
 ├─ src/ReyEngine.Rendering/    # No UI, no Avalonia. Pure Silk.NET GL + System.Numerics.
 │   ├─ OrbitCamera.cs, ShaderUtil.cs (ES/desktop GLSL)
@@ -103,7 +103,8 @@ reference the UI, so the pipeline is unit-testable and reusable (e.g. a future C
 - [x] **`.bin` editing** — edit primitive values (string/int/uint/float/bool/hash/vector) in the Inspector, dirty tracking + revert, save to override, edited `.bin` flows through Build Package
 - [x] **Material Editor** — champion + map materials: texture slots, sampler names, params, submesh assignment; edit/replace texture paths, live Apply, save to override, unresolved warnings
 - [x] **Multi-material rendering** — each submesh resolves to its own `StaticMaterialDef` diffuse (Aatrox body/wings/sword/banner all distinct); editor + viewport share one resolver
-- [ ] Add brand-new chunks (TOC rebuild) · array/struct element editing · GPU skinning · HLSL shader/blend emulation · sound preview
+- [x] **Array/struct element editing** — add/remove texture sampler slots on a material (clones the schema); via `BinTreeCloner` + `BinTreeContainer.Add/Remove`
+- [ ] GPU skinning · HLSL shader/blend emulation · sound preview · ~~add brand-new chunks~~ (blocked: WAD v3.4 subchunk table)
 
 ## 4. Data pipeline: WAD → decoded asset → preview
 
@@ -188,6 +189,7 @@ No Play button — this is an editor, not a runtime.
 | **M7 ✅** | structured `.bin` editing (primitive values) · dirty/revert per-field+file · save to override · edited `.bin` in Build Package · reopen-validate |
 | **M8 ✅** | Material Editor (champion skin + map materials) · texture-slot/param editing · live Apply · Inspector tabs (Overview/Materials/Raw BIN) · unresolved warnings · raw texture replace |
 | **M9 ✅** | proper material/sampler resolution · per-submesh multi-material diffuse (fixes single-texture bug) · unified editor+renderer resolver (`ChampionMaterialResolver`) |
+| **M10 ✅** | array/struct element editing · add/remove material sampler slots (`BinTreeCloner`) · build-validated · (new-chunk import shelved: WAD v3.4 subchunk table) |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
@@ -285,3 +287,12 @@ WAD's tree refreshes `0x…` → readable paths in place. The full sync is ~250 
    `.materials.bin` materials (StaticMaterialDef) with their texture slots. **Search** narrows the list.
 2. Edit one diffuse `texturePath` to another valid map texture → **Apply** (viewport re-textures) → **Save To
    Override** → **Build Package** → reopen → edit persists.
+
+### M10 sampler add/remove checklist (Aatrox)
+
+1. Open Aatrox, select `aatrox.skn` → **Materials** tab. On a `StaticMaterialDef` material (e.g. `Sword_inst`)
+   click **+ Add Sampler** → a new slot appears (cloned from an existing sampler, so its address modes etc.
+   stay valid). Rename it / set its path, **✓** to apply.
+2. Click **✕** on any added sampler to remove it. (The base/inline texture slots have no **✕** — they aren't
+   array elements.)
+3. **Save To Override** → **Build Package** → reopen the built WAD → the added/removed sampler parses back.
