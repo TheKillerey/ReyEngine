@@ -1,3 +1,4 @@
+using System.Numerics;
 using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
@@ -52,7 +53,7 @@ public sealed class ViewportControl : OpenGlControlBase
 
     public void OrbitBy(float dx, float dy)
     {
-        _camera.Orbit(-dx * 0.01f, -dy * 0.01f);
+        _camera.Orbit(dx * 0.01f, dy * 0.01f);
         RequestNextFrameRendering();
     }
 
@@ -151,7 +152,8 @@ public sealed class ViewportControl : OpenGlControlBase
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
         float aspect = h == 0 ? 1f : (float)w / h;
-        var viewProj = _camera.ViewProjection(aspect);
+        // League's engine is -X oriented; mirror world X so assets match their in-game orientation.
+        var viewProj = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjection(aspect);
 
         _grid.Render(viewProj);
         _meshRenderer.Render(viewProj, Wireframe, ShowBounds, ShowBones);
