@@ -8,6 +8,7 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
 {
     public AssetTreeNode Model { get; }
     public ObservableCollection<AssetNodeViewModel> Children { get; } = new();
+    public AssetNodeViewModel? Parent { get; private set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsModified))]
@@ -17,8 +18,12 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
     {
         Model = model;
         foreach (var child in model.Children)
-            Children.Add(new AssetNodeViewModel(child));
+            Children.Add(new AssetNodeViewModel(child) { Parent = this });
     }
+
+    /// <summary>Folder children only (for the Content Browser folder tree).</summary>
+    public IEnumerable<AssetNodeViewModel> Folders => Children.Where(c => c.IsFolder);
+    public bool HasSubfolders => Children.Any(c => c.IsFolder);
 
     public string Name => Model.Name;
     public bool IsFolder => Model.IsFolder;

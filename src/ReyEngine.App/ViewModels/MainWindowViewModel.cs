@@ -68,6 +68,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public ObservableCollection<AssetNodeViewModel> RootNodes { get; } = new();
     public BinEditorViewModel BinEditor { get; } = new();
     public MaterialEditorViewModel MaterialEditor { get; } = new();
+    public ContentBrowserViewModel ContentBrowser { get; } = new();
+    public MapContentViewModel MapContent { get; } = new();
+    public ObservableCollection<RecentProjectViewModel> RecentProjectList { get; } = new();
+    public bool HasRecentProjects => RecentProjectList.Count > 0;
 
     [ObservableProperty] private AssetNodeViewModel? _selectedNode;
     [ObservableProperty] private bool _projectMode;
@@ -118,6 +122,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.ReplaceTextureAsset = ReplaceTextureForSlot;
         MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
         MaterialEditor.SaveOverride = SaveMaterialOverride;
+
+        ContentBrowser.FileSelected = node => SelectedNode = node;
+        MapContent.OpenMap = node => SelectedNode = node;
+        LoadRecentProjects(RecentProjects.Load());
+    }
+
+    /// <summary>Push the freshly-built asset tree into the Content Browser + Map Content panels.</summary>
+    private void RefreshContentPanels()
+    {
+        ContentBrowser.SetRoots(RootNodes);
+        var maps = _nodesByHash.Values
+            .Where(n => n.Entry is { Type: AssetType.MapGeometry })
+            .Where(n => !ProjectMode || n.Entry!.SourceKind != AssetSourceKind.RiotReference)
+            .OrderBy(n => n.Entry!.Path, StringComparer.OrdinalIgnoreCase)
+            .DistinctBy(n => n.Entry!.PathHash)
+            .ToList();
+        MapContent.SetMaps(maps);
+        MapContent.ClearMap();
     }
 
     // ---- Material editor: asset access helpers --------------------------
@@ -240,6 +262,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IndexNodes(rootVm);
         RootNodes.Add(rootVm);
         RefreshAllStatuses();
+        RefreshContentPanels();
     }
 
     private void IndexNodes(AssetNodeViewModel node)
@@ -721,6 +744,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _currentMap = map;
                 CurrentModelTextures = textures;
                 MapGeoInspector.Show(map, entry.Path);
+                MapContent.ShowMap(entry.DisplayName, map.Groups
+                    .Select((g, i) => new MapPieceViewModel { Name = string.IsNullOrEmpty(g.Material) ? $"Mesh {i}" : g.Material, Info = $"{g.IndexCount / 3:n0} tris" })
+                    .ToList());
                 _log.Success("MapGeo", $"{entry.DisplayName}: v{map.Version}, {map.MeshCount:n0} meshes, {map.VertexCount:n0} verts, {map.TriangleCount:n0} tris, {map.MaterialCount} materials" +
                                        (map.Warnings.Count > 0 ? $", {map.Warnings.Count} warnings" : ""));
             });
@@ -1002,7 +1028,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task OpenProjectFolder()
     {
         var folder = await Dialogs.OpenFolderAsync("Open project folder");
-        if (folder is null) return;
+        if (folder is not null) OpenProjectAt(folder);
+    }
+
+    [RelayCommand]
+    private void OpenRecentProject(string? folder)
+    {
+        if (string.IsNullOrEmpty(folder)) return;
+        if (!Directory.Exists(folder)) { _log.Warn("Project", $"Folder no longer exists: {folder}"); return; }
+        OpenProjectAt(folder);
+    }
+
+    private void OpenProjectAt(string folder)
+    {
         try
         {
             var project = ReyProjectService.OpenFolder(folder);
@@ -1014,6 +1052,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ClearViewport(); Inspector.Clear(); BinEditor.Clear(); MaterialEditor.Clear();
             ProjectMode = true; InspectionMode = false;
             HasMaterialData = false; HasInspectorBody = false;
+            LoadRecentProjects(RecentProjects.Add(folder));
             UpdateTitle();
             Status = $"Project '{project.Name}' — {_mounts!.Count:n0} assets across {_mounts.Mounts.Count} mount(s)";
             _log.Success("Project", $"Opened '{project.Name}': {project.ProjectFolders.Count} folder(s), {project.ProjectWads.Count} WAD(s), {project.ReferenceWads.Count} Riot reference(s); {_mounts.Count:n0} assets mounted.");
@@ -1021,6 +1060,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _log.Info("Project", "No Riot references yet — add one via Project ▸ Manage Riot References to preview/copy source assets.");
         }
         catch (Exception ex) { _log.Error("Project", ex.Message); }
+    }
+
+    private void LoadRecentProjects(IEnumerable<string> folders)
+    {
+        RecentProjectList.Clear();
+        foreach (var f in folders)
+            RecentProjectList.Add(new RecentProjectViewModel(f));
     }
 
     private void BuildMounts()
@@ -1067,6 +1113,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IndexNodes(riotVm);
         IndexNodes(projectVm);
         RefreshAllStatuses();
+        RefreshContentPanels();
     }
 
     /// <summary>Re-enumerate the override mount after a save/copy so reads + conflicts reflect new files.</summary>

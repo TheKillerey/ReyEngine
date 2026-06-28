@@ -5,7 +5,12 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M11 complete.** ReyEngine is now a **project editor** (Unity/Unreal-style), not just a WAD viewer.
+> Status: **M12 complete.** Unreal-style **workspace layout**: the asset browser became a **Content Browser**
+> (folder tree + file tiles + breadcrumb, Windows/Explorer-style) docked in the center **above the console**;
+> the **left panel is now Map Content** (project maps + the loaded map's mesh-group outline); the right stays
+> the Inspector. Plus **Open Recent** projects. On top of the M11 project editor. Builds 0 errors; launches clean.
+>
+> Status (M11): ReyEngine is a **project editor** (Unity/Unreal-style), not just a WAD viewer.
 > **File ▸ Open Project Folder** scans a mod folder for `.wad.client` files and unpacked-WAD folders, writes
 > `.reyengine/project.json`, and mounts a virtual file system: **project content is editable, Riot WADs are
 > read-only references**, overrides win over project, project wins over Riot (with conflict indicators). Editing
@@ -196,6 +201,7 @@ No Play button — this is an editor, not a runtime.
 | **M9 ✅** | proper material/sampler resolution · per-submesh multi-material diffuse (fixes single-texture bug) · unified editor+renderer resolver (`ChampionMaterialResolver`) |
 | **M10 ✅** | array/struct element editing · add/remove material sampler slots (`BinTreeCloner`) · build-validated · (new-chunk import shelved: WAD v3.4 subchunk table) |
 | **M11 ✅** | project-folder editor · asset mount layer (override>project>Riot + conflicts) · read-only Riot refs + Copy-to-Project · build from project root · inspection-mode for single WAD |
+| **M12 ✅** | Unreal-style layout · Content Browser (folder tree + tiles + breadcrumb, center above console) · Map Content left panel · Open Recent projects |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
