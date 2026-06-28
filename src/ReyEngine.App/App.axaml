@@ -1,0 +1,35 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ReyEngine.App.App"
+             RequestedThemeVariant="Dark">
+
+  <Application.Resources>
+    <ResourceDictionary>
+      <Color x:Key="ReyBg">#0A0D13</Color>
+      <Color x:Key="ReyPanel">#10151F</Color>
+      <Color x:Key="ReyPanelAlt">#141C29</Color>
+      <Color x:Key="ReyHeader">#0C111A</Color>
+      <Color x:Key="ReyBorder">#1E2A3A</Color>
+      <Color x:Key="ReyAccent">#36E2C2</Color>
+      <Color x:Key="ReyAccent2">#6C5CE7</Color>
+      <Color x:Key="ReyText">#C7D0DD</Color>
+      <Color x:Key="ReyTextDim">#6A7686</Color>
+
+      <SolidColorBrush x:Key="ReyBgBrush" Color="{StaticResource ReyBg}" />
+      <SolidColorBrush x:Key="ReyPanelBrush" Color="{StaticResource ReyPanel}" />
+      <SolidColorBrush x:Key="ReyPanelAltBrush" Color="{StaticResource ReyPanelAlt}" />
+      <SolidColorBrush x:Key="ReyHeaderBrush" Color="{StaticResource ReyHeader}" />
+      <SolidColorBrush x:Key="ReyBorderBrush" Color="{StaticResource ReyBorder}" />
+      <SolidColorBrush x:Key="ReyAccentBrush" Color="{StaticResource ReyAccent}" />
+      <SolidColorBrush x:Key="ReyAccent2Brush" Color="{StaticResource ReyAccent2}" />
+      <SolidColorBrush x:Key="ReyTextBrush" Color="{StaticResource ReyText}" />
+      <SolidColorBrush x:Key="ReyTextDimBrush" Color="{StaticResource ReyTextDim}" />
+    </ResourceDictionary>
+  </Application.Resources>
+
+  <Application.Styles>
+    <FluentTheme />
+    <StyleInclude Source="avares://ReyEngine.App/Themes/ReyEngineDark.axaml" />
+  </Application.Styles>
+
+</Application>

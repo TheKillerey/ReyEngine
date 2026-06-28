@@ -1,0 +1,170 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:conv="clr-namespace:ReyEngine.App.Converters"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.MainWindow"
+        Title="{Binding Title}"
+        Width="1500" Height="900"
+        MinWidth="1000" MinHeight="640"
+        Background="{DynamicResource ReyBgBrush}"
+        Foreground="{DynamicResource ReyTextBrush}"
+        FontFamily="Inter, Segoe UI, sans-serif">
+
+  <Window.Resources>
+    <conv:LogLevelToBrushConverter x:Key="LevelToBrush" />
+  </Window.Resources>
+
+  <DockPanel>
+
+    <!-- ============ TOP MENU ============ -->
+    <Menu DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}">
+      <MenuItem Header="_File">
+        <MenuItem Header="Open WAD…" Command="{Binding OpenWadCommand}" />
+        <MenuItem Header="Load Hash Dictionaries…" Command="{Binding LoadHashesCommand}" />
+        <Separator />
+        <MenuItem Header="Export Selected…" Command="{Binding ExportSelectedCommand}" />
+        <Separator />
+        <MenuItem Header="Exit" Command="{Binding ExitCommand}" />
+      </MenuItem>
+      <MenuItem Header="_Edit">
+        <MenuItem Header="Clear Console" Command="{Binding ClearConsoleCommand}" />
+      </MenuItem>
+      <MenuItem Header="_View">
+        <MenuItem Header="Reload WAD" Command="{Binding ReloadWadCommand}" />
+      </MenuItem>
+      <MenuItem Header="_Tools">
+        <MenuItem Header="Hash Lookup" Command="{Binding HashLookupCommand}" />
+        <MenuItem Header="Shader Preview" Command="{Binding ShaderPreviewCommand}" />
+        <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
+      </MenuItem>
+      <MenuItem Header="_Project">
+        <MenuItem Header="Reload WAD" Command="{Binding ReloadWadCommand}" />
+      </MenuItem>
+      <MenuItem Header="_Help">
+        <MenuItem Header="About ReyEngine" IsEnabled="False" />
+      </MenuItem>
+    </Menu>
+
+    <!-- ============ TOOLBAR ============ -->
+    <Border DockPanel.Dock="Top"
+            Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}"
+            BorderThickness="0,1,0,1" Padding="8,6">
+      <StackPanel Orientation="Horizontal">
+        <Button Classes="tool" Content="Import" Command="{Binding OpenWadCommand}" />
+        <Button Classes="tool" Content="Export" Command="{Binding ExportSelectedCommand}" />
+        <Button Classes="tool" Content="Reload WAD" Command="{Binding ReloadWadCommand}" />
+        <Button Classes="tool" Content="Build Package" Command="{Binding BuildPackageCommand}" />
+        <Button Classes="tool" Content="Shader Preview" Command="{Binding ShaderPreviewCommand}" />
+        <Border Width="1" Background="{DynamicResource ReyBorderBrush}" Margin="6,2" />
+        <TextBox Width="240" VerticalAlignment="Center" Margin="0,0,4,0"
+                 Watermark="path or string to hash"
+                 Text="{Binding HashInput, Mode=TwoWay}" />
+        <Button Classes="tool" Content="Hash Lookup" Command="{Binding HashLookupCommand}" />
+      </StackPanel>
+    </Border>
+
+    <!-- ============ STATUS BAR ============ -->
+    <Border DockPanel.Dock="Bottom"
+            Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}"
+            BorderThickness="0,1,0,0" Padding="10,4">
+      <TextBlock Text="{Binding Status}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
+    </Border>
+
+    <!-- ============ MAIN AREA ============ -->
+    <Grid ColumnDefinitions="290,4,*,4,360">
+
+      <!-- LEFT: Asset Browser / WAD Explorer -->
+      <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}">
+        <DockPanel>
+          <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="ASSET BROWSER · WAD EXPLORER" />
+          <TreeView ItemsSource="{Binding RootNodes}"
+                    SelectedItem="{Binding SelectedNode, Mode=TwoWay}"
+                    Background="Transparent" BorderThickness="0">
+            <TreeView.ItemTemplate>
+              <TreeDataTemplate ItemsSource="{Binding Children}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="3"
+                          Padding="4,1" MinWidth="36" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Kind}" FontSize="9"
+                               Foreground="{DynamicResource ReyAccentBrush}"
+                               HorizontalAlignment="Center" />
+                  </Border>
+                  <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextBrush}"
+                             FontSize="12" VerticalAlignment="Center" />
+                </StackPanel>
+              </TreeDataTemplate>
+            </TreeView.ItemTemplate>
+          </TreeView>
+        </DockPanel>
+      </Border>
+
+      <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
+
+      <!-- CENTER: Viewport + Console -->
+      <Grid Grid.Column="2" RowDefinitions="*,4,210">
+        <Border Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
+          <Grid>
+            <views:ViewportControl />
+            <Border Background="#66000000" CornerRadius="4" Padding="8,3"
+                    HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10"
+                    IsHitTestVisible="False">
+              <TextBlock Text="VIEWPORT  ·  LMB orbit · Shift+LMB pan · wheel zoom"
+                         FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" />
+            </Border>
+          </Grid>
+        </Border>
+
+        <GridSplitter Grid.Row="1" Background="{DynamicResource ReyBorderBrush}" />
+
+        <Border Grid.Row="2" Background="{DynamicResource ReyPanelBrush}">
+          <DockPanel>
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto">
+              <TextBlock Classes="panelHeader" Text="CONSOLE · IMPORT LOG" />
+              <Button Grid.Column="1" Classes="tool" Content="Clear"
+                      Command="{Binding ClearConsoleCommand}" Margin="0,4,8,0" />
+            </Grid>
+            <ListBox Classes="console" ItemsSource="{Binding Console.Entries}"
+                     Background="Transparent" BorderThickness="0" Padding="6,0">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding}"
+                             FontFamily="Cascadia Mono, Consolas, monospace" FontSize="12"
+                             Foreground="{Binding Level, Converter={StaticResource LevelToBrush}}" />
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+      </Grid>
+
+      <GridSplitter Grid.Column="3" Background="{DynamicResource ReyBorderBrush}" />
+
+      <!-- RIGHT: Inspector -->
+      <Border Grid.Column="4" Background="{DynamicResource ReyPanelBrush}">
+        <DockPanel>
+          <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="INSPECTOR" />
+          <ScrollViewer>
+            <StackPanel Margin="12" Spacing="10">
+              <TextBlock Text="{Binding Inspector.Title}" Foreground="{DynamicResource ReyTextBrush}"
+                         FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" />
+              <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="3"
+                      Padding="6,2" HorizontalAlignment="Left">
+                <TextBlock Text="{Binding Inspector.Subtitle}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
+              </Border>
+              <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8"
+                      IsVisible="{Binding Inspector.HasPreview}">
+                <Image Source="{Binding Inspector.PreviewImage}" Stretch="Uniform" MaxHeight="340" />
+              </Border>
+              <TextBlock Text="{Binding Inspector.Details}" Foreground="{DynamicResource ReyTextDimBrush}"
+                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
+            </StackPanel>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+
+    </Grid>
+  </DockPanel>
+</Window>

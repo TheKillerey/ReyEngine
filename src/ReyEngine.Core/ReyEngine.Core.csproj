@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- Asset format decoding (WAD, tex, skn/skl, mapgeo, bin, anm). GPL-3.0. -->
+    <PackageReference Include="LeagueToolkit" Version="4.1.0-beta.53" />
+    <!-- XxHash64 for WAD chunk path hashing (MIT, Microsoft). -->
+    <PackageReference Include="System.IO.Hashing" Version="10.0.2" />
+    <!-- MemoryOwner / Memory2D / Span2D used by LeagueToolkit APIs. -->
+    <PackageReference Include="CommunityToolkit.HighPerformance" Version="8.4.0" />
+  </ItemGroup>
+
+</Project>

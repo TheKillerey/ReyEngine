@@ -1,0 +1,17 @@
+## .NET / Visual Studio
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.idea/
+*.DotSettings.user
+
+## ReyEngine
+/data/hashes/*.txt
+/data/cache/
+/out/
+/exports/
+
+## Keep dictionary folder
+!/data/hashes/README.md

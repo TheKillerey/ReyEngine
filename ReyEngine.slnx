@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ReyEngine.App/ReyEngine.App.csproj" />
+    <Project Path="src/ReyEngine.Core/ReyEngine.Core.csproj" />
+    <Project Path="src/ReyEngine.Rendering/ReyEngine.Rendering.csproj" />
+  </Folder>
+</Solution>

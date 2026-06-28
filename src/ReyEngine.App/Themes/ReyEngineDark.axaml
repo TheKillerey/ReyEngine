@@ -1,0 +1,39 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Section header label -->
+  <Style Selector="TextBlock.panelHeader">
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextDimBrush}" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Padding" Value="10,7" />
+  </Style>
+
+  <!-- Toolbar / utility buttons -->
+  <Style Selector="Button.tool">
+    <Setter Property="Background" Value="{DynamicResource ReyPanelAltBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Padding" Value="11,5" />
+    <Setter Property="Margin" Value="0,0,4,0" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+  <Style Selector="Button.tool:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyBorderBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccentBrush}" />
+  </Style>
+
+  <!-- TreeView rows -->
+  <Style Selector="TreeViewItem">
+    <Setter Property="Padding" Value="2,1" />
+  </Style>
+
+  <!-- ListBox console rows: tighten spacing -->
+  <Style Selector="ListBox.console ListBoxItem">
+    <Setter Property="Padding" Value="2,0" />
+    <Setter Property="MinHeight" Value="18" />
+  </Style>
+
+</Styles>
