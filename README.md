@@ -5,7 +5,17 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M13 complete.** Fixes untextured champions/maps in project mode: a mod folder only ships its
+> Status: **M14 complete.** Project-mode bug fixes + Project Settings. The real cause of untextured
+> champions / missing skeletons / empty animation lists in project mode was a set of `_archive is null`
+> guards (compound conditions an earlier sweep missed) that short-circuited texture/skeleton/animation
+> loading whenever there was no single WAD — now `ContentLoaded`, so they run against the mount layer.
+> Also: companion `.materials.bin` linking tolerates renamed copies ("base_srx - Kopie.mapgeo"), map
+> materials fall back to the original game `.materials.bin` when a mod's copy is broken/empty, animations
+> fall back to the game WADs, and **Project ▸ Project Settings** sets the game folder (powers the
+> fallback), build output, and references. *Known limit:* one specific Old-SR `.materials.bin` is malformed
+> (LeagueToolkit can't parse it) and is an older map revision, so that map's textures still don't resolve.
+>
+> Status (M13): mounts the **original Riot game WADs as a read-only fallback** a mod folder only ships its
 > *changed* files, so assets it doesn't include (skin bins, textures, meshes — e.g. `sru_dragon`) had nowhere
 > to resolve. ReyEngine now mounts the **original Riot game WADs as a read-only fallback** (auto-discovered
 > from the game folder: DATA / Common / Global + the matching map WAD) — consulted only on a miss, not added
@@ -210,6 +220,7 @@ No Play button — this is an editor, not a runtime.
 | **M11 ✅** | project-folder editor · asset mount layer (override>project>Riot + conflicts) · read-only Riot refs + Copy-to-Project · build from project root · inspection-mode for single WAD |
 | **M12 ✅** | Unreal-style layout · Content Browser (folder tree + tiles + breadcrumb, center above console) · Map Content left panel · Open Recent projects |
 | **M13 ✅** | game-WAD reference fallback (auto-discovered DATA/Common/Global + map WAD) · resolves assets a mod doesn't ship · fixes untextured project champions/maps |
+| **M14 ✅** | fix project-mode texture/skeleton/animation guards · `.materials.bin` copy-name + game fallback · animation fallback · Project Settings (game folder / output / references) |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |

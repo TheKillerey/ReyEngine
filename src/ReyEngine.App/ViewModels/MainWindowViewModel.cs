@@ -194,12 +194,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         int ci = Array.FindIndex(parts, p => p.Equals("characters", StringComparison.OrdinalIgnoreCase));
         string champ = ci >= 0 && ci + 1 < parts.Length ? parts[ci + 1] : "";
         var marker = $"/characters/{champ}/";
-        return AssetEntries
-            .Where(e => e.IsResolved && e.Path.EndsWith(".anm", StringComparison.OrdinalIgnoreCase)
-                        && (champ.Length == 0 || e.Path.Contains(marker, StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(e => e.Path, StringComparer.OrdinalIgnoreCase)
-            .Select(e => new AnimationEntryViewModel(e))
-            .ToList();
+        const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+        bool Match(string path, bool resolved) =>
+            resolved && path.EndsWith(".anm", OIC) && (champ.Length == 0 || path.Contains(marker, OIC));
+
+        var seen = new HashSet<ulong>();
+        var list = new List<AnimationEntryViewModel>();
+        foreach (var e in AssetEntries)
+            if (Match(e.Path, e.IsResolved) && seen.Add(e.PathHash)) list.Add(new AnimationEntryViewModel(e));
+
+        // If the mod doesn't ship this unit's animations, fall back to the original game WADs.
+        if (list.Count == 0 && _mounts is not null)
+            foreach (var fb in _mounts.Fallback)
+                foreach (var a in fb.Enumerate())
+                    if (Match(a.VirtualPath, a.IsResolved) && seen.Add(a.PathHash)) list.Add(new AnimationEntryViewModel(a.ToEntry()));
+
+        return list.OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     [RelayCommand]
@@ -761,21 +771,94 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Resolve the map's materials .bin → per-group diffuse textures (shared instances for reuse).</summary>
     private IReadOnlyList<TextureImage?>? TryLoadMapTextures(WadAssetEntry mapEntry, MapGeoAsset map)
     {
-        if (_archive is null || !mapEntry.IsResolved) return null;
+        if (!ContentLoaded || !mapEntry.IsResolved) return null;
 
-        var binPath = MapGeoMaterialResolver.MaterialsBinPathFor(mapEntry.Path);
-        if (!TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         {
-            _log.Info("MapGeo", "No materials .bin found — rendering flat.");
+            _log.Info("MapGeo", $"No materials .bin found for {mapEntry.DisplayName} — rendering flat.");
             return null;
         }
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
-        Dictionary<string, string> materialToTexture;
-        try { materialToTexture = MapGeoMaterialResolver.Resolve(GetAssetBytes(binEntry), names); }
-        catch (Exception ex) { _log.Warn("MapGeo", $"materials parse failed: {ex.Message}"); return null; }
-        if (materialToTexture.Count == 0) return null;
+        var materialToTexture = ResolveMapMaterials(binEntry, names);
+        if (materialToTexture.Count == 0)
+        {
+            _log.Info("MapGeo", "Materials .bin didn't resolve any textures — rendering flat.");
+            return null;
+        }
         return BuildMapTextures(map, materialToTexture, names.Count);
+    }
+
+    /// <summary>Resolve map material→texture, falling back to the original game .materials.bin when the
+    /// project's copy is broken (malformed .bin) or resolves nothing.</summary>
+    private Dictionary<string, string> ResolveMapMaterials(WadAssetEntry binEntry, List<string> names)
+    {
+        try
+        {
+            var r = MapGeoMaterialResolver.Resolve(GetAssetBytes(binEntry), names);
+            if (r.Count > 0) return r;
+        }
+        catch (Exception ex) { _log.Warn("MapGeo", $"project materials.bin parse failed: {ex.Message}"); }
+
+        var fb = _mounts?.ReadFallback(binEntry.PathHash);
+        if (fb is not null)
+        {
+            try
+            {
+                var r = MapGeoMaterialResolver.Resolve(fb, names);
+                if (r.Count > 0) { _log.Info("MapGeo", "Used the original game materials.bin (the project's copy was broken/empty)."); return r; }
+            }
+            catch (Exception ex) { _log.Warn("MapGeo", $"game materials.bin parse failed: {ex.Message}"); }
+        }
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Resolve a mapgeo's companion .materials.bin, tolerating renamed copies (a mod folder often holds
+    /// "base_srx - Kopie.mapgeo" whose materials are still the original "base_srx.materials.bin").
+    /// </summary>
+    private bool TryResolveMaterialsBin(string mapgeoPath, out WadAssetEntry binEntry)
+    {
+        const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+
+        var direct = MapGeoMaterialResolver.MaterialsBinPathFor(mapgeoPath);
+        if (TryResolveEntry(HashAlgorithms.WadPath(direct), out binEntry)) return true;
+
+        int slash = direct.LastIndexOf('/');
+        string dir = slash < 0 ? "" : direct[..(slash + 1)];
+        string file = direct[dir.Length..];
+        string stem = file.EndsWith(".materials.bin", OIC) ? file[..^".materials.bin".Length] : file;
+
+        // Strip "copy" suffixes (Windows/Explorer in several languages) and retry — the stripped name
+        // usually exists in the game fallback.
+        string cleaned = StripCopySuffix(stem);
+        if (!cleaned.Equals(stem, OIC) &&
+            TryResolveEntry(HashAlgorithms.WadPath(dir + cleaned + ".materials.bin"), out binEntry)) return true;
+
+        // Last resort: any sibling .materials.bin in the same folder of the loaded project.
+        foreach (var e in AssetEntries)
+            if (e.IsResolved && e.Path.EndsWith(".materials.bin", OIC))
+            {
+                int s = e.Path.LastIndexOf('/');
+                var d = s < 0 ? "" : e.Path[..(s + 1)];
+                if (d.Equals(dir, OIC)) { binEntry = e; return true; }
+            }
+
+        binEntry = null!;
+        return false;
+    }
+
+    private static string StripCopySuffix(string name)
+    {
+        string[] suffixes = { " - Kopie", " - Copy", " - copia", " - copie", " - Copie", " copy", "_copy", " (1)", " (2)", " (3)" };
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var sfx in suffixes)
+                if (name.EndsWith(sfx, StringComparison.OrdinalIgnoreCase)) { name = name[..^sfx.Length]; changed = true; }
+        }
+        return name;
     }
 
     /// <summary>Per-group diffuse textures from resolved map material→texture map (override-aware loads).</summary>
@@ -801,7 +884,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Find the skin .bin for a .skn, resolve per-submesh diffuse textures, decode them.</summary>
     private IReadOnlyList<TextureImage?>? TryLoadTextures(WadAssetEntry skn, MeshAsset mesh)
     {
-        if (_archive is null || !skn.IsResolved) return null;
+        if (!ContentLoaded || !skn.IsResolved) return null;
 
         var binPath = SkinPaths.BinPathForSkn(skn.Path);
         if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
@@ -845,7 +928,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Find the matching .skl for a resolved .skn inside the same WAD.</summary>
     private SkeletonAsset? TryPairSkeleton(WadAssetEntry skn)
     {
-        if (_archive is null || !skn.IsResolved || !skn.Path.EndsWith(".skn", StringComparison.OrdinalIgnoreCase))
+        if (!ContentLoaded || !skn.IsResolved || !skn.Path.EndsWith(".skn", StringComparison.OrdinalIgnoreCase))
             return null;
         var sklPath = skn.Path[..^4] + ".skl";
         var hash = HashAlgorithms.WadPath(sklPath);
@@ -1144,6 +1227,33 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (_mounts is null) return;
         BuildMounts();
+    }
+
+    [RelayCommand]
+    private async Task SetGameFolder()
+    {
+        var folder = await Dialogs.OpenFolderAsync("Select the League of Legends 'Game' folder (for reference fallback)");
+        if (folder is null) return;
+        Project.GameDirectory = folder;
+        var probe = GameReferenceLibrary.Discover(folder, Project.ProjectFolders.Append(Project.Name));
+        if (probe.Count == 0) { _log.Warn("Project", $"No game WADs found under {folder}. Pick the 'Game' folder (it should contain DATA/FINAL)."); return; }
+        if (ProjectMode)
+        {
+            ReyProjectService.Save(Project, Project.ProjectFilePath!);
+            BuildMounts(); BuildProjectTree();
+        }
+        _log.Success("Project", $"Game folder set: {folder} — {probe.Count} reference WAD(s) available as fallback. Reload the asset to apply.");
+    }
+
+    [RelayCommand]
+    private async Task SetOutputFolder()
+    {
+        var folder = await Dialogs.OpenFolderAsync("Select the build output folder");
+        if (folder is null) return;
+        if (BuildSafety.IsInsideGameInstall(folder)) { _log.Error("Project", "Refusing to set the output inside a Riot/League install folder."); return; }
+        Project.OutputDirectory = folder;
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        _log.Success("Project", $"Build output folder set: {folder}");
     }
 
     [RelayCommand]

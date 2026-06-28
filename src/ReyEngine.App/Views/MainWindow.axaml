@@ -60,7 +60,11 @@
         <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
         <MenuItem Header="Open Build Folder" Command="{Binding OpenBuildFolderCommand}" />
         <Separator />
-        <MenuItem Header="Manage Riot References…" Command="{Binding ManageRiotReferencesCommand}" />
+        <MenuItem Header="Project Settings">
+          <MenuItem Header="Set Game Folder…" Command="{Binding SetGameFolderCommand}" />
+          <MenuItem Header="Set Build Output Folder…" Command="{Binding SetOutputFolderCommand}" />
+          <MenuItem Header="Manage Riot References…" Command="{Binding ManageRiotReferencesCommand}" />
+        </MenuItem>
         <MenuItem Header="Sync Hashes" Command="{Binding SyncHashesCommand}" />
       </MenuItem>
       <MenuItem Header="_Help">

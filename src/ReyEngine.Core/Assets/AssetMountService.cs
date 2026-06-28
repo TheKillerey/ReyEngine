@@ -90,6 +90,15 @@ public sealed class AssetMountService : IDisposable
     /// <summary>Does any mount or fallback hold this hash?</summary>
     public bool Has(ulong pathHash) => _index.ContainsKey(pathHash) || _fallback.Any(f => f.Contains(pathHash));
 
+    /// <summary>Read ONLY from the game fallback (bypassing project/override) — for when a mod's copy
+    /// of a shared file is broken and we want the original game version.</summary>
+    public byte[]? ReadFallback(ulong pathHash)
+    {
+        foreach (var f in _fallback)
+            if (f.Contains(pathHash)) return f.Read(pathHash);
+        return null;
+    }
+
     /// <summary>All mounts (in priority order) that hold a given hash — for "show all sources".</summary>
     public IReadOnlyList<IAssetMount> SourcesOf(ulong pathHash) =>
         _index.TryGetValue(pathHash, out var a) ? a.AllSources : Array.Empty<IAssetMount>();
