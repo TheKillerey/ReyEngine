@@ -5,10 +5,11 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M6 complete.** Adds **`.anm` animation playback** for skinned champions (CPU skinning) —
-> on top of M5's project/Build-Package pipeline and M1–M4 preview (textured champions, `.bin` inspector,
-> textured MAPGEO). Verified: Aatrox loads its skeleton + animations, CPU-skins, and plays textured
-> with timeline/play/speed/loop.
+> Status: **M7 complete.** Adds **structured `.bin` editing** — edit primitive property values
+> (string/number/bool/hash/vector) in the Inspector, track dirty state, save into the project override
+> layer, and Build Package picks the edited `.bin` up automatically. On top of M6 animation playback,
+> M5's project/Build-Package pipeline, and M1–M4 preview. Verified end-to-end on Aatrox: edit a texture
+> path + a float in `skin0.bin` → save override → build → reopen → edits parse back; untouched assets intact.
 
 ---
 
@@ -54,7 +55,8 @@ ReyEngine.sln
 │   ├─ Meshes/                # MeshAsset (+blend data), SkinnedMeshDecoder
 │   ├─ Skeletons/             # SkeletonAsset (+joints/influences), SkeletonDecoder
 │   ├─ Animation/             # AnimationClip, AnimationDecoder, SkinnedMeshAnimator (CPU skinning, M6)
-│   ├─ Meta/                  # BinDocument, SkinMaterialExtractor (M4)
+│   ├─ Meta/                  # BinDocument (read-only tree), SkinMaterialExtractor (M4);
+│   │                         #   BinEditorDocument + BinValueEditor (editable primitives, re-serialize via LeagueToolkit, M7)
 │   └─ MapGeo/                # MapGeoAsset, MapGeoDecoder (M4) — reuses the mesh renderer
 ├─ src/ReyEngine.Rendering/    # No UI, no Avalonia. Pure Silk.NET GL + System.Numerics.
 │   ├─ OrbitCamera.cs, ShaderUtil.cs (ES/desktop GLSL)
@@ -91,7 +93,8 @@ reference the UI, so the pipeline is unit-testable and reusable (e.g. a future C
 - [x] **Project system** — `.reyproject` (new/open/save), asset override tracking, modified markers in the tree
 - [x] **Build Package** — non-destructive WAD repack (copy + append + TOC patch) + build validation; never writes into the game install
 - [x] **Animation playback** — `.anm` decoded + CPU-skinned onto the champion; play/pause/timeline/speed/loop, textures + bones preserved
-- [ ] Add brand-new chunks (TOC rebuild) · GPU skinning · sound preview
+- [x] **`.bin` editing** — edit primitive values (string/int/uint/float/bool/hash/vector) in the Inspector, dirty tracking + revert, save to override, edited `.bin` flows through Build Package
+- [ ] Add brand-new chunks (TOC rebuild) · array/struct element editing · GPU skinning · sound preview
 
 ## 4. Data pipeline: WAD → decoded asset → preview
 
@@ -173,6 +176,7 @@ No Play button — this is an editor, not a runtime.
 | **M4 ✅** | `.bin` property tree · textured champion · textured MAPGEO (SR verified) · -X orientation |
 | **M5 ✅** | project system (`.reyproject`) · replace WAD assets · Build Package (repack + reopen-validate) · install-folder guard |
 | **M6 ✅** | ANM animation playback (CPU skinning) · animation panel (play/timeline/speed/loop) · textures + bones during playback |
+| **M7 ✅** | structured `.bin` editing (primitive values) · dirty/revert per-field+file · save to override · edited `.bin` in Build Package · reopen-validate |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
@@ -235,3 +239,18 @@ WAD's tree refreshes `0x…` → readable paths in place. The full sync is ~250 
 4. Toggle **Bones** (top-right of the viewport) → the skeleton overlay animates with the mesh.
 5. If a champion's animations don't auto-list, `Tools ▸ Assign Animation…` to load a `.anm` from disk.
 6. Selecting a non-mesh asset (texture/mapgeo) stops playback cleanly; mapgeo still renders textured (no regression).
+
+### M7 `.bin` editing checklist (Aatrox)
+
+1. Open `Champions/Aatrox.wad.client`, click `data/characters/aatrox/skins/skin0.bin` → the **BIN EDITOR**
+   appears. Primitive fields (string/number/bool/hash/vector) have an editable text box; complex
+   objects/arrays show their value read-only.
+2. Filter for `skinScale` (a float) — change it (e.g. `1.09` → `0.5`), press **Enter** or **✓ Apply**.
+   The field shows a dirty dot; an invalid value (e.g. letters) turns red and is rejected (decimals are
+   culture-invariant). **↺** reverts the field; **Revert File** reverts everything.
+3. Filter for `image`/a `.tex` string and point it at another existing texture path.
+4. **Save To Override** → the edited `.bin` is re-serialized, re-parse-validated, and written into the
+   project override layer (a project is created/prompted if needed). The asset turns **Modified**.
+5. **Build ▸ Build Package** → reopen the built `.wad.client`; the edited `.bin` parses back with your
+   changes and unmodified chunks are intact. **Export BIN…** writes the edited `.bin` straight to disk.
+6. Right-click any field → **Copy Field Path / Hash / Value**.

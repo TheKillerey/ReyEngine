@@ -291,18 +291,53 @@
                            FontSize="11" TextWrapping="Wrap" IsVisible="{Binding MapGeoInspector.HasWarnings}" />
               </StackPanel>
 
-              <!-- bin property tree -->
-              <StackPanel Spacing="6" IsVisible="{Binding HasBinTree}">
+              <!-- bin editor (M7) -->
+              <StackPanel Spacing="6" IsVisible="{Binding BinEditor.HasBin}">
                 <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
-                <TextBlock Text="BIN PROPERTIES" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" />
-                <TreeView ItemsSource="{Binding BinTreeRoots}" Background="Transparent" BorderThickness="0" MaxHeight="520">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="BIN EDITOR" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" />
+                  <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center"
+                           IsVisible="{Binding BinEditor.IsDirty}" ToolTip.Tip="Unsaved edits" />
+                </StackPanel>
+                <TextBlock Text="{Binding BinEditor.Summary}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
+                <TextBox Watermark="Filter field names…" Text="{Binding BinEditor.Filter}" FontSize="11" Padding="4,2" />
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <Button Classes="tool" Content="Revert File" Command="{Binding BinEditor.RevertFileCommand}" />
+                  <Button Classes="tool" Content="Save To Override" Command="{Binding SaveBinToOverrideCommand}" />
+                  <Button Classes="tool" Content="Export BIN…" Command="{Binding ExportEditedBinCommand}" />
+                </StackPanel>
+                <TreeView ItemsSource="{Binding BinEditor.Roots}" Background="Transparent" BorderThickness="0" MaxHeight="560">
                   <TreeView.ItemTemplate>
                     <TreeDataTemplate ItemsSource="{Binding Children}">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
+                      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsVisible}">
                         <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextBrush}"
-                                   FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
-                        <TextBlock Text="{Binding Value}" Foreground="{DynamicResource ReyAccentBrush}"
-                                   FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
+                                   FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding TypeName}" Foreground="{DynamicResource ReyTextDimBrush}"
+                                   FontSize="10" VerticalAlignment="Center" IsVisible="{Binding IsBranch}" />
+                        <!-- editable primitive -->
+                        <StackPanel Orientation="Horizontal" Spacing="3" IsVisible="{Binding IsEditable}">
+                          <TextBox Text="{Binding EditedText}" MinWidth="150" FontSize="11" Padding="4,1"
+                                   FontFamily="Cascadia Mono, Consolas, monospace">
+                            <TextBox.KeyBindings>
+                              <KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" />
+                            </TextBox.KeyBindings>
+                          </TextBox>
+                          <Button Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" ToolTip.Tip="Apply edit" />
+                          <Button Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" ToolTip.Tip="Revert field" />
+                          <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                          <TextBlock Text="{Binding ErrorText}" Foreground="#FF6B6B" FontSize="10" VerticalAlignment="Center" IsVisible="{Binding HasError}" />
+                        </StackPanel>
+                        <!-- read-only leaf value -->
+                        <TextBlock Text="{Binding OriginalText}" Foreground="{DynamicResource ReyAccentBrush}"
+                                   FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" VerticalAlignment="Center"
+                                   IsVisible="{Binding IsReadOnlyValue}" />
+                        <StackPanel.ContextMenu>
+                          <ContextMenu>
+                            <MenuItem Header="Copy Field Path" Command="{Binding CopyPathCommand}" />
+                            <MenuItem Header="Copy Field Hash" Command="{Binding CopyHashCommand}" />
+                            <MenuItem Header="Copy Value" Command="{Binding CopyValueCommand}" />
+                          </ContextMenu>
+                        </StackPanel.ContextMenu>
                       </StackPanel>
                     </TreeDataTemplate>
                   </TreeView.ItemTemplate>

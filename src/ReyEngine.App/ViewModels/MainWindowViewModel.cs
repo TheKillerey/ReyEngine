@@ -37,7 +37,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MapGeoInspectorViewModel MapGeoInspector { get; } = new();
     public AnimationInspectorViewModel Animation { get; } = new();
     public ObservableCollection<AssetNodeViewModel> RootNodes { get; } = new();
-    public ObservableCollection<BinNodeViewModel> BinTreeRoots { get; } = new();
+    public BinEditorViewModel BinEditor { get; } = new();
 
     [ObservableProperty] private AssetNodeViewModel? _selectedNode;
     [ObservableProperty] private string _title = "ReyEngine";
@@ -55,7 +55,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showWireframe;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;
-    [ObservableProperty] private bool _hasBinTree;
 
     public MainWindowViewModel()
     {
@@ -73,6 +72,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Animation.ClipLoader = DecodeAnimation;
         Animation.ClipChanged = clip => CurrentAnimation = clip;
         Animation.TimeChanged = t => AnimationTime = t;
+
+        BinEditor.CopyHandler = Dialogs.CopyAsync;
     }
 
     // ---- Animation ------------------------------------------------------
@@ -297,7 +298,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             modified && _overrides.TryGet(entry.PathHash, out var ov) ? ov.OverrideFile : null);
 
         if (entry.Type is not AssetType.SkinnedMesh) ClearViewport();
-        if (entry.Type != AssetType.Bin) ClearBinTree();
+        if (entry.Type != AssetType.Bin) BinEditor.Clear();
 
         switch (entry.Type)
         {
@@ -334,16 +335,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             var doc = await Task.Run(() =>
-                BinDocument.Parse(_archive.Extract(entry),
+                BinEditorDocument.Parse(_archive.Extract(entry),
                     h => _resolver.Database.TryGetBinName(h, out var n) ? n : null));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                BinTreeRoots.Clear();
-                foreach (var root in doc.Roots) BinTreeRoots.Add(new BinNodeViewModel(root));
-                HasBinTree = BinTreeRoots.Count > 0;
+                BinEditor.Load(doc, entry);
                 _log.Info("Bin", $"{entry.DisplayName}: {doc.Roots.Count} object(s)" +
-                                 (doc.Dependencies.Count > 0 ? $", {doc.Dependencies.Count} dependencies" : ""));
+                                 (doc.Dependencies.Count > 0 ? $", {doc.Dependencies.Count} dependencies" : "") +
+                                 " — primitive fields are editable.");
             });
         }
         catch (Exception ex)
@@ -352,11 +352,53 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private void ClearBinTree()
+    [RelayCommand]
+    private async Task SaveBinToOverride()
     {
-        if (BinTreeRoots.Count == 0 && !HasBinTree) return;
-        BinTreeRoots.Clear();
-        HasBinTree = false;
+        if (BinEditor.Entry is not { } entry) { _log.Warn("Bin", "No .bin open."); return; }
+        if (!BinEditor.IsDirty) { _log.Info("Bin", "No applied edits to save."); return; }
+        if (!await EnsureProjectSavedAsync()) return;
+
+        var bytes = BinEditor.Serialize();
+        if (bytes is null) return;
+
+        // Validate the edited .bin re-parses before committing it to the override layer.
+        try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
+        catch (Exception ex) { _log.Error("Bin", $"Edited .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
+
+        try
+        {
+            var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".bin");
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = entry.PathHash,
+                ResolvedPath = entry.IsResolved ? entry.Path : null,
+                OverrideFile = dest,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+            Inspector.SetAssetStatus("Modified — Project Override", dest);
+            Project.IsDirty = true;
+            UpdateTitle();
+            _log.Success("Bin", $"Saved edited {entry.DisplayName} to project override ({bytes.Length:n0} bytes, re-parse OK). Build Package will include it.");
+        }
+        catch (Exception ex) { _log.Error("Bin", ex.Message); }
+    }
+
+    [RelayCommand]
+    private async Task ExportEditedBin()
+    {
+        if (BinEditor.Entry is not { } entry) { _log.Warn("Bin", "No .bin open."); return; }
+        var bytes = BinEditor.Serialize();
+        if (bytes is null) return;
+        var outPath = await Dialogs.SaveFileAsync("Export edited .bin", entry.DisplayName);
+        if (outPath is null) return;
+        try
+        {
+            await File.WriteAllBytesAsync(outPath, bytes);
+            _log.Success("Bin", $"Exported edited {entry.DisplayName} → {outPath} ({bytes.Length:n0} bytes).");
+        }
+        catch (Exception ex) { _log.Error("Bin", ex.Message); }
     }
 
     private async Task TryPreviewTextureAsync(WadAssetEntry entry)
