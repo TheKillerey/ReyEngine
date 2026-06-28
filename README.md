@@ -5,10 +5,14 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M10 complete.** Adds **array/struct element editing** to the `.bin`/material system: you can now
-> **add and remove texture sampler slots** on a material (cloning an existing sampler so the schema stays
-> valid), on top of M9's correct per-submesh material resolution and M7/M8 editing. Verified end-to-end on
-> Aatrox: add a sampler → save override → build → reopen → the new sampler parses back.
+> Status: **M11 complete.** ReyEngine is now a **project editor** (Unity/Unreal-style), not just a WAD viewer.
+> **File ▸ Open Project Folder** scans a mod folder for `.wad.client` files and unpacked-WAD folders, writes
+> `.reyengine/project.json`, and mounts a virtual file system: **project content is editable, Riot WADs are
+> read-only references**, overrides win over project, project wins over Riot (with conflict indicators). Editing
+> a Riot asset is blocked until you **Copy Asset To Project**; **Build Package** builds from the project root to
+> `<root>/Build/` (never the game install). Single **Open WAD** still works as read-only inspection mode.
+> Verified end-to-end on a real mod (Old Summoners Rift V2 + Riot Map11): open folder → mount 32k assets →
+> copy a read-only Riot `.bin` → edit → build → reopen → edit parses back. M1–M10 preview/edit still work.
 >
 > *Scope notes:* (1) **Adding brand-new WAD chunks** (importing files at new paths) was investigated and
 > deliberately **not shipped** — WAD v3.4 stores a separate subchunk table that can't be safely relocated
@@ -104,7 +108,8 @@ reference the UI, so the pipeline is unit-testable and reusable (e.g. a future C
 - [x] **Material Editor** — champion + map materials: texture slots, sampler names, params, submesh assignment; edit/replace texture paths, live Apply, save to override, unresolved warnings
 - [x] **Multi-material rendering** — each submesh resolves to its own `StaticMaterialDef` diffuse (Aatrox body/wings/sword/banner all distinct); editor + viewport share one resolver
 - [x] **Array/struct element editing** — add/remove texture sampler slots on a material (clones the schema); via `BinTreeCloner` + `BinTreeContainer.Add/Remove`
-- [ ] GPU skinning · HLSL shader/blend emulation · sound preview · ~~add brand-new chunks~~ (blocked: WAD v3.4 subchunk table)
+- [x] **Project editor** — open a mod folder (packed WADs + unpacked-WAD folders), mount Riot WADs read-only, edit project content, Copy-to-Project, build to `<root>/Build/`
+- [ ] GPU skinning · HLSL shader/blend emulation · sound preview · pack folder→WAD · ~~add chunks to Riot WADs~~ (blocked: WAD v3.4 subchunk table)
 
 ## 4. Data pipeline: WAD → decoded asset → preview
 
@@ -190,6 +195,7 @@ No Play button — this is an editor, not a runtime.
 | **M8 ✅** | Material Editor (champion skin + map materials) · texture-slot/param editing · live Apply · Inspector tabs (Overview/Materials/Raw BIN) · unresolved warnings · raw texture replace |
 | **M9 ✅** | proper material/sampler resolution · per-submesh multi-material diffuse (fixes single-texture bug) · unified editor+renderer resolver (`ChampionMaterialResolver`) |
 | **M10 ✅** | array/struct element editing · add/remove material sampler slots (`BinTreeCloner`) · build-validated · (new-chunk import shelved: WAD v3.4 subchunk table) |
+| **M11 ✅** | project-folder editor · asset mount layer (override>project>Riot + conflicts) · read-only Riot refs + Copy-to-Project · build from project root · inspection-mode for single WAD |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
@@ -296,3 +302,18 @@ WAD's tree refreshes `0x…` → readable paths in place. The full sync is ~250 
 2. Click **✕** on any added sampler to remove it. (The base/inline texture slots have no **✕** — they aren't
    array elements.)
 3. **Save To Override** → **Build Package** → reopen the built WAD → the added/removed sampler parses back.
+
+### M11 project editor checklist
+
+1. **File ▸ Open Project Folder** → pick a mod folder (e.g. an *Old Summoners Rift V2* export). ReyEngine scans
+   for `.wad.client` files + unpacked-WAD folders, writes `.reyengine/project.json`, and the Content Browser
+   shows two groups: **Project** (editable, `PRJ`/`OVR` tags) and **Riot References** (read-only, 🔒); conflicts
+   (asset in both) show ⚠.
+2. **Project ▸ Manage Riot References…** → add a Riot WAD (e.g. `…/Maps/Shipping/Map11.wad.client`). Its assets
+   appear under *Riot References*, read-only.
+3. Select a Riot asset → preview works but the Inspector shows *Read-only Riot asset*; saving an edit is blocked.
+   Right-click ▸ **Copy Asset To Project** → it becomes a project override (editable); edit its `.bin`/material/
+   texture path → **Save To Override**.
+4. **Project ▸ Build Package** → builds to `<project>/Build/` (folder projects are staged with overrides applied;
+   project WADs are repacked). Reopen the built folder via **Open Project Folder** to confirm the edit is present.
+5. **File ▸ Open WAD (inspect)** still opens a single WAD in read-only inspection mode (yellow banner).

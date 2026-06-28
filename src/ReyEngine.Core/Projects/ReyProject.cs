@@ -15,6 +15,19 @@ public sealed class ReyProject
     public string? HashDirectory { get; set; }
     public List<ProjectAssetOverride> Overrides { get; set; } = new();
 
+    // M11 project-folder editor.
+    public int ProjectVersion { get; set; } = 1;
+    /// <summary>The opened project folder (folder-mode). Null for legacy single-WAD projects.</summary>
+    public string? RootPath { get; set; }
+    /// <summary>Editable mod .wad.client files (relative to <see cref="RootPath"/>).</summary>
+    public List<string> ProjectWads { get; set; } = new();
+    /// <summary>Editable unpacked-WAD folders (relative to <see cref="RootPath"/>).</summary>
+    public List<string> ProjectFolders { get; set; } = new();
+    /// <summary>Read-only Riot reference WAD paths (absolute).</summary>
+    public List<string> ReferenceWads { get; set; } = new();
+    public List<string> RecentAssets { get; set; } = new();
+
+    [JsonIgnore] public bool IsFolderProject => RootPath is not null;
     [JsonIgnore] public string? ProjectFilePath { get; set; }
     [JsonIgnore] public bool IsDirty { get; set; }
 
@@ -25,6 +38,12 @@ public sealed class ReyProject
     [JsonIgnore]
     public string? OverridesDirectory =>
         WorkspaceDirectory is null ? null : System.IO.Path.Combine(WorkspaceDirectory, "overrides");
+
+    /// <summary>Absolute path of a project-relative entry (folder or WAD).</summary>
+    public string ResolveProjectPath(string relativeOrAbsolute) =>
+        System.IO.Path.IsPathRooted(relativeOrAbsolute) || RootPath is null
+            ? relativeOrAbsolute
+            : System.IO.Path.GetFullPath(System.IO.Path.Combine(RootPath, relativeOrAbsolute));
 
     public static string GuessGameDirectory()
     {

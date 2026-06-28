@@ -5,6 +5,38 @@ namespace ReyEngine.Core.Projects;
 public static class ReyProjectService
 {
     public const string Extension = ".reyproject";
+    public const string FolderMetaDir = ".reyengine";
+    public const string FolderMetaFile = "project.json";
+
+    /// <summary>Open (or initialise) a project folder. Creates <c>.reyengine/project.json</c> if absent.</summary>
+    public static ReyProject OpenFolder(string root)
+    {
+        var metaPath = Path.Combine(root, FolderMetaDir, FolderMetaFile);
+        ReyProject project;
+        bool isNew = !File.Exists(metaPath);
+        if (!isNew)
+        {
+            project = JsonSerializer.Deserialize<ReyProject>(File.ReadAllText(metaPath)) ?? new ReyProject();
+        }
+        else
+        {
+            var scan = ProjectScanner.Scan(root);
+            project = new ReyProject
+            {
+                Name = Path.GetFileName(root.TrimEnd('/', '\\')),
+                ProjectWads = scan.Wads,
+                ProjectFolders = scan.Folders,
+                OutputDirectory = Path.Combine(root, "Build"),
+                GameDirectory = ReyProject.GuessGameDirectory(),
+                ProjectVersion = 1,
+            };
+        }
+        project.RootPath = root;
+        project.ProjectFilePath = metaPath;
+        project.IsDirty = false;
+        if (isNew) Save(project, metaPath);
+        return project;
+    }
 
     private static readonly JsonSerializerOptions Options = new()
     {

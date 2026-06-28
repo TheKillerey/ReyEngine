@@ -11,6 +11,11 @@ public sealed class WadAssetEntry
     public string Compression { get; init; } = "";
     public AssetType Type { get; set; } = AssetType.Unknown;
 
+    // M11 mount metadata (project editor). Defaults preserve single-WAD behaviour.
+    public AssetSourceKind SourceKind { get; set; } = AssetSourceKind.ProjectWad;
+    public bool ReadOnly { get; set; }
+    public bool HasConflict { get; set; }
+
     public string DisplayName
     {
         get

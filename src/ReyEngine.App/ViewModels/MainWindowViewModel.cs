@@ -28,8 +28,36 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private readonly HashSyncService _sync = new();
     private readonly WadPathResolver _resolver;
     private WadArchive? _archive;
+    private AssetMountService? _mounts;          // project mode: the virtual file system
     private readonly AssetOverrideStore _overrides = new();
     private readonly Dictionary<ulong, AssetNodeViewModel> _nodesByHash = new();
+
+    private bool ContentLoaded => _archive is not null || _mounts is not null;
+
+    /// <summary>Read an asset's bytes, mount-aware (project mode) or override-aware (single WAD).</summary>
+    private byte[] ReadAsset(ulong hash)
+    {
+        if (_mounts is not null)
+            return _mounts.Read(hash) ?? throw new FileNotFoundException($"0x{hash:x16} not in any mount.");
+        if (_overrides.TryGet(hash, out var ov) && File.Exists(ov.OverrideFile)) return File.ReadAllBytes(ov.OverrideFile);
+        return _archive!.Extract(hash);
+    }
+
+    private bool TryResolveEntry(ulong hash, out WadAssetEntry entry)
+    {
+        if (_mounts is not null)
+        {
+            if (_mounts.TryGet(hash, out var a)) { entry = a.ToEntry(); return true; }
+            entry = null!; return false;
+        }
+        if (_archive is not null) return _archive.TryGetEntry(hash, out entry!);
+        entry = null!; return false;
+    }
+
+    private IEnumerable<WadAssetEntry> AssetEntries =>
+        _mounts is not null ? _mounts.Assets.Select(a => a.ToEntry())
+        : _archive is not null ? _archive.Entries
+        : Enumerable.Empty<WadAssetEntry>();
 
     public DialogService Dialogs { get; } = new();
     public ConsoleViewModel Console { get; } = new();
@@ -42,6 +70,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MaterialEditorViewModel MaterialEditor { get; } = new();
 
     [ObservableProperty] private AssetNodeViewModel? _selectedNode;
+    [ObservableProperty] private bool _projectMode;
+    [ObservableProperty] private bool _inspectionMode;
     [ObservableProperty] private string _title = "ReyEngine";
     [ObservableProperty] private string _status = "Ready — open a .wad.client to begin";
     [ObservableProperty] private string _hashInput = "";
@@ -94,18 +124,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private byte[]? ReadAssetByPath(string path)
     {
-        if (_archive is null || string.IsNullOrEmpty(path)) return null;
+        if (!ContentLoaded || string.IsNullOrEmpty(path)) return null;
         var hash = HashAlgorithms.WadPath(path);
-        if (_overrides.TryGet(hash, out var ov) && File.Exists(ov.OverrideFile))
-            return File.ReadAllBytes(ov.OverrideFile);
-        return _archive.TryGetEntry(hash, out var te) ? _archive.Extract(te) : null;
+        return TryResolveEntry(hash, out _) ? ReadAsset(hash) : null;
     }
 
     private bool TextureExistsByPath(string path)
     {
-        if (_archive is null || string.IsNullOrEmpty(path)) return false;
-        var hash = HashAlgorithms.WadPath(path);
-        return _overrides.Has(hash) || _archive.TryGetEntry(hash, out _);
+        if (!ContentLoaded || string.IsNullOrEmpty(path)) return false;
+        return TryResolveEntry(HashAlgorithms.WadPath(path), out _);
     }
 
     private TextureImage? LoadTextureByPath(string path)
@@ -123,29 +150,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private void OpenTextureByPath(string path)
     {
-        if (_archive is null) return;
+        if (!ContentLoaded) return;
         var hash = HashAlgorithms.WadPath(path);
         if (_nodesByHash.TryGetValue(hash, out var node)) SelectedNode = node;
-        else _log.Warn("Material", $"Texture not found in this WAD: {path}");
+        else _log.Warn("Material", $"Texture not found: {path}");
     }
 
     // ---- Animation ------------------------------------------------------
 
     private AnimationClip? DecodeAnimation(WadAssetEntry entry)
     {
-        if (_archive is null) return null;
-        try { return AnimationDecoder.Decode(_archive.Extract(entry), entry.DisplayName); }
+        if (!ContentLoaded) return null;
+        try { return AnimationDecoder.Decode(ReadAsset(entry.PathHash), entry.DisplayName); }
         catch (Exception ex) { _log.Error("Anim", $"{entry.DisplayName}: {ex.Message}"); return null; }
     }
 
     private IEnumerable<AnimationEntryViewModel> FindAnimations(WadAssetEntry skn)
     {
-        if (_archive is null || !skn.IsResolved) return Enumerable.Empty<AnimationEntryViewModel>();
+        if (!ContentLoaded || !skn.IsResolved) return Enumerable.Empty<AnimationEntryViewModel>();
         var parts = skn.Path.Split('/');
         int ci = Array.FindIndex(parts, p => p.Equals("characters", StringComparison.OrdinalIgnoreCase));
         string champ = ci >= 0 && ci + 1 < parts.Length ? parts[ci + 1] : "";
         var marker = $"/characters/{champ}/";
-        return _archive.Entries
+        return AssetEntries
             .Where(e => e.IsResolved && e.Path.EndsWith(".anm", StringComparison.OrdinalIgnoreCase)
                         && (champ.Length == 0 || e.Path.Contains(marker, StringComparison.OrdinalIgnoreCase)))
             .OrderBy(e => e.Path, StringComparer.OrdinalIgnoreCase)
@@ -190,7 +217,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ClearViewport();
             Inspector.Clear();
 
+            _mounts?.Dispose(); _mounts = null;
+            ProjectMode = false; InspectionMode = true;
             _log.Success("WAD", $"Loaded {_archive.Entries.Count:n0} chunks; resolved {_archive.ResolvedCount:n0} paths.");
+            _log.Info("WAD", "Single-WAD inspection mode — open a project folder (File ▸ Open Project Folder) to edit and build mods.");
             Status = $"{_archive.Name} — {_archive.Entries.Count:n0} entries · {_archive.ResolvedCount:n0} resolved";
             Title = $"ReyEngine — {_archive.Name}";
         }
@@ -202,7 +232,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private void RebuildTree()
     {
-        if (_archive is null) return;
+        if (!ContentLoaded) return;
         var root = AssetTree.Build(_archive.Entries, _archive.Name);
         RootNodes.Clear();
         _nodesByHash.Clear();
@@ -230,12 +260,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Bytes for an asset — the project override if one exists, otherwise the WAD chunk.</summary>
-    private byte[] GetAssetBytes(WadAssetEntry entry)
-    {
-        if (_overrides.TryGet(entry.PathHash, out var ov) && File.Exists(ov.OverrideFile))
-            return File.ReadAllBytes(ov.OverrideFile);
-        return _archive!.Extract(entry);
-    }
+    private byte[] GetAssetBytes(WadAssetEntry entry) => ReadAsset(entry.PathHash);
 
     [RelayCommand]
     private void ReloadWad()
@@ -248,12 +273,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task ExportSelected()
     {
         var entry = SelectedNode?.Entry;
-        if (entry is null || _archive is null) { _log.Warn("Export", "Select a file first."); return; }
+        if (entry is null || !ContentLoaded) { _log.Warn("Export", "Select a file first."); return; }
         var outPath = await Dialogs.SaveFileAsync("Export asset", entry.DisplayName);
         if (outPath is null) return;
         try
         {
-            _archive.ExtractToFile(entry, outPath);
+            File.WriteAllBytes(outPath, ReadAsset(entry.PathHash));
             _log.Success("Export", $"Wrote {outPath}");
         }
         catch (Exception ex) { _log.Error("Export", ex.Message); }
@@ -289,7 +314,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private void ApplyHashesToOpenWad()
     {
-        if (_archive is null) return;
+        if (!ContentLoaded) return;
         int resolved = _resolver.RefreshArchive(_archive);
         RebuildTree();
         _log.Success("Hashes", $"Resolved {resolved:n0} / {_archive.Entries.Count:n0} WAD paths.");
@@ -339,15 +364,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // preview/decode still works before a hash sync (guard against huge chunks).
         if (entry.Type == AssetType.Unknown && _archive is not null && entry.UncompressedSize < 32 * 1024 * 1024)
         {
-            try { entry.Type = AssetTypeDetector.FromMagic(_archive.Extract(entry)); }
+            try { entry.Type = AssetTypeDetector.FromMagic(ReadAsset(entry.PathHash)); }
             catch { /* leave Unknown */ }
         }
 
         Inspector.ShowEntry(entry);
         Inspector.SetPreview(null);
         bool modified = _overrides.Has(entry.PathHash);
+        string source = !ProjectMode ? "WAD"
+            : entry.SourceKind switch
+            {
+                AssetSourceKind.RiotReference => "Read-only Riot asset",
+                AssetSourceKind.ProjectOverride => "Project override (editable)",
+                _ => "Project asset (editable)",
+            };
         Inspector.SetAssetStatus(
-            modified ? "Modified — Project Override" : "Original — WAD",
+            modified ? $"Modified — {source}" : source,
             modified && _overrides.TryGet(entry.PathHash, out var ov) ? ov.OverrideFile : null);
 
         if (entry.Type is not AssetType.SkinnedMesh) ClearViewport();
@@ -386,7 +418,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private WadAssetEntry? ResolveMaterialBin(WadAssetEntry entry)
     {
-        if (_archive is null) return null;
+        if (!ContentLoaded) return null;
         if (entry.Type == AssetType.Bin) return entry;
         if (!entry.IsResolved) return null;
         string? binPath = entry.Type switch
@@ -396,7 +428,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _ => null,
         };
         if (binPath is null) return null;
-        return _archive.TryGetEntry(HashAlgorithms.WadPath(binPath), out var be) ? be : null;
+        return TryResolveEntry(HashAlgorithms.WadPath(binPath), out var be) ? be : null;
     }
 
     private void TryLoadMaterialBin(WadAssetEntry entry, bool alsoRawBin)
@@ -408,7 +440,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private async Task LoadMaterialBinAsync(WadAssetEntry binEntry, bool alsoRawBin)
     {
-        if (_archive is null) return;
+        if (!ContentLoaded) return;
         byte[] bytes;
         try { bytes = GetAssetBytes(binEntry); }
         catch (Exception ex) { _log.Warn("Material", $"{binEntry.DisplayName}: {ex.Message}"); return; }
@@ -463,6 +495,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task SaveMaterialOverride()
     {
         if (MaterialEditor.BinEntry is not { } binEntry) { _log.Warn("Material", "No material .bin open."); return; }
+        if (!GuardEditable(binEntry)) return;
         if (!MaterialEditor.IsDirty) { _log.Info("Material", "No material edits to save."); return; }
         if (!await EnsureProjectSavedAsync()) return;
 
@@ -492,10 +525,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private async Task ReplaceTextureForSlot(TextureSlotViewModel slot)
     {
-        if (_archive is null) return;
+        if (!ContentLoaded) return;
         var path = slot.EditedPath;
         var hash = HashAlgorithms.WadPath(path);
-        if (!_archive.TryGetEntry(hash, out _)) { _log.Warn("Material", $"Texture not in this WAD — can't replace: {path}"); return; }
+        if (!TryResolveEntry(hash, out _)) { _log.Warn("Material", $"Texture not found — can't replace: {path}"); return; }
         if (!await EnsureProjectSavedAsync()) return;
 
         var file = await Dialogs.OpenFileAsync($"Replace texture {Path.GetFileName(path)} (.dds/.tex)", DialogService.All);
@@ -535,11 +568,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private async Task LoadBinAsync(WadAssetEntry entry)
     {
-        if (_archive is null) return;
+        if (!ContentLoaded) return;
         try
         {
             var doc = await Task.Run(() =>
-                BinEditorDocument.Parse(_archive.Extract(entry),
+                BinEditorDocument.Parse(ReadAsset(entry.PathHash),
                     h => _resolver.Database.TryGetBinName(h, out var n) ? n : null));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -560,6 +593,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task SaveBinToOverride()
     {
         if (BinEditor.Entry is not { } entry) { _log.Warn("Bin", "No .bin open."); return; }
+        if (!GuardEditable(entry)) return;
         if (!BinEditor.IsDirty) { _log.Info("Bin", "No applied edits to save."); return; }
         if (!await EnsureProjectSavedAsync()) return;
 
@@ -607,7 +641,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private async Task TryPreviewTextureAsync(WadAssetEntry entry)
     {
-        if (_archive is null) return;
+        if (!ContentLoaded) return;
         try
         {
             var img = await Task.Run(() => TextureDecoder.Decode(GetAssetBytes(entry)));
@@ -622,12 +656,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private async Task LoadMeshAsync(WadAssetEntry entry)
     {
-        if (_archive is null) return;
+        if (!ContentLoaded) return;
         try
         {
             var (mesh, skeleton, textures) = await Task.Run(() =>
             {
-                var m = SkinnedMeshDecoder.Decode(_archive.Extract(entry));
+                var m = SkinnedMeshDecoder.Decode(ReadAsset(entry.PathHash));
                 var s = TryPairSkeleton(entry);
                 var t = TryLoadTextures(entry, m);
                 return (m, s, t);
@@ -657,13 +691,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private async Task LoadMapGeoAsync(WadAssetEntry entry)
     {
-        if (_archive is null) return;
+        if (!ContentLoaded) return;
         try
         {
             _log.Info("MapGeo", $"Decoding {entry.DisplayName} …");
             var (map, mesh, textures) = await Task.Run(() =>
             {
-                var m = MapGeoDecoder.Decode(_archive.Extract(entry));
+                var m = MapGeoDecoder.Decode(ReadAsset(entry.PathHash));
                 var meshAsset = new MeshAsset
                 {
                     Positions = m.Positions,
@@ -704,7 +738,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_archive is null || !mapEntry.IsResolved) return null;
 
         var binPath = MapGeoMaterialResolver.MaterialsBinPathFor(mapEntry.Path);
-        if (!_archive.TryGetEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
+        if (!TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
         {
             _log.Info("MapGeo", "No materials .bin found — rendering flat.");
             return null;
@@ -744,7 +778,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_archive is null || !skn.IsResolved) return null;
 
         var binPath = SkinPaths.BinPathForSkn(skn.Path);
-        if (binPath is null || !_archive.TryGetEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
+        if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
         {
             _log.Info("Material", $"No skin .bin found for {skn.DisplayName} (flat shading).");
             return null;
@@ -789,8 +823,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return null;
         var sklPath = skn.Path[..^4] + ".skl";
         var hash = HashAlgorithms.WadPath(sklPath);
-        if (!_archive.TryGetEntry(hash, out var sklEntry)) return null;
-        try { return SkeletonDecoder.Decode(_archive.Extract(sklEntry)); }
+        if (!TryResolveEntry(hash, out var sklEntry)) return null;
+        try { return SkeletonDecoder.Decode(ReadAsset(sklEntry.PathHash)); }
         catch { return null; }
     }
 
@@ -889,6 +923,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var entry = SelectedNode?.Entry;
         if (entry is null) { _log.Warn("Project", "Select an asset to replace."); return; }
+        if (!GuardEditable(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         var file = await Dialogs.OpenFileAsync($"Replace {entry.DisplayName}", DialogService.All);
@@ -961,9 +996,236 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // ---- Build -----------------------------------------------------------
 
+    // ---- Project folder mode (M11) --------------------------------------
+
+    [RelayCommand]
+    private async Task OpenProjectFolder()
+    {
+        var folder = await Dialogs.OpenFolderAsync("Open project folder");
+        if (folder is null) return;
+        try
+        {
+            var project = ReyProjectService.OpenFolder(folder);
+            Project = project;
+            _overrides.LoadFrom(project);
+            _archive?.Dispose(); _archive = null;
+            BuildMounts();
+            BuildProjectTree();
+            ClearViewport(); Inspector.Clear(); BinEditor.Clear(); MaterialEditor.Clear();
+            ProjectMode = true; InspectionMode = false;
+            HasMaterialData = false; HasInspectorBody = false;
+            UpdateTitle();
+            Status = $"Project '{project.Name}' — {_mounts!.Count:n0} assets across {_mounts.Mounts.Count} mount(s)";
+            _log.Success("Project", $"Opened '{project.Name}': {project.ProjectFolders.Count} folder(s), {project.ProjectWads.Count} WAD(s), {project.ReferenceWads.Count} Riot reference(s); {_mounts.Count:n0} assets mounted.");
+            if (project.ReferenceWads.Count == 0)
+                _log.Info("Project", "No Riot references yet — add one via Project ▸ Manage Riot References to preview/copy source assets.");
+        }
+        catch (Exception ex) { _log.Error("Project", ex.Message); }
+    }
+
+    private void BuildMounts()
+    {
+        _mounts?.Dispose();
+        _mounts = new AssetMountService();
+        if (Project.OverridesDirectory is { } ov) _mounts.Add(new OverrideMount(ov, _resolver));
+        foreach (var f in Project.ProjectFolders)
+            try { _mounts.Add(new FolderMount(Project.ResolveProjectPath(f), _resolver, f == "." ? Project.Name : f)); }
+            catch (Exception ex) { _log.Warn("Project", $"folder {f}: {ex.Message}"); }
+        foreach (var w in Project.ProjectWads)
+            try { _mounts.Add(new WadMount(WadArchive.Open(Project.ResolveProjectPath(w), _resolver), AssetSourceKind.ProjectWad, editable: true)); }
+            catch (Exception ex) { _log.Warn("Project", $"WAD {w}: {ex.Message}"); }
+        foreach (var r in Project.ReferenceWads)
+            try { _mounts.Add(new WadMount(WadArchive.Open(r, _resolver), AssetSourceKind.RiotReference, editable: false, name: Path.GetFileName(r))); }
+            catch (Exception ex) { _log.Warn("Project", $"reference {Path.GetFileName(r)}: {ex.Message}"); }
+        _mounts.Rebuild();
+    }
+
+    private void BuildProjectTree()
+    {
+        if (_mounts is null) return;
+        RootNodes.Clear();
+        _nodesByHash.Clear();
+
+        var projectGroup = new AssetTreeNode { Name = "Project", IsFolder = true };
+        foreach (var mount in _mounts.Mounts.Where(m => m.Kind != AssetSourceKind.RiotReference))
+        {
+            var entries = mount.Enumerate().Select(a => a.ToEntry()).ToList();
+            if (entries.Count == 0) continue;
+            projectGroup.Children.Add(AssetTree.Build(entries, mount.Name));
+        }
+
+        var riotGroup = new AssetTreeNode { Name = "Riot References", IsFolder = true };
+        foreach (var mount in _mounts.Mounts.Where(m => m.Kind == AssetSourceKind.RiotReference))
+            riotGroup.Children.Add(AssetTree.Build(mount.Enumerate().Select(a => a.ToEntry()).ToList(), mount.Name));
+
+        var projectVm = new AssetNodeViewModel(projectGroup);
+        var riotVm = new AssetNodeViewModel(riotGroup);
+        RootNodes.Add(projectVm);
+        if (riotGroup.Children.Count > 0) RootNodes.Add(riotVm);
+
+        // Index Riot first, then Project, so a conflicted asset's *project* node wins status updates.
+        IndexNodes(riotVm);
+        IndexNodes(projectVm);
+        RefreshAllStatuses();
+    }
+
+    /// <summary>Re-enumerate the override mount after a save/copy so reads + conflicts reflect new files.</summary>
+    private void RefreshOverrideMount()
+    {
+        if (_mounts is null) return;
+        BuildMounts();
+    }
+
+    [RelayCommand]
+    private async Task ManageRiotReferences()
+    {
+        if (!ProjectMode) { _log.Warn("Project", "Open a project folder first."); return; }
+        var path = await Dialogs.OpenFileAsync("Add Riot reference WAD", DialogService.Wad, DialogService.All);
+        if (path is null) return;
+        if (Project.ReferenceWads.Contains(path, StringComparer.OrdinalIgnoreCase)) { _log.Info("Project", "Reference already added."); return; }
+        Project.ReferenceWads.Add(path);
+        Project.IsDirty = true;
+        ReyProjectService.Save(Project, Project.ProjectFilePath!);
+        BuildMounts();
+        BuildProjectTree();
+        _log.Success("Project", $"Added Riot reference {Path.GetFileName(path)} — {_mounts!.Count:n0} assets now mounted.");
+    }
+
+    [RelayCommand]
+    private void CopyAssetToProject()
+    {
+        var entry = SelectedNode?.Entry;
+        if (entry is null) { _log.Warn("Project", "Select an asset to copy."); return; }
+        if (!ProjectMode || _mounts is null) { _log.Warn("Project", "Copy to Project needs an open project."); return; }
+        if (entry.SourceKind != AssetSourceKind.RiotReference)
+        { _log.Info("Project", "Asset is already editable in the project."); return; }
+
+        try
+        {
+            var bytes = ReadAsset(entry.PathHash);
+            var ext = Path.GetExtension(entry.IsResolved ? entry.Path : ".bin");
+            var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, string.IsNullOrEmpty(ext) ? ".bin" : ext);
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = entry.PathHash,
+                ResolvedPath = entry.IsResolved ? entry.Path : null,
+                OverrideFile = dest,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            Project.IsDirty = true;
+            RefreshOverrideMount();
+            BuildProjectTree();
+            if (_nodesByHash.TryGetValue(entry.PathHash, out var node)) SelectedNode = node;
+            UpdateTitle();
+            _log.Success("Project", $"Copied {entry.DisplayName} into the project ({bytes.Length:n0} bytes). It is now editable.");
+        }
+        catch (Exception ex) { _log.Error("Project", ex.Message); }
+    }
+
+    /// <summary>Block editing read-only Riot assets; suggest Copy to Project.</summary>
+    private bool GuardEditable(WadAssetEntry? entry)
+    {
+        if (ProjectMode && entry is { SourceKind: AssetSourceKind.RiotReference })
+        {
+            _log.Warn("Project", $"'{entry.DisplayName}' is a read-only Riot asset. Right-click ▸ Copy Asset To Project to edit it.");
+            return false;
+        }
+        return true;
+    }
+
+    [RelayCommand]
+    private async Task BuildProject()
+    {
+        if (_mounts is null || Project.RootPath is null) { _log.Warn("Build", "Open a project folder first."); return; }
+        var buildRoot = Project.OutputDirectory ?? Path.Combine(Project.RootPath, "Build");
+        if (BuildSafety.IsInsideGameInstall(buildRoot))
+        { _log.Error("Build", "Refusing to build into a Riot/League install folder. Change the output directory in Project Settings."); return; }
+
+        _overrides.SaveTo(Project);
+        ReyProjectService.Save(Project, Project.ProjectFilePath!);
+        Directory.CreateDirectory(buildRoot);
+        _log.Info("Build", $"Building project '{Project.Name}' → {buildRoot}");
+        IsBuilding = true; Status = "Building project…";
+        try
+        {
+            await Task.Run(() => BuildProjectCore(buildRoot));
+            Status = $"Built project to {buildRoot}";
+            _log.Success("Build", $"Project build ready: {buildRoot}. Open it via File ▸ Open Project Folder to verify.");
+        }
+        catch (Exception ex) { _log.Error("Build", ex.Message); }
+        finally { IsBuilding = false; }
+    }
+
+    private void BuildProjectCore(string buildRoot)
+    {
+        var overridesByHash = _overrides.All.ToDictionary(o => o.PathHash, o => o.OverrideFile);
+        int wads = 0, staged = 0, files = 0, skipped = 0;
+
+        // Project WADs: safe in-place replace of existing chunks.
+        foreach (var w in Project.ProjectWads)
+        {
+            var src = Project.ResolveProjectPath(w);
+            if (!File.Exists(src)) { _log.Warn("Build", $"missing project WAD {w}"); continue; }
+            using var arc = WadArchive.Open(src, _resolver);
+            var apply = new Dictionary<ulong, byte[]>();
+            foreach (var (hash, file) in overridesByHash)
+                if (arc.TryGetEntry(hash, out _) && File.Exists(file)) apply[hash] = File.ReadAllBytes(file);
+            var outWad = Path.Combine(buildRoot, Path.GetFileName(w));
+            var report = new BuildReport { OutputPath = outWad };
+            WadRepackService.Repack(src, apply, outWad, report);
+            foreach (var i in report.Issues) _log.Warn("Build", i.Message);
+            _log.Info("Build", $"WAD {Path.GetFileName(w)}: {apply.Count} replaced → {Path.GetFileName(outWad)}");
+            wads++;
+        }
+
+        // Project folders: stage (copy tree + apply overrides as files — new files are safe in folder format).
+        foreach (var f in Project.ProjectFolders)
+        {
+            var srcFolder = Project.ResolveProjectPath(f);
+            var name = f == "." ? Project.Name : f.Replace('/', '_');
+            var outFolder = Path.Combine(buildRoot, name);
+            files += CopyTree(srcFolder, outFolder);
+            staged++;
+        }
+
+        // Apply overrides into the (folder) build output at their resolved path.
+        if (Project.ProjectFolders.Count > 0)
+        {
+            var name0 = Project.ProjectFolders[0] == "." ? Project.Name : Project.ProjectFolders[0].Replace('/', '_');
+            var outFolder = Path.Combine(buildRoot, name0);
+            foreach (var ov in _overrides.All)
+            {
+                if (!File.Exists(ov.OverrideFile)) { skipped++; continue; }
+                string rel = ov.ResolvedPath ?? $"0x{ov.PathHash:x16}{Path.GetExtension(ov.OverrideFile)}";
+                var dest = Path.Combine(outFolder, rel.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.Copy(ov.OverrideFile, dest, overwrite: true);
+                files++;
+            }
+        }
+
+        _log.Info("Build", $"project WADs: {wads} · staged folders: {staged} · files written: {files:n0} · skipped: {skipped}");
+    }
+
+    private static int CopyTree(string src, string dst)
+    {
+        int n = 0;
+        foreach (var file in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(src, file);
+            if (rel.StartsWith(".reyengine", StringComparison.OrdinalIgnoreCase)) continue;
+            var dest = Path.Combine(dst, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.Copy(file, dest, overwrite: true);
+            n++;
+        }
+        return n;
+    }
+
     [RelayCommand]
     private async Task BuildPackage()
     {
+        if (ProjectMode) { await BuildProject(); return; }
         if (!await EnsureProjectSavedAsync()) return;
         _overrides.SaveTo(Project);
         ReyProjectService.Save(Project, Project.ProjectFilePath!);

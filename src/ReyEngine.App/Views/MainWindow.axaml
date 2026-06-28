@@ -19,12 +19,13 @@
     <!-- ============ TOP MENU ============ -->
     <Menu DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}">
       <MenuItem Header="_File">
+        <MenuItem Header="Open Project Folder…" Command="{Binding OpenProjectFolderCommand}" />
         <MenuItem Header="New Project…" Command="{Binding NewProjectCommand}" />
         <MenuItem Header="Open Project…" Command="{Binding OpenProjectCommand}" />
         <MenuItem Header="Save Project" Command="{Binding SaveProjectCommand}" />
         <MenuItem Header="Save Project As…" Command="{Binding SaveProjectAsCommand}" />
         <Separator />
-        <MenuItem Header="Open WAD…" Command="{Binding OpenWadCommand}" />
+        <MenuItem Header="Open WAD (inspect)…" Command="{Binding OpenWadCommand}" />
         <MenuItem Header="Export Selected…" Command="{Binding ExportSelectedCommand}" />
         <Separator />
         <MenuItem Header="Exit" Command="{Binding ExitCommand}" />
@@ -49,7 +50,8 @@
         <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
         <MenuItem Header="Open Build Folder" Command="{Binding OpenBuildFolderCommand}" />
         <Separator />
-        <MenuItem Header="Reload WAD" Command="{Binding ReloadWadCommand}" />
+        <MenuItem Header="Manage Riot References…" Command="{Binding ManageRiotReferencesCommand}" />
+        <MenuItem Header="Sync Hashes" Command="{Binding SyncHashesCommand}" />
       </MenuItem>
       <MenuItem Header="_Help">
         <MenuItem Header="About ReyEngine" IsEnabled="False" />
@@ -76,6 +78,13 @@
       </StackPanel>
     </Border>
 
+    <!-- ============ INSPECTION-MODE BANNER (M11) ============ -->
+    <Border DockPanel.Dock="Top" Background="#2A2113" BorderBrush="#FFB454" BorderThickness="0,0,0,1"
+            Padding="10,4" IsVisible="{Binding InspectionMode}">
+      <TextBlock Text="🔍 Single-WAD inspection mode — open a project folder (File ▸ Open Project Folder) to edit and build mods."
+                 Foreground="#FFD9A0" FontSize="11" />
+    </Border>
+
     <!-- ============ STATUS BAR ============ -->
     <Border DockPanel.Dock="Bottom"
             Background="{DynamicResource ReyHeaderBrush}"
@@ -99,6 +108,8 @@
                 <StackPanel Orientation="Horizontal" Spacing="8">
                   <StackPanel.ContextMenu>
                     <ContextMenu>
+                      <MenuItem Header="Copy Asset To Project" Command="{Binding $parent[TreeView].DataContext.CopyAssetToProjectCommand}" />
+                      <Separator />
                       <MenuItem Header="Replace Selected Asset…" Command="{Binding $parent[TreeView].DataContext.ReplaceSelectedCommand}" />
                       <MenuItem Header="Import New Asset…" Command="{Binding $parent[TreeView].DataContext.ImportNewAssetCommand}" />
                       <MenuItem Header="Revert Asset" Command="{Binding $parent[TreeView].DataContext.RevertSelectedCommand}" />
@@ -118,6 +129,12 @@
                   </Border>
                   <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextBrush}"
                              FontSize="12" VerticalAlignment="Center" />
+                  <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="3" Padding="3,0" VerticalAlignment="Center"
+                          IsVisible="{Binding HasSourceTag}">
+                    <TextBlock Text="{Binding SourceTag}" FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" />
+                  </Border>
+                  <TextBlock Text="🔒" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding IsReadOnly}" ToolTip.Tip="Read-only Riot asset" />
+                  <TextBlock Text="⚠" FontSize="9" Foreground="#FFB454" VerticalAlignment="Center" IsVisible="{Binding HasConflict}" ToolTip.Tip="In multiple sources (project shadows Riot)" />
                   <Ellipse Width="7" Height="7" VerticalAlignment="Center"
                            Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsModified}" />
                 </StackPanel>

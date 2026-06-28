@@ -25,6 +25,17 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
     public WadAssetEntry? Entry => Model.Entry;
     public bool IsModified => Status == AssetStatus.Modified;
 
+    public bool IsReadOnly => Entry is { ReadOnly: true };
+    public bool HasConflict => Entry is { HasConflict: true };
+    public string SourceTag => IsFolder ? "" : Entry?.SourceKind switch
+    {
+        AssetSourceKind.ProjectOverride => "OVR",
+        AssetSourceKind.ProjectFolder or AssetSourceKind.ProjectWad => "PRJ",
+        AssetSourceKind.RiotReference => "RIOT",
+        _ => "",
+    };
+    public bool HasSourceTag => SourceTag.Length > 0;
+
     public string Kind => IsFolder
         ? "DIR"
         : Entry?.Type switch
