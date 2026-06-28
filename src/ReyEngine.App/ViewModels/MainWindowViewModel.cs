@@ -13,6 +13,7 @@ using ReyEngine.Core.Diagnostics;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Projects;
 using ReyEngine.Core.Wad;
+using ReyEngine.Formats.Animation;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Meta;
@@ -34,6 +35,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public InspectorViewModel Inspector { get; } = new();
     public MeshInspectorViewModel MeshInspector { get; } = new();
     public MapGeoInspectorViewModel MapGeoInspector { get; } = new();
+    public AnimationInspectorViewModel Animation { get; } = new();
     public ObservableCollection<AssetNodeViewModel> RootNodes { get; } = new();
     public ObservableCollection<BinNodeViewModel> BinTreeRoots { get; } = new();
 
@@ -48,6 +50,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private MeshAsset? _currentMesh;
     [ObservableProperty] private SkeletonAsset? _currentSkeleton;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelTextures;
+    [ObservableProperty] private AnimationClip? _currentAnimation;
+    [ObservableProperty] private double _animationTime;
     [ObservableProperty] private bool _showWireframe;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;
@@ -65,6 +69,51 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _resolver = new WadPathResolver(db);
         if (db.WadCount + db.BinCount == 0)
             _log.Warn("Hashes", "No hash dictionary yet. Use Tools ▸ Sync Hashes to download from CommunityDragon.");
+
+        Animation.ClipLoader = DecodeAnimation;
+        Animation.ClipChanged = clip => CurrentAnimation = clip;
+        Animation.TimeChanged = t => AnimationTime = t;
+    }
+
+    // ---- Animation ------------------------------------------------------
+
+    private AnimationClip? DecodeAnimation(WadAssetEntry entry)
+    {
+        if (_archive is null) return null;
+        try { return AnimationDecoder.Decode(_archive.Extract(entry), entry.DisplayName); }
+        catch (Exception ex) { _log.Error("Anim", $"{entry.DisplayName}: {ex.Message}"); return null; }
+    }
+
+    private IEnumerable<AnimationEntryViewModel> FindAnimations(WadAssetEntry skn)
+    {
+        if (_archive is null || !skn.IsResolved) return Enumerable.Empty<AnimationEntryViewModel>();
+        var parts = skn.Path.Split('/');
+        int ci = Array.FindIndex(parts, p => p.Equals("characters", StringComparison.OrdinalIgnoreCase));
+        string champ = ci >= 0 && ci + 1 < parts.Length ? parts[ci + 1] : "";
+        var marker = $"/characters/{champ}/";
+        return _archive.Entries
+            .Where(e => e.IsResolved && e.Path.EndsWith(".anm", StringComparison.OrdinalIgnoreCase)
+                        && (champ.Length == 0 || e.Path.Contains(marker, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(e => e.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(e => new AnimationEntryViewModel(e))
+            .ToList();
+    }
+
+    [RelayCommand]
+    private async Task AssignAnimation()
+    {
+        if (CurrentMesh is not { CanSkin: true } || CurrentSkeleton is null)
+        { _log.Warn("Anim", "Select a skinned champion (.skn with a skeleton) first."); return; }
+        var anmType = new FilePickerFileType("Animation") { Patterns = new[] { "*.anm" } };
+        var path = await Dialogs.OpenFileAsync("Assign animation (.anm)", anmType, DialogService.All);
+        if (path is null) return;
+        try
+        {
+            var clip = AnimationDecoder.Decode(File.ReadAllBytes(path), Path.GetFileName(path));
+            Animation.SetExternalClip(clip);
+            _log.Success("Anim", $"Assigned {Path.GetFileName(path)} ({clip.Duration:0.00}s, {clip.Fps:0.#} fps).");
+        }
+        catch (Exception ex) { _log.Error("Anim", ex.Message); }
     }
 
     // ---- WAD ------------------------------------------------------------
@@ -272,6 +321,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentMesh = null;
         CurrentSkeleton = null;
         CurrentModelTextures = null;
+        CurrentAnimation = null;
+        AnimationTime = 0;
+        Animation.Clear();
         MeshInspector.Clear();
         MapGeoInspector.Clear();
     }
@@ -342,6 +394,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 CurrentModelTextures = textures;
                 ShowBones = skeleton is not null;
                 MeshInspector.ShowMesh(mesh, skeleton);
+                Animation.SetSkeleton(skeleton?.BoneCount ?? 0);
+                Animation.SetAnimations(mesh.CanSkin && skeleton is not null
+                    ? FindAnimations(entry)
+                    : Enumerable.Empty<AnimationEntryViewModel>());
                 _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris, {mesh.SubMeshes.Count} submesh(es)" +
                                      (skeleton is null ? "" : $", {skeleton.BoneCount} bones"));
             });

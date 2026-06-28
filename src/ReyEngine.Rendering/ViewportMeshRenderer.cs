@@ -19,6 +19,8 @@ public sealed class ViewportMeshRenderer : IDisposable
     private uint _vao, _vbo, _ebo, _wireEbo;
     private int _indexCount, _wireIndexCount;
     private bool _hasMesh;
+    private float[]? _interleaved; // kept so per-frame skinning can update pos+normal in place
+    private int _meshVertexCount;
 
     private uint _whiteTex;
     private SubmeshDraw[] _submeshes = Array.Empty<SubmeshDraw>();
@@ -120,6 +122,8 @@ void main() { FragColor = uColor; }";
             interleaved[i * 8 + 6] = uvs[i * 2 + 0];
             interleaved[i * 8 + 7] = uvs[i * 2 + 1];
         }
+        _interleaved = interleaved;
+        _meshVertexCount = vertexCount;
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -191,6 +195,25 @@ void main() { FragColor = uColor; }";
     {
         if (!_ready || !_hasMesh || index < 0 || index >= _submeshes.Length) return;
         _submeshes[index].Texture = textureId;
+    }
+
+    /// <summary>Replace pos+normal of the existing mesh (keeps UVs/indices/textures) — for per-frame skinning.</summary>
+    public unsafe void UpdateVertices(float[] positions, float[] normals)
+    {
+        if (!_ready || !_hasMesh || _interleaved is null) return;
+        int vc = Math.Min(_meshVertexCount, Math.Min(positions.Length / 3, normals.Length / 3));
+        for (int i = 0; i < vc; i++)
+        {
+            _interleaved[i * 8 + 0] = positions[i * 3 + 0];
+            _interleaved[i * 8 + 1] = positions[i * 3 + 1];
+            _interleaved[i * 8 + 2] = positions[i * 3 + 2];
+            _interleaved[i * 8 + 3] = normals[i * 3 + 0];
+            _interleaved[i * 8 + 4] = normals[i * 3 + 1];
+            _interleaved[i * 8 + 5] = normals[i * 3 + 2];
+        }
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
+        fixed (float* p = _interleaved)
+            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(_interleaved.Length * sizeof(float)), p);
     }
 
     public void SetBoneSegments(float[]? lineVerts)

@@ -56,6 +56,30 @@ public static class SkinnedMeshDecoder
             }
         }
 
+        int[]? blendIndices = null;
+        float[]? blendWeights = null;
+        if (view.TryGetAccessor(ElementName.BlendIndex, out var biAccessor) &&
+            view.TryGetAccessor(ElementName.BlendWeight, out var bwAccessor))
+        {
+            try
+            {
+                var bi = biAccessor.AsXyzwU8Array();
+                var bw = bwAccessor.AsVector4Array();
+                blendIndices = new int[vc * 4];
+                blendWeights = new float[vc * 4];
+                for (int i = 0; i < vc; i++)
+                {
+                    var b = bi[i];
+                    blendIndices[i * 4] = b.x; blendIndices[i * 4 + 1] = b.y;
+                    blendIndices[i * 4 + 2] = b.z; blendIndices[i * 4 + 3] = b.w;
+                    var w = bw[i];
+                    blendWeights[i * 4] = w.X; blendWeights[i * 4 + 1] = w.Y;
+                    blendWeights[i * 4 + 2] = w.Z; blendWeights[i * 4 + 3] = w.W;
+                }
+            }
+            catch { blendIndices = null; blendWeights = null; }
+        }
+
         IndexArray ia = skn.Indices;
         var indices = new uint[ia.Count];
         for (int i = 0; i < ia.Count; i++) indices[i] = ia[i];
@@ -76,6 +100,8 @@ public static class SkinnedMeshDecoder
             SubMeshes = subs,
             BoundsMin = min,
             BoundsMax = max,
+            BlendIndices = blendIndices,
+            BlendWeights = blendWeights,
         };
     }
 }

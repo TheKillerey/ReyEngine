@@ -5,10 +5,10 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M5 complete.** Adds a **project system** (`.reyproject`) and a non-destructive **Build
-> Package** pipeline: replace assets in a WAD and repack a new `.wad.client` that reopens with the
-> changes. On top of M1–M4 preview (textured champions, `.bin` inspector, textured MAPGEO). Verified:
-> replace a texture in Aatrox → build → reopen → modified texture present; unmodified chunks intact.
+> Status: **M6 complete.** Adds **`.anm` animation playback** for skinned champions (CPU skinning) —
+> on top of M5's project/Build-Package pipeline and M1–M4 preview (textured champions, `.bin` inspector,
+> textured MAPGEO). Verified: Aatrox loads its skeleton + animations, CPU-skins, and plays textured
+> with timeline/play/speed/loop.
 
 ---
 
@@ -51,8 +51,9 @@ ReyEngine.sln
 │   ├─ Build/                 # WadRepackService, BuildPackageService, BuildReport, BuildSafety (M5)
 │   └─ ReyPaths.cs
 ├─ src/ReyEngine.Formats/      # No UI. SKN/SKL/MAPGEO decoding → plain data. (refs Core + LeagueToolkit)
-│   ├─ Meshes/                # MeshAsset, SkinnedMeshDecoder
-│   ├─ Skeletons/             # SkeletonAsset, SkeletonDecoder
+│   ├─ Meshes/                # MeshAsset (+blend data), SkinnedMeshDecoder
+│   ├─ Skeletons/             # SkeletonAsset (+joints/influences), SkeletonDecoder
+│   ├─ Animation/             # AnimationClip, AnimationDecoder, SkinnedMeshAnimator (CPU skinning, M6)
 │   ├─ Meta/                  # BinDocument, SkinMaterialExtractor (M4)
 │   └─ MapGeo/                # MapGeoAsset, MapGeoDecoder (M4) — reuses the mesh renderer
 ├─ src/ReyEngine.Rendering/    # No UI, no Avalonia. Pure Silk.NET GL + System.Numerics.
@@ -89,7 +90,8 @@ reference the UI, so the pipeline is unit-testable and reusable (e.g. a future C
 - [x] **MAPGEO rendering** — `.mapgeo` decoded + **textured** from map materials `.bin` (Summoner's Rift verified)
 - [x] **Project system** — `.reyproject` (new/open/save), asset override tracking, modified markers in the tree
 - [x] **Build Package** — non-destructive WAD repack (copy + append + TOC patch) + build validation; never writes into the game install
-- [ ] Add brand-new chunks (TOC rebuild) · ANM animation playback (M6)
+- [x] **Animation playback** — `.anm` decoded + CPU-skinned onto the champion; play/pause/timeline/speed/loop, textures + bones preserved
+- [ ] Add brand-new chunks (TOC rebuild) · GPU skinning · sound preview
 
 ## 4. Data pipeline: WAD → decoded asset → preview
 
@@ -170,6 +172,7 @@ No Play button — this is an editor, not a runtime.
 | **M3 ✅** | CommunityDragon hash sync + cache + path resolution · SKN mesh + SKL bone rendering · mesh inspector |
 | **M4 ✅** | `.bin` property tree · textured champion · textured MAPGEO (SR verified) · -X orientation |
 | **M5 ✅** | project system (`.reyproject`) · replace WAD assets · Build Package (repack + reopen-validate) · install-folder guard |
+| **M6 ✅** | ANM animation playback (CPU skinning) · animation panel (play/timeline/speed/loop) · textures + bones during playback |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
@@ -221,3 +224,14 @@ WAD's tree refreshes `0x…` → readable paths in place. The full sync is ~250 
    `<workspace>/build/<project>/` (it refuses to write into a Riot/League folder).
 5. `File ▸ Open WAD` → the built file → navigate to the replaced texture → it shows the new image; everything else intact.
 6. Right-click the asset → **Revert Asset**, build again → the original texture returns.
+
+### M6 animation checklist (champion playback)
+
+1. Open `Champions/Aatrox.wad.client`, navigate to `assets/characters/aatrox/skins/base/aatrox.skn`, click it.
+   The textured mesh appears and the Inspector's **ANIMATION** panel shows *Skeleton: 127 bones*.
+2. Pick an animation from the dropdown (e.g. `*idle*` or `*run*`) → it loads and starts playing; the model moves,
+   stays textured, and the timeline + `0.00 / N.NN s (frame …)` advance.
+3. **Play / Pause**, drag the **timeline**, change **Speed** (0.1–2×), toggle **Loop**, **◀| / |▶** step frames.
+4. Toggle **Bones** (top-right of the viewport) → the skeleton overlay animates with the mesh.
+5. If a champion's animations don't auto-list, `Tools ▸ Assign Animation…` to load a `.anm` from disk.
+6. Selecting a non-mesh asset (texture/mapgeo) stops playback cleanly; mapgeo still renders textured (no regression).

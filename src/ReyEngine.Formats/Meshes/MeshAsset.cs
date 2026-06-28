@@ -11,6 +11,11 @@ public sealed class MeshAsset
     public required uint[] Indices { get; init; }
     public required IReadOnlyList<SubMeshInfo> SubMeshes { get; init; }
 
+    // Skinning inputs (4 influences / vertex); null for non-skinned meshes (e.g. mapgeo).
+    public int[]? BlendIndices { get; init; }
+    public float[]? BlendWeights { get; init; }
+    public bool CanSkin => BlendIndices is not null && BlendWeights is not null;
+
     public int VertexCount { get; init; }
     public int IndexCount => Indices.Length;
     public int TriangleCount => Indices.Length / 3;

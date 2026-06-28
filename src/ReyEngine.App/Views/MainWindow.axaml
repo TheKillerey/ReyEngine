@@ -41,6 +41,7 @@
         <Separator />
         <MenuItem Header="Hash Lookup" Command="{Binding HashLookupCommand}" />
         <MenuItem Header="Assign Skeleton…" Command="{Binding AssignSkeletonCommand}" />
+        <MenuItem Header="Assign Animation…" Command="{Binding AssignAnimationCommand}" />
         <MenuItem Header="Shader Preview" Command="{Binding ShaderPreviewCommand}" />
         <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
       </MenuItem>
@@ -136,6 +137,8 @@
                 Mesh="{Binding CurrentMesh}"
                 ModelTextures="{Binding CurrentModelTextures}"
                 Skeleton="{Binding CurrentSkeleton}"
+                AnimationClip="{Binding CurrentAnimation}"
+                AnimationTime="{Binding AnimationTime}"
                 Wireframe="{Binding ShowWireframe}"
                 ShowBones="{Binding ShowBones}"
                 ShowBounds="{Binding ShowBounds}" />
@@ -240,6 +243,42 @@
                 <TextBlock Text="Submeshes / materials" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
                 <TextBlock Text="{Binding MeshInspector.SubMeshes}" Foreground="{DynamicResource ReyTextBrush}"
                            FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
+              </StackPanel>
+
+              <!-- animation -->
+              <StackPanel Spacing="6" IsVisible="{Binding MeshInspector.HasMesh}">
+                <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
+                <TextBlock Text="ANIMATION" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding Animation.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
+
+                <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Select animation…"
+                          ItemsSource="{Binding Animation.Animations}"
+                          SelectedItem="{Binding Animation.SelectedAnimation, Mode=TwoWay}"
+                          IsVisible="{Binding Animation.HasAnimations}">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Name}" FontSize="11" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Classes="tool" Content="Assign Animation…" HorizontalAlignment="Left"
+                        Command="{Binding AssignAnimationCommand}" />
+
+                <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Animation.HasClip}">
+                  <Button Classes="tool" Content="◀|" Command="{Binding Animation.StepBackCommand}" />
+                  <Button Classes="tool" Content="Play / Pause" Command="{Binding Animation.TogglePlayCommand}" />
+                  <Button Classes="tool" Content="|▶" Command="{Binding Animation.StepForwardCommand}" />
+                  <CheckBox Content="Loop" IsChecked="{Binding Animation.Loop}" VerticalAlignment="Center" FontSize="11" />
+                </StackPanel>
+                <Slider Minimum="0" Maximum="{Binding Animation.Duration}" Value="{Binding Animation.Time, Mode=TwoWay}"
+                        IsVisible="{Binding Animation.HasClip}" />
+                <TextBlock Text="{Binding Animation.TimeText}" Foreground="{DynamicResource ReyTextDimBrush}"
+                           FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" IsVisible="{Binding Animation.HasClip}" />
+                <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding Animation.HasClip}">
+                  <TextBlock Text="Speed" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" />
+                  <Slider Minimum="0.1" Maximum="2" Value="{Binding Animation.Speed, Mode=TwoWay}" Width="130" />
+                  <TextBlock Text="{Binding Animation.Speed, StringFormat='{}{0:0.0}x'}" Foreground="{DynamicResource ReyTextBrush}" FontSize="11" VerticalAlignment="Center" />
+                </StackPanel>
               </StackPanel>
 
               <!-- mapgeo stats -->

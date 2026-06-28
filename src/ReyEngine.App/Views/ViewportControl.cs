@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using ReyEngine.Core.Decoding;
+using ReyEngine.Formats.Animation;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Skeletons;
 using ReyEngine.Rendering;
@@ -30,7 +31,13 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowBounds));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelTextures));
+    public static readonly StyledProperty<AnimationClip?> AnimationClipProperty =
+        AvaloniaProperty.Register<ViewportControl, AnimationClip?>(nameof(AnimationClip));
+    public static readonly StyledProperty<double> AnimationTimeProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(AnimationTime));
 
+    public AnimationClip? AnimationClip { get => GetValue(AnimationClipProperty); set => SetValue(AnimationClipProperty, value); }
+    public double AnimationTime { get => GetValue(AnimationTimeProperty); set => SetValue(AnimationTimeProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelTextures { get => GetValue(ModelTexturesProperty); set => SetValue(ModelTexturesProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
@@ -43,7 +50,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private GridRenderer? _grid;
     private ViewportMeshRenderer? _meshRenderer;
     private readonly OrbitCamera _camera = new();
-    private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty;
+    private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating;
 
     // Offscreen target with a real depth buffer (Avalonia's default FBO has none).
     private uint _fbo, _colorRb, _depthRb;
@@ -114,6 +121,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax, subs);
                 _needFrame = true;
                 _texturesDirty = true;
+                _skinDirty = true;
             }
             else _meshRenderer.ClearMesh();
             _meshDirty = false;
@@ -142,6 +150,11 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             _meshRenderer.SetBoneSegments(Skeleton is null ? null : BuildBoneSegments(Skeleton));
             _bonesDirty = false;
+        }
+        if (_skinDirty)
+        {
+            ApplySkinning();
+            _skinDirty = false;
         }
         if (_needFrame) { FrameCamera(); _needFrame = false; }
 
@@ -215,9 +228,33 @@ public sealed class ViewportControl : OpenGlControlBase
         base.OnPropertyChanged(change);
         if (change.Property == MeshProperty) { _meshDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelTexturesProperty) { _texturesDirty = true; RequestNextFrameRendering(); }
-        else if (change.Property == SkeletonProperty) { _bonesDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == AnimationClipProperty || change.Property == AnimationTimeProperty) { _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == WireframeProperty || change.Property == ShowBonesProperty || change.Property == ShowBoundsProperty)
-            RequestNextFrameRendering();
+        { _skinDirty = true; RequestNextFrameRendering(); }
+    }
+
+    private void ApplySkinning()
+    {
+        if (_meshRenderer is null || !_meshRenderer.HasMesh) return;
+
+        if (AnimationClip is { } clip && Mesh is { CanSkin: true } m && Skeleton is { } skeleton)
+        {
+            try
+            {
+                var frame = SkinnedMeshAnimator.Skin(m, skeleton, clip, (float)AnimationTime);
+                _meshRenderer.UpdateVertices(frame.Positions, frame.Normals);
+                if (ShowBones) _meshRenderer.SetBoneSegments(frame.BoneSegments);
+                _wasAnimating = true;
+            }
+            catch { /* keep last frame */ }
+        }
+        else if (_wasAnimating && Mesh is { } bind)
+        {
+            _meshRenderer.UpdateVertices(bind.Positions, bind.Normals);
+            if (Skeleton is { } s) _meshRenderer.SetBoneSegments(BuildBoneSegments(s));
+            _wasAnimating = false;
+        }
     }
 
     private void FrameCamera()
