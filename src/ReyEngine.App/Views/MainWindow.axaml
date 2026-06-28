@@ -115,19 +115,27 @@
       <Grid Grid.Column="2" RowDefinitions="*,4,210">
         <Border Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
           <Grid>
-            <views:ViewportControl
+            <views:ViewportControl x:Name="Viewport"
                 Mesh="{Binding CurrentMesh}"
                 Skeleton="{Binding CurrentSkeleton}"
                 Wireframe="{Binding ShowWireframe}"
                 ShowBones="{Binding ShowBones}"
                 ShowBounds="{Binding ShowBounds}" />
 
-            <!-- view toggles -->
+            <!-- transparent surface that forwards pointer input to the viewport camera -->
+            <Border x:Name="ViewportInput" Background="Transparent"
+                    PointerPressed="OnViewportPointerPressed"
+                    PointerMoved="OnViewportPointerMoved"
+                    PointerReleased="OnViewportPointerReleased"
+                    PointerWheelChanged="OnViewportPointerWheel" />
+
+            <!-- view toggles (above the input surface so they stay clickable) -->
             <StackPanel Orientation="Horizontal" Spacing="4" Margin="10"
                         HorizontalAlignment="Right" VerticalAlignment="Top">
               <ToggleButton Content="Wireframe" IsChecked="{Binding ShowWireframe}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Bones" IsChecked="{Binding ShowBones}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Bounds" IsChecked="{Binding ShowBounds}" FontSize="11" Padding="8,3" />
+              <Button Content="Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" />
             </StackPanel>
 
             <Border Background="#66000000" CornerRadius="4" Padding="8,3"

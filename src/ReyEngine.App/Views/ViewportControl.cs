@@ -1,5 +1,4 @@
 using Avalonia;
-using Avalonia.Input;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using ReyEngine.Formats.Meshes;
@@ -11,7 +10,9 @@ namespace ReyEngine.App.Views;
 
 /// <summary>
 /// OpenGL viewport: grid backdrop + selected mesh (solid/wireframe) with optional
-/// bounding box and skeleton overlays. Mesh uploads happen on the GL thread.
+/// bounding box and skeleton overlays. Mesh uploads + auto-framing happen on the GL
+/// thread. Camera input is driven externally (a transparent overlay forwards pointer
+/// events here, because a bare OpenGlControlBase is not hit-testable).
 /// </summary>
 public sealed class ViewportControl : OpenGlControlBase
 {
@@ -37,10 +38,35 @@ public sealed class ViewportControl : OpenGlControlBase
     private GridRenderer? _grid;
     private ViewportMeshRenderer? _meshRenderer;
     private readonly OrbitCamera _camera = new();
-    private bool _meshDirty, _bonesDirty;
+    private bool _meshDirty, _bonesDirty, _needFrame;
 
-    private Point _lastPointer;
-    private bool _orbiting;
+    // ---- Public camera API (driven by the input overlay) ----
+
+    public void OrbitBy(float dx, float dy)
+    {
+        _camera.Orbit(-dx * 0.01f, -dy * 0.01f);
+        RequestNextFrameRendering();
+    }
+
+    public void PanBy(float dx, float dy)
+    {
+        _camera.Pan(-dx, dy);
+        RequestNextFrameRendering();
+    }
+
+    public void ZoomBy(float wheelDelta)
+    {
+        _camera.Zoom(wheelDelta > 0 ? 0.9f : 1.1f);
+        RequestNextFrameRendering();
+    }
+
+    public void RequestFrame()
+    {
+        _needFrame = true;
+        RequestNextFrameRendering();
+    }
+
+    // ---- GL lifecycle ----
 
     protected override void OnOpenGlInit(GlInterface gl)
     {
@@ -52,7 +78,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _meshRenderer = new ViewportMeshRenderer();
         _meshRenderer.Initialize(_gl, _gles);
 
-        if (Mesh is not null) { _meshDirty = true; FrameCamera(); }
+        if (Mesh is not null) { _meshDirty = true; }
         if (Skeleton is not null) _bonesDirty = true;
         RequestNextFrameRendering();
     }
@@ -73,9 +99,11 @@ public sealed class ViewportControl : OpenGlControlBase
         if (_meshDirty)
         {
             if (Mesh is { } m)
+            {
                 _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax);
-            else
-                _meshRenderer.ClearMesh();
+                _needFrame = true;
+            }
+            else _meshRenderer.ClearMesh();
             _meshDirty = false;
         }
         if (_bonesDirty)
@@ -83,6 +111,7 @@ public sealed class ViewportControl : OpenGlControlBase
             _meshRenderer.SetBoneSegments(Skeleton is null ? null : BuildBoneSegments(Skeleton));
             _bonesDirty = false;
         }
+        if (_needFrame) { FrameCamera(); _needFrame = false; }
 
         float scale = (float)(VisualRoot?.RenderScaling ?? 1.0);
         uint w = (uint)Math.Max(1, Bounds.Width * scale);
@@ -104,7 +133,7 @@ public sealed class ViewportControl : OpenGlControlBase
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == MeshProperty) { _meshDirty = true; FrameCamera(); RequestNextFrameRendering(); }
+        if (change.Property == MeshProperty) { _meshDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == WireframeProperty || change.Property == ShowBonesProperty || change.Property == ShowBoundsProperty)
             RequestNextFrameRendering();
@@ -113,8 +142,12 @@ public sealed class ViewportControl : OpenGlControlBase
     private void FrameCamera()
     {
         if (Mesh is not { } m) return;
+        float radius = MathF.Max(m.Radius, 1f);
+        float dist = radius / MathF.Sin(_camera.FieldOfView * 0.5f) * 1.25f; // fit sphere + margin
         _camera.Target = m.Center;
-        _camera.Distance = Math.Clamp(m.Radius * 2.6f, 20f, 50000f);
+        _camera.Distance = Math.Clamp(dist, 5f, 100000f);
+        _camera.Near = MathF.Max(dist * 0.01f, 0.05f);
+        _camera.Far = dist * 40f + radius * 20f;
     }
 
     private static float[] BuildBoneSegments(SkeletonAsset skeleton)
@@ -130,43 +163,5 @@ public sealed class ViewportControl : OpenGlControlBase
             verts.Add(parent.WorldPosition.X); verts.Add(parent.WorldPosition.Y); verts.Add(parent.WorldPosition.Z);
         }
         return verts.ToArray();
-    }
-
-    protected override void OnPointerPressed(PointerPressedEventArgs e)
-    {
-        base.OnPointerPressed(e);
-        _orbiting = true;
-        _lastPointer = e.GetPosition(this);
-        e.Pointer.Capture(this);
-    }
-
-    protected override void OnPointerMoved(PointerEventArgs e)
-    {
-        base.OnPointerMoved(e);
-        if (!_orbiting) return;
-        var p = e.GetPosition(this);
-        var dx = (float)(p.X - _lastPointer.X);
-        var dy = (float)(p.Y - _lastPointer.Y);
-        _lastPointer = p;
-
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-            _camera.Pan(-dx, dy);
-        else
-            _camera.Orbit(-dx * 0.01f, -dy * 0.01f);
-        RequestNextFrameRendering();
-    }
-
-    protected override void OnPointerReleased(PointerReleasedEventArgs e)
-    {
-        base.OnPointerReleased(e);
-        _orbiting = false;
-        e.Pointer.Capture(null);
-    }
-
-    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
-    {
-        base.OnPointerWheelChanged(e);
-        _camera.Zoom(e.Delta.Y > 0 ? 0.9f : 1.1f);
-        RequestNextFrameRendering();
     }
 }
