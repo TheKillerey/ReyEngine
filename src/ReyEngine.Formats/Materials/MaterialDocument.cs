@@ -38,6 +38,32 @@ public sealed class MaterialDocument
         return ms.ToArray();
     }
 
+    /// <summary>Diffuse texture path for the base mesh (submeshes with no material override). Reads live (reflects edits).</summary>
+    public string? DefaultDiffusePath =>
+        Materials.Where(m => m.IsDefault).Select(m => m.Diffuse?.Path).FirstOrDefault(p => !string.IsNullOrEmpty(p));
+
+    /// <summary>Champion: submesh name → diffuse texture path (live). Each material's submeshes resolve to its diffuse slot.</summary>
+    public Dictionary<string, string> SubmeshDiffuse()
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var b in Materials)
+        {
+            var d = b.Diffuse?.Path;
+            if (string.IsNullOrEmpty(d)) continue;
+            foreach (var sub in b.Submeshes) map[sub] = d;
+        }
+        return map;
+    }
+
+    /// <summary>Map (or any): material name → diffuse texture path (live).</summary>
+    public Dictionary<string, string> MaterialDiffuse()
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var b in Materials)
+            if (b.Diffuse?.Path is { Length: > 0 } d) map[b.Name] = d;
+        return map;
+    }
+
     public static MaterialDocument Parse(byte[] data, Func<uint, string?> resolve)
     {
         var tree = new BinTree(new MemoryStream(data, writable: false));
@@ -46,6 +72,7 @@ public sealed class MaterialDocument
 
         // Champion: default diffuse + reverse map material-object -> submesh(es) from materialOverride.
         var assignment = new Dictionary<uint, List<string>>();
+        uint? defaultMaterialHash = null;
         if (champion)
         {
             foreach (var o in tree.Objects.Values)
@@ -54,8 +81,11 @@ public sealed class MaterialDocument
 
                 if (Field(smp.Properties, "texture") is BinTreeString defTex)
                     materials.Add(new MaterialBinding(
-                        "(skin default texture)", "SkinMeshDataProperties", "(base mesh)",
+                        "(skin default texture)", "SkinMeshDataProperties", Array.Empty<string>(), isDefault: true,
                         new List<TextureSlot> { new("texture", defTex) }, new List<MaterialParameter>()));
+
+                // The default material applies to every submesh not covered by an override.
+                if (Field(smp.Properties, "material") is BinTreeObjectLink defMat) defaultMaterialHash = defMat.Value;
 
                 if (Field(smp.Properties, "materialOverride") is BinTreeContainer overrides)
                 {
@@ -72,7 +102,7 @@ public sealed class MaterialDocument
                         }
                         if (Field(ov.Properties, "texture") is BinTreeString inlineTex)
                             materials.Add(new MaterialBinding(
-                                $"(inline override: {submesh})", "MaterialOverride", submesh,
+                                $"(inline override: {submesh})", "MaterialOverride", new[] { submesh }, isDefault: false,
                                 new List<TextureSlot> { new("texture", inlineTex) }, new List<MaterialParameter>()));
                     }
                 }
@@ -92,6 +122,8 @@ public sealed class MaterialDocument
             foreach (var el in samplers.Elements)
             {
                 if (el is not BinTreeStruct s) continue;
+                // League sampler structs: 'TextureName' holds the sampler name (e.g. Diffuse_Texture),
+                // 'texturePath' holds the .tex path. (Some schemas fall back to samplerName/textureName.)
                 string sampler = (Field(s.Properties, "TextureName") as BinTreeString)?.Value
                                  ?? (Field(s.Properties, "samplerName") as BinTreeString)?.Value ?? "(sampler)";
                 var pathProp = (Field(s.Properties, "texturePath") as BinTreeString)
@@ -108,11 +140,12 @@ public sealed class MaterialDocument
                         && Field(ps.Properties, "value") is { } valProp)
                         parameters.Add(new MaterialParameter(pn.Value, valProp));
 
-            string assignedTo = assignment.TryGetValue(pathHash, out var subs)
-                ? string.Join(", ", subs.Distinct(StringComparer.OrdinalIgnoreCase))
-                : (champion ? "(shared / default)" : "");
+            var subs = assignment.TryGetValue(pathHash, out var list2)
+                ? list2.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+                : Array.Empty<string>();
+            bool isDefault = defaultMaterialHash == pathHash;
 
-            materials.Add(new MaterialBinding(name, shader, assignedTo, slots, parameters));
+            materials.Add(new MaterialBinding(name, shader, subs, isDefault, slots, parameters));
         }
 
         return new MaterialDocument(tree, champion ? MaterialSourceKind.ChampionSkin : MaterialSourceKind.MapMaterials, materials);
@@ -130,16 +163,23 @@ public sealed class MaterialBinding
 {
     public string Name { get; }
     public string ShaderName { get; }
-    public string AssignedTo { get; }
+    public IReadOnlyList<string> Submeshes { get; }
+    public bool IsDefault { get; }
     public IReadOnlyList<TextureSlot> Slots { get; }
     public IReadOnlyList<MaterialParameter> Parameters { get; }
 
-    public MaterialBinding(string name, string shaderName, string assignedTo,
+    public MaterialBinding(string name, string shaderName, IReadOnlyList<string> submeshes, bool isDefault,
         IReadOnlyList<TextureSlot> slots, IReadOnlyList<MaterialParameter> parameters)
     {
-        Name = name; ShaderName = shaderName; AssignedTo = assignedTo;
+        Name = name; ShaderName = shaderName; Submeshes = submeshes; IsDefault = isDefault;
         Slots = slots; Parameters = parameters;
     }
+
+    /// <summary>Display string for the submesh(es)/group this material drives.</summary>
+    public string AssignedTo => Submeshes.Count > 0 ? string.Join(", ", Submeshes) : (IsDefault ? "(base mesh)" : "");
+
+    /// <summary>The diffuse/albedo slot if present, else the first texture slot.</summary>
+    public TextureSlot? Diffuse => Slots.FirstOrDefault(s => s.IsDiffuse) ?? Slots.FirstOrDefault();
 
     public bool IsDirty => Slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty);
     public void Revert() { foreach (var s in Slots) s.Revert(); foreach (var p in Parameters) p.Revert(); }

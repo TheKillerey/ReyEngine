@@ -445,8 +445,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             if (MaterialEditor.Kind == MaterialSourceKind.ChampionSkin && CurrentMesh is { } mesh)
             {
-                var info = SkinMaterialExtractor.Extract(bytes);
-                CurrentModelTextures = BuildSubmeshTextures(mesh, info, "material preview");
+                var resolved = ChampionMaterialResolver.Resolve(bytes, ResolveBinName);
+                CurrentModelTextures = BuildSubmeshTextures(mesh, resolved, "material preview");
             }
             else if (MaterialEditor.Kind == MaterialSourceKind.MapMaterials && _currentMap is { } map && CurrentMesh is not null)
             {
@@ -738,28 +738,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return result;
     }
 
-    /// <summary>Find the skin .bin for a .skn, extract per-submesh diffuse textures, decode them.</summary>
+    /// <summary>Find the skin .bin for a .skn, resolve per-submesh diffuse textures, decode them.</summary>
     private IReadOnlyList<TextureImage?>? TryLoadTextures(WadAssetEntry skn, MeshAsset mesh)
     {
         if (_archive is null || !skn.IsResolved) return null;
 
-        SkinMaterialInfo? material = null;
         var binPath = SkinPaths.BinPathForSkn(skn.Path);
-        if (binPath is not null && _archive.TryGetEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
+        if (binPath is null || !_archive.TryGetEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
         {
-            try { material = SkinMaterialExtractor.Extract(GetAssetBytes(binEntry)); }
-            catch (Exception ex) { _log.Warn("Material", $"bin parse failed: {ex.Message}"); }
+            _log.Info("Material", $"No skin .bin found for {skn.DisplayName} (flat shading).");
+            return null;
         }
-        if (material is null || !material.HasAny)
+        var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName);
+        if (!resolved.HasAny)
         {
             _log.Info("Material", $"No skin material found for {skn.DisplayName} (flat shading).");
             return null;
         }
-        return BuildSubmeshTextures(mesh, material, skn.DisplayName);
+        return BuildSubmeshTextures(mesh, resolved, skn.DisplayName);
     }
 
-    /// <summary>Per-submesh diffuse textures from resolved material info (override-aware loads).</summary>
-    private IReadOnlyList<TextureImage?> BuildSubmeshTextures(MeshAsset mesh, SkinMaterialInfo material, string label)
+    /// <summary>Per-submesh diffuse textures from the resolved champion material (override-aware loads).</summary>
+    private IReadOnlyList<TextureImage?> BuildSubmeshTextures(MeshAsset mesh, ChampionMaterialResolver.Result material, string label)
     {
         var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
         TextureImage? Load(string? path)
@@ -773,12 +773,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         int loaded = 0;
         for (int i = 0; i < mesh.SubMeshes.Count; i++)
         {
-            var path = material.SubmeshTexture.TryGetValue(mesh.SubMeshes[i].Material, out var p) ? p : material.DefaultTexture;
-            var img = Load(path);
+            var img = Load(material.For(mesh.SubMeshes[i].Material));
             result[i] = img;
             if (img is not null) loaded++;
         }
-        _log.Success("Material", $"Applied {loaded}/{mesh.SubMeshes.Count} submesh textures for {label}.");
+        int distinct = cache.Values.Count(v => v is not null);
+        _log.Success("Material", $"Applied {loaded}/{mesh.SubMeshes.Count} submesh textures ({distinct} distinct) for {label}.");
         return result;
     }
 
