@@ -117,6 +117,7 @@
           <Grid>
             <views:ViewportControl x:Name="Viewport"
                 Mesh="{Binding CurrentMesh}"
+                ModelTextures="{Binding CurrentModelTextures}"
                 Skeleton="{Binding CurrentSkeleton}"
                 Wireframe="{Binding ShowWireframe}"
                 ShowBones="{Binding ShowBones}"
@@ -212,6 +213,24 @@
                 <TextBlock Text="Submeshes / materials" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
                 <TextBlock Text="{Binding MeshInspector.SubMeshes}" Foreground="{DynamicResource ReyTextBrush}"
                            FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
+              </StackPanel>
+
+              <!-- bin property tree -->
+              <StackPanel Spacing="6" IsVisible="{Binding HasBinTree}">
+                <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
+                <TextBlock Text="BIN PROPERTIES" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" />
+                <TreeView ItemsSource="{Binding BinTreeRoots}" Background="Transparent" BorderThickness="0" MaxHeight="520">
+                  <TreeView.ItemTemplate>
+                    <TreeDataTemplate ItemsSource="{Binding Children}">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextBrush}"
+                                   FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
+                        <TextBlock Text="{Binding Value}" Foreground="{DynamicResource ReyAccentBrush}"
+                                   FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
+                      </StackPanel>
+                    </TreeDataTemplate>
+                  </TreeView.ItemTemplate>
+                </TreeView>
               </StackPanel>
             </StackPanel>
           </ScrollViewer>

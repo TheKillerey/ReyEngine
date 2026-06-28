@@ -5,9 +5,9 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M3 working.** WAD browse + extract, CommunityDragon hash sync + path resolution,
-> texture (`.tex`/`.dds`) preview, and **SKN mesh + SKL skeleton rendering** in the OpenGL viewport —
-> all verified against a real game install (`DATA.wad.client`: 4,895/4,895 paths resolved, meshes decoded).
+> Status: **M4 in progress.** On top of M3 (mesh/skeleton/hash sync), adds **textured champion
+> rendering** (skin `.bin` → per-submesh diffuse textures) and a **`.bin` property-tree inspector**.
+> Verified against a real install — Aatrox renders fully textured from `Aatrox.wad.client`.
 
 ---
 
@@ -80,7 +80,9 @@ reference the UI, so the pipeline is unit-testable and reusable (e.g. a future C
 - [x] **Hash sync** from CommunityDragon (split files, 32/64-bit, conflicts) + binary cache + auto-load
 - [x] **SKN mesh rendering** (solid/wireframe), bounds + **SKL bone overlay**, auto/manual skeleton pairing
 - [x] Mesh inspector (verts/indices/tris/submeshes/materials/bounds/bones)
-- [ ] MAPGEO render (M4) · `.bin` tree inspector (M4) · material/shader preview (M4) · WAD repack (M5) · ANM playback (M6)
+- [x] **Textured mesh** — skin `.bin` → per-submesh diffuse textures applied in the viewport
+- [x] **`.bin` property-tree inspector** (resolved class/field names + values)
+- [ ] MAPGEO render (M4) · material/shader params beyond diffuse (M4) · WAD repack (M5) · ANM playback (M6)
 
 ## 4. Data pipeline: WAD → decoded asset → preview
 
@@ -159,7 +161,7 @@ No Play button — this is an editor, not a runtime.
 | **M1 ✅** | Solution, Core pipeline (WAD/hash/types), validated on real game data |
 | **M2 ✅** | Avalonia shell, dark theme, browser/inspector/console, GL grid viewport, texture preview |
 | **M3 ✅** | CommunityDragon hash sync + cache + path resolution · SKN mesh + SKL bone rendering · mesh inspector |
-| **M4** | `.bin` property tree · MAPGEO load/render · material/shader preview (League `.bin` params → preview shaders) |
+| **M4 ◐** | `.bin` property tree ✅ · textured mesh from skin materials ✅ · MAPGEO load/render (next) |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |

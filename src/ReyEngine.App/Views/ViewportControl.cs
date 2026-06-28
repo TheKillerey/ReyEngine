@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
+using ReyEngine.Core.Decoding;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Skeletons;
 using ReyEngine.Rendering;
@@ -26,7 +27,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowBones));
     public static readonly StyledProperty<bool> ShowBoundsProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowBounds));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelTextures));
 
+    public IReadOnlyList<TextureImage?>? ModelTextures { get => GetValue(ModelTexturesProperty); set => SetValue(ModelTexturesProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
     public bool Wireframe { get => GetValue(WireframeProperty); set => SetValue(WireframeProperty, value); }
@@ -38,7 +42,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private GridRenderer? _grid;
     private ViewportMeshRenderer? _meshRenderer;
     private readonly OrbitCamera _camera = new();
-    private bool _meshDirty, _bonesDirty, _needFrame;
+    private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty;
 
     // Offscreen target with a real depth buffer (Avalonia's default FBO has none).
     private uint _fbo, _colorRb, _depthRb;
@@ -105,11 +109,24 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             if (Mesh is { } m)
             {
-                _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax);
+                var subs = m.SubMeshes.Select(s => (s.StartIndex, s.IndexCount)).ToList();
+                _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax, subs);
                 _needFrame = true;
+                _texturesDirty = true;
             }
             else _meshRenderer.ClearMesh();
             _meshDirty = false;
+        }
+        if (_texturesDirty && _meshRenderer.HasMesh)
+        {
+            if (ModelTextures is { } texs)
+            {
+                int n = Math.Min(texs.Count, _meshRenderer.SubmeshCount);
+                for (int i = 0; i < n; i++)
+                    if (texs[i] is { } img)
+                        _meshRenderer.SetSubmeshTexture(i, img.Rgba, img.Width, img.Height);
+            }
+            _texturesDirty = false;
         }
         if (_bonesDirty)
         {
@@ -186,6 +203,7 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         base.OnPropertyChanged(change);
         if (change.Property == MeshProperty) { _meshDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == ModelTexturesProperty) { _texturesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == WireframeProperty || change.Property == ShowBonesProperty || change.Property == ShowBoundsProperty)
             RequestNextFrameRendering();

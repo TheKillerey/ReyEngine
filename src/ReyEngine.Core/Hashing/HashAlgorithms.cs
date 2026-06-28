@@ -25,6 +25,19 @@ public static class HashAlgorithms
         return hash;
     }
 
+    /// <summary>FNV-1a 32 over the string as-is (no lowercasing). Some .bin name hashes are case-sensitive.</summary>
+    public static uint Fnv1aRaw(string input)
+    {
+        const uint prime = 16777619u;
+        uint hash = 2166136261u;
+        foreach (char c in input)
+        {
+            hash ^= (byte)c;
+            hash *= prime;
+        }
+        return hash;
+    }
+
     public static uint Elf(string input)
     {
         uint hash = 0;

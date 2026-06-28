@@ -12,6 +12,7 @@ using ReyEngine.Core.Diagnostics;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Meshes;
+using ReyEngine.Formats.Meta;
 using ReyEngine.Formats.Skeletons;
 
 namespace ReyEngine.App.ViewModels;
@@ -29,6 +30,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MeshInspectorViewModel MeshInspector { get; } = new();
     public ReyProject Project { get; } = new();
     public ObservableCollection<AssetNodeViewModel> RootNodes { get; } = new();
+    public ObservableCollection<BinNodeViewModel> BinTreeRoots { get; } = new();
 
     [ObservableProperty] private AssetNodeViewModel? _selectedNode;
     [ObservableProperty] private string _title = "ReyEngine";
@@ -38,9 +40,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // Viewport-bound state
     [ObservableProperty] private MeshAsset? _currentMesh;
     [ObservableProperty] private SkeletonAsset? _currentSkeleton;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelTextures;
     [ObservableProperty] private bool _showWireframe;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;
+    [ObservableProperty] private bool _hasBinTree;
 
     public MainWindowViewModel()
     {
@@ -204,6 +208,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Inspector.SetPreview(null);
 
         if (entry.Type is not AssetType.SkinnedMesh) ClearViewport();
+        if (entry.Type != AssetType.Bin) ClearBinTree();
 
         switch (entry.Type)
         {
@@ -214,7 +219,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _ = LoadMeshAsync(entry);
                 break;
             case AssetType.Bin:
-                Inspector.SetNote("BIN property tree coming in M4.");
+                _ = LoadBinAsync(entry);
                 break;
         }
     }
@@ -223,7 +228,39 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         CurrentMesh = null;
         CurrentSkeleton = null;
+        CurrentModelTextures = null;
         MeshInspector.Clear();
+    }
+
+    private async Task LoadBinAsync(WadAssetEntry entry)
+    {
+        if (_archive is null) return;
+        try
+        {
+            var doc = await Task.Run(() =>
+                BinDocument.Parse(_archive.Extract(entry),
+                    h => _resolver.Database.TryGetBinName(h, out var n) ? n : null));
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                BinTreeRoots.Clear();
+                foreach (var root in doc.Roots) BinTreeRoots.Add(new BinNodeViewModel(root));
+                HasBinTree = BinTreeRoots.Count > 0;
+                _log.Info("Bin", $"{entry.DisplayName}: {doc.Roots.Count} object(s)" +
+                                 (doc.Dependencies.Count > 0 ? $", {doc.Dependencies.Count} dependencies" : ""));
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Bin", $"{entry.DisplayName}: {ex.Message}");
+        }
+    }
+
+    private void ClearBinTree()
+    {
+        if (BinTreeRoots.Count == 0 && !HasBinTree) return;
+        BinTreeRoots.Clear();
+        HasBinTree = false;
     }
 
     private async Task TryPreviewTextureAsync(WadAssetEntry entry)
@@ -246,17 +283,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_archive is null) return;
         try
         {
-            var (mesh, skeleton) = await Task.Run(() =>
+            var (mesh, skeleton, textures) = await Task.Run(() =>
             {
                 var m = SkinnedMeshDecoder.Decode(_archive.Extract(entry));
                 var s = TryPairSkeleton(entry);
-                return (m, s);
+                var t = TryLoadTextures(entry, m);
+                return (m, s, t);
             });
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 CurrentMesh = mesh;
                 CurrentSkeleton = skeleton;
+                CurrentModelTextures = textures;
                 ShowBones = skeleton is not null;
                 MeshInspector.ShowMesh(mesh, skeleton);
                 _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris, {mesh.SubMeshes.Count} submesh(es)" +
@@ -268,6 +307,51 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Error("Mesh", $"{entry.DisplayName}: {ex.Message}");
             await Dispatcher.UIThread.InvokeAsync(ClearViewport);
         }
+    }
+
+    /// <summary>Find the skin .bin for a .skn, extract per-submesh diffuse textures, decode them.</summary>
+    private IReadOnlyList<TextureImage?>? TryLoadTextures(WadAssetEntry skn, MeshAsset mesh)
+    {
+        if (_archive is null || !skn.IsResolved) return null;
+
+        SkinMaterialInfo? material = null;
+        var binPath = SkinPaths.BinPathForSkn(skn.Path);
+        if (binPath is not null && _archive.TryGetEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
+        {
+            try { material = SkinMaterialExtractor.Extract(_archive.Extract(binEntry)); }
+            catch (Exception ex) { _log.Warn("Material", $"bin parse failed: {ex.Message}"); }
+        }
+        if (material is null || !material.HasAny)
+        {
+            _log.Info("Material", $"No skin material found for {skn.DisplayName} (flat shading).");
+            return null;
+        }
+
+        var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
+        TextureImage? Load(string? path)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            if (cache.TryGetValue(path, out var hit)) return hit;
+            TextureImage? img = null;
+            if (_archive.TryGetEntry(HashAlgorithms.WadPath(path), out var te))
+            {
+                try { img = TextureDecoder.Decode(_archive.Extract(te)); } catch { /* unsupported */ }
+            }
+            cache[path] = img;
+            return img;
+        }
+
+        var result = new TextureImage?[mesh.SubMeshes.Count];
+        int loaded = 0;
+        for (int i = 0; i < mesh.SubMeshes.Count; i++)
+        {
+            var path = material.SubmeshTexture.TryGetValue(mesh.SubMeshes[i].Material, out var p) ? p : material.DefaultTexture;
+            var img = Load(path);
+            result[i] = img;
+            if (img is not null) loaded++;
+        }
+        _log.Success("Material", $"Applied {loaded}/{mesh.SubMeshes.Count} submesh textures for {skn.DisplayName}.");
+        return result;
     }
 
     /// <summary>Find the matching .skl for a resolved .skn inside the same WAD.</summary>
