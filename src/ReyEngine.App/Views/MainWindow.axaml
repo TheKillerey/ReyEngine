@@ -231,6 +231,12 @@
                            FontSize="11" TextWrapping="Wrap" />
               </Border>
 
+              <!-- INSPECTOR TABS (M8): Overview / Materials / Raw BIN Tree -->
+              <TabControl SelectedIndex="{Binding InspectorTab}" IsVisible="{Binding HasInspectorBody}" Padding="0" Margin="0,4,0,0">
+                <TabItem FontSize="12">
+                  <TabItem.Header><TextBlock Text="Overview" FontSize="12" /></TabItem.Header>
+                  <StackPanel Spacing="10" Margin="0,8,0,0">
+
               <!-- mesh stats (SKN) -->
               <StackPanel Spacing="8" IsVisible="{Binding MeshInspector.HasMesh}">
                 <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
@@ -291,8 +297,111 @@
                            FontSize="11" TextWrapping="Wrap" IsVisible="{Binding MapGeoInspector.HasWarnings}" />
               </StackPanel>
 
+                  </StackPanel>
+                </TabItem>
+
+                <!-- MATERIALS TAB -->
+                <TabItem FontSize="12" IsVisible="{Binding HasMaterialData}">
+                  <TabItem.Header><TextBlock Text="Materials" FontSize="12" /></TabItem.Header>
+                  <ScrollViewer MaxHeight="680">
+                    <StackPanel Spacing="8" Margin="0,8,4,0">
+                      <TextBlock Text="{Binding MaterialEditor.Summary}" Foreground="{DynamicResource ReyTextBrush}" FontSize="12" FontWeight="SemiBold" />
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6" IsVisible="{Binding MaterialEditor.HasUnresolved}">
+                        <TextBlock Text="⚠ Some texture paths don't resolve in this WAD — see the ⚠ slots below." Foreground="#FFB454" FontSize="11" TextWrapping="Wrap" />
+                      </Border>
+                      <TextBox Watermark="Search materials / textures…" Text="{Binding MaterialEditor.Search}" FontSize="11" Padding="4,2" />
+                      <StackPanel Orientation="Horizontal" Spacing="10">
+                        <CheckBox Content="Only unresolved" IsChecked="{Binding MaterialEditor.OnlyUnresolved}" FontSize="11" />
+                        <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding MaterialEditor.IsDirty}" ToolTip.Tip="Unsaved edits" />
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Button Classes="tool" Content="Apply (preview)" Command="{Binding MaterialEditor.ApplyCommand}" />
+                        <Button Classes="tool" Content="Save To Override" Command="{Binding MaterialEditor.SaveCommand}" />
+                        <Button Classes="tool" Content="Revert All" Command="{Binding MaterialEditor.RevertAllCommand}" />
+                      </StackPanel>
+
+                      <ItemsControl ItemsSource="{Binding MaterialEditor.Materials}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <Border IsVisible="{Binding IsVisible}" Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+                              <StackPanel Spacing="5">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                  <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextBrush}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                  <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                  <TextBlock Text="{Binding ShaderName}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" VerticalAlignment="Center" />
+                                  <TextBlock Text="{Binding AssignedTo, StringFormat='→ {0}'}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="10" VerticalAlignment="Center" IsVisible="{Binding HasAssignment}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                  <Button Classes="tool" Content="Copy name" Command="{Binding CopyNameCommand}" />
+                                  <Button Classes="tool" Content="Revert material" Command="{Binding RevertCommand}" />
+                                </StackPanel>
+
+                                <ItemsControl ItemsSource="{Binding Slots}">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                      <StackPanel Spacing="2" Margin="0,4,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                          <TextBlock Text="{Binding SamplerName}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" MinWidth="110" VerticalAlignment="Center" />
+                                          <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" IsVisible="{Binding IsDiffuse}" ToolTip.Tip="Diffuse" />
+                                          <TextBlock Text="⚠" Foreground="#FFB454" FontSize="11" VerticalAlignment="Center" IsVisible="{Binding Unresolved}" ToolTip.Tip="Path not found in this WAD" />
+                                          <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Spacing="3">
+                                          <TextBox Text="{Binding EditedPath}" MinWidth="250" FontSize="10" Padding="4,1" FontFamily="Cascadia Mono, Consolas, monospace">
+                                            <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" /></TextBox.KeyBindings>
+                                          </TextBox>
+                                          <Button Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" ToolTip.Tip="Apply path" />
+                                          <Button Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" ToolTip.Tip="Revert" />
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                          <Button Classes="tool" Content="Preview" Command="{Binding PreviewCommand}" />
+                                          <Button Classes="tool" Content="Open" Command="{Binding OpenCommand}" />
+                                          <Button Classes="tool" Content="Copy" Command="{Binding CopyPathCommand}" />
+                                          <Button Classes="tool" Content="Replace Texture…" Command="{Binding ReplaceCommand}" />
+                                        </StackPanel>
+                                        <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="3" Padding="3" HorizontalAlignment="Left" IsVisible="{Binding HasThumbnail}">
+                                          <Image Source="{Binding Thumbnail}" Stretch="Uniform" MaxHeight="96" MaxWidth="96" />
+                                        </Border>
+                                      </StackPanel>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Expander Header="Parameters" IsVisible="{Binding HasParameters}" FontSize="11" Margin="0,4,0,0">
+                                  <ItemsControl ItemsSource="{Binding Parameters}">
+                                    <ItemsControl.ItemTemplate>
+                                      <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
+                                          <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" MinWidth="110" VerticalAlignment="Center" />
+                                          <TextBox Text="{Binding EditedText}" MinWidth="150" FontSize="10" Padding="4,1" IsEnabled="{Binding IsEditable}" FontFamily="Cascadia Mono, Consolas, monospace">
+                                            <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" /></TextBox.KeyBindings>
+                                          </TextBox>
+                                          <Button Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" />
+                                          <Button Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" />
+                                          <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                                          <TextBlock Text="{Binding ErrorText}" Foreground="#FF6B6B" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding HasError}" />
+                                        </StackPanel>
+                                      </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                  </ItemsControl>
+                                </Expander>
+                              </StackPanel>
+                            </Border>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                  </ScrollViewer>
+                </TabItem>
+
+                <!-- RAW BIN TREE TAB -->
+                <TabItem FontSize="12" IsVisible="{Binding BinEditor.HasBin}">
+                  <TabItem.Header><TextBlock Text="Raw BIN Tree" FontSize="12" /></TabItem.Header>
+
               <!-- bin editor (M7) -->
-              <StackPanel Spacing="6" IsVisible="{Binding BinEditor.HasBin}">
+              <StackPanel Spacing="6" Margin="0,8,0,0" IsVisible="{Binding BinEditor.HasBin}">
                 <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
                   <TextBlock Text="BIN EDITOR" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" />
@@ -343,6 +452,8 @@
                   </TreeView.ItemTemplate>
                 </TreeView>
               </StackPanel>
+                </TabItem>
+              </TabControl>
             </StackPanel>
           </ScrollViewer>
         </DockPanel>

@@ -5,11 +5,12 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M7 complete.** Adds **structured `.bin` editing** — edit primitive property values
-> (string/number/bool/hash/vector) in the Inspector, track dirty state, save into the project override
-> layer, and Build Package picks the edited `.bin` up automatically. On top of M6 animation playback,
-> M5's project/Build-Package pipeline, and M1–M4 preview. Verified end-to-end on Aatrox: edit a texture
-> path + a float in `skin0.bin` → save override → build → reopen → edits parse back; untouched assets intact.
+> Status: **M8 complete.** Adds a **Material Editor** — a material-centric view over champion skin
+> `.bin` and map `.materials.bin` (Inspector tabs: Overview / Materials / Raw BIN Tree). Edit texture-slot
+> paths and numeric params without raw `.bin` digging, **Apply** for a live viewport preview, **Save To
+> Override** (the edited `.bin` flows through Build Package), with unresolved-texture warnings and raw
+> "Replace Texture…". On top of M7 `.bin` editing, M6 animation, M5 build pipeline, M1–M4 preview.
+> Verified end-to-end: edit a diffuse path on Aatrox **and** Map11 → save → build → reopen → edits parse back.
 
 ---
 
@@ -55,6 +56,7 @@ ReyEngine.sln
 │   ├─ Meshes/                # MeshAsset (+blend data), SkinnedMeshDecoder
 │   ├─ Skeletons/             # SkeletonAsset (+joints/influences), SkeletonDecoder
 │   ├─ Animation/             # AnimationClip, AnimationDecoder, SkinnedMeshAnimator (CPU skinning, M6)
+│   ├─ Materials/             # MaterialDocument: champion/map materials → editable texture slots + params (M8)
 │   ├─ Meta/                  # BinDocument (read-only tree), SkinMaterialExtractor (M4);
 │   │                         #   BinEditorDocument + BinValueEditor (editable primitives, re-serialize via LeagueToolkit, M7)
 │   └─ MapGeo/                # MapGeoAsset, MapGeoDecoder (M4) — reuses the mesh renderer
@@ -94,7 +96,8 @@ reference the UI, so the pipeline is unit-testable and reusable (e.g. a future C
 - [x] **Build Package** — non-destructive WAD repack (copy + append + TOC patch) + build validation; never writes into the game install
 - [x] **Animation playback** — `.anm` decoded + CPU-skinned onto the champion; play/pause/timeline/speed/loop, textures + bones preserved
 - [x] **`.bin` editing** — edit primitive values (string/int/uint/float/bool/hash/vector) in the Inspector, dirty tracking + revert, save to override, edited `.bin` flows through Build Package
-- [ ] Add brand-new chunks (TOC rebuild) · array/struct element editing · GPU skinning · sound preview
+- [x] **Material Editor** — champion + map materials: texture slots, sampler names, params, submesh assignment; edit/replace texture paths, live Apply, save to override, unresolved warnings
+- [ ] Add brand-new chunks (TOC rebuild) · array/struct element editing · GPU skinning · shader-param UI · sound preview
 
 ## 4. Data pipeline: WAD → decoded asset → preview
 
@@ -177,6 +180,7 @@ No Play button — this is an editor, not a runtime.
 | **M5 ✅** | project system (`.reyproject`) · replace WAD assets · Build Package (repack + reopen-validate) · install-folder guard |
 | **M6 ✅** | ANM animation playback (CPU skinning) · animation panel (play/timeline/speed/loop) · textures + bones during playback |
 | **M7 ✅** | structured `.bin` editing (primitive values) · dirty/revert per-field+file · save to override · edited `.bin` in Build Package · reopen-validate |
+| **M8 ✅** | Material Editor (champion skin + map materials) · texture-slot/param editing · live Apply · Inspector tabs (Overview/Materials/Raw BIN) · unresolved warnings · raw texture replace |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
@@ -254,3 +258,23 @@ WAD's tree refreshes `0x…` → readable paths in place. The full sync is ~250 
 5. **Build ▸ Build Package** → reopen the built `.wad.client`; the edited `.bin` parses back with your
    changes and unmodified chunks are intact. **Export BIN…** writes the edited `.bin` straight to disk.
 6. Right-click any field → **Copy Field Path / Hash / Value**.
+
+### M8 Material Editor checklist
+
+**Champion (Aatrox):**
+1. Open `Champions/Aatrox.wad.client`, click `…/skins/base/aatrox.skn`. The Inspector shows tabs
+   **Overview / Materials / Raw BIN Tree**; open **Materials** → 5 materials (skin default texture, Sword,
+   Banner, VFXBase, Wings) with their texture slots (diffuse marked •), sampler names, submesh assignment, and params.
+2. On `(skin default texture)` change the path to another existing `.tex` (e.g. another skin's `…_TX_CM.tex`),
+   press **Enter**/**✓**, then **Apply (preview)** → the champion re-textures live. A bad path shows a ⚠ and the
+   "Only unresolved" filter isolates it.
+3. **Save To Override** → the edited `skin0.bin` is re-parse-validated and written to the project override.
+   **Build ▸ Build Package** → reopen the built WAD → the material edit parses back.
+4. Per-slot **Preview** (thumbnail), **Open** (jump to the texture asset), **Copy**, and **Replace Texture…**
+   (drop in a raw `.dds`/`.tex` — reuses M5 replace).
+
+**Map (Map11):**
+1. Open `Maps/Shipping/Map11.wad.client`, select a `…/map11/*.mapgeo` → **Materials** lists the companion
+   `.materials.bin` materials (StaticMaterialDef) with their texture slots. **Search** narrows the list.
+2. Edit one diffuse `texturePath` to another valid map texture → **Apply** (viewport re-textures) → **Save To
+   Override** → **Build Package** → reopen → edit persists.

@@ -15,6 +15,7 @@ using ReyEngine.Core.Projects;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Animation;
 using ReyEngine.Formats.MapGeo;
+using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Meta;
 using ReyEngine.Formats.Skeletons;
@@ -38,6 +39,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public AnimationInspectorViewModel Animation { get; } = new();
     public ObservableCollection<AssetNodeViewModel> RootNodes { get; } = new();
     public BinEditorViewModel BinEditor { get; } = new();
+    public MaterialEditorViewModel MaterialEditor { get; } = new();
 
     [ObservableProperty] private AssetNodeViewModel? _selectedNode;
     [ObservableProperty] private string _title = "ReyEngine";
@@ -55,6 +57,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showWireframe;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;
+    [ObservableProperty] private bool _hasMaterialData;
+    [ObservableProperty] private bool _hasInspectorBody;
+    [ObservableProperty] private int _inspectorTab;
+    private MapGeoAsset? _currentMap;
 
     public MainWindowViewModel()
     {
@@ -74,6 +80,53 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Animation.TimeChanged = t => AnimationTime = t;
 
         BinEditor.CopyHandler = Dialogs.CopyAsync;
+
+        MaterialEditor.CopyHandler = Dialogs.CopyAsync;
+        MaterialEditor.TextureExists = TextureExistsByPath;
+        MaterialEditor.LoadThumbnail = LoadThumbnailByPath;
+        MaterialEditor.OpenTexture = OpenTextureByPath;
+        MaterialEditor.ReplaceTextureAsset = ReplaceTextureForSlot;
+        MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
+        MaterialEditor.SaveOverride = SaveMaterialOverride;
+    }
+
+    // ---- Material editor: asset access helpers --------------------------
+
+    private byte[]? ReadAssetByPath(string path)
+    {
+        if (_archive is null || string.IsNullOrEmpty(path)) return null;
+        var hash = HashAlgorithms.WadPath(path);
+        if (_overrides.TryGet(hash, out var ov) && File.Exists(ov.OverrideFile))
+            return File.ReadAllBytes(ov.OverrideFile);
+        return _archive.TryGetEntry(hash, out var te) ? _archive.Extract(te) : null;
+    }
+
+    private bool TextureExistsByPath(string path)
+    {
+        if (_archive is null || string.IsNullOrEmpty(path)) return false;
+        var hash = HashAlgorithms.WadPath(path);
+        return _overrides.Has(hash) || _archive.TryGetEntry(hash, out _);
+    }
+
+    private TextureImage? LoadTextureByPath(string path)
+    {
+        var bytes = ReadAssetByPath(path);
+        if (bytes is null) return null;
+        try { return TextureDecoder.Decode(bytes); } catch { return null; }
+    }
+
+    private Avalonia.Media.Imaging.Bitmap? LoadThumbnailByPath(string path)
+    {
+        var img = LoadTextureByPath(path);
+        return img is null ? null : BitmapFactory.FromRgba(img);
+    }
+
+    private void OpenTextureByPath(string path)
+    {
+        if (_archive is null) return;
+        var hash = HashAlgorithms.WadPath(path);
+        if (_nodesByHash.TryGetValue(hash, out var node)) SelectedNode = node;
+        else _log.Warn("Material", $"Texture not found in this WAD: {path}");
     }
 
     // ---- Animation ------------------------------------------------------
@@ -299,6 +352,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         if (entry.Type is not AssetType.SkinnedMesh) ClearViewport();
         if (entry.Type != AssetType.Bin) BinEditor.Clear();
+        HasInspectorBody = entry.Type is AssetType.SkinnedMesh or AssetType.MapGeometry or AssetType.Bin;
+        InspectorTab = entry.Type == AssetType.Bin ? 2 : 0;
+        if (!HasInspectorBody)
+        {
+            MaterialEditor.Clear();
+            HasMaterialData = false;
+        }
 
         switch (entry.Type)
         {
@@ -307,20 +367,164 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 break;
             case AssetType.SkinnedMesh:
                 _ = LoadMeshAsync(entry);
+                TryLoadMaterialBin(entry, alsoRawBin: true);
                 break;
             case AssetType.MapGeometry:
                 _ = LoadMapGeoAsync(entry);
+                TryLoadMaterialBin(entry, alsoRawBin: true);
                 break;
             case AssetType.Bin:
                 _ = LoadBinAsync(entry);
+                TryLoadMaterialBin(entry, alsoRawBin: false);
                 break;
         }
+    }
+
+    // ---- Material editor: load + apply + save ---------------------------
+
+    private string? ResolveBinName(uint h) => _resolver.Database.TryGetBinName(h, out var n) ? n : null;
+
+    private WadAssetEntry? ResolveMaterialBin(WadAssetEntry entry)
+    {
+        if (_archive is null) return null;
+        if (entry.Type == AssetType.Bin) return entry;
+        if (!entry.IsResolved) return null;
+        string? binPath = entry.Type switch
+        {
+            AssetType.SkinnedMesh => SkinPaths.BinPathForSkn(entry.Path),
+            AssetType.MapGeometry => MapGeoMaterialResolver.MaterialsBinPathFor(entry.Path),
+            _ => null,
+        };
+        if (binPath is null) return null;
+        return _archive.TryGetEntry(HashAlgorithms.WadPath(binPath), out var be) ? be : null;
+    }
+
+    private void TryLoadMaterialBin(WadAssetEntry entry, bool alsoRawBin)
+    {
+        var binEntry = ResolveMaterialBin(entry);
+        if (binEntry is null) { MaterialEditor.Clear(); HasMaterialData = false; return; }
+        _ = LoadMaterialBinAsync(binEntry, alsoRawBin);
+    }
+
+    private async Task LoadMaterialBinAsync(WadAssetEntry binEntry, bool alsoRawBin)
+    {
+        if (_archive is null) return;
+        byte[] bytes;
+        try { bytes = GetAssetBytes(binEntry); }
+        catch (Exception ex) { _log.Warn("Material", $"{binEntry.DisplayName}: {ex.Message}"); return; }
+
+        MaterialDocument? matDoc = null;
+        BinEditorDocument? binDoc = null;
+        await Task.Run(() =>
+        {
+            try { matDoc = MaterialDocument.Parse(bytes, ResolveBinName); } catch { matDoc = null; }
+            if (alsoRawBin) { try { binDoc = BinEditorDocument.Parse(bytes, ResolveBinName); } catch { binDoc = null; } }
+        });
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (alsoRawBin && binDoc is not null) BinEditor.Load(binDoc, binEntry);
+            if (matDoc is not null && matDoc.Materials.Count > 0)
+            {
+                MaterialEditor.Load(matDoc, binEntry);
+                HasMaterialData = true;
+                if (MaterialEditor.UnresolvedCount > 0)
+                    _log.Warn("Material", $"{binEntry.DisplayName}: {matDoc.Materials.Count} material(s), {MaterialEditor.UnresolvedCount} texture path(s) unresolved in this WAD.");
+                else
+                    _log.Info("Material", $"{binEntry.DisplayName}: {matDoc.Materials.Count} material(s).");
+            }
+            else { MaterialEditor.Clear(); HasMaterialData = false; }
+        });
+    }
+
+    private void ApplyMaterialToViewport()
+    {
+        var bytes = MaterialEditor.Serialize();
+        if (bytes is null) return;
+        try
+        {
+            if (MaterialEditor.Kind == MaterialSourceKind.ChampionSkin && CurrentMesh is { } mesh)
+            {
+                var info = SkinMaterialExtractor.Extract(bytes);
+                CurrentModelTextures = BuildSubmeshTextures(mesh, info, "material preview");
+            }
+            else if (MaterialEditor.Kind == MaterialSourceKind.MapMaterials && _currentMap is { } map && CurrentMesh is not null)
+            {
+                var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
+                var m2t = MapGeoMaterialResolver.Resolve(bytes, names);
+                CurrentModelTextures = BuildMapTextures(map, m2t, names.Count);
+            }
+            else { _log.Info("Material", "Nothing in the viewport to preview — select the matching .skn/.mapgeo."); return; }
+            _log.Success("Material", "Applied material edits to the viewport (live).");
+        }
+        catch (Exception ex) { _log.Error("Material", $"Apply failed: {ex.Message}"); }
+    }
+
+    private async Task SaveMaterialOverride()
+    {
+        if (MaterialEditor.BinEntry is not { } binEntry) { _log.Warn("Material", "No material .bin open."); return; }
+        if (!MaterialEditor.IsDirty) { _log.Info("Material", "No material edits to save."); return; }
+        if (!await EnsureProjectSavedAsync()) return;
+
+        var bytes = MaterialEditor.Serialize();
+        if (bytes is null) return;
+        try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
+        catch (Exception ex) { _log.Error("Material", $"Edited material .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
+
+        try
+        {
+            var dest = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = binEntry.PathHash,
+                ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                OverrideFile = dest,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            UpdateTitle();
+            ApplyMaterialToViewport();
+            _log.Success("Material", $"Saved edited material {binEntry.DisplayName} to override ({bytes.Length:n0} bytes, re-parse OK). Build Package will include it.");
+        }
+        catch (Exception ex) { _log.Error("Material", ex.Message); }
+    }
+
+    private async Task ReplaceTextureForSlot(TextureSlotViewModel slot)
+    {
+        if (_archive is null) return;
+        var path = slot.EditedPath;
+        var hash = HashAlgorithms.WadPath(path);
+        if (!_archive.TryGetEntry(hash, out _)) { _log.Warn("Material", $"Texture not in this WAD — can't replace: {path}"); return; }
+        if (!await EnsureProjectSavedAsync()) return;
+
+        var file = await Dialogs.OpenFileAsync($"Replace texture {Path.GetFileName(path)} (.dds/.tex)", DialogService.All);
+        if (file is null) return;
+        try
+        {
+            var stored = ProjectWorkspace.StoreOverride(Project, hash, file);
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = hash,
+                ResolvedPath = path,
+                OverrideFile = stored,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            SetNodeStatus(hash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            UpdateTitle();
+            slot.RefreshResolved();
+            ApplyMaterialToViewport();
+            _log.Success("Material", $"Replaced texture {Path.GetFileName(path)} with {Path.GetFileName(file)} (raw). Build Package will include it.");
+        }
+        catch (Exception ex) { _log.Error("Material", ex.Message); }
     }
 
     private void ClearViewport()
     {
         CurrentMesh = null;
         CurrentSkeleton = null;
+        _currentMap = null;
         CurrentModelTextures = null;
         CurrentAnimation = null;
         AnimationTime = 0;
@@ -480,6 +684,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 CurrentSkeleton = null;
                 ShowBones = false;
                 CurrentMesh = mesh;
+                _currentMap = map;
                 CurrentModelTextures = textures;
                 MapGeoInspector.Show(map, entry.Path);
                 _log.Success("MapGeo", $"{entry.DisplayName}: v{map.Version}, {map.MeshCount:n0} meshes, {map.VertexCount:n0} verts, {map.TriangleCount:n0} tris, {map.MaterialCount} materials" +
@@ -507,21 +712,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
         Dictionary<string, string> materialToTexture;
-        try { materialToTexture = MapGeoMaterialResolver.Resolve(_archive.Extract(binEntry), names); }
+        try { materialToTexture = MapGeoMaterialResolver.Resolve(GetAssetBytes(binEntry), names); }
         catch (Exception ex) { _log.Warn("MapGeo", $"materials parse failed: {ex.Message}"); return null; }
         if (materialToTexture.Count == 0) return null;
+        return BuildMapTextures(map, materialToTexture, names.Count);
+    }
 
+    /// <summary>Per-group diffuse textures from resolved map material→texture map (override-aware loads).</summary>
+    private IReadOnlyList<TextureImage?> BuildMapTextures(MapGeoAsset map, Dictionary<string, string> materialToTexture, int materialCount)
+    {
         var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
         TextureImage? Load(string path)
         {
             if (cache.TryGetValue(path, out var hit)) return hit;
-            TextureImage? img = null;
-            if (_archive.TryGetEntry(HashAlgorithms.WadPath(path), out var te))
-            {
-                try { img = TextureDecoder.Decode(_archive.Extract(te)); } catch { /* unsupported */ }
-            }
-            cache[path] = img;
-            return img;
+            return cache[path] = LoadTextureByPath(path);
         }
 
         var result = new TextureImage?[map.Groups.Count];
@@ -530,7 +734,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 result[i] = Load(path);
 
         int unique = cache.Values.Count(v => v is not null);
-        _log.Success("MapGeo", $"Loaded {unique} unique textures ({materialToTexture.Count}/{names.Count} materials resolved).");
+        _log.Success("MapGeo", $"Loaded {unique} unique textures ({materialToTexture.Count}/{materialCount} materials resolved).");
         return result;
     }
 
@@ -543,7 +747,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var binPath = SkinPaths.BinPathForSkn(skn.Path);
         if (binPath is not null && _archive.TryGetEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
         {
-            try { material = SkinMaterialExtractor.Extract(_archive.Extract(binEntry)); }
+            try { material = SkinMaterialExtractor.Extract(GetAssetBytes(binEntry)); }
             catch (Exception ex) { _log.Warn("Material", $"bin parse failed: {ex.Message}"); }
         }
         if (material is null || !material.HasAny)
@@ -551,19 +755,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Info("Material", $"No skin material found for {skn.DisplayName} (flat shading).");
             return null;
         }
+        return BuildSubmeshTextures(mesh, material, skn.DisplayName);
+    }
 
+    /// <summary>Per-submesh diffuse textures from resolved material info (override-aware loads).</summary>
+    private IReadOnlyList<TextureImage?> BuildSubmeshTextures(MeshAsset mesh, SkinMaterialInfo material, string label)
+    {
         var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
         TextureImage? Load(string? path)
         {
             if (string.IsNullOrEmpty(path)) return null;
             if (cache.TryGetValue(path, out var hit)) return hit;
-            TextureImage? img = null;
-            if (_archive.TryGetEntry(HashAlgorithms.WadPath(path), out var te))
-            {
-                try { img = TextureDecoder.Decode(_archive.Extract(te)); } catch { /* unsupported */ }
-            }
-            cache[path] = img;
-            return img;
+            return cache[path] = LoadTextureByPath(path);
         }
 
         var result = new TextureImage?[mesh.SubMeshes.Count];
@@ -575,7 +778,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             result[i] = img;
             if (img is not null) loaded++;
         }
-        _log.Success("Material", $"Applied {loaded}/{mesh.SubMeshes.Count} submesh textures for {skn.DisplayName}.");
+        _log.Success("Material", $"Applied {loaded}/{mesh.SubMeshes.Count} submesh textures for {label}.");
         return result;
     }
 
