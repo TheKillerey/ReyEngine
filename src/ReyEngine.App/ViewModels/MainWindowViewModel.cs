@@ -11,6 +11,7 @@ using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Diagnostics;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
+using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Meta;
 using ReyEngine.Formats.Skeletons;
@@ -28,6 +29,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public ConsoleViewModel Console { get; } = new();
     public InspectorViewModel Inspector { get; } = new();
     public MeshInspectorViewModel MeshInspector { get; } = new();
+    public MapGeoInspectorViewModel MapGeoInspector { get; } = new();
     public ReyProject Project { get; } = new();
     public ObservableCollection<AssetNodeViewModel> RootNodes { get; } = new();
     public ObservableCollection<BinNodeViewModel> BinTreeRoots { get; } = new();
@@ -218,6 +220,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             case AssetType.SkinnedMesh:
                 _ = LoadMeshAsync(entry);
                 break;
+            case AssetType.MapGeometry:
+                _ = LoadMapGeoAsync(entry);
+                break;
             case AssetType.Bin:
                 _ = LoadBinAsync(entry);
                 break;
@@ -230,6 +235,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentSkeleton = null;
         CurrentModelTextures = null;
         MeshInspector.Clear();
+        MapGeoInspector.Clear();
     }
 
     private async Task LoadBinAsync(WadAssetEntry entry)
@@ -305,6 +311,42 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex)
         {
             _log.Error("Mesh", $"{entry.DisplayName}: {ex.Message}");
+            await Dispatcher.UIThread.InvokeAsync(ClearViewport);
+        }
+    }
+
+    private async Task LoadMapGeoAsync(WadAssetEntry entry)
+    {
+        if (_archive is null) return;
+        try
+        {
+            _log.Info("MapGeo", $"Decoding {entry.DisplayName} …");
+            var map = await Task.Run(() => MapGeoDecoder.Decode(_archive.Extract(entry)));
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                CurrentSkeleton = null;
+                CurrentModelTextures = null;
+                ShowBones = false;
+                CurrentMesh = new MeshAsset
+                {
+                    Positions = map.Positions,
+                    Normals = map.Normals,
+                    Uvs = map.Uvs,
+                    Indices = map.Indices,
+                    VertexCount = map.VertexCount,
+                    SubMeshes = map.Groups.Select(g => new SubMeshInfo(g.Material, g.StartIndex, g.IndexCount, 0)).ToList(),
+                    BoundsMin = map.BoundsMin,
+                    BoundsMax = map.BoundsMax,
+                };
+                MapGeoInspector.Show(map, entry.Path);
+                _log.Success("MapGeo", $"{entry.DisplayName}: v{map.Version}, {map.MeshCount:n0} meshes, {map.VertexCount:n0} verts, {map.TriangleCount:n0} tris, {map.MaterialCount} materials" +
+                                       (map.Warnings.Count > 0 ? $", {map.Warnings.Count} warnings" : ""));
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Error("MapGeo", $"{entry.DisplayName}: {ex.Message}");
             await Dispatcher.UIThread.InvokeAsync(ClearViewport);
         }
     }

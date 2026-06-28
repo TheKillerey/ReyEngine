@@ -5,9 +5,10 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M4 in progress.** On top of M3 (mesh/skeleton/hash sync), adds **textured champion
-> rendering** (skin `.bin` → per-submesh diffuse textures) and a **`.bin` property-tree inspector**.
-> Verified against a real install — Aatrox renders fully textured from `Aatrox.wad.client`.
+> Status: **M4 in progress.** On top of M3 (mesh/skeleton/hash sync): **textured champion rendering**
+> (skin `.bin` → per-submesh diffuse textures), a **`.bin` property-tree inspector**, and **MAPGEO
+> rendering** (flat). Verified on a real install — Aatrox renders fully textured, Summoner's Rift
+> (`Map11`, 2.6M verts) renders as geometry.
 
 ---
 
@@ -50,7 +51,8 @@ ReyEngine.sln
 ├─ src/ReyEngine.Formats/      # No UI. SKN/SKL/MAPGEO decoding → plain data. (refs Core + LeagueToolkit)
 │   ├─ Meshes/                # MeshAsset, SkinnedMeshDecoder
 │   ├─ Skeletons/             # SkeletonAsset, SkeletonDecoder
-│   └─ Map/                   # IMapGeometryAsset + MapGeoDecoder (M4 stub)
+│   ├─ Meta/                  # BinDocument, SkinMaterialExtractor (M4)
+│   └─ MapGeo/                # MapGeoAsset, MapGeoDecoder (M4) — reuses the mesh renderer
 ├─ src/ReyEngine.Rendering/    # No UI, no Avalonia. Pure Silk.NET GL + System.Numerics.
 │   ├─ OrbitCamera.cs, ShaderUtil.cs (ES/desktop GLSL)
 │   ├─ GridRenderer.cs        # grid + axes
@@ -82,7 +84,8 @@ reference the UI, so the pipeline is unit-testable and reusable (e.g. a future C
 - [x] Mesh inspector (verts/indices/tris/submeshes/materials/bounds/bones)
 - [x] **Textured mesh** — skin `.bin` → per-submesh diffuse textures applied in the viewport
 - [x] **`.bin` property-tree inspector** (resolved class/field names + values)
-- [ ] MAPGEO render (M4) · material/shader params beyond diffuse (M4) · WAD repack (M5) · ANM playback (M6)
+- [x] **MAPGEO rendering** — `.mapgeo` decoded + rendered flat (verified on Summoner's Rift: 2.6M verts, 293 materials)
+- [ ] Textured maps (map materials `.bin`) (M4) · WAD repack (M5) · ANM playback (M6)
 
 ## 4. Data pipeline: WAD → decoded asset → preview
 
@@ -161,7 +164,7 @@ No Play button — this is an editor, not a runtime.
 | **M1 ✅** | Solution, Core pipeline (WAD/hash/types), validated on real game data |
 | **M2 ✅** | Avalonia shell, dark theme, browser/inspector/console, GL grid viewport, texture preview |
 | **M3 ✅** | CommunityDragon hash sync + cache + path resolution · SKN mesh + SKL bone rendering · mesh inspector |
-| **M4 ◐** | `.bin` property tree ✅ · textured mesh from skin materials ✅ · MAPGEO load/render (next) |
+| **M4 ◐** | `.bin` tree ✅ · textured champion ✅ · MAPGEO flat render ✅ (SR verified) · textured maps (next) |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
@@ -198,4 +201,7 @@ WAD's tree refreshes `0x…` → readable paths in place. The full sync is ~250 
    draws an orange bone overlay; otherwise `Tools ▸ Assign Skeleton…` to load one manually.
 8. **Hash Lookup** — type a path in the toolbar box → `Hash Lookup` prints xxhash64/fnv1a/elf and any resolved
    candidates (conflicts listed if a hash maps to several strings).
-9. **`.bin`** — click a `.bin` → Inspector note "BIN property tree coming in M4" (placeholder, by design).
+9. **`.bin`** — click a `.bin` → its property tree appears in the Inspector (resolved names + values).
+10. **MAPGEO** — open a map WAD (`Maps/Shipping/Map11.wad.client`), click a `.mapgeo` → the map renders
+    flat in the viewport, framed to its bounds; Inspector shows version/mesh/vertex/material counts.
+    (Map textures are the next M4 step; maps render flat grey for now.)

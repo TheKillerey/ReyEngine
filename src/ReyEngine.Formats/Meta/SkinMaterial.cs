@@ -16,6 +16,11 @@ public sealed class SkinMaterialInfo
 /// Pulls diffuse texture paths out of a champion skin .bin (SkinCharacterDataProperties).
 /// Navigates by FNV-1a field-name hashes (trying both case conventions), so it needs no
 /// hash dictionary.
+///
+/// TODO: Verify .bin materialOverride mapping with multiple champions/skins later. The current
+/// mapping (submesh name -> texture / material diffuse sampler) works for Aatrox, but not all
+/// materialOverride shapes (e.g. material links into shared StaticMaterialDef, multi-sampler
+/// materials, color/tint params) are confirmed correct across champions.
 /// </summary>
 public static class SkinMaterialExtractor
 {

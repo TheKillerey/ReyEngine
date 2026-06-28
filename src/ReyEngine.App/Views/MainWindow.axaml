@@ -215,6 +215,16 @@
                            FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
               </StackPanel>
 
+              <!-- mapgeo stats -->
+              <StackPanel Spacing="8" IsVisible="{Binding MapGeoInspector.HasMap}">
+                <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
+                <TextBlock Text="MAP GEOMETRY" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding MapGeoInspector.Stats}" Foreground="{DynamicResource ReyTextDimBrush}"
+                           FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding MapGeoInspector.Warnings}" Foreground="{DynamicResource ReyAccent2Brush}"
+                           FontSize="11" TextWrapping="Wrap" IsVisible="{Binding MapGeoInspector.HasWarnings}" />
+              </StackPanel>
+
               <!-- bin property tree -->
               <StackPanel Spacing="6" IsVisible="{Binding HasBinTree}">
                 <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
