@@ -9,19 +9,30 @@ namespace ReyEngine.Core.Assets;
 public sealed class AssetMountService : IDisposable
 {
     private readonly List<IAssetMount> _mounts = new();
+    private readonly List<IAssetMount> _fallback = new();
     private readonly Dictionary<ulong, MountedAsset> _index = new();
 
     public IReadOnlyList<IAssetMount> Mounts => _mounts;
+    public IReadOnlyList<IAssetMount> Fallback => _fallback;
     public IReadOnlyCollection<MountedAsset> Assets => _index.Values;
     public int Count => _index.Count;
 
     /// <summary>Add a mount. Order matters: add highest-priority (overrides) first.</summary>
     public void Add(IAssetMount mount) => _mounts.Add(mount);
 
+    /// <summary>
+    /// Add a read-only fallback source (e.g. an original Riot game WAD). Fallbacks are consulted only
+    /// when no mounted source holds a hash, and are NOT enumerated into the asset tree — so missing
+    /// skin bins / textures resolve from the original game files without bloating the browser.
+    /// </summary>
+    public void AddFallback(IAssetMount mount) => _fallback.Add(mount);
+
     public void Clear()
     {
         foreach (var m in _mounts) m.Dispose();
+        foreach (var m in _fallback) m.Dispose();
         _mounts.Clear();
+        _fallback.Clear();
         _index.Clear();
     }
 
@@ -59,9 +70,25 @@ public sealed class AssetMountService : IDisposable
         }
     }
 
-    public bool TryGet(ulong pathHash, out MountedAsset asset) => _index.TryGetValue(pathHash, out asset!);
+    public bool TryGet(ulong pathHash, out MountedAsset asset)
+    {
+        if (_index.TryGetValue(pathHash, out asset!)) return true;
+        foreach (var f in _fallback)
+            if (f.Get(pathHash) is { } a) { asset = a; return true; }
+        asset = null!;
+        return false;
+    }
 
-    public byte[]? Read(ulong pathHash) => _index.TryGetValue(pathHash, out var a) ? a.Source.Read(pathHash) : null;
+    public byte[]? Read(ulong pathHash)
+    {
+        if (_index.TryGetValue(pathHash, out var a)) return a.Source.Read(pathHash);
+        foreach (var f in _fallback)
+            if (f.Contains(pathHash)) return f.Read(pathHash);
+        return null;
+    }
+
+    /// <summary>Does any mount or fallback hold this hash?</summary>
+    public bool Has(ulong pathHash) => _index.ContainsKey(pathHash) || _fallback.Any(f => f.Contains(pathHash));
 
     /// <summary>All mounts (in priority order) that hold a given hash — for "show all sources".</summary>
     public IReadOnlyList<IAssetMount> SourcesOf(ulong pathHash) =>

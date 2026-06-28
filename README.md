@@ -5,7 +5,14 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M12 complete.** Unreal-style **workspace layout**: the asset browser became a **Content Browser**
+> Status: **M13 complete.** Fixes untextured champions/maps in project mode: a mod folder only ships its
+> *changed* files, so assets it doesn't include (skin bins, textures, meshes — e.g. `sru_dragon`) had nowhere
+> to resolve. ReyEngine now mounts the **original Riot game WADs as a read-only fallback** (auto-discovered
+> from the game folder: DATA / Common / Global + the matching map WAD) — consulted only on a miss, not added
+> to the browser. Project files still win; missing base assets resolve from the install. Verified: `sru_dragon`
+> (bin+texture only in the game WAD) now renders textured.
+>
+> Status (M12): Unreal-style **workspace layout**: the asset browser became a **Content Browser**
 > (folder tree + file tiles + breadcrumb, Windows/Explorer-style) docked in the center **above the console**;
 > the **left panel is now Map Content** (project maps + the loaded map's mesh-group outline); the right stays
 > the Inspector. Plus **Open Recent** projects. On top of the M11 project editor. Builds 0 errors; launches clean.
@@ -202,6 +209,7 @@ No Play button — this is an editor, not a runtime.
 | **M10 ✅** | array/struct element editing · add/remove material sampler slots (`BinTreeCloner`) · build-validated · (new-chunk import shelved: WAD v3.4 subchunk table) |
 | **M11 ✅** | project-folder editor · asset mount layer (override>project>Riot + conflicts) · read-only Riot refs + Copy-to-Project · build from project root · inspection-mode for single WAD |
 | **M12 ✅** | Unreal-style layout · Content Browser (folder tree + tiles + breadcrumb, center above console) · Map Content left panel · Open Recent projects |
+| **M13 ✅** | game-WAD reference fallback (auto-discovered DATA/Common/Global + map WAD) · resolves assets a mod doesn't ship · fixes untextured project champions/maps |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |

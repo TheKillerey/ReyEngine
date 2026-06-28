@@ -1083,7 +1083,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         foreach (var r in Project.ReferenceWads)
             try { _mounts.Add(new WadMount(WadArchive.Open(r, _resolver), AssetSourceKind.RiotReference, editable: false, name: Path.GetFileName(r))); }
             catch (Exception ex) { _log.Warn("Project", $"reference {Path.GetFileName(r)}: {ex.Message}"); }
+
+        AddGameFallback();
         _mounts.Rebuild();
+    }
+
+    /// <summary>Mount the original Riot game WADs as read-only fallback so missing assets resolve from the install.</summary>
+    private void AddGameFallback()
+    {
+        if (_mounts is null) return;
+        var mapNames = Project.ProjectFolders.Concat(Project.ProjectWads)
+            .Select(p => p == "." ? Project.Name : Path.GetFileNameWithoutExtension(p).Replace(".wad", "", StringComparison.OrdinalIgnoreCase))
+            .Append(Project.Name);
+
+        int n = 0;
+        foreach (var wad in GameReferenceLibrary.Discover(Project.GameDirectory, mapNames))
+        {
+            if (Project.ReferenceWads.Contains(wad, StringComparer.OrdinalIgnoreCase)) continue; // already an explicit reference
+            try { _mounts.AddFallback(new WadMount(WadArchive.Open(wad), AssetSourceKind.RiotReference, editable: false, name: Path.GetFileName(wad))); n++; }
+            catch (Exception ex) { _log.Warn("Project", $"game fallback {Path.GetFileName(wad)}: {ex.Message}"); }
+        }
+        if (n > 0)
+            _log.Info("Project", $"Mounted {n} game WAD(s) as read-only fallback — missing skin bins/textures resolve from the original game files. (Set the game folder via Tools if assets are still missing.)");
+        else if (string.IsNullOrEmpty(Project.GameDirectory))
+            _log.Warn("Project", "No game folder configured — missing base assets (textures/skin bins not in the mod) won't resolve. Set it so ReyEngine can fall back to the original WADs.");
     }
 
     private void BuildProjectTree()

@@ -22,6 +22,8 @@ public interface IAssetMount : IDisposable
     bool IsEditable { get; }
     IEnumerable<MountedAsset> Enumerate();
     bool Contains(ulong pathHash);
+    /// <summary>The single asset for a hash if this mount holds it (for fallback resolution).</summary>
+    MountedAsset? Get(ulong pathHash);
     byte[] Read(ulong pathHash);
 }
 
@@ -87,6 +89,11 @@ public sealed class WadMount : IAssetMount
     }
 
     public bool Contains(ulong pathHash) => _archive.TryGetEntry(pathHash, out _);
+
+    public MountedAsset? Get(ulong pathHash) => _archive.TryGetEntry(pathHash, out var e)
+        ? new MountedAsset { PathHash = e.PathHash, VirtualPath = e.Path, IsResolved = e.IsResolved, Type = e.Type, Size = e.UncompressedSize, Source = this }
+        : null;
+
     public byte[] Read(ulong pathHash) => _archive.Extract(pathHash);
     public void Dispose() => _archive.Dispose();
 }
@@ -133,30 +140,33 @@ public sealed class FolderMount : IAssetMount
 
     public IEnumerable<MountedAsset> Enumerate()
     {
-        foreach (var (hash, file) in _files)
+        foreach (var (hash, file) in _files) yield return BuildAsset(hash, file);
+    }
+
+    private MountedAsset BuildAsset(ulong hash, string file)
+    {
+        var rel = Path.GetRelativePath(Location, file).Replace('\\', '/');
+        string name = Path.GetFileNameWithoutExtension(rel);
+        bool looseHash = !rel.Contains('/') && name.Length == 16;
+
+        string path = rel;
+        bool resolved = !looseHash;
+        if (looseHash && _resolver is not null && _resolver.TryGetPath(hash, out var rp)) { path = rp; resolved = true; }
+        else if (looseHash) path = $"0x{hash:x16}{Path.GetExtension(rel)}";
+
+        return new MountedAsset
         {
-            var rel = Path.GetRelativePath(Location, file).Replace('\\', '/');
-            string name = Path.GetFileNameWithoutExtension(rel);
-            bool looseHash = !rel.Contains('/') && name.Length == 16;
-
-            string path = rel;
-            bool resolved = !looseHash;
-            if (looseHash && _resolver is not null && _resolver.TryGetPath(hash, out var rp)) { path = rp; resolved = true; }
-            else if (looseHash) path = $"0x{hash:x16}{Path.GetExtension(rel)}";
-
-            yield return new MountedAsset
-            {
-                PathHash = hash,
-                VirtualPath = path,
-                IsResolved = resolved,
-                Type = AssetTypeDetector.FromPath(path),
-                Size = new FileInfo(file).Length,
-                Source = this,
-            };
-        }
+            PathHash = hash,
+            VirtualPath = path,
+            IsResolved = resolved,
+            Type = AssetTypeDetector.FromPath(path),
+            Size = new FileInfo(file).Length,
+            Source = this,
+        };
     }
 
     public bool Contains(ulong pathHash) => _files.ContainsKey(pathHash);
+    public MountedAsset? Get(ulong pathHash) => _files.TryGetValue(pathHash, out var f) ? BuildAsset(pathHash, f) : null;
     public byte[] Read(ulong pathHash) => File.ReadAllBytes(_files[pathHash]);
     public void Dispose() { }
 }
@@ -187,22 +197,28 @@ public sealed class OverrideMount : IAssetMount
 
     public IEnumerable<MountedAsset> Enumerate()
     {
-        foreach (var (hash, file) in _files)
+        foreach (var (hash, file) in _files) yield return BuildAsset(hash, file);
+    }
+
+    private MountedAsset BuildAsset(ulong hash, string file)
+    {
+        bool resolved = false;
+        string path;
+        if (_resolver is not null && _resolver.TryGetPath(hash, out var rp)) { resolved = true; path = rp; }
+        else path = $"0x{hash:x16}{Path.GetExtension(file)}";
+        return new MountedAsset
         {
-            string path = _resolver is not null && _resolver.TryGetPath(hash, out var rp) ? rp : $"0x{hash:x16}{Path.GetExtension(file)}";
-            yield return new MountedAsset
-            {
-                PathHash = hash,
-                VirtualPath = path,
-                IsResolved = _resolver is not null && _resolver.TryGetPath(hash, out _),
-                Type = AssetTypeDetector.FromPath(path),
-                Size = new FileInfo(file).Length,
-                Source = this,
-            };
-        }
+            PathHash = hash,
+            VirtualPath = path,
+            IsResolved = resolved,
+            Type = AssetTypeDetector.FromPath(path),
+            Size = new FileInfo(file).Length,
+            Source = this,
+        };
     }
 
     public bool Contains(ulong pathHash) => _files.ContainsKey(pathHash);
+    public MountedAsset? Get(ulong pathHash) => _files.TryGetValue(pathHash, out var f) ? BuildAsset(pathHash, f) : null;
     public byte[] Read(ulong pathHash) => File.ReadAllBytes(_files[pathHash]);
     public void Dispose() { }
 }
