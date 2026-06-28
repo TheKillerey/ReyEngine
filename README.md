@@ -5,8 +5,9 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **MVP foundation working.** WAD browse + extract, hash tools, texture (`.tex`/`.dds`)
-> preview, and a live OpenGL viewport are functional and verified against a real game install.
+> Status: **M3 working.** WAD browse + extract, CommunityDragon hash sync + path resolution,
+> texture (`.tex`/`.dds`) preview, and **SKN mesh + SKL skeleton rendering** in the OpenGL viewport —
+> all verified against a real game install (`DATA.wad.client`: 4,895/4,895 paths resolved, meshes decoded).
 
 ---
 
@@ -40,14 +41,20 @@ or hand-rolled parsers (WAD/tex/bin are easy; skn/mapgeo/anm are more work).
 ReyEngine.sln
 ├─ src/ReyEngine.Core/         # No UI. Asset model + pipeline. (refs LeagueToolkit)
 │   ├─ Diagnostics/            # Logger, ILogSink, LogEntry
-│   ├─ Hashing/               # FNV-1a / ELF / SDBM / XxHash64 + HashDictionary
+│   ├─ Hashing/               # FNV-1a/ELF/SDBM/XxHash64, HashDatabase, HashSyncService,
+│   │                         #   WadPathResolver, IHashResolver
 │   ├─ Assets/                # AssetType + magic sniffer, WadAssetEntry, AssetTree
-│   ├─ Wad/                   # WadArchive (open / list / extract / repack-later)
-│   ├─ Decoding/              # TextureDecoder (.tex/.dds → RGBA8); mesh/bin decoders later
-│   └─ ReyProject.cs          # editor project model (game dir, hash dir, recents)
+│   ├─ Wad/                   # WadArchive (open / list / extract / re-resolve / repack-later)
+│   ├─ Decoding/              # TextureDecoder (.tex/.dds → RGBA8)
+│   └─ ReyProject.cs, ReyPaths.cs
+├─ src/ReyEngine.Formats/      # No UI. SKN/SKL/MAPGEO decoding → plain data. (refs Core + LeagueToolkit)
+│   ├─ Meshes/                # MeshAsset, SkinnedMeshDecoder
+│   ├─ Skeletons/             # SkeletonAsset, SkeletonDecoder
+│   └─ Map/                   # IMapGeometryAsset + MapGeoDecoder (M4 stub)
 ├─ src/ReyEngine.Rendering/    # No UI, no Avalonia. Pure Silk.NET GL + System.Numerics.
-│   ├─ OrbitCamera.cs
-│   └─ GridRenderer.cs        # grid + axes; the base the mesh renderer extends
+│   ├─ OrbitCamera.cs, ShaderUtil.cs (ES/desktop GLSL)
+│   ├─ GridRenderer.cs        # grid + axes
+│   └─ ViewportMeshRenderer.cs # solid/wireframe mesh + bounds + bone overlays; MapGeoRenderer (M4 stub)
 └─ src/ReyEngine.App/          # Avalonia shell (the only project that knows about UI)
     ├─ Views/                  # MainWindow.axaml, ViewportControl (GL bridge)
     ├─ ViewModels/             # MVVM: MainWindow, AssetNode, Inspector, Console
@@ -70,8 +77,10 @@ reference the UI, so the pipeline is unit-testable and reusable (e.g. a future C
 - [x] Hash Lookup tool (XxHash64 / FNV-1a / ELF for any string)
 - [x] OpenGL viewport: grid + axes, orbit/pan/zoom camera
 - [x] Console/import log, dark futuristic UI, full menu + toolbar
-- [ ] SKN/SKL mesh preview (M3) · MAPGEO (M3) · ANM playback (M6)
-- [ ] `.bin` tree inspector (M3) · material/shader preview (M4) · WAD repack (M5)
+- [x] **Hash sync** from CommunityDragon (split files, 32/64-bit, conflicts) + binary cache + auto-load
+- [x] **SKN mesh rendering** (solid/wireframe), bounds + **SKL bone overlay**, auto/manual skeleton pairing
+- [x] Mesh inspector (verts/indices/tris/submeshes/materials/bounds/bones)
+- [ ] MAPGEO render (M4) · `.bin` tree inspector (M4) · material/shader preview (M4) · WAD repack (M5) · ANM playback (M6)
 
 ## 4. Data pipeline: WAD → decoded asset → preview
 
@@ -149,8 +158,8 @@ No Play button — this is an editor, not a runtime.
 |-----------|-------|
 | **M1 ✅** | Solution, Core pipeline (WAD/hash/types), validated on real game data |
 | **M2 ✅** | Avalonia shell, dark theme, browser/inspector/console, GL grid viewport, texture preview |
-| **M3** | SKN/SKL mesh rendering in viewport · `.bin` property tree in Inspector · MAPGEO load |
-| **M4** | Material/shader preview (League `.bin` params → preview shaders) |
+| **M3 ✅** | CommunityDragon hash sync + cache + path resolution · SKN mesh + SKL bone rendering · mesh inspector |
+| **M4** | `.bin` property tree · MAPGEO load/render · material/shader preview (League `.bin` params → preview shaders) |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
@@ -164,4 +173,27 @@ dotnet run --project src/ReyEngine.App        # launch the editor
 
 Requires the **.NET 10 SDK** (LeagueToolkit 4.1 targets net10.0). Then `File ▸ Open WAD…`
 and point it at e.g. `C:\Riot Games\League of Legends\Game\DATA\FINAL\DATA.wad.client`.
-For readable paths, drop CDTB hash lists into `data/hashes/` (see that folder's README).
+
+### Hash resolution (M3)
+
+`Tools ▸ Sync Hashes` downloads the CommunityDragon hash lists
+(`hashes/lol`: split `hashes.game.txt.N`, `hashes.lcu.txt`, `hashes.bin*.txt`) into
+`data/hashes/communitydragon/lol/`, merges them (32-bit FNV for bin, 64-bit XxHash64 for WAD,
+keeping conflict candidates), and writes a fast binary cache `data/hashes/merged_hashes.cache`.
+On the next launch the cache auto-loads — **no network needed**. `Tools ▸ Reload Local Hashes`
+re-reads it; loose `.txt` files dropped in `data/hashes/` are still merged too. After a sync the open
+WAD's tree refreshes `0x…` → readable paths in place. The full sync is ~250 MB; it is git-ignored.
+
+### M3 test checklist (using `DATA.wad.client`)
+
+1. **Launch** — `dotnet run --project src/ReyEngine.App`. Console shows the hash cache loading (if present).
+2. **Sync** — `Tools ▸ Sync Hashes`. Watch the console: *Downloading… / parsed … / Loaded X / Saving cache*.
+3. **Open** — `Import` → `DATA.wad.client`. Console: `resolved N / 4,895 paths`; tree shows `data/…` paths.
+4. **Texture** — click any `IMG` (`.dds`/`.tex`) → preview appears in the Inspector.
+5. **Mesh** — click a `MSH` (`.skn`) → it renders centered in the viewport; Inspector shows verts/tris/submeshes.
+6. **Toggles** — `Wireframe`, `Bounds`, `Bones` (top-right of viewport) change the render; LMB orbit, wheel zoom.
+7. **Skeleton** — for a champion WAD (e.g. `Champions/Aatrox.wad.client`) a matching `.skl` auto-pairs and
+   draws an orange bone overlay; otherwise `Tools ▸ Assign Skeleton…` to load one manually.
+8. **Hash Lookup** — type a path in the toolbar box → `Hash Lookup` prints xxhash64/fnv1a/elf and any resolved
+   candidates (conflicts listed if a hash maps to several strings).
+9. **`.bin`** — click a `.bin` → Inspector note "BIN property tree coming in M4" (placeholder, by design).

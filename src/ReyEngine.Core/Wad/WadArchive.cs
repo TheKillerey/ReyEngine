@@ -7,51 +7,76 @@ namespace ReyEngine.Core.Wad;
 
 /// <summary>
 /// Thin, ReyEngine-friendly wrapper over LeagueToolkit's <see cref="WadFile"/>:
-/// opens an archive, exposes resolved entries, and extracts chunk bytes on demand.
+/// opens an archive, exposes resolved entries, extracts chunk bytes, and supports
+/// re-resolving paths after the hash dictionary changes.
 /// </summary>
 public sealed class WadArchive : IDisposable
 {
     private readonly WadFile _wad;
+    private readonly Dictionary<ulong, WadAssetEntry> _byHash;
 
     public string FilePath { get; }
     public string Name => System.IO.Path.GetFileName(FilePath);
     public IReadOnlyList<WadAssetEntry> Entries { get; }
-    public int ResolvedCount { get; }
+    public int ResolvedCount { get; private set; }
 
-    private WadArchive(string path, WadFile wad, List<WadAssetEntry> entries, int resolved)
+    private WadArchive(string path, WadFile wad, List<WadAssetEntry> entries)
     {
         FilePath = path;
         _wad = wad;
         Entries = entries;
-        ResolvedCount = resolved;
+        _byHash = entries.ToDictionary(e => e.PathHash);
     }
 
-    public static WadArchive Open(string path, HashDictionary? hashes = null)
+    public static WadArchive Open(string path, IHashResolver? resolver = null)
     {
         var wad = new WadFile(path);
         var list = new List<WadAssetEntry>(wad.Chunks.Count);
-        int resolved = 0;
 
         foreach (var (hash, chunk) in wad.Chunks)
         {
-            bool isResolved = hashes is not null && hashes.TryGetPath(hash, out var known);
-            string p = isResolved ? hashes!.ResolvePath(hash) : $"0x{hash:x16}.unknown";
-            if (isResolved) resolved++;
-
             list.Add(new WadAssetEntry
             {
                 PathHash = hash,
-                Path = p,
-                IsResolved = isResolved,
+                Path = $"0x{hash:x16}.unknown",
+                IsResolved = false,
                 CompressedSize = chunk.CompressedSize,
                 UncompressedSize = chunk.UncompressedSize,
                 Compression = chunk.Compression.ToString(),
-                Type = isResolved ? AssetTypeDetector.FromPath(p) : AssetType.Unknown,
+                Type = AssetType.Unknown,
             });
         }
 
-        return new WadArchive(path, wad, list, resolved);
+        var archive = new WadArchive(path, wad, list);
+        if (resolver is not null) archive.ReResolve(resolver);
+        return archive;
     }
+
+    /// <summary>Re-apply a resolver to all entries (path / resolved flag / type). Returns resolved count.</summary>
+    public int ReResolve(IHashResolver resolver)
+    {
+        int resolved = 0;
+        foreach (var e in Entries)
+        {
+            if (resolver.TryGetPath(e.PathHash, out var path))
+            {
+                e.Path = path;
+                e.IsResolved = true;
+                e.Type = AssetTypeDetector.FromPath(path);
+                resolved++;
+            }
+            else
+            {
+                e.Path = $"0x{e.PathHash:x16}.unknown";
+                e.IsResolved = false;
+                e.Type = AssetType.Unknown;
+            }
+        }
+        ResolvedCount = resolved;
+        return resolved;
+    }
+
+    public bool TryGetEntry(ulong pathHash, out WadAssetEntry entry) => _byHash.TryGetValue(pathHash, out entry!);
 
     /// <summary>Extract and decompress a chunk to a managed byte array.</summary>
     public byte[] Extract(WadAssetEntry entry) => Extract(entry.PathHash);

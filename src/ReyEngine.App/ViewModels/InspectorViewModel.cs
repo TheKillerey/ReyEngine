@@ -12,6 +12,8 @@ public sealed partial class InspectorViewModel : ViewModelBase
     [ObservableProperty] private string _details = "Select an asset in the browser to inspect it.";
     [ObservableProperty] private Bitmap? _previewImage;
     [ObservableProperty] private bool _hasPreview;
+    [ObservableProperty] private string _note = "";
+    [ObservableProperty] private bool _hasNote;
 
     public void ShowEntry(WadAssetEntry e)
     {
@@ -27,6 +29,13 @@ public sealed partial class InspectorViewModel : ViewModelBase
         sb.AppendLine($"Size on disk  {Format(e.CompressedSize)}");
         sb.AppendLine($"Size raw      {Format(e.UncompressedSize)}");
         Details = sb.ToString();
+        SetNote("");
+    }
+
+    public void SetNote(string note)
+    {
+        Note = note;
+        HasNote = !string.IsNullOrEmpty(note);
     }
 
     public void SetPreview(Bitmap? bmp)
@@ -41,6 +50,7 @@ public sealed partial class InspectorViewModel : ViewModelBase
         Subtitle = "";
         Details = "Select an asset in the browser to inspect it.";
         SetPreview(null);
+        SetNote("");
     }
 
     private static string Format(long bytes) => bytes switch

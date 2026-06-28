@@ -2,7 +2,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:ReyEngine.App.Views"
         xmlns:conv="clr-namespace:ReyEngine.App.Converters"
-        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         x:Class="ReyEngine.App.Views.MainWindow"
         Title="{Binding Title}"
         Width="1500" Height="900"
@@ -21,7 +20,6 @@
     <Menu DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}">
       <MenuItem Header="_File">
         <MenuItem Header="Open WAD…" Command="{Binding OpenWadCommand}" />
-        <MenuItem Header="Load Hash Dictionaries…" Command="{Binding LoadHashesCommand}" />
         <Separator />
         <MenuItem Header="Export Selected…" Command="{Binding ExportSelectedCommand}" />
         <Separator />
@@ -34,7 +32,11 @@
         <MenuItem Header="Reload WAD" Command="{Binding ReloadWadCommand}" />
       </MenuItem>
       <MenuItem Header="_Tools">
+        <MenuItem Header="Sync Hashes (CommunityDragon)" Command="{Binding SyncHashesCommand}" />
+        <MenuItem Header="Reload Local Hashes" Command="{Binding ReloadLocalHashesCommand}" />
+        <Separator />
         <MenuItem Header="Hash Lookup" Command="{Binding HashLookupCommand}" />
+        <MenuItem Header="Assign Skeleton…" Command="{Binding AssignSkeletonCommand}" />
         <MenuItem Header="Shader Preview" Command="{Binding ShaderPreviewCommand}" />
         <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
       </MenuItem>
@@ -55,6 +57,7 @@
         <Button Classes="tool" Content="Import" Command="{Binding OpenWadCommand}" />
         <Button Classes="tool" Content="Export" Command="{Binding ExportSelectedCommand}" />
         <Button Classes="tool" Content="Reload WAD" Command="{Binding ReloadWadCommand}" />
+        <Button Classes="tool" Content="Sync Hashes" Command="{Binding SyncHashesCommand}" />
         <Button Classes="tool" Content="Build Package" Command="{Binding BuildPackageCommand}" />
         <Button Classes="tool" Content="Shader Preview" Command="{Binding ShaderPreviewCommand}" />
         <Border Width="1" Background="{DynamicResource ReyBorderBrush}" Margin="6,2" />
@@ -86,11 +89,16 @@
             <TreeView.ItemTemplate>
               <TreeDataTemplate ItemsSource="{Binding Children}">
                 <StackPanel Orientation="Horizontal" Spacing="8">
+                  <StackPanel.ContextMenu>
+                    <ContextMenu>
+                      <MenuItem Header="Export…" Command="{Binding $parent[TreeView].DataContext.ExportSelectedCommand}" />
+                      <MenuItem Header="Assign Skeleton…" Command="{Binding $parent[TreeView].DataContext.AssignSkeletonCommand}" />
+                    </ContextMenu>
+                  </StackPanel.ContextMenu>
                   <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="3"
                           Padding="4,1" MinWidth="36" VerticalAlignment="Center">
                     <TextBlock Text="{Binding Kind}" FontSize="9"
-                               Foreground="{DynamicResource ReyAccentBrush}"
-                               HorizontalAlignment="Center" />
+                               Foreground="{DynamicResource ReyAccentBrush}" HorizontalAlignment="Center" />
                   </Border>
                   <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextBrush}"
                              FontSize="12" VerticalAlignment="Center" />
@@ -107,10 +115,23 @@
       <Grid Grid.Column="2" RowDefinitions="*,4,210">
         <Border Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
           <Grid>
-            <views:ViewportControl />
+            <views:ViewportControl
+                Mesh="{Binding CurrentMesh}"
+                Skeleton="{Binding CurrentSkeleton}"
+                Wireframe="{Binding ShowWireframe}"
+                ShowBones="{Binding ShowBones}"
+                ShowBounds="{Binding ShowBounds}" />
+
+            <!-- view toggles -->
+            <StackPanel Orientation="Horizontal" Spacing="4" Margin="10"
+                        HorizontalAlignment="Right" VerticalAlignment="Top">
+              <ToggleButton Content="Wireframe" IsChecked="{Binding ShowWireframe}" FontSize="11" Padding="8,3" />
+              <ToggleButton Content="Bones" IsChecked="{Binding ShowBones}" FontSize="11" Padding="8,3" />
+              <ToggleButton Content="Bounds" IsChecked="{Binding ShowBounds}" FontSize="11" Padding="8,3" />
+            </StackPanel>
+
             <Border Background="#66000000" CornerRadius="4" Padding="8,3"
-                    HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10"
-                    IsHitTestVisible="False">
+                    HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10" IsHitTestVisible="False">
               <TextBlock Text="VIEWPORT  ·  LMB orbit · Shift+LMB pan · wheel zoom"
                          FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" />
             </Border>
@@ -154,12 +175,36 @@
                       Padding="6,2" HorizontalAlignment="Left">
                 <TextBlock Text="{Binding Inspector.Subtitle}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
               </Border>
+
+              <!-- texture preview -->
               <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8"
                       IsVisible="{Binding Inspector.HasPreview}">
                 <Image Source="{Binding Inspector.PreviewImage}" Stretch="Uniform" MaxHeight="340" />
               </Border>
+
               <TextBlock Text="{Binding Inspector.Details}" Foreground="{DynamicResource ReyTextDimBrush}"
                          FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
+
+              <!-- note (e.g. bin placeholder) -->
+              <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8"
+                      IsVisible="{Binding Inspector.HasNote}">
+                <TextBlock Text="{Binding Inspector.Note}" Foreground="{DynamicResource ReyAccent2Brush}"
+                           FontSize="11" TextWrapping="Wrap" />
+              </Border>
+
+              <!-- mesh stats (SKN) -->
+              <StackPanel Spacing="8" IsVisible="{Binding MeshInspector.HasMesh}">
+                <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
+                <TextBlock Text="MESH" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding MeshInspector.Stats}" Foreground="{DynamicResource ReyTextDimBrush}"
+                           FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
+                <TextBlock Text="{Binding MeshInspector.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
+                <Button Classes="tool" Content="Assign Skeleton…" HorizontalAlignment="Left"
+                        Command="{Binding AssignSkeletonCommand}" />
+                <TextBlock Text="Submeshes / materials" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
+                <TextBlock Text="{Binding MeshInspector.SubMeshes}" Foreground="{DynamicResource ReyTextBrush}"
+                           FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
+              </StackPanel>
             </StackPanel>
           </ScrollViewer>
         </DockPanel>
