@@ -19,8 +19,12 @@
     <!-- ============ TOP MENU ============ -->
     <Menu DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}">
       <MenuItem Header="_File">
-        <MenuItem Header="Open WAD…" Command="{Binding OpenWadCommand}" />
+        <MenuItem Header="New Project…" Command="{Binding NewProjectCommand}" />
+        <MenuItem Header="Open Project…" Command="{Binding OpenProjectCommand}" />
+        <MenuItem Header="Save Project" Command="{Binding SaveProjectCommand}" />
+        <MenuItem Header="Save Project As…" Command="{Binding SaveProjectAsCommand}" />
         <Separator />
+        <MenuItem Header="Open WAD…" Command="{Binding OpenWadCommand}" />
         <MenuItem Header="Export Selected…" Command="{Binding ExportSelectedCommand}" />
         <Separator />
         <MenuItem Header="Exit" Command="{Binding ExitCommand}" />
@@ -41,6 +45,9 @@
         <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
       </MenuItem>
       <MenuItem Header="_Project">
+        <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
+        <MenuItem Header="Open Build Folder" Command="{Binding OpenBuildFolderCommand}" />
+        <Separator />
         <MenuItem Header="Reload WAD" Command="{Binding ReloadWadCommand}" />
       </MenuItem>
       <MenuItem Header="_Help">
@@ -91,7 +98,15 @@
                 <StackPanel Orientation="Horizontal" Spacing="8">
                   <StackPanel.ContextMenu>
                     <ContextMenu>
-                      <MenuItem Header="Export…" Command="{Binding $parent[TreeView].DataContext.ExportSelectedCommand}" />
+                      <MenuItem Header="Replace Selected Asset…" Command="{Binding $parent[TreeView].DataContext.ReplaceSelectedCommand}" />
+                      <MenuItem Header="Import New Asset…" Command="{Binding $parent[TreeView].DataContext.ImportNewAssetCommand}" />
+                      <MenuItem Header="Revert Asset" Command="{Binding $parent[TreeView].DataContext.RevertSelectedCommand}" />
+                      <Separator />
+                      <MenuItem Header="Export Original…" Command="{Binding $parent[TreeView].DataContext.ExportSelectedCommand}" />
+                      <MenuItem Header="Export Modified…" Command="{Binding $parent[TreeView].DataContext.ExportModifiedCommand}" />
+                      <Separator />
+                      <MenuItem Header="Copy Resolved Path" Command="{Binding $parent[TreeView].DataContext.CopyResolvedPathCommand}" />
+                      <MenuItem Header="Copy Hash" Command="{Binding $parent[TreeView].DataContext.CopyHashCommand}" />
                       <MenuItem Header="Assign Skeleton…" Command="{Binding $parent[TreeView].DataContext.AssignSkeletonCommand}" />
                     </ContextMenu>
                   </StackPanel.ContextMenu>
@@ -102,6 +117,8 @@
                   </Border>
                   <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextBrush}"
                              FontSize="12" VerticalAlignment="Center" />
+                  <Ellipse Width="7" Height="7" VerticalAlignment="Center"
+                           Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsModified}" />
                 </StackPanel>
               </TreeDataTemplate>
             </TreeView.ItemTemplate>
@@ -184,6 +201,16 @@
                       Padding="6,2" HorizontalAlignment="Left">
                 <TextBlock Text="{Binding Inspector.Subtitle}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
               </Border>
+
+              <!-- project asset status -->
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                         Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding Inspector.IsModified}" />
+                <TextBlock Text="{Binding Inspector.AssetStatus}" FontSize="11"
+                           Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+              </StackPanel>
+              <TextBlock Text="{Binding Inspector.AssetSource}" FontSize="10"
+                         Foreground="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding Inspector.IsModified}" />
 
               <!-- texture preview -->
               <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8"

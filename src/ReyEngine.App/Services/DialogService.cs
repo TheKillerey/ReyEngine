@@ -9,7 +9,14 @@ public sealed class DialogService
     public TopLevel? Owner { get; set; }
 
     public static FilePickerFileType Wad => new("WAD archive") { Patterns = new[] { "*.wad.client", "*.wad" } };
+    public static FilePickerFileType Project => new("ReyEngine project") { Patterns = new[] { "*.reyproject" } };
     public static FilePickerFileType All => new("All files") { Patterns = new[] { "*" } };
+
+    public async Task CopyAsync(string text)
+    {
+        var clipboard = Owner?.Clipboard;
+        if (clipboard is not null) await clipboard.SetTextAsync(text);
+    }
 
     public async Task<string?> OpenFileAsync(string title, params FilePickerFileType[] filters)
     {

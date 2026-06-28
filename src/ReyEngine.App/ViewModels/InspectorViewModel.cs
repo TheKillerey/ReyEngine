@@ -14,6 +14,16 @@ public sealed partial class InspectorViewModel : ViewModelBase
     [ObservableProperty] private bool _hasPreview;
     [ObservableProperty] private string _note = "";
     [ObservableProperty] private bool _hasNote;
+    [ObservableProperty] private string _assetStatus = "";
+    [ObservableProperty] private string _assetSource = "";
+    [ObservableProperty] private bool _isModified;
+
+    public void SetAssetStatus(string status, string? overrideFile)
+    {
+        AssetStatus = status;
+        IsModified = overrideFile is not null;
+        AssetSource = overrideFile is not null ? $"Override: {System.IO.Path.GetFileName(overrideFile)}" : "";
+    }
 
     public void ShowEntry(WadAssetEntry e)
     {

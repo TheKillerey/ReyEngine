@@ -1,12 +1,17 @@
 using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 using ReyEngine.Core.Assets;
 
 namespace ReyEngine.App.ViewModels;
 
-public sealed class AssetNodeViewModel : ViewModelBase
+public sealed partial class AssetNodeViewModel : ViewModelBase
 {
     public AssetTreeNode Model { get; }
     public ObservableCollection<AssetNodeViewModel> Children { get; } = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsModified))]
+    private AssetStatus _status = AssetStatus.Original;
 
     public AssetNodeViewModel(AssetTreeNode model)
     {
@@ -18,6 +23,7 @@ public sealed class AssetNodeViewModel : ViewModelBase
     public string Name => Model.Name;
     public bool IsFolder => Model.IsFolder;
     public WadAssetEntry? Entry => Model.Entry;
+    public bool IsModified => Status == AssetStatus.Modified;
 
     public string Kind => IsFolder
         ? "DIR"

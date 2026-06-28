@@ -5,10 +5,10 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M4 complete.** On top of M3 (mesh/skeleton/hash sync): **textured champion rendering**,
-> a **`.bin` property-tree inspector**, and **textured MAPGEO rendering** (map materials `.bin` →
-> per-group diffuse textures). Verified on a real install — Aatrox and Summoner's Rift (`Map11`,
-> 2.6M verts, 272 unique textures) both render fully textured.
+> Status: **M5 complete.** Adds a **project system** (`.reyproject`) and a non-destructive **Build
+> Package** pipeline: replace assets in a WAD and repack a new `.wad.client` that reopens with the
+> changes. On top of M1–M4 preview (textured champions, `.bin` inspector, textured MAPGEO). Verified:
+> replace a texture in Aatrox → build → reopen → modified texture present; unmodified chunks intact.
 
 ---
 
@@ -45,9 +45,11 @@ ReyEngine.sln
 │   ├─ Hashing/               # FNV-1a/ELF/SDBM/XxHash64, HashDatabase, HashSyncService,
 │   │                         #   WadPathResolver, IHashResolver
 │   ├─ Assets/                # AssetType + magic sniffer, WadAssetEntry, AssetTree
-│   ├─ Wad/                   # WadArchive (open / list / extract / re-resolve / repack-later)
+│   ├─ Wad/                   # WadArchive (open / list / extract / re-resolve)
 │   ├─ Decoding/              # TextureDecoder (.tex/.dds → RGBA8)
-│   └─ ReyProject.cs, ReyPaths.cs
+│   ├─ Projects/              # ReyProject(.reyproject), ReyProjectService, ProjectWorkspace, AssetOverrideStore (M5)
+│   ├─ Build/                 # WadRepackService, BuildPackageService, BuildReport, BuildSafety (M5)
+│   └─ ReyPaths.cs
 ├─ src/ReyEngine.Formats/      # No UI. SKN/SKL/MAPGEO decoding → plain data. (refs Core + LeagueToolkit)
 │   ├─ Meshes/                # MeshAsset, SkinnedMeshDecoder
 │   ├─ Skeletons/             # SkeletonAsset, SkeletonDecoder
@@ -85,7 +87,9 @@ reference the UI, so the pipeline is unit-testable and reusable (e.g. a future C
 - [x] **Textured mesh** — skin `.bin` → per-submesh diffuse textures applied in the viewport
 - [x] **`.bin` property-tree inspector** (resolved class/field names + values)
 - [x] **MAPGEO rendering** — `.mapgeo` decoded + **textured** from map materials `.bin` (Summoner's Rift verified)
-- [ ] WAD repack / Build Package (M5) · ANM animation playback (M6)
+- [x] **Project system** — `.reyproject` (new/open/save), asset override tracking, modified markers in the tree
+- [x] **Build Package** — non-destructive WAD repack (copy + append + TOC patch) + build validation; never writes into the game install
+- [ ] Add brand-new chunks (TOC rebuild) · ANM animation playback (M6)
 
 ## 4. Data pipeline: WAD → decoded asset → preview
 
@@ -165,6 +169,7 @@ No Play button — this is an editor, not a runtime.
 | **M2 ✅** | Avalonia shell, dark theme, browser/inspector/console, GL grid viewport, texture preview |
 | **M3 ✅** | CommunityDragon hash sync + cache + path resolution · SKN mesh + SKL bone rendering · mesh inspector |
 | **M4 ✅** | `.bin` property tree · textured champion · textured MAPGEO (SR verified) · -X orientation |
+| **M5 ✅** | project system (`.reyproject`) · replace WAD assets · Build Package (repack + reopen-validate) · install-folder guard |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
@@ -205,3 +210,14 @@ WAD's tree refreshes `0x…` → readable paths in place. The full sync is ~250 
 10. **MAPGEO** — open a map WAD (`Maps/Shipping/Map11.wad.client`), click a `.mapgeo` → the map renders
     **textured** (from its `.materials.bin`), framed to its bounds; Inspector shows version/mesh/vertex/
     material counts. Large maps load 200–300 textures, so expect a brief decode + a few hundred MB of VRAM.
+
+### M5 build-package checklist (project editing)
+
+1. Open `Champions/Aatrox.wad.client`, then `File ▸ New Project` (uses the open WAD as source).
+2. `File ▸ Save Project As…` → pick a folder (this becomes the workspace; overrides live in `overrides/`).
+3. Click a `.tex` (e.g. `aatrox_base_tx_cm.tex`), right-click → **Replace Selected Asset…** → choose any `.tex`/`.dds`.
+   The tree gets a violet dot, the Inspector shows *Modified — Project Override*, and the preview updates.
+4. `Project ▸ Build Package` → console logs *replaced/copied* counts + *Reopened OK — N chunks*. Output lands in
+   `<workspace>/build/<project>/` (it refuses to write into a Riot/League folder).
+5. `File ▸ Open WAD` → the built file → navigate to the replaced texture → it shows the new image; everything else intact.
+6. Right-click the asset → **Revert Asset**, build again → the original texture returns.
