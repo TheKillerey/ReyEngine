@@ -40,6 +40,10 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly OrbitCamera _camera = new();
     private bool _meshDirty, _bonesDirty, _needFrame;
 
+    // Offscreen target with a real depth buffer (Avalonia's default FBO has none).
+    private uint _fbo, _colorRb, _depthRb;
+    private int _fboW, _fboH;
+
     // ---- Public camera API (driven by the input overlay) ----
 
     public void OrbitBy(float dx, float dy)
@@ -87,6 +91,7 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         _grid?.Dispose();
         _meshRenderer?.Dispose();
+        DeleteFbo();
         _grid = null;
         _meshRenderer = null;
         _gl = null;
@@ -117,9 +122,14 @@ public sealed class ViewportControl : OpenGlControlBase
         uint w = (uint)Math.Max(1, Bounds.Width * scale);
         uint h = (uint)Math.Max(1, Bounds.Height * scale);
 
+        EnsureFbo(w, h);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+
         _gl.Viewport(0, 0, w, h);
         _gl.ClearColor(0.039f, 0.051f, 0.075f, 1f);
         _gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
+        _gl.Enable(EnableCap.DepthTest);
+        _gl.DepthFunc(DepthFunction.Lequal);
         _gl.Enable(EnableCap.Blend);
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
@@ -128,6 +138,48 @@ public sealed class ViewportControl : OpenGlControlBase
 
         _grid.Render(viewProj);
         _meshRenderer.Render(viewProj, Wireframe, ShowBounds, ShowBones);
+
+        // Resolve our offscreen color into Avalonia's framebuffer.
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _fbo);
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, (uint)fb);
+        _gl.BlitFramebuffer(0, 0, (int)w, (int)h, 0, 0, (int)w, (int)h,
+            (uint)ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)fb);
+    }
+
+    private void EnsureFbo(uint w, uint h)
+    {
+        if (_gl is null) return;
+        if (_fbo != 0 && _fboW == (int)w && _fboH == (int)h) return;
+        DeleteFbo();
+
+        _fbo = _gl.GenFramebuffer();
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+
+        _colorRb = _gl.GenRenderbuffer();
+        _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _colorRb);
+        _gl.RenderbufferStorage(RenderbufferTarget.Renderbuffer, InternalFormat.Rgba8, w, h);
+        _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+            RenderbufferTarget.Renderbuffer, _colorRb);
+
+        _depthRb = _gl.GenRenderbuffer();
+        _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _depthRb);
+        _gl.RenderbufferStorage(RenderbufferTarget.Renderbuffer, InternalFormat.DepthComponent24, w, h);
+        _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
+            RenderbufferTarget.Renderbuffer, _depthRb);
+
+        _fboW = (int)w;
+        _fboH = (int)h;
+    }
+
+    private void DeleteFbo()
+    {
+        if (_gl is null || _fbo == 0) return;
+        _gl.DeleteFramebuffer(_fbo);
+        _gl.DeleteRenderbuffer(_colorRb);
+        _gl.DeleteRenderbuffer(_depthRb);
+        _fbo = _colorRb = _depthRb = 0;
+        _fboW = _fboH = 0;
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
