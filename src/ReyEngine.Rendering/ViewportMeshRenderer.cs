@@ -162,7 +162,9 @@ void main() { FragColor = uColor; }";
     public unsafe void Render(Matrix4x4 viewProjection, bool wireframe, bool showBounds, bool showBones)
     {
         if (!_ready) return;
-        var m = Matrix4x4.Transpose(viewProjection);
+        // Row-major numerics matrix uploaded with transpose=false => GL reads it as the
+        // transpose, which is the column-major matrix column-vector GLSL expects.
+        var m = viewProjection;
 
         if (_hasMesh)
         {

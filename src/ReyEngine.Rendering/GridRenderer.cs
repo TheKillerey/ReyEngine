@@ -52,7 +52,9 @@ void main() { FragColor = uColor; }";
     {
         if (!_ready) return;
 
-        var m = Matrix4x4.Transpose(viewProjection);
+        // System.Numerics is row-major; uploading directly with transpose=false makes GL
+        // read it column-major (= the transpose), which is what column-vector GLSL needs.
+        var m = viewProjection;
         _gl.UseProgram(_program);
         _gl.UniformMatrix4(_uMvp, 1, false, in m.M11);
         _gl.BindVertexArray(_vao);
