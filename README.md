@@ -5,10 +5,10 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M4 in progress.** On top of M3 (mesh/skeleton/hash sync): **textured champion rendering**
-> (skin `.bin` → per-submesh diffuse textures), a **`.bin` property-tree inspector**, and **MAPGEO
-> rendering** (flat). Verified on a real install — Aatrox renders fully textured, Summoner's Rift
-> (`Map11`, 2.6M verts) renders as geometry.
+> Status: **M4 complete.** On top of M3 (mesh/skeleton/hash sync): **textured champion rendering**,
+> a **`.bin` property-tree inspector**, and **textured MAPGEO rendering** (map materials `.bin` →
+> per-group diffuse textures). Verified on a real install — Aatrox and Summoner's Rift (`Map11`,
+> 2.6M verts, 272 unique textures) both render fully textured.
 
 ---
 
@@ -84,8 +84,8 @@ reference the UI, so the pipeline is unit-testable and reusable (e.g. a future C
 - [x] Mesh inspector (verts/indices/tris/submeshes/materials/bounds/bones)
 - [x] **Textured mesh** — skin `.bin` → per-submesh diffuse textures applied in the viewport
 - [x] **`.bin` property-tree inspector** (resolved class/field names + values)
-- [x] **MAPGEO rendering** — `.mapgeo` decoded + rendered flat (verified on Summoner's Rift: 2.6M verts, 293 materials)
-- [ ] Textured maps (map materials `.bin`) (M4) · WAD repack (M5) · ANM playback (M6)
+- [x] **MAPGEO rendering** — `.mapgeo` decoded + **textured** from map materials `.bin` (Summoner's Rift verified)
+- [ ] WAD repack / Build Package (M5) · ANM animation playback (M6)
 
 ## 4. Data pipeline: WAD → decoded asset → preview
 
@@ -164,7 +164,7 @@ No Play button — this is an editor, not a runtime.
 | **M1 ✅** | Solution, Core pipeline (WAD/hash/types), validated on real game data |
 | **M2 ✅** | Avalonia shell, dark theme, browser/inspector/console, GL grid viewport, texture preview |
 | **M3 ✅** | CommunityDragon hash sync + cache + path resolution · SKN mesh + SKL bone rendering · mesh inspector |
-| **M4 ◐** | `.bin` tree ✅ · textured champion ✅ · MAPGEO flat render ✅ (SR verified) · textured maps (next) |
+| **M4 ✅** | `.bin` property tree · textured champion · textured MAPGEO (SR verified) · -X orientation |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
@@ -203,5 +203,5 @@ WAD's tree refreshes `0x…` → readable paths in place. The full sync is ~250 
    candidates (conflicts listed if a hash maps to several strings).
 9. **`.bin`** — click a `.bin` → its property tree appears in the Inspector (resolved names + values).
 10. **MAPGEO** — open a map WAD (`Maps/Shipping/Map11.wad.client`), click a `.mapgeo` → the map renders
-    flat in the viewport, framed to its bounds; Inspector shows version/mesh/vertex/material counts.
-    (Map textures are the next M4 step; maps render flat grey for now.)
+    **textured** (from its `.materials.bin`), framed to its bounds; Inspector shows version/mesh/vertex/
+    material counts. Large maps load 200–300 textures, so expect a brief decode + a few hundred MB of VRAM.

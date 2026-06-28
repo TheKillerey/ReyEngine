@@ -122,10 +122,19 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             if (ModelTextures is { } texs)
             {
+                // Upload each unique image once; submeshes sharing a texture share its GL id.
+                var uploaded = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
                 int n = Math.Min(texs.Count, _meshRenderer.SubmeshCount);
                 for (int i = 0; i < n; i++)
-                    if (texs[i] is { } img)
-                        _meshRenderer.SetSubmeshTexture(i, img.Rgba, img.Width, img.Height);
+                {
+                    if (texs[i] is not { } img) continue;
+                    if (!uploaded.TryGetValue(img, out var texId))
+                    {
+                        texId = _meshRenderer.UploadTexture(img.Rgba, img.Width, img.Height);
+                        uploaded[img] = texId;
+                    }
+                    _meshRenderer.SetSubmeshTextureId(i, texId);
+                }
             }
             _texturesDirty = false;
         }

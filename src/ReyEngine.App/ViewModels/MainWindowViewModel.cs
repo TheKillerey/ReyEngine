@@ -321,24 +321,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             _log.Info("MapGeo", $"Decoding {entry.DisplayName} …");
-            var map = await Task.Run(() => MapGeoDecoder.Decode(_archive.Extract(entry)));
+            var (map, mesh, textures) = await Task.Run(() =>
+            {
+                var m = MapGeoDecoder.Decode(_archive.Extract(entry));
+                var meshAsset = new MeshAsset
+                {
+                    Positions = m.Positions,
+                    Normals = m.Normals,
+                    Uvs = m.Uvs,
+                    Indices = m.Indices,
+                    VertexCount = m.VertexCount,
+                    SubMeshes = m.Groups.Select(g => new SubMeshInfo(g.Material, g.StartIndex, g.IndexCount, 0)).ToList(),
+                    BoundsMin = m.BoundsMin,
+                    BoundsMax = m.BoundsMax,
+                };
+                var tex = TryLoadMapTextures(entry, m);
+                return (m, meshAsset, tex);
+            });
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 CurrentSkeleton = null;
-                CurrentModelTextures = null;
                 ShowBones = false;
-                CurrentMesh = new MeshAsset
-                {
-                    Positions = map.Positions,
-                    Normals = map.Normals,
-                    Uvs = map.Uvs,
-                    Indices = map.Indices,
-                    VertexCount = map.VertexCount,
-                    SubMeshes = map.Groups.Select(g => new SubMeshInfo(g.Material, g.StartIndex, g.IndexCount, 0)).ToList(),
-                    BoundsMin = map.BoundsMin,
-                    BoundsMax = map.BoundsMax,
-                };
+                CurrentMesh = mesh;
+                CurrentModelTextures = textures;
                 MapGeoInspector.Show(map, entry.Path);
                 _log.Success("MapGeo", $"{entry.DisplayName}: v{map.Version}, {map.MeshCount:n0} meshes, {map.VertexCount:n0} verts, {map.TriangleCount:n0} tris, {map.MaterialCount} materials" +
                                        (map.Warnings.Count > 0 ? $", {map.Warnings.Count} warnings" : ""));
@@ -349,6 +355,47 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Error("MapGeo", $"{entry.DisplayName}: {ex.Message}");
             await Dispatcher.UIThread.InvokeAsync(ClearViewport);
         }
+    }
+
+    /// <summary>Resolve the map's materials .bin → per-group diffuse textures (shared instances for reuse).</summary>
+    private IReadOnlyList<TextureImage?>? TryLoadMapTextures(WadAssetEntry mapEntry, MapGeoAsset map)
+    {
+        if (_archive is null || !mapEntry.IsResolved) return null;
+
+        var binPath = MapGeoMaterialResolver.MaterialsBinPathFor(mapEntry.Path);
+        if (!_archive.TryGetEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
+        {
+            _log.Info("MapGeo", "No materials .bin found — rendering flat.");
+            return null;
+        }
+
+        var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
+        Dictionary<string, string> materialToTexture;
+        try { materialToTexture = MapGeoMaterialResolver.Resolve(_archive.Extract(binEntry), names); }
+        catch (Exception ex) { _log.Warn("MapGeo", $"materials parse failed: {ex.Message}"); return null; }
+        if (materialToTexture.Count == 0) return null;
+
+        var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
+        TextureImage? Load(string path)
+        {
+            if (cache.TryGetValue(path, out var hit)) return hit;
+            TextureImage? img = null;
+            if (_archive.TryGetEntry(HashAlgorithms.WadPath(path), out var te))
+            {
+                try { img = TextureDecoder.Decode(_archive.Extract(te)); } catch { /* unsupported */ }
+            }
+            cache[path] = img;
+            return img;
+        }
+
+        var result = new TextureImage?[map.Groups.Count];
+        for (int i = 0; i < map.Groups.Count; i++)
+            if (materialToTexture.TryGetValue(map.Groups[i].Material, out var path))
+                result[i] = Load(path);
+
+        int unique = cache.Values.Count(v => v is not null);
+        _log.Success("MapGeo", $"Loaded {unique} unique textures ({materialToTexture.Count}/{names.Count} materials resolved).");
+        return result;
     }
 
     /// <summary>Find the skin .bin for a .skn, extract per-submesh diffuse textures, decode them.</summary>

@@ -22,6 +22,7 @@ public sealed class ViewportMeshRenderer : IDisposable
 
     private uint _whiteTex;
     private SubmeshDraw[] _submeshes = Array.Empty<SubmeshDraw>();
+    private readonly List<uint> _ownedTextures = new(); // unique textures, shared across submeshes
 
     private uint _boundsVao, _boundsVbo;
     private uint _boneVao, _boneVbo;
@@ -168,10 +169,9 @@ void main() { FragColor = uColor; }";
         _hasMesh = true;
     }
 
-    public unsafe void SetSubmeshTexture(int index, byte[] rgba, int width, int height)
+    /// <summary>Uploads a texture once and returns its GL id (caller shares it across submeshes).</summary>
+    public unsafe uint UploadTexture(byte[] rgba, int width, int height)
     {
-        if (!_ready || !_hasMesh || index < 0 || index >= _submeshes.Length) return;
-
         uint tex = _gl.GenTexture();
         _gl.BindTexture(TextureTarget.Texture2D, tex);
         fixed (byte* p = rgba)
@@ -183,9 +183,14 @@ void main() { FragColor = uColor; }";
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _ownedTextures.Add(tex);
+        return tex;
+    }
 
-        if (_submeshes[index].Texture != 0) _gl.DeleteTexture(_submeshes[index].Texture);
-        _submeshes[index].Texture = tex;
+    public void SetSubmeshTextureId(int index, uint textureId)
+    {
+        if (!_ready || !_hasMesh || index < 0 || index >= _submeshes.Length) return;
+        _submeshes[index].Texture = textureId;
     }
 
     public void SetBoneSegments(float[]? lineVerts)
@@ -312,8 +317,8 @@ void main() { FragColor = uColor; }";
     private void DeleteMeshBuffers()
     {
         if (!_hasMesh) return;
-        foreach (var s in _submeshes)
-            if (s.Texture != 0) _gl.DeleteTexture(s.Texture);
+        foreach (var t in _ownedTextures) _gl.DeleteTexture(t);
+        _ownedTextures.Clear();
         _submeshes = Array.Empty<SubmeshDraw>();
         _gl.DeleteBuffer(_vbo);
         _gl.DeleteBuffer(_ebo);
