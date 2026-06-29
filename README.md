@@ -5,6 +5,14 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M19 complete.** Adds **secondary-sampler blending** to the RiotApprox preview. The champion
+> material's own **Gradient** sampler now colours the fresnel rim (Aatrox's rim glows its darkin red instead of
+> flat white), the **Mask** sampler gates where the rim shows, and an **Emissive** sampler (where present) adds a
+> self-illuminated glow — all driven by the real `StaticMaterialDef` sampler values, with a safe fallback so
+> materials without these samplers look unchanged. New viewport debug views expose the raw **Mask** and
+> **Emissive** channels for inspection. Verified on Aatrox (3 masks / 2 gradients resolved; rim picks up the
+> gradient, no regression on diffuse).
+>
 > Status: **M18 complete.** Adds **Riot shader inspection + a close-preview emulation**. ReyEngine scans the
 > game's `ShaderCache.dx11.wad.client` into a cached shader database (**Tools ▸ Scan Riot Shaders** → 828
 > shaders, vertex/pixel, with variant + define counts, cached to `.reyengine/shader_cache.json`), mounts the
@@ -255,6 +263,7 @@ No Play button — this is an editor, not a runtime.
 | **M16 ✅** | folder → `.wad.client` packing (`WadPackService`) — fresh v3.4 WAD, sorted TOC, Zstd chunks, reopen-validated · folder projects build a distributable WAD |
 | **M17 ✅** | `.fantome` export (`FantomeExporter`) — META/info.json + thumbnail + WAD/ · Project Settings dialog (mod name/author/version/description/thumbnail + game/output folders) |
 | **M18 ✅** | Riot shader inspection + close preview — scan `ShaderCache.dx11.wad` → cached `ShaderDatabase` (`.reyengine/shader_cache.json`) · mount `Shaders.wad` textures read-only · Material Editor shader-binding panel · viewport preview modes (Basic / **Riot Approx** rim+cutout / Debug base·alpha·normals) · export shader bytecode dump |
+| **M19 ✅** | Secondary-sampler blending — per-submesh **Mask / Gradient / Emissive** samplers resolved from `StaticMaterialDef` and bound to the renderer (texture units 1–3); RiotApprox rim is now gradient-coloured + mask-gated, with emissive glow where present · Debug · Mask / Emissive views · safe fallback for materials without them |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |

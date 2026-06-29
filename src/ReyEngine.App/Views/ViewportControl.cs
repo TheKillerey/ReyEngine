@@ -31,6 +31,12 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowBounds));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelTextures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelMaskTexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelMaskTextures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelGradientTexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelGradientTextures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelEmissiveTexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelEmissiveTextures));
     public static readonly StyledProperty<AnimationClip?> AnimationClipProperty =
         AvaloniaProperty.Register<ViewportControl, AnimationClip?>(nameof(AnimationClip));
     public static readonly StyledProperty<double> AnimationTimeProperty =
@@ -42,6 +48,9 @@ public sealed class ViewportControl : OpenGlControlBase
     public AnimationClip? AnimationClip { get => GetValue(AnimationClipProperty); set => SetValue(AnimationClipProperty, value); }
     public double AnimationTime { get => GetValue(AnimationTimeProperty); set => SetValue(AnimationTimeProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelTextures { get => GetValue(ModelTexturesProperty); set => SetValue(ModelTexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? ModelMaskTextures { get => GetValue(ModelMaskTexturesProperty); set => SetValue(ModelMaskTexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? ModelGradientTextures { get => GetValue(ModelGradientTexturesProperty); set => SetValue(ModelGradientTexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? ModelEmissiveTextures { get => GetValue(ModelEmissiveTexturesProperty); set => SetValue(ModelEmissiveTexturesProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
     public bool Wireframe { get => GetValue(WireframeProperty); set => SetValue(WireframeProperty, value); }
@@ -131,22 +140,12 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         if (_texturesDirty && _meshRenderer.HasMesh)
         {
-            if (ModelTextures is { } texs)
-            {
-                // Upload each unique image once; submeshes sharing a texture share its GL id.
-                var uploaded = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
-                int n = Math.Min(texs.Count, _meshRenderer.SubmeshCount);
-                for (int i = 0; i < n; i++)
-                {
-                    if (texs[i] is not { } img) continue;
-                    if (!uploaded.TryGetValue(img, out var texId))
-                    {
-                        texId = _meshRenderer.UploadTexture(img.Rgba, img.Width, img.Height);
-                        uploaded[img] = texId;
-                    }
-                    _meshRenderer.SetSubmeshTextureId(i, texId);
-                }
-            }
+            // Upload each unique image once (shared across all layers); submeshes sharing an image share its GL id.
+            var uploaded = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
+            UploadLayer(ModelTextures, 0, uploaded);          // diffuse
+            UploadLayer(ModelMaskTextures, 1, uploaded);      // mask
+            UploadLayer(ModelGradientTextures, 2, uploaded);  // gradient
+            UploadLayer(ModelEmissiveTextures, 3, uploaded);  // emissive
             _texturesDirty = false;
         }
         if (_bonesDirty)
@@ -226,11 +225,33 @@ public sealed class ViewportControl : OpenGlControlBase
         _fboW = _fboH = 0;
     }
 
+    /// <summary>Upload a per-submesh texture list into a renderer layer (0 diffuse · 1 mask · 2 gradient · 3 emissive).</summary>
+    private void UploadLayer(IReadOnlyList<TextureImage?>? texs, int slot, Dictionary<TextureImage, uint> uploaded)
+    {
+        if (_meshRenderer is null) return;
+        int count = texs?.Count ?? 0;
+        for (int i = 0; i < _meshRenderer.SubmeshCount; i++)
+        {
+            uint id = 0;
+            if (i < count && texs![i] is { } img)
+            {
+                if (!uploaded.TryGetValue(img, out id))
+                {
+                    id = _meshRenderer.UploadTexture(img.Rgba, img.Width, img.Height);
+                    uploaded[img] = id;
+                }
+            }
+            _meshRenderer.SetSubmeshLayer(i, slot, id); // 0 when the layer is absent → renderer falls back
+        }
+    }
+
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
         if (change.Property == MeshProperty) { _meshDirty = true; RequestNextFrameRendering(); }
-        else if (change.Property == ModelTexturesProperty) { _texturesDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == ModelTexturesProperty || change.Property == ModelMaskTexturesProperty
+                 || change.Property == ModelGradientTexturesProperty || change.Property == ModelEmissiveTexturesProperty)
+        { _texturesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimationClipProperty || change.Property == AnimationTimeProperty) { _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == WireframeProperty || change.Property == ShowBonesProperty

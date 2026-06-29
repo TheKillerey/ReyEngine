@@ -45,17 +45,27 @@ public sealed class MaterialDocument
         Materials.Where(m => m.IsDefault).Select(m => m.Diffuse?.Path).FirstOrDefault(p => !string.IsNullOrEmpty(p));
 
     /// <summary>Champion: submesh name → diffuse texture path (live). Each material's submeshes resolve to its diffuse slot.</summary>
-    public Dictionary<string, string> SubmeshDiffuse()
+    public Dictionary<string, string> SubmeshDiffuse() => SubmeshSampler(b => b.Diffuse);
+
+    /// <summary>Generic submesh → secondary-sampler path map (mask/gradient/emissive), live.</summary>
+    public Dictionary<string, string> SubmeshSampler(Func<MaterialBinding, TextureSlot?> pick)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var b in Materials)
         {
-            var d = b.Diffuse?.Path;
-            if (string.IsNullOrEmpty(d)) continue;
-            foreach (var sub in b.Submeshes) map[sub] = d;
+            var p = pick(b)?.Path;
+            if (string.IsNullOrEmpty(p)) continue;
+            foreach (var sub in b.Submeshes) map[sub] = p;
         }
         return map;
     }
+
+    private string? DefaultSampler(Func<MaterialBinding, TextureSlot?> pick) =>
+        Materials.Where(m => m.IsDefault).Select(m => pick(m)?.Path).FirstOrDefault(p => !string.IsNullOrEmpty(p));
+
+    public string? DefaultMaskPath => DefaultSampler(b => b.Mask);
+    public string? DefaultGradientPath => DefaultSampler(b => b.Gradient);
+    public string? DefaultEmissivePath => DefaultSampler(b => b.Emissive);
 
     /// <summary>Map (or any): material name → diffuse texture path (live).</summary>
     public Dictionary<string, string> MaterialDiffuse()
@@ -210,6 +220,11 @@ public sealed class MaterialBinding
     /// <summary>The diffuse/albedo slot if present, else the first texture slot.</summary>
     public TextureSlot? Diffuse => _slots.FirstOrDefault(s => s.IsDiffuse) ?? _slots.FirstOrDefault();
 
+    // Secondary samplers (M19) used by the RiotApprox preview.
+    public TextureSlot? Mask => _slots.FirstOrDefault(s => s.IsMask);
+    public TextureSlot? Gradient => _slots.FirstOrDefault(s => s.IsGradient);
+    public TextureSlot? Emissive => _slots.FirstOrDefault(s => s.IsEmissive);
+
     public bool IsDirty => _structurallyEdited || _slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty);
     private bool _structurallyEdited;
 
@@ -277,6 +292,13 @@ public sealed class TextureSlot
     public bool IsDiffuse =>
         SamplerName.Contains("Diffuse", OIC) || SamplerName.Contains("Albedo", OIC) ||
         SamplerName.Contains("Color", OIC) || SamplerName.Contains("Main", OIC);
+
+    // Secondary samplers (M19). A "Color_Mask" counts as a mask, not a diffuse, so exclude diffuse-likes first.
+    public bool IsMask => !IsDiffuse && SamplerName.Contains("Mask", OIC);
+    public bool IsGradient => SamplerName.Contains("Gradient", OIC) || SamplerName.Contains("Gredient", OIC);
+    public bool IsEmissive =>
+        SamplerName.Contains("Emiss", OIC) || SamplerName.Contains("EmissionR", OIC) ||
+        SamplerName.Contains("Glow", OIC) || SamplerName.Contains("Illum", OIC);
 }
 
 /// <summary>One material parameter (e.g. a vec4 tint) editable via the M7 value editor.</summary>

@@ -14,6 +14,7 @@ public sealed class ViewportMeshRenderer : IDisposable
 
     private uint _meshProgram, _lineProgram;
     private int _mMvp, _mModel, _mLight, _mTex, _mHasTex, _mBaseColor, _mMode, _mCamPos;
+    private int _mMask, _mGradient, _mEmissive, _mHasMask, _mHasGradient, _mHasEmissive;
     private int _lMvp, _lColor;
 
     private uint _vao, _vbo, _ebo, _wireEbo;
@@ -34,7 +35,10 @@ public sealed class ViewportMeshRenderer : IDisposable
     {
         public int Start;
         public int Count;
-        public uint Texture;
+        public uint Texture;     // slot 0 diffuse
+        public uint Mask;        // slot 1
+        public uint Gradient;    // slot 2
+        public uint Emissive;    // slot 3
     }
 
     private const string MeshVert = @"
@@ -53,7 +57,7 @@ void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
 }";
 
-    // uMode: 0 Basic · 1 RiotApprox (rim/fresnel + alpha cutout) · 2 Debug base · 3 Debug alpha · 4 Debug normal
+    // uMode: 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal · 5 Debug mask · 6 Debug emissive
     private const string MeshFrag = @"
 in vec3 vN;
 in vec2 vUv;
@@ -61,7 +65,13 @@ in vec3 vWorld;
 out vec4 FragColor;
 uniform vec3 uLight;
 uniform sampler2D uTex;
+uniform sampler2D uMask;
+uniform sampler2D uGradient;
+uniform sampler2D uEmissive;
 uniform int uHasTex;
+uniform int uHasMask;
+uniform int uHasGradient;
+uniform int uHasEmissive;
 uniform vec3 uBaseColor;
 uniform int uMode;
 uniform vec3 uCamPos;
@@ -74,17 +84,38 @@ void main() {
     if (uMode == 2) { FragColor = vec4(base, 1.0); return; }                 // debug: base/diffuse
     if (uMode == 3) { FragColor = vec4(vec3(alpha), 1.0); return; }          // debug: alpha
     if (uMode == 4) { FragColor = vec4(n * 0.5 + 0.5, 1.0); return; }        // debug: normals
+    if (uMode == 5) {                                                        // debug: mask (white if none)
+        vec3 mk = (uHasMask == 1) ? texture(uMask, vUv).rgb : vec3(1.0);
+        FragColor = vec4(mk, 1.0); return;
+    }
+    if (uMode == 6) {                                                        // debug: emissive (black if none)
+        vec3 em = (uHasEmissive == 1) ? texture(uEmissive, vUv).rgb : vec3(0.0);
+        FragColor = vec4(em, 1.0); return;
+    }
 
     float d = max(dot(n, normalize(-uLight)), 0.0);
     float light = 0.35 + 0.75 * d;
     vec3 col = base * light;
 
     if (uMode == 1) {
-        // RiotApprox: a fresnel rim highlight (League champion shaders use fresnel bloom) + alpha cutout.
+        // RiotApprox: a fresnel rim highlight (League champion shaders use fresnel bloom) coloured by the
+        // material's own Gradient sampler and gated by its Mask, + emissive glow, + alpha cutout.
         if (alpha < 0.35) discard;
         vec3 viewDir = normalize(uCamPos - vWorld);
         float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
-        col += fres * 0.6 * (0.5 + 0.5 * base);
+        // gradient gives the rim its colour (sampled along the fresnel ramp); else tint by base.
+        vec3 rimCol = (uHasGradient == 1)
+            ? texture(uGradient, vec2(clamp(fres, 0.02, 0.98), 0.5)).rgb
+            : (0.5 + 0.5 * base);
+        // mask gates where the rim shows (R channel); kept gentle so it never fully kills the highlight.
+        float gate = (uHasMask == 1) ? mix(0.5, 1.0, texture(uMask, vUv).r) : 1.0;
+        col += fres * 0.6 * rimCol * gate;
+        // emissive self-illumination: R channel = strength (works for EmissionR_* packs and plain glow
+        // masks), tinted by the diffuse so glowing parts glow in their own colour.
+        if (uHasEmissive == 1) {
+            float em = texture(uEmissive, vUv).r;
+            col += base * em * 1.5;
+        }
     }
     FragColor = vec4(col, 1.0);
 }";
@@ -114,6 +145,12 @@ void main() { FragColor = uColor; }";
         _mBaseColor = gl.GetUniformLocation(_meshProgram, "uBaseColor");
         _mMode = gl.GetUniformLocation(_meshProgram, "uMode");
         _mCamPos = gl.GetUniformLocation(_meshProgram, "uCamPos");
+        _mMask = gl.GetUniformLocation(_meshProgram, "uMask");
+        _mGradient = gl.GetUniformLocation(_meshProgram, "uGradient");
+        _mEmissive = gl.GetUniformLocation(_meshProgram, "uEmissive");
+        _mHasMask = gl.GetUniformLocation(_meshProgram, "uHasMask");
+        _mHasGradient = gl.GetUniformLocation(_meshProgram, "uHasGradient");
+        _mHasEmissive = gl.GetUniformLocation(_meshProgram, "uHasEmissive");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -215,10 +252,19 @@ void main() { FragColor = uColor; }";
         return tex;
     }
 
-    public void SetSubmeshTextureId(int index, uint textureId)
+    public void SetSubmeshTextureId(int index, uint textureId) => SetSubmeshLayer(index, 0, textureId);
+
+    /// <summary>Set a submesh texture layer: 0 diffuse · 1 mask · 2 gradient · 3 emissive (0 = none).</summary>
+    public void SetSubmeshLayer(int index, int slot, uint textureId)
     {
         if (!_ready || !_hasMesh || index < 0 || index >= _submeshes.Length) return;
-        _submeshes[index].Texture = textureId;
+        switch (slot)
+        {
+            case 0: _submeshes[index].Texture = textureId; break;
+            case 1: _submeshes[index].Mask = textureId; break;
+            case 2: _submeshes[index].Gradient = textureId; break;
+            case 3: _submeshes[index].Emissive = textureId; break;
+        }
     }
 
     /// <summary>Replace pos+normal of the existing mesh (keeps UVs/indices/textures) — for per-frame skinning.</summary>
@@ -288,13 +334,25 @@ void main() { FragColor = uColor; }";
                 _gl.Uniform1(_mMode, previewMode);
                 _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);
                 _gl.Uniform1(_mTex, 0);
-                _gl.ActiveTexture(TextureUnit.Texture0);
+                _gl.Uniform1(_mMask, 1);
+                _gl.Uniform1(_mGradient, 2);
+                _gl.Uniform1(_mEmissive, 3);
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
 
                 foreach (var s in _submeshes)
                 {
+                    _gl.ActiveTexture(TextureUnit.Texture0);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);
                     _gl.Uniform1(_mHasTex, s.Texture != 0 ? 1 : 0);
+                    _gl.ActiveTexture(TextureUnit.Texture1);
+                    _gl.BindTexture(TextureTarget.Texture2D, s.Mask != 0 ? s.Mask : _whiteTex);
+                    _gl.Uniform1(_mHasMask, s.Mask != 0 ? 1 : 0);
+                    _gl.ActiveTexture(TextureUnit.Texture2);
+                    _gl.BindTexture(TextureTarget.Texture2D, s.Gradient != 0 ? s.Gradient : _whiteTex);
+                    _gl.Uniform1(_mHasGradient, s.Gradient != 0 ? 1 : 0);
+                    _gl.ActiveTexture(TextureUnit.Texture3);
+                    _gl.BindTexture(TextureTarget.Texture2D, s.Emissive != 0 ? s.Emissive : _whiteTex);
+                    _gl.Uniform1(_mHasEmissive, s.Emissive != 0 ? 1 : 0);
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
                 }
             }
