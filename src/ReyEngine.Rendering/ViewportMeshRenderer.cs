@@ -15,6 +15,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private uint _meshProgram, _lineProgram;
     private int _mMvp, _mModel, _mLight, _mTex, _mHasTex, _mBaseColor, _mMode, _mCamPos;
     private int _mMask, _mGradient, _mEmissive, _mHasMask, _mHasGradient, _mHasEmissive;
+    private int _mMatCap, _mMatCapMask, _mHasMatCap, _mHasMatCapMask, _mView;
     private int _lMvp, _lColor;
 
     private uint _vao, _vbo, _ebo, _wireEbo;
@@ -39,6 +40,8 @@ public sealed class ViewportMeshRenderer : IDisposable
         public uint Mask;        // slot 1
         public uint Gradient;    // slot 2
         public uint Emissive;    // slot 3
+        public uint MatCap;      // slot 4
+        public uint MatCapMask;  // slot 5
     }
 
     private const string MeshVert = @"
@@ -68,13 +71,25 @@ uniform sampler2D uTex;
 uniform sampler2D uMask;
 uniform sampler2D uGradient;
 uniform sampler2D uEmissive;
+uniform sampler2D uMatCap;
+uniform sampler2D uMatCapMask;
 uniform int uHasTex;
 uniform int uHasMask;
 uniform int uHasGradient;
 uniform int uHasEmissive;
+uniform int uHasMatCap;
+uniform int uHasMatCapMask;
 uniform vec3 uBaseColor;
 uniform int uMode;
 uniform vec3 uCamPos;
+uniform mat4 uView;
+
+// League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
+vec3 matcapColour(vec3 worldN) {
+    vec3 vn = normalize(mat3(uView) * worldN);
+    vec2 uv = vn.xy * 0.5 + 0.5;
+    return texture(uMatCap, uv).rgb;
+}
 void main() {
     vec3 n = length(vN) > 0.001 ? normalize(vN) : vec3(0.0, 1.0, 0.0);
     vec4 tex = (uHasTex == 1) ? texture(uTex, vUv) : vec4(uBaseColor, 1.0);
@@ -91,6 +106,10 @@ void main() {
     if (uMode == 6) {                                                        // debug: emissive (black if none)
         vec3 em = (uHasEmissive == 1) ? texture(uEmissive, vUv).rgb : vec3(0.0);
         FragColor = vec4(em, 1.0); return;
+    }
+    if (uMode == 7) {                                                        // debug: matcap (grey if none)
+        vec3 mc = (uHasMatCap == 1) ? matcapColour(n) : vec3(0.2);
+        FragColor = vec4(mc, 1.0); return;
     }
 
     float d = max(dot(n, normalize(-uLight)), 0.0);
@@ -110,6 +129,11 @@ void main() {
         // mask gates where the rim shows (R channel); kept gentle so it never fully kills the highlight.
         float gate = (uHasMask == 1) ? mix(0.5, 1.0, texture(uMask, vUv).r) : 1.0;
         col += fres * 0.6 * rimCol * gate;
+        // matcap fake-lighting highlight (additive), gated by its own mask where present.
+        if (uHasMatCap == 1) {
+            float mcGate = (uHasMatCapMask == 1) ? texture(uMatCapMask, vUv).r : 1.0;
+            col += matcapColour(n) * 0.6 * mcGate;
+        }
         // emissive self-illumination: R channel = strength (works for EmissionR_* packs and plain glow
         // masks), tinted by the diffuse so glowing parts glow in their own colour.
         if (uHasEmissive == 1) {
@@ -151,6 +175,11 @@ void main() { FragColor = uColor; }";
         _mHasMask = gl.GetUniformLocation(_meshProgram, "uHasMask");
         _mHasGradient = gl.GetUniformLocation(_meshProgram, "uHasGradient");
         _mHasEmissive = gl.GetUniformLocation(_meshProgram, "uHasEmissive");
+        _mMatCap = gl.GetUniformLocation(_meshProgram, "uMatCap");
+        _mMatCapMask = gl.GetUniformLocation(_meshProgram, "uMatCapMask");
+        _mHasMatCap = gl.GetUniformLocation(_meshProgram, "uHasMatCap");
+        _mHasMatCapMask = gl.GetUniformLocation(_meshProgram, "uHasMatCapMask");
+        _mView = gl.GetUniformLocation(_meshProgram, "uView");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -264,6 +293,8 @@ void main() { FragColor = uColor; }";
             case 1: _submeshes[index].Mask = textureId; break;
             case 2: _submeshes[index].Gradient = textureId; break;
             case 3: _submeshes[index].Emissive = textureId; break;
+            case 4: _submeshes[index].MatCap = textureId; break;
+            case 5: _submeshes[index].MatCapMask = textureId; break;
         }
     }
 
@@ -301,9 +332,12 @@ void main() { FragColor = uColor; }";
     }
 
     public unsafe void Render(Matrix4x4 viewProjection, bool wireframe, bool showBounds, bool showBones)
-        => Render(viewProjection, Vector3.Zero, 0, wireframe, showBounds, showBones);
+        => Render(viewProjection, Matrix4x4.Identity, Vector3.Zero, 0, wireframe, showBounds, showBones);
 
     public unsafe void Render(Matrix4x4 viewProjection, Vector3 camPos, int previewMode, bool wireframe, bool showBounds, bool showBones)
+        => Render(viewProjection, Matrix4x4.Identity, camPos, previewMode, wireframe, showBounds, showBones);
+
+    public unsafe void Render(Matrix4x4 viewProjection, Matrix4x4 view, Vector3 camPos, int previewMode, bool wireframe, bool showBounds, bool showBones)
     {
         if (!_ready) return;
         var m = viewProjection;
@@ -333,10 +367,13 @@ void main() { FragColor = uColor; }";
                 _gl.Uniform3(_mBaseColor, 0.62f, 0.66f, 0.74f);
                 _gl.Uniform1(_mMode, previewMode);
                 _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);
+                _gl.UniformMatrix4(_mView, 1, false, in view.M11);
                 _gl.Uniform1(_mTex, 0);
                 _gl.Uniform1(_mMask, 1);
                 _gl.Uniform1(_mGradient, 2);
                 _gl.Uniform1(_mEmissive, 3);
+                _gl.Uniform1(_mMatCap, 4);
+                _gl.Uniform1(_mMatCapMask, 5);
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
 
                 foreach (var s in _submeshes)
@@ -353,6 +390,12 @@ void main() { FragColor = uColor; }";
                     _gl.ActiveTexture(TextureUnit.Texture3);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Emissive != 0 ? s.Emissive : _whiteTex);
                     _gl.Uniform1(_mHasEmissive, s.Emissive != 0 ? 1 : 0);
+                    _gl.ActiveTexture(TextureUnit.Texture4);
+                    _gl.BindTexture(TextureTarget.Texture2D, s.MatCap != 0 ? s.MatCap : _whiteTex);
+                    _gl.Uniform1(_mHasMatCap, s.MatCap != 0 ? 1 : 0);
+                    _gl.ActiveTexture(TextureUnit.Texture5);
+                    _gl.BindTexture(TextureTarget.Texture2D, s.MatCapMask != 0 ? s.MatCapMask : _whiteTex);
+                    _gl.Uniform1(_mHasMatCapMask, s.MatCapMask != 0 ? 1 : 0);
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
                 }
             }

@@ -169,6 +169,8 @@
                 ModelMaskTextures="{Binding CurrentModelMaskTextures}"
                 ModelGradientTextures="{Binding CurrentModelGradientTextures}"
                 ModelEmissiveTextures="{Binding CurrentModelEmissiveTextures}"
+                ModelMatCapTextures="{Binding CurrentModelMatCapTextures}"
+                ModelMatCapMaskTextures="{Binding CurrentModelMatCapMaskTextures}"
                 Skeleton="{Binding CurrentSkeleton}"
                 AnimationClip="{Binding CurrentAnimation}"
                 AnimationTime="{Binding AnimationTime}"
@@ -196,6 +198,7 @@
                 <ComboBoxItem>Debug · Normals</ComboBoxItem>
                 <ComboBoxItem>Debug · Mask</ComboBoxItem>
                 <ComboBoxItem>Debug · Emissive</ComboBoxItem>
+                <ComboBoxItem>Debug · MatCap</ComboBoxItem>
               </ComboBox>
               <ToggleButton Content="Wireframe" IsChecked="{Binding ShowWireframe}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Bones" IsChecked="{Binding ShowBones}" FontSize="11" Padding="8,3" />

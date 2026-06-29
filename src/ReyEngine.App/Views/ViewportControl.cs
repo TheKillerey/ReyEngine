@@ -37,6 +37,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelGradientTextures));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelEmissiveTexturesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelEmissiveTextures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelMatCapTexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelMatCapTextures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelMatCapMaskTexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelMatCapMaskTextures));
     public static readonly StyledProperty<AnimationClip?> AnimationClipProperty =
         AvaloniaProperty.Register<ViewportControl, AnimationClip?>(nameof(AnimationClip));
     public static readonly StyledProperty<double> AnimationTimeProperty =
@@ -51,6 +55,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public IReadOnlyList<TextureImage?>? ModelMaskTextures { get => GetValue(ModelMaskTexturesProperty); set => SetValue(ModelMaskTexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelGradientTextures { get => GetValue(ModelGradientTexturesProperty); set => SetValue(ModelGradientTexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelEmissiveTextures { get => GetValue(ModelEmissiveTexturesProperty); set => SetValue(ModelEmissiveTexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? ModelMatCapTextures { get => GetValue(ModelMatCapTexturesProperty); set => SetValue(ModelMatCapTexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? ModelMatCapMaskTextures { get => GetValue(ModelMatCapMaskTexturesProperty); set => SetValue(ModelMatCapMaskTexturesProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
     public bool Wireframe { get => GetValue(WireframeProperty); set => SetValue(WireframeProperty, value); }
@@ -142,10 +148,12 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             // Upload each unique image once (shared across all layers); submeshes sharing an image share its GL id.
             var uploaded = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
-            UploadLayer(ModelTextures, 0, uploaded);          // diffuse
-            UploadLayer(ModelMaskTextures, 1, uploaded);      // mask
-            UploadLayer(ModelGradientTextures, 2, uploaded);  // gradient
-            UploadLayer(ModelEmissiveTextures, 3, uploaded);  // emissive
+            UploadLayer(ModelTextures, 0, uploaded);            // diffuse
+            UploadLayer(ModelMaskTextures, 1, uploaded);        // mask
+            UploadLayer(ModelGradientTextures, 2, uploaded);    // gradient
+            UploadLayer(ModelEmissiveTextures, 3, uploaded);    // emissive
+            UploadLayer(ModelMatCapTextures, 4, uploaded);      // matcap
+            UploadLayer(ModelMatCapMaskTextures, 5, uploaded);  // matcap mask
             _texturesDirty = false;
         }
         if (_bonesDirty)
@@ -180,7 +188,8 @@ public sealed class ViewportControl : OpenGlControlBase
         var viewProj = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjection(aspect);
 
         _grid.Render(viewProj);
-        _meshRenderer.Render(viewProj, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones);
+        var view = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.View; // same X-mirror as viewProj, for the matcap lookup
+        _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones);
 
         // Resolve our offscreen color into Avalonia's framebuffer.
         _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _fbo);
@@ -250,7 +259,8 @@ public sealed class ViewportControl : OpenGlControlBase
         base.OnPropertyChanged(change);
         if (change.Property == MeshProperty) { _meshDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelTexturesProperty || change.Property == ModelMaskTexturesProperty
-                 || change.Property == ModelGradientTexturesProperty || change.Property == ModelEmissiveTexturesProperty)
+                 || change.Property == ModelGradientTexturesProperty || change.Property == ModelEmissiveTexturesProperty
+                 || change.Property == ModelMatCapTexturesProperty || change.Property == ModelMatCapMaskTexturesProperty)
         { _texturesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimationClipProperty || change.Property == AnimationTimeProperty) { _skinDirty = true; RequestNextFrameRendering(); }

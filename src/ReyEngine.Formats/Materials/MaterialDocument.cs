@@ -66,6 +66,8 @@ public sealed class MaterialDocument
     public string? DefaultMaskPath => DefaultSampler(b => b.Mask);
     public string? DefaultGradientPath => DefaultSampler(b => b.Gradient);
     public string? DefaultEmissivePath => DefaultSampler(b => b.Emissive);
+    public string? DefaultMatCapPath => DefaultSampler(b => b.MatCap);
+    public string? DefaultMatCapMaskPath => DefaultSampler(b => b.MatCapMask);
 
     /// <summary>Map (or any): material name → diffuse texture path (live).</summary>
     public Dictionary<string, string> MaterialDiffuse()
@@ -220,10 +222,12 @@ public sealed class MaterialBinding
     /// <summary>The diffuse/albedo slot if present, else the first texture slot.</summary>
     public TextureSlot? Diffuse => _slots.FirstOrDefault(s => s.IsDiffuse) ?? _slots.FirstOrDefault();
 
-    // Secondary samplers (M19) used by the RiotApprox preview.
+    // Secondary samplers (M19/M20) used by the RiotApprox preview.
     public TextureSlot? Mask => _slots.FirstOrDefault(s => s.IsMask);
     public TextureSlot? Gradient => _slots.FirstOrDefault(s => s.IsGradient);
     public TextureSlot? Emissive => _slots.FirstOrDefault(s => s.IsEmissive);
+    public TextureSlot? MatCap => _slots.FirstOrDefault(s => s.IsMatCap);
+    public TextureSlot? MatCapMask => _slots.FirstOrDefault(s => s.IsMatCapMask);
 
     public bool IsDirty => _structurallyEdited || _slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty);
     private bool _structurallyEdited;
@@ -293,8 +297,11 @@ public sealed class TextureSlot
         SamplerName.Contains("Diffuse", OIC) || SamplerName.Contains("Albedo", OIC) ||
         SamplerName.Contains("Color", OIC) || SamplerName.Contains("Main", OIC);
 
-    // Secondary samplers (M19). A "Color_Mask" counts as a mask, not a diffuse, so exclude diffuse-likes first.
-    public bool IsMask => !IsDiffuse && SamplerName.Contains("Mask", OIC);
+    // Secondary samplers (M19/M20). A "Color_Mask" counts as a mask, not a diffuse, so exclude diffuse-likes
+    // first; a "MatCap_Mask" is the matcap's own mask, not the rim mask, so exclude MatCap from the rim mask.
+    public bool IsMatCap => SamplerName.Contains("MatCap", OIC) && !SamplerName.Contains("Mask", OIC);
+    public bool IsMatCapMask => SamplerName.Contains("MatCap", OIC) && SamplerName.Contains("Mask", OIC);
+    public bool IsMask => !IsDiffuse && SamplerName.Contains("Mask", OIC) && !SamplerName.Contains("MatCap", OIC);
     public bool IsGradient => SamplerName.Contains("Gradient", OIC) || SamplerName.Contains("Gredient", OIC);
     public bool IsEmissive =>
         SamplerName.Contains("Emiss", OIC) || SamplerName.Contains("EmissionR", OIC) ||

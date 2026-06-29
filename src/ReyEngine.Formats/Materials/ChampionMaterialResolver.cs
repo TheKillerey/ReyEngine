@@ -12,12 +12,15 @@ public static class ChampionMaterialResolver
         Dictionary<string, string> SubmeshDiffuse, string? DefaultDiffuse,
         Dictionary<string, string> SubmeshMask, string? DefaultMask,
         Dictionary<string, string> SubmeshGradient, string? DefaultGradient,
-        Dictionary<string, string> SubmeshEmissive, string? DefaultEmissive)
+        Dictionary<string, string> SubmeshEmissive, string? DefaultEmissive,
+        Dictionary<string, string> SubmeshMatCap, string? DefaultMatCap,
+        Dictionary<string, string> SubmeshMatCapMask, string? DefaultMatCapMask)
     {
         public bool HasAny => SubmeshDiffuse.Count > 0 || !string.IsNullOrEmpty(DefaultDiffuse);
         public bool HasSecondary =>
-            SubmeshMask.Count > 0 || SubmeshGradient.Count > 0 || SubmeshEmissive.Count > 0
-            || !string.IsNullOrEmpty(DefaultMask) || !string.IsNullOrEmpty(DefaultGradient) || !string.IsNullOrEmpty(DefaultEmissive);
+            SubmeshMask.Count > 0 || SubmeshGradient.Count > 0 || SubmeshEmissive.Count > 0 || SubmeshMatCap.Count > 0
+            || !string.IsNullOrEmpty(DefaultMask) || !string.IsNullOrEmpty(DefaultGradient)
+            || !string.IsNullOrEmpty(DefaultEmissive) || !string.IsNullOrEmpty(DefaultMatCap);
 
         private static string? Pick(Dictionary<string, string> map, string? def, string submesh) =>
             map.TryGetValue(submesh, out var p) ? p : def;
@@ -27,12 +30,11 @@ public static class ChampionMaterialResolver
         public string? ForMask(string submesh) => Pick(SubmeshMask, DefaultMask, submesh);
         public string? ForGradient(string submesh) => Pick(SubmeshGradient, DefaultGradient, submesh);
         public string? ForEmissive(string submesh) => Pick(SubmeshEmissive, DefaultEmissive, submesh);
+        public string? ForMatCap(string submesh) => Pick(SubmeshMatCap, DefaultMatCap, submesh);
+        public string? ForMatCapMask(string submesh) => Pick(SubmeshMatCapMask, DefaultMatCapMask, submesh);
 
-        public static Result Empty() => new(
-            new(StringComparer.OrdinalIgnoreCase), null,
-            new(StringComparer.OrdinalIgnoreCase), null,
-            new(StringComparer.OrdinalIgnoreCase), null,
-            new(StringComparer.OrdinalIgnoreCase), null);
+        private static Dictionary<string, string> M() => new(StringComparer.OrdinalIgnoreCase);
+        public static Result Empty() => new(M(), null, M(), null, M(), null, M(), null, M(), null, M(), null);
     }
 
     public static Result Resolve(byte[] skinBin, Func<uint, string?> resolve)
@@ -44,7 +46,9 @@ public static class ChampionMaterialResolver
                 doc.SubmeshDiffuse(), doc.DefaultDiffusePath,
                 doc.SubmeshSampler(b => b.Mask), doc.DefaultMaskPath,
                 doc.SubmeshSampler(b => b.Gradient), doc.DefaultGradientPath,
-                doc.SubmeshSampler(b => b.Emissive), doc.DefaultEmissivePath);
+                doc.SubmeshSampler(b => b.Emissive), doc.DefaultEmissivePath,
+                doc.SubmeshSampler(b => b.MatCap), doc.DefaultMatCapPath,
+                doc.SubmeshSampler(b => b.MatCapMask), doc.DefaultMatCapMaskPath);
         }
         catch
         {

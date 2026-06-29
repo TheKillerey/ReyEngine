@@ -90,6 +90,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelMaskTextures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelGradientTextures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelEmissiveTextures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelMatCapTextures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelMatCapMaskTextures;
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
     [ObservableProperty] private bool _showWireframe;
@@ -598,6 +600,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelMaskTextures = null;
         CurrentModelGradientTextures = null;
         CurrentModelEmissiveTextures = null;
+        CurrentModelMatCapTextures = null;
+        CurrentModelMatCapMaskTextures = null;
     }
 
     private void ClearViewport()
@@ -933,6 +937,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var masks = new TextureImage?[n];
         var grads = new TextureImage?[n];
         var emis = new TextureImage?[n];
+        var matcaps = new TextureImage?[n];
+        var matcapMasks = new TextureImage?[n];
         int loaded = 0, secondary = 0;
         for (int i = 0; i < n; i++)
         {
@@ -943,12 +949,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             masks[i] = Load(material.ForMask(sub));
             grads[i] = Load(material.ForGradient(sub));
             emis[i] = Load(material.ForEmissive(sub));
-            if (masks[i] is not null || grads[i] is not null || emis[i] is not null) secondary++;
+            matcaps[i] = Load(material.ForMatCap(sub));
+            matcapMasks[i] = Load(material.ForMatCapMask(sub));
+            if (masks[i] is not null || grads[i] is not null || emis[i] is not null || matcaps[i] is not null) secondary++;
         }
-        // Publish the secondary layers (mask/gradient/emissive) for the RiotApprox preview.
+        // Publish the secondary layers (mask/gradient/emissive/matcap) for the RiotApprox preview.
         CurrentModelMaskTextures = material.SubmeshMask.Count > 0 || material.DefaultMask is not null ? masks : null;
         CurrentModelGradientTextures = material.SubmeshGradient.Count > 0 || material.DefaultGradient is not null ? grads : null;
         CurrentModelEmissiveTextures = material.SubmeshEmissive.Count > 0 || material.DefaultEmissive is not null ? emis : null;
+        CurrentModelMatCapTextures = material.SubmeshMatCap.Count > 0 || material.DefaultMatCap is not null ? matcaps : null;
+        CurrentModelMatCapMaskTextures = material.SubmeshMatCapMask.Count > 0 || material.DefaultMatCapMask is not null ? matcapMasks : null;
 
         int distinct = cache.Values.Count(v => v is not null);
         var extra = material.HasSecondary ? $", {secondary} with secondary samplers (mask/gradient/emissive)" : "";

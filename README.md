@@ -5,6 +5,14 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M20 complete.** Adds **MatCap** support to the RiotApprox preview — the 2nd-most-common League
+> champion sampler (`MatCap_Tex`), a view-space spheremap of fake studio lighting. ReyEngine resolves the
+> per-submesh `MatCap_Tex` (+ optional `MatCap_Mask`), binds them to the renderer, and adds the matcap as an
+> additive highlight sampled by the view-space normal (the standard, well-defined matcap technique — not
+> guesswork). A **Debug · MatCap** view shows the raw spheremap shading. Verified the spheremap math with a
+> directional test matcap (correct view-dependent shading across the model) and confirmed per-submesh resolution
+> on Aatrox's Prestige skin (Arm/Diamond → DiamondColor matcap).
+>
 > Status: **M19 complete.** Adds **secondary-sampler blending** to the RiotApprox preview. The champion
 > material's own **Gradient** sampler now colours the fresnel rim (Aatrox's rim glows its darkin red instead of
 > flat white), the **Mask** sampler gates where the rim shows, and an **Emissive** sampler (where present) adds a
@@ -264,6 +272,7 @@ No Play button — this is an editor, not a runtime.
 | **M17 ✅** | `.fantome` export (`FantomeExporter`) — META/info.json + thumbnail + WAD/ · Project Settings dialog (mod name/author/version/description/thumbnail + game/output folders) |
 | **M18 ✅** | Riot shader inspection + close preview — scan `ShaderCache.dx11.wad` → cached `ShaderDatabase` (`.reyengine/shader_cache.json`) · mount `Shaders.wad` textures read-only · Material Editor shader-binding panel · viewport preview modes (Basic / **Riot Approx** rim+cutout / Debug base·alpha·normals) · export shader bytecode dump |
 | **M19 ✅** | Secondary-sampler blending — per-submesh **Mask / Gradient / Emissive** samplers resolved from `StaticMaterialDef` and bound to the renderer (texture units 1–3); RiotApprox rim is now gradient-coloured + mask-gated, with emissive glow where present · Debug · Mask / Emissive views · safe fallback for materials without them |
+| **M20 ✅** | **MatCap** preview — per-submesh `MatCap_Tex` (+ `MatCap_Mask`) bound to texture units 4–5; view-space spheremap fake-lighting highlight (additive, mask-gated) in RiotApprox · Debug · MatCap view · view matrix plumbed for the spheremap lookup |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
