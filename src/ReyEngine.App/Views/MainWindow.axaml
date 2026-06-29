@@ -53,7 +53,8 @@
         <MenuItem Header="Hash Lookup" Command="{Binding HashLookupCommand}" />
         <MenuItem Header="Assign Skeleton…" Command="{Binding AssignSkeletonCommand}" />
         <MenuItem Header="Assign Animation…" Command="{Binding AssignAnimationCommand}" />
-        <MenuItem Header="Shader Preview" Command="{Binding ShaderPreviewCommand}" />
+        <MenuItem Header="Scan Riot Shaders" Command="{Binding ScanRiotShadersCommand}" />
+        <MenuItem Header="Export Shader Dump…" Command="{Binding ExportShaderDumpCommand}" />
         <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
       </MenuItem>
       <MenuItem Header="_Project">
@@ -170,7 +171,8 @@
                 AnimationTime="{Binding AnimationTime}"
                 Wireframe="{Binding ShowWireframe}"
                 ShowBones="{Binding ShowBones}"
-                ShowBounds="{Binding ShowBounds}" />
+                ShowBounds="{Binding ShowBounds}"
+                PreviewMode="{Binding PreviewMode}" />
 
             <!-- transparent surface that forwards pointer input to the viewport camera -->
             <Border x:Name="ViewportInput" Background="Transparent"
@@ -182,6 +184,14 @@
             <!-- view toggles (above the input surface so they stay clickable) -->
             <StackPanel Orientation="Horizontal" Spacing="4" Margin="10"
                         HorizontalAlignment="Right" VerticalAlignment="Top">
+              <ComboBox SelectedIndex="{Binding PreviewMode}" FontSize="11" MinWidth="120" VerticalAlignment="Center"
+                        ToolTip.Tip="Preview shading mode">
+                <ComboBoxItem>Basic</ComboBoxItem>
+                <ComboBoxItem>Riot Approx</ComboBoxItem>
+                <ComboBoxItem>Debug · Base</ComboBoxItem>
+                <ComboBoxItem>Debug · Alpha</ComboBoxItem>
+                <ComboBoxItem>Debug · Normals</ComboBoxItem>
+              </ComboBox>
               <ToggleButton Content="Wireframe" IsChecked="{Binding ShowWireframe}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Bones" IsChecked="{Binding ShowBones}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Bounds" IsChecked="{Binding ShowBounds}" FontSize="11" Padding="8,3" />
@@ -407,6 +417,13 @@
                   <ScrollViewer MaxHeight="680">
                     <StackPanel Spacing="8" Margin="0,8,4,0">
                       <TextBlock Text="{Binding MaterialEditor.Summary}" Foreground="{DynamicResource ReyTextBrush}" FontSize="12" FontWeight="SemiBold" />
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6,4">
+                        <StackPanel Spacing="2">
+                          <TextBlock Text="SHADER BINDING" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <TextBlock Text="{Binding ShaderDbStatus}" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                          <TextBlock Text="The sampler slots below are the material's bound textures (required samplers). Switch the viewport to 'Riot Approx' to preview." FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </Border>
                       <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6" IsVisible="{Binding MaterialEditor.HasUnresolved}">
                         <TextBlock Text="⚠ Some texture paths don't resolve in this WAD — see the ⚠ slots below." Foreground="#FFB454" FontSize="11" TextWrapping="Wrap" />
                       </Border>

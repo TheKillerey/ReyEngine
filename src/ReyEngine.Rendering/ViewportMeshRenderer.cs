@@ -13,7 +13,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private bool _ready;
 
     private uint _meshProgram, _lineProgram;
-    private int _mMvp, _mModel, _mLight, _mTex, _mHasTex, _mBaseColor;
+    private int _mMvp, _mModel, _mLight, _mTex, _mHasTex, _mBaseColor, _mMode, _mCamPos;
     private int _lMvp, _lColor;
 
     private uint _vao, _vbo, _ebo, _wireEbo;
@@ -45,26 +45,48 @@ uniform mat4 uMvp;
 uniform mat4 uModel;
 out vec3 vN;
 out vec2 vUv;
+out vec3 vWorld;
 void main() {
     vN = mat3(uModel) * aNormal;
     vUv = aUv;
+    vWorld = (uModel * vec4(aPos, 1.0)).xyz;
     gl_Position = uMvp * vec4(aPos, 1.0);
 }";
 
+    // uMode: 0 Basic · 1 RiotApprox (rim/fresnel + alpha cutout) · 2 Debug base · 3 Debug alpha · 4 Debug normal
     private const string MeshFrag = @"
 in vec3 vN;
 in vec2 vUv;
+in vec3 vWorld;
 out vec4 FragColor;
 uniform vec3 uLight;
 uniform sampler2D uTex;
 uniform int uHasTex;
 uniform vec3 uBaseColor;
+uniform int uMode;
+uniform vec3 uCamPos;
 void main() {
     vec3 n = length(vN) > 0.001 ? normalize(vN) : vec3(0.0, 1.0, 0.0);
+    vec4 tex = (uHasTex == 1) ? texture(uTex, vUv) : vec4(uBaseColor, 1.0);
+    vec3 base = tex.rgb;
+    float alpha = (uHasTex == 1) ? tex.a : 1.0;
+
+    if (uMode == 2) { FragColor = vec4(base, 1.0); return; }                 // debug: base/diffuse
+    if (uMode == 3) { FragColor = vec4(vec3(alpha), 1.0); return; }          // debug: alpha
+    if (uMode == 4) { FragColor = vec4(n * 0.5 + 0.5, 1.0); return; }        // debug: normals
+
     float d = max(dot(n, normalize(-uLight)), 0.0);
     float light = 0.35 + 0.75 * d;
-    vec3 base = (uHasTex == 1) ? texture(uTex, vUv).rgb : uBaseColor;
-    FragColor = vec4(base * light, 1.0);
+    vec3 col = base * light;
+
+    if (uMode == 1) {
+        // RiotApprox: a fresnel rim highlight (League champion shaders use fresnel bloom) + alpha cutout.
+        if (alpha < 0.35) discard;
+        vec3 viewDir = normalize(uCamPos - vWorld);
+        float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
+        col += fres * 0.6 * (0.5 + 0.5 * base);
+    }
+    FragColor = vec4(col, 1.0);
 }";
 
     private const string LineVert = @"
@@ -90,6 +112,8 @@ void main() { FragColor = uColor; }";
         _mTex = gl.GetUniformLocation(_meshProgram, "uTex");
         _mHasTex = gl.GetUniformLocation(_meshProgram, "uHasTex");
         _mBaseColor = gl.GetUniformLocation(_meshProgram, "uBaseColor");
+        _mMode = gl.GetUniformLocation(_meshProgram, "uMode");
+        _mCamPos = gl.GetUniformLocation(_meshProgram, "uCamPos");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -231,6 +255,9 @@ void main() { FragColor = uColor; }";
     }
 
     public unsafe void Render(Matrix4x4 viewProjection, bool wireframe, bool showBounds, bool showBones)
+        => Render(viewProjection, Vector3.Zero, 0, wireframe, showBounds, showBones);
+
+    public unsafe void Render(Matrix4x4 viewProjection, Vector3 camPos, int previewMode, bool wireframe, bool showBounds, bool showBones)
     {
         if (!_ready) return;
         var m = viewProjection;
@@ -258,6 +285,8 @@ void main() { FragColor = uColor; }";
                 _gl.UniformMatrix4(_mModel, 1, false, in model.M11);
                 _gl.Uniform3(_mLight, -0.4f, -0.85f, -0.45f);
                 _gl.Uniform3(_mBaseColor, 0.62f, 0.66f, 0.74f);
+                _gl.Uniform1(_mMode, previewMode);
+                _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);
                 _gl.Uniform1(_mTex, 0);
                 _gl.ActiveTexture(TextureUnit.Texture0);
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);

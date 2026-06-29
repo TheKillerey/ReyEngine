@@ -35,7 +35,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, AnimationClip?>(nameof(AnimationClip));
     public static readonly StyledProperty<double> AnimationTimeProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(AnimationTime));
+    public static readonly StyledProperty<int> PreviewModeProperty =
+        AvaloniaProperty.Register<ViewportControl, int>(nameof(PreviewMode));
 
+    public int PreviewMode { get => GetValue(PreviewModeProperty); set => SetValue(PreviewModeProperty, value); }
     public AnimationClip? AnimationClip { get => GetValue(AnimationClipProperty); set => SetValue(AnimationClipProperty, value); }
     public double AnimationTime { get => GetValue(AnimationTimeProperty); set => SetValue(AnimationTimeProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelTextures { get => GetValue(ModelTexturesProperty); set => SetValue(ModelTexturesProperty, value); }
@@ -178,7 +181,7 @@ public sealed class ViewportControl : OpenGlControlBase
         var viewProj = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjection(aspect);
 
         _grid.Render(viewProj);
-        _meshRenderer.Render(viewProj, Wireframe, ShowBounds, ShowBones);
+        _meshRenderer.Render(viewProj, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones);
 
         // Resolve our offscreen color into Avalonia's framebuffer.
         _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _fbo);
@@ -230,7 +233,8 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == ModelTexturesProperty) { _texturesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimationClipProperty || change.Property == AnimationTimeProperty) { _skinDirty = true; RequestNextFrameRendering(); }
-        else if (change.Property == WireframeProperty || change.Property == ShowBonesProperty || change.Property == ShowBoundsProperty)
+        else if (change.Property == WireframeProperty || change.Property == ShowBonesProperty
+                 || change.Property == ShowBoundsProperty || change.Property == PreviewModeProperty)
         { _skinDirty = true; RequestNextFrameRendering(); }
     }
 

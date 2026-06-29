@@ -5,6 +5,15 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M18 complete.** Adds **Riot shader inspection + a close-preview emulation**. ReyEngine scans the
+> game's `ShaderCache.dx11.wad.client` into a cached shader database (**Tools ▸ Scan Riot Shaders** → 828
+> shaders, vertex/pixel, with variant + define counts, cached to `.reyengine/shader_cache.json`), mounts the
+> shared `Shaders.wad` textures as read-only references, and surfaces a shader-binding panel in the Material
+> Editor. The viewport gains a **preview-mode dropdown** — *Basic*, **Riot Approx** (a fresnel rim highlight +
+> alpha cutout that approximates League's champion shaders), and **Debug** views (base / alpha / normals).
+> DX11 bytecode is *not* executed in the GL viewport (it can't be) — the preview is a faithful approximation,
+> not parity. Riot shader WADs are strictly read-only. Champions and maps both use the upgraded shading.
+>
 > Status: **M17 complete.** Adds **`.fantome` mod export** (Fantome / cslol-manager format) + a **Project
 > Settings** dialog. Set the mod Name / Author / Version / Description / Thumbnail, then **Project ▸ Export
 > .fantome…** builds the project, packs its folders into WADs, and writes a `.fantome` ZIP — `META/info.json`
@@ -245,6 +254,7 @@ No Play button — this is an editor, not a runtime.
 | **M15 ✅** | fault-tolerant `.bin` reader (`TolerantBinReader`/`SafeBinTree`) — dedupes duplicate property keys, reuses LeagueToolkit's per-property reader · malformed Old-SR map materials now load/render |
 | **M16 ✅** | folder → `.wad.client` packing (`WadPackService`) — fresh v3.4 WAD, sorted TOC, Zstd chunks, reopen-validated · folder projects build a distributable WAD |
 | **M17 ✅** | `.fantome` export (`FantomeExporter`) — META/info.json + thumbnail + WAD/ · Project Settings dialog (mod name/author/version/description/thumbnail + game/output folders) |
+| **M18 ✅** | Riot shader inspection + close preview — scan `ShaderCache.dx11.wad` → cached `ShaderDatabase` (`.reyengine/shader_cache.json`) · mount `Shaders.wad` textures read-only · Material Editor shader-binding panel · viewport preview modes (Basic / **Riot Approx** rim+cutout / Debug base·alpha·normals) · export shader bytecode dump |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |

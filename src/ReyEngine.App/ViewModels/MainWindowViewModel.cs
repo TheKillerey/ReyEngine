@@ -18,6 +18,7 @@ using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Meta;
+using ReyEngine.Formats.Shaders;
 using ReyEngine.Formats.Skeletons;
 
 namespace ReyEngine.App.ViewModels;
@@ -94,7 +95,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _hasMaterialData;
     [ObservableProperty] private bool _hasInspectorBody;
     [ObservableProperty] private int _inspectorTab;
+    [ObservableProperty] private int _previewMode; // 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal
+    [ObservableProperty] private string _shaderDbStatus = "Riot shaders not scanned.";
     private MapGeoAsset? _currentMap;
+    private ShaderDatabase? _shaderDb;
 
     public MainWindowViewModel()
     {
@@ -1135,6 +1139,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ClearViewport(); Inspector.Clear(); BinEditor.Clear(); MaterialEditor.Clear();
             ProjectMode = true; InspectionMode = false;
             HasMaterialData = false; HasInspectorBody = false;
+            LoadCachedShaderDb();
             LoadRecentProjects(RecentProjects.Add(folder));
             UpdateTitle();
             Status = $"Project '{project.Name}' — {_mounts!.Count:n0} assets across {_mounts.Mounts.Count} mount(s)";
@@ -1243,6 +1248,58 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             BuildMounts(); BuildProjectTree();
         }
         _log.Success("Project", $"Game folder set: {folder} — {probe.Count} reference WAD(s) available as fallback. Reload the asset to apply.");
+    }
+
+    // ---- Riot shader database (M18) -------------------------------------
+
+    private string? ShaderCachePath =>
+        Project.WorkspaceDirectory is { } w ? Path.Combine(w, "shader_cache.json") : null;
+
+    private void LoadCachedShaderDb()
+    {
+        _shaderDb = ShaderCachePath is { } p ? ShaderCacheService.Load(p) : null;
+        ShaderDbStatus = _shaderDb is { } d
+            ? $"Riot shaders: {d.Shaders.Count:n0} ({d.VertexCount} VS · {d.PixelCount} PS), cached."
+            : "Riot shaders not scanned — Tools ▸ Scan Riot Shaders.";
+    }
+
+    [RelayCommand]
+    private async Task ScanRiotShaders()
+    {
+        var path = GameReferenceLibrary.FindShaderCache(Project.GameDirectory);
+        if (path is null)
+        {
+            _log.Warn("Shader", "ShaderCache.dx11.wad.client not found — set the game folder in Project Settings first.");
+            return;
+        }
+        _log.Info("Shader", $"Scanning {Path.GetFileName(path)} …");
+        Status = "Scanning Riot shaders…";
+        try
+        {
+            var db = await Task.Run(() =>
+            {
+                using var wad = WadArchive.Open(path, _resolver);
+                return ShaderScanner.Scan(wad);
+            });
+            _shaderDb = db;
+            if (ShaderCachePath is { } cp) { ShaderCacheService.Save(db, cp); }
+            ShaderDbStatus = $"Riot shaders: {db.Shaders.Count:n0} ({db.VertexCount} VS · {db.PixelCount} PS), cached.";
+            _log.Success("Shader", $"Scanned {db.Shaders.Count:n0} shaders ({db.VertexCount} vertex, {db.PixelCount} pixel). Cached to {(ShaderCachePath is null ? "(memory)" : ".reyengine/shader_cache.json")}.");
+            Status = ShaderDbStatus;
+        }
+        catch (Exception ex) { _log.Error("Shader", ex.Message); }
+    }
+
+    [RelayCommand]
+    private async Task ExportShaderDump()
+    {
+        var entry = SelectedNode?.Entry;
+        if (entry is null || _archive is null && _mounts is null) { _log.Warn("Shader", "Select a shader (.dx11) asset first."); return; }
+        if (!entry.Path.Contains(".dx11", StringComparison.OrdinalIgnoreCase)) { _log.Warn("Shader", "Selected asset isn't a shader (.dx11)."); return; }
+        var outPath = await Dialogs.SaveFileAsync("Export shader bytecode", entry.DisplayName);
+        if (outPath is null) return;
+        try { await File.WriteAllBytesAsync(outPath, ReadAsset(entry.PathHash)); _log.Success("Shader", $"Wrote {outPath}."); }
+        catch (Exception ex) { _log.Error("Shader", ex.Message); }
     }
 
     [RelayCommand]

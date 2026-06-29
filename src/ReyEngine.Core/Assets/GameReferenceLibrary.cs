@@ -25,6 +25,7 @@ public static class GameReferenceLibrary
         AddIf("DATA.wad.client");
         AddIf("Common.wad.client");
         AddIf("Global.wad.client");
+        AddIf("Shaders", "Shaders.wad.client");   // shared shader textures (normal maps, masks)
 
         foreach (var name in mapNames.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -32,6 +33,15 @@ public static class GameReferenceLibrary
             AddIf("Maps", "Shipping", name + ".en_US.wad.client");
         }
         return result;
+    }
+
+    /// <summary>Locate the compiled DX11 shader cache WAD in the game install (for the shader database).</summary>
+    public static string? FindShaderCache(string? gameDirectory)
+    {
+        var final = FindFinalDir(gameDirectory);
+        if (final is null) return null;
+        var p = Path.Combine(final, "ShaderCache.dx11.wad.client");
+        return File.Exists(p) ? p : null;
     }
 
     /// <summary>Resolve the DATA/FINAL directory from a configured game path (Game, Game/DATA/FINAL, …).</summary>
