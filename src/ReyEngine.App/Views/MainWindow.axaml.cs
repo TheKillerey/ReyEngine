@@ -19,7 +19,19 @@ public partial class MainWindow : Window
     {
         base.OnOpened(e);
         if (DataContext is MainWindowViewModel vm)
+        {
             vm.Dialogs.Owner = this;
+            vm.RequestProjectSettings += () => ShowProjectSettings(vm);
+        }
+    }
+
+    private async void ShowProjectSettings(MainWindowViewModel vm)
+    {
+        var settings = new ProjectSettingsViewModel(vm.Project, vm.Dialogs);
+        var win = new ProjectSettingsWindow { DataContext = settings };
+        settings.CloseRequested += () => win.Close();
+        await win.ShowDialog(this);
+        if (settings.Saved) vm.ApplyProjectSettings(settings);
     }
 
     // ---- Viewport camera input (forwarded from the transparent overlay) ----

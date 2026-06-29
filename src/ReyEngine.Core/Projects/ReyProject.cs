@@ -27,6 +27,16 @@ public sealed class ReyProject
     public List<string> ReferenceWads { get; set; } = new();
     public List<string> RecentAssets { get; set; } = new();
 
+    // M17 .fantome mod metadata.
+    public string? ModName { get; set; }
+    public string? ModAuthor { get; set; }
+    public string ModVersion { get; set; } = "1.0.0";
+    public string? ModDescription { get; set; }
+    public string? ModHeart { get; set; }
+    public string? ModHome { get; set; }
+    public string? ThumbnailPath { get; set; }
+
+    [JsonIgnore] public string EffectiveModName => string.IsNullOrWhiteSpace(ModName) ? Name : ModName!;
     [JsonIgnore] public bool IsFolderProject => RootPath is not null;
     [JsonIgnore] public string? ProjectFilePath { get; set; }
     [JsonIgnore] public bool IsDirty { get; set; }

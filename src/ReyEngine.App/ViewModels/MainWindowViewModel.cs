@@ -1256,6 +1256,91 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _log.Success("Project", $"Build output folder set: {folder}");
     }
 
+    // ---- Project Settings dialog + .fantome export (M17) ----------------
+
+    public event Action? RequestProjectSettings;
+
+    [RelayCommand]
+    private void OpenProjectSettings()
+    {
+        if (!ProjectMode) { _log.Warn("Project", "Open a project folder first."); return; }
+        RequestProjectSettings?.Invoke();
+    }
+
+    /// <summary>Called by the view after the settings dialog is saved.</summary>
+    public void ApplyProjectSettings(ProjectSettingsViewModel vm)
+    {
+        vm.ApplyTo(Project);
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        if (ProjectMode) { BuildMounts(); BuildProjectTree(); }
+        _log.Success("Project", "Project settings saved.");
+    }
+
+    [RelayCommand]
+    private async Task ExportFantome()
+    {
+        if (!ProjectMode || Project.RootPath is null) { _log.Warn("Export", "Open a project folder first."); return; }
+        if (string.IsNullOrWhiteSpace(Project.ModAuthor))
+            _log.Info("Export", "Tip: set the author / version / thumbnail in Project ▸ Project Settings for a complete package.");
+
+        string name = Project.EffectiveModName;
+        string author = string.IsNullOrWhiteSpace(Project.ModAuthor) ? "Unknown" : Project.ModAuthor!;
+        var suggested = SanitizeFileName($"{name} by {author}.fantome");
+        var outPath = await Dialogs.SaveFileAsync("Export .fantome", suggested);
+        if (outPath is null) return;
+        if (!outPath.EndsWith(".fantome", StringComparison.OrdinalIgnoreCase)) outPath += ".fantome";
+
+        var thumb = LoadThumbnailPng(Project.ThumbnailPath);
+        var meta = new FantomeMeta
+        {
+            Name = name,
+            Author = author,
+            Version = string.IsNullOrWhiteSpace(Project.ModVersion) ? "1.0.0" : Project.ModVersion,
+            Description = Project.ModDescription ?? "",
+            Heart = Project.ModHeart,
+            Home = Project.ModHome,
+        };
+
+        IsBuilding = true; Status = "Exporting .fantome…";
+        try
+        {
+            await Task.Run(() =>
+            {
+                var buildRoot = Project.OutputDirectory ?? Path.Combine(Project.RootPath, "Build");
+                if (BuildSafety.IsInsideGameInstall(buildRoot))
+                    throw new InvalidOperationException("Build output is inside the game install — change it in Project Settings.");
+                Directory.CreateDirectory(buildRoot);
+                BuildProjectCore(buildRoot);
+                var wads = Directory.GetFiles(buildRoot, "*.wad.client").ToList();
+                if (wads.Count == 0) throw new InvalidOperationException("No WAD was produced — the project has no packable content.");
+                FantomeExporter.Export(meta, wads, thumb, outPath);
+            });
+            _log.Success("Export", $"Wrote {outPath} ({new FileInfo(outPath).Length / 1048576.0:0.0} MB) — {meta.Name} v{meta.Version} by {meta.Author}.");
+            Status = $"Exported {Path.GetFileName(outPath)}";
+        }
+        catch (Exception ex) { _log.Error("Export", ex.Message); }
+        finally { IsBuilding = false; }
+    }
+
+    private byte[]? LoadThumbnailPng(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
+        try
+        {
+            using var image = SixLabors.ImageSharp.Image.Load(path);
+            using var ms = new MemoryStream();
+            SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, ms);
+            return ms.ToArray();
+        }
+        catch (Exception ex) { _log.Warn("Export", $"thumbnail: {ex.Message}"); return null; }
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, ' ');
+        return name.Trim();
+    }
+
     [RelayCommand]
     private async Task ManageRiotReferences()
     {

@@ -5,7 +5,13 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M16 complete.** Adds **folder → `.wad.client` packing** for distributable mods. Building a
+> Status: **M17 complete.** Adds **`.fantome` mod export** (Fantome / cslol-manager format) + a **Project
+> Settings** dialog. Set the mod Name / Author / Version / Description / Thumbnail, then **Project ▸ Export
+> .fantome…** builds the project, packs its folders into WADs, and writes a `.fantome` ZIP — `META/info.json`
+> (+ `details.json`), `META/image.png` thumbnail, `WAD/*.wad.client` — named `<Name> by <Author>.fantome`.
+> Verified the package byte-matches a real Fantome export's structure (`info.json` identical).
+>
+> Status (M16): Adds **folder → `.wad.client` packing** for distributable mods. Building a
 > folder project now stages the content (with overrides applied) and packs it into a fresh, valid
 > `.wad.client`: v3.4 header, hash-sorted TOC, Zstd-compressed chunks, no subchunks (so it sidesteps the
 > v3.4 subchunk-relocation problem of *editing* an existing WAD — a fresh WAD is fully under our control).
@@ -238,6 +244,7 @@ No Play button — this is an editor, not a runtime.
 | **M14 ✅** | fix project-mode texture/skeleton/animation guards · `.materials.bin` copy-name + game fallback · animation fallback · Project Settings (game folder / output / references) |
 | **M15 ✅** | fault-tolerant `.bin` reader (`TolerantBinReader`/`SafeBinTree`) — dedupes duplicate property keys, reuses LeagueToolkit's per-property reader · malformed Old-SR map materials now load/render |
 | **M16 ✅** | folder → `.wad.client` packing (`WadPackService`) — fresh v3.4 WAD, sorted TOC, Zstd chunks, reopen-validated · folder projects build a distributable WAD |
+| **M17 ✅** | `.fantome` export (`FantomeExporter`) — META/info.json + thumbnail + WAD/ · Project Settings dialog (mod name/author/version/description/thumbnail + game/output folders) |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |
