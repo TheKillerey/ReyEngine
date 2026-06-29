@@ -22,7 +22,7 @@ public static class MapGeoMaterialResolver
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         BinTree bin;
-        try { bin = new BinTree(new MemoryStream(materialsBinData, writable: false)); }
+        try { bin = ReyEngine.Formats.Meta.SafeBinTree.Parse(materialsBinData); }
         catch { return result; }
 
         foreach (var name in materialNames.Where(n => !string.IsNullOrEmpty(n)).Distinct(StringComparer.OrdinalIgnoreCase))

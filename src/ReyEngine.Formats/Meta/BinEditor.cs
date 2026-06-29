@@ -27,7 +27,7 @@ public sealed class BinEditorDocument
 
     public static BinEditorDocument Parse(byte[] data, Func<uint, string?> resolve)
     {
-        var tree = new BinTree(new MemoryStream(data, writable: false));
+        var tree = SafeBinTree.Parse(data);
         var roots = new List<EditableBinField>(tree.Objects.Count);
         foreach (var (pathHash, obj) in tree.Objects)
         {

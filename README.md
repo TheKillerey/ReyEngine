@@ -5,7 +5,15 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M14 complete.** Project-mode bug fixes + Project Settings. The real cause of untextured
+> Status: **M15 complete.** Adds a **fault-tolerant `.bin` reader** so malformed/old-tooling mod bins load.
+> Some mod bins have a struct/object with two properties sharing one name hash, which makes LeagueToolkit's
+> strict reader throw — ReyEngine now replicates the container framing, reuses LeagueToolkit's own per-property
+> reader, and de-duplicates (last value wins) before building real `BinTree` objects. All `.bin` consumers
+> (materials, editor, document) route through `SafeBinTree.Parse` (strict first, tolerant on failure).
+> Verified: identical to LeagueToolkit on good bins; the Old-SR `base_srx.materials.bin` (1.8 MB, strict throws)
+> now parses to 765 objects → **200/201 map materials resolve, 1084/1096 groups textured** — the map renders.
+>
+> Status (M14): Project-mode bug fixes + Project Settings. The real cause of untextured
 > champions / missing skeletons / empty animation lists in project mode was a set of `_archive is null`
 > guards (compound conditions an earlier sweep missed) that short-circuited texture/skeleton/animation
 > loading whenever there was no single WAD — now `ContentLoaded`, so they run against the mount layer.
@@ -221,6 +229,7 @@ No Play button — this is an editor, not a runtime.
 | **M12 ✅** | Unreal-style layout · Content Browser (folder tree + tiles + breadcrumb, center above console) · Map Content left panel · Open Recent projects |
 | **M13 ✅** | game-WAD reference fallback (auto-discovered DATA/Common/Global + map WAD) · resolves assets a mod doesn't ship · fixes untextured project champions/maps |
 | **M14 ✅** | fix project-mode texture/skeleton/animation guards · `.materials.bin` copy-name + game fallback · animation fallback · Project Settings (game folder / output / references) |
+| **M15 ✅** | fault-tolerant `.bin` reader (`TolerantBinReader`/`SafeBinTree`) — dedupes duplicate property keys, reuses LeagueToolkit's per-property reader · malformed Old-SR map materials now load/render |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |

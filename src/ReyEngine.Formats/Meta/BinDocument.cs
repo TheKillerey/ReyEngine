@@ -27,7 +27,7 @@ public sealed class BinDocument
     /// <summary>Parse a .bin into a readable tree. <paramref name="resolve"/> maps a name hash to a name (or null).</summary>
     public static BinDocument Parse(byte[] data, Func<uint, string?> resolve)
     {
-        var bin = new BinTree(new MemoryStream(data, writable: false));
+        var bin = SafeBinTree.Parse(data);
         var roots = new List<BinNode>(bin.Objects.Count);
 
         foreach (var (pathHash, obj) in bin.Objects)

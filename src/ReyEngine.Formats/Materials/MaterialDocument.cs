@@ -68,7 +68,7 @@ public sealed class MaterialDocument
 
     public static MaterialDocument Parse(byte[] data, Func<uint, string?> resolve)
     {
-        var tree = new BinTree(new MemoryStream(data, writable: false));
+        var tree = SafeBinTree.Parse(data);
         bool champion = tree.Objects.Values.Any(o => Field(o.Properties, "skinMeshProperties") is not null);
         var materials = new List<MaterialBinding>();
 
