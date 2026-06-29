@@ -5,7 +5,14 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M15 complete.** Adds a **fault-tolerant `.bin` reader** so malformed/old-tooling mod bins load.
+> Status: **M16 complete.** Adds **folder → `.wad.client` packing** for distributable mods. Building a
+> folder project now stages the content (with overrides applied) and packs it into a fresh, valid
+> `.wad.client`: v3.4 header, hash-sorted TOC, Zstd-compressed chunks, no subchunks (so it sidesteps the
+> v3.4 subchunk-relocation problem of *editing* an existing WAD — a fresh WAD is fully under our control).
+> Verified: packed the Old-SR project (3,614 chunks, 1.48 GB → 0.72 GB), reopened it, and skn/materials.bin/
+> mapgeo/dds all extract + decode. ReyEngine can now open a mod folder, edit it, and build a shippable WAD.
+>
+> Status (M15): fault-tolerant `.bin` reader so malformed/old-tooling mod bins load.
 > Some mod bins have a struct/object with two properties sharing one name hash, which makes LeagueToolkit's
 > strict reader throw — ReyEngine now replicates the container framing, reuses LeagueToolkit's own per-property
 > reader, and de-duplicates (last value wins) before building real `BinTree` objects. All `.bin` consumers
@@ -230,6 +237,7 @@ No Play button — this is an editor, not a runtime.
 | **M13 ✅** | game-WAD reference fallback (auto-discovered DATA/Common/Global + map WAD) · resolves assets a mod doesn't ship · fixes untextured project champions/maps |
 | **M14 ✅** | fix project-mode texture/skeleton/animation guards · `.materials.bin` copy-name + game fallback · animation fallback · Project Settings (game folder / output / references) |
 | **M15 ✅** | fault-tolerant `.bin` reader (`TolerantBinReader`/`SafeBinTree`) — dedupes duplicate property keys, reuses LeagueToolkit's per-property reader · malformed Old-SR map materials now load/render |
+| **M16 ✅** | folder → `.wad.client` packing (`WadPackService`) — fresh v3.4 WAD, sorted TOC, Zstd chunks, reopen-validated · folder projects build a distributable WAD |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |

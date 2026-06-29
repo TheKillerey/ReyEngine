@@ -1359,20 +1359,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
 
         // Project folders: stage (copy tree + apply overrides as files — new files are safe in folder format).
+        var stagedFolders = new List<(string name, string dir)>();
         foreach (var f in Project.ProjectFolders)
         {
             var srcFolder = Project.ResolveProjectPath(f);
             var name = f == "." ? Project.Name : f.Replace('/', '_');
-            var outFolder = Path.Combine(buildRoot, name);
+            var outFolder = Path.Combine(buildRoot, "staged", name);
             files += CopyTree(srcFolder, outFolder);
+            stagedFolders.Add((name, outFolder));
             staged++;
         }
 
-        // Apply overrides into the (folder) build output at their resolved path.
-        if (Project.ProjectFolders.Count > 0)
+        // Apply overrides into the first staged folder at their resolved path.
+        if (stagedFolders.Count > 0)
         {
-            var name0 = Project.ProjectFolders[0] == "." ? Project.Name : Project.ProjectFolders[0].Replace('/', '_');
-            var outFolder = Path.Combine(buildRoot, name0);
+            var outFolder = stagedFolders[0].dir;
             foreach (var ov in _overrides.All)
             {
                 if (!File.Exists(ov.OverrideFile)) { skipped++; continue; }
@@ -1384,7 +1385,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
         }
 
-        _log.Info("Build", $"project WADs: {wads} · staged folders: {staged} · files written: {files:n0} · skipped: {skipped}");
+        // Pack each staged folder into a distributable .wad.client.
+        int packed = 0;
+        foreach (var (name, dir) in stagedFolders)
+        {
+            var outWad = Path.Combine(buildRoot, name + ".wad.client");
+            WadPackReport pr;
+            try { pr = WadPackService.Pack(dir, outWad); }
+            catch (Exception ex) { _log.Error("Build", $"Pack failed for {name}: {ex.Message}"); continue; }
+            foreach (var w in pr.Warnings) _log.Warn("Build", w);
+            if (pr.Success)
+            {
+                packed++;
+                _log.Success("Build", $"Packed {name}.wad.client — {pr.Chunks:n0} chunks, {pr.InputBytes / 1048576.0:0.0}→{pr.OutputBytes / 1048576.0:0.0} MB. {pr.Validation}");
+            }
+            else _log.Error("Build", $"Pack didn't validate for {name} — the staged folder is at {dir}.");
+        }
+
+        _log.Info("Build", $"project WADs: {wads} · folders packed: {packed}/{staged} · files: {files:n0} · skipped: {skipped}");
     }
 
     private static int CopyTree(string src, string dst)
