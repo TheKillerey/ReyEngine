@@ -19,15 +19,18 @@ public static class MapGeoDecoder
         var uvs = new List<float>();
         var indices = new List<uint>();
         var groups = new List<MapGeoGroup>();
+        var meshes = new List<MapGeoMesh>();
         var materials = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
 
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);
         int meshCount = 0;
+        int meshIndex = -1;
 
         foreach (var mesh in env.Meshes)
         {
+            meshIndex++;
             try
             {
                 var view = mesh.VerticesView;
@@ -61,6 +64,11 @@ public static class MapGeoDecoder
                 int vis = (int)mesh.VisibilityFlags;
                 uint ctrl = mesh.VisibilityControllerPathHash;
                 string meshName = mesh.Name ?? "";
+                meshes.Add(new MapGeoMesh
+                {
+                    Index = meshIndex, Name = meshName, VertexStart = baseVertex, VertexCount = vc,
+                    Transform = transform, VisibilityFlags = vis, ControllerHash = ctrl,
+                });
                 if (mesh.Submeshes.Count > 0)
                 {
                     foreach (var sub in mesh.Submeshes)
@@ -99,6 +107,7 @@ public static class MapGeoDecoder
             Uvs = uvs.ToArray(),
             Indices = indices.ToArray(),
             Groups = groups,
+            Meshes = meshes,
             Version = version,
             VertexCount = positions.Count / 3,
             MeshCount = meshCount,
