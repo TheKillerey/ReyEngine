@@ -21,9 +21,19 @@ public static class MapVisibility
         new("Base", 1), new("Cup", 2), new("Tunnel", 4), new("Upgraded", 8),
     };
 
-    /// <summary>Visible for the chosen dragon? bit 0 = "All" (no filter); 0/255 flags = visible everywhere.</summary>
+    /// <summary>The Base layer bit (Layer1) — the map's always-present foundation (floor/structures).</summary>
+    public const int BaseBit = 1;
+
+    /// <summary>
+    /// Visible for the chosen dragon? bit 0 = "All" (no filter); flags 0/255 are visible everywhere;
+    /// the <see cref="BaseBit"/> (Base/Layer1) foundation stays under every dragon so the floor never
+    /// disappears — dragon layers are additive on top of Base (matches the MapgeoAddon preview).
+    /// </summary>
     public static bool VisibleForDragon(int flags, int dragonBit)
-        => dragonBit == 0 || flags == 0 || flags == 255 || (flags & dragonBit) != 0;
+        => dragonBit == 0
+           || flags == 0 || flags == 255
+           || (flags & BaseBit) != 0
+           || (flags & dragonBit) != 0;
 
     /// <summary>Human-readable layer label for a mesh's bitmask (used for the layer-group tree).</summary>
     public static string DragonLabel(int flags)
