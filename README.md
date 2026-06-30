@@ -5,6 +5,16 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M25 complete.** **Mesh move/reposition now works and persists.** Select a mesh in the Map Content
+> tree, type an X/Y/Z position, **Apply Move** (it moves live in the viewport), then **Save to Mod**. Because
+> LeagueToolkit's `EnvironmentAsset.Write` is lossy (it corrupts the mapgeo), ReyEngine instead **surgically
+> patches** each moved mesh's transform translation in place — locating it by its unique
+> `[BoundingBox][Transform]` byte signature (the AABB disambiguates the many identity transforms) and overwriting
+> only the 12 translation bytes, leaving the rest of the file byte-exact. Verified on both the current SR Map11
+> (v18) and the old OldSR map (which LeagueToolkit's writer couldn't even round-trip): the patched mapgeo reopens
+> cleanly, moved meshes land at the right spot, and Build Package ships it. (M24 was the move foundation +
+> discovering the writer was broken; M25 is the patcher that unblocks it.)
+>
 > Status: **M23 complete.** The **Baron pit visibility** combobox is now live. ReyEngine decodes the map's
 > visibility controllers out of its `.materials.bin` files — Dragon Layer (`0xc406a533`), Baron Layer
 > (`0xec733fe2`) and Child (`0xe21083b5`) controllers, recursing through `Parents`/`ParentMode` — and resolves
@@ -299,6 +309,7 @@ No Play button — this is an editor, not a runtime.
 | **M18 ✅** | Riot shader inspection + close preview — scan `ShaderCache.dx11.wad` → cached `ShaderDatabase` (`.reyengine/shader_cache.json`) · mount `Shaders.wad` textures read-only · Material Editor shader-binding panel · viewport preview modes (Basic / **Riot Approx** rim+cutout / Debug base·alpha·normals) · export shader bytecode dump |
 | **M19 ✅** | Secondary-sampler blending — per-submesh **Mask / Gradient / Emissive** samplers resolved from `StaticMaterialDef` and bound to the renderer (texture units 1–3); RiotApprox rim is now gradient-coloured + mask-gated, with emissive glow where present · Debug · Mask / Emissive views · safe fallback for materials without them |
 | **M20 ✅** | **MatCap** preview — per-submesh `MatCap_Tex` (+ `MatCap_Mask`) bound to texture units 4–5; view-space spheremap fake-lighting highlight (additive, mask-gated) in RiotApprox · Debug · MatCap view · view matrix plumbed for the spheremap lookup |
+| **M24–M25 ✅** | **Mesh move/reposition** — per-mesh vertex tracking + live viewport translate; persist by surgically patching the transform translation via its `[BoundingBox][Transform]` signature (LeagueToolkit's `EnvironmentAsset.Write` is lossy, so we never re-serialize) → saved to the override + Build Package |
 | **M23 ✅** | **Baron pit visibility** — decode the map's visibility controllers (`MapVisibilityControllers`: Dragon `0xc406a533` / Baron `0xec733fe2` / Child `0xe21083b5`, recursing `Parents`/`ParentMode`) → resolve each mesh to Base/Cup/Tunnel/Upgraded bits; the Baron combobox now live-filters the baron pit, combined with the dragon filter |
 | **M22 ✅** | Camera (LMB look + inverted, fly on LMB) · **dragon visibility system** — per-mesh `VisibilityFlags` carried through the decoder, per-submesh render visibility toggle, **Dragon/Baron comboboxes** + *Meshes→Layer Groups→names* tree filter the viewport live (Base/Inferno/Mountain/Ocean/Cloud/Hextech/Chemtech/Void) |
 | **M21 ✅** | Editor polish — **Unreal-style camera** (RMB look + WASD/QE fly · Alt+LMB orbit · MMB pan · wheel dolly · RMB+wheel fly-speed · F focus) · **logo** (titlebar icon + menu wordmark, runtime-loaded) · **Content Browser type icons** · shader fix: **normal-map gating** (normal maps never used as the base texture) |

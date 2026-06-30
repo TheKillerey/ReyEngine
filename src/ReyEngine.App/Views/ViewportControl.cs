@@ -43,6 +43,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelMatCapMaskTextures));
     public static readonly StyledProperty<IReadOnlyList<bool>?> ModelSubmeshVisibleProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<bool>?>(nameof(ModelSubmeshVisible));
+    public static readonly StyledProperty<int> MeshVerticesRevisionProperty =
+        AvaloniaProperty.Register<ViewportControl, int>(nameof(MeshVerticesRevision));
     public static readonly StyledProperty<AnimationClip?> AnimationClipProperty =
         AvaloniaProperty.Register<ViewportControl, AnimationClip?>(nameof(AnimationClip));
     public static readonly StyledProperty<double> AnimationTimeProperty =
@@ -60,6 +62,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public IReadOnlyList<TextureImage?>? ModelMatCapTextures { get => GetValue(ModelMatCapTexturesProperty); set => SetValue(ModelMatCapTexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelMatCapMaskTextures { get => GetValue(ModelMatCapMaskTexturesProperty); set => SetValue(ModelMatCapMaskTexturesProperty, value); }
     public IReadOnlyList<bool>? ModelSubmeshVisible { get => GetValue(ModelSubmeshVisibleProperty); set => SetValue(ModelSubmeshVisibleProperty, value); }
+    public int MeshVerticesRevision { get => GetValue(MeshVerticesRevisionProperty); set => SetValue(MeshVerticesRevisionProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
     public bool Wireframe { get => GetValue(WireframeProperty); set => SetValue(WireframeProperty, value); }
@@ -297,6 +300,11 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == ModelMatCapTexturesProperty || change.Property == ModelMatCapMaskTexturesProperty)
         { _texturesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelSubmeshVisibleProperty) { _visibilityDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == MeshVerticesRevisionProperty)
+        {
+            if (Mesh is { } m && _meshRenderer is { } r && r.HasMesh) r.UpdateVertices(m.Positions, m.Normals);
+            RequestNextFrameRendering();
+        }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimationClipProperty || change.Property == AnimationTimeProperty) { _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == WireframeProperty || change.Property == ShowBonesProperty

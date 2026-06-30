@@ -163,8 +163,32 @@
             </Grid>
           </StackPanel>
 
+          <!-- mesh move / reposition panel (shown when a mesh is selected) -->
+          <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyPanelAltBrush}" Padding="8,6" Margin="0,4,0,0"
+                  IsVisible="{Binding SelectedMapMesh, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <StackPanel Spacing="4">
+              <TextBlock Text="MOVE MESH" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBlock Text="{Binding SelectedMapMesh.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
+              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
+                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="1" Text="{Binding MeshMoveX}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="3" Text="{Binding MeshMoveY}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="5" Text="{Binding MeshMoveZ}" FontSize="10" Padding="3,1" />
+              </Grid>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button Content="Apply Move" Command="{Binding ApplyMeshMoveCommand}" FontSize="11" Padding="8,2" />
+                <Button Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
+                        IsEnabled="{Binding HasMapMoves}"
+                        Background="{DynamicResource ReyAccentBrush}" Foreground="#08221E" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
           <!-- Meshes → Layer Groups → mesh names -->
-          <TreeView ItemsSource="{Binding MapContent.LayerGroups}" Background="Transparent" BorderThickness="0" Padding="4,0">
+          <TreeView ItemsSource="{Binding MapContent.LayerGroups}" SelectedItem="{Binding SelectedTreeItem, Mode=TwoWay}"
+                    Background="Transparent" BorderThickness="0" Padding="4,0">
             <TreeView.DataTemplates>
               <TreeDataTemplate DataType="vm:MapLayerGroupViewModel" ItemsSource="{Binding Meshes}">
                 <StackPanel Orientation="Horizontal" Spacing="5">
@@ -200,6 +224,7 @@
                 ModelMatCapTextures="{Binding CurrentModelMatCapTextures}"
                 ModelMatCapMaskTextures="{Binding CurrentModelMatCapMaskTextures}"
                 ModelSubmeshVisible="{Binding CurrentModelSubmeshVisible}"
+                MeshVerticesRevision="{Binding MeshVerticesRevision}"
                 Skeleton="{Binding CurrentSkeleton}"
                 AnimationClip="{Binding CurrentAnimation}"
                 AnimationTime="{Binding AnimationTime}"

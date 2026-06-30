@@ -8,6 +8,7 @@ public sealed class MapPieceViewModel
 {
     public required string Name { get; init; }
     public required string Info { get; init; }
+    public int MeshIndex { get; init; } = -1;   // index into MapGeoAsset.Meshes (for selection/move)
 }
 
 /// <summary>A visibility layer group (one distinct dragon bitmask) and the meshes it contains.</summary>

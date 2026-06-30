@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -612,6 +613,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentSkeleton = null;
         _currentMap = null;
         _mapControllers = null;
+        _currentMapBytes = null;
+        _currentMapEntry = null;
+        SelectedMapMesh = null;
+        HasMapMoves = false;
         CurrentModelTextures = null;
         ClearSecondaryTextures();
         CurrentModelSubmeshVisible = null;
@@ -673,23 +678,98 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Build the Map Content layer-group outline (Meshes → Layer Groups → mesh names).</summary>
     private void BuildMapLayerGroups(MapGeoAsset map)
     {
-        var groups = map.Groups
-            .GroupBy(g => g.VisibilityFlags)
+        var groups = map.Meshes
+            .GroupBy(m => m.VisibilityFlags)
             .Select(g =>
             {
-                var meshNames = g.Select(x => string.IsNullOrEmpty(x.Name) ? x.Material : x.Name)
-                                 .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n).ToList();
                 var vm = new MapLayerGroupViewModel
                 {
-                    Name = $"{MapVisibility.DragonLabel(g.Key)} — {meshNames.Count} mesh(es)",
+                    Name = $"{MapVisibility.DragonLabel(g.Key)} — {g.Count()} mesh(es)",
                     Bit = g.Key,
                 };
-                foreach (var n in meshNames) vm.Meshes.Add(new MapPieceViewModel { Name = n, Info = "" });
+                foreach (var mesh in g.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase))
+                    vm.Meshes.Add(new MapPieceViewModel { Name = mesh.Name, Info = "", MeshIndex = mesh.Index });
                 return vm;
             })
             .OrderByDescending(vm => vm.Meshes.Count)
             .ToList();
         MapContent.SetLayerGroups(groups);
+    }
+
+    // ---- Mesh move / reposition (M25) ----------------------------------
+
+    private byte[]? _currentMapBytes;
+    private WadAssetEntry? _currentMapEntry;
+
+    [ObservableProperty] private MapGeoMesh? _selectedMapMesh;
+    [ObservableProperty] private object? _selectedTreeItem;
+    [ObservableProperty] private string _meshMoveX = "0";
+    [ObservableProperty] private string _meshMoveY = "0";
+    [ObservableProperty] private string _meshMoveZ = "0";
+    [ObservableProperty] private int _meshVerticesRevision;
+    [ObservableProperty] private bool _hasMapMoves;
+
+    partial void OnSelectedTreeItemChanged(object? value)
+    {
+        if (value is MapPieceViewModel { MeshIndex: >= 0 } p && _currentMap is { } map && p.MeshIndex < map.Meshes.Count)
+        {
+            var m = map.Meshes[p.MeshIndex];
+            SelectedMapMesh = m;
+            var pos = m.Transform.Translation + m.Offset;
+            MeshMoveX = pos.X.ToString("0.###", CultureInfo.InvariantCulture);
+            MeshMoveY = pos.Y.ToString("0.###", CultureInfo.InvariantCulture);
+            MeshMoveZ = pos.Z.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+        else SelectedMapMesh = null;
+    }
+
+    [RelayCommand]
+    private void ApplyMeshMove()
+    {
+        if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
+        if (!float.TryParse(MeshMoveX, NumberStyles.Float, CultureInfo.InvariantCulture, out var x)
+            || !float.TryParse(MeshMoveY, NumberStyles.Float, CultureInfo.InvariantCulture, out var y)
+            || !float.TryParse(MeshMoveZ, NumberStyles.Float, CultureInfo.InvariantCulture, out var z))
+        { _log.Warn("MapGeo", "Enter valid X/Y/Z numbers."); return; }
+
+        var target = new System.Numerics.Vector3(x, y, z);
+        var current = m.Transform.Translation + m.Offset;
+        var delta = target - current;
+        if (delta.LengthSquared() < 1e-6f) return;
+
+        map.TranslateMesh(m, delta);
+        MeshVerticesRevision++;           // re-upload the moved vertices to the viewport
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+        _log.Info("MapGeo", $"Moved '{m.Name}' to ({x:0.#}, {y:0.#}, {z:0.#}).");
+    }
+
+    [RelayCommand]
+    private async Task SaveMeshMoves()
+    {
+        if (_currentMap is not { } map || _currentMapBytes is null || _currentMapEntry is not { } entry) return;
+        if (!MapGeoWriter.HasMoves(map.Meshes)) { _log.Info("MapGeo", "No mesh moves to save."); return; }
+        if (!GuardEditable(entry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        var bytes = MapGeoWriter.TryWriteWithMoves(_currentMapBytes, map.Meshes, out var err);
+        if (bytes is null) { _log.Error("MapGeo", $"Could not save mesh moves: {err}"); return; }
+        try
+        {
+            var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = entry.PathHash,
+                ResolvedPath = entry.IsResolved ? entry.Path : null,
+                OverrideFile = dest,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            UpdateTitle();
+            int moved = map.Meshes.Count(x => x.IsMoved);
+            _log.Success("MapGeo", $"Saved {moved} mesh move(s) to override ({bytes.Length:n0} bytes). Build Package will include it.");
+        }
+        catch (Exception ex) { _log.Error("MapGeo", ex.Message); }
     }
 
     private async Task LoadBinAsync(WadAssetEntry entry)
@@ -821,9 +901,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             _log.Info("MapGeo", $"Decoding {entry.DisplayName} …");
+            var rawMapBytes = ReadAsset(entry.PathHash);
             var (map, mesh, textures) = await Task.Run(() =>
             {
-                var m = MapGeoDecoder.Decode(ReadAsset(entry.PathHash));
+                var m = MapGeoDecoder.Decode(rawMapBytes);
                 var meshAsset = new MeshAsset
                 {
                     Positions = m.Positions,
@@ -845,6 +926,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 ShowBones = false;
                 CurrentMesh = mesh;
                 _currentMap = map;
+                _currentMapBytes = rawMapBytes;
+                _currentMapEntry = entry;
+                SelectedMapMesh = null;
                 CurrentModelTextures = textures;
                 ClearSecondaryTextures(); // maps don't use champion secondary samplers
                 MapGeoInspector.Show(map, entry.Path);
