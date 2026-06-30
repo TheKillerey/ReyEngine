@@ -158,7 +158,7 @@
                 <TextBlock Text="Baron" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
                 <ComboBox ItemsSource="{Binding BaronOptions}" SelectedIndex="{Binding SelectedBaronIndex}"
                           FontSize="10" HorizontalAlignment="Stretch"
-                          ToolTip.Tip="Baron pit states. Dragon filtering is live; baron-state filtering needs the visibility controllers decoded (next step)." />
+                          ToolTip.Tip="Baron pit state. Resolves the map's visibility controllers (Base/Cup/Tunnel/Upgraded) and hides meshes that don't belong to the selected state." />
               </StackPanel>
             </Grid>
           </StackPanel>

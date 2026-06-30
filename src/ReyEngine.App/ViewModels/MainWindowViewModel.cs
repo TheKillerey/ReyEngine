@@ -104,6 +104,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private int _previewMode; // 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal
     [ObservableProperty] private string _shaderDbStatus = "Riot shaders not scanned.";
     private MapGeoAsset? _currentMap;
+    private MapVisibilityControllers? _mapControllers;
     private ShaderDatabase? _shaderDb;
 
     public MainWindowViewModel()
@@ -610,6 +611,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentMesh = null;
         CurrentSkeleton = null;
         _currentMap = null;
+        _mapControllers = null;
         CurrentModelTextures = null;
         ClearSecondaryTextures();
         CurrentModelSubmeshVisible = null;
@@ -633,15 +635,39 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnSelectedDragonIndexChanged(int value) => ApplyMapVisibility();
     partial void OnSelectedBaronIndexChanged(int value) => ApplyMapVisibility();
 
-    /// <summary>Compute per-group visibility from the selected dragon layer and push it to the viewport.</summary>
+    /// <summary>Compute per-group visibility from the selected dragon + baron layers and push it to the viewport.</summary>
     private void ApplyMapVisibility()
     {
         if (_currentMap is not { } map) { CurrentModelSubmeshVisible = null; return; }
         int dragonBit = SelectedDragonIndex <= 0 ? 0 : MapVisibility.Dragons[SelectedDragonIndex - 1].Bit;
+        int baronBit = SelectedBaronIndex <= 0 ? 0 : MapVisibility.Barons[SelectedBaronIndex - 1].Bit;
         var vis = new bool[map.Groups.Count];
         for (int i = 0; i < vis.Length; i++)
-            vis[i] = MapVisibility.VisibleForDragon(map.Groups[i].VisibilityFlags, dragonBit);
+        {
+            var g = map.Groups[i];
+            bool dragonVisible = MapVisibility.VisibleForDragon(g.VisibilityFlags, dragonBit);
+            bool baronVisible = baronBit == 0 || (_mapControllers?.Resolve(g.ControllerHash).VisibleForBaron(baronBit) ?? true);
+            vis[i] = dragonVisible && baronVisible;
+        }
         CurrentModelSubmeshVisible = vis;
+    }
+
+    /// <summary>Index the baron/dragon visibility controllers from the map's sibling .bin files.</summary>
+    private void BuildMapControllers(string mapgeoPath)
+    {
+        var dir = mapgeoPath[..(mapgeoPath.LastIndexOf('/') + 1)];
+        var bins = new List<byte[]>();
+        foreach (var e in AssetEntries.Where(e => e.IsResolved
+                     && e.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)
+                     && e.Path.StartsWith(dir, StringComparison.OrdinalIgnoreCase)))
+        {
+            try { bins.Add(ReadAsset(e.PathHash)); } catch { /* skip unreadable bins */ }
+        }
+        _mapControllers = MapVisibilityControllers.Build(bins);
+        if (_mapControllers.BaronControllerCount > 0)
+            _log.Info("MapGeo", $"Baron visibility: {_mapControllers.Count} controllers ({_mapControllers.BaronControllerCount} baron) from {bins.Count} bin(s).");
+        else
+            _log.Info("MapGeo", $"No baron visibility controllers found in this map's bins — baron filter inactive (dragon layers still work).");
     }
 
     /// <summary>Build the Map Content layer-group outline (Meshes → Layer Groups → mesh names).</summary>
@@ -826,6 +852,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     .Select((g, i) => new MapPieceViewModel { Name = string.IsNullOrEmpty(g.Material) ? $"Mesh {i}" : g.Material, Info = $"{g.IndexCount / 3:n0} tris" })
                     .ToList());
                 BuildMapLayerGroups(map);
+                BuildMapControllers(entry.Path);
                 SelectedBaronIndex = 0;
                 SelectedDragonIndex = 0; // handlers call ApplyMapVisibility; _currentMap is already set
                 ApplyMapVisibility();    // ensure reset even if the index was already 0

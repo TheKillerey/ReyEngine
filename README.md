@@ -5,6 +5,14 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M23 complete.** The **Baron pit visibility** combobox is now live. ReyEngine decodes the map's
+> visibility controllers out of its `.materials.bin` files — Dragon Layer (`0xc406a533`), Baron Layer
+> (`0xec733fe2`) and Child (`0xe21083b5`) controllers, recursing through `Parents`/`ParentMode` — and resolves
+> each mesh's controller into its baron state bits (Base / Cup / Tunnel / Upgraded). Selecting a baron state in
+> the Map Content panel hides the baron-pit meshes that don't belong to it, combined with the dragon-layer
+> filter. Verified on SR Map11: 25 controllers (4 baron), 14 baron-constrained meshes (3 Base / 3 Cup / 5 Tunnel
+> / 3 Upgraded), and the filter live-hides the non-matching ones.
+>
 > Status: **M22 complete.** Camera + map layer/visibility system. The viewport camera now uses **LMB**
 > (mouse-look + WASD/QE fly · Alt+LMB orbit · MMB pan · wheel dolly · F focus) with **inverted/direct** look
 > (cursor up→look up, left→look left). Adds the **dragon elemental-rift visibility system** (mirrors the
@@ -291,6 +299,7 @@ No Play button — this is an editor, not a runtime.
 | **M18 ✅** | Riot shader inspection + close preview — scan `ShaderCache.dx11.wad` → cached `ShaderDatabase` (`.reyengine/shader_cache.json`) · mount `Shaders.wad` textures read-only · Material Editor shader-binding panel · viewport preview modes (Basic / **Riot Approx** rim+cutout / Debug base·alpha·normals) · export shader bytecode dump |
 | **M19 ✅** | Secondary-sampler blending — per-submesh **Mask / Gradient / Emissive** samplers resolved from `StaticMaterialDef` and bound to the renderer (texture units 1–3); RiotApprox rim is now gradient-coloured + mask-gated, with emissive glow where present · Debug · Mask / Emissive views · safe fallback for materials without them |
 | **M20 ✅** | **MatCap** preview — per-submesh `MatCap_Tex` (+ `MatCap_Mask`) bound to texture units 4–5; view-space spheremap fake-lighting highlight (additive, mask-gated) in RiotApprox · Debug · MatCap view · view matrix plumbed for the spheremap lookup |
+| **M23 ✅** | **Baron pit visibility** — decode the map's visibility controllers (`MapVisibilityControllers`: Dragon `0xc406a533` / Baron `0xec733fe2` / Child `0xe21083b5`, recursing `Parents`/`ParentMode`) → resolve each mesh to Base/Cup/Tunnel/Upgraded bits; the Baron combobox now live-filters the baron pit, combined with the dragon filter |
 | **M22 ✅** | Camera (LMB look + inverted, fly on LMB) · **dragon visibility system** — per-mesh `VisibilityFlags` carried through the decoder, per-submesh render visibility toggle, **Dragon/Baron comboboxes** + *Meshes→Layer Groups→names* tree filter the viewport live (Base/Inferno/Mountain/Ocean/Cloud/Hextech/Chemtech/Void) |
 | **M21 ✅** | Editor polish — **Unreal-style camera** (RMB look + WASD/QE fly · Alt+LMB orbit · MMB pan · wheel dolly · RMB+wheel fly-speed · F focus) · **logo** (titlebar icon + menu wordmark, runtime-loaded) · **Content Browser type icons** · shader fix: **normal-map gating** (normal maps never used as the base texture) |
 | **M5** | Bulk export + WAD repack / Build Package |
