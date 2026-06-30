@@ -5,6 +5,15 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M21 complete.** Editor polish + a shader-fidelity fix. The viewport now has an **Unreal-style
+> camera**: RMB = mouse-look + WASD/QE fly, Alt+LMB = orbit, MMB = pan, wheel = dolly (RMB+wheel adjusts fly
+> speed), **F** = focus selected. Adds the **ReyEngine logo** (titlebar icon + menu-bar wordmark) and **file/folder
+> type icons** in the Content Browser (folder, mesh, texture, skeleton, animation, map, bin, shader, …). Shader
+> fix: **normal maps are now classified and never shown as the base texture** — they're only used by shaders that
+> declare them (a material whose only sampler is a normal map no longer renders the normal map as its diffuse).
+> Note: full DX11 shader recreation isn't possible (compiled bytecode can't run in GL) — fidelity continues via
+> the `.bin`-driven RiotApprox emulation (M18–M20 + this normal-map gating).
+>
 > Status: **M20 complete.** Adds **MatCap** support to the RiotApprox preview — the 2nd-most-common League
 > champion sampler (`MatCap_Tex`), a view-space spheremap of fake studio lighting. ReyEngine resolves the
 > per-submesh `MatCap_Tex` (+ optional `MatCap_Mask`), binds them to the renderer, and adds the matcap as an
@@ -273,6 +282,7 @@ No Play button — this is an editor, not a runtime.
 | **M18 ✅** | Riot shader inspection + close preview — scan `ShaderCache.dx11.wad` → cached `ShaderDatabase` (`.reyengine/shader_cache.json`) · mount `Shaders.wad` textures read-only · Material Editor shader-binding panel · viewport preview modes (Basic / **Riot Approx** rim+cutout / Debug base·alpha·normals) · export shader bytecode dump |
 | **M19 ✅** | Secondary-sampler blending — per-submesh **Mask / Gradient / Emissive** samplers resolved from `StaticMaterialDef` and bound to the renderer (texture units 1–3); RiotApprox rim is now gradient-coloured + mask-gated, with emissive glow where present · Debug · Mask / Emissive views · safe fallback for materials without them |
 | **M20 ✅** | **MatCap** preview — per-submesh `MatCap_Tex` (+ `MatCap_Mask`) bound to texture units 4–5; view-space spheremap fake-lighting highlight (additive, mask-gated) in RiotApprox · Debug · MatCap view · view matrix plumbed for the spheremap lookup |
+| **M21 ✅** | Editor polish — **Unreal-style camera** (RMB look + WASD/QE fly · Alt+LMB orbit · MMB pan · wheel dolly · RMB+wheel fly-speed · F focus) · **logo** (titlebar icon + menu wordmark, runtime-loaded) · **Content Browser type icons** · shader fix: **normal-map gating** (normal maps never used as the base texture) |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
 | **M7** | Project files, tabbed multi-WAD, search/filter, thumbnails, settings |

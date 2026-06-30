@@ -219,8 +219,11 @@ public sealed class MaterialBinding
     /// <summary>Display string for the submesh(es)/group this material drives.</summary>
     public string AssignedTo => Submeshes.Count > 0 ? string.Join(", ", Submeshes) : (IsDefault ? "(base mesh)" : "");
 
-    /// <summary>The diffuse/albedo slot if present, else the first texture slot.</summary>
-    public TextureSlot? Diffuse => _slots.FirstOrDefault(s => s.IsDiffuse) ?? _slots.FirstOrDefault();
+    /// <summary>The diffuse/albedo slot if present, else the first base-colour-safe slot (never a normal map).</summary>
+    public TextureSlot? Diffuse =>
+        _slots.FirstOrDefault(s => s.IsDiffuse)
+        ?? _slots.FirstOrDefault(s => s.IsBaseColorCandidate)
+        ?? _slots.FirstOrDefault(s => !s.IsNormal);
 
     // Secondary samplers (M19/M20) used by the RiotApprox preview.
     public TextureSlot? Mask => _slots.FirstOrDefault(s => s.IsMask);
@@ -306,6 +309,15 @@ public sealed class TextureSlot
     public bool IsEmissive =>
         SamplerName.Contains("Emiss", OIC) || SamplerName.Contains("EmissionR", OIC) ||
         SamplerName.Contains("Glow", OIC) || SamplerName.Contains("Illum", OIC);
+
+    // Normal map (M21): a tangent-space normal. We classify it so it's never shown as the base
+    // texture; proper normal mapping needs tangents and is only applied by shaders that declare it.
+    public bool IsNormal =>
+        SamplerName.Contains("Normal", OIC) || SamplerName.Contains("_nrm", OIC) ||
+        SamplerName.Contains("NormalMap", OIC) || SamplerName.EndsWith("_NM", OIC);
+
+    /// <summary>A sampler that is safe to treat as the base colour (not a normal/mask/secondary map).</summary>
+    public bool IsBaseColorCandidate => !IsNormal && !IsMask && !IsMatCap && !IsMatCapMask && !IsGradient && !IsEmissive;
 }
 
 /// <summary>One material parameter (e.g. a vec4 tint) editable via the M7 value editor.</summary>

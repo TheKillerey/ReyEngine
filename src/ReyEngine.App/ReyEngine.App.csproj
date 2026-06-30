@@ -20,6 +20,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Copied next to the exe and loaded at runtime; embedding the logo as an AvaloniaResource
+         corrupted the assembly IL via Avalonia.Build.Tasks, so we avoid the resource compiler. -->
+    <Content Include="Assets\reyengine_logo.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ReyEngine.Core\ReyEngine.Core.csproj" />
     <ProjectReference Include="..\ReyEngine.Formats\ReyEngine.Formats.csproj" />
     <ProjectReference Include="..\ReyEngine.Rendering\ReyEngine.Rendering.csproj" />

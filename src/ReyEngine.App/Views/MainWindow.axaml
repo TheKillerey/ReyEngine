@@ -18,7 +18,10 @@
   <DockPanel>
 
     <!-- ============ TOP MENU ============ -->
-    <Menu DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}">
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Background="{DynamicResource ReyHeaderBrush}">
+      <Image x:Name="LogoImage" Grid.Column="0" Height="24" Margin="10,3,6,3"
+             VerticalAlignment="Center" ToolTip.Tip="ReyEngine" />
+    <Menu Grid.Column="1" Background="Transparent">
       <MenuItem Header="_File">
         <MenuItem Header="Open Project Folder…" Command="{Binding OpenProjectFolderCommand}" />
         <MenuItem Header="Open Recent" ItemsSource="{Binding RecentProjectList}">
@@ -72,6 +75,7 @@
         <MenuItem Header="About ReyEngine" IsEnabled="False" />
       </MenuItem>
     </Menu>
+    </Grid>
 
     <!-- ============ TOOLBAR ============ -->
     <Border DockPanel.Dock="Top"
@@ -181,10 +185,13 @@
 
             <!-- transparent surface that forwards pointer input to the viewport camera -->
             <Border x:Name="ViewportInput" Background="Transparent"
+                    Focusable="True"
                     PointerPressed="OnViewportPointerPressed"
                     PointerMoved="OnViewportPointerMoved"
                     PointerReleased="OnViewportPointerReleased"
-                    PointerWheelChanged="OnViewportPointerWheel" />
+                    PointerWheelChanged="OnViewportPointerWheel"
+                    KeyDown="OnViewportKeyDown"
+                    KeyUp="OnViewportKeyUp" />
 
             <!-- view toggles (above the input surface so they stay clickable) -->
             <StackPanel Orientation="Horizontal" Spacing="4" Margin="10"
@@ -236,7 +243,7 @@
                 <TreeView.ItemTemplate>
                   <TreeDataTemplate ItemsSource="{Binding Folders}">
                     <StackPanel Orientation="Horizontal" Spacing="5">
-                      <TextBlock Text="📁" FontSize="11" VerticalAlignment="Center" />
+                      <TextBlock Text="{Binding Icon}" FontSize="12" VerticalAlignment="Center" />
                       <TextBlock Text="{Binding Name}" FontSize="12" Foreground="{DynamicResource ReyTextBrush}" VerticalAlignment="Center" />
                     </StackPanel>
                   </TreeDataTemplate>
@@ -266,8 +273,11 @@
                         </Button.ContextMenu>
                         <StackPanel>
                           <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Width="58" Height="42" HorizontalAlignment="Center">
-                            <TextBlock Text="{Binding Kind}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource ReyAccentBrush}" />
+                            <Grid>
+                              <TextBlock Text="{Binding Icon}" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                              <TextBlock Text="{Binding Kind}" FontSize="7" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                         Margin="0,0,3,2" Foreground="{DynamicResource ReyAccentBrush}" />
+                            </Grid>
                           </Border>
                           <StackPanel Orientation="Horizontal" Spacing="2" HorizontalAlignment="Center" Margin="0,3,0,0">
                             <TextBlock Text="🔒" FontSize="8" VerticalAlignment="Center" IsVisible="{Binding IsReadOnly}" />

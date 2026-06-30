@@ -57,4 +57,21 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
             AssetType.Unknown => "?",
             _ => "BIN",
         };
+
+    /// <summary>Type glyph shown in the Content Browser (folder + per-file-type icons).</summary>
+    public string Icon => IsFolder
+        ? (HasSubfolders ? "📂" : "📁")
+        : Entry?.Type switch
+        {
+            AssetType.Texture or AssetType.Dds or AssetType.Image => "🖼",
+            AssetType.SkinnedMesh or AssetType.StaticMesh => "🧊",
+            AssetType.Skeleton => "🦴",
+            AssetType.Animation => "🎞",
+            AssetType.MapGeometry => "🗺",
+            AssetType.Bin => "📦",
+            AssetType.Audio => "🔊",
+            AssetType.Shader => "✨",
+            AssetType.Json or AssetType.Text => "📄",
+            _ => "📄",
+        };
 }

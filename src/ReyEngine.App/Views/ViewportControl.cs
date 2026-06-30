@@ -82,6 +82,26 @@ public sealed class ViewportControl : OpenGlControlBase
         RequestNextFrameRendering();
     }
 
+    /// <summary>RMB mouse-look (rotate the view in place).</summary>
+    public void LookBy(float dx, float dy)
+    {
+        _camera.Look(dx * 0.005f, -dy * 0.005f);
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>WASD/QE fly step (forward/right/up in [-1..1], dt seconds).</summary>
+    public void FlyBy(float forward, float right, float up, float dt)
+    {
+        _camera.MoveLocal(forward, right, up, dt);
+        RequestNextFrameRendering();
+    }
+
+    public void AdjustFlySpeed(float wheelDelta)
+    {
+        _camera.AdjustFlySpeed(wheelDelta > 0 ? 1.15f : 0.87f);
+        RequestNextFrameRendering();
+    }
+
     public void PanBy(float dx, float dy)
     {
         _camera.Pan(-dx, dy);
@@ -93,6 +113,9 @@ public sealed class ViewportControl : OpenGlControlBase
         _camera.Zoom(wheelDelta > 0 ? 0.9f : 1.1f);
         RequestNextFrameRendering();
     }
+
+    /// <summary>F: frame the current mesh (Unreal-style focus-selected).</summary>
+    public void FocusSelected() => RequestFrame();
 
     public void RequestFrame()
     {
