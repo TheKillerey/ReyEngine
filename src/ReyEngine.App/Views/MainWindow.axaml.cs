@@ -56,8 +56,8 @@ public partial class MainWindow : Window
     }
 
     // ---- Unreal-style viewport camera input (forwarded from the transparent overlay) ----
-    // RMB = mouse-look + WASD/QE fly · Alt+LMB = orbit · MMB = pan · wheel = dolly (RMB+wheel = fly speed)
-    // LMB = dolly + turn · F = focus selected.
+    // LMB = mouse-look + WASD/QE fly · Alt+LMB = orbit · MMB = pan · wheel = dolly (LMB+wheel = fly speed)
+    // F = focus selected. (Look is direct: cursor up→look up, left→look left.)
 
     private void OnViewportPointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -69,7 +69,7 @@ public partial class MainWindow : Window
         _lastPointer = pt.Position;
         e.Pointer.Capture(ViewportInput);
         ViewportInput.Focus(); // so WASD/F reach the viewport
-        if (_rmb) StartFly();
+        if (_lmb && !_alt) StartFly();
     }
 
     private void OnViewportPointerMoved(object? sender, PointerEventArgs e)
@@ -80,10 +80,10 @@ public partial class MainWindow : Window
         var dy = (float)(p.Y - _lastPointer.Y);
         _lastPointer = p;
 
-        if (_rmb) Viewport.LookBy(dx, dy);
+        if (_lmb && _alt) Viewport.OrbitBy(dx, dy);
+        else if (_lmb) Viewport.LookBy(dx, dy);
         else if (_mmb) Viewport.PanBy(dx, dy);
-        else if (_lmb && _alt) Viewport.OrbitBy(dx, dy);
-        else if (_lmb) { Viewport.FlyBy(-dy * 0.04f, 0f, 0f, 0.05f); Viewport.LookBy(dx, 0f); }
+        else if (_rmb) Viewport.LookBy(dx, dy);
     }
 
     private void OnViewportPointerReleased(object? sender, PointerReleasedEventArgs e)
@@ -92,13 +92,13 @@ public partial class MainWindow : Window
         _lmb = props.IsLeftButtonPressed;
         _rmb = props.IsRightButtonPressed;
         _mmb = props.IsMiddleButtonPressed;
-        if (!_rmb) StopFly();
+        if (!_lmb) StopFly();
         if (!(_lmb || _rmb || _mmb)) e.Pointer.Capture(null);
     }
 
     private void OnViewportPointerWheel(object? sender, PointerWheelEventArgs e)
     {
-        if (_rmb) Viewport.AdjustFlySpeed((float)e.Delta.Y);
+        if (_lmb) Viewport.AdjustFlySpeed((float)e.Delta.Y);
         else Viewport.ZoomBy((float)e.Delta.Y);
     }
 
@@ -128,7 +128,7 @@ public partial class MainWindow : Window
 
     private void FlyTick(object? sender, EventArgs e)
     {
-        if (!_rmb) { StopFly(); return; }
+        if (!_lmb) { StopFly(); return; }
         float f = 0, r = 0, u = 0;
         if (_heldKeys.Contains(Key.W)) f += 1;
         if (_heldKeys.Contains(Key.S)) f -= 1;

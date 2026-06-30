@@ -31,5 +31,11 @@ public sealed class MapGeoAsset
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 }
 
-/// <summary>An index range in the combined buffer that shares a material (StaticMaterialDef name).</summary>
-public sealed record MapGeoGroup(string Material, int StartIndex, int IndexCount);
+/// <summary>
+/// An index range in the combined buffer for one mesh-submesh: its material plus the source mesh's
+/// name and visibility data (dragon-layer bitmask + baron visibility-controller hash) for the layer
+/// system. <see cref="VisibilityFlags"/> defaults to 255 (visible on all dragon configurations).
+/// </summary>
+public sealed record MapGeoGroup(
+    string Material, int StartIndex, int IndexCount,
+    string Name = "", int VisibilityFlags = 255, uint ControllerHash = 0);

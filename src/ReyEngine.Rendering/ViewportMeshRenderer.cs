@@ -42,6 +42,7 @@ public sealed class ViewportMeshRenderer : IDisposable
         public uint Emissive;    // slot 3
         public uint MatCap;      // slot 4
         public uint MatCapMask;  // slot 5
+        public bool Visible;     // layer/visibility filter (map dragon/baron)
     }
 
     private const string MeshVert = @"
@@ -255,9 +256,9 @@ void main() { FragColor = uColor; }";
         _gl.BindVertexArray(0);
 
         if (submeshes.Count == 0)
-            _submeshes = new[] { new SubmeshDraw { Start = 0, Count = indices.Length, Texture = 0 } };
+            _submeshes = new[] { new SubmeshDraw { Start = 0, Count = indices.Length, Texture = 0, Visible = true } };
         else
-            _submeshes = submeshes.Select(s => new SubmeshDraw { Start = s.start, Count = s.count, Texture = 0 }).ToArray();
+            _submeshes = submeshes.Select(s => new SubmeshDraw { Start = s.start, Count = s.count, Texture = 0, Visible = true }).ToArray();
 
         UploadLines(_boundsVao, _boundsVbo, BuildBoxLines(min, max), out _boundsVerts);
         _hasMesh = true;
@@ -282,6 +283,13 @@ void main() { FragColor = uColor; }";
     }
 
     public void SetSubmeshTextureId(int index, uint textureId) => SetSubmeshLayer(index, 0, textureId);
+
+    /// <summary>Show/hide a submesh (map dragon/baron layer filter). No-op outside range.</summary>
+    public void SetSubmeshVisible(int index, bool visible)
+    {
+        if (!_ready || !_hasMesh || index < 0 || index >= _submeshes.Length) return;
+        _submeshes[index].Visible = visible;
+    }
 
     /// <summary>Set a submesh texture layer: 0 diffuse · 1 mask · 2 gradient · 3 emissive (0 = none).</summary>
     public void SetSubmeshLayer(int index, int slot, uint textureId)
@@ -378,6 +386,7 @@ void main() { FragColor = uColor; }";
 
                 foreach (var s in _submeshes)
                 {
+                    if (!s.Visible) continue;
                     _gl.ActiveTexture(TextureUnit.Texture0);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);
                     _gl.Uniform1(_mHasTex, s.Texture != 0 ? 1 : 0);

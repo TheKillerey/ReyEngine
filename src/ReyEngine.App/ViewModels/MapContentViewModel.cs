@@ -10,6 +10,14 @@ public sealed class MapPieceViewModel
     public required string Info { get; init; }
 }
 
+/// <summary>A visibility layer group (one distinct dragon bitmask) and the meshes it contains.</summary>
+public sealed class MapLayerGroupViewModel
+{
+    public required string Name { get; init; }   // e.g. "Ocean — 137 meshes"
+    public required int Bit { get; init; }        // the distinct VisibilityFlags value
+    public ObservableCollection<MapPieceViewModel> Meshes { get; } = new();
+}
+
 public sealed class RecentProjectViewModel
 {
     public string Path { get; }
@@ -25,6 +33,7 @@ public sealed partial class MapContentViewModel : ViewModelBase
 {
     public ObservableCollection<AssetNodeViewModel> Maps { get; } = new();
     public ObservableCollection<MapPieceViewModel> Pieces { get; } = new();
+    public ObservableCollection<MapLayerGroupViewModel> LayerGroups { get; } = new();
 
     [ObservableProperty] private string _mapName = "";
     [ObservableProperty] private bool _hasMap;
@@ -48,10 +57,17 @@ public sealed partial class MapContentViewModel : ViewModelBase
         HasMap = true;
     }
 
+    public void SetLayerGroups(IEnumerable<MapLayerGroupViewModel> groups)
+    {
+        LayerGroups.Clear();
+        foreach (var g in groups) LayerGroups.Add(g);
+    }
+
     public void ClearMap()
     {
         MapName = "";
         Pieces.Clear();
+        LayerGroups.Clear();
         HasMap = false;
     }
 

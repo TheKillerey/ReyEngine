@@ -92,6 +92,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelEmissiveTextures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelMatCapTextures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelMatCapMaskTextures;
+    [ObservableProperty] private IReadOnlyList<bool>? _currentModelSubmeshVisible;
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
     [ObservableProperty] private bool _showWireframe;
@@ -611,11 +612,58 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _currentMap = null;
         CurrentModelTextures = null;
         ClearSecondaryTextures();
+        CurrentModelSubmeshVisible = null;
         CurrentAnimation = null;
         AnimationTime = 0;
         Animation.Clear();
         MeshInspector.Clear();
         MapGeoInspector.Clear();
+    }
+
+    // ---- Map dragon/baron visibility layers (M22) ----------------------
+
+    public IReadOnlyList<string> DragonOptions { get; } =
+        new[] { "All Layers" }.Concat(MapVisibility.Dragons.Select(d => d.Name)).ToList();
+    public IReadOnlyList<string> BaronOptions { get; } =
+        new[] { "All" }.Concat(MapVisibility.Barons.Select(b => b.Name)).ToList();
+
+    [ObservableProperty] private int _selectedDragonIndex;
+    [ObservableProperty] private int _selectedBaronIndex;
+
+    partial void OnSelectedDragonIndexChanged(int value) => ApplyMapVisibility();
+    partial void OnSelectedBaronIndexChanged(int value) => ApplyMapVisibility();
+
+    /// <summary>Compute per-group visibility from the selected dragon layer and push it to the viewport.</summary>
+    private void ApplyMapVisibility()
+    {
+        if (_currentMap is not { } map) { CurrentModelSubmeshVisible = null; return; }
+        int dragonBit = SelectedDragonIndex <= 0 ? 0 : MapVisibility.Dragons[SelectedDragonIndex - 1].Bit;
+        var vis = new bool[map.Groups.Count];
+        for (int i = 0; i < vis.Length; i++)
+            vis[i] = MapVisibility.VisibleForDragon(map.Groups[i].VisibilityFlags, dragonBit);
+        CurrentModelSubmeshVisible = vis;
+    }
+
+    /// <summary>Build the Map Content layer-group outline (Meshes → Layer Groups → mesh names).</summary>
+    private void BuildMapLayerGroups(MapGeoAsset map)
+    {
+        var groups = map.Groups
+            .GroupBy(g => g.VisibilityFlags)
+            .Select(g =>
+            {
+                var meshNames = g.Select(x => string.IsNullOrEmpty(x.Name) ? x.Material : x.Name)
+                                 .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n).ToList();
+                var vm = new MapLayerGroupViewModel
+                {
+                    Name = $"{MapVisibility.DragonLabel(g.Key)} — {meshNames.Count} mesh(es)",
+                    Bit = g.Key,
+                };
+                foreach (var n in meshNames) vm.Meshes.Add(new MapPieceViewModel { Name = n, Info = "" });
+                return vm;
+            })
+            .OrderByDescending(vm => vm.Meshes.Count)
+            .ToList();
+        MapContent.SetLayerGroups(groups);
     }
 
     private async Task LoadBinAsync(WadAssetEntry entry)
@@ -777,6 +825,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MapContent.ShowMap(entry.DisplayName, map.Groups
                     .Select((g, i) => new MapPieceViewModel { Name = string.IsNullOrEmpty(g.Material) ? $"Mesh {i}" : g.Material, Info = $"{g.IndexCount / 3:n0} tris" })
                     .ToList());
+                BuildMapLayerGroups(map);
+                SelectedBaronIndex = 0;
+                SelectedDragonIndex = 0; // handlers call ApplyMapVisibility; _currentMap is already set
+                ApplyMapVisibility();    // ensure reset even if the index was already 0
                 _log.Success("MapGeo", $"{entry.DisplayName}: v{map.Version}, {map.MeshCount:n0} meshes, {map.VertexCount:n0} verts, {map.TriangleCount:n0} tris, {map.MaterialCount} materials" +
                                        (map.Warnings.Count > 0 ? $", {map.Warnings.Count} warnings" : ""));
             });

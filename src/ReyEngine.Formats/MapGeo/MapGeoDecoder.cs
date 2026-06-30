@@ -58,6 +58,9 @@ public static class MapGeoDecoder
                 }
 
                 var ia = mesh.Indices;
+                int vis = (int)mesh.VisibilityFlags;
+                uint ctrl = mesh.VisibilityControllerPathHash;
+                string meshName = mesh.Name ?? "";
                 if (mesh.Submeshes.Count > 0)
                 {
                     foreach (var sub in mesh.Submeshes)
@@ -68,7 +71,7 @@ public static class MapGeoDecoder
                         int end = sub.StartIndex + sub.IndexCount;
                         for (int k = sub.StartIndex; k < end && k < ia.Count; k++)
                             indices.Add((uint)(ia[k] + baseVertex));
-                        groups.Add(new MapGeoGroup(material, gStart, indices.Count - gStart));
+                        groups.Add(new MapGeoGroup(material, gStart, indices.Count - gStart, meshName, vis, ctrl));
                     }
                 }
                 else
@@ -76,7 +79,7 @@ public static class MapGeoDecoder
                     int gStart = indices.Count;
                     for (int k = 0; k < ia.Count; k++)
                         indices.Add((uint)(ia[k] + baseVertex));
-                    groups.Add(new MapGeoGroup("", gStart, indices.Count - gStart));
+                    groups.Add(new MapGeoGroup("", gStart, indices.Count - gStart, meshName, vis, ctrl));
                 }
 
                 meshCount++;

@@ -41,6 +41,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelMatCapTextures));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelMatCapMaskTexturesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelMatCapMaskTextures));
+    public static readonly StyledProperty<IReadOnlyList<bool>?> ModelSubmeshVisibleProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<bool>?>(nameof(ModelSubmeshVisible));
     public static readonly StyledProperty<AnimationClip?> AnimationClipProperty =
         AvaloniaProperty.Register<ViewportControl, AnimationClip?>(nameof(AnimationClip));
     public static readonly StyledProperty<double> AnimationTimeProperty =
@@ -57,6 +59,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public IReadOnlyList<TextureImage?>? ModelEmissiveTextures { get => GetValue(ModelEmissiveTexturesProperty); set => SetValue(ModelEmissiveTexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelMatCapTextures { get => GetValue(ModelMatCapTexturesProperty); set => SetValue(ModelMatCapTexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelMatCapMaskTextures { get => GetValue(ModelMatCapMaskTexturesProperty); set => SetValue(ModelMatCapMaskTexturesProperty, value); }
+    public IReadOnlyList<bool>? ModelSubmeshVisible { get => GetValue(ModelSubmeshVisibleProperty); set => SetValue(ModelSubmeshVisibleProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
     public bool Wireframe { get => GetValue(WireframeProperty); set => SetValue(WireframeProperty, value); }
@@ -68,7 +71,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private GridRenderer? _grid;
     private ViewportMeshRenderer? _meshRenderer;
     private readonly OrbitCamera _camera = new();
-    private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating;
+    private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty;
 
     // Offscreen target with a real depth buffer (Avalonia's default FBO has none).
     private uint _fbo, _colorRb, _depthRb;
@@ -82,10 +85,10 @@ public sealed class ViewportControl : OpenGlControlBase
         RequestNextFrameRendering();
     }
 
-    /// <summary>RMB mouse-look (rotate the view in place).</summary>
+    /// <summary>LMB mouse-look (rotate the view in place). Direct mapping: cursor up→look up, left→look left.</summary>
     public void LookBy(float dx, float dy)
     {
-        _camera.Look(dx * 0.005f, -dy * 0.005f);
+        _camera.Look(-dx * 0.005f, dy * 0.005f);
         RequestNextFrameRendering();
     }
 
@@ -163,6 +166,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 _needFrame = true;
                 _texturesDirty = true;
                 _skinDirty = true;
+                _visibilityDirty = true;
             }
             else _meshRenderer.ClearMesh();
             _meshDirty = false;
@@ -178,6 +182,13 @@ public sealed class ViewportControl : OpenGlControlBase
             UploadLayer(ModelMatCapTextures, 4, uploaded);      // matcap
             UploadLayer(ModelMatCapMaskTextures, 5, uploaded);  // matcap mask
             _texturesDirty = false;
+        }
+        if (_visibilityDirty && _meshRenderer.HasMesh)
+        {
+            var vis = ModelSubmeshVisible;
+            for (int i = 0; i < _meshRenderer.SubmeshCount; i++)
+                _meshRenderer.SetSubmeshVisible(i, vis is null || i >= vis.Count || vis[i]);
+            _visibilityDirty = false;
         }
         if (_bonesDirty)
         {
@@ -285,6 +296,7 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == ModelGradientTexturesProperty || change.Property == ModelEmissiveTexturesProperty
                  || change.Property == ModelMatCapTexturesProperty || change.Property == ModelMatCapMaskTexturesProperty)
         { _texturesDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == ModelSubmeshVisibleProperty) { _visibilityDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimationClipProperty || change.Property == AnimationTimeProperty) { _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == WireframeProperty || change.Property == ShowBonesProperty

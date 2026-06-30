@@ -5,6 +5,15 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M22 complete.** Camera + map layer/visibility system. The viewport camera now uses **LMB**
+> (mouse-look + WASD/QE fly · Alt+LMB orbit · MMB pan · wheel dolly · F focus) with **inverted/direct** look
+> (cursor up→look up, left→look left). Adds the **dragon elemental-rift visibility system** (mirrors the
+> MapgeoAddon): each mapgeo mesh carries its `VisibilityFlags` (8-bit dragon bitmask) + baron controller hash,
+> the **Map Content** panel shows a *Meshes → Layer Groups → mesh names* tree, and two **Dragon / Baron**
+> comboboxes filter the viewport — selecting *Ocean*, *Chemtech*, *Void*, … live-hides the meshes that don't
+> belong to that elemental rift (verified on SR Map11: All = 769 groups, Ocean = 421). Baron-state precise
+> filtering and per-mesh move/reposition are the next steps.
+>
 > Status: **M21 complete.** Editor polish + a shader-fidelity fix. The viewport now has an **Unreal-style
 > camera**: RMB = mouse-look + WASD/QE fly, Alt+LMB = orbit, MMB = pan, wheel = dolly (RMB+wheel adjusts fly
 > speed), **F** = focus selected. Adds the **ReyEngine logo** (titlebar icon + menu-bar wordmark) and **file/folder
@@ -282,6 +291,7 @@ No Play button — this is an editor, not a runtime.
 | **M18 ✅** | Riot shader inspection + close preview — scan `ShaderCache.dx11.wad` → cached `ShaderDatabase` (`.reyengine/shader_cache.json`) · mount `Shaders.wad` textures read-only · Material Editor shader-binding panel · viewport preview modes (Basic / **Riot Approx** rim+cutout / Debug base·alpha·normals) · export shader bytecode dump |
 | **M19 ✅** | Secondary-sampler blending — per-submesh **Mask / Gradient / Emissive** samplers resolved from `StaticMaterialDef` and bound to the renderer (texture units 1–3); RiotApprox rim is now gradient-coloured + mask-gated, with emissive glow where present · Debug · Mask / Emissive views · safe fallback for materials without them |
 | **M20 ✅** | **MatCap** preview — per-submesh `MatCap_Tex` (+ `MatCap_Mask`) bound to texture units 4–5; view-space spheremap fake-lighting highlight (additive, mask-gated) in RiotApprox · Debug · MatCap view · view matrix plumbed for the spheremap lookup |
+| **M22 ✅** | Camera (LMB look + inverted, fly on LMB) · **dragon visibility system** — per-mesh `VisibilityFlags` carried through the decoder, per-submesh render visibility toggle, **Dragon/Baron comboboxes** + *Meshes→Layer Groups→names* tree filter the viewport live (Base/Inferno/Mountain/Ocean/Cloud/Hextech/Chemtech/Void) |
 | **M21 ✅** | Editor polish — **Unreal-style camera** (RMB look + WASD/QE fly · Alt+LMB orbit · MMB pan · wheel dolly · RMB+wheel fly-speed · F focus) · **logo** (titlebar icon + menu wordmark, runtime-loaded) · **Content Browser type icons** · shader fix: **normal-map gating** (normal maps never used as the base texture) |
 | **M5** | Bulk export + WAD repack / Build Package |
 | **M6** | ANM animation playback · skeleton overlay · soundbank (BNK/WPK) extraction |
