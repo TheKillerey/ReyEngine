@@ -42,12 +42,17 @@ public static class MapGeoDecoder
                 var meshNrm = view.TryGetAccessor(ElementName.Normal, out var nAcc) ? ReadVector3(nAcc, vc) : null;
                 var meshUv = view.TryGetAccessor(ElementName.Texcoord0, out var tAcc) ? ReadVector2(tAcc, vc) : null;
 
+                var meshMin = new Vector3(float.MaxValue);
+                var meshMax = new Vector3(float.MinValue);
+
                 for (int i = 0; i < vc; i++)
                 {
                     Vector3 p = Vector3.Transform(meshPos[i], transform);
                     positions.Add(p.X); positions.Add(p.Y); positions.Add(p.Z);
                     min = Vector3.Min(min, p);
                     max = Vector3.Max(max, p);
+                    meshMin = Vector3.Min(meshMin, p);
+                    meshMax = Vector3.Max(meshMax, p);
 
                     if (meshNrm is not null)
                     {
@@ -68,6 +73,7 @@ public static class MapGeoDecoder
                 {
                     Index = meshIndex, Name = meshName, VertexStart = baseVertex, VertexCount = vc,
                     Transform = transform, VisibilityFlags = vis, ControllerHash = ctrl,
+                    Pivot = vc > 0 ? (meshMin + meshMax) * 0.5f : transform.Translation,
                 });
                 if (mesh.Submeshes.Count > 0)
                 {

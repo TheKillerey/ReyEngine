@@ -5,6 +5,16 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M26 complete.** **Rotate and scale now work and persist too**, alongside move. The Transform
+> Mesh panel gained Rotation (X/Y/Z degrees) and Scale (X/Y/Z) fields plus a **Reset** button. Rotation/scale
+> happen around the mesh's own pivot (its local bounding-box center) — not the map origin — so a mesh spins/grows
+> in place. The patcher now writes the **full 4×4 transform matrix** (linear part = original-linear × scale ×
+> rotation, translation = pivot + rotated(original-translation − pivot) + offset) instead of just the translation
+> bytes, and also **recomputes the mesh's bounding box** from its transformed corners so in-game culling stays
+> correct. Verified rigorously on two real maps: pure translation/rotation/scale each cross-checked against a
+> hand-computed matrix, a combined move+rotate+scale+reset round-trip restores the exact original vertex, and the
+> patched file re-decodes with all edited (and un-edited) vertices matching to sub-millimeter precision.
+>
 > Status: **M25 complete.** **Mesh move/reposition now works and persists.** Select a mesh in the Map Content
 > tree, type an X/Y/Z position, **Apply Move** (it moves live in the viewport), then **Save to Mod**. Because
 > LeagueToolkit's `EnvironmentAsset.Write` is lossy (it corrupts the mapgeo), ReyEngine instead **surgically
@@ -310,6 +320,7 @@ No Play button — this is an editor, not a runtime.
 | **M19 ✅** | Secondary-sampler blending — per-submesh **Mask / Gradient / Emissive** samplers resolved from `StaticMaterialDef` and bound to the renderer (texture units 1–3); RiotApprox rim is now gradient-coloured + mask-gated, with emissive glow where present · Debug · Mask / Emissive views · safe fallback for materials without them |
 | **M20 ✅** | **MatCap** preview — per-submesh `MatCap_Tex` (+ `MatCap_Mask`) bound to texture units 4–5; view-space spheremap fake-lighting highlight (additive, mask-gated) in RiotApprox · Debug · MatCap view · view matrix plumbed for the spheremap lookup |
 | **M24–M25 ✅** | **Mesh move/reposition** — per-mesh vertex tracking + live viewport translate; persist by surgically patching the transform translation via its `[BoundingBox][Transform]` signature (LeagueToolkit's `EnvironmentAsset.Write` is lossy, so we never re-serialize) → saved to the override + Build Package |
+| **M26 ✅** | **Mesh rotate + scale** (around the mesh's own pivot) — live viewport preview via a pristine-vertex snapshot; persist by patching the *full* transform matrix + recomputed bounding box; Reset button; verified against hand-computed matrices + round-trip re-decode on two real maps |
 | **M23 ✅** | **Baron pit visibility** — decode the map's visibility controllers (`MapVisibilityControllers`: Dragon `0xc406a533` / Baron `0xec733fe2` / Child `0xe21083b5`, recursing `Parents`/`ParentMode`) → resolve each mesh to Base/Cup/Tunnel/Upgraded bits; the Baron combobox now live-filters the baron pit, combined with the dragon filter |
 | **M22 ✅** | Camera (LMB look + inverted, fly on LMB) · **dragon visibility system** — per-mesh `VisibilityFlags` carried through the decoder, per-submesh render visibility toggle, **Dragon/Baron comboboxes** + *Meshes→Layer Groups→names* tree filter the viewport live (Base/Inferno/Mountain/Ocean/Cloud/Hextech/Chemtech/Void) |
 | **M21 ✅** | Editor polish — **Unreal-style camera** (RMB look + WASD/QE fly · Alt+LMB orbit · MMB pan · wheel dolly · RMB+wheel fly-speed · F focus) · **logo** (titlebar icon + menu wordmark, runtime-loaded) · **Content Browser type icons** · shader fix: **normal-map gating** (normal maps never used as the base texture) |

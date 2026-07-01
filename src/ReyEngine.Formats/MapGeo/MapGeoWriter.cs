@@ -5,18 +5,19 @@ using LeagueToolkit.Core.Environment;
 namespace ReyEngine.Formats.MapGeo;
 
 /// <summary>
-/// Persists mesh moves into a .mapgeo by surgically patching each moved mesh's transform translation
-/// in place, leaving the rest of the file byte-exact. LeagueToolkit's <c>EnvironmentAsset.Write</c> is
-/// lossy for these versions (it produces an unreadable file), so we never re-serialize — instead we
-/// locate each transform via its unique <c>[BoundingBox(24)][Transform(64)]</c> byte signature (the AABB
-/// disambiguates the many identity transforms) and overwrite the 12 translation bytes.
+/// Persists mesh moves/rotations/scales into a .mapgeo by surgically patching each edited mesh's
+/// transform (and bounding box) in place, leaving the rest of the file byte-exact. LeagueToolkit's
+/// <c>EnvironmentAsset.Write</c> is lossy for these versions (it produces an unreadable file), so we
+/// never re-serialize — instead we locate each mesh via its unique <c>[BoundingBox(24)][Transform(64)]</c>
+/// byte signature (the AABB disambiguates the many identical/identity transforms) and overwrite both
+/// blocks with the recomputed values.
 /// </summary>
 public static class MapGeoWriter
 {
     public static bool CanWriteBack => true;
     public static bool HasMoves(IEnumerable<MapGeoMesh> meshes) => meshes.Any(m => m.IsMoved);
 
-    /// <summary>Patch the moved meshes' transforms into <paramref name="originalMapgeo"/> and return new bytes.</summary>
+    /// <summary>Patch the edited meshes' transforms into <paramref name="originalMapgeo"/> and return new bytes.</summary>
     public static byte[] WriteWithMoves(byte[] originalMapgeo, IReadOnlyList<MapGeoMesh> meshes)
     {
         var moves = meshes.Where(m => m.IsMoved).ToList();
@@ -42,9 +43,9 @@ public static class MapGeoWriter
             list.Add(i);
         }
 
-        foreach (var (key, indices) in indicesBySig)
+        foreach (var (_, indices) in indicesBySig)
         {
-            if (!indices.Any(byMove.Contains)) continue;       // nothing moved in this signature group
+            if (!indices.Any(byMove.Contains)) continue;       // nothing edited in this signature group
             var sig = sigByIndex[indices[0]];
             var occurrences = FindAll(result, sig);            // file order
             int n = Math.Min(indices.Count, occurrences.Count);
@@ -53,18 +54,55 @@ public static class MapGeoWriter
                 int meshIndex = indices[rank];                 // mesh order ↔ file order
                 var mv = moves.FirstOrDefault(m => m.Index == meshIndex);
                 if (mv is null) continue;
-                // translation = the M41/M42/M43 floats: 24 (bbox) + 48 (matrix row 4) into the signature.
-                int t = occurrences[rank] + 24 + 48;
-                var newT = envMeshes[meshIndex].Transform.Translation + mv.Offset;
-                BinaryPrimitives.WriteSingleLittleEndian(result.AsSpan(t + 0, 4), newT.X);
-                BinaryPrimitives.WriteSingleLittleEndian(result.AsSpan(t + 4, 4), newT.Y);
-                BinaryPrimitives.WriteSingleLittleEndian(result.AsSpan(t + 8, 4), newT.Z);
+
+                var original = envMeshes[meshIndex].Transform;
+                var box = envMeshes[meshIndex].BoundingBox;
+                var (newTransform, newMin, newMax) = ComputeNew(original, box.Min, box.Max, mv);
+
+                int off = occurrences[rank];
+                WriteVector3(result, off + 0, newMin);
+                WriteVector3(result, off + 12, newMax);
+                WriteMatrix(result, off + 24, newTransform);
             }
         }
         return result;
     }
 
-    /// <summary>Patch the moves AND validate the result still reopens. Returns null + a reason on failure.</summary>
+    /// <summary>
+    /// New transform + AABB for a mesh given its accumulated edit. Derivation: baked vertices are
+    /// <c>local * OriginalTransform</c>; we want <c>pivot + SR*(baked - pivot) + offset</c> where SR is
+    /// the mesh's scale-then-rotate matrix. Splitting OriginalTransform into its linear part L0 and
+    /// translation T0 gives: NewTransform.Linear = L0 * SR, NewTransform.Translation =
+    /// pivot + SR*(T0 - pivot) + offset. The same SR/pivot/offset applied to the original AABB corners
+    /// gives the new (axis-aligned) bounding box.
+    /// </summary>
+    private static (Matrix4x4 transform, Vector3 min, Vector3 max) ComputeNew(
+        Matrix4x4 original, Vector3 boxMin, Vector3 boxMax, MapGeoMesh mv)
+    {
+        var sr = mv.ScaleRotationMatrix;
+        var pivot = mv.Pivot;
+        var offset = mv.Offset;
+
+        var linear = original with { Translation = Vector3.Zero };
+        var newLinear = linear * sr;
+        var newTranslation = pivot + Vector3.Transform(original.Translation - pivot, sr) + offset;
+        var newTransform = newLinear with { Translation = newTranslation };
+
+        Vector3 newMin = new(float.MaxValue), newMax = new(float.MinValue);
+        for (int i = 0; i < 8; i++)
+        {
+            var corner = new Vector3(
+                (i & 1) == 0 ? boxMin.X : boxMax.X,
+                (i & 2) == 0 ? boxMin.Y : boxMax.Y,
+                (i & 4) == 0 ? boxMin.Z : boxMax.Z);
+            var moved = pivot + Vector3.Transform(corner - pivot, sr) + offset;
+            newMin = Vector3.Min(newMin, moved);
+            newMax = Vector3.Max(newMax, moved);
+        }
+        return (newTransform, newMin, newMax);
+    }
+
+    /// <summary>Patch the edits AND validate the result still reopens. Returns null + a reason on failure.</summary>
     public static byte[]? TryWriteWithMoves(byte[] originalMapgeo, IReadOnlyList<MapGeoMesh> meshes, out string? error)
     {
         try
@@ -86,16 +124,28 @@ public static class MapGeoWriter
     {
         var b = new byte[88];
         var box = m.BoundingBox;
-        var t = m.Transform;
+        WriteVector3(b, 0, box.Min);
+        WriteVector3(b, 12, box.Max);
+        WriteMatrix(b, 24, m.Transform);
+        return b;
+    }
+
+    private static void WriteVector3(byte[] b, int offset, Vector3 v)
+    {
+        BinaryPrimitives.WriteSingleLittleEndian(b.AsSpan(offset + 0, 4), v.X);
+        BinaryPrimitives.WriteSingleLittleEndian(b.AsSpan(offset + 4, 4), v.Y);
+        BinaryPrimitives.WriteSingleLittleEndian(b.AsSpan(offset + 8, 4), v.Z);
+    }
+
+    private static void WriteMatrix(byte[] b, int offset, Matrix4x4 t)
+    {
         Span<float> f = stackalloc float[]
         {
-            box.Min.X, box.Min.Y, box.Min.Z, box.Max.X, box.Max.Y, box.Max.Z,
             t.M11, t.M12, t.M13, t.M14, t.M21, t.M22, t.M23, t.M24,
             t.M31, t.M32, t.M33, t.M34, t.M41, t.M42, t.M43, t.M44,
         };
         for (int i = 0; i < f.Length; i++)
-            BinaryPrimitives.WriteSingleLittleEndian(b.AsSpan(i * 4, 4), f[i]);
-        return b;
+            BinaryPrimitives.WriteSingleLittleEndian(b.AsSpan(offset + i * 4, 4), f[i]);
     }
 
     private static List<int> FindAll(byte[] hay, byte[] needle)

@@ -163,12 +163,14 @@
             </Grid>
           </StackPanel>
 
-          <!-- mesh move / reposition panel (shown when a mesh is selected) -->
+          <!-- mesh transform panel (move / rotate / scale — shown when a mesh is selected) -->
           <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyPanelAltBrush}" Padding="8,6" Margin="0,4,0,0"
                   IsVisible="{Binding SelectedMapMesh, Converter={x:Static ObjectConverters.IsNotNull}}">
             <StackPanel Spacing="4">
-              <TextBlock Text="MOVE MESH" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBlock Text="TRANSFORM MESH" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
               <TextBlock Text="{Binding SelectedMapMesh.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
+
+              <TextBlock Text="Position" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
               <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
                 <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
                 <TextBox Grid.Column="1" Text="{Binding MeshMoveX}" FontSize="10" Padding="3,1" />
@@ -177,8 +179,32 @@
                 <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
                 <TextBox Grid.Column="5" Text="{Binding MeshMoveZ}" FontSize="10" Padding="3,1" />
               </Grid>
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Button Content="Apply Move" Command="{Binding ApplyMeshMoveCommand}" FontSize="11" Padding="8,2" />
+
+              <TextBlock Text="Rotation (degrees)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
+                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="1" Text="{Binding MeshRotateX}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="3" Text="{Binding MeshRotateY}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="5" Text="{Binding MeshRotateZ}" FontSize="10" Padding="3,1" />
+              </Grid>
+
+              <TextBlock Text="Scale" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
+                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="1" Text="{Binding MeshScaleX}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="3" Text="{Binding MeshScaleY}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="5" Text="{Binding MeshScaleZ}" FontSize="10" Padding="3,1" />
+              </Grid>
+
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+                <Button Content="Apply" Command="{Binding ApplyMeshMoveCommand}" FontSize="11" Padding="8,2"
+                        ToolTip.Tip="Apply position/rotation/scale live in the viewport" />
+                <Button Content="Reset" Command="{Binding ResetMeshTransformCommand}" FontSize="11" Padding="8,2"
+                        ToolTip.Tip="Restore this mesh's original transform" />
                 <Button Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
                         IsEnabled="{Binding HasMapMoves}"
                         Background="{DynamicResource ReyAccentBrush}" Foreground="#08221E" />

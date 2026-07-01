@@ -696,7 +696,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MapContent.SetLayerGroups(groups);
     }
 
-    // ---- Mesh move / reposition (M25) ----------------------------------
+    // ---- Mesh move / rotate / scale (M25/M26) ---------------------------
+    // "Position" shown/edited is the mesh's own pivot (local bbox center) + its offset — the world-space
+    // location of the mesh's center, which stays meaningful independent of any applied rotation/scale.
 
     private byte[]? _currentMapBytes;
     private WadAssetEntry? _currentMapEntry;
@@ -706,6 +708,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _meshMoveX = "0";
     [ObservableProperty] private string _meshMoveY = "0";
     [ObservableProperty] private string _meshMoveZ = "0";
+    [ObservableProperty] private string _meshRotateX = "0";
+    [ObservableProperty] private string _meshRotateY = "0";
+    [ObservableProperty] private string _meshRotateZ = "0";
+    [ObservableProperty] private string _meshScaleX = "1";
+    [ObservableProperty] private string _meshScaleY = "1";
+    [ObservableProperty] private string _meshScaleZ = "1";
     [ObservableProperty] private int _meshVerticesRevision;
     [ObservableProperty] private bool _hasMapMoves;
 
@@ -715,32 +723,67 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var m = map.Meshes[p.MeshIndex];
             SelectedMapMesh = m;
-            var pos = m.Transform.Translation + m.Offset;
-            MeshMoveX = pos.X.ToString("0.###", CultureInfo.InvariantCulture);
-            MeshMoveY = pos.Y.ToString("0.###", CultureInfo.InvariantCulture);
-            MeshMoveZ = pos.Z.ToString("0.###", CultureInfo.InvariantCulture);
+            RefreshMeshTransformFields(m);
         }
         else SelectedMapMesh = null;
+    }
+
+    private void RefreshMeshTransformFields(MapGeoMesh m)
+    {
+        var pos = m.Pivot + m.Offset;
+        MeshMoveX = pos.X.ToString("0.###", CultureInfo.InvariantCulture);
+        MeshMoveY = pos.Y.ToString("0.###", CultureInfo.InvariantCulture);
+        MeshMoveZ = pos.Z.ToString("0.###", CultureInfo.InvariantCulture);
+        MeshRotateX = m.RotationDegrees.X.ToString("0.###", CultureInfo.InvariantCulture);
+        MeshRotateY = m.RotationDegrees.Y.ToString("0.###", CultureInfo.InvariantCulture);
+        MeshRotateZ = m.RotationDegrees.Z.ToString("0.###", CultureInfo.InvariantCulture);
+        MeshScaleX = m.Scale.X.ToString("0.###", CultureInfo.InvariantCulture);
+        MeshScaleY = m.Scale.Y.ToString("0.###", CultureInfo.InvariantCulture);
+        MeshScaleZ = m.Scale.Z.ToString("0.###", CultureInfo.InvariantCulture);
+    }
+
+    private static bool TryParseVector3(string sx, string sy, string sz, out System.Numerics.Vector3 v)
+    {
+        v = default;
+        if (!float.TryParse(sx, NumberStyles.Float, CultureInfo.InvariantCulture, out var x)
+            || !float.TryParse(sy, NumberStyles.Float, CultureInfo.InvariantCulture, out var y)
+            || !float.TryParse(sz, NumberStyles.Float, CultureInfo.InvariantCulture, out var z))
+            return false;
+        v = new System.Numerics.Vector3(x, y, z);
+        return true;
     }
 
     [RelayCommand]
     private void ApplyMeshMove()
     {
         if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
-        if (!float.TryParse(MeshMoveX, NumberStyles.Float, CultureInfo.InvariantCulture, out var x)
-            || !float.TryParse(MeshMoveY, NumberStyles.Float, CultureInfo.InvariantCulture, out var y)
-            || !float.TryParse(MeshMoveZ, NumberStyles.Float, CultureInfo.InvariantCulture, out var z))
-        { _log.Warn("MapGeo", "Enter valid X/Y/Z numbers."); return; }
+        if (!TryParseVector3(MeshMoveX, MeshMoveY, MeshMoveZ, out var target))
+        { _log.Warn("MapGeo", "Enter valid position X/Y/Z numbers."); return; }
+        if (!TryParseVector3(MeshRotateX, MeshRotateY, MeshRotateZ, out var rotation))
+        { _log.Warn("MapGeo", "Enter valid rotation X/Y/Z numbers (degrees)."); return; }
+        if (!TryParseVector3(MeshScaleX, MeshScaleY, MeshScaleZ, out var scale))
+        { _log.Warn("MapGeo", "Enter valid scale X/Y/Z numbers."); return; }
+        if (scale.X == 0 || scale.Y == 0 || scale.Z == 0)
+        { _log.Warn("MapGeo", "Scale cannot be zero on any axis."); return; }
 
-        var target = new System.Numerics.Vector3(x, y, z);
-        var current = m.Transform.Translation + m.Offset;
-        var delta = target - current;
-        if (delta.LengthSquared() < 1e-6f) return;
-
-        map.TranslateMesh(m, delta);
-        MeshVerticesRevision++;           // re-upload the moved vertices to the viewport
+        map.TranslateMesh(m, target - m.Pivot);
+        map.RotateMesh(m, rotation);
+        map.ScaleMesh(m, scale);
+        MeshVerticesRevision++;           // re-upload the edited vertices to the viewport
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
-        _log.Info("MapGeo", $"Moved '{m.Name}' to ({x:0.#}, {y:0.#}, {z:0.#}).");
+        _log.Info("MapGeo", $"Transformed '{m.Name}': pos ({target.X:0.#}, {target.Y:0.#}, {target.Z:0.#}), " +
+                            $"rot ({rotation.X:0.#}°, {rotation.Y:0.#}°, {rotation.Z:0.#}°), scale ({scale.X:0.##}, {scale.Y:0.##}, {scale.Z:0.##}).");
+    }
+
+    [RelayCommand]
+    private void ResetMeshTransform()
+    {
+        if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
+        map.ResetMesh(m);
+        RefreshMeshTransformFields(m);
+        MeshVerticesRevision++;
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+        _log.Info("MapGeo", $"Reset '{m.Name}' to its original transform.");
     }
 
     [RelayCommand]
