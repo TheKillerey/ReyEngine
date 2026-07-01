@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Numerics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -15,6 +16,11 @@ public partial class MainWindow : Window
     private bool _lmb, _rmb, _mmb, _alt;
     private readonly HashSet<Key> _heldKeys = new();
     private DispatcherTimer? _flyTimer;
+
+    // Translate-gizmo drag state (mutually exclusive with camera fly for the same LMB stroke).
+    private ViewportControl.GizmoAxis? _gizmoDragAxis;
+    private float _gizmoDragStartT;
+    private Vector3 _gizmoDragStartOffset;
 
     public MainWindow()
     {
@@ -58,6 +64,15 @@ public partial class MainWindow : Window
     // ---- Unreal-style viewport camera input (forwarded from the transparent overlay) ----
     // LMB = mouse-look + WASD/QE fly · Alt+LMB = orbit · MMB = pan · wheel = dolly (LMB+wheel = fly speed)
     // F = focus selected. (Look is direct: cursor up→look up, left→look left.)
+    // When a map mesh is selected, LMB-down first hit-tests the translate gizmo (X/Y/Z axis handles at
+    // its pivot); a hit starts an axis-constrained drag instead of camera-look/fly for that stroke.
+
+    private static Vector3 AxisUnitVector(ViewportControl.GizmoAxis axis) => axis switch
+    {
+        ViewportControl.GizmoAxis.X => Vector3.UnitX,
+        ViewportControl.GizmoAxis.Y => Vector3.UnitY,
+        _ => Vector3.UnitZ,
+    };
 
     private void OnViewportPointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -69,13 +84,38 @@ public partial class MainWindow : Window
         _lastPointer = pt.Position;
         e.Pointer.Capture(ViewportInput);
         ViewportInput.Focus(); // so WASD/F reach the viewport
-        if (_lmb && !_alt) StartFly();
+
+        if (_lmb && !_alt)
+        {
+            var axis = Viewport.HitTestGizmoAxis(pt.Position);
+            if (axis is { } a && DataContext is MainWindowViewModel { SelectedMapMesh: { } mesh }
+                && Viewport.TryGetAxisParameter(a, pt.Position, out var t0))
+            {
+                _gizmoDragAxis = a;
+                _gizmoDragStartT = t0;
+                _gizmoDragStartOffset = mesh.Offset;
+                return; // gizmo drag takes over this stroke — don't also start camera fly
+            }
+            StartFly();
+        }
     }
 
     private void OnViewportPointerMoved(object? sender, PointerEventArgs e)
     {
-        if (!(_lmb || _rmb || _mmb)) return;
         var p = e.GetPosition(ViewportInput);
+
+        if (_gizmoDragAxis is { } axis)
+        {
+            if (DataContext is MainWindowViewModel vm && Viewport.TryGetAxisParameter(axis, p, out var t))
+            {
+                var delta = AxisUnitVector(axis) * (t - _gizmoDragStartT);
+                vm.DragSelectedMeshTo(_gizmoDragStartOffset + delta);
+            }
+            _lastPointer = p;
+            return;
+        }
+
+        if (!(_lmb || _rmb || _mmb)) return;
         var dx = (float)(p.X - _lastPointer.X);
         var dy = (float)(p.Y - _lastPointer.Y);
         _lastPointer = p;
@@ -88,6 +128,12 @@ public partial class MainWindow : Window
 
     private void OnViewportPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
+        if (_gizmoDragAxis is not null)
+        {
+            _gizmoDragAxis = null;
+            (DataContext as MainWindowViewModel)?.EndMeshDrag();
+        }
+
         var props = e.GetCurrentPoint(ViewportInput).Properties;
         _lmb = props.IsLeftButtonPressed;
         _rmb = props.IsRightButtonPressed;

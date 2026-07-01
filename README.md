@@ -5,6 +5,18 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M27 complete.** **You can now see and drag the selected mesh in the viewport.** Selecting a mesh
+> in the Map Content → Layer Groups tree draws a bright amber wireframe box around it (always on top, so it
+> reads clearly even inside dense terrain), plus a 3-axis **translate gizmo** — red/green/blue lines from the
+> mesh's pivot. **Click-drag an axis line to move the mesh along it**, live, no typing required; the numeric
+> Position field updates as you drag, and Save to Mod persists it exactly like the M25 patcher. Dragging is
+> axis-constrained via proper 3D ray-picking (project the mouse to a world ray, find its closest point on the
+> axis line) — not a screen-space hack — verified with 9 independent round-trip checks (project→unproject
+> recovers the exact original coordinate on X/Y/Z, including at an angled camera) before being wired into the
+> UI, and confirmed visually: an isolated render shows the highlight box exactly enclosing the selected mesh
+> with the gizmo axes anchored at its pivot. LMB still drives the camera (look/fly) everywhere else — the gizmo
+> only intercepts clicks that land within ~10px of one of its axis lines.
+>
 > Status: **M26 complete.** **Rotate and scale now work and persist too**, alongside move. The Transform
 > Mesh panel gained Rotation (X/Y/Z degrees) and Scale (X/Y/Z) fields plus a **Reset** button. Rotation/scale
 > happen around the mesh's own pivot (its local bounding-box center) — not the map origin — so a mesh spins/grows
@@ -321,6 +333,7 @@ No Play button — this is an editor, not a runtime.
 | **M20 ✅** | **MatCap** preview — per-submesh `MatCap_Tex` (+ `MatCap_Mask`) bound to texture units 4–5; view-space spheremap fake-lighting highlight (additive, mask-gated) in RiotApprox · Debug · MatCap view · view matrix plumbed for the spheremap lookup |
 | **M24–M25 ✅** | **Mesh move/reposition** — per-mesh vertex tracking + live viewport translate; persist by surgically patching the transform translation via its `[BoundingBox][Transform]` signature (LeagueToolkit's `EnvironmentAsset.Write` is lossy, so we never re-serialize) → saved to the override + Build Package |
 | **M26 ✅** | **Mesh rotate + scale** (around the mesh's own pivot) — live viewport preview via a pristine-vertex snapshot; persist by patching the *full* transform matrix + recomputed bounding box; Reset button; verified against hand-computed matrices + round-trip re-decode on two real maps |
+| **M27 ✅** | **Selection highlight + translate gizmo** — amber wireframe box around the selected mesh (always on top); click-drag 3-axis gizmo (X/Y/Z) to move it live via real 3D ray-picking (`ViewportPicking`: project/unproject/closest-point-on-axis, independently verified with 9 round-trip checks); numeric fields stay in sync; Save to Mod persists via the M25/M26 patcher |
 | **M23 ✅** | **Baron pit visibility** — decode the map's visibility controllers (`MapVisibilityControllers`: Dragon `0xc406a533` / Baron `0xec733fe2` / Child `0xe21083b5`, recursing `Parents`/`ParentMode`) → resolve each mesh to Base/Cup/Tunnel/Upgraded bits; the Baron combobox now live-filters the baron pit, combined with the dragon filter |
 | **M22 ✅** | Camera (LMB look + inverted, fly on LMB) · **dragon visibility system** — per-mesh `VisibilityFlags` carried through the decoder, per-submesh render visibility toggle, **Dragon/Baron comboboxes** + *Meshes→Layer Groups→names* tree filter the viewport live (Base/Inferno/Mountain/Ocean/Cloud/Hextech/Chemtech/Void) |
 | **M21 ✅** | Editor polish — **Unreal-style camera** (RMB look + WASD/QE fly · Alt+LMB orbit · MMB pan · wheel dolly · RMB+wheel fly-speed · F focus) · **logo** (titlebar icon + menu wordmark, runtime-loaded) · **Content Browser type icons** · shader fix: **normal-map gating** (normal maps never used as the base texture) |

@@ -51,8 +51,19 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, double>(nameof(AnimationTime));
     public static readonly StyledProperty<int> PreviewModeProperty =
         AvaloniaProperty.Register<ViewportControl, int>(nameof(PreviewMode));
+    public static readonly StyledProperty<Vector3?> SelectionBoundsMinProperty =
+        AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(SelectionBoundsMin));
+    public static readonly StyledProperty<Vector3?> SelectionBoundsMaxProperty =
+        AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(SelectionBoundsMax));
+    public static readonly StyledProperty<Vector3?> GizmoPivotProperty =
+        AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GizmoPivot));
 
     public int PreviewMode { get => GetValue(PreviewModeProperty); set => SetValue(PreviewModeProperty, value); }
+    /// <summary>World-space bounds of the currently-selected map mesh, for the amber highlight box.</summary>
+    public Vector3? SelectionBoundsMin { get => GetValue(SelectionBoundsMinProperty); set => SetValue(SelectionBoundsMinProperty, value); }
+    public Vector3? SelectionBoundsMax { get => GetValue(SelectionBoundsMaxProperty); set => SetValue(SelectionBoundsMaxProperty, value); }
+    /// <summary>World-space pivot of the currently-selected map mesh (null = no selection, no gizmo).</summary>
+    public Vector3? GizmoPivot { get => GetValue(GizmoPivotProperty); set => SetValue(GizmoPivotProperty, value); }
     public AnimationClip? AnimationClip { get => GetValue(AnimationClipProperty); set => SetValue(AnimationClipProperty, value); }
     public double AnimationTime { get => GetValue(AnimationTimeProperty); set => SetValue(AnimationTimeProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelTextures { get => GetValue(ModelTexturesProperty); set => SetValue(ModelTexturesProperty, value); }
@@ -122,6 +133,64 @@ public sealed class ViewportControl : OpenGlControlBase
 
     /// <summary>F: frame the current mesh (Unreal-style focus-selected).</summary>
     public void FocusSelected() => RequestFrame();
+
+    // ---- Translate gizmo picking (screen point → axis / drag amount) ----
+    // Uses the exact viewProj/size/camera state from the most recent render, so hit-testing always
+    // matches what's on screen even mid-drag while the camera or gizmo arm length is unchanged.
+
+    public enum GizmoAxis { X, Y, Z }
+
+    private Matrix4x4 _lastViewProj = Matrix4x4.Identity;
+    private double _lastViewportW = 1, _lastViewportH = 1;
+    private Vector3 _lastCamPos;
+    private const float GizmoHitPixels = 10f;
+
+    private static Vector3 AxisDir(GizmoAxis axis) => axis switch
+    {
+        GizmoAxis.X => Vector3.UnitX,
+        GizmoAxis.Y => Vector3.UnitY,
+        _ => Vector3.UnitZ,
+    };
+
+    /// <summary>Which gizmo axis (if any) is under the given control-relative point, within a pixel threshold.</summary>
+    public GizmoAxis? HitTestGizmoAxis(Point screenPos)
+    {
+        if (GizmoPivot is not { } pivot || _lastViewportW <= 0 || _lastViewportH <= 0) return null;
+        float armLength = GizmoArmLength(pivot);
+        if (armLength <= 0f) return null;
+
+        GizmoAxis? best = null;
+        float bestDist = GizmoHitPixels;
+        foreach (var axis in new[] { GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z })
+        {
+            if (!ViewportPicking.ProjectToScreen(pivot, _lastViewProj, _lastViewportW, _lastViewportH, out var p0)) continue;
+            if (!ViewportPicking.ProjectToScreen(pivot + AxisDir(axis) * armLength, _lastViewProj, _lastViewportW, _lastViewportH, out var p1)) continue;
+            float d = DistancePointToSegment(new Vector2((float)screenPos.X, (float)screenPos.Y), p0, p1);
+            if (d < bestDist) { bestDist = d; best = axis; }
+        }
+        return best;
+    }
+
+    /// <summary>Where along the world-space axis line (through the pivot) the given screen point projects to.</summary>
+    public bool TryGetAxisParameter(GizmoAxis axis, Point screenPos, out float t)
+    {
+        t = 0f;
+        if (GizmoPivot is not { } pivot) return false;
+        if (!ViewportPicking.TryGetRay(new Vector2((float)screenPos.X, (float)screenPos.Y), _lastViewProj, _lastViewportW, _lastViewportH, _lastCamPos, out var rayOrigin, out var rayDir))
+            return false;
+        t = ViewportPicking.ClosestParameterOnLine(rayOrigin, rayDir, pivot, AxisDir(axis));
+        return true;
+    }
+
+    private float GizmoArmLength(Vector3 pivot) => Math.Clamp(Vector3.Distance(_lastCamPos, pivot) * 0.15f, 10f, 5000f);
+
+    private static float DistancePointToSegment(Vector2 p, Vector2 a, Vector2 b)
+    {
+        var ab = b - a;
+        float len2 = ab.LengthSquared();
+        float t = len2 < 1e-6f ? 0f : Math.Clamp(Vector2.Dot(p - a, ab) / len2, 0f, 1f);
+        return Vector2.Distance(p, a + ab * t);
+    }
 
     public void RequestFrame()
     {
@@ -224,6 +293,16 @@ public sealed class ViewportControl : OpenGlControlBase
         // League's engine is -X oriented; mirror world X so assets match their in-game orientation.
         var viewProj = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjection(aspect);
 
+        // Cache the exact matrices/size used for THIS frame so gizmo hit-testing (driven by pointer
+        // events, outside the render loop) always matches what's actually on screen.
+        _lastViewProj = viewProj;
+        _lastViewportW = Bounds.Width;
+        _lastViewportH = Bounds.Height;
+        _lastCamPos = _camera.Position;
+
+        _meshRenderer.SetHighlightBounds(SelectionBoundsMin, SelectionBoundsMax);
+        _meshRenderer.SetGizmo(GizmoPivot, GizmoPivot is { } piv ? GizmoArmLength(piv) : 0f);
+
         _grid.Render(viewProj);
         var view = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.View; // same X-mirror as viewProj, for the matcap lookup
         _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones);
@@ -305,6 +384,9 @@ public sealed class ViewportControl : OpenGlControlBase
             if (Mesh is { } m && _meshRenderer is { } r && r.HasMesh) r.UpdateVertices(m.Positions, m.Normals);
             RequestNextFrameRendering();
         }
+        else if (change.Property == SelectionBoundsMinProperty || change.Property == SelectionBoundsMaxProperty
+                 || change.Property == GizmoPivotProperty)
+        { RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimationClipProperty || change.Property == AnimationTimeProperty) { _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == WireframeProperty || change.Property == ShowBonesProperty

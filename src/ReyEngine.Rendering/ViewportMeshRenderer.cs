@@ -30,7 +30,12 @@ public sealed class ViewportMeshRenderer : IDisposable
 
     private uint _boundsVao, _boundsVbo;
     private uint _boneVao, _boneVbo;
-    private int _boundsVerts, _boneVerts;
+    private uint _highlightVao, _highlightVbo;
+    private uint _gizmoVao, _gizmoVbo;
+    private int _boundsVerts, _boneVerts, _highlightVerts;
+    private bool _hasGizmo;
+    private Vector3 _gizmoPivot;
+    private float _gizmoArmLength;
 
     private struct SubmeshDraw
     {
@@ -192,6 +197,10 @@ void main() { FragColor = uColor; }";
         _boundsVbo = gl.GenBuffer();
         _boneVao = gl.GenVertexArray();
         _boneVbo = gl.GenBuffer();
+        _highlightVao = gl.GenVertexArray();
+        _highlightVbo = gl.GenBuffer();
+        _gizmoVao = gl.GenVertexArray();
+        _gizmoVbo = gl.GenBuffer();
         _ready = true;
     }
 
@@ -332,11 +341,30 @@ void main() { FragColor = uColor; }";
         UploadLines(_boneVao, _boneVbo, lineVerts, out _boneVerts);
     }
 
+    /// <summary>Draw a highlight wireframe box (always on top) around the given world-space bounds,
+    /// or clear it when either bound is null (e.g. no map mesh selected).</summary>
+    public void SetHighlightBounds(Vector3? min, Vector3? max)
+    {
+        if (!_ready) return;
+        if (min is not { } a || max is not { } b) { _highlightVerts = 0; return; }
+        UploadLines(_highlightVao, _highlightVbo, BuildBoxLines(a, b), out _highlightVerts);
+    }
+
+    /// <summary>Set (or clear, with pivot=null) the translate gizmo: 3 axis lines from the pivot,
+    /// each <paramref name="armLength"/> world units long.</summary>
+    public void SetGizmo(Vector3? pivot, float armLength)
+    {
+        _hasGizmo = pivot.HasValue && armLength > 0f;
+        if (pivot.HasValue) { _gizmoPivot = pivot.Value; _gizmoArmLength = armLength; }
+    }
+
     public void ClearMesh()
     {
         DeleteMeshBuffers();
         _boneVerts = 0;
         _boundsVerts = 0;
+        _highlightVerts = 0;
+        _hasGizmo = false;
     }
 
     public unsafe void Render(Matrix4x4 viewProjection, bool wireframe, bool showBounds, bool showBones)
@@ -429,6 +457,53 @@ void main() { FragColor = uColor; }";
                 _gl.BindVertexArray(_boneVao);
                 _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_boneVerts);
             }
+            _gl.BindVertexArray(0);
+        }
+
+        // Selection highlight: a bright box around the selected map mesh, always on top so it reads
+        // clearly even inside dense geometry.
+        if (_highlightVerts > 0)
+        {
+            _gl.UseProgram(_lineProgram);
+            _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+            _gl.Disable(EnableCap.DepthTest);
+            _gl.Uniform4(_lColor, 1.0f, 0.78f, 0.2f, 1f); // selection amber
+            _gl.BindVertexArray(_highlightVao);
+            _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_highlightVerts);
+            _gl.BindVertexArray(0);
+        }
+
+        // Translate gizmo: 3 axis lines from the selected mesh's pivot (X=red, Y=green, Z=blue), always
+        // on top so it stays clickable regardless of what's behind it.
+        if (_hasGizmo)
+        {
+            Span<float> verts = stackalloc float[]
+            {
+                _gizmoPivot.X, _gizmoPivot.Y, _gizmoPivot.Z, _gizmoPivot.X + _gizmoArmLength, _gizmoPivot.Y, _gizmoPivot.Z,
+                _gizmoPivot.X, _gizmoPivot.Y, _gizmoPivot.Z, _gizmoPivot.X, _gizmoPivot.Y + _gizmoArmLength, _gizmoPivot.Z,
+                _gizmoPivot.X, _gizmoPivot.Y, _gizmoPivot.Z, _gizmoPivot.X, _gizmoPivot.Y, _gizmoPivot.Z + _gizmoArmLength,
+            };
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _gizmoVbo);
+            unsafe
+            {
+                fixed (float* p = verts)
+                    _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(verts.Length * sizeof(float)), p, BufferUsageARB.DynamicDraw);
+            }
+            _gl.BindVertexArray(_gizmoVao);
+            _gl.EnableVertexAttribArray(0);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+
+            _gl.UseProgram(_lineProgram);
+            _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+            _gl.Disable(EnableCap.DepthTest);
+            _gl.LineWidth(2.5f);
+            _gl.Uniform4(_lColor, 0.95f, 0.25f, 0.25f, 1f); // X red
+            _gl.DrawArrays(PrimitiveType.Lines, 0, 2);
+            _gl.Uniform4(_lColor, 0.3f, 0.9f, 0.35f, 1f);   // Y green
+            _gl.DrawArrays(PrimitiveType.Lines, 2, 2);
+            _gl.Uniform4(_lColor, 0.3f, 0.55f, 0.98f, 1f);  // Z blue
+            _gl.DrawArrays(PrimitiveType.Lines, 4, 2);
+            _gl.LineWidth(1f);
             _gl.BindVertexArray(0);
         }
     }

@@ -616,6 +616,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _currentMapBytes = null;
         _currentMapEntry = null;
         SelectedMapMesh = null;
+        SelectionBoundsMin = SelectionBoundsMax = GizmoPivot = null;
         HasMapMoves = false;
         CurrentModelTextures = null;
         ClearSecondaryTextures();
@@ -716,6 +717,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _meshScaleZ = "1";
     [ObservableProperty] private int _meshVerticesRevision;
     [ObservableProperty] private bool _hasMapMoves;
+    [ObservableProperty] private System.Numerics.Vector3? _selectionBoundsMin;
+    [ObservableProperty] private System.Numerics.Vector3? _selectionBoundsMax;
+    [ObservableProperty] private System.Numerics.Vector3? _gizmoPivot;
 
     partial void OnSelectedTreeItemChanged(object? value)
     {
@@ -724,8 +728,51 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var m = map.Meshes[p.MeshIndex];
             SelectedMapMesh = m;
             RefreshMeshTransformFields(m);
+            RefreshSelectionVisuals();
         }
-        else SelectedMapMesh = null;
+        else
+        {
+            SelectedMapMesh = null;
+            SelectionBoundsMin = SelectionBoundsMax = GizmoPivot = null;
+        }
+    }
+
+    /// <summary>Recompute the selection highlight box (live vertex bounds) + the gizmo pivot for the
+    /// currently-selected mesh. Call after selecting a mesh and after any edit that moves its vertices.</summary>
+    private void RefreshSelectionVisuals()
+    {
+        if (SelectedMapMesh is not { } m || _currentMap is not { } map) { SelectionBoundsMin = SelectionBoundsMax = GizmoPivot = null; return; }
+        var min = new System.Numerics.Vector3(float.MaxValue);
+        var max = new System.Numerics.Vector3(float.MinValue);
+        int start = m.VertexStart * 3, end = (m.VertexStart + m.VertexCount) * 3;
+        for (int i = start; i < end; i += 3)
+        {
+            var p = new System.Numerics.Vector3(map.Positions[i], map.Positions[i + 1], map.Positions[i + 2]);
+            min = System.Numerics.Vector3.Min(min, p);
+            max = System.Numerics.Vector3.Max(max, p);
+        }
+        SelectionBoundsMin = m.VertexCount > 0 ? min : null;
+        SelectionBoundsMax = m.VertexCount > 0 ? max : null;
+        GizmoPivot = m.Pivot + m.Offset;
+    }
+
+    /// <summary>Live-drag the selected mesh to an absolute offset (called every pointer-move frame by
+    /// the viewport's translate gizmo) — cheap and silent; <see cref="EndMeshDrag"/> logs completion.</summary>
+    public void DragSelectedMeshTo(System.Numerics.Vector3 absoluteOffset)
+    {
+        if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
+        map.TranslateMesh(m, absoluteOffset);
+        RefreshMeshTransformFields(m);
+        RefreshSelectionVisuals();
+        MeshVerticesRevision++;
+    }
+
+    public void EndMeshDrag()
+    {
+        if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+        var pos = m.Pivot + m.Offset;
+        _log.Info("MapGeo", $"Moved '{m.Name}' to ({pos.X:0.#}, {pos.Y:0.#}, {pos.Z:0.#}) via gizmo.");
     }
 
     private void RefreshMeshTransformFields(MapGeoMesh m)
@@ -770,6 +817,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         map.RotateMesh(m, rotation);
         map.ScaleMesh(m, scale);
         MeshVerticesRevision++;           // re-upload the edited vertices to the viewport
+        RefreshSelectionVisuals();
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
         _log.Info("MapGeo", $"Transformed '{m.Name}': pos ({target.X:0.#}, {target.Y:0.#}, {target.Z:0.#}), " +
                             $"rot ({rotation.X:0.#}°, {rotation.Y:0.#}°, {rotation.Z:0.#}°), scale ({scale.X:0.##}, {scale.Y:0.##}, {scale.Z:0.##}).");
@@ -781,6 +829,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
         map.ResetMesh(m);
         RefreshMeshTransformFields(m);
+        RefreshSelectionVisuals();
         MeshVerticesRevision++;
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
         _log.Info("MapGeo", $"Reset '{m.Name}' to its original transform.");
