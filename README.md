@@ -5,6 +5,17 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M29 complete.** **Undo/Redo.** Every edit is now a reversible command on a global stack:
+> **Ctrl+Z / Ctrl+Y** (or Ctrl+Shift+Z), Edit-menu entries that name the step ("Undo Move Mesh", "Redo Edit
+> Diffuse_Texture"), and ↶/↷ buttons in the viewport bar. Covered: mesh **move/rotate/scale/reset** (a whole
+> gizmo drag = one undo step — state captured at press/release, not per pointer-move), **.bin value edits**,
+> **material texture paths**, **material parameters**, and **sampler add/remove** (undo re-inserts the *exact*
+> original bin element, not a re-clone). Retyping the same field merges into one step. Safety: failed edits never
+> enter the stack; undoing a transform re-syncs viewport + fields + highlight; commands are purged when their
+> document is replaced (new map/bin/material load) and the stack clears on project/WAD open; the title-bar `*`
+> tracks the stack's savepoint. Verified with a 27-check suite on real SR/Aatrox data — undo restores exact
+> vertices and round-trips exact serialized values, so save/build after undo ships the undone state.
+>
 > Status: **M28 complete.** **Viewport editing now actually works like Blender/UE.** Three fixes from live
 > testing: (1) the mesh itself now moves when you drag — the vertex re-upload ran on the UI thread where no GL
 > context is current, so only the highlight box moved; it now happens inside the render loop. (2) Dragging no
@@ -346,6 +357,7 @@ No Play button — this is an editor, not a runtime.
 | **M24–M25 ✅** | **Mesh move/reposition** — per-mesh vertex tracking + live viewport translate; persist by surgically patching the transform translation via its `[BoundingBox][Transform]` signature (LeagueToolkit's `EnvironmentAsset.Write` is lossy, so we never re-serialize) → saved to the override + Build Package |
 | **M26 ✅** | **Mesh rotate + scale** (around the mesh's own pivot) — live viewport preview via a pristine-vertex snapshot; persist by patching the *full* transform matrix + recomputed bounding box; Reset button; verified against hand-computed matrices + round-trip re-decode on two real maps |
 | **M27 ✅** | **Selection highlight + translate gizmo** — amber wireframe box around the selected mesh (always on top); click-drag 3-axis gizmo (X/Y/Z) to move it live via real 3D ray-picking (`ViewportPicking`: project/unproject/closest-point-on-axis, independently verified with 9 round-trip checks); numeric fields stay in sync; Save to Mod persists via the M25/M26 patcher |
+| **M29 ✅** | **Undo/Redo** — `Core/Undo` (`IEditorCommand`, `UndoRedoService` with merge/purge/savepoint, `CompositeCommand` for M30 multi-select) · typed commands: `MeshTransformCommand` (drag = one step), `BinEditCommand`, `TexturePathEditCommand`, `MaterialParamEditCommand`, `SamplerAddRemoveCommand` (exact-element reinsert) · Ctrl+Z/Y + Edit menu + ↶/↷ buttons · title-bar dirty savepoint · stale-document purge |
 | **M28 ✅** | **Viewport editing fixed + click-to-select** — vertex re-upload moved onto the GL thread (the mesh actually moves now); pick ray derived purely from the render matrix (two-point unprojection, correct under the -X mirror); drag axis frozen at its press-time origin (kills the snap-back feedback loop); **click a mesh to select it** (exact triangle picking, visibility-aware, ~9ms/click, syncs the tree; empty click deselects) |
 | **M23 ✅** | **Baron pit visibility** — decode the map's visibility controllers (`MapVisibilityControllers`: Dragon `0xc406a533` / Baron `0xec733fe2` / Child `0xe21083b5`, recursing `Parents`/`ParentMode`) → resolve each mesh to Base/Cup/Tunnel/Upgraded bits; the Baron combobox now live-filters the baron pit, combined with the dragon filter |
 | **M22 ✅** | Camera (LMB look + inverted, fly on LMB) · **dragon visibility system** — per-mesh `VisibilityFlags` carried through the decoder, per-submesh render visibility toggle, **Dragon/Baron comboboxes** + *Meshes→Layer Groups→names* tree filter the viewport live (Base/Inferno/Mountain/Ocean/Cloud/Hextech/Chemtech/Void) |

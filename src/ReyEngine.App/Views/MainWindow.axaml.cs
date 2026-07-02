@@ -96,7 +96,7 @@ public partial class MainWindow : Window
         if (_lmb && !_alt)
         {
             var axis = Viewport.HitTestGizmoAxis(pt.Position);
-            if (axis is { } a && DataContext is MainWindowViewModel { SelectedMapMesh: { } mesh }
+            if (axis is { } a && DataContext is MainWindowViewModel { SelectedMapMesh: { } mesh } vm
                 && Viewport.GizmoPivot is { } pivot
                 && Viewport.TryGetAxisParameter(a, pt.Position, pivot, out var t0))
             {
@@ -104,6 +104,7 @@ public partial class MainWindow : Window
                 _gizmoDragOrigin = pivot;   // frozen for the whole drag
                 _gizmoDragStartT = t0;
                 _gizmoDragStartOffset = mesh.Offset;
+                vm.BeginMeshDrag();         // capture the before-state → the whole drag = ONE undo step
                 return; // gizmo drag takes over this stroke — don't also start camera fly
             }
             StartFly();
@@ -213,5 +214,18 @@ public partial class MainWindow : Window
     private void OnFrameClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         Viewport.RequestFrame();
+    }
+
+    /// <summary>Global Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z). TextBoxes keep their own local undo:
+    /// when one has focus its unhandled shortcuts must not fire the global editor stack.</summary>
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Handled || e.Source is TextBox) return;
+        if (!e.KeyModifiers.HasFlag(KeyModifiers.Control) || DataContext is not MainWindowViewModel vm) return;
+
+        bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        if (e.Key == Key.Z && !shift) { vm.UndoCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.Y || (e.Key == Key.Z && shift)) { vm.RedoCommand.Execute(null); e.Handled = true; }
     }
 }

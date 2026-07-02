@@ -267,6 +267,22 @@ public sealed class MaterialBinding
         return true;
     }
 
+    /// <summary>
+    /// Re-insert a previously removed sampler — the EXACT original element, kept alive by its
+    /// <see cref="TextureSlot"/> — for undo support. (Appended at the container end: BinTreeContainer
+    /// has no positional insert, so a mid-list remove + undo may reorder samplers; order is not
+    /// semantically meaningful for sampler lookup, which is by name.)
+    /// </summary>
+    public bool ReinsertSampler(TextureSlot slot)
+    {
+        if (SamplerContainer is null || slot.Element is null) return false;
+        if (SamplerContainer.Elements.Contains(slot.Element)) return false; // already present
+        SamplerContainer.Add(slot.Element);
+        _slots.Add(slot);
+        _structurallyEdited = true;
+        return true;
+    }
+
     public void Revert() { foreach (var s in _slots) s.Revert(); foreach (var p in Parameters) p.Revert(); }
 }
 

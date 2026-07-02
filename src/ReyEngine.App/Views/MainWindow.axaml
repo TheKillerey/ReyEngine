@@ -44,6 +44,9 @@
         <MenuItem Header="Exit" Command="{Binding ExitCommand}" />
       </MenuItem>
       <MenuItem Header="_Edit">
+        <MenuItem Header="{Binding UndoLabel}" Command="{Binding UndoCommand}" IsEnabled="{Binding CanUndo}" InputGesture="Ctrl+Z" />
+        <MenuItem Header="{Binding RedoLabel}" Command="{Binding RedoCommand}" IsEnabled="{Binding CanRedo}" InputGesture="Ctrl+Y" />
+        <Separator />
         <MenuItem Header="Clear Console" Command="{Binding ClearConsoleCommand}" />
       </MenuItem>
       <MenuItem Header="_View">
@@ -275,6 +278,10 @@
             <!-- view toggles (above the input surface so they stay clickable) -->
             <StackPanel Orientation="Horizontal" Spacing="4" Margin="10"
                         HorizontalAlignment="Right" VerticalAlignment="Top">
+              <Button Content="↶" FontSize="13" Padding="7,2" Command="{Binding UndoCommand}"
+                      IsEnabled="{Binding CanUndo}" ToolTip.Tip="{Binding UndoLabel}" />
+              <Button Content="↷" FontSize="13" Padding="7,2" Command="{Binding RedoCommand}"
+                      IsEnabled="{Binding CanRedo}" ToolTip.Tip="{Binding RedoLabel}" />
               <ComboBox SelectedIndex="{Binding PreviewMode}" FontSize="11" MinWidth="120" VerticalAlignment="Center"
                         ToolTip.Tip="Preview shading mode">
                 <ComboBoxItem>Basic</ComboBoxItem>

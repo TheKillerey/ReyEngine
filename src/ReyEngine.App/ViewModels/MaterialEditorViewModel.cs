@@ -3,6 +3,7 @@ using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Core.Assets;
+using ReyEngine.Core.Undo;
 using ReyEngine.Formats.Materials;
 
 namespace ReyEngine.App.ViewModels;
@@ -17,11 +18,14 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
     [ObservableProperty] private bool _unresolved;
     [ObservableProperty] private Bitmap? _thumbnail;
 
+    private string _lastApplied;   // the path currently applied to the live property (for undo capture)
+
     public TextureSlotViewModel(TextureSlot model, MaterialEditorViewModel owner)
     {
         Model = model;
         _owner = owner;
         _editedPath = model.Path;
+        _lastApplied = model.Path;
         RefreshResolved();
     }
 
@@ -37,6 +41,7 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
     public void ResetFromModel()
     {
         EditedPath = Model.Path;
+        _lastApplied = Model.Path;
         Thumbnail = null;
         RefreshResolved();
         RaiseDirty();
@@ -47,10 +52,25 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
     [RelayCommand]
     private void Apply()
     {
+        var oldPath = _lastApplied;
         Model.SetPath(EditedPath.Trim());
         EditedPath = Model.Path;
+        if (!string.Equals(EditedPath, oldPath, StringComparison.Ordinal))
+            _owner.UndoService?.PushApplied(new TexturePathEditCommand(_owner.DocContext, Model, oldPath, EditedPath, SyncFromCommand));
+        _lastApplied = EditedPath;
         RefreshResolved();
         Thumbnail = null;
+        _owner.NotifyChanged();
+    }
+
+    /// <summary>Called by undo/redo after the command re-applied a path — sync the slot row UI.</summary>
+    private void SyncFromCommand(string appliedPath)
+    {
+        EditedPath = appliedPath;
+        _lastApplied = appliedPath;
+        Thumbnail = null;
+        RefreshResolved();
+        RaiseDirty();
         _owner.NotifyChanged();
     }
 
@@ -104,8 +124,26 @@ public sealed partial class MaterialParameterViewModel : ViewModelBase
     [RelayCommand]
     private void Apply()
     {
-        try { Model.Apply(EditedText); HasError = false; ErrorText = ""; EditedText = Model.CurrentText; _owner.NotifyChanged(); }
+        try
+        {
+            var oldText = Model.CurrentText;   // canonical form (round-trippable)
+            Model.Apply(EditedText);           // throws on invalid input — nothing is pushed then
+            HasError = false; ErrorText = "";
+            EditedText = Model.CurrentText;
+            if (!string.Equals(EditedText, oldText, StringComparison.Ordinal))
+                _owner.UndoService?.PushApplied(new MaterialParamEditCommand(_owner.DocContext, Model, oldText, EditedText, SyncFromCommand));
+            _owner.NotifyChanged();
+        }
         catch (Exception ex) { HasError = true; ErrorText = ex.Message; }
+    }
+
+    /// <summary>Called by undo/redo after the command re-applied a value — sync the row UI.</summary>
+    private void SyncFromCommand(string appliedText)
+    {
+        EditedText = appliedText;
+        HasError = false; ErrorText = "";
+        RaiseDirty();
+        _owner.NotifyChanged();
     }
 
     [RelayCommand]
@@ -142,6 +180,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         var slot = Model.AddSampler("New_Texture", Model.Diffuse?.Path ?? "");
         if (slot is null) return;
         Slots.Add(new TextureSlotViewModel(slot, Owner!) { Binding = this });
+        Owner!.UndoService?.PushApplied(new SamplerAddRemoveCommand(Owner.DocContext, Model, slot, isAdd: true, OnSamplerPresenceChanged));
         RaiseDirty();
         Owner!.NotifyChanged();
     }
@@ -150,6 +189,24 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     {
         if (!Model.RemoveSampler(slot.Model)) return;
         Slots.Remove(slot);
+        Owner!.UndoService?.PushApplied(new SamplerAddRemoveCommand(Owner.DocContext, Model, slot.Model, isAdd: false, OnSamplerPresenceChanged));
+        RaiseDirty();
+        Owner!.NotifyChanged();
+    }
+
+    /// <summary>Called by undo/redo after a sampler was re-added/removed — sync the slot rows.</summary>
+    private void OnSamplerPresenceChanged(TextureSlot slot, bool nowPresent)
+    {
+        if (nowPresent)
+        {
+            if (!Slots.Any(s => ReferenceEquals(s.Model, slot)))
+                Slots.Add(new TextureSlotViewModel(slot, Owner!) { Binding = this });
+        }
+        else
+        {
+            var vm = Slots.FirstOrDefault(s => ReferenceEquals(s.Model, slot));
+            if (vm is not null) Slots.Remove(vm);
+        }
         RaiseDirty();
         Owner!.NotifyChanged();
     }
@@ -220,8 +277,13 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     public Action? ApplyToViewport { get; set; }
     public Func<Task>? SaveOverride { get; set; }
 
+    /// <summary>Global undo stack (set by MainWindowViewModel). Commands are tagged with the doc instance.</summary>
+    public UndoRedoService? UndoService { get; set; }
+    public object? DocContext => _doc;
+
     public void Load(MaterialDocument doc, WadAssetEntry binEntry)
     {
+        if (_doc is not null) UndoService?.PurgeContext(_doc); // stale commands must never mutate a replaced doc
         _doc = doc;
         BinEntry = binEntry;
         Kind = doc.Kind;
@@ -240,6 +302,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
     public void Clear()
     {
+        if (_doc is not null) UndoService?.PurgeContext(_doc);
         _doc = null; BinEntry = null;
         Materials.Clear();
         HasMaterials = false; IsDirty = false; Search = ""; Summary = ""; UnresolvedCount = 0;

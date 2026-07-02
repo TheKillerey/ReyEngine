@@ -13,6 +13,7 @@ using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Diagnostics;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Projects;
+using ReyEngine.Core.Undo;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Animation;
 using ReyEngine.Formats.MapGeo;
@@ -73,6 +74,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MaterialEditorViewModel MaterialEditor { get; } = new();
     public ContentBrowserViewModel ContentBrowser { get; } = new();
     public MapContentViewModel MapContent { get; } = new();
+
+    // ---- Undo/Redo (M29) -------------------------------------------------
+    public UndoRedoService UndoService { get; } = new();
+    public bool CanUndo => UndoService.CanUndo;
+    public bool CanRedo => UndoService.CanRedo;
+    public string UndoLabel => UndoService.UndoName is { } u ? $"Undo {u}" : "Undo";
+    public string RedoLabel => UndoService.RedoName is { } r ? $"Redo {r}" : "Redo";
+
+    [RelayCommand] private void Undo() => UndoService.Undo();
+    [RelayCommand] private void Redo() => UndoService.Redo();
     public ObservableCollection<RecentProjectViewModel> RecentProjectList { get; } = new();
     public bool HasRecentProjects => RecentProjectList.Count > 0;
 
@@ -126,8 +137,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Animation.ClipChanged = clip => CurrentAnimation = clip;
         Animation.TimeChanged = t => AnimationTime = t;
 
-        BinEditor.CopyHandler = Dialogs.CopyAsync;
+        UndoService.Changed += () =>
+        {
+            OnPropertyChanged(nameof(CanUndo));
+            OnPropertyChanged(nameof(CanRedo));
+            OnPropertyChanged(nameof(UndoLabel));
+            OnPropertyChanged(nameof(RedoLabel));
+            UpdateTitle();
+        };
+        UndoService.Error += msg => _log.Warn("Undo", msg);
 
+        BinEditor.CopyHandler = Dialogs.CopyAsync;
+        BinEditor.UndoService = UndoService;
+
+        MaterialEditor.UndoService = UndoService;
         MaterialEditor.CopyHandler = Dialogs.CopyAsync;
         MaterialEditor.TextureExists = TextureExistsByPath;
         MaterialEditor.LoadThumbnail = LoadThumbnailByPath;
@@ -261,6 +284,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             RebuildTree();
             ClearViewport();
             Inspector.Clear();
+            UndoService.Clear(); // new inspection context = fresh history
 
             _mounts?.Dispose(); _mounts = null;
             ProjectMode = false; InspectionMode = true;
@@ -564,6 +588,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project.IsDirty = true;
             UpdateTitle();
             ApplyMaterialToViewport();
+            UndoService.MarkSaved();
             _log.Success("Material", $"Saved edited material {binEntry.DisplayName} to override ({bytes.Length:n0} bytes, re-parse OK). Build Package will include it.");
         }
         catch (Exception ex) { _log.Error("Material", ex.Message); }
@@ -612,6 +637,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         CurrentMesh = null;
         CurrentSkeleton = null;
+        if (_currentMap is { } clearedMap) UndoService.PurgeContext(clearedMap);
         _currentMap = null;
         _mapControllers = null;
         _currentMapBytes = null;
@@ -783,6 +809,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         GizmoPivot = m.Pivot + m.Offset;
     }
 
+    private MeshTransformCommand.State _dragBefore;   // captured at gizmo-press → one command per drag
+
+    /// <summary>Called at gizmo-press: capture the transform so the whole drag becomes ONE undo step.</summary>
+    public void BeginMeshDrag()
+    {
+        if (SelectedMapMesh is { } m) _dragBefore = MeshTransformCommand.State.Capture(m);
+    }
+
     /// <summary>Live-drag the selected mesh to an absolute offset (called every pointer-move frame by
     /// the viewport's translate gizmo) — cheap and silent; <see cref="EndMeshDrag"/> logs completion.</summary>
     public void DragSelectedMeshTo(System.Numerics.Vector3 absoluteOffset)
@@ -797,6 +831,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public void EndMeshDrag()
     {
         if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
+        PushTransformCommand("Move Mesh", map, m, _dragBefore, MeshTransformCommand.State.Capture(m));
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
         var pos = m.Pivot + m.Offset;
         _log.Info("MapGeo", $"Moved '{m.Name}' to ({pos.X:0.#}, {pos.Y:0.#}, {pos.Z:0.#}) via gizmo.");
@@ -827,6 +862,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return true;
     }
 
+    /// <summary>UI sync run after a transform command executes OR undoes (viewport, fields, highlight, dirty).</summary>
+    private Action MakeTransformRefresh(MapGeoAsset map, MapGeoMesh mesh) => () =>
+    {
+        MeshVerticesRevision++;   // re-upload the edited vertices to the viewport (GL thread)
+        if (ReferenceEquals(SelectedMapMesh, mesh))
+        {
+            RefreshMeshTransformFields(mesh);
+            RefreshSelectionVisuals();
+        }
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+    };
+
+    /// <summary>Push an already-applied transform edit as one undo step (no-op if nothing changed).</summary>
+    private void PushTransformCommand(string name, MapGeoAsset map, MapGeoMesh mesh,
+        MeshTransformCommand.State before, MeshTransformCommand.State after)
+    {
+        if (before == after) return;
+        UndoService.PushApplied(new MeshTransformCommand(name, map, mesh, before, after, MakeTransformRefresh(map, mesh)));
+    }
+
     [RelayCommand]
     private void ApplyMeshMove()
     {
@@ -840,9 +895,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (scale.X == 0 || scale.Y == 0 || scale.Z == 0)
         { _log.Warn("MapGeo", "Scale cannot be zero on any axis."); return; }
 
+        var before = MeshTransformCommand.State.Capture(m);
         map.TranslateMesh(m, target - m.Pivot);
         map.RotateMesh(m, rotation);
         map.ScaleMesh(m, scale);
+        PushTransformCommand("Transform Mesh", map, m, before, MeshTransformCommand.State.Capture(m));
         MeshVerticesRevision++;           // re-upload the edited vertices to the viewport
         RefreshSelectionVisuals();
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
@@ -854,7 +911,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void ResetMeshTransform()
     {
         if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
+        var before = MeshTransformCommand.State.Capture(m);
         map.ResetMesh(m);
+        PushTransformCommand("Reset Transform", map, m, before, MeshTransformCommand.State.Capture(m));
         RefreshMeshTransformFields(m);
         RefreshSelectionVisuals();
         MeshVerticesRevision++;
@@ -886,6 +945,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project.IsDirty = true;
             UpdateTitle();
             int moved = map.Meshes.Count(x => x.IsMoved);
+            UndoService.MarkSaved();
             _log.Success("MapGeo", $"Saved {moved} mesh move(s) to override ({bytes.Length:n0} bytes). Build Package will include it.");
         }
         catch (Exception ex) { _log.Error("MapGeo", ex.Message); }
@@ -943,6 +1003,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Inspector.SetAssetStatus("Modified — Project Override", dest);
             Project.IsDirty = true;
             UpdateTitle();
+            UndoService.MarkSaved();
             _log.Success("Bin", $"Saved edited {entry.DisplayName} to project override ({bytes.Length:n0} bytes, re-parse OK). Build Package will include it.");
         }
         catch (Exception ex) { _log.Error("Bin", ex.Message); }
@@ -1044,6 +1105,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 CurrentSkeleton = null;
                 ShowBones = false;
                 CurrentMesh = mesh;
+                if (_currentMap is { } replacedMap) UndoService.PurgeContext(replacedMap); // stale transform commands
                 _currentMap = map;
                 _currentMapBytes = rawMapBytes;
                 _currentMapEntry = entry;
@@ -1320,6 +1382,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (Project.ProjectFilePath is null) { await SaveProjectAs(); return; }
         _overrides.SaveTo(Project);
         ReyProjectService.Save(Project, Project.ProjectFilePath);
+        UndoService.MarkSaved();
         _log.Success("Project", $"Saved {Project.ProjectFilePath}");
         UpdateTitle();
     }
@@ -1456,6 +1519,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             BuildMounts();
             BuildProjectTree();
             ClearViewport(); Inspector.Clear(); BinEditor.Clear(); MaterialEditor.Clear();
+            UndoService.Clear(); // new project = fresh history
             ProjectMode = true; InspectionMode = false;
             HasMaterialData = false; HasInspectorBody = false;
             LoadCachedShaderDb();
@@ -1946,7 +2010,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void UpdateTitle()
     {
         var name = string.IsNullOrEmpty(Project.Name) ? "Untitled" : Project.Name;
-        Title = $"ReyEngine — {name}{(Project.IsDirty ? " *" : "")}" + (_archive is not null ? $" — {_archive.Name}" : "");
+        bool dirty = Project.IsDirty || UndoService.IsDirty;
+        Title = $"ReyEngine — {name}{(dirty ? " *" : "")}" + (_archive is not null ? $" — {_archive.Name}" : "");
     }
 
     // ---- Misc commands --------------------------------------------------
