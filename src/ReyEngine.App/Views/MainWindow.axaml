@@ -275,6 +275,31 @@
             </StackPanel>
           </Border>
 
+          <!-- Mesh Details (M33) — read-only metadata for the selected mapgeo mesh -->
+          <Expander DockPanel.Dock="Bottom" Margin="0,4,0,0" IsExpanded="True"
+                    IsVisible="{Binding MeshDetails.HasMesh}" FontSize="11">
+            <Expander.Header>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="MESH DETAILS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding MeshDetails.Title}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}"
+                           TextTrimming="CharacterEllipsis" MaxWidth="170" VerticalAlignment="Center" />
+              </StackPanel>
+            </Expander.Header>
+            <ScrollViewer MaxHeight="260" HorizontalScrollBarVisibility="Disabled">
+              <ItemsControl ItemsSource="{Binding MeshDetails.Rows}" Margin="2,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid ColumnDefinitions="120,*" Margin="0,1">
+                      <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Top" />
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource ReyTextBrush}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Expander>
+
           <!-- Meshes → Layer Groups → mesh names.  Ctrl+click a mesh row toggles multi-select (M30). -->
           <TreeView x:Name="MapContentTree"
                     ItemsSource="{Binding MapContent.LayerGroups}" SelectedItem="{Binding SelectedTreeItem, Mode=TwoWay}"

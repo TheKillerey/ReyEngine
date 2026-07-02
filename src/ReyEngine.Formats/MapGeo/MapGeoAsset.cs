@@ -150,6 +150,17 @@ public sealed class MapGeoMesh
     public int VisibilityFlags { get; init; }
     public uint ControllerHash { get; init; }
 
+    // ---- M33 mesh metadata (for the inspector; captured from the EnvironmentAssetMesh at decode) ----
+    public int IndexCount { get; init; }
+    public Vector3 BoundsMin { get; init; }
+    public Vector3 BoundsMax { get; init; }
+    public string[] Attributes { get; init; } = System.Array.Empty<string>();  // vertex elements present
+    public bool HasLightmapUv { get; init; }     // Texcoord1
+    public bool HasVertexColor { get; init; }    // PrimaryColor
+    public string RenderFlags { get; init; } = "";
+    public bool DisableBackfaceCulling { get; init; }
+    public string? StationaryLightTexture { get; init; }  // baked lightmap (empty/null on modern SR)
+
     public Vector3 Offset;                                // accumulated single-select move (world space), default zero
     public Vector3 RotationDegrees;                        // accumulated single-select rotation (XYZ euler, degrees)
     public Vector3 Scale = Vector3.One;                     // accumulated single-select scale, default one

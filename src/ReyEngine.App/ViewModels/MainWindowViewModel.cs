@@ -689,7 +689,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             vis[i] = resolver.IsVisible(g.VisibilityFlags, g.ControllerHash, dragonBit, baronBit);
         }
         CurrentModelSubmeshVisible = vis;
-        RefreshMeshVisibilityDiagnostic();  // keep the inspector's "why visible/hidden" in sync
+        RefreshMeshDetails();  // keep the inspector's mesh details + "why visible/hidden" in sync
         PruneSelectionToVisible(); // hidden (filtered-out) meshes must not stay selected/transformable
     }
 
@@ -700,11 +700,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Visibility diagnostic for the primary-selected mesh under the current dragon/baron filters (M33).</summary>
     [ObservableProperty] private string _meshVisibilityReason = "";
 
-    private void RefreshMeshVisibilityDiagnostic()
+    /// <summary>The full mesh-details inspector for the selected mapgeo mesh (M33).</summary>
+    public MeshDetailsViewModel MeshDetails { get; } = new();
+
+    private void RefreshMeshDetails()
     {
-        if (_selection.Primary is not { } m || _visibilityResolver is null) { MeshVisibilityReason = ""; return; }
+        if (_selection.Primary is not { } m || _visibilityResolver is null)
+        { MeshVisibilityReason = ""; MeshDetails.Clear(); return; }
         var d = _visibilityResolver.Resolve(m.VisibilityFlags, m.ControllerHash, CurrentDragonBit, CurrentBaronBit);
         MeshVisibilityReason = d.Reason;
+        if (_selection.Count == 1)
+        {
+            string? material = _currentMap?.Groups.FirstOrDefault(g => g.MeshIndex == m.Index)?.Material;
+            string? source = _currentMapEntry is { } e ? Path.GetFileName(MapGeoMaterialResolver.MaterialsBinPathFor(e.Path)) : null;
+            MeshDetails.Load(m, material, source, d);
+        }
+        else MeshDetails.Clear(); // multi-select uses the batch panel, not per-mesh details
     }
 
     /// <summary>Drop any selected meshes that the current visibility filter hides (a mesh is visible if
@@ -890,7 +901,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (primary is not null) RefreshMeshTransformFields(primary);
         SyncTreeHighlight();
         RefreshSelectionVisuals();
-        RefreshMeshVisibilityDiagnostic();
+        RefreshMeshDetails();
     }
 
     /// <summary>Mirror the SelectionSet onto the tree: mark selected rows' <c>IsSelected</c>, and keep the

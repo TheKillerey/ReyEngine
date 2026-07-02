@@ -7,6 +7,8 @@ namespace ReyEngine.Formats.MapGeo;
 
 public static class MapGeoDecoder
 {
+    private static readonly ElementName[] AllElementNames = (ElementName[])Enum.GetValues(typeof(ElementName));
+
     public static MapGeoAsset Decode(byte[] data)
     {
         int version = data.Length >= 8 ? (int)BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4)) : 0;
@@ -76,11 +78,27 @@ public static class MapGeoDecoder
                 int vis = (int)mesh.VisibilityFlags;
                 uint ctrl = mesh.VisibilityControllerPathHash;
                 string meshName = mesh.Name ?? "";
+
+                // M33 per-mesh metadata for the inspector.
+                var attrs = new List<string>();
+                foreach (var en in AllElementNames)
+                    if (view.TryGetAccessor(en, out _)) attrs.Add(en.ToString());
+                string? slTex = mesh.StationaryLight.Texture is { Length: > 0 } s ? s : null;
+
                 meshes.Add(new MapGeoMesh
                 {
                     Index = meshIndex, Name = meshName, VertexStart = baseVertex, VertexCount = vc,
                     Transform = transform, VisibilityFlags = vis, ControllerHash = ctrl,
                     Pivot = vc > 0 ? (meshMin + meshMax) * 0.5f : transform.Translation,
+                    IndexCount = ia.Count,
+                    BoundsMin = vc > 0 ? meshMin : transform.Translation,
+                    BoundsMax = vc > 0 ? meshMax : transform.Translation,
+                    Attributes = attrs.ToArray(),
+                    HasLightmapUv = view.TryGetAccessor(ElementName.Texcoord1, out _),
+                    HasVertexColor = meshCol is not null,
+                    RenderFlags = mesh.RenderFlags.ToString(),
+                    DisableBackfaceCulling = mesh.DisableBackfaceCulling,
+                    StationaryLightTexture = slTex,
                 });
                 if (mesh.Submeshes.Count > 0)
                 {
