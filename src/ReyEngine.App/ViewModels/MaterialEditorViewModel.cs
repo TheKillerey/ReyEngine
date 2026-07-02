@@ -174,6 +174,40 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     public bool CanEditSamplers => Model.CanEditSamplers;
     public bool IsDirty => Model.IsDirty;
 
+    // ---- M32 preview profile (features + UV transform) ----
+    public string ProfileLabel => Model.Profile.ProfileLabel;
+    public string FeatureSummary => Model.Profile.FeatureSummary;
+    public bool UsesSpecular => Model.Profile.UsesSpecular;
+
+    /// <summary>Per-material UV transform display (scale/offset, and the source param name when known).</summary>
+    public string UvTransformText
+    {
+        get
+        {
+            var p = Model.Profile;
+            if (!p.HasUvTransform) return "UV: identity (scale 1,1 · offset 0,0)";
+            var s = $"UV scale ({p.UvScale.X:0.###}, {p.UvScale.Y:0.###}) · offset ({p.UvOffset.X:0.###}, {p.UvOffset.Y:0.###})";
+            if (p.UvRotationDegrees != 0f) s += $" · rot {p.UvRotationDegrees:0.#}°";
+            return s;
+        }
+    }
+
+    public bool HasUvSource => Model.Profile.HasUvTransform && (Model.Profile.UvScaleSource is not null || Model.Profile.UvOffsetSource is not null);
+    public string UvSourceText
+    {
+        get
+        {
+            var p = Model.Profile;
+            var parts = new List<string>();
+            if (p.UvScaleSource is { } s) parts.Add($"scale ← {s}");
+            if (p.UvOffsetSource is { } o) parts.Add($"offset ← {o}");
+            return parts.Count > 0 ? string.Join(" · ", parts) : "";
+        }
+    }
+
+    /// <summary>Warn when we couldn't map this material to a known preview profile (UV/features unresolved).</summary>
+    public bool ProfileUnresolved => Model.Profile.Kind == PreviewProfileKind.Unknown;
+
     [RelayCommand]
     private void AddSampler()
     {

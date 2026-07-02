@@ -14,8 +14,13 @@ public static class ChampionMaterialResolver
         Dictionary<string, string> SubmeshGradient, string? DefaultGradient,
         Dictionary<string, string> SubmeshEmissive, string? DefaultEmissive,
         Dictionary<string, string> SubmeshMatCap, string? DefaultMatCap,
-        Dictionary<string, string> SubmeshMatCapMask, string? DefaultMatCapMask)
+        Dictionary<string, string> SubmeshMatCapMask, string? DefaultMatCapMask,
+        Dictionary<string, MaterialProfile> SubmeshProfile, MaterialProfile DefaultProfile)
     {
+        /// <summary>Preview profile (features + UV transform) for a submesh — its own material, else the default (M32).</summary>
+        public MaterialProfile Profile(string submesh) =>
+            SubmeshProfile.TryGetValue(submesh, out var p) ? p : DefaultProfile;
+
         public bool HasAny => SubmeshDiffuse.Count > 0 || !string.IsNullOrEmpty(DefaultDiffuse);
         public bool HasSecondary =>
             SubmeshMask.Count > 0 || SubmeshGradient.Count > 0 || SubmeshEmissive.Count > 0 || SubmeshMatCap.Count > 0
@@ -34,7 +39,9 @@ public static class ChampionMaterialResolver
         public string? ForMatCapMask(string submesh) => Pick(SubmeshMatCapMask, DefaultMatCapMask, submesh);
 
         private static Dictionary<string, string> M() => new(StringComparer.OrdinalIgnoreCase);
-        public static Result Empty() => new(M(), null, M(), null, M(), null, M(), null, M(), null, M(), null);
+        private static Dictionary<string, MaterialProfile> P() => new(StringComparer.OrdinalIgnoreCase);
+        public static Result Empty() =>
+            new(M(), null, M(), null, M(), null, M(), null, M(), null, M(), null, P(), MaterialProfile.Default);
     }
 
     public static Result Resolve(byte[] skinBin, Func<uint, string?> resolve)
@@ -48,7 +55,8 @@ public static class ChampionMaterialResolver
                 doc.SubmeshSampler(b => b.Gradient), doc.DefaultGradientPath,
                 doc.SubmeshSampler(b => b.Emissive), doc.DefaultEmissivePath,
                 doc.SubmeshSampler(b => b.MatCap), doc.DefaultMatCapPath,
-                doc.SubmeshSampler(b => b.MatCapMask), doc.DefaultMatCapMaskPath);
+                doc.SubmeshSampler(b => b.MatCapMask), doc.DefaultMatCapMaskPath,
+                doc.SubmeshProfiles(), doc.DefaultProfile);
         }
         catch
         {

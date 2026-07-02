@@ -315,6 +315,7 @@
                 ModelMatCapTextures="{Binding CurrentModelMatCapTextures}"
                 ModelMatCapMaskTextures="{Binding CurrentModelMatCapMaskTextures}"
                 ModelSubmeshVisible="{Binding CurrentModelSubmeshVisible}"
+                ModelSubmeshMaterials="{Binding CurrentModelSubmeshMaterials}"
                 MeshVerticesRevision="{Binding MeshVerticesRevision}"
                 SelectionBoxes="{Binding SelectionBoxes}"
                 GroupBoundsMin="{Binding GroupBoundsMin}"
@@ -355,6 +356,8 @@
                 <ComboBoxItem>Debug · Mask</ComboBoxItem>
                 <ComboBoxItem>Debug · Emissive</ComboBoxItem>
                 <ComboBoxItem>Debug · MatCap</ComboBoxItem>
+                <ComboBoxItem>Debug · UV Checker</ComboBoxItem>
+                <ComboBoxItem>Debug · Specular</ComboBoxItem>
               </ComboBox>
               <ToggleButton Content="Wireframe" IsChecked="{Binding ShowWireframe}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Bones" IsChecked="{Binding ShowBones}" FontSize="11" Padding="8,3" />
@@ -618,6 +621,25 @@
                                   <TextBlock Text="{Binding ShaderName}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" VerticalAlignment="Center" />
                                   <TextBlock Text="{Binding AssignedTo, StringFormat='→ {0}'}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="10" VerticalAlignment="Center" IsVisible="{Binding HasAssignment}" />
                                 </StackPanel>
+
+                                <!-- M32: preview profile (features + UV transform) -->
+                                <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="3" Padding="6,4">
+                                  <StackPanel Spacing="2">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                      <Border Background="{DynamicResource ReyAccentBrush}" CornerRadius="3" Padding="5,1">
+                                        <TextBlock Text="{Binding ProfileLabel}" Foreground="#08221E" FontSize="9" FontWeight="SemiBold" />
+                                      </Border>
+                                      <TextBlock Text="{Binding FeatureSummary}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" VerticalAlignment="Center" />
+                                      <Border Background="#4D8A5AF0" CornerRadius="3" Padding="5,1" VerticalAlignment="Center" IsVisible="{Binding UsesSpecular}">
+                                        <TextBlock Text="SPECULAR" Foreground="{DynamicResource ReyTextBrush}" FontSize="8" FontWeight="SemiBold" />
+                                      </Border>
+                                      <TextBlock Text="⚠ profile unresolved" Foreground="#FFB454" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding ProfileUnresolved}" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding UvTransformText}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
+                                    <TextBlock Text="{Binding UvSourceText}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="9" IsVisible="{Binding HasUvSource}" />
+                                  </StackPanel>
+                                </Border>
+
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                   <Button Classes="tool" Content="Copy name" Command="{Binding CopyNameCommand}" />
                                   <Button Classes="tool" Content="Revert material" Command="{Binding RevertCommand}" />

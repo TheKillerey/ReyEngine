@@ -107,6 +107,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelMatCapTextures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelMatCapMaskTextures;
     [ObservableProperty] private IReadOnlyList<bool>? _currentModelSubmeshVisible;
+    [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
     [ObservableProperty] private bool _showWireframe;
@@ -557,7 +558,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
                 var m2t = MapGeoMaterialResolver.Resolve(bytes, names);
-                CurrentModelTextures = BuildMapTextures(map, m2t, names.Count);
+                var profiles = MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName);
+                CurrentModelTextures = BuildMapTextures(map, m2t, profiles, names.Count);
             }
             else { _log.Info("Material", "Nothing in the viewport to preview — select the matching .skn/.mapgeo."); return; }
             _log.Success("Material", "Applied material edits to the viewport (live).");
@@ -649,6 +651,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasMapMoves = false;
         CurrentModelTextures = null;
         ClearSecondaryTextures();
+        CurrentModelSubmeshMaterials = null;
         CurrentModelSubmeshVisible = null;
         CurrentAnimation = null;
         AnimationTime = 0;
@@ -1251,6 +1254,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 CurrentMesh = mesh;
                 CurrentSkeleton = skeleton;
                 CurrentModelTextures = textures;
+                if (textures is null) CurrentModelSubmeshMaterials = null; // flat mesh — no per-material data
                 ShowBones = skeleton is not null;
                 MeshInspector.ShowMesh(mesh, skeleton);
                 Animation.SetSkeleton(skeleton?.BoneCount ?? 0);
@@ -1337,23 +1341,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
-        var materialToTexture = ResolveMapMaterials(binEntry, names);
+        var (materialToTexture, profiles) = ResolveMapMaterials(binEntry, names);
         if (materialToTexture.Count == 0)
         {
             _log.Info("MapGeo", "Materials .bin didn't resolve any textures — rendering flat.");
             return null;
         }
-        return BuildMapTextures(map, materialToTexture, names.Count);
+        return BuildMapTextures(map, materialToTexture, profiles, names.Count);
     }
 
-    /// <summary>Resolve map material→texture, falling back to the original game .materials.bin when the
-    /// project's copy is broken (malformed .bin) or resolves nothing.</summary>
-    private Dictionary<string, string> ResolveMapMaterials(WadAssetEntry binEntry, List<string> names)
+    /// <summary>Resolve map material→texture (+ M32 profiles), falling back to the original game
+    /// .materials.bin when the project's copy is broken (malformed .bin) or resolves nothing.</summary>
+    private (Dictionary<string, string> textures, Dictionary<string, MaterialProfile> profiles) ResolveMapMaterials(WadAssetEntry binEntry, List<string> names)
     {
         try
         {
-            var r = MapGeoMaterialResolver.Resolve(GetAssetBytes(binEntry), names);
-            if (r.Count > 0) return r;
+            var bytes = GetAssetBytes(binEntry);
+            var r = MapGeoMaterialResolver.Resolve(bytes, names);
+            if (r.Count > 0) return (r, MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName));
         }
         catch (Exception ex) { _log.Warn("MapGeo", $"project materials.bin parse failed: {ex.Message}"); }
 
@@ -1363,11 +1368,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             try
             {
                 var r = MapGeoMaterialResolver.Resolve(fb, names);
-                if (r.Count > 0) { _log.Info("MapGeo", "Used the original game materials.bin (the project's copy was broken/empty)."); return r; }
+                if (r.Count > 0)
+                {
+                    _log.Info("MapGeo", "Used the original game materials.bin (the project's copy was broken/empty).");
+                    return (r, MaterialProfiles.ForMapMaterials(fb, names, ResolveBinName));
+                }
             }
             catch (Exception ex) { _log.Warn("MapGeo", $"game materials.bin parse failed: {ex.Message}"); }
         }
-        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        return (new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), new Dictionary<string, MaterialProfile>(StringComparer.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -1418,8 +1427,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return name;
     }
 
-    /// <summary>Per-group diffuse textures from resolved map material→texture map (override-aware loads).</summary>
-    private IReadOnlyList<TextureImage?> BuildMapTextures(MapGeoAsset map, Dictionary<string, string> materialToTexture, int materialCount)
+    /// <summary>Per-group diffuse textures from resolved map material→texture map (override-aware loads).
+    /// Also publishes the per-group preview materials (UV transform + specular flag) from the profiles (M32).</summary>
+    private IReadOnlyList<TextureImage?> BuildMapTextures(MapGeoAsset map, Dictionary<string, string> materialToTexture,
+        Dictionary<string, MaterialProfile> profilesByName, int materialCount)
     {
         var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
         TextureImage? Load(string path)
@@ -1429,12 +1440,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
 
         var result = new TextureImage?[map.Groups.Count];
+        var submeshMats = new ViewportMeshRenderer.SubmeshMaterial[map.Groups.Count];
         for (int i = 0; i < map.Groups.Count; i++)
-            if (materialToTexture.TryGetValue(map.Groups[i].Material, out var path))
+        {
+            var matName = map.Groups[i].Material;
+            if (materialToTexture.TryGetValue(matName, out var path))
                 result[i] = Load(path);
+            if (profilesByName.TryGetValue(matName, out var prof))
+            {
+                submeshMats[i] = ToSubmeshMaterial(prof);
+                LogUvTransform(prof, matName);
+            }
+            else submeshMats[i] = ViewportMeshRenderer.SubmeshMaterial.Default;
+        }
+        CurrentModelSubmeshMaterials = submeshMats;
 
         int unique = cache.Values.Count(v => v is not null);
-        _log.Success("MapGeo", $"Loaded {unique} unique textures ({materialToTexture.Count}/{materialCount} materials resolved).");
+        int spec = submeshMats.Count(m => m.UsesSpecular);
+        _log.Success("MapGeo", $"Loaded {unique} unique textures ({materialToTexture.Count}/{materialCount} materials resolved)" +
+                               (spec > 0 ? $", {spec} group(s) with specular." : "."));
         return result;
     }
 
@@ -1458,6 +1482,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return BuildSubmeshTextures(mesh, resolved, skn.DisplayName);
     }
 
+    /// <summary>Map a Formats <see cref="MaterialProfile"/> to the renderer's per-submesh material (M32).</summary>
+    private static ViewportMeshRenderer.SubmeshMaterial ToSubmeshMaterial(MaterialProfile p) =>
+        new(p.UsesRim, p.UsesSpecular, p.UvScale, p.UvOffset, p.UvRotationDegrees);
+
+    private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
+
+    /// <summary>Log the UV transform applied to a material once (spec: "log which UV transform was applied").</summary>
+    private void LogUvTransform(MaterialProfile p, string label)
+    {
+        if (!p.HasUvTransform) return;
+        var key = $"{label}|{p.UvScale}|{p.UvOffset}|{p.UvRotationDegrees}";
+        if (!_loggedUvTransforms.Add(key)) return;
+        _log.Info("Material", $"UV transform on '{label}': scale ({p.UvScale.X:0.###}, {p.UvScale.Y:0.###})" +
+                              $" offset ({p.UvOffset.X:0.###}, {p.UvOffset.Y:0.###})" +
+                              (p.UvRotationDegrees != 0 ? $" rot {p.UvRotationDegrees:0.#}°" : "") +
+                              (p.UvScaleSource is not null ? $"  [from {p.UvScaleSource}]" : "") +
+                              (p.UvOffsetSource is not null ? $"  [offset from {p.UvOffsetSource}]" : ""));
+    }
+
     /// <summary>Per-submesh diffuse textures from the resolved champion material (override-aware loads).</summary>
     private IReadOnlyList<TextureImage?> BuildSubmeshTextures(MeshAsset mesh, ChampionMaterialResolver.Result material, string label)
     {
@@ -1476,6 +1519,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var emis = new TextureImage?[n];
         var matcaps = new TextureImage?[n];
         var matcapMasks = new TextureImage?[n];
+        var submeshMats = new ViewportMeshRenderer.SubmeshMaterial[n];
         int loaded = 0, secondary = 0;
         for (int i = 0; i < n; i++)
         {
@@ -1489,7 +1533,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             matcaps[i] = Load(material.ForMatCap(sub));
             matcapMasks[i] = Load(material.ForMatCapMask(sub));
             if (masks[i] is not null || grads[i] is not null || emis[i] is not null || matcaps[i] is not null) secondary++;
+            submeshMats[i] = ToSubmeshMaterial(material.Profile(sub));
+            LogUvTransform(material.Profile(sub), sub);
         }
+        CurrentModelSubmeshMaterials = submeshMats;
         // Publish the secondary layers (mask/gradient/emissive/matcap) for the RiotApprox preview.
         CurrentModelMaskTextures = material.SubmeshMask.Count > 0 || material.DefaultMask is not null ? masks : null;
         CurrentModelGradientTextures = material.SubmeshGradient.Count > 0 || material.DefaultGradient is not null ? grads : null;

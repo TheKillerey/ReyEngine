@@ -43,6 +43,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelMatCapMaskTextures));
     public static readonly StyledProperty<IReadOnlyList<bool>?> ModelSubmeshVisibleProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<bool>?>(nameof(ModelSubmeshVisible));
+    public static readonly StyledProperty<IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?> ModelSubmeshMaterialsProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?>(nameof(ModelSubmeshMaterials));
     public static readonly StyledProperty<int> MeshVerticesRevisionProperty =
         AvaloniaProperty.Register<ViewportControl, int>(nameof(MeshVerticesRevision));
     public static readonly StyledProperty<AnimationClip?> AnimationClipProperty =
@@ -77,6 +79,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public IReadOnlyList<TextureImage?>? ModelMatCapTextures { get => GetValue(ModelMatCapTexturesProperty); set => SetValue(ModelMatCapTexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelMatCapMaskTextures { get => GetValue(ModelMatCapMaskTexturesProperty); set => SetValue(ModelMatCapMaskTexturesProperty, value); }
     public IReadOnlyList<bool>? ModelSubmeshVisible { get => GetValue(ModelSubmeshVisibleProperty); set => SetValue(ModelSubmeshVisibleProperty, value); }
+    public IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? ModelSubmeshMaterials { get => GetValue(ModelSubmeshMaterialsProperty); set => SetValue(ModelSubmeshMaterialsProperty, value); }
     public int MeshVerticesRevision { get => GetValue(MeshVerticesRevisionProperty); set => SetValue(MeshVerticesRevisionProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
@@ -89,7 +92,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private GridRenderer? _grid;
     private ViewportMeshRenderer? _meshRenderer;
     private readonly OrbitCamera _camera = new();
-    private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty;
+    private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
 
     // Offscreen target with a real depth buffer (Avalonia's default FBO has none).
     private uint _fbo, _colorRb, _depthRb;
@@ -252,6 +255,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 _texturesDirty = true;
                 _skinDirty = true;
                 _visibilityDirty = true;
+                _materialsDirty = true;
             }
             else _meshRenderer.ClearMesh();
             _meshDirty = false;
@@ -274,6 +278,15 @@ public sealed class ViewportControl : OpenGlControlBase
             for (int i = 0; i < _meshRenderer.SubmeshCount; i++)
                 _meshRenderer.SetSubmeshVisible(i, vis is null || i >= vis.Count || vis[i]);
             _visibilityDirty = false;
+        }
+        if (_materialsDirty && _meshRenderer.HasMesh)
+        {
+            var mats = ModelSubmeshMaterials;
+            if (mats is null) _meshRenderer.ClearSubmeshMaterials();
+            else
+                for (int i = 0; i < _meshRenderer.SubmeshCount; i++)
+                    _meshRenderer.SetSubmeshMaterial(i, i < mats.Count ? mats[i] : ViewportMeshRenderer.SubmeshMaterial.Default);
+            _materialsDirty = false;
         }
         if (_verticesDirty && _meshRenderer.HasMesh)
         {
@@ -400,6 +413,7 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == ModelMatCapTexturesProperty || change.Property == ModelMatCapMaskTexturesProperty)
         { _texturesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelSubmeshVisibleProperty) { _visibilityDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == ModelSubmeshMaterialsProperty) { _materialsDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == MeshVerticesRevisionProperty)
         {
             // GL buffer uploads need the GL context current — only true inside OnOpenGlRender, never

@@ -5,7 +5,22 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M30 complete.** **Multi-select + batch transform for MAPGEO meshes.** Hold **Ctrl** and click
+> Status: **M32 complete.** **RiotApprox preview correctness — real UV tiling + no more fake specular.** The
+> preview now reads each material's real `.bin` data to decide what lighting to apply, instead of shading every
+> surface the same way. **UV tiling/offset** is read from `paramValues` (`UV_Scale`, `UV_Offset`, `Decal_UV_Tile`,
+> `UV_Translate`, `UV_Rotation`, …) and applied per-submesh as `uv = uv·scale + offset` (default identity). The
+> **fresnel rim** that used to be drawn on *everything* (which read as fake specular) is now gated on real rim
+> data — the `USE_RIM` switch or a Gradient sampler — so League's plain diffuse materials render flat/lambert.
+> **Specular is off by default** and only turns on for materials that actually carry it (`Specular_Intensity` /
+> `Spec_Color` params, or a gloss/metal switch) — on Summoner's Rift that's 49 of ~5,600 materials, not all of
+> them. A data-driven **profile** per material (Champion Skin · Map Static · MatCap · Specular) chooses the
+> feature set; the Material Editor shows the profile, whether specular is active, and the UV scale/offset (with
+> the source param name), and the viewport gains **UV-checker** and **specular-only** debug views. Verified on
+> real Aatrox + Map11 data: Aatrox's rim materials keep their rim, the SR base kit renders flat, `UV_Scale` is
+> read from the bin, and only the specular-tagged materials get a highlight. Basic mode is unchanged; the
+> renderer was extended, not rewritten.
+>
+> Previously (**M30**): **Multi-select + batch transform for MAPGEO meshes.** Hold **Ctrl** and click
 > meshes in the viewport (or Ctrl+click rows in the Map Content tree) to build a selection; a plain click
 > single-selects, an empty click clears. Every selected mesh gets its own amber highlight box, the group gets a
 > cool-blue combined bounds box, and **one gizmo sits at the selection center** — dragging it moves the whole
@@ -364,6 +379,7 @@ No Play button — this is an editor, not a runtime.
 | **M24–M25 ✅** | **Mesh move/reposition** — per-mesh vertex tracking + live viewport translate; persist by surgically patching the transform translation via its `[BoundingBox][Transform]` signature (LeagueToolkit's `EnvironmentAsset.Write` is lossy, so we never re-serialize) → saved to the override + Build Package |
 | **M26 ✅** | **Mesh rotate + scale** (around the mesh's own pivot) — live viewport preview via a pristine-vertex snapshot; persist by patching the *full* transform matrix + recomputed bounding box; Reset button; verified against hand-computed matrices + round-trip re-decode on two real maps |
 | **M27 ✅** | **Selection highlight + translate gizmo** — amber wireframe box around the selected mesh (always on top); click-drag 3-axis gizmo (X/Y/Z) to move it live via real 3D ray-picking (`ViewportPicking`: project/unproject/closest-point-on-axis, independently verified with 9 round-trip checks); numeric fields stay in sync; Save to Mod persists via the M25/M26 patcher |
+| **M32 ✅** | **RiotApprox UV + specular correctness** — data-driven per-material preview `MaterialProfile` (features + UV transform) classified from real `.bin` data: `switches` (`USE_RIM` …), `paramValues` (`UV_Scale`/`UV_Offset`/`Decal_UV_Tile`/…), specular `Specular_*`/`Spec_Color` params · per-submesh UV transform (`uv·scale+offset`, optional rotation) in the shader · **rim gated on real rim data**, **specular off by default** (only for specular-tagged materials — 49/5,600 on SR, not global) · profiles: Champion Skin · Map Static · MatCap · Specular · Material Editor shows profile + specular flag + UV scale/offset + source param · **UV-checker** & **specular-only** debug views · renderer extended (per-submesh `SubmeshMaterial` uniforms), not rewritten; Basic mode unchanged · verified on real Aatrox + Map11 |
 | **M30 ✅** | **Multi-select + batch transform** — `Core/Selection` (`SelectionSet<T>`: primary anchor, toggle/re-anchor, Changed event) · Ctrl+click viewport + tree multi-select, per-mesh amber highlight boxes + cool-blue group bounds, one gizmo at the selection center · **Batch Transform** inspector (move Δ · rotate/scale about center · Reset Selected · Clear Selection) · world-space `GroupMatrix` applied after each mesh's own transform so batch ops compose rigidly · one `BatchTransformCommand` per batch edit (drag or numeric) → one Undo step restoring every mesh exactly · byte-patch persistence carries the GroupMatrix · visibility-filtered meshes pruned from the selection · 20-check suite on real Map11 |
 | **M29 ✅** | **Undo/Redo** — `Core/Undo` (`IEditorCommand`, `UndoRedoService` with merge/purge/savepoint, `CompositeCommand` for M30 multi-select) · typed commands: `MeshTransformCommand` (drag = one step), `BinEditCommand`, `TexturePathEditCommand`, `MaterialParamEditCommand`, `SamplerAddRemoveCommand` (exact-element reinsert) · Ctrl+Z/Y + Edit menu + ↶/↷ buttons · title-bar dirty savepoint · stale-document purge |
 | **M28 ✅** | **Viewport editing fixed + click-to-select** — vertex re-upload moved onto the GL thread (the mesh actually moves now); pick ray derived purely from the render matrix (two-point unprojection, correct under the -X mirror); drag axis frozen at its press-time origin (kills the snap-back feedback loop); **click a mesh to select it** (exact triangle picking, visibility-aware, ~9ms/click, syncs the tree; empty click deselects) |

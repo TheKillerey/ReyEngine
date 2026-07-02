@@ -69,6 +69,25 @@ public sealed class MaterialDocument
     public string? DefaultMatCapPath => DefaultSampler(b => b.MatCap);
     public string? DefaultMatCapMaskPath => DefaultSampler(b => b.MatCapMask);
 
+    /// <summary>Champion: submesh name → preview profile (M32). Only real StaticMaterialDef bindings
+    /// contribute a profile (the skin-default-texture/inline bindings carry no switches/params).</summary>
+    public Dictionary<string, MaterialProfile> SubmeshProfiles()
+    {
+        var map = new Dictionary<string, MaterialProfile>(StringComparer.OrdinalIgnoreCase);
+        foreach (var b in Materials)
+        {
+            if (!b.IsStaticMaterialDef) continue;
+            foreach (var sub in b.Submeshes) map[sub] = b.Profile;
+        }
+        return map;
+    }
+
+    /// <summary>Profile for submeshes with no override — the default StaticMaterialDef's profile.</summary>
+    public MaterialProfile DefaultProfile =>
+        Materials.FirstOrDefault(m => m.IsDefault && m.IsStaticMaterialDef)?.Profile
+        ?? Materials.FirstOrDefault(m => m.IsStaticMaterialDef)?.Profile
+        ?? MaterialProfile.Default;
+
     /// <summary>Map (or any): material name → diffuse texture path (live).</summary>
     public Dictionary<string, string> MaterialDiffuse()
     {
@@ -157,6 +176,21 @@ public sealed class MaterialDocument
                         && Field(ps.Properties, "value") is { } valProp)
                         parameters.Add(new MaterialParameter(pn.Value, valProp));
 
+            // Shader feature switches (StaticMaterialSwitchDef: 'name' + optional 'on'; absent 'on' = true).
+            var switches = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            if (Field(o.Properties, "switches") is BinTreeContainer sw)
+                foreach (var el in sw.Elements)
+                    if (el is BinTreeStruct ss && Field(ss.Properties, "name") is BinTreeString sn)
+                    {
+                        bool on = Field(ss.Properties, "on") switch
+                        {
+                            BinTreeBool ob => ob.Value,
+                            BinTreeBitBool obb => obb.Value,
+                            _ => true, // an entry with no explicit 'on' is enabled
+                        };
+                        switches[sn.Value] = on;
+                    }
+
             var subs = assignment.TryGetValue(pathHash, out var list2)
                 ? list2.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
                 : Array.Empty<string>();
@@ -167,10 +201,13 @@ public sealed class MaterialDocument
                 SamplerContainer = samplers,
                 NameFieldHash = nameFieldHash,
                 PathFieldHash = pathFieldHash,
+                Switches = switches,
             });
         }
 
-        return new MaterialDocument(tree, champion ? MaterialSourceKind.ChampionSkin : MaterialSourceKind.MapMaterials, materials);
+        var kind = champion ? MaterialSourceKind.ChampionSkin : MaterialSourceKind.MapMaterials;
+        foreach (var b in materials) b.Profile = MaterialProfiles.Classify(b, kind);
+        return new MaterialDocument(tree, kind, materials);
     }
 
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> props, string name)
@@ -208,6 +245,16 @@ public sealed class MaterialBinding
     internal BinTreeContainer? SamplerContainer { get; init; }
     internal uint NameFieldHash { get; init; }
     internal uint PathFieldHash { get; init; }
+
+    /// <summary>Shader feature switches (name → on). Only populated for StaticMaterialDef bindings (M32).</summary>
+    public IReadOnlyDictionary<string, bool> Switches { get; init; } = EmptySwitches;
+    private static readonly IReadOnlyDictionary<string, bool> EmptySwitches = new Dictionary<string, bool>();
+
+    /// <summary>The derived RiotApprox preview profile (features + UV transform). Set during parse (M32).</summary>
+    public MaterialProfile Profile { get; internal set; } = MaterialProfile.Default;
+
+    /// <summary>True for real StaticMaterialDef bindings (they carry the switches/params that drive the profile).</summary>
+    public bool IsStaticMaterialDef => SamplerContainer is not null;
 
     public MaterialBinding(string name, string shaderName, IReadOnlyList<string> submeshes, bool isDefault,
         List<TextureSlot> slots, IReadOnlyList<MaterialParameter> parameters)
@@ -356,6 +403,19 @@ public sealed class MaterialParameter
     public string CurrentText => BinValueEditor.Format(_prop, _ => null);
     public bool IsEditable => BinValueEditor.KindOf(_prop) != BinValueKind.ReadOnly;
     public bool IsDirty => !string.Equals(CurrentText, OriginalText, StringComparison.Ordinal);
+
+    /// <summary>Read the parameter as a Vector4 (scalars/vec2/vec3 zero-extend). False if not numeric (M32 UV read).</summary>
+    public bool TryGetVector4(out System.Numerics.Vector4 v)
+    {
+        switch (_prop)
+        {
+            case BinTreeVector4 p: v = p.Value; return true;
+            case BinTreeVector3 p: v = new System.Numerics.Vector4(p.Value, 0f); return true;
+            case BinTreeVector2 p: v = new System.Numerics.Vector4(p.Value.X, p.Value.Y, 0f, 0f); return true;
+            case BinTreeF32 p: v = new System.Numerics.Vector4(p.Value, 0f, 0f, 0f); return true;
+            default: v = default; return false;
+        }
+    }
 
     /// <summary>Apply text (throws on invalid input — caller keeps the old value).</summary>
     public void Apply(string text) => BinValueEditor.Apply(_prop, text);

@@ -16,6 +16,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mMvp, _mModel, _mLight, _mTex, _mHasTex, _mBaseColor, _mMode, _mCamPos;
     private int _mMask, _mGradient, _mEmissive, _mHasMask, _mHasGradient, _mHasEmissive;
     private int _mMatCap, _mMatCapMask, _mHasMatCap, _mHasMatCapMask, _mView;
+    private int _mUvScaleOffset, _mUvRot, _mUsesRim, _mUsesSpec;   // M32: per-material UV + feature flags
     private int _lMvp, _lColor;
 
     private uint _vao, _vbo, _ebo, _wireEbo;
@@ -49,6 +50,22 @@ public sealed class ViewportMeshRenderer : IDisposable
         public uint MatCap;      // slot 4
         public uint MatCapMask;  // slot 5
         public bool Visible;     // layer/visibility filter (map dragon/baron)
+
+        // M32 per-material preview data. Defaults are identity/off so untouched submeshes render as before.
+        public Vector4 UvScaleOffset;   // xy scale, zw offset
+        public float UvRotationRadians;
+        public bool UsesRim;
+        public bool UsesSpecular;
+
+        public static SubmeshDraw Create(int start, int count) =>
+            new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0) };
+    }
+
+    /// <summary>Per-submesh preview material data pushed from the App's resolved <c>MaterialProfile</c> (M32).</summary>
+    public readonly record struct SubmeshMaterial(
+        bool UsesRim, bool UsesSpecular, Vector2 UvScale, Vector2 UvOffset, float UvRotationDegrees)
+    {
+        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
 
     private const string MeshVert = @"
@@ -67,7 +84,10 @@ void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
 }";
 
-    // uMode: 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal · 5 Debug mask · 6 Debug emissive
+    // uMode: 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal · 5 Debug mask
+    //        6 Debug emissive · 7 Debug matcap · 8 Debug UV checker · 9 Debug specular
+    // M32: rim + specular are gated per-material (uUsesRim/uUsesSpec) — no fake specular by default.
+    // The base UV is transformed per-material by uUvScaleOffset (xy scale, zw offset) + uUvRot (radians).
     private const string MeshFrag = @"
 in vec3 vN;
 in vec2 vUv;
@@ -90,6 +110,10 @@ uniform vec3 uBaseColor;
 uniform int uMode;
 uniform vec3 uCamPos;
 uniform mat4 uView;
+uniform vec4 uUvScaleOffset;   // xy = scale, zw = offset (identity = 1,1,0,0)
+uniform float uUvRot;          // radians, rotate about (0.5, 0.5); 0 = none
+uniform int uUsesRim;          // fresnel rim highlight only when the material profile asks for it
+uniform int uUsesSpec;         // specular highlight only when the material profile asks for it
 
 // League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
 vec3 matcapColour(vec3 worldN) {
@@ -97,9 +121,20 @@ vec3 matcapColour(vec3 worldN) {
     vec2 uv = vn.xy * 0.5 + 0.5;
     return texture(uMatCap, uv).rgb;
 }
+// Per-material UV transform: optional rotation about the centre, then scale + offset.
+vec2 xformUv(vec2 uv0) {
+    vec2 uv = uv0;
+    if (uUvRot != 0.0) {
+        float c = cos(uUvRot), s = sin(uUvRot);
+        vec2 p = uv - 0.5;
+        uv = vec2(p.x * c - p.y * s, p.x * s + p.y * c) + 0.5;
+    }
+    return uv * uUvScaleOffset.xy + uUvScaleOffset.zw;
+}
 void main() {
     vec3 n = length(vN) > 0.001 ? normalize(vN) : vec3(0.0, 1.0, 0.0);
-    vec4 tex = (uHasTex == 1) ? texture(uTex, vUv) : vec4(uBaseColor, 1.0);
+    vec2 uv = xformUv(vUv);
+    vec4 tex = (uHasTex == 1) ? texture(uTex, uv) : vec4(uBaseColor, 1.0);
     vec3 base = tex.rgb;
     float alpha = (uHasTex == 1) ? tex.a : 1.0;
 
@@ -107,46 +142,58 @@ void main() {
     if (uMode == 3) { FragColor = vec4(vec3(alpha), 1.0); return; }          // debug: alpha
     if (uMode == 4) { FragColor = vec4(n * 0.5 + 0.5, 1.0); return; }        // debug: normals
     if (uMode == 5) {                                                        // debug: mask (white if none)
-        vec3 mk = (uHasMask == 1) ? texture(uMask, vUv).rgb : vec3(1.0);
+        vec3 mk = (uHasMask == 1) ? texture(uMask, uv).rgb : vec3(1.0);
         FragColor = vec4(mk, 1.0); return;
     }
     if (uMode == 6) {                                                        // debug: emissive (black if none)
-        vec3 em = (uHasEmissive == 1) ? texture(uEmissive, vUv).rgb : vec3(0.0);
+        vec3 em = (uHasEmissive == 1) ? texture(uEmissive, uv).rgb : vec3(0.0);
         FragColor = vec4(em, 1.0); return;
     }
     if (uMode == 7) {                                                        // debug: matcap (grey if none)
         vec3 mc = (uHasMatCap == 1) ? matcapColour(n) : vec3(0.2);
         FragColor = vec4(mc, 1.0); return;
     }
+    if (uMode == 8) {                                                        // debug: UV checker (post-transform)
+        vec2 t = floor(uv * 8.0);
+        float c = mod(t.x + t.y, 2.0);
+        FragColor = vec4(mix(vec3(0.14, 0.15, 0.19), vec3(0.85, 0.86, 0.92), c), 1.0); return;
+    }
 
+    vec3 viewDir = normalize(uCamPos - vWorld);
     float d = max(dot(n, normalize(-uLight)), 0.0);
     float light = 0.35 + 0.75 * d;
     vec3 col = base * light;
 
+    // Specular highlight — computed only when the material's profile enables it (League materials are
+    // diffuse/lambert by default). Blinn-Phong half-vector term.
+    float specTerm = 0.0;
+    if (uUsesSpec == 1) {
+        vec3 h = normalize(normalize(-uLight) + viewDir);
+        specTerm = pow(max(dot(n, h), 0.0), 32.0);
+    }
+    if (uMode == 9) { FragColor = vec4(vec3(specTerm), 1.0); return; }       // debug: specular only
+
     if (uMode == 1) {
-        // RiotApprox: a fresnel rim highlight (League champion shaders use fresnel bloom) coloured by the
-        // material's own Gradient sampler and gated by its Mask, + emissive glow, + alpha cutout.
+        // RiotApprox. Alpha cutout, then the fresnel rim (only if the material uses rim) coloured by its
+        // Gradient sampler and gated by its Mask, + matcap, + emissive glow, + optional specular.
         if (alpha < 0.35) discard;
-        vec3 viewDir = normalize(uCamPos - vWorld);
-        float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
-        // gradient gives the rim its colour (sampled along the fresnel ramp); else tint by base.
-        vec3 rimCol = (uHasGradient == 1)
-            ? texture(uGradient, vec2(clamp(fres, 0.02, 0.98), 0.5)).rgb
-            : (0.5 + 0.5 * base);
-        // mask gates where the rim shows (R channel); kept gentle so it never fully kills the highlight.
-        float gate = (uHasMask == 1) ? mix(0.5, 1.0, texture(uMask, vUv).r) : 1.0;
-        col += fres * 0.6 * rimCol * gate;
-        // matcap fake-lighting highlight (additive), gated by its own mask where present.
+        if (uUsesRim == 1) {
+            float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
+            vec3 rimCol = (uHasGradient == 1)
+                ? texture(uGradient, vec2(clamp(fres, 0.02, 0.98), 0.5)).rgb
+                : (0.5 + 0.5 * base);
+            float gate = (uHasMask == 1) ? mix(0.5, 1.0, texture(uMask, uv).r) : 1.0;
+            col += fres * 0.6 * rimCol * gate;
+        }
         if (uHasMatCap == 1) {
-            float mcGate = (uHasMatCapMask == 1) ? texture(uMatCapMask, vUv).r : 1.0;
+            float mcGate = (uHasMatCapMask == 1) ? texture(uMatCapMask, uv).r : 1.0;
             col += matcapColour(n) * 0.6 * mcGate;
         }
-        // emissive self-illumination: R channel = strength (works for EmissionR_* packs and plain glow
-        // masks), tinted by the diffuse so glowing parts glow in their own colour.
         if (uHasEmissive == 1) {
-            float em = texture(uEmissive, vUv).r;
+            float em = texture(uEmissive, uv).r;
             col += base * em * 1.5;
         }
+        col += specTerm * 0.5;   // white-ish highlight, only when uUsesSpec
     }
     FragColor = vec4(col, 1.0);
 }";
@@ -187,6 +234,10 @@ void main() { FragColor = uColor; }";
         _mHasMatCap = gl.GetUniformLocation(_meshProgram, "uHasMatCap");
         _mHasMatCapMask = gl.GetUniformLocation(_meshProgram, "uHasMatCapMask");
         _mView = gl.GetUniformLocation(_meshProgram, "uView");
+        _mUvScaleOffset = gl.GetUniformLocation(_meshProgram, "uUvScaleOffset");
+        _mUvRot = gl.GetUniformLocation(_meshProgram, "uUvRot");
+        _mUsesRim = gl.GetUniformLocation(_meshProgram, "uUsesRim");
+        _mUsesSpec = gl.GetUniformLocation(_meshProgram, "uUsesSpec");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -268,9 +319,9 @@ void main() { FragColor = uColor; }";
         _gl.BindVertexArray(0);
 
         if (submeshes.Count == 0)
-            _submeshes = new[] { new SubmeshDraw { Start = 0, Count = indices.Length, Texture = 0, Visible = true } };
+            _submeshes = new[] { SubmeshDraw.Create(0, indices.Length) };
         else
-            _submeshes = submeshes.Select(s => new SubmeshDraw { Start = s.start, Count = s.count, Texture = 0, Visible = true }).ToArray();
+            _submeshes = submeshes.Select(s => SubmeshDraw.Create(s.start, s.count)).ToArray();
 
         UploadLines(_boundsVao, _boundsVbo, BuildBoxLines(min, max), out _boundsVerts);
         _hasMesh = true;
@@ -315,6 +366,29 @@ void main() { FragColor = uColor; }";
             case 3: _submeshes[index].Emissive = textureId; break;
             case 4: _submeshes[index].MatCap = textureId; break;
             case 5: _submeshes[index].MatCapMask = textureId; break;
+        }
+    }
+
+    /// <summary>Push a submesh's preview material (M32): UV transform + rim/specular feature flags.
+    /// No-op outside range; unset submeshes keep the identity/off defaults (render exactly as before).</summary>
+    public void SetSubmeshMaterial(int index, SubmeshMaterial mat)
+    {
+        if (!_ready || !_hasMesh || index < 0 || index >= _submeshes.Length) return;
+        _submeshes[index].UvScaleOffset = new Vector4(mat.UvScale.X, mat.UvScale.Y, mat.UvOffset.X, mat.UvOffset.Y);
+        _submeshes[index].UvRotationRadians = mat.UvRotationDegrees * (MathF.PI / 180f);
+        _submeshes[index].UsesRim = mat.UsesRim;
+        _submeshes[index].UsesSpecular = mat.UsesSpecular;
+    }
+
+    /// <summary>Reset every submesh's preview material to identity UV + no rim/specular (M32).</summary>
+    public void ClearSubmeshMaterials()
+    {
+        for (int i = 0; i < _submeshes.Length; i++)
+        {
+            _submeshes[i].UvScaleOffset = new Vector4(1, 1, 0, 0);
+            _submeshes[i].UvRotationRadians = 0f;
+            _submeshes[i].UsesRim = false;
+            _submeshes[i].UsesSpecular = false;
         }
     }
 
@@ -442,6 +516,11 @@ void main() { FragColor = uColor; }";
                 foreach (var s in _submeshes)
                 {
                     if (!s.Visible) continue;
+                    // M32 per-material: UV transform + rim/specular gates (identity/off by default).
+                    _gl.Uniform4(_mUvScaleOffset, s.UvScaleOffset.X, s.UvScaleOffset.Y, s.UvScaleOffset.Z, s.UvScaleOffset.W);
+                    _gl.Uniform1(_mUvRot, s.UvRotationRadians);
+                    _gl.Uniform1(_mUsesRim, s.UsesRim ? 1 : 0);
+                    _gl.Uniform1(_mUsesSpec, s.UsesSpecular ? 1 : 0);
                     _gl.ActiveTexture(TextureUnit.Texture0);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);
                     _gl.Uniform1(_mHasTex, s.Texture != 0 ? 1 : 0);
