@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ReyEngine.Formats.Materials;
 
 namespace ReyEngine.App.ViewModels;
 
@@ -25,6 +26,34 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
     /// <summary>Invoked when a file (non-folder) is chosen — the host loads it.</summary>
     public Action<AssetNodeViewModel?>? FileSelected { get; set; }
 
+    // ---- Material virtual assets (M33) ----
+    /// <summary>Materials contained in the currently-opened material library (.materials.bin / skin .bin).</summary>
+    public ObservableCollection<MaterialAssetViewModel> Materials { get; } = new();
+    [ObservableProperty] private bool _hasMaterials;
+    [ObservableProperty] private string _materialsSource = "";
+
+    /// <summary>Host hook: extract the material virtual-assets from a material-library node.</summary>
+    public Func<AssetNodeViewModel, IReadOnlyList<MaterialAssetViewModel>>? ExtractMaterials { get; set; }
+    /// <summary>Host hook: open a material virtual-asset in the Material Editor.</summary>
+    public Action<MaterialAssetViewModel>? MaterialSelected { get; set; }
+
+    [RelayCommand]
+    private void OpenMaterial(MaterialAssetViewModel? material)
+    {
+        if (material is not null) MaterialSelected?.Invoke(material);
+    }
+
+    private void PopulateMaterials(AssetNodeViewModel node)
+    {
+        Materials.Clear();
+        if (ExtractMaterials is { } ex && node.Entry is { } e && MaterialLibraryExtractor.IsMaterialLibrary(e.Path))
+        {
+            foreach (var m in ex(node)) Materials.Add(m);
+            MaterialsSource = node.Name;
+        }
+        HasMaterials = Materials.Count > 0;
+    }
+
     public void SetRoots(IEnumerable<AssetNodeViewModel> roots)
     {
         FolderRoots.Clear();
@@ -37,6 +66,9 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
         FolderRoots.Clear();
         Items.Clear();
         Breadcrumbs.Clear();
+        Materials.Clear();
+        HasMaterials = false;
+        MaterialsSource = "";
         CurrentFolder = null;
         LocationText = "";
         CanGoUp = false;
@@ -65,7 +97,7 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
     {
         if (node is null) return;
         if (node.IsFolder) { SelectedFolder = node; NavigateTo(node); }
-        else { SelectedItem = node; FileSelected?.Invoke(node); }
+        else { SelectedItem = node; PopulateMaterials(node); FileSelected?.Invoke(node); }
     }
 
     [RelayCommand]

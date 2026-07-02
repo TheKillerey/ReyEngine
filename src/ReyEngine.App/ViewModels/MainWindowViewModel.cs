@@ -165,8 +165,36 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.SaveOverride = SaveMaterialOverride;
 
         ContentBrowser.FileSelected = node => SelectedNode = node;
+        ContentBrowser.ExtractMaterials = ExtractMaterialsForNode;
+        ContentBrowser.MaterialSelected = OpenMaterialAsset;
         MapContent.OpenMap = node => SelectedNode = node;
         LoadRecentProjects(RecentProjects.Load());
+    }
+
+    /// <summary>Extract a material library's (.materials.bin / skin .bin) materials as virtual assets (M33).</summary>
+    private IReadOnlyList<MaterialAssetViewModel> ExtractMaterialsForNode(AssetNodeViewModel node)
+    {
+        if (node.Entry is not { } e) return System.Array.Empty<MaterialAssetViewModel>();
+        try
+        {
+            var mats = MaterialLibraryExtractor.Extract(GetAssetBytes(e), ResolveBinName);
+            return mats.Select(m => new MaterialAssetViewModel(m, e, e.ReadOnly)).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Material", $"Could not read materials from {e.DisplayName}: {ex.Message}");
+            return System.Array.Empty<MaterialAssetViewModel>();
+        }
+    }
+
+    /// <summary>Open a material virtual-asset in the Material Editor, filtered to the chosen material (M33).</summary>
+    private async void OpenMaterialAsset(MaterialAssetViewModel material)
+    {
+        await LoadMaterialBinAsync(material.SourceEntry, alsoRawBin: false);
+        MaterialEditor.Search = material.FullName; // focus the editor on the clicked material
+        InspectorTab = 0;
+        _log.Info("Material", $"Opened '{material.FullName}' ({material.Profile}) from {material.SourceBin}" +
+                              (material.ReadOnly ? " — read-only reference (Copy To Project to edit)." : "."));
     }
 
     /// <summary>Push the freshly-built asset tree into the Content Browser + Map Content panels.</summary>

@@ -430,7 +430,42 @@
                 </TreeView.ItemTemplate>
               </TreeView>
               <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
-              <ScrollViewer Grid.Column="2" Padding="6,4">
+              <DockPanel Grid.Column="2">
+                <!-- Material virtual assets in the opened .materials.bin / skin .bin (M33) -->
+                <Border DockPanel.Dock="Bottom" IsVisible="{Binding ContentBrowser.HasMaterials}"
+                        Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Margin="4" MaxHeight="190">
+                  <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Margin="8,5,8,3" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource ReyTextDimBrush}"
+                               Text="{Binding ContentBrowser.MaterialsSource, StringFormat='MATERIALS · {0}'}" />
+                    <ScrollViewer>
+                      <ItemsControl ItemsSource="{Binding ContentBrowser.Materials}" Margin="4,0,4,4">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Background="Transparent" Padding="6,2"
+                                    Command="{Binding $parent[ItemsControl].DataContext.ContentBrowser.OpenMaterialCommand}"
+                                    CommandParameter="{Binding}" ToolTip.Tip="{Binding Tooltip}">
+                              <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Border Background="{DynamicResource ReyAccentBrush}" CornerRadius="2" Padding="3,0" VerticalAlignment="Center">
+                                  <TextBlock Text="{Binding Badge}" FontSize="8" FontWeight="SemiBold" Foreground="#08221E" />
+                                </Border>
+                                <TextBlock Text="🎨" FontSize="10" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
+                                           TextTrimming="CharacterEllipsis" MaxWidth="200" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Profile}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+                                <TextBlock FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center"
+                                           Text="{Binding SamplerCount, StringFormat='{}{0} tex'}" />
+                                <TextBlock FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center"
+                                           Text="{Binding ParameterCount, StringFormat='{}{0} params'}" />
+                              </StackPanel>
+                            </Button>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </ScrollViewer>
+                  </DockPanel>
+                </Border>
+                <ScrollViewer Padding="6,4">
                 <ItemsControl ItemsSource="{Binding ContentBrowser.Items}">
                   <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
@@ -471,7 +506,8 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
-              </ScrollViewer>
+                </ScrollViewer>
+              </DockPanel>
             </Grid>
           </DockPanel>
         </Border>
