@@ -5,6 +5,18 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
+> Status: **M28 complete.** **Viewport editing now actually works like Blender/UE.** Three fixes from live
+> testing: (1) the mesh itself now moves when you drag — the vertex re-upload ran on the UI thread where no GL
+> context is current, so only the highlight box moved; it now happens inside the render loop. (2) Dragging no
+> longer fights you — the pick ray is derived purely from the render matrix (the old one mixed in the unmirrored
+> camera eye → wrong direction), and the drag axis stays anchored at its press-time origin (re-anchoring at the
+> live pivot created a feedback loop that snapped the mesh back every other frame). (3) **Click a mesh in the
+> viewport to select it** — exact Möller–Trumbore triangle picking over all visible triangles (~9ms/click on the
+> full SR map), respecting the dragon/baron visibility filters, syncing the Map Content tree selection; clicking
+> empty space deselects. All three verified: the harness reproduces the old feedback bug (t: 98.98 → 0 snap-back)
+> and confirms the fix, mirrored-matrix round-trips recover exact axis coordinates, and 12/12 test picks land
+> inside the picked mesh's bounds.
+>
 > Status: **M27 complete.** **You can now see and drag the selected mesh in the viewport.** Selecting a mesh
 > in the Map Content → Layer Groups tree draws a bright amber wireframe box around it (always on top, so it
 > reads clearly even inside dense terrain), plus a 3-axis **translate gizmo** — red/green/blue lines from the
@@ -334,6 +346,7 @@ No Play button — this is an editor, not a runtime.
 | **M24–M25 ✅** | **Mesh move/reposition** — per-mesh vertex tracking + live viewport translate; persist by surgically patching the transform translation via its `[BoundingBox][Transform]` signature (LeagueToolkit's `EnvironmentAsset.Write` is lossy, so we never re-serialize) → saved to the override + Build Package |
 | **M26 ✅** | **Mesh rotate + scale** (around the mesh's own pivot) — live viewport preview via a pristine-vertex snapshot; persist by patching the *full* transform matrix + recomputed bounding box; Reset button; verified against hand-computed matrices + round-trip re-decode on two real maps |
 | **M27 ✅** | **Selection highlight + translate gizmo** — amber wireframe box around the selected mesh (always on top); click-drag 3-axis gizmo (X/Y/Z) to move it live via real 3D ray-picking (`ViewportPicking`: project/unproject/closest-point-on-axis, independently verified with 9 round-trip checks); numeric fields stay in sync; Save to Mod persists via the M25/M26 patcher |
+| **M28 ✅** | **Viewport editing fixed + click-to-select** — vertex re-upload moved onto the GL thread (the mesh actually moves now); pick ray derived purely from the render matrix (two-point unprojection, correct under the -X mirror); drag axis frozen at its press-time origin (kills the snap-back feedback loop); **click a mesh to select it** (exact triangle picking, visibility-aware, ~9ms/click, syncs the tree; empty click deselects) |
 | **M23 ✅** | **Baron pit visibility** — decode the map's visibility controllers (`MapVisibilityControllers`: Dragon `0xc406a533` / Baron `0xec733fe2` / Child `0xe21083b5`, recursing `Parents`/`ParentMode`) → resolve each mesh to Base/Cup/Tunnel/Upgraded bits; the Baron combobox now live-filters the baron pit, combined with the dragon filter |
 | **M22 ✅** | Camera (LMB look + inverted, fly on LMB) · **dragon visibility system** — per-mesh `VisibilityFlags` carried through the decoder, per-submesh render visibility toggle, **Dragon/Baron comboboxes** + *Meshes→Layer Groups→names* tree filter the viewport live (Base/Inferno/Mountain/Ocean/Cloud/Hextech/Chemtech/Void) |
 | **M21 ✅** | Editor polish — **Unreal-style camera** (RMB look + WASD/QE fly · Alt+LMB orbit · MMB pan · wheel dolly · RMB+wheel fly-speed · F focus) · **logo** (titlebar icon + menu wordmark, runtime-loaded) · **Content Browser type icons** · shader fix: **normal-map gating** (normal maps never used as the base texture) |

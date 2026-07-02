@@ -99,7 +99,7 @@ public sealed class MapGeoAsset
 /// </summary>
 public sealed record MapGeoGroup(
     string Material, int StartIndex, int IndexCount,
-    string Name = "", int VisibilityFlags = 255, uint ControllerHash = 0);
+    string Name = "", int VisibilityFlags = 255, uint ControllerHash = 0, int MeshIndex = -1);
 
 /// <summary>One source mapgeo mesh: its baked vertex range + original transform, for selection/move.</summary>
 public sealed class MapGeoMesh

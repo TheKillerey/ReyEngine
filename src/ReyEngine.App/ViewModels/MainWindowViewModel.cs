@@ -21,6 +21,7 @@ using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Meta;
 using ReyEngine.Formats.Shaders;
 using ReyEngine.Formats.Skeletons;
+using ReyEngine.Rendering;
 
 namespace ReyEngine.App.ViewModels;
 
@@ -723,9 +724,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     partial void OnSelectedTreeItemChanged(object? value)
     {
-        if (value is MapPieceViewModel { MeshIndex: >= 0 } p && _currentMap is { } map && p.MeshIndex < map.Meshes.Count)
+        // Match by MapGeoMesh.Index (the env-mesh index), not list position — they diverge if any mesh
+        // failed to decode.
+        if (value is MapPieceViewModel { MeshIndex: >= 0 } p && _currentMap is { } map
+            && map.Meshes.FirstOrDefault(x => x.Index == p.MeshIndex) is { } m)
         {
-            var m = map.Meshes[p.MeshIndex];
             SelectedMapMesh = m;
             RefreshMeshTransformFields(m);
             RefreshSelectionVisuals();
@@ -735,6 +738,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             SelectedMapMesh = null;
             SelectionBoundsMin = SelectionBoundsMax = GizmoPivot = null;
         }
+    }
+
+    /// <summary>
+    /// Blender/UE-style viewport click-selection: cast the pick ray at the map's visible triangles and
+    /// select the nearest-hit mesh (or clear the selection on a miss). Selection goes through
+    /// <see cref="SelectedTreeItem"/> so the Map Content tree highlights the same mesh.
+    /// </summary>
+    public void SelectMeshFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir)
+    {
+        if (_currentMap is not { } map || map.Groups.Count == 0) return;
+        var submeshes = map.Groups.Select(g => (g.StartIndex, g.IndexCount)).ToList();
+        int hit = ViewportMeshPicker.PickSubmesh(map.Positions, map.Indices, submeshes,
+            CurrentModelSubmeshVisible, rayOrigin, rayDir, out _);
+        if (hit < 0)
+        {
+            SelectedTreeItem = null; // clicked empty space — deselect, like Blender/UE
+            return;
+        }
+        int meshIndex = map.Groups[hit].MeshIndex;
+        var piece = MapContent.LayerGroups.SelectMany(g => g.Meshes).FirstOrDefault(x => x.MeshIndex == meshIndex);
+        if (piece is null) return;
+        SelectedTreeItem = piece; // drives the same selection path as clicking the tree
+        var name = map.Meshes.FirstOrDefault(x => x.Index == meshIndex)?.Name ?? $"#{meshIndex}";
+        _log.Info("MapGeo", $"Selected '{name}' (viewport click).");
     }
 
     /// <summary>Recompute the selection highlight box (live vertex bounds) + the gizmo pivot for the

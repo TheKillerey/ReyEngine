@@ -85,7 +85,7 @@ public static class MapGeoDecoder
                         int end = sub.StartIndex + sub.IndexCount;
                         for (int k = sub.StartIndex; k < end && k < ia.Count; k++)
                             indices.Add((uint)(ia[k] + baseVertex));
-                        groups.Add(new MapGeoGroup(material, gStart, indices.Count - gStart, meshName, vis, ctrl));
+                        groups.Add(new MapGeoGroup(material, gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex));
                     }
                 }
                 else
@@ -93,7 +93,7 @@ public static class MapGeoDecoder
                     int gStart = indices.Count;
                     for (int k = 0; k < ia.Count; k++)
                         indices.Add((uint)(ia[k] + baseVertex));
-                    groups.Add(new MapGeoGroup("", gStart, indices.Count - gStart, meshName, vis, ctrl));
+                    groups.Add(new MapGeoGroup("", gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex));
                 }
 
                 meshCount++;

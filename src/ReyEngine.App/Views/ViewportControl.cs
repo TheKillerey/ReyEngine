@@ -85,7 +85,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private GridRenderer? _grid;
     private ViewportMeshRenderer? _meshRenderer;
     private readonly OrbitCamera _camera = new();
-    private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty;
+    private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty;
 
     // Offscreen target with a real depth buffer (Avalonia's default FBO has none).
     private uint _fbo, _colorRb, _depthRb;
@@ -171,16 +171,25 @@ public sealed class ViewportControl : OpenGlControlBase
         return best;
     }
 
-    /// <summary>Where along the world-space axis line (through the pivot) the given screen point projects to.</summary>
-    public bool TryGetAxisParameter(GizmoAxis axis, Point screenPos, out float t)
+    /// <summary>
+    /// Where along a world-space axis line the given screen point projects to. The line origin is
+    /// passed explicitly and MUST stay fixed for the whole drag (using the live gizmo pivot would
+    /// re-anchor the line every frame the mesh moves — a feedback loop that oscillates the mesh).
+    /// </summary>
+    public bool TryGetAxisParameter(GizmoAxis axis, Point screenPos, Vector3 lineOrigin, out float t)
     {
         t = 0f;
-        if (GizmoPivot is not { } pivot) return false;
-        if (!ViewportPicking.TryGetRay(new Vector2((float)screenPos.X, (float)screenPos.Y), _lastViewProj, _lastViewportW, _lastViewportH, _lastCamPos, out var rayOrigin, out var rayDir))
+        if (!ViewportPicking.TryGetRay(new Vector2((float)screenPos.X, (float)screenPos.Y), _lastViewProj, _lastViewportW, _lastViewportH, out var rayOrigin, out var rayDir))
             return false;
-        t = ViewportPicking.ClosestParameterOnLine(rayOrigin, rayDir, pivot, AxisDir(axis));
+        t = ViewportPicking.ClosestParameterOnLine(rayOrigin, rayDir, lineOrigin, AxisDir(axis));
         return true;
     }
+
+    /// <summary>World-space pick ray under a control-relative point (for click-to-select), derived from
+    /// the exact matrices used to render the last frame.</summary>
+    public bool TryGetPickRay(Point screenPos, out Vector3 rayOrigin, out Vector3 rayDir)
+        => ViewportPicking.TryGetRay(new Vector2((float)screenPos.X, (float)screenPos.Y),
+            _lastViewProj, _lastViewportW, _lastViewportH, out rayOrigin, out rayDir);
 
     private float GizmoArmLength(Vector3 pivot) => Math.Clamp(Vector3.Distance(_lastCamPos, pivot) * 0.15f, 10f, 5000f);
 
@@ -262,6 +271,11 @@ public sealed class ViewportControl : OpenGlControlBase
                 _meshRenderer.SetSubmeshVisible(i, vis is null || i >= vis.Count || vis[i]);
             _visibilityDirty = false;
         }
+        if (_verticesDirty && _meshRenderer.HasMesh)
+        {
+            if (Mesh is { } moved) _meshRenderer.UpdateVertices(moved.Positions, moved.Normals);
+            _verticesDirty = false;
+        }
         if (_bonesDirty)
         {
             _meshRenderer.SetBoneSegments(Skeleton is null ? null : BuildBoneSegments(Skeleton));
@@ -294,11 +308,13 @@ public sealed class ViewportControl : OpenGlControlBase
         var viewProj = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjection(aspect);
 
         // Cache the exact matrices/size used for THIS frame so gizmo hit-testing (driven by pointer
-        // events, outside the render loop) always matches what's actually on screen.
+        // events, outside the render loop) always matches what's actually on screen. The eye is stored
+        // in MESH-DATA space: vertices get X-mirrored before the view matrix, so the camera effectively
+        // sits at (-x, y, z) relative to the un-mirrored data the pivots/bounds live in.
         _lastViewProj = viewProj;
         _lastViewportW = Bounds.Width;
         _lastViewportH = Bounds.Height;
-        _lastCamPos = _camera.Position;
+        _lastCamPos = new Vector3(-_camera.Position.X, _camera.Position.Y, _camera.Position.Z);
 
         _meshRenderer.SetHighlightBounds(SelectionBoundsMin, SelectionBoundsMax);
         _meshRenderer.SetGizmo(GizmoPivot, GizmoPivot is { } piv ? GizmoArmLength(piv) : 0f);
@@ -381,7 +397,9 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == ModelSubmeshVisibleProperty) { _visibilityDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == MeshVerticesRevisionProperty)
         {
-            if (Mesh is { } m && _meshRenderer is { } r && r.HasMesh) r.UpdateVertices(m.Positions, m.Normals);
+            // GL buffer uploads need the GL context current — only true inside OnOpenGlRender, never
+            // here on the UI thread. Flag it and do the actual UpdateVertices in the render loop.
+            _verticesDirty = true;
             RequestNextFrameRendering();
         }
         else if (change.Property == SelectionBoundsMinProperty || change.Property == SelectionBoundsMaxProperty

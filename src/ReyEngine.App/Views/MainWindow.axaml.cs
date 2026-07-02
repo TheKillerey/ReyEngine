@@ -21,6 +21,12 @@ public partial class MainWindow : Window
     private ViewportControl.GizmoAxis? _gizmoDragAxis;
     private float _gizmoDragStartT;
     private Vector3 _gizmoDragStartOffset;
+    private Vector3 _gizmoDragOrigin;   // pivot at drag start — the axis line must NOT re-anchor mid-drag
+
+    // Click-to-select: a press+release with almost no movement is a pick, not a camera drag.
+    private Point _pressPos;
+    private bool _pressMoved;
+    private const double ClickSlopPixels = 4.0;
 
     public MainWindow()
     {
@@ -82,6 +88,8 @@ public partial class MainWindow : Window
         _mmb = pt.Properties.IsMiddleButtonPressed;
         _alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
         _lastPointer = pt.Position;
+        _pressPos = pt.Position;
+        _pressMoved = false;
         e.Pointer.Capture(ViewportInput);
         ViewportInput.Focus(); // so WASD/F reach the viewport
 
@@ -89,9 +97,11 @@ public partial class MainWindow : Window
         {
             var axis = Viewport.HitTestGizmoAxis(pt.Position);
             if (axis is { } a && DataContext is MainWindowViewModel { SelectedMapMesh: { } mesh }
-                && Viewport.TryGetAxisParameter(a, pt.Position, out var t0))
+                && Viewport.GizmoPivot is { } pivot
+                && Viewport.TryGetAxisParameter(a, pt.Position, pivot, out var t0))
             {
                 _gizmoDragAxis = a;
+                _gizmoDragOrigin = pivot;   // frozen for the whole drag
                 _gizmoDragStartT = t0;
                 _gizmoDragStartOffset = mesh.Offset;
                 return; // gizmo drag takes over this stroke — don't also start camera fly
@@ -103,10 +113,14 @@ public partial class MainWindow : Window
     private void OnViewportPointerMoved(object? sender, PointerEventArgs e)
     {
         var p = e.GetPosition(ViewportInput);
+        if (Math.Abs(p.X - _pressPos.X) > ClickSlopPixels || Math.Abs(p.Y - _pressPos.Y) > ClickSlopPixels)
+            _pressMoved = true;
 
         if (_gizmoDragAxis is { } axis)
         {
-            if (DataContext is MainWindowViewModel vm && Viewport.TryGetAxisParameter(axis, p, out var t))
+            // Measure along the FROZEN drag-start axis line; the live pivot moves with the mesh and
+            // would re-anchor the line every frame (feedback loop → oscillation).
+            if (DataContext is MainWindowViewModel vm && Viewport.TryGetAxisParameter(axis, p, _gizmoDragOrigin, out var t))
             {
                 var delta = AxisUnitVector(axis) * (t - _gizmoDragStartT);
                 vm.DragSelectedMeshTo(_gizmoDragStartOffset + delta);
@@ -128,18 +142,29 @@ public partial class MainWindow : Window
 
     private void OnViewportPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (_gizmoDragAxis is not null)
+        bool wasGizmoDrag = _gizmoDragAxis is not null;
+        if (wasGizmoDrag)
         {
             _gizmoDragAxis = null;
             (DataContext as MainWindowViewModel)?.EndMeshDrag();
         }
 
+        bool wasLmb = _lmb;
         var props = e.GetCurrentPoint(ViewportInput).Properties;
         _lmb = props.IsLeftButtonPressed;
         _rmb = props.IsRightButtonPressed;
         _mmb = props.IsMiddleButtonPressed;
         if (!_lmb) StopFly();
         if (!(_lmb || _rmb || _mmb)) e.Pointer.Capture(null);
+
+        // A stationary LMB click (no camera drag, no gizmo drag, no Alt-orbit) = pick a mesh under the
+        // cursor, Blender/UE-style. A miss clears the selection.
+        if (wasLmb && !_lmb && !wasGizmoDrag && !_pressMoved && !_alt
+            && DataContext is MainWindowViewModel vm
+            && Viewport.TryGetPickRay(e.GetPosition(ViewportInput), out var origin, out var dir))
+        {
+            vm.SelectMeshFromViewport(origin, dir);
+        }
     }
 
     private void OnViewportPointerWheel(object? sender, PointerWheelEventArgs e)
