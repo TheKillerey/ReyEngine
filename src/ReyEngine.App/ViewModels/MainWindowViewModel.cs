@@ -190,9 +190,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Open a material virtual-asset in the Material Editor, filtered to the chosen material (M33).</summary>
     private async void OpenMaterialAsset(MaterialAssetViewModel material)
     {
+        // Show the inspector body + its source-bin overview, then load the materials and reveal the tab.
+        Inspector.ShowEntry(material.SourceEntry);
+        Inspector.SetAssetStatus(material.ReadOnly ? "Read-only Riot material" : "Project material (editable)", null);
+        HasInspectorBody = true;
+
         await LoadMaterialBinAsync(material.SourceEntry, alsoRawBin: false);
-        MaterialEditor.Search = material.FullName; // focus the editor on the clicked material
-        InspectorTab = 0;
+        if (!HasMaterialData)
+        {
+            _log.Warn("Material", $"'{material.FullName}': no editable materials resolved from {material.SourceBin}.");
+            return;
+        }
+        MaterialEditor.Search = material.FullName; // filter the editor to the clicked material
+        InspectorTab = 1;                          // the "Materials" tab
         _log.Info("Material", $"Opened '{material.FullName}' ({material.Profile}) from {material.SourceBin}" +
                               (material.ReadOnly ? " — read-only reference (Copy To Project to edit)." : "."));
     }
