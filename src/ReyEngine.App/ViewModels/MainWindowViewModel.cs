@@ -5,6 +5,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ReyEngine.App.Documents;
 using ReyEngine.App.Imaging;
 using ReyEngine.App.Services;
 using ReyEngine.Core.Assets;
@@ -165,7 +166,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
         MaterialEditor.SaveOverride = SaveMaterialOverride;
 
-        ContentBrowser.FileSelected = node => SelectedNode = node;
+        ContentBrowser.FileSelected = OpenAssetDocument;
         ContentBrowser.ExtractMaterials = ExtractMaterialsForNode;
         ContentBrowser.MaterialSelected = OpenMaterialAsset;
         _thumbnails = new ThumbnailService(p =>
@@ -177,7 +178,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             foreach (var n in nodes) _thumbnails.Request(n.ThumbnailPath, bmp => n.Thumbnail = bmp);
         };
-        MapContent.OpenMap = node => SelectedNode = node;
+        MapContent.OpenMap = OpenAssetDocument;
         LoadRecentProjects(RecentProjects.Load());
     }
 
@@ -215,6 +216,131 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         InspectorTab = 1;                          // the "Materials" tab
         _log.Info("Material", $"Opened '{material.FullName}' ({material.Profile}) from {material.SourceBin}" +
                               (material.ReadOnly ? " — read-only reference (Copy To Project to edit)." : "."));
+    }
+
+    // ---- Document / viewport tabs (M33) --------------------------------------------------------------
+
+    public ObservableCollection<EditorDocument> Documents { get; } = new();
+    [ObservableProperty] private EditorDocument? _activeDocument;
+    private bool _restoringScene;
+
+    /// <summary>A cached map viewport scene — lets a map tab restore fully (edits/selection/visibility) on
+    /// re-activation instead of re-decoding, so it "stays loaded" while other assets are inspected.</summary>
+    private sealed record MapScene(
+        MapGeoAsset Map, byte[] MapBytes, WadAssetEntry Entry, MapVisibilityControllers? Controllers,
+        MeshAsset Mesh, IReadOnlyList<TextureImage?>? Textures,
+        IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials,
+        int DragonIndex, int BaronIndex, bool HasMoves, int[] SelectedMeshIndices,
+        List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces);
+
+    /// <summary>User opened an asset — create or focus its tab and activate it.</summary>
+    private void OpenAssetDocument(AssetNodeViewModel? node)
+    {
+        if (node?.Entry is not { } entry) { SelectedNode = node; return; }
+        var doc = Documents.FirstOrDefault(d => d.Key == entry.PathHash);
+        if (doc is null)
+        {
+            doc = new EditorDocument
+            {
+                Title = entry.DisplayName,
+                Kind = EditorDocument.KindOf(entry.Type),
+                Key = entry.PathHash,
+                Entry = entry,
+            };
+            Documents.Add(doc);
+        }
+        ActivateDocument(doc);
+    }
+
+    [RelayCommand]
+    private void ActivateDocument(EditorDocument? doc)
+    {
+        if (doc is null) return;
+        if (ReferenceEquals(ActiveDocument, doc)) return;
+
+        CaptureActiveScene(); // snapshot the outgoing map (if any) so it restores later
+        foreach (var d in Documents) d.IsActive = ReferenceEquals(d, doc);
+        ActiveDocument = doc;
+
+        var node = doc.Entry is { } e && _nodesByHash.TryGetValue(e.PathHash, out var n) ? n : null;
+        if (doc.Scene is MapScene scene)
+        {
+            _restoringScene = true;
+            try { SelectedNode = node; RestoreMapScene(scene); }
+            finally { _restoringScene = false; }
+        }
+        else
+        {
+            SelectedNode = node; // triggers the normal load path (OnSelectedNodeChanged)
+        }
+    }
+
+    [RelayCommand]
+    private void CloseDocument(EditorDocument? doc)
+    {
+        if (doc is null) return;
+        bool wasActive = ReferenceEquals(doc, ActiveDocument);
+        if (doc.Scene is MapScene ms) UndoService.PurgeContext(ms.Map);
+        doc.IsActive = false;
+        Documents.Remove(doc);
+        if (!wasActive) return;
+
+        ActiveDocument = null; // so activating the next tab doesn't snapshot the dying scene
+        var next = Documents.LastOrDefault();
+        if (next is not null) ActivateDocument(next);
+        else ClearViewport();
+    }
+
+    private void CaptureActiveScene()
+    {
+        if (ActiveDocument is { Kind: DocumentKind.Map }) ActiveDocument.Scene = CaptureMapScene();
+    }
+
+    /// <summary>Reflect a map's unsaved mesh edits as a dirty dot on its tab.</summary>
+    partial void OnHasMapMovesChanged(bool value)
+    {
+        if (ActiveDocument is { Kind: DocumentKind.Map } d) d.IsDirty = value;
+    }
+
+    private MapScene? CaptureMapScene()
+    {
+        if (_currentMap is not { } map || _currentMapBytes is null || _currentMapEntry is not { } entry || CurrentMesh is not { } mesh)
+            return null;
+        return new MapScene(map, _currentMapBytes, entry, _mapControllers, mesh,
+            CurrentModelTextures, CurrentModelSubmeshMaterials,
+            SelectedDragonIndex, SelectedBaronIndex, HasMapMoves,
+            _selection.Items.Select(m => m.Index).ToArray(),
+            MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList());
+    }
+
+    private void RestoreMapScene(MapScene s)
+    {
+        CurrentSkeleton = null; ShowBones = false;
+        _currentMap = s.Map; _currentMapBytes = s.MapBytes; _currentMapEntry = s.Entry;
+        _mapControllers = s.Controllers;
+        _visibilityResolver = new MapVisibilityResolver(s.Controllers);
+        CurrentMesh = s.Mesh;
+        CurrentModelTextures = s.Textures;
+        ClearSecondaryTextures();
+        CurrentModelSubmeshMaterials = s.Materials;
+        MapGeoInspector.Show(s.Map, s.Entry.Path);
+        MapContent.SetLayerGroups(s.LayerGroups);
+        MapContent.ShowMap(s.MapName, s.Pieces);
+        HasMapMoves = s.HasMoves;
+        Inspector.ShowEntry(s.Entry);
+        HasInspectorBody = true;
+        InspectorTab = 0;
+        TryLoadMaterialBin(s.Entry, alsoRawBin: true);
+
+        var meshes = s.SelectedMeshIndices
+            .Select(i => s.Map.Meshes.FirstOrDefault(x => x.Index == i))
+            .Where(m => m is not null).Select(m => m!).ToList();
+        _selection.SetMany(meshes);
+        SelectedDragonIndex = s.DragonIndex;
+        SelectedBaronIndex = s.BaronIndex;
+        ApplyMapVisibility();   // recompute the visibility array from the restored filters
+        MeshVerticesRevision++; // re-upload possibly-edited vertices
+        _log.Info("MapGeo", $"Restored map tab '{s.MapName}' ({s.Map.MeshCount:n0} meshes).");
     }
 
     /// <summary>Push the freshly-built asset tree into the Content Browser + Map Content panels.</summary>
@@ -334,6 +460,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Info("WAD", $"Opening {Path.GetFileName(path)} …");
             _archive?.Dispose();
             _archive = WadArchive.Open(path, _resolver);
+            Documents.Clear(); ActiveDocument = null;  // fresh source — old tabs are stale
             RebuildTree();
             ClearViewport();
             Inspector.Clear();
@@ -480,6 +607,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     partial void OnSelectedNodeChanged(AssetNodeViewModel? value)
     {
+        if (_restoringScene) return; // a document tab is restoring its cached scene — don't re-load
         var entry = value?.Entry;
         if (entry is null) return;
 

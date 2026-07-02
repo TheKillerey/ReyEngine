@@ -332,6 +332,42 @@
       <!-- CENTER: Viewport + Console -->
       <Grid Grid.Column="2" RowDefinitions="*,4,300,4,170">
         <Border Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
+          <DockPanel>
+            <!-- Document / viewport tabs (M33): the loaded map stays alive while other assets are inspected -->
+            <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
+                    BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1"
+                    IsVisible="{Binding ActiveDocument, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <ItemsControl ItemsSource="{Binding Documents}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Margin="2,3,0,0" CornerRadius="4,4,0,0"
+                              Background="{Binding IsActive, Converter={StaticResource SelectionHighlight}}">
+                        <StackPanel Orientation="Horizontal" Margin="7,4,4,4" Spacing="4">
+                          <Button Background="Transparent" BorderThickness="0" Padding="0"
+                                  Command="{Binding $parent[ItemsControl].DataContext.ActivateDocumentCommand}" CommandParameter="{Binding}"
+                                  ToolTip.Tip="{Binding Title}">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                              <TextBlock Text="{Binding Glyph}" FontSize="11" VerticalAlignment="Center" />
+                              <TextBlock Text="{Binding Title}" FontSize="11" VerticalAlignment="Center"
+                                         MaxWidth="150" TextTrimming="CharacterEllipsis"
+                                         Foreground="{DynamicResource ReyTextBrush}" />
+                              <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                            </StackPanel>
+                          </Button>
+                          <Button Content="✕" FontSize="10" Padding="4,0" Background="Transparent" BorderThickness="0"
+                                  Command="{Binding $parent[ItemsControl].DataContext.CloseDocumentCommand}" CommandParameter="{Binding}"
+                                  ToolTip.Tip="Close tab" />
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Border>
           <Grid>
             <views:ViewportControl x:Name="Viewport"
                 Mesh="{Binding CurrentMesh}"
@@ -399,6 +435,7 @@
                          FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" />
             </Border>
           </Grid>
+          </DockPanel>
         </Border>
 
         <GridSplitter Grid.Row="1" Background="{DynamicResource ReyBorderBrush}" />
