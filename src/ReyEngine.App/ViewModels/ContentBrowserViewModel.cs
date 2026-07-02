@@ -96,6 +96,7 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
     private void Open(AssetNodeViewModel? node)
     {
         if (node is null) return;
+        if (node.MaterialAsset is { } mat) { SelectedItem = node; MaterialSelected?.Invoke(mat); return; }
         if (node.IsFolder) { SelectedFolder = node; NavigateTo(node); }
         else { SelectedItem = node; PopulateMaterials(node); FileSelected?.Invoke(node); }
     }

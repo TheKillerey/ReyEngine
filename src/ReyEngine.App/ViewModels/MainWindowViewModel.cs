@@ -1927,6 +1927,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var projectVm = new AssetNodeViewModel(projectGroup);
         var riotVm = new AssetNodeViewModel(riotGroup);
+
+        // M33: graft the project's materials in as virtual "ASSETS/<material path>" tree nodes so every
+        // StaticMaterialDef in a .materials.bin / skin .bin is browsable (and openable) as a first-class
+        // asset. Project mounts only — reference WADs hold far too many materials to extract eagerly.
+        foreach (var mount in _mounts.Mounts.Where(m => m.Kind != AssetSourceKind.RiotReference))
+        {
+            var mountVm = projectVm.Children.FirstOrDefault(c => c.Name == mount.Name);
+            if (mountVm is null) continue;
+            InjectMaterialAssets(mountVm, mount.Enumerate().Select(a => a.ToEntry()).ToList(), readOnly: false);
+        }
+
         RootNodes.Add(projectVm);
         if (riotGroup.Children.Count > 0) RootNodes.Add(riotVm);
 
@@ -1935,6 +1946,41 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IndexNodes(projectVm);
         RefreshAllStatuses();
         RefreshContentPanels();
+    }
+
+    /// <summary>Graft each material-library bin's materials into the tree as virtual "ASSETS/&lt;name&gt;" nodes (M33).</summary>
+    private void InjectMaterialAssets(AssetNodeViewModel mountVm, IReadOnlyList<WadAssetEntry> entries, bool readOnly)
+    {
+        AssetNodeViewModel? assetsRoot = null;
+        int count = 0;
+        foreach (var e in entries.Where(x => x.IsResolved && MaterialLibraryExtractor.IsMaterialLibrary(x.Path)))
+        {
+            IReadOnlyList<Formats.Materials.MaterialSummary> mats;
+            try { mats = MaterialLibraryExtractor.Extract(GetAssetBytes(e), ResolveBinName); }
+            catch { continue; }
+            if (mats.Count == 0) continue;
+
+            assetsRoot ??= GetOrAddChildFolder(mountVm, "ASSETS");
+            foreach (var m in mats)
+            {
+                var matVm = new MaterialAssetViewModel(m, e, readOnly);
+                var parts = m.Name.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                var folder = assetsRoot;
+                for (int i = 0; i < parts.Length - 1; i++) folder = GetOrAddChildFolder(folder, parts[i]);
+                folder.AddChild(AssetNodeViewModel.MaterialLeaf(matVm));
+                count++;
+            }
+        }
+        if (count > 0) _log.Info("Materials", $"{mountVm.Name}: exposed {count} material(s) as virtual assets under ASSETS/.");
+    }
+
+    private static AssetNodeViewModel GetOrAddChildFolder(AssetNodeViewModel parent, string name)
+    {
+        var existing = parent.Children.FirstOrDefault(c => c.IsFolder && string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null) return existing;
+        var f = AssetNodeViewModel.VirtualFolder(name);
+        parent.AddChild(f);
+        return f;
     }
 
     /// <summary>Re-enumerate the override mount after a save/copy so reads + conflicts reflect new files.</summary>

@@ -6,9 +6,18 @@ namespace ReyEngine.App.ViewModels;
 
 public sealed partial class AssetNodeViewModel : ViewModelBase
 {
-    public AssetTreeNode Model { get; }
+    /// <summary>The backing mount/tree node. Null for virtual nodes (material folders/leaves, M33).</summary>
+    public AssetTreeNode? Model { get; }
     public ObservableCollection<AssetNodeViewModel> Children { get; } = new();
     public AssetNodeViewModel? Parent { get; private set; }
+
+    // Virtual-node overrides (used when Model is null).
+    private readonly string? _virtualName;
+    private readonly bool _virtualIsFolder;
+
+    /// <summary>Set for a virtual material leaf — clicking it opens the Material Editor (M33).</summary>
+    public MaterialAssetViewModel? MaterialAsset { get; private init; }
+    public bool IsMaterial => MaterialAsset is not null;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsModified))]
@@ -21,28 +30,49 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
             Children.Add(new AssetNodeViewModel(child) { Parent = this });
     }
 
+    private AssetNodeViewModel(string name, bool isFolder)
+    {
+        _virtualName = name;
+        _virtualIsFolder = isFolder;
+    }
+
+    /// <summary>A synthetic folder node (no backing entry) for grouping virtual assets.</summary>
+    public static AssetNodeViewModel VirtualFolder(string name) => new(name, isFolder: true);
+
+    /// <summary>A synthetic leaf node for a material virtual-asset.</summary>
+    public static AssetNodeViewModel MaterialLeaf(MaterialAssetViewModel material) =>
+        new(material.Name, isFolder: false) { MaterialAsset = material };
+
+    /// <summary>Attach a child and set its parent (for post-construction virtual grafting).</summary>
+    public void AddChild(AssetNodeViewModel child)
+    {
+        child.Parent = this;
+        Children.Add(child);
+    }
+
     /// <summary>Folder children only (for the Content Browser folder tree).</summary>
     public IEnumerable<AssetNodeViewModel> Folders => Children.Where(c => c.IsFolder);
     public bool HasSubfolders => Children.Any(c => c.IsFolder);
 
-    public string Name => Model.Name;
-    public bool IsFolder => Model.IsFolder;
-    public WadAssetEntry? Entry => Model.Entry;
+    public string Name => Model?.Name ?? _virtualName ?? "";
+    public bool IsFolder => Model?.IsFolder ?? _virtualIsFolder;
+    public WadAssetEntry? Entry => Model?.Entry;
     public bool IsModified => Status == AssetStatus.Modified;
 
-    public bool IsReadOnly => Entry is { ReadOnly: true };
+    public bool IsReadOnly => IsMaterial ? MaterialAsset!.ReadOnly : Entry is { ReadOnly: true };
     public bool HasConflict => Entry is { HasConflict: true };
-    public string SourceTag => IsFolder ? "" : Entry?.SourceKind switch
-    {
-        AssetSourceKind.ProjectOverride => "OVR",
-        AssetSourceKind.ProjectFolder or AssetSourceKind.ProjectWad => "PRJ",
-        AssetSourceKind.RiotReference => "RIOT",
-        _ => "",
-    };
+    public string SourceTag => IsFolder ? "" : IsMaterial
+        ? (MaterialAsset!.ReadOnly ? "RIOT" : "PRJ")
+        : Entry?.SourceKind switch
+        {
+            AssetSourceKind.ProjectOverride => "OVR",
+            AssetSourceKind.ProjectFolder or AssetSourceKind.ProjectWad => "PRJ",
+            AssetSourceKind.RiotReference => "RIOT",
+            _ => "",
+        };
     public bool HasSourceTag => SourceTag.Length > 0;
 
-    public string Kind => IsFolder
-        ? "DIR"
+    public string Kind => IsFolder ? "DIR" : IsMaterial ? "MAT"
         : Entry?.Type switch
         {
             AssetType.Texture or AssetType.Dds or AssetType.Image => "IMG",
@@ -61,6 +91,7 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
     /// <summary>Type glyph shown in the Content Browser (folder + per-file-type icons).</summary>
     public string Icon => IsFolder
         ? (HasSubfolders ? "📂" : "📁")
+        : IsMaterial ? "🎨"
         : Entry?.Type switch
         {
             AssetType.Texture or AssetType.Dds or AssetType.Image => "🖼",
