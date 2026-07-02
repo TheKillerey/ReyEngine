@@ -123,214 +123,10 @@
     </Border>
 
     <!-- ============ MAIN AREA ============ -->
-    <Grid ColumnDefinitions="290,4,*,4,360">
-
-      <!-- LEFT: MAP CONTENT (World Outliner) -->
-      <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}">
-        <DockPanel>
-          <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="MAP CONTENT" />
-          <TextBlock DockPanel.Dock="Top" Text="{Binding MapContent.Summary}"
-                     Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" Margin="8,2,8,4" TextWrapping="Wrap" />
-
-          <!-- project maps -->
-          <ScrollViewer DockPanel.Dock="Top" MaxHeight="180">
-            <ItemsControl ItemsSource="{Binding MapContent.Maps}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                  <Button Classes="tool" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Margin="6,1"
-                          Command="{Binding $parent[ItemsControl].DataContext.MapContent.OpenCommand}"
-                          CommandParameter="{Binding}">
-                    <StackPanel Orientation="Horizontal" Spacing="5">
-                      <TextBlock Text="🗺" FontSize="11" />
-                      <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
-                  </Button>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </ScrollViewer>
-
-          <Border DockPanel.Dock="Top" Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,6"
-                  IsVisible="{Binding MapContent.HasMap}" />
-          <TextBlock DockPanel.Dock="Top" Text="{Binding MapContent.MapName}" Foreground="{DynamicResource ReyAccentBrush}"
-                     FontSize="11" FontWeight="SemiBold" Margin="8,0,8,2" IsVisible="{Binding MapContent.HasMap}" />
-
-          <!-- dragon / baron visibility layer selectors -->
-          <StackPanel DockPanel.Dock="Top" Margin="8,2,8,4" Spacing="3" IsVisible="{Binding MapContent.HasMap}">
-            <TextBlock Text="VISIBILITY LAYERS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
-            <Grid ColumnDefinitions="*,*">
-              <StackPanel Grid.Column="0" Margin="0,0,3,0">
-                <TextBlock Text="Dragon" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <ComboBox ItemsSource="{Binding DragonOptions}" SelectedIndex="{Binding SelectedDragonIndex}"
-                          FontSize="10" HorizontalAlignment="Stretch" />
-              </StackPanel>
-              <StackPanel Grid.Column="1" Margin="3,0,0,0">
-                <TextBlock Text="Baron" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <ComboBox ItemsSource="{Binding BaronOptions}" SelectedIndex="{Binding SelectedBaronIndex}"
-                          FontSize="10" HorizontalAlignment="Stretch"
-                          ToolTip.Tip="Baron pit state. Resolves the map's visibility controllers (Base/Cup/Tunnel/Upgraded) and hides meshes that don't belong to the selected state." />
-              </StackPanel>
-            </Grid>
-          </StackPanel>
-
-          <!-- BATCH transform panel (M30) — shown when 2+ meshes are selected -->
-          <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyPanelAltBrush}" Padding="8,6" Margin="0,4,0,0"
-                  IsVisible="{Binding IsMultiSelect}">
-            <StackPanel Spacing="4">
-              <TextBlock Text="BATCH TRANSFORM" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
-              <TextBlock Text="{Binding SelectionStatus}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" />
-              <TextBlock Text="Rotate/scale act around the selection center. Move is a world delta added to every mesh."
-                         FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-
-              <TextBlock Text="Move Δ (world)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
-              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
-                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="1" Text="{Binding BatchMoveX}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="3" Text="{Binding BatchMoveY}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="5" Text="{Binding BatchMoveZ}" FontSize="10" Padding="3,1" />
-              </Grid>
-              <Button Content="Move Selection" Command="{Binding ApplyBatchMoveCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
-
-              <TextBlock Text="Rotate Δ (degrees, about center)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
-              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
-                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="1" Text="{Binding BatchRotateX}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="3" Text="{Binding BatchRotateY}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="5" Text="{Binding BatchRotateZ}" FontSize="10" Padding="3,1" />
-              </Grid>
-              <Button Content="Rotate Selection" Command="{Binding ApplyBatchRotateCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
-
-              <TextBlock Text="Scale Δ (about center)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
-              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
-                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="1" Text="{Binding BatchScaleX}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="3" Text="{Binding BatchScaleY}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="5" Text="{Binding BatchScaleZ}" FontSize="10" Padding="3,1" />
-              </Grid>
-              <Button Content="Scale Selection" Command="{Binding ApplyBatchScaleCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
-
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
-                <Button Content="Reset Selected" Command="{Binding ResetSelectedCommand}" FontSize="11" Padding="8,2"
-                        ToolTip.Tip="Restore every selected mesh to its original transform" />
-                <Button Content="Clear Selection" Command="{Binding ClearSelectionCommand}" FontSize="11" Padding="8,2" />
-                <Button Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
-                        IsEnabled="{Binding HasMapMoves}"
-                        Background="{DynamicResource ReyAccentBrush}" Foreground="#08221E" />
-              </StackPanel>
-            </StackPanel>
-          </Border>
-
-          <!-- mesh transform panel (move / rotate / scale — shown when exactly ONE mesh is selected) -->
-          <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyPanelAltBrush}" Padding="8,6" Margin="0,4,0,0"
-                  IsVisible="{Binding IsSingleSelect}">
-            <StackPanel Spacing="4">
-              <TextBlock Text="TRANSFORM MESH" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
-              <TextBlock Text="{Binding SelectedMapMesh.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
-
-              <TextBlock Text="Position" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
-              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
-                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="1" Text="{Binding MeshMoveX}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="3" Text="{Binding MeshMoveY}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="5" Text="{Binding MeshMoveZ}" FontSize="10" Padding="3,1" />
-              </Grid>
-
-              <TextBlock Text="Rotation (degrees)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
-              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
-                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="1" Text="{Binding MeshRotateX}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="3" Text="{Binding MeshRotateY}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="5" Text="{Binding MeshRotateZ}" FontSize="10" Padding="3,1" />
-              </Grid>
-
-              <TextBlock Text="Scale" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
-              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
-                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="1" Text="{Binding MeshScaleX}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="3" Text="{Binding MeshScaleY}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="5" Text="{Binding MeshScaleZ}" FontSize="10" Padding="3,1" />
-              </Grid>
-
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
-                <Button Content="Apply" Command="{Binding ApplyMeshMoveCommand}" FontSize="11" Padding="8,2"
-                        ToolTip.Tip="Apply position/rotation/scale live in the viewport" />
-                <Button Content="Reset" Command="{Binding ResetMeshTransformCommand}" FontSize="11" Padding="8,2"
-                        ToolTip.Tip="Restore this mesh's original transform" />
-                <Button Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
-                        IsEnabled="{Binding HasMapMoves}"
-                        Background="{DynamicResource ReyAccentBrush}" Foreground="#08221E" />
-              </StackPanel>
-            </StackPanel>
-          </Border>
-
-          <!-- Mesh Details (M33) — read-only metadata for the selected mapgeo mesh -->
-          <Expander DockPanel.Dock="Bottom" Margin="0,4,0,0" IsExpanded="True"
-                    IsVisible="{Binding MeshDetails.HasMesh}" FontSize="11">
-            <Expander.Header>
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Text="MESH DETAILS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
-                <TextBlock Text="{Binding MeshDetails.Title}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}"
-                           TextTrimming="CharacterEllipsis" MaxWidth="170" VerticalAlignment="Center" />
-              </StackPanel>
-            </Expander.Header>
-            <ScrollViewer MaxHeight="260" HorizontalScrollBarVisibility="Disabled">
-              <ItemsControl ItemsSource="{Binding MeshDetails.Rows}" Margin="2,0">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <Grid ColumnDefinitions="120,*" Margin="0,1">
-                      <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Top" />
-                      <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" TextWrapping="Wrap"
-                                 Foreground="{DynamicResource ReyTextBrush}" />
-                    </Grid>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </ScrollViewer>
-          </Expander>
-
-          <!-- Meshes → Layer Groups → mesh names.  Ctrl+click a mesh row toggles multi-select (M30). -->
-          <TreeView x:Name="MapContentTree"
-                    ItemsSource="{Binding MapContent.LayerGroups}" SelectedItem="{Binding SelectedTreeItem, Mode=TwoWay}"
-                    Background="Transparent" BorderThickness="0" Padding="4,0">
-            <TreeView.DataTemplates>
-              <TreeDataTemplate DataType="vm:MapLayerGroupViewModel" ItemsSource="{Binding Meshes}">
-                <StackPanel Orientation="Horizontal" Spacing="5">
-                  <TextBlock Text="🗂" FontSize="10" VerticalAlignment="Center" />
-                  <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
-                             Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
-                </StackPanel>
-              </TreeDataTemplate>
-              <DataTemplate DataType="vm:MapPieceViewModel">
-                <Border Background="{Binding IsSelected, Converter={StaticResource SelectionHighlight}}"
-                        CornerRadius="2" Padding="3,0" Margin="-3,0">
-                  <StackPanel Orientation="Horizontal" Spacing="5">
-                    <TextBlock Text="🧊" FontSize="9" VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
-                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                  </StackPanel>
-                </Border>
-              </DataTemplate>
-            </TreeView.DataTemplates>
-          </TreeView>
-        </DockPanel>
-      </Border>
-
-      <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
+    <Grid ColumnDefinitions="*,4,360">
 
       <!-- CENTER: Viewport + Console -->
-      <Grid Grid.Column="2" RowDefinitions="*,4,300,4,170">
+      <Grid Grid.Column="0" RowDefinitions="*,4,300,4,170">
         <Border Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
           <DockPanel>
             <!-- Document / viewport tabs (M33): the loaded map stays alive while other assets are inspected -->
@@ -574,10 +370,10 @@
         </Border>
       </Grid>
 
-      <GridSplitter Grid.Column="3" Background="{DynamicResource ReyBorderBrush}" />
+      <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
 
       <!-- RIGHT: Inspector -->
-      <Border Grid.Column="4" Background="{DynamicResource ReyPanelBrush}">
+      <Border Grid.Column="2" Background="{DynamicResource ReyPanelBrush}">
         <DockPanel>
           <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="INSPECTOR" />
           <ScrollViewer>
@@ -864,6 +660,12 @@
                   </TreeView.ItemTemplate>
                 </TreeView>
               </StackPanel>
+                </TabItem>
+
+                <!-- Map outliner (M33): visibility layers, layer tree, transform, mesh details -->
+                <TabItem FontSize="12" IsVisible="{Binding MapContent.HasMap}">
+                  <TabItem.Header><TextBlock Text="Map" FontSize="12" /></TabItem.Header>
+                  <views:MapOutlinerView MinHeight="400" />
                 </TabItem>
               </TabControl>
             </StackPanel>

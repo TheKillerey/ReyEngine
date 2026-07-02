@@ -32,9 +32,6 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         LoadBranding();
-        // Ctrl+click multi-select on the Map Content tree — intercept before the TreeView's own selection.
-        MapContentTree.AddHandler(InputElement.PointerPressedEvent, OnMapTreePointerPressed,
-            Avalonia.Interactivity.RoutingStrategies.Tunnel);
     }
 
     /// <summary>Load the logo (copied next to the exe) for the titlebar icon + the menu-bar wordmark.</summary>
@@ -172,18 +169,6 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Ctrl+click on a Map Content tree row toggles that mesh in the multi-selection (M30). We
-    /// intercept on the tunnel so the TreeView's own single-select doesn't collapse the set first.</summary>
-    private void OnMapTreePointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (!e.KeyModifiers.HasFlag(KeyModifiers.Control)) return;
-        if (DataContext is not MainWindowViewModel vm) return;
-        if ((e.Source as Control)?.DataContext is MapPieceViewModel piece)
-        {
-            vm.ToggleMeshSelectionFromTree(piece);
-            e.Handled = true;
-        }
-    }
 
     private void OnViewportPointerWheel(object? sender, PointerWheelEventArgs e)
     {

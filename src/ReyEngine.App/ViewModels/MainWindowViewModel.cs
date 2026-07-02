@@ -329,7 +329,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasMapMoves = s.HasMoves;
         Inspector.ShowEntry(s.Entry);
         HasInspectorBody = true;
-        InspectorTab = 0;
+        InspectorTab = 3; // the Map tab
         TryLoadMaterialBin(s.Entry, alsoRawBin: true);
 
         var meshes = s.SelectedMeshIndices
@@ -636,7 +636,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (entry.Type is not AssetType.SkinnedMesh) ClearViewport();
         if (entry.Type != AssetType.Bin) BinEditor.Clear();
         HasInspectorBody = entry.Type is AssetType.SkinnedMesh or AssetType.MapGeometry or AssetType.Bin;
-        InspectorTab = entry.Type == AssetType.Bin ? 2 : 0;
+        InspectorTab = entry.Type switch { AssetType.Bin => 2, AssetType.MapGeometry => 3, _ => 0 };
         if (!HasInspectorBody)
         {
             MaterialEditor.Clear();
