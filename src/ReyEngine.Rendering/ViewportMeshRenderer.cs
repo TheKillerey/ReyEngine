@@ -164,7 +164,7 @@ void main() {
     float light = 0.35 + 0.75 * d;
     vec3 col = base * light;
 
-    // Specular highlight — computed only when the material's profile enables it (League materials are
+    // Specular highlight - computed only when the material's profile enables it (League materials are
     // diffuse/lambert by default). Blinn-Phong half-vector term.
     float specTerm = 0.0;
     if (uUsesSpec == 1) {
