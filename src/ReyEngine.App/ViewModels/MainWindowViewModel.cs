@@ -720,6 +720,35 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (keep.Count != _selection.Count) _selection.SetMany(keep);
     }
 
+    /// <summary>Tools ▸ Map Material Diagnostics — scan the loaded map's bins + mapgeo and write an honest
+    /// report (classes, exposed vs unknown fields, lighting/lightmap/visibility signals) to
+    /// <c>.reyengine/reports/materials_diagnostics_&lt;map&gt;.json</c> (M33).</summary>
+    [RelayCommand]
+    private void MapMaterialDiagnostics()
+    {
+        if (_currentMap is null || _currentMapEntry is not { } entry || _currentMapBytes is null)
+        { _log.Warn("Diagnostics", "Load a map first, then run Map Material Diagnostics."); return; }
+        try
+        {
+            var dir = entry.Path[..(entry.Path.LastIndexOf('/') + 1)];
+            var bins = new List<(string, byte[])>();
+            foreach (var e in AssetEntries.Where(e => e.IsResolved
+                         && e.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)
+                         && e.Path.StartsWith(dir, StringComparison.OrdinalIgnoreCase)))
+            { try { bins.Add((e.Path, ReadAsset(e.PathHash))); } catch { /* skip unreadable */ } }
+
+            var report = MapDiagnosticsReport.Build(entry.DisplayName, bins, _currentMapBytes, ResolveBinName);
+            var safe = new string(entry.DisplayName.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
+            var path = Path.Combine(ProjectWorkspace.ReportsDir(Project), $"materials_diagnostics_{safe}.json");
+            File.WriteAllText(path, report.ToJson());
+            _log.Success("Diagnostics", $"Map diagnostics written: {path}");
+            foreach (var f in report.LightmapFindings.Concat(report.LightingFindings)
+                         .Concat(report.VisibilityFindings).Concat(report.PreviewFindings))
+                _log.Info("Diagnostics", f);
+        }
+        catch (Exception ex) { _log.Error("Diagnostics", ex.Message); }
+    }
+
     /// <summary>Index the baron/dragon visibility controllers from the map's sibling .bin files.</summary>
     private void BuildMapControllers(string mapgeoPath)
     {

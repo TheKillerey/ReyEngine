@@ -11,6 +11,16 @@ public static class ProjectWorkspace
         return dir;
     }
 
+    /// <summary>Folder for generated developer reports (diagnostics, etc.): <c>&lt;workspace&gt;/.reyengine/reports</c>,
+    /// falling back to the shared data root when no project is saved.</summary>
+    public static string ReportsDir(ReyProject project)
+    {
+        var root = project.WorkspaceDirectory ?? ReyPaths.DataRoot;
+        var dir = Path.Combine(root, ".reyengine", "reports");
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
     public static string BuildDir(ReyProject project)
     {
         var root = project.OutputDirectory

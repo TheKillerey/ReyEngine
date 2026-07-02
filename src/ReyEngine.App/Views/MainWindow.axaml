@@ -62,6 +62,8 @@
         <MenuItem Header="Assign Animation…" Command="{Binding AssignAnimationCommand}" />
         <MenuItem Header="Scan Riot Shaders" Command="{Binding ScanRiotShadersCommand}" />
         <MenuItem Header="Export Shader Dump…" Command="{Binding ExportShaderDumpCommand}" />
+        <MenuItem Header="Map Material Diagnostics" Command="{Binding MapMaterialDiagnosticsCommand}"
+                  ToolTip.Tip="Scan the loaded map's bins + mapgeo and write an honest diagnostics report (classes, unknown fields, lighting/lightmap/visibility) to .reyengine/reports/" />
         <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
       </MenuItem>
       <MenuItem Header="_Project">
