@@ -57,30 +57,50 @@ public sealed class MapVisibilityResolver
         d.ControllerBaronBits = ctrl.BaronBits;
         d.ControllerNotVisible = ctrl.NotVisible;
 
-        // Dragon: the per-mesh layer bitmask is authoritative (verified against Map11's flag histogram — a
-        // mesh belongs to exactly the dragon layers its bits name). The controller's dragon bits are reported
-        // in the diagnostic for transparency but do NOT widen visibility, otherwise base-flagged meshes with
-        // an elemental controller would wrongly re-appear under every dragon (the very bug M33 fixes).
-        d.DragonVisible = MapVisibility.VisibleForDragon(flags, dragonBit);
+        // Mirrors MapgeoAddon.update_environment_visibility exactly.
+        // STEP 1 — dragon. The Base bit stays visible under every dragon (the foundation), UNLESS the mesh's
+        // visibility controller carries dragon bits: then the controller OVERRIDES the bitmask (this is how a
+        // base mesh gets disabled), applying ParentMode 3 as an inversion. A controller dragon set that
+        // includes Base (bit 1) counts as "in-list" for any dragon.
+        bool controllerOverrodeDragon = false;
+        if (dragonBit == 0)
+        {
+            d.DragonVisible = true; // "All" — no dragon filter
+        }
+        else if (d.HasController && ctrl.DragonBits != 0)
+        {
+            controllerOverrodeDragon = true;
+            bool inList = (ctrl.DragonBits & MapVisibility.BaseBit) != 0 || (ctrl.DragonBits & dragonBit) != 0;
+            d.DragonVisible = ctrl.NotVisible ? !inList : inList;
+        }
+        else
+        {
+            d.DragonVisible = MapVisibility.VisibleForDragon(flags, dragonBit); // bitmask; Base foundation on
+        }
 
-        // Baron: resolved purely from the controller (bit 0 = "All" = no filter).
+        // STEP 2 — baron. Controller baron bits + ParentMode (bit 0 / no baron bits = "All" = visible).
         d.BaronVisible = ctrl.VisibleForBaron(baronBit);
 
-        d.Reason = BuildReason(d, d.DragonVisible);
+        d.Reason = BuildReason(d, controllerOverrodeDragon);
         return d;
     }
 
-    private static string BuildReason(VisibilityDiagnostic d, bool bitmaskVis)
+    private static string BuildReason(VisibilityDiagnostic d, bool controllerOverrodeDragon)
     {
         if (!d.DragonVisible)
-            return $"hidden: dragon '{d.DragonName}' (bit {d.DragonBit}) is not in the mesh's layer mask {d.Flags} [{d.FlagLabel}]";
+            return controllerOverrodeDragon
+                ? $"hidden: controller {(d.ControllerNotVisible ? "excludes" : "restricts to")} dragon bits {d.ControllerDragonBits}, which {(d.ControllerNotVisible ? "includes" : "omits")} '{d.DragonName}'"
+                : $"hidden: dragon '{d.DragonName}' (bit {d.DragonBit}) is not in the mesh's layer mask {d.Flags} [{d.FlagLabel}]";
         if (!d.BaronVisible)
             return d.ControllerNotVisible
                 ? $"hidden: controller excludes baron '{d.BaronName}' (controller baron bits {d.ControllerBaronBits}, inverted)"
                 : $"hidden: baron '{d.BaronName}' (bit {d.BaronBit}) is not in the controller's baron bits {d.ControllerBaronBits}";
 
-        var why = d.DragonBit == 0 ? "no dragon filter" : $"layer mask {d.Flags} [{d.FlagLabel}] includes '{d.DragonName}'";
-        var baronWhy = d.BaronBit == 0 ? "no baron filter" : "controller allows this baron state";
+        string why = d.DragonBit == 0 ? "no dragon filter"
+            : controllerOverrodeDragon ? $"controller dragon bits {d.ControllerDragonBits} allow '{d.DragonName}'"
+            : (d.Flags & MapVisibility.BaseBit) != 0 && (d.Flags & d.DragonBit) == 0 ? $"Base foundation (layer mask {d.Flags}) is visible under every dragon"
+            : $"layer mask {d.Flags} [{d.FlagLabel}] includes '{d.DragonName}'";
+        string baronWhy = d.BaronBit == 0 ? "no baron filter" : "controller allows this baron state";
         return $"visible: {why}; {baronWhy}";
     }
 
