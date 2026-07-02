@@ -120,6 +120,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _shaderDbStatus = "Riot shaders not scanned.";
     private MapGeoAsset? _currentMap;
     private MapVisibilityControllers? _mapControllers;
+    private MapVisibilityResolver? _visibilityResolver;
     private ShaderDatabase? _shaderDb;
 
     public MainWindowViewModel()
@@ -645,6 +646,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_currentMap is { } clearedMap) UndoService.PurgeContext(clearedMap);
         _currentMap = null;
         _mapControllers = null;
+        _visibilityResolver = null;
         _currentMapBytes = null;
         _currentMapEntry = null;
         _selection.Clear();
@@ -679,16 +681,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_currentMap is not { } map) { CurrentModelSubmeshVisible = null; return; }
         int dragonBit = SelectedDragonIndex <= 0 ? 0 : MapVisibility.Dragons[SelectedDragonIndex - 1].Bit;
         int baronBit = SelectedBaronIndex <= 0 ? 0 : MapVisibility.Barons[SelectedBaronIndex - 1].Bit;
+        var resolver = _visibilityResolver ??= new MapVisibilityResolver(_mapControllers);
         var vis = new bool[map.Groups.Count];
         for (int i = 0; i < vis.Length; i++)
         {
             var g = map.Groups[i];
-            bool dragonVisible = MapVisibility.VisibleForDragon(g.VisibilityFlags, dragonBit);
-            bool baronVisible = baronBit == 0 || (_mapControllers?.Resolve(g.ControllerHash).VisibleForBaron(baronBit) ?? true);
-            vis[i] = dragonVisible && baronVisible;
+            vis[i] = resolver.IsVisible(g.VisibilityFlags, g.ControllerHash, dragonBit, baronBit);
         }
         CurrentModelSubmeshVisible = vis;
+        RefreshMeshVisibilityDiagnostic();  // keep the inspector's "why visible/hidden" in sync
         PruneSelectionToVisible(); // hidden (filtered-out) meshes must not stay selected/transformable
+    }
+
+    /// <summary>Current dragon/baron bits from the selectors (0 = "All").</summary>
+    private int CurrentDragonBit => SelectedDragonIndex <= 0 ? 0 : MapVisibility.Dragons[SelectedDragonIndex - 1].Bit;
+    private int CurrentBaronBit => SelectedBaronIndex <= 0 ? 0 : MapVisibility.Barons[SelectedBaronIndex - 1].Bit;
+
+    /// <summary>Visibility diagnostic for the primary-selected mesh under the current dragon/baron filters (M33).</summary>
+    [ObservableProperty] private string _meshVisibilityReason = "";
+
+    private void RefreshMeshVisibilityDiagnostic()
+    {
+        if (_selection.Primary is not { } m || _visibilityResolver is null) { MeshVisibilityReason = ""; return; }
+        var d = _visibilityResolver.Resolve(m.VisibilityFlags, m.ControllerHash, CurrentDragonBit, CurrentBaronBit);
+        MeshVisibilityReason = d.Reason;
     }
 
     /// <summary>Drop any selected meshes that the current visibility filter hides (a mesh is visible if
@@ -716,6 +732,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             try { bins.Add(ReadAsset(e.PathHash)); } catch { /* skip unreadable bins */ }
         }
         _mapControllers = MapVisibilityControllers.Build(bins);
+        _visibilityResolver = new MapVisibilityResolver(_mapControllers);
         if (_mapControllers.BaronControllerCount > 0)
             _log.Info("MapGeo", $"Baron visibility: {_mapControllers.Count} controllers ({_mapControllers.BaronControllerCount} baron) from {bins.Count} bin(s).");
         else
@@ -844,6 +861,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (primary is not null) RefreshMeshTransformFields(primary);
         SyncTreeHighlight();
         RefreshSelectionVisuals();
+        RefreshMeshVisibilityDiagnostic();
     }
 
     /// <summary>Mirror the SelectionSet onto the tree: mark selected rows' <c>IsSelected</c>, and keep the

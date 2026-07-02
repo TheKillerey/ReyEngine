@@ -21,18 +21,20 @@ public static class MapVisibility
         new("Base", 1), new("Cup", 2), new("Tunnel", 4), new("Upgraded", 8),
     };
 
-    /// <summary>The Base layer bit (Layer1) — the map's always-present foundation (floor/structures).</summary>
+    /// <summary>The Base layer bit (Layer1) — the "no elemental dragon" state.</summary>
     public const int BaseBit = 1;
 
     /// <summary>
-    /// Visible for the chosen dragon? bit 0 = "All" (no filter); flags 0/255 are visible everywhere;
-    /// the <see cref="BaseBit"/> (Base/Layer1) foundation stays under every dragon so the floor never
-    /// disappears — dragon layers are additive on top of Base (matches the MapgeoAddon preview).
+    /// Visible for the chosen dragon layer? A mesh shows for dragon state <paramref name="dragonBit"/> iff
+    /// that layer's bit is set in its <paramref name="flags"/> mask (matching how the game activates a single
+    /// layer bit at a time). <c>dragonBit == 0</c> means "All" (no filter); <c>flags == 0</c> means the mesh
+    /// carries no layer info and is unconstrained. Meshes flagged for all layers (255) match every dragon.
+    /// (M33 fix: the old "Base bit forces visible everywhere" override wrongly kept Base/multi-layer meshes
+    /// on for every dragon — verified against Map11's flag histogram where base geometry is swapped per layer.)
     /// </summary>
     public static bool VisibleForDragon(int flags, int dragonBit)
         => dragonBit == 0
-           || flags == 0 || flags == 255
-           || (flags & BaseBit) != 0
+           || flags == 0
            || (flags & dragonBit) != 0;
 
     /// <summary>Human-readable layer label for a mesh's bitmask (used for the layer-group tree).</summary>
