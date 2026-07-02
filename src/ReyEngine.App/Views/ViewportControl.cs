@@ -250,7 +250,7 @@ public sealed class ViewportControl : OpenGlControlBase
             if (Mesh is { } m)
             {
                 var subs = m.SubMeshes.Select(s => (s.StartIndex, s.IndexCount)).ToList();
-                _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax, subs);
+                _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax, subs, m.Colors);
                 _needFrame = true;
                 _texturesDirty = true;
                 _skinDirty = true;

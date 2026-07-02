@@ -17,9 +17,11 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mMask, _mGradient, _mEmissive, _mHasMask, _mHasGradient, _mHasEmissive;
     private int _mMatCap, _mMatCapMask, _mHasMatCap, _mHasMatCapMask, _mView;
     private int _mUvScaleOffset, _mUvRot, _mUsesRim, _mUsesSpec;   // M32: per-material UV + feature flags
+    private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
     private int _lMvp, _lColor;
 
-    private uint _vao, _vbo, _ebo, _wireEbo;
+    private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo;
+    private bool _hasVertexColor;
     private int _indexCount, _wireIndexCount;
     private bool _hasMesh;
     private float[]? _interleaved; // kept so per-frame skinning can update pos+normal in place
@@ -72,26 +74,30 @@ public sealed class ViewportMeshRenderer : IDisposable
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUv;
+layout(location = 3) in vec4 aColor;   // PrimaryColor (defaults to white via VertexAttrib4f when absent)
 uniform mat4 uMvp;
 uniform mat4 uModel;
 out vec3 vN;
 out vec2 vUv;
 out vec3 vWorld;
+out vec4 vColor;
 void main() {
     vN = mat3(uModel) * aNormal;
     vUv = aUv;
+    vColor = aColor;
     vWorld = (uModel * vec4(aPos, 1.0)).xyz;
     gl_Position = uMvp * vec4(aPos, 1.0);
 }";
 
     // uMode: 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal · 5 Debug mask
-    //        6 Debug emissive · 7 Debug matcap · 8 Debug UV checker · 9 Debug specular
+    //        6 Debug emissive · 7 Debug matcap · 8 Debug UV checker · 9 Debug specular · 10 Debug vertex color
     // M32: rim + specular are gated per-material (uUsesRim/uUsesSpec) — no fake specular by default.
     // The base UV is transformed per-material by uUvScaleOffset (xy scale, zw offset) + uUvRot (radians).
     private const string MeshFrag = @"
 in vec3 vN;
 in vec2 vUv;
 in vec3 vWorld;
+in vec4 vColor;
 out vec4 FragColor;
 uniform vec3 uLight;
 uniform sampler2D uTex;
@@ -114,6 +120,7 @@ uniform vec4 uUvScaleOffset;   // xy = scale, zw = offset (identity = 1,1,0,0)
 uniform float uUvRot;          // radians, rotate about (0.5, 0.5); 0 = none
 uniform int uUsesRim;          // fresnel rim highlight only when the material profile asks for it
 uniform int uUsesSpec;         // specular highlight only when the material profile asks for it
+uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map baked-term/mask data)
 
 // League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
 vec3 matcapColour(vec3 worldN) {
@@ -157,6 +164,9 @@ void main() {
         vec2 t = floor(uv * 8.0);
         float c = mod(t.x + t.y, 2.0);
         FragColor = vec4(mix(vec3(0.14, 0.15, 0.19), vec3(0.85, 0.86, 0.92), c), 1.0); return;
+    }
+    if (uMode == 10) {                                                       // debug: vertex color (magenta if none)
+        FragColor = uHasVertexColor == 1 ? vec4(vColor.rgb, 1.0) : vec4(0.8, 0.0, 0.8, 1.0); return;
     }
 
     vec3 viewDir = normalize(uCamPos - vWorld);
@@ -238,6 +248,7 @@ void main() { FragColor = uColor; }";
         _mUvRot = gl.GetUniformLocation(_meshProgram, "uUvRot");
         _mUsesRim = gl.GetUniformLocation(_meshProgram, "uUsesRim");
         _mUsesSpec = gl.GetUniformLocation(_meshProgram, "uUsesSpec");
+        _mHasVertexColor = gl.GetUniformLocation(_meshProgram, "uHasVertexColor");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -259,7 +270,8 @@ void main() { FragColor = uColor; }";
     }
 
     public unsafe void SetMesh(float[] positions, float[] normals, float[] uvs, uint[] indices,
-        int vertexCount, Vector3 min, Vector3 max, IReadOnlyList<(int start, int count)> submeshes)
+        int vertexCount, Vector3 min, Vector3 max, IReadOnlyList<(int start, int count)> submeshes,
+        float[]? colors = null)
     {
         if (!_ready) return;
         DeleteMeshBuffers();
@@ -294,6 +306,24 @@ void main() { FragColor = uColor; }";
         _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
         _gl.EnableVertexAttribArray(2);
         _gl.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, stride, (void*)(6 * sizeof(float)));
+
+        // Vertex color (location 3) lives in its own buffer so the stride-8 pos/normal/uv layout — and the
+        // per-frame skinning that rewrites it — stay untouched. Absent → a constant white generic attribute.
+        _hasVertexColor = colors is { Length: > 0 } && colors.Length >= vertexCount * 4;
+        if (_hasVertexColor)
+        {
+            _colorVbo = _gl.GenBuffer();
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _colorVbo);
+            fixed (float* cp = colors)
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(colors!.Length * sizeof(float)), cp, BufferUsageARB.StaticDraw);
+            _gl.EnableVertexAttribArray(3);
+            _gl.VertexAttribPointer(3, 4, VertexAttribPointerType.Float, false, 4 * sizeof(float), (void*)0);
+        }
+        else
+        {
+            _gl.DisableVertexAttribArray(3);
+            _gl.VertexAttrib4(3, 1f, 1f, 1f, 1f); // constant white when the mesh has no PrimaryColor
+        }
 
         _ebo = _gl.GenBuffer();
         _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
@@ -503,6 +533,7 @@ void main() { FragColor = uColor; }";
                 _gl.Uniform3(_mLight, -0.4f, -0.85f, -0.45f);
                 _gl.Uniform3(_mBaseColor, 0.62f, 0.66f, 0.74f);
                 _gl.Uniform1(_mMode, previewMode);
+                _gl.Uniform1(_mHasVertexColor, _hasVertexColor ? 1 : 0);
                 _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);
                 _gl.UniformMatrix4(_mView, 1, false, in view.M11);
                 _gl.Uniform1(_mTex, 0);
@@ -675,7 +706,9 @@ void main() { FragColor = uColor; }";
         _gl.DeleteBuffer(_vbo);
         _gl.DeleteBuffer(_ebo);
         _gl.DeleteBuffer(_wireEbo);
+        if (_colorVbo != 0) { _gl.DeleteBuffer(_colorVbo); _colorVbo = 0; }
         _gl.DeleteVertexArray(_vao);
+        _hasVertexColor = false;
         _hasMesh = false;
     }
 

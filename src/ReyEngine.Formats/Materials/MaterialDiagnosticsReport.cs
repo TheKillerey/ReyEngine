@@ -120,7 +120,7 @@ public sealed class MapDiagnosticsReport
                 report.LightmapFindings.Add($"Lightmap data detected: {mapgeoInfo.MeshesWithStationaryLightTexture} StationaryLight + {mapgeoInfo.MeshesWithBakedLightTexture} BakedLight textures, {mapgeoInfo.MeshesWithLightmapUv} meshes with Texcoord1. This can drive a lightmap preview.");
 
             if (mapgeoInfo.MeshesWithVertexColor > 0)
-                report.PreviewFindings.Add($"Vertex color (PrimaryColor) present on {mapgeoInfo.MeshesWithVertexColor}/{mapgeoInfo.MeshCount} meshes — this is the baked ambient/tint this format uses instead of lightmaps.");
+                report.PreviewFindings.Add($"Vertex color (PrimaryColor) present on {mapgeoInfo.MeshesWithVertexColor}/{mapgeoInfo.MeshCount} meshes — decoded and viewable via the 'Debug ▸ Vertex Color' view. On SR it is largely 0/1 per-vertex data (blend masks / shader terms, mean luminance ~0.4), NOT a smooth baked-light multiplier, so it is deliberately NOT applied as lighting (applying it would darken/patch the map = invented lighting).");
             else
                 report.PreviewFindings.Add("No PrimaryColor vertex attribute on this map's meshes.");
 

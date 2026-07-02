@@ -360,6 +360,7 @@
                 <ComboBoxItem>Debug · MatCap</ComboBoxItem>
                 <ComboBoxItem>Debug · UV Checker</ComboBoxItem>
                 <ComboBoxItem>Debug · Specular</ComboBoxItem>
+                <ComboBoxItem>Debug · Vertex Color</ComboBoxItem>
               </ComboBox>
               <ToggleButton Content="Wireframe" IsChecked="{Binding ShowWireframe}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Bones" IsChecked="{Binding ShowBones}" FontSize="11" Padding="8,3" />

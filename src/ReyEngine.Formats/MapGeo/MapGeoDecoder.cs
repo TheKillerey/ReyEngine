@@ -17,6 +17,8 @@ public static class MapGeoDecoder
         var positions = new List<float>();
         var normals = new List<float>();
         var uvs = new List<float>();
+        var colors = new List<float>();   // PrimaryColor RGBA 0..1 (white when a mesh has none)
+        bool anyColor = false;
         var indices = new List<uint>();
         var groups = new List<MapGeoGroup>();
         var meshes = new List<MapGeoMesh>();
@@ -41,6 +43,8 @@ public static class MapGeoDecoder
                 var meshPos = ReadVector3(view.GetAccessor(ElementName.Position), vc);
                 var meshNrm = view.TryGetAccessor(ElementName.Normal, out var nAcc) ? ReadVector3(nAcc, vc) : null;
                 var meshUv = view.TryGetAccessor(ElementName.Texcoord0, out var tAcc) ? ReadVector2(tAcc, vc) : null;
+                var meshCol = view.TryGetAccessor(ElementName.PrimaryColor, out var cAcc) ? ReadColor(cAcc, vc) : null;
+                if (meshCol is not null) anyColor = true;
 
                 var meshMin = new Vector3(float.MaxValue);
                 var meshMax = new Vector3(float.MinValue);
@@ -63,6 +67,9 @@ public static class MapGeoDecoder
 
                     if (meshUv is not null) { uvs.Add(meshUv[i].X); uvs.Add(meshUv[i].Y); }
                     else { uvs.Add(0f); uvs.Add(0f); }
+
+                    if (meshCol is not null) { var c = meshCol[i]; colors.Add(c.X); colors.Add(c.Y); colors.Add(c.Z); colors.Add(c.W); }
+                    else { colors.Add(1f); colors.Add(1f); colors.Add(1f); colors.Add(1f); }
                 }
 
                 var ia = mesh.Indices;
@@ -111,6 +118,8 @@ public static class MapGeoDecoder
             Positions = positions.ToArray(),
             Normals = normals.ToArray(),
             Uvs = uvs.ToArray(),
+            Colors = anyColor ? colors.ToArray() : null,
+            HasVertexColor = anyColor,
             Indices = indices.ToArray(),
             Groups = groups,
             Meshes = meshes,
@@ -141,6 +150,27 @@ public static class MapGeoDecoder
                 var h = arr[i];
                 result[i] = new Vector3((float)h.Item1, (float)h.Item2, (float)h.Item3);
             }
+        }
+        return result;
+    }
+
+    // PrimaryColor is BGRA_Packed8888 (bytes) — normalize to RGBA 0..1. Falls back to Vector4 float colors.
+    private static Vector4[] ReadColor(VertexElementAccessor acc, int count)
+    {
+        var result = new Vector4[count];
+        try
+        {
+            var arr = acc.AsBgraU8Array();
+            for (int i = 0; i < count; i++)
+            {
+                var c = arr[i]; // (byte b, byte g, byte r, byte a)
+                result[i] = new Vector4(c.r / 255f, c.g / 255f, c.b / 255f, c.a / 255f);
+            }
+        }
+        catch
+        {
+            try { var arr = acc.AsVector4Array(); for (int i = 0; i < count; i++) result[i] = arr[i]; }
+            catch { for (int i = 0; i < count; i++) result[i] = Vector4.One; }
         }
         return result;
     }

@@ -12,6 +12,8 @@ public sealed class MapGeoAsset
     public required float[] Positions { get; init; }
     public required float[] Normals { get; init; }
     public required float[] Uvs { get; init; }
+    public float[]? Colors { get; init; }        // 4 floats / vertex (RGBA 0..1) from PrimaryColor; null if none
+    public bool HasVertexColor { get; init; }
     public required uint[] Indices { get; init; }
     public required IReadOnlyList<MapGeoGroup> Groups { get; init; }
     public IReadOnlyList<MapGeoMesh> Meshes { get; init; } = Array.Empty<MapGeoMesh>();

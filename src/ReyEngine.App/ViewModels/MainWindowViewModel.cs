@@ -1334,6 +1334,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     Positions = m.Positions,
                     Normals = m.Normals,
                     Uvs = m.Uvs,
+                    Colors = m.Colors,
                     Indices = m.Indices,
                     VertexCount = m.VertexCount,
                     SubMeshes = m.Groups.Select(g => new SubMeshInfo(g.Material, g.StartIndex, g.IndexCount, 0)).ToList(),
