@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using ReyEngine.Core.Assets;
 
@@ -22,6 +23,12 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsModified))]
     private AssetStatus _status = AssetStatus.Original;
+
+    /// <summary>Lazily-loaded Content Browser thumbnail (texture files + material diffuse). Null until decoded.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasThumbnail))]
+    private Bitmap? _thumbnail;
+    public bool HasThumbnail => Thumbnail is not null;
 
     public AssetNodeViewModel(AssetTreeNode model)
     {
@@ -58,6 +65,13 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
     public bool IsFolder => Model?.IsFolder ?? _virtualIsFolder;
     public WadAssetEntry? Entry => Model?.Entry;
     public bool IsModified => Status == AssetStatus.Modified;
+
+    /// <summary>The texture path whose decoded image is this node's thumbnail (a texture file, or a
+    /// material's diffuse). Null when the node has no previewable image.</summary>
+    public string? ThumbnailPath => IsMaterial
+        ? MaterialAsset!.DiffusePath
+        : Entry?.Type is AssetType.Texture or AssetType.Dds ? Entry.Path : null;
+    public bool WantsThumbnail => !IsFolder && !string.IsNullOrEmpty(ThumbnailPath);
 
     public bool IsReadOnly => IsMaterial ? MaterialAsset!.ReadOnly : Entry is { ReadOnly: true };
     public bool HasConflict => Entry is { HasConflict: true };

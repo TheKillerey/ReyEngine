@@ -37,6 +37,9 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
     /// <summary>Host hook: open a material virtual-asset in the Material Editor.</summary>
     public Action<MaterialAssetViewModel>? MaterialSelected { get; set; }
 
+    /// <summary>Host hook: lazily load thumbnails for the items now shown (textures + material diffuse).</summary>
+    public Action<IReadOnlyList<AssetNodeViewModel>>? RequestThumbnails { get; set; }
+
     [RelayCommand]
     private void OpenMaterial(MaterialAssetViewModel? material)
     {
@@ -90,6 +93,10 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
         for (var n = folder; n is not null; n = n.Parent) Breadcrumbs.Insert(0, n);
         LocationText = folder is null ? "/" : "/" + string.Join(" / ", Breadcrumbs.Select(b => b.Name));
         CanGoUp = folder is not null;
+
+        // Lazily load thumbnails only for what's now on screen.
+        if (RequestThumbnails is { } req)
+            req(Items.Where(i => i.WantsThumbnail && !i.HasThumbnail).ToList());
     }
 
     [RelayCommand]

@@ -35,6 +35,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private WadArchive? _archive;
     private AssetMountService? _mounts;          // project mode: the virtual file system
     private readonly AssetOverrideStore _overrides = new();
+    private readonly ReyEngine.App.Services.ThumbnailService _thumbnails; // Content Browser lazy thumbnails
     private readonly Dictionary<ulong, AssetNodeViewModel> _nodesByHash = new();
 
     private bool ContentLoaded => _archive is not null || _mounts is not null;
@@ -167,6 +168,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ContentBrowser.FileSelected = node => SelectedNode = node;
         ContentBrowser.ExtractMaterials = ExtractMaterialsForNode;
         ContentBrowser.MaterialSelected = OpenMaterialAsset;
+        _thumbnails = new ThumbnailService(p =>
+        {
+            var img = LoadTextureByPath(p);
+            return img is null ? null : BitmapFactory.FromRgbaThumbnail(img);
+        });
+        ContentBrowser.RequestThumbnails = nodes =>
+        {
+            foreach (var n in nodes) _thumbnails.Request(n.ThumbnailPath, bmp => n.Thumbnail = bmp);
+        };
         MapContent.OpenMap = node => SelectedNode = node;
         LoadRecentProjects(RecentProjects.Load());
     }
@@ -1922,6 +1932,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_mounts is null) return;
         RootNodes.Clear();
         _nodesByHash.Clear();
+        _thumbnails.Clear();
 
         var projectGroup = new AssetTreeNode { Name = "Project", IsFolder = true };
         foreach (var mount in _mounts.Mounts.Where(m => m.Kind != AssetSourceKind.RiotReference))
