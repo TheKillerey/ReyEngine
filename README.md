@@ -5,16 +5,23 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M29 complete.** **Undo/Redo.** Every edit is now a reversible command on a global stack:
-> **Ctrl+Z / Ctrl+Y** (or Ctrl+Shift+Z), Edit-menu entries that name the step ("Undo Move Mesh", "Redo Edit
-> Diffuse_Texture"), and ↶/↷ buttons in the viewport bar. Covered: mesh **move/rotate/scale/reset** (a whole
-> gizmo drag = one undo step — state captured at press/release, not per pointer-move), **.bin value edits**,
-> **material texture paths**, **material parameters**, and **sampler add/remove** (undo re-inserts the *exact*
-> original bin element, not a re-clone). Retyping the same field merges into one step. Safety: failed edits never
-> enter the stack; undoing a transform re-syncs viewport + fields + highlight; commands are purged when their
-> document is replaced (new map/bin/material load) and the stack clears on project/WAD open; the title-bar `*`
-> tracks the stack's savepoint. Verified with a 27-check suite on real SR/Aatrox data — undo restores exact
-> vertices and round-trips exact serialized values, so save/build after undo ships the undone state.
+> Status: **M30 complete.** **Multi-select + batch transform for MAPGEO meshes.** Hold **Ctrl** and click
+> meshes in the viewport (or Ctrl+click rows in the Map Content tree) to build a selection; a plain click
+> single-selects, an empty click clears. Every selected mesh gets its own amber highlight box, the group gets a
+> cool-blue combined bounds box, and **one gizmo sits at the selection center** — dragging it moves the whole
+> group rigidly. The inspector swaps to a **Batch Transform** panel (count, move Δ, rotate/scale about the
+> selection center, **Reset Selected**, **Clear Selection**); the status bar shows *"N meshes selected"*.
+> Batch ops compose through a world-space **GroupMatrix** applied *after* each mesh's own transform, so rotation
+> and scale happen around the true group center without disturbing single-select fields. Every batch edit
+> (drag or numeric) is **one Undo step** (`BatchTransformCommand`) that restores/reapplies every mesh exactly;
+> persistence reuses the M25 byte-patcher so all changed transforms ship in the build. Hidden (visibility-
+> filtered) meshes are pruned from the selection so they're never transformed. Verified with a 20-check suite on
+> real SR Map11 geometry — rigid rotate, 2× scale doubling distance-to-center, undo/redo to exact vertices, and
+> byte-patch round-trip all pass; single-select is unchanged.
+>
+> Previously (**M29**): **Undo/Redo** — every edit is a reversible command on a global stack (**Ctrl+Z / Ctrl+Y**,
+> Edit-menu steps, ↶/↷ buttons) covering mesh move/rotate/scale/reset, .bin values, material texture paths &
+> params, and sampler add/remove; title-bar `*` savepoint; stale-document purge.
 >
 > Status: **M28 complete.** **Viewport editing now actually works like Blender/UE.** Three fixes from live
 > testing: (1) the mesh itself now moves when you drag — the vertex re-upload ran on the UI thread where no GL
@@ -357,6 +364,7 @@ No Play button — this is an editor, not a runtime.
 | **M24–M25 ✅** | **Mesh move/reposition** — per-mesh vertex tracking + live viewport translate; persist by surgically patching the transform translation via its `[BoundingBox][Transform]` signature (LeagueToolkit's `EnvironmentAsset.Write` is lossy, so we never re-serialize) → saved to the override + Build Package |
 | **M26 ✅** | **Mesh rotate + scale** (around the mesh's own pivot) — live viewport preview via a pristine-vertex snapshot; persist by patching the *full* transform matrix + recomputed bounding box; Reset button; verified against hand-computed matrices + round-trip re-decode on two real maps |
 | **M27 ✅** | **Selection highlight + translate gizmo** — amber wireframe box around the selected mesh (always on top); click-drag 3-axis gizmo (X/Y/Z) to move it live via real 3D ray-picking (`ViewportPicking`: project/unproject/closest-point-on-axis, independently verified with 9 round-trip checks); numeric fields stay in sync; Save to Mod persists via the M25/M26 patcher |
+| **M30 ✅** | **Multi-select + batch transform** — `Core/Selection` (`SelectionSet<T>`: primary anchor, toggle/re-anchor, Changed event) · Ctrl+click viewport + tree multi-select, per-mesh amber highlight boxes + cool-blue group bounds, one gizmo at the selection center · **Batch Transform** inspector (move Δ · rotate/scale about center · Reset Selected · Clear Selection) · world-space `GroupMatrix` applied after each mesh's own transform so batch ops compose rigidly · one `BatchTransformCommand` per batch edit (drag or numeric) → one Undo step restoring every mesh exactly · byte-patch persistence carries the GroupMatrix · visibility-filtered meshes pruned from the selection · 20-check suite on real Map11 |
 | **M29 ✅** | **Undo/Redo** — `Core/Undo` (`IEditorCommand`, `UndoRedoService` with merge/purge/savepoint, `CompositeCommand` for M30 multi-select) · typed commands: `MeshTransformCommand` (drag = one step), `BinEditCommand`, `TexturePathEditCommand`, `MaterialParamEditCommand`, `SamplerAddRemoveCommand` (exact-element reinsert) · Ctrl+Z/Y + Edit menu + ↶/↷ buttons · title-bar dirty savepoint · stale-document purge |
 | **M28 ✅** | **Viewport editing fixed + click-to-select** — vertex re-upload moved onto the GL thread (the mesh actually moves now); pick ray derived purely from the render matrix (two-point unprojection, correct under the -X mirror); drag axis frozen at its press-time origin (kills the snap-back feedback loop); **click a mesh to select it** (exact triangle picking, visibility-aware, ~9ms/click, syncs the tree; empty click deselects) |
 | **M23 ✅** | **Baron pit visibility** — decode the map's visibility controllers (`MapVisibilityControllers`: Dragon `0xc406a533` / Baron `0xec733fe2` / Child `0xe21083b5`, recursing `Parents`/`ParentMode`) → resolve each mesh to Base/Cup/Tunnel/Upgraded bits; the Baron combobox now live-filters the baron pit, combined with the dragon filter |

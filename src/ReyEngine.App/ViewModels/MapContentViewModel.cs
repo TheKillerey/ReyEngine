@@ -4,11 +4,15 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace ReyEngine.App.ViewModels;
 
-public sealed class MapPieceViewModel
+public sealed partial class MapPieceViewModel : ObservableObject
 {
     public required string Name { get; init; }
     public required string Info { get; init; }
     public int MeshIndex { get; init; } = -1;   // index into MapGeoAsset.Meshes (for selection/move)
+
+    /// <summary>Multi-select highlight state (M30): mirrors the viewport SelectionSet so the tree row
+    /// shows as selected even when it isn't the TreeView's single SelectedItem.</summary>
+    [ObservableProperty] private bool _isSelected;
 }
 
 /// <summary>A visibility layer group (one distinct dragon bitmask) and the meshes it contains.</summary>

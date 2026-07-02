@@ -13,6 +13,7 @@
 
   <Window.Resources>
     <conv:LogLevelToBrushConverter x:Key="LevelToBrush" />
+    <conv:BoolToBrushConverter x:Key="SelectionHighlight" TrueBrush="#3336E2C2" FalseBrush="Transparent" />
   </Window.Resources>
 
   <DockPanel>
@@ -112,7 +113,11 @@
             Background="{DynamicResource ReyHeaderBrush}"
             BorderBrush="{DynamicResource ReyBorderBrush}"
             BorderThickness="0,1,0,0" Padding="10,4">
-      <TextBlock Text="{Binding Status}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Right" Text="{Binding SelectionStatus}" Foreground="{DynamicResource ReyAccentBrush}"
+                   FontSize="11" IsVisible="{Binding SelectionStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        <TextBlock Text="{Binding Status}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
+      </DockPanel>
     </Border>
 
     <!-- ============ MAIN AREA ============ -->
@@ -166,9 +171,62 @@
             </Grid>
           </StackPanel>
 
-          <!-- mesh transform panel (move / rotate / scale — shown when a mesh is selected) -->
+          <!-- BATCH transform panel (M30) — shown when 2+ meshes are selected -->
           <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyPanelAltBrush}" Padding="8,6" Margin="0,4,0,0"
-                  IsVisible="{Binding SelectedMapMesh, Converter={x:Static ObjectConverters.IsNotNull}}">
+                  IsVisible="{Binding IsMultiSelect}">
+            <StackPanel Spacing="4">
+              <TextBlock Text="BATCH TRANSFORM" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBlock Text="{Binding SelectionStatus}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" />
+              <TextBlock Text="Rotate/scale act around the selection center. Move is a world delta added to every mesh."
+                         FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+
+              <TextBlock Text="Move Δ (world)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
+                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="1" Text="{Binding BatchMoveX}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="3" Text="{Binding BatchMoveY}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="5" Text="{Binding BatchMoveZ}" FontSize="10" Padding="3,1" />
+              </Grid>
+              <Button Content="Move Selection" Command="{Binding ApplyBatchMoveCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
+
+              <TextBlock Text="Rotate Δ (degrees, about center)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
+                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="1" Text="{Binding BatchRotateX}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="3" Text="{Binding BatchRotateY}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="5" Text="{Binding BatchRotateZ}" FontSize="10" Padding="3,1" />
+              </Grid>
+              <Button Content="Rotate Selection" Command="{Binding ApplyBatchRotateCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
+
+              <TextBlock Text="Scale Δ (about center)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto">
+                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="1" Text="{Binding BatchScaleX}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="3" Text="{Binding BatchScaleY}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="5" Text="{Binding BatchScaleZ}" FontSize="10" Padding="3,1" />
+              </Grid>
+              <Button Content="Scale Selection" Command="{Binding ApplyBatchScaleCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
+
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+                <Button Content="Reset Selected" Command="{Binding ResetSelectedCommand}" FontSize="11" Padding="8,2"
+                        ToolTip.Tip="Restore every selected mesh to its original transform" />
+                <Button Content="Clear Selection" Command="{Binding ClearSelectionCommand}" FontSize="11" Padding="8,2" />
+                <Button Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
+                        IsEnabled="{Binding HasMapMoves}"
+                        Background="{DynamicResource ReyAccentBrush}" Foreground="#08221E" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <!-- mesh transform panel (move / rotate / scale — shown when exactly ONE mesh is selected) -->
+          <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyPanelAltBrush}" Padding="8,6" Margin="0,4,0,0"
+                  IsVisible="{Binding IsSingleSelect}">
             <StackPanel Spacing="4">
               <TextBlock Text="TRANSFORM MESH" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
               <TextBlock Text="{Binding SelectedMapMesh.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
@@ -215,8 +273,9 @@
             </StackPanel>
           </Border>
 
-          <!-- Meshes → Layer Groups → mesh names -->
-          <TreeView ItemsSource="{Binding MapContent.LayerGroups}" SelectedItem="{Binding SelectedTreeItem, Mode=TwoWay}"
+          <!-- Meshes → Layer Groups → mesh names.  Ctrl+click a mesh row toggles multi-select (M30). -->
+          <TreeView x:Name="MapContentTree"
+                    ItemsSource="{Binding MapContent.LayerGroups}" SelectedItem="{Binding SelectedTreeItem, Mode=TwoWay}"
                     Background="Transparent" BorderThickness="0" Padding="4,0">
             <TreeView.DataTemplates>
               <TreeDataTemplate DataType="vm:MapLayerGroupViewModel" ItemsSource="{Binding Meshes}">
@@ -227,11 +286,14 @@
                 </StackPanel>
               </TreeDataTemplate>
               <DataTemplate DataType="vm:MapPieceViewModel">
-                <StackPanel Orientation="Horizontal" Spacing="5">
-                  <TextBlock Text="🧊" FontSize="9" VerticalAlignment="Center" />
-                  <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
-                             TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                </StackPanel>
+                <Border Background="{Binding IsSelected, Converter={StaticResource SelectionHighlight}}"
+                        CornerRadius="2" Padding="3,0" Margin="-3,0">
+                  <StackPanel Orientation="Horizontal" Spacing="5">
+                    <TextBlock Text="🧊" FontSize="9" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                  </StackPanel>
+                </Border>
               </DataTemplate>
             </TreeView.DataTemplates>
           </TreeView>
@@ -254,8 +316,9 @@
                 ModelMatCapMaskTextures="{Binding CurrentModelMatCapMaskTextures}"
                 ModelSubmeshVisible="{Binding CurrentModelSubmeshVisible}"
                 MeshVerticesRevision="{Binding MeshVerticesRevision}"
-                SelectionBoundsMin="{Binding SelectionBoundsMin}"
-                SelectionBoundsMax="{Binding SelectionBoundsMax}"
+                SelectionBoxes="{Binding SelectionBoxes}"
+                GroupBoundsMin="{Binding GroupBoundsMin}"
+                GroupBoundsMax="{Binding GroupBoundsMax}"
                 GizmoPivot="{Binding GizmoPivot}"
                 Skeleton="{Binding CurrentSkeleton}"
                 AnimationClip="{Binding CurrentAnimation}"

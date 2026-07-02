@@ -70,23 +70,25 @@ public static class MapGeoWriter
 
     /// <summary>
     /// New transform + AABB for a mesh given its accumulated edit. Derivation: baked vertices are
-    /// <c>local * OriginalTransform</c>; we want <c>pivot + SR*(baked - pivot) + offset</c> where SR is
-    /// the mesh's scale-then-rotate matrix. Splitting OriginalTransform into its linear part L0 and
-    /// translation T0 gives: NewTransform.Linear = L0 * SR, NewTransform.Translation =
-    /// pivot + SR*(T0 - pivot) + offset. The same SR/pivot/offset applied to the original AABB corners
-    /// gives the new (axis-aligned) bounding box.
+    /// <c>local * OriginalTransform</c>; the self transform wants <c>pivot + SR*(baked - pivot) + offset</c>,
+    /// then the world-space GroupMatrix (batch ops) is applied on top: W(p) = self(p) * GroupMatrix.
+    /// Splitting OriginalTransform into linear L0 + translation T0: self-transform's matrix =
+    /// (L0*SR) with translation pivot + SR*(T0 - pivot) + offset; the final file transform is that * GroupMatrix.
+    /// The same full transform applied to the original AABB corners gives the new (axis-aligned) bounding box.
     /// </summary>
     private static (Matrix4x4 transform, Vector3 min, Vector3 max) ComputeNew(
         Matrix4x4 original, Vector3 boxMin, Vector3 boxMax, MapGeoMesh mv)
     {
         var sr = mv.ScaleRotationMatrix;
+        var group = mv.GroupMatrix;
         var pivot = mv.Pivot;
         var offset = mv.Offset;
 
         var linear = original with { Translation = Vector3.Zero };
-        var newLinear = linear * sr;
-        var newTranslation = pivot + Vector3.Transform(original.Translation - pivot, sr) + offset;
-        var newTransform = newLinear with { Translation = newTranslation };
+        var selfLinear = linear * sr;
+        var selfTranslation = pivot + Vector3.Transform(original.Translation - pivot, sr) + offset;
+        var selfTransform = selfLinear with { Translation = selfTranslation };
+        var newTransform = selfTransform * group; // apply the batch/group affine after the self transform
 
         Vector3 newMin = new(float.MaxValue), newMax = new(float.MinValue);
         for (int i = 0; i < 8; i++)
@@ -95,7 +97,8 @@ public static class MapGeoWriter
                 (i & 1) == 0 ? boxMin.X : boxMax.X,
                 (i & 2) == 0 ? boxMin.Y : boxMax.Y,
                 (i & 4) == 0 ? boxMin.Z : boxMax.Z);
-            var moved = pivot + Vector3.Transform(corner - pivot, sr) + offset;
+            var self = pivot + Vector3.Transform(corner - pivot, sr) + offset;
+            var moved = Vector3.Transform(self, group);
             newMin = Vector3.Min(newMin, moved);
             newMax = Vector3.Max(newMax, moved);
         }

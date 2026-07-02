@@ -31,8 +31,9 @@ public sealed class ViewportMeshRenderer : IDisposable
     private uint _boundsVao, _boundsVbo;
     private uint _boneVao, _boneVbo;
     private uint _highlightVao, _highlightVbo;
+    private uint _groupBoundsVao, _groupBoundsVbo;
     private uint _gizmoVao, _gizmoVbo;
-    private int _boundsVerts, _boneVerts, _highlightVerts;
+    private int _boundsVerts, _boneVerts, _highlightVerts, _groupBoundsVerts;
     private bool _hasGizmo;
     private Vector3 _gizmoPivot;
     private float _gizmoArmLength;
@@ -199,6 +200,8 @@ void main() { FragColor = uColor; }";
         _boneVbo = gl.GenBuffer();
         _highlightVao = gl.GenVertexArray();
         _highlightVbo = gl.GenBuffer();
+        _groupBoundsVao = gl.GenVertexArray();
+        _groupBoundsVbo = gl.GenBuffer();
         _gizmoVao = gl.GenVertexArray();
         _gizmoVbo = gl.GenBuffer();
         _ready = true;
@@ -345,9 +348,32 @@ void main() { FragColor = uColor; }";
     /// or clear it when either bound is null (e.g. no map mesh selected).</summary>
     public void SetHighlightBounds(Vector3? min, Vector3? max)
     {
+        if (min is { } a && max is { } b) SetHighlightBoxes(new[] { (a, b) });
+        else SetHighlightBoxes(Array.Empty<(Vector3, Vector3)>());
+    }
+
+    /// <summary>Draw an amber highlight box (always on top) around EACH selected mesh's world bounds.</summary>
+    public void SetHighlightBoxes(IReadOnlyList<(Vector3 min, Vector3 max)> boxes)
+    {
         if (!_ready) return;
-        if (min is not { } a || max is not { } b) { _highlightVerts = 0; return; }
-        UploadLines(_highlightVao, _highlightVbo, BuildBoxLines(a, b), out _highlightVerts);
+        if (boxes.Count == 0) { _highlightVerts = 0; return; }
+        var verts = new float[boxes.Count * 12 * 2 * 3];
+        int o = 0;
+        foreach (var (min, max) in boxes)
+        {
+            var box = BuildBoxLines(min, max);
+            Array.Copy(box, 0, verts, o, box.Length);
+            o += box.Length;
+        }
+        UploadLines(_highlightVao, _highlightVbo, verts, out _highlightVerts);
+    }
+
+    /// <summary>Draw a dimmer box around the whole selection (the group bounds), or clear it.</summary>
+    public void SetGroupBounds(Vector3? min, Vector3? max)
+    {
+        if (!_ready) return;
+        if (min is not { } a || max is not { } b) { _groupBoundsVerts = 0; return; }
+        UploadLines(_groupBoundsVao, _groupBoundsVbo, BuildBoxLines(a, b), out _groupBoundsVerts);
     }
 
     /// <summary>Set (or clear, with pivot=null) the translate gizmo: 3 axis lines from the pivot,
@@ -364,6 +390,7 @@ void main() { FragColor = uColor; }";
         _boneVerts = 0;
         _boundsVerts = 0;
         _highlightVerts = 0;
+        _groupBoundsVerts = 0;
         _hasGizmo = false;
     }
 
@@ -460,16 +487,25 @@ void main() { FragColor = uColor; }";
             _gl.BindVertexArray(0);
         }
 
-        // Selection highlight: a bright box around the selected map mesh, always on top so it reads
-        // clearly even inside dense geometry.
-        if (_highlightVerts > 0)
+        // Selection highlight: a bright box around each selected mesh + a dimmer box around the whole
+        // group, always on top so they read clearly even inside dense geometry.
+        if (_highlightVerts > 0 || _groupBoundsVerts > 0)
         {
             _gl.UseProgram(_lineProgram);
             _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
             _gl.Disable(EnableCap.DepthTest);
-            _gl.Uniform4(_lColor, 1.0f, 0.78f, 0.2f, 1f); // selection amber
-            _gl.BindVertexArray(_highlightVao);
-            _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_highlightVerts);
+            if (_groupBoundsVerts > 0)
+            {
+                _gl.Uniform4(_lColor, 0.5f, 0.65f, 0.95f, 1f); // group bounds — cool blue
+                _gl.BindVertexArray(_groupBoundsVao);
+                _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_groupBoundsVerts);
+            }
+            if (_highlightVerts > 0)
+            {
+                _gl.Uniform4(_lColor, 1.0f, 0.78f, 0.2f, 1f); // selection amber
+                _gl.BindVertexArray(_highlightVao);
+                _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_highlightVerts);
+            }
             _gl.BindVertexArray(0);
         }
 

@@ -42,13 +42,14 @@ public sealed class MapGeoAsset
         ApplyMeshTransform(mesh);
     }
 
-    /// <summary>Recompute a mesh's baked vertices from its pristine original + its current Offset/Rotation/Scale.</summary>
+    /// <summary>Recompute a mesh's baked vertices from its pristine original + its self transform + GroupMatrix.</summary>
     public void ApplyMeshTransform(MapGeoMesh mesh)
     {
         _originalPositions ??= (float[])Positions.Clone();
         _originalNormals ??= (float[])Normals.Clone();
 
         var sr = mesh.ScaleRotationMatrix;
+        var group = mesh.GroupMatrix;
         var pivot = mesh.Pivot;
         var offset = mesh.Offset;
         int start = mesh.VertexStart * 3;
@@ -57,23 +58,57 @@ public sealed class MapGeoAsset
         for (int i = start; i < end; i += 3)
         {
             var op = new Vector3(_originalPositions[i], _originalPositions[i + 1], _originalPositions[i + 2]);
-            var p = pivot + Vector3.Transform(op - pivot, sr) + offset;
+            var self = pivot + Vector3.Transform(op - pivot, sr) + offset; // single-select transform
+            var p = Vector3.Transform(self, group);                        // then the batch/group affine
             Positions[i] = p.X; Positions[i + 1] = p.Y; Positions[i + 2] = p.Z;
 
             var on = new Vector3(_originalNormals[i], _originalNormals[i + 1], _originalNormals[i + 2]);
-            var n = Vector3.Normalize(Vector3.TransformNormal(on, sr));
+            var n = Vector3.Normalize(Vector3.TransformNormal(Vector3.TransformNormal(on, sr), group));
             Normals[i] = n.X; Normals[i + 1] = n.Y; Normals[i + 2] = n.Z;
         }
     }
 
-    /// <summary>Undo all edits on a mesh, restoring its original baked vertices.</summary>
+    /// <summary>Undo all edits on a mesh (single + group), restoring its original baked vertices.</summary>
     public void ResetMesh(MapGeoMesh mesh)
     {
         mesh.Offset = Vector3.Zero;
         mesh.RotationDegrees = Vector3.Zero;
         mesh.Scale = Vector3.One;
+        mesh.GroupMatrix = Matrix4x4.Identity;
         if (_originalPositions is null) return; // never edited — nothing to restore
         ApplyMeshTransform(mesh);
+    }
+
+    // ---- Batch (multi-select) transforms around a shared world-space center (M30) --------------------
+
+    /// <summary>Translate a set of meshes together by a world-space delta.</summary>
+    public void BatchTranslate(IEnumerable<MapGeoMesh> meshes, Vector3 delta)
+        => ApplyGroup(meshes, Matrix4x4.CreateTranslation(delta));
+
+    /// <summary>Rotate a set of meshes rigidly about <paramref name="center"/> (XYZ euler degrees).</summary>
+    public void BatchRotate(IEnumerable<MapGeoMesh> meshes, Vector3 eulerDegrees, Vector3 center)
+    {
+        var r = Matrix4x4.CreateRotationX(eulerDegrees.X * MathF.PI / 180f)
+              * Matrix4x4.CreateRotationY(eulerDegrees.Y * MathF.PI / 180f)
+              * Matrix4x4.CreateRotationZ(eulerDegrees.Z * MathF.PI / 180f);
+        ApplyGroup(meshes, AroundCenter(r, center));
+    }
+
+    /// <summary>Scale a set of meshes about <paramref name="center"/>.</summary>
+    public void BatchScale(IEnumerable<MapGeoMesh> meshes, Vector3 scale, Vector3 center)
+        => ApplyGroup(meshes, AroundCenter(Matrix4x4.CreateScale(scale), center));
+
+    // world affine that applies m about the given center (translate to origin, m, translate back)
+    private static Matrix4x4 AroundCenter(Matrix4x4 m, Vector3 center)
+        => Matrix4x4.CreateTranslation(-center) * m * Matrix4x4.CreateTranslation(center);
+
+    private void ApplyGroup(IEnumerable<MapGeoMesh> meshes, Matrix4x4 groupDelta)
+    {
+        foreach (var mesh in meshes)
+        {
+            mesh.GroupMatrix *= groupDelta; // W(p) = self(p) * GroupMatrix, so post-multiply to apply after
+            ApplyMeshTransform(mesh);
+        }
     }
 
     public int Version { get; init; }
@@ -113,11 +148,20 @@ public sealed class MapGeoMesh
     public int VisibilityFlags { get; init; }
     public uint ControllerHash { get; init; }
 
-    public Vector3 Offset;                                // accumulated user move (world space), default zero
-    public Vector3 RotationDegrees;                        // accumulated user rotation (XYZ euler, degrees), default zero
-    public Vector3 Scale = Vector3.One;                     // accumulated user scale, default one
+    public Vector3 Offset;                                // accumulated single-select move (world space), default zero
+    public Vector3 RotationDegrees;                        // accumulated single-select rotation (XYZ euler, degrees)
+    public Vector3 Scale = Vector3.One;                     // accumulated single-select scale, default one
 
-    public bool IsMoved => Offset != Vector3.Zero || RotationDegrees != Vector3.Zero || Scale != Vector3.One;
+    /// <summary>
+    /// World-space affine applied AFTER the self (pivot-relative euler/scale/offset) transform. This is where
+    /// BATCH (multi-select) move/rotate/scale-around-a-shared-center accumulate — a single mesh's numeric fields
+    /// stay meaningful while a group operation composes rigidly on top. Default identity.
+    /// </summary>
+    public Matrix4x4 GroupMatrix = Matrix4x4.Identity;
+
+    public bool IsMoved =>
+        Offset != Vector3.Zero || RotationDegrees != Vector3.Zero || Scale != Vector3.One
+        || GroupMatrix != Matrix4x4.Identity;
 
     /// <summary>The combined scale-then-rotate matrix used both for the live vertex preview and the write-back.</summary>
     public Matrix4x4 ScaleRotationMatrix =>

@@ -13,6 +13,7 @@ using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Diagnostics;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Projects;
+using ReyEngine.Core.Selection;
 using ReyEngine.Core.Undo;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Animation;
@@ -146,6 +147,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             UpdateTitle();
         };
         UndoService.Error += msg => _log.Warn("Undo", msg);
+
+        _selection.Changed += OnMeshSelectionChanged;
 
         BinEditor.CopyHandler = Dialogs.CopyAsync;
         BinEditor.UndoService = UndoService;
@@ -642,8 +645,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapControllers = null;
         _currentMapBytes = null;
         _currentMapEntry = null;
-        SelectedMapMesh = null;
-        SelectionBoundsMin = SelectionBoundsMax = GizmoPivot = null;
+        _selection.Clear();
         HasMapMoves = false;
         CurrentModelTextures = null;
         ClearSecondaryTextures();
@@ -683,6 +685,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             vis[i] = dragonVisible && baronVisible;
         }
         CurrentModelSubmeshVisible = vis;
+        PruneSelectionToVisible(); // hidden (filtered-out) meshes must not stay selected/transformable
+    }
+
+    /// <summary>Drop any selected meshes that the current visibility filter hides (a mesh is visible if
+    /// at least one of its submesh groups is visible), so batch transforms never touch filtered geometry.</summary>
+    private void PruneSelectionToVisible()
+    {
+        if (_selection.IsEmpty || _currentMap is not { } map || CurrentModelSubmeshVisible is not { } vis) return;
+        var visibleMeshIndices = new HashSet<int>();
+        int n = System.Math.Min(map.Groups.Count, vis.Count);
+        for (int i = 0; i < n; i++)
+            if (vis[i]) visibleMeshIndices.Add(map.Groups[i].MeshIndex);
+        var keep = _selection.Items.Where(m => visibleMeshIndices.Contains(m.Index)).ToList();
+        if (keep.Count != _selection.Count) _selection.SetMany(keep);
     }
 
     /// <summary>Index the baron/dragon visibility controllers from the map's sibling .bin files.</summary>
@@ -744,34 +760,48 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _meshScaleZ = "1";
     [ObservableProperty] private int _meshVerticesRevision;
     [ObservableProperty] private bool _hasMapMoves;
-    [ObservableProperty] private System.Numerics.Vector3? _selectionBoundsMin;
-    [ObservableProperty] private System.Numerics.Vector3? _selectionBoundsMax;
-    [ObservableProperty] private System.Numerics.Vector3? _gizmoPivot;
+
+    // ---- Multi-selection + batch transform (M30) -----------------------
+    private readonly SelectionSet<MapGeoMesh> _selection = new();
+    private bool _syncingTreeSelection;   // reentrancy guard: tree<->selection sync must not recurse
+
+    [ObservableProperty] private IReadOnlyList<(System.Numerics.Vector3 min, System.Numerics.Vector3 max)>? _selectionBoxes;
+    [ObservableProperty] private System.Numerics.Vector3? _groupBoundsMin;
+    [ObservableProperty] private System.Numerics.Vector3? _groupBoundsMax;
+    [ObservableProperty] private System.Numerics.Vector3? _gizmoPivot;   // selection center = gizmo origin
+    [ObservableProperty] private bool _isMultiSelect;                    // 2+ meshes → batch inspector
+    [ObservableProperty] private bool _isSingleSelect;                   // exactly 1 → single-mesh inspector
+    [ObservableProperty] private string _selectionStatus = "";          // e.g. "3 meshes selected"
+
+    // Batch transform deltas — applied to the whole selection around its center (blank/identity = no-op).
+    [ObservableProperty] private string _batchMoveX = "0";
+    [ObservableProperty] private string _batchMoveY = "0";
+    [ObservableProperty] private string _batchMoveZ = "0";
+    [ObservableProperty] private string _batchRotateX = "0";
+    [ObservableProperty] private string _batchRotateY = "0";
+    [ObservableProperty] private string _batchRotateZ = "0";
+    [ObservableProperty] private string _batchScaleX = "1";
+    [ObservableProperty] private string _batchScaleY = "1";
+    [ObservableProperty] private string _batchScaleZ = "1";
 
     partial void OnSelectedTreeItemChanged(object? value)
     {
+        if (_syncingTreeSelection) return; // sync is pushing the selection INTO the tree — don't loop back
         // Match by MapGeoMesh.Index (the env-mesh index), not list position — they diverge if any mesh
-        // failed to decode.
+        // failed to decode. A plain tree click is a single-select (Ctrl+click toggling is handled separately).
         if (value is MapPieceViewModel { MeshIndex: >= 0 } p && _currentMap is { } map
             && map.Meshes.FirstOrDefault(x => x.Index == p.MeshIndex) is { } m)
-        {
-            SelectedMapMesh = m;
-            RefreshMeshTransformFields(m);
-            RefreshSelectionVisuals();
-        }
-        else
-        {
-            SelectedMapMesh = null;
-            SelectionBoundsMin = SelectionBoundsMax = GizmoPivot = null;
-        }
+            _selection.SetSingle(m);
+        else if (value is null)
+            _selection.Clear();
     }
 
     /// <summary>
     /// Blender/UE-style viewport click-selection: cast the pick ray at the map's visible triangles and
-    /// select the nearest-hit mesh (or clear the selection on a miss). Selection goes through
-    /// <see cref="SelectedTreeItem"/> so the Map Content tree highlights the same mesh.
+    /// select the nearest-hit mesh. Plain click = single-select; <paramref name="additive"/> (Ctrl) toggles
+    /// the hit mesh in/out of the current set; an empty non-additive click clears the selection.
     /// </summary>
-    public void SelectMeshFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir)
+    public void SelectMeshFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir, bool additive = false)
     {
         if (_currentMap is not { } map || map.Groups.Count == 0) return;
         var submeshes = map.Groups.Select(g => (g.StartIndex, g.IndexCount)).ToList();
@@ -779,62 +809,145 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             CurrentModelSubmeshVisible, rayOrigin, rayDir, out _);
         if (hit < 0)
         {
-            SelectedTreeItem = null; // clicked empty space — deselect, like Blender/UE
+            if (!additive) _selection.Clear(); // empty click clears; Ctrl+empty keeps the set (UE/Blender)
             return;
         }
         int meshIndex = map.Groups[hit].MeshIndex;
-        var piece = MapContent.LayerGroups.SelectMany(g => g.Meshes).FirstOrDefault(x => x.MeshIndex == meshIndex);
-        if (piece is null) return;
-        SelectedTreeItem = piece; // drives the same selection path as clicking the tree
-        var name = map.Meshes.FirstOrDefault(x => x.Index == meshIndex)?.Name ?? $"#{meshIndex}";
-        _log.Info("MapGeo", $"Selected '{name}' (viewport click).");
+        var mesh = map.Meshes.FirstOrDefault(x => x.Index == meshIndex);
+        if (mesh is null) return;
+        if (additive) _selection.Toggle(mesh);
+        else _selection.SetSingle(mesh);
+        var name = mesh.Name?.Length > 0 ? mesh.Name : $"#{meshIndex}";
+        _log.Info("MapGeo", additive ? $"{(_selection.Contains(mesh) ? "Added" : "Removed")} '{name}' ({_selection.Count} selected)."
+                                      : $"Selected '{name}' (viewport click).");
     }
 
-    /// <summary>Recompute the selection highlight box (live vertex bounds) + the gizmo pivot for the
-    /// currently-selected mesh. Call after selecting a mesh and after any edit that moves its vertices.</summary>
+    /// <summary>Ctrl+click on a Map Content tree row: toggle that mesh in/out of the selection.</summary>
+    public void ToggleMeshSelectionFromTree(MapPieceViewModel piece)
+    {
+        if (_currentMap is not { } map || piece.MeshIndex < 0) return;
+        if (map.Meshes.FirstOrDefault(x => x.Index == piece.MeshIndex) is { } m) _selection.Toggle(m);
+    }
+
+    /// <summary>Central selection handler (raised by <see cref="SelectionSet{T}.Changed"/>): re-derive the
+    /// primary mesh, single/multi flags, status text, tree highlight, and all viewport visuals.</summary>
+    private void OnMeshSelectionChanged()
+    {
+        var primary = _selection.Primary;
+        SelectedMapMesh = primary;
+        IsMultiSelect = _selection.IsMulti;
+        IsSingleSelect = _selection.Count == 1;
+        SelectionStatus = _selection.Count switch { 0 => "", 1 => "1 mesh selected", var n => $"{n} meshes selected" };
+        if (primary is not null) RefreshMeshTransformFields(primary);
+        SyncTreeHighlight();
+        RefreshSelectionVisuals();
+    }
+
+    /// <summary>Mirror the SelectionSet onto the tree: mark selected rows' <c>IsSelected</c>, and keep the
+    /// TreeView's single SelectedItem pointed at the primary (guarded so it doesn't feed back).</summary>
+    private void SyncTreeHighlight()
+    {
+        var selectedIndices = _selection.Items.Select(m => m.Index).ToHashSet();
+        MapPieceViewModel? primaryPiece = null;
+        foreach (var g in MapContent.LayerGroups)
+            foreach (var piece in g.Meshes)
+            {
+                piece.IsSelected = piece.MeshIndex >= 0 && selectedIndices.Contains(piece.MeshIndex);
+                if (piece.IsSelected && _selection.Primary is { } pm && piece.MeshIndex == pm.Index) primaryPiece = piece;
+            }
+        _syncingTreeSelection = true;
+        SelectedTreeItem = primaryPiece; // scrolls/anchors the tree to the primary without re-triggering select
+        _syncingTreeSelection = false;
+    }
+
+    /// <summary>Recompute the per-mesh selection highlight boxes (live vertex bounds), the combined group
+    /// bounds, and the gizmo pivot (selection center). Call after selecting and after any vertex-moving edit.</summary>
     private void RefreshSelectionVisuals()
     {
-        if (SelectedMapMesh is not { } m || _currentMap is not { } map) { SelectionBoundsMin = SelectionBoundsMax = GizmoPivot = null; return; }
-        var min = new System.Numerics.Vector3(float.MaxValue);
-        var max = new System.Numerics.Vector3(float.MinValue);
-        int start = m.VertexStart * 3, end = (m.VertexStart + m.VertexCount) * 3;
-        for (int i = start; i < end; i += 3)
+        if (_selection.IsEmpty || _currentMap is not { } map)
         {
-            var p = new System.Numerics.Vector3(map.Positions[i], map.Positions[i + 1], map.Positions[i + 2]);
-            min = System.Numerics.Vector3.Min(min, p);
-            max = System.Numerics.Vector3.Max(max, p);
+            SelectionBoxes = null; GroupBoundsMin = GroupBoundsMax = GizmoPivot = null;
+            return;
         }
-        SelectionBoundsMin = m.VertexCount > 0 ? min : null;
-        SelectionBoundsMax = m.VertexCount > 0 ? max : null;
-        GizmoPivot = m.Pivot + m.Offset;
+        var boxes = new List<(System.Numerics.Vector3 min, System.Numerics.Vector3 max)>(_selection.Count);
+        var gmin = new System.Numerics.Vector3(float.MaxValue);
+        var gmax = new System.Numerics.Vector3(float.MinValue);
+        foreach (var m in _selection.Items)
+        {
+            if (m.VertexCount <= 0) continue;
+            var min = new System.Numerics.Vector3(float.MaxValue);
+            var max = new System.Numerics.Vector3(float.MinValue);
+            int start = m.VertexStart * 3, end = (m.VertexStart + m.VertexCount) * 3;
+            for (int i = start; i < end; i += 3)
+            {
+                var p = new System.Numerics.Vector3(map.Positions[i], map.Positions[i + 1], map.Positions[i + 2]);
+                min = System.Numerics.Vector3.Min(min, p);
+                max = System.Numerics.Vector3.Max(max, p);
+            }
+            boxes.Add((min, max));
+            gmin = System.Numerics.Vector3.Min(gmin, min);
+            gmax = System.Numerics.Vector3.Max(gmax, max);
+        }
+        if (boxes.Count == 0) { SelectionBoxes = null; GroupBoundsMin = GroupBoundsMax = GizmoPivot = null; return; }
+        SelectionBoxes = boxes;
+        // Group bounds box only makes sense for a multi-selection; a single mesh already has its highlight box.
+        GroupBoundsMin = _selection.IsMulti ? gmin : null;
+        GroupBoundsMax = _selection.IsMulti ? gmax : null;
+        GizmoPivot = (gmin + gmax) * 0.5f; // selection center = combined bbox center
     }
 
-    private MeshTransformCommand.State _dragBefore;   // captured at gizmo-press → one command per drag
+    // Drag state captured at gizmo-press so the WHOLE drag is one undo step. For a multi-selection we
+    // record every mesh's before-state and the primary's start offset (to derive the world delta).
+    private (MapGeoMesh mesh, MeshTransformCommand.State before)[] _dragBefore = System.Array.Empty<(MapGeoMesh, MeshTransformCommand.State)>();
+    private System.Numerics.Vector3 _dragStartPrimaryOffset;
 
-    /// <summary>Called at gizmo-press: capture the transform so the whole drag becomes ONE undo step.</summary>
+    /// <summary>Called at gizmo-press: capture the transform(s) so the whole drag becomes ONE undo step.</summary>
     public void BeginMeshDrag()
     {
-        if (SelectedMapMesh is { } m) _dragBefore = MeshTransformCommand.State.Capture(m);
+        _dragBefore = _selection.Items.Select(m => (m, MeshTransformCommand.State.Capture(m))).ToArray();
+        _dragStartPrimaryOffset = _selection.Primary?.Offset ?? System.Numerics.Vector3.Zero;
     }
 
-    /// <summary>Live-drag the selected mesh to an absolute offset (called every pointer-move frame by
-    /// the viewport's translate gizmo) — cheap and silent; <see cref="EndMeshDrag"/> logs completion.</summary>
+    /// <summary>Live-drag the selection to an absolute primary offset (called every pointer-move frame by
+    /// the viewport's translate gizmo). Single mesh moves via its own offset; a multi-selection moves rigidly
+    /// as a group (world delta applied through the GroupMatrix). Cheap + silent; <see cref="EndMeshDrag"/> logs.</summary>
     public void DragSelectedMeshTo(System.Numerics.Vector3 absoluteOffset)
     {
-        if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
-        map.TranslateMesh(m, absoluteOffset);
-        RefreshMeshTransformFields(m);
+        if (_selection.Primary is not { } primary || _currentMap is not { } map) return;
+        if (_selection.IsMulti)
+        {
+            // Restore all meshes to their drag-start state, then batch-translate by the total world delta —
+            // absolute-from-start so repeated frames don't accumulate.
+            var worldDelta = absoluteOffset - _dragStartPrimaryOffset;
+            foreach (var (mesh, before) in _dragBefore) { before.ApplyTo(mesh); map.ApplyMeshTransform(mesh); }
+            map.BatchTranslate(_selection.Items, worldDelta);
+        }
+        else
+        {
+            map.TranslateMesh(primary, absoluteOffset);
+        }
+        RefreshMeshTransformFields(primary);
         RefreshSelectionVisuals();
         MeshVerticesRevision++;
     }
 
     public void EndMeshDrag()
     {
-        if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
-        PushTransformCommand("Move Mesh", map, m, _dragBefore, MeshTransformCommand.State.Capture(m));
+        if (_selection.Primary is not { } primary || _currentMap is not { } map || _dragBefore.Length == 0) return;
+        if (_selection.IsMulti)
+        {
+            var entries = _dragBefore.Select(b => (b.mesh, b.before, MeshTransformCommand.State.Capture(b.mesh)));
+            var cmd = new BatchTransformCommand("Move Meshes", map, entries, MakeBatchRefresh(map));
+            if (cmd.HasChange) UndoService.PushApplied(cmd);
+            _log.Info("MapGeo", $"Moved {_dragBefore.Length} meshes via gizmo.");
+        }
+        else
+        {
+            PushTransformCommand("Move Mesh", map, primary, _dragBefore[0].before, MeshTransformCommand.State.Capture(primary));
+            var pos = primary.Pivot + primary.Offset;
+            _log.Info("MapGeo", $"Moved '{primary.Name}' to ({pos.X:0.#}, {pos.Y:0.#}, {pos.Z:0.#}) via gizmo.");
+        }
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
-        var pos = m.Pivot + m.Offset;
-        _log.Info("MapGeo", $"Moved '{m.Name}' to ({pos.X:0.#}, {pos.Y:0.#}, {pos.Z:0.#}) via gizmo.");
     }
 
     private void RefreshMeshTransformFields(MapGeoMesh m)
@@ -873,6 +986,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
     };
+
+    /// <summary>UI sync run after a BATCH transform command executes OR undoes: re-upload vertices, refresh
+    /// the primary's fields, recompute all selection visuals, and update the dirty flag.</summary>
+    private Action MakeBatchRefresh(MapGeoAsset map) => () =>
+    {
+        MeshVerticesRevision++;
+        if (SelectedMapMesh is { } primary) RefreshMeshTransformFields(primary);
+        RefreshSelectionVisuals();
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+    };
+
+    /// <summary>Run a batch operation on the whole selection as ONE undo step: capture every mesh's
+    /// before-state, apply <paramref name="op"/>, then push a single <see cref="BatchTransformCommand"/>.</summary>
+    private void RunBatch(string name, MapGeoAsset map, Action op)
+    {
+        var before = _selection.Items.Select(m => (mesh: m, state: MeshTransformCommand.State.Capture(m))).ToList();
+        op();
+        var entries = before.Select(b => (b.mesh, b.state, MeshTransformCommand.State.Capture(b.mesh)));
+        var cmd = new BatchTransformCommand(name, map, entries, MakeBatchRefresh(map));
+        if (!cmd.HasChange) return;
+        UndoService.PushApplied(cmd);
+        MeshVerticesRevision++;
+        if (SelectedMapMesh is { } primary) RefreshMeshTransformFields(primary);
+        RefreshSelectionVisuals();
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+    }
 
     /// <summary>Push an already-applied transform edit as one undo step (no-op if nothing changed).</summary>
     private void PushTransformCommand(string name, MapGeoAsset map, MapGeoMesh mesh,
@@ -920,6 +1059,60 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
         _log.Info("MapGeo", $"Reset '{m.Name}' to its original transform.");
     }
+
+    // ---- Batch transform commands (M30) — operate on the whole selection around its center -------------
+
+    private System.Numerics.Vector3 SelectionCenter() =>
+        GizmoPivot ?? System.Numerics.Vector3.Zero; // gizmo pivot IS the live selection center
+
+    [RelayCommand]
+    private void ApplyBatchMove()
+    {
+        if (!_selection.IsMulti || _currentMap is not { } map) return;
+        if (!TryParseVector3(BatchMoveX, BatchMoveY, BatchMoveZ, out var delta))
+        { _log.Warn("MapGeo", "Enter valid batch move X/Y/Z numbers."); return; }
+        if (delta == System.Numerics.Vector3.Zero) return;
+        RunBatch("Batch Move", map, () => map.BatchTranslate(_selection.Items, delta));
+        _log.Info("MapGeo", $"Moved {_selection.Count} meshes by ({delta.X:0.#}, {delta.Y:0.#}, {delta.Z:0.#}).");
+    }
+
+    [RelayCommand]
+    private void ApplyBatchRotate()
+    {
+        if (!_selection.IsMulti || _currentMap is not { } map) return;
+        if (!TryParseVector3(BatchRotateX, BatchRotateY, BatchRotateZ, out var euler))
+        { _log.Warn("MapGeo", "Enter valid batch rotation X/Y/Z numbers (degrees)."); return; }
+        if (euler == System.Numerics.Vector3.Zero) return;
+        var center = SelectionCenter();
+        RunBatch("Batch Rotate", map, () => map.BatchRotate(_selection.Items, euler, center));
+        _log.Info("MapGeo", $"Rotated {_selection.Count} meshes by ({euler.X:0.#}°, {euler.Y:0.#}°, {euler.Z:0.#}°) about the selection center.");
+    }
+
+    [RelayCommand]
+    private void ApplyBatchScale()
+    {
+        if (!_selection.IsMulti || _currentMap is not { } map) return;
+        if (!TryParseVector3(BatchScaleX, BatchScaleY, BatchScaleZ, out var scale))
+        { _log.Warn("MapGeo", "Enter valid batch scale X/Y/Z numbers."); return; }
+        if (scale.X == 0 || scale.Y == 0 || scale.Z == 0)
+        { _log.Warn("MapGeo", "Batch scale cannot be zero on any axis."); return; }
+        if (scale == System.Numerics.Vector3.One) return;
+        var center = SelectionCenter();
+        RunBatch("Batch Scale", map, () => map.BatchScale(_selection.Items, scale, center));
+        _log.Info("MapGeo", $"Scaled {_selection.Count} meshes by ({scale.X:0.##}, {scale.Y:0.##}, {scale.Z:0.##}) about the selection center.");
+    }
+
+    /// <summary>Reset every selected mesh to its original transform as one undo step.</summary>
+    [RelayCommand]
+    private void ResetSelected()
+    {
+        if (_currentMap is not { } map || _selection.IsEmpty) return;
+        RunBatch("Reset Selected", map, () => { foreach (var m in _selection.Items) map.ResetMesh(m); });
+        _log.Info("MapGeo", $"Reset {_selection.Count} selected mesh(es) to their original transforms.");
+    }
+
+    [RelayCommand]
+    private void ClearSelection() => _selection.Clear();
 
     [RelayCommand]
     private async Task SaveMeshMoves()
@@ -1109,7 +1302,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _currentMap = map;
                 _currentMapBytes = rawMapBytes;
                 _currentMapEntry = entry;
-                SelectedMapMesh = null;
+                _selection.Clear();
                 CurrentModelTextures = textures;
                 ClearSecondaryTextures(); // maps don't use champion secondary samplers
                 MapGeoInspector.Show(map, entry.Path);

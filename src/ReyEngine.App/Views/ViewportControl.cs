@@ -51,18 +51,22 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, double>(nameof(AnimationTime));
     public static readonly StyledProperty<int> PreviewModeProperty =
         AvaloniaProperty.Register<ViewportControl, int>(nameof(PreviewMode));
-    public static readonly StyledProperty<Vector3?> SelectionBoundsMinProperty =
-        AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(SelectionBoundsMin));
-    public static readonly StyledProperty<Vector3?> SelectionBoundsMaxProperty =
-        AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(SelectionBoundsMax));
+    public static readonly StyledProperty<IReadOnlyList<(Vector3 min, Vector3 max)>?> SelectionBoxesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<(Vector3 min, Vector3 max)>?>(nameof(SelectionBoxes));
+    public static readonly StyledProperty<Vector3?> GroupBoundsMinProperty =
+        AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GroupBoundsMin));
+    public static readonly StyledProperty<Vector3?> GroupBoundsMaxProperty =
+        AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GroupBoundsMax));
     public static readonly StyledProperty<Vector3?> GizmoPivotProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GizmoPivot));
 
     public int PreviewMode { get => GetValue(PreviewModeProperty); set => SetValue(PreviewModeProperty, value); }
-    /// <summary>World-space bounds of the currently-selected map mesh, for the amber highlight box.</summary>
-    public Vector3? SelectionBoundsMin { get => GetValue(SelectionBoundsMinProperty); set => SetValue(SelectionBoundsMinProperty, value); }
-    public Vector3? SelectionBoundsMax { get => GetValue(SelectionBoundsMaxProperty); set => SetValue(SelectionBoundsMaxProperty, value); }
-    /// <summary>World-space pivot of the currently-selected map mesh (null = no selection, no gizmo).</summary>
+    /// <summary>World-space bounds of every selected map mesh, for the amber highlight boxes.</summary>
+    public IReadOnlyList<(Vector3 min, Vector3 max)>? SelectionBoxes { get => GetValue(SelectionBoxesProperty); set => SetValue(SelectionBoxesProperty, value); }
+    /// <summary>Combined bounds of a multi-selection (the dimmer group box); null for single/empty selection.</summary>
+    public Vector3? GroupBoundsMin { get => GetValue(GroupBoundsMinProperty); set => SetValue(GroupBoundsMinProperty, value); }
+    public Vector3? GroupBoundsMax { get => GetValue(GroupBoundsMaxProperty); set => SetValue(GroupBoundsMaxProperty, value); }
+    /// <summary>World-space center of the selection — the translate-gizmo origin (null = no selection).</summary>
     public Vector3? GizmoPivot { get => GetValue(GizmoPivotProperty); set => SetValue(GizmoPivotProperty, value); }
     public AnimationClip? AnimationClip { get => GetValue(AnimationClipProperty); set => SetValue(AnimationClipProperty, value); }
     public double AnimationTime { get => GetValue(AnimationTimeProperty); set => SetValue(AnimationTimeProperty, value); }
@@ -316,7 +320,8 @@ public sealed class ViewportControl : OpenGlControlBase
         _lastViewportH = Bounds.Height;
         _lastCamPos = new Vector3(-_camera.Position.X, _camera.Position.Y, _camera.Position.Z);
 
-        _meshRenderer.SetHighlightBounds(SelectionBoundsMin, SelectionBoundsMax);
+        _meshRenderer.SetHighlightBoxes(SelectionBoxes ?? Array.Empty<(Vector3, Vector3)>());
+        _meshRenderer.SetGroupBounds(GroupBoundsMin, GroupBoundsMax);
         _meshRenderer.SetGizmo(GizmoPivot, GizmoPivot is { } piv ? GizmoArmLength(piv) : 0f);
 
         _grid.Render(viewProj);
@@ -402,8 +407,8 @@ public sealed class ViewportControl : OpenGlControlBase
             _verticesDirty = true;
             RequestNextFrameRendering();
         }
-        else if (change.Property == SelectionBoundsMinProperty || change.Property == SelectionBoundsMaxProperty
-                 || change.Property == GizmoPivotProperty)
+        else if (change.Property == SelectionBoxesProperty || change.Property == GroupBoundsMinProperty
+                 || change.Property == GroupBoundsMaxProperty || change.Property == GizmoPivotProperty)
         { RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimationClipProperty || change.Property == AnimationTimeProperty) { _skinDirty = true; RequestNextFrameRendering(); }

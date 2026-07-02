@@ -32,6 +32,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         LoadBranding();
+        // Ctrl+click multi-select on the Map Content tree — intercept before the TreeView's own selection.
+        MapContentTree.AddHandler(InputElement.PointerPressedEvent, OnMapTreePointerPressed,
+            Avalonia.Interactivity.RoutingStrategies.Tunnel);
     }
 
     /// <summary>Load the logo (copied next to the exe) for the titlebar icon + the menu-bar wordmark.</summary>
@@ -159,12 +162,26 @@ public partial class MainWindow : Window
         if (!(_lmb || _rmb || _mmb)) e.Pointer.Capture(null);
 
         // A stationary LMB click (no camera drag, no gizmo drag, no Alt-orbit) = pick a mesh under the
-        // cursor, Blender/UE-style. A miss clears the selection.
+        // cursor, Blender/UE-style. Ctrl adds/removes from the selection; a plain miss clears it.
         if (wasLmb && !_lmb && !wasGizmoDrag && !_pressMoved && !_alt
             && DataContext is MainWindowViewModel vm
             && Viewport.TryGetPickRay(e.GetPosition(ViewportInput), out var origin, out var dir))
         {
-            vm.SelectMeshFromViewport(origin, dir);
+            bool additive = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+            vm.SelectMeshFromViewport(origin, dir, additive);
+        }
+    }
+
+    /// <summary>Ctrl+click on a Map Content tree row toggles that mesh in the multi-selection (M30). We
+    /// intercept on the tunnel so the TreeView's own single-select doesn't collapse the set first.</summary>
+    private void OnMapTreePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.KeyModifiers.HasFlag(KeyModifiers.Control)) return;
+        if (DataContext is not MainWindowViewModel vm) return;
+        if ((e.Source as Control)?.DataContext is MapPieceViewModel piece)
+        {
+            vm.ToggleMeshSelectionFromTree(piece);
+            e.Handled = true;
         }
     }
 
