@@ -123,10 +123,21 @@
     </Border>
 
     <!-- ============ MAIN AREA ============ -->
-    <Grid ColumnDefinitions="*,4,360">
+    <Grid ColumnDefinitions="290,4,*,4,360">
+
+      <!-- LEFT: MAP CONTENT (scene outliner — visibility, layer tree, transform, mesh details;
+           the redundant .mapgeo list was retired, maps open from the Content Browser + tabs) -->
+      <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}">
+        <DockPanel>
+          <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="MAP CONTENT" />
+          <views:MapOutlinerView />
+        </DockPanel>
+      </Border>
+
+      <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
 
       <!-- CENTER: Viewport + Console -->
-      <Grid Grid.Column="0" RowDefinitions="*,4,300,4,170">
+      <Grid Grid.Column="2" RowDefinitions="*,4,300,4,170">
         <Border Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
           <DockPanel>
             <!-- Document / viewport tabs (M33): the loaded map stays alive while other assets are inspected -->
@@ -370,10 +381,10 @@
         </Border>
       </Grid>
 
-      <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
+      <GridSplitter Grid.Column="3" Background="{DynamicResource ReyBorderBrush}" />
 
       <!-- RIGHT: Inspector -->
-      <Border Grid.Column="2" Background="{DynamicResource ReyPanelBrush}">
+      <Border Grid.Column="4" Background="{DynamicResource ReyPanelBrush}">
         <DockPanel>
           <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="INSPECTOR" />
           <ScrollViewer>
@@ -660,12 +671,6 @@
                   </TreeView.ItemTemplate>
                 </TreeView>
               </StackPanel>
-                </TabItem>
-
-                <!-- Map outliner (M33): visibility layers, layer tree, transform, mesh details -->
-                <TabItem FontSize="12" IsVisible="{Binding MapContent.HasMap}">
-                  <TabItem.Header><TextBlock Text="Map" FontSize="12" /></TabItem.Header>
-                  <views:MapOutlinerView MinHeight="400" />
                 </TabItem>
               </TabControl>
             </StackPanel>
