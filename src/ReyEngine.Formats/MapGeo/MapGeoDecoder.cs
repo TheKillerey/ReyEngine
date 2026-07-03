@@ -21,6 +21,8 @@ public static class MapGeoDecoder
         var uvs = new List<float>();
         var colors = new List<float>();   // PrimaryColor RGBA 0..1 (white when a mesh has none)
         bool anyColor = false;
+        var lightmapUvs = new List<float>();   // atlas-mapped lightmap UV (0,0 when a mesh has none)
+        bool anyLightmap = false;
         var indices = new List<uint>();
         var groups = new List<MapGeoGroup>();
         var meshes = new List<MapGeoMesh>();
@@ -48,6 +50,15 @@ public static class MapGeoDecoder
                 var meshCol = view.TryGetAccessor(ElementName.PrimaryColor, out var cAcc) ? ReadColor(cAcc, vc) : null;
                 if (meshCol is not null) anyColor = true;
 
+                // Baked lightmap: a dedicated UV channel (Texcoord7) + the BakedLight channel's atlas
+                // texture + scale/bias. Final atlas UV = uv * scale + bias (see Map12/Bilgewater).
+                var lm = mesh.BakedLight;
+                bool meshHasLm = !string.IsNullOrEmpty(lm.Texture)
+                                 && view.TryGetAccessor(ElementName.Texcoord7, out var lmAcc);
+                Vector2[]? meshLmUv = meshHasLm ? ReadVector2(view.GetAccessor(ElementName.Texcoord7), vc) : null;
+                string lmTex = meshHasLm ? lm.Texture : "";
+                if (meshHasLm) anyLightmap = true;
+
                 var meshMin = new Vector3(float.MaxValue);
                 var meshMax = new Vector3(float.MinValue);
 
@@ -72,6 +83,13 @@ public static class MapGeoDecoder
 
                     if (meshCol is not null) { var c = meshCol[i]; colors.Add(c.X); colors.Add(c.Y); colors.Add(c.Z); colors.Add(c.W); }
                     else { colors.Add(1f); colors.Add(1f); colors.Add(1f); colors.Add(1f); }
+
+                    if (meshLmUv is not null)
+                    {
+                        lightmapUvs.Add(meshLmUv[i].X * lm.Scale.X + lm.Bias.X);
+                        lightmapUvs.Add(meshLmUv[i].Y * lm.Scale.Y + lm.Bias.Y);
+                    }
+                    else { lightmapUvs.Add(0f); lightmapUvs.Add(0f); }
                 }
 
                 var ia = mesh.Indices;
@@ -110,7 +128,7 @@ public static class MapGeoDecoder
                         int end = sub.StartIndex + sub.IndexCount;
                         for (int k = sub.StartIndex; k < end && k < ia.Count; k++)
                             indices.Add((uint)(ia[k] + baseVertex));
-                        groups.Add(new MapGeoGroup(material, gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex));
+                        groups.Add(new MapGeoGroup(material, gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex, lmTex));
                     }
                 }
                 else
@@ -118,7 +136,7 @@ public static class MapGeoDecoder
                     int gStart = indices.Count;
                     for (int k = 0; k < ia.Count; k++)
                         indices.Add((uint)(ia[k] + baseVertex));
-                    groups.Add(new MapGeoGroup("", gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex));
+                    groups.Add(new MapGeoGroup("", gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex, lmTex));
                 }
 
                 meshCount++;
@@ -138,6 +156,8 @@ public static class MapGeoDecoder
             Uvs = uvs.ToArray(),
             Colors = anyColor ? colors.ToArray() : null,
             HasVertexColor = anyColor,
+            LightmapUvs = anyLightmap ? lightmapUvs.ToArray() : null,
+            HasLightmap = anyLightmap,
             Indices = indices.ToArray(),
             Groups = groups,
             Meshes = meshes,

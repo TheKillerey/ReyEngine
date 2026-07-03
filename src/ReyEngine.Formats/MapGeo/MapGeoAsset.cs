@@ -14,6 +14,8 @@ public sealed class MapGeoAsset
     public required float[] Uvs { get; init; }
     public float[]? Colors { get; init; }        // 4 floats / vertex (RGBA 0..1) from PrimaryColor; null if none
     public bool HasVertexColor { get; init; }
+    public float[]? LightmapUvs { get; init; }    // 2 floats / vertex, atlas-mapped (uv7*scale+bias); null if none
+    public bool HasLightmap { get; init; }
     public required uint[] Indices { get; init; }
     public required IReadOnlyList<MapGeoGroup> Groups { get; init; }
     public IReadOnlyList<MapGeoMesh> Meshes { get; init; } = Array.Empty<MapGeoMesh>();
@@ -136,7 +138,8 @@ public sealed class MapGeoAsset
 /// </summary>
 public sealed record MapGeoGroup(
     string Material, int StartIndex, int IndexCount,
-    string Name = "", int VisibilityFlags = 255, uint ControllerHash = 0, int MeshIndex = -1);
+    string Name = "", int VisibilityFlags = 255, uint ControllerHash = 0, int MeshIndex = -1,
+    string LightmapTexture = "");
 
 /// <summary>One source mapgeo mesh: its baked vertex range + original transform, for selection/move.</summary>
 public sealed class MapGeoMesh

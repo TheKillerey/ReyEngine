@@ -18,10 +18,11 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mMatCap, _mMatCapMask, _mHasMatCap, _mHasMatCapMask, _mView;
     private int _mUvScaleOffset, _mUvRot, _mUsesRim, _mUsesSpec;   // M32: per-material UV + feature flags
     private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
+    private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
     private int _lMvp, _lColor;
 
-    private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo;
-    private bool _hasVertexColor;
+    private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo;
+    private bool _hasVertexColor, _hasLightmapUv;
     private int _indexCount, _wireIndexCount;
     private bool _hasMesh;
     private float[]? _interleaved; // kept so per-frame skinning can update pos+normal in place
@@ -51,6 +52,7 @@ public sealed class ViewportMeshRenderer : IDisposable
         public uint Emissive;    // slot 3
         public uint MatCap;      // slot 4
         public uint MatCapMask;  // slot 5
+        public uint Lightmap;    // slot 6 (map baked lightmap atlas)
         public bool Visible;     // layer/visibility filter (map dragon/baron)
 
         // M32 per-material preview data. Defaults are identity/off so untouched submeshes render as before.
@@ -75,29 +77,36 @@ layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUv;
 layout(location = 3) in vec4 aColor;   // PrimaryColor (defaults to white via VertexAttrib4f when absent)
+layout(location = 4) in vec2 aLmUv;    // baked-lightmap atlas UV (already uv7*scale+bias; 0 when absent)
 uniform mat4 uMvp;
 uniform mat4 uModel;
 out vec3 vN;
 out vec2 vUv;
 out vec3 vWorld;
 out vec4 vColor;
+out vec2 vLmUv;
 void main() {
     vN = mat3(uModel) * aNormal;
     vUv = aUv;
     vColor = aColor;
+    vLmUv = aLmUv;
     vWorld = (uModel * vec4(aPos, 1.0)).xyz;
     gl_Position = uMvp * vec4(aPos, 1.0);
 }";
 
     // uMode: 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal · 5 Debug mask
     //        6 Debug emissive · 7 Debug matcap · 8 Debug UV checker · 9 Debug specular · 10 Debug vertex color
+    //        11 Debug lightmap
     // M32: rim + specular are gated per-material (uUsesRim/uUsesSpec) — no fake specular by default.
     // The base UV is transformed per-material by uUvScaleOffset (xy scale, zw offset) + uUvRot (radians).
+    // M33: when a mesh carries a baked lightmap (uHasLightmap), the atlas replaces the fake directional
+    //      term (col = base * lightmap) — real baked light instead of an invented one.
     private const string MeshFrag = @"
 in vec3 vN;
 in vec2 vUv;
 in vec3 vWorld;
 in vec4 vColor;
+in vec2 vLmUv;
 out vec4 FragColor;
 uniform vec3 uLight;
 uniform sampler2D uTex;
@@ -121,6 +130,8 @@ uniform float uUvRot;          // radians, rotate about (0.5, 0.5); 0 = none
 uniform int uUsesRim;          // fresnel rim highlight only when the material profile asks for it
 uniform int uUsesSpec;         // specular highlight only when the material profile asks for it
 uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map baked-term/mask data)
+uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
+uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
 
 // League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
 vec3 matcapColour(vec3 worldN) {
@@ -168,11 +179,19 @@ void main() {
     if (uMode == 10) {                                                       // debug: vertex color (magenta if none)
         FragColor = uHasVertexColor == 1 ? vec4(vColor.rgb, 1.0) : vec4(0.8, 0.0, 0.8, 1.0); return;
     }
+    if (uMode == 11) {                                                       // debug: lightmap (dark blue if none)
+        FragColor = uHasLightmap == 1 ? vec4(texture(uLightmap, vLmUv).rgb, 1.0) : vec4(0.03, 0.03, 0.08, 1.0); return;
+    }
 
     vec3 viewDir = normalize(uCamPos - vWorld);
     float d = max(dot(n, normalize(-uLight)), 0.0);
     float light = 0.35 + 0.75 * d;
     vec3 col = base * light;
+
+    // Baked lightmap: when the mesh carries a real BakedLight atlas, that IS the lighting for this
+    // surface, so it replaces the fake directional term (finalColor = diffuse * lightmap). Only kicks
+    // in where genuine baked data exists (Map12-style maps); Old-Rift meshes keep the directional look.
+    if (uHasLightmap == 1) col = base * texture(uLightmap, vLmUv).rgb;
 
     // Specular highlight - computed only when the material's profile enables it (League materials are
     // diffuse/lambert by default). Blinn-Phong half-vector term.
@@ -249,6 +268,8 @@ void main() { FragColor = uColor; }";
         _mUsesRim = gl.GetUniformLocation(_meshProgram, "uUsesRim");
         _mUsesSpec = gl.GetUniformLocation(_meshProgram, "uUsesSpec");
         _mHasVertexColor = gl.GetUniformLocation(_meshProgram, "uHasVertexColor");
+        _mLightmap = gl.GetUniformLocation(_meshProgram, "uLightmap");
+        _mHasLightmap = gl.GetUniformLocation(_meshProgram, "uHasLightmap");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -271,7 +292,7 @@ void main() { FragColor = uColor; }";
 
     public unsafe void SetMesh(float[] positions, float[] normals, float[] uvs, uint[] indices,
         int vertexCount, Vector3 min, Vector3 max, IReadOnlyList<(int start, int count)> submeshes,
-        float[]? colors = null)
+        float[]? colors = null, float[]? lightmapUvs = null)
     {
         if (!_ready) return;
         DeleteMeshBuffers();
@@ -323,6 +344,24 @@ void main() { FragColor = uColor; }";
         {
             _gl.DisableVertexAttribArray(3);
             _gl.VertexAttrib4(3, 1f, 1f, 1f, 1f); // constant white when the mesh has no PrimaryColor
+        }
+
+        // Baked lightmap UV (location 4) — same separate-VBO pattern; already atlas-mapped (uv7*scale+bias)
+        // at decode. Absent → a constant (0,0) generic attribute (the lightmap is gated off per-submesh anyway).
+        _hasLightmapUv = lightmapUvs is { Length: > 0 } && lightmapUvs.Length >= vertexCount * 2;
+        if (_hasLightmapUv)
+        {
+            _lightmapUvVbo = _gl.GenBuffer();
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _lightmapUvVbo);
+            fixed (float* lp = lightmapUvs)
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(lightmapUvs!.Length * sizeof(float)), lp, BufferUsageARB.StaticDraw);
+            _gl.EnableVertexAttribArray(4);
+            _gl.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, 2 * sizeof(float), (void*)0);
+        }
+        else
+        {
+            _gl.DisableVertexAttribArray(4);
+            _gl.VertexAttrib2(4, 0f, 0f);
         }
 
         _ebo = _gl.GenBuffer();
@@ -384,7 +423,8 @@ void main() { FragColor = uColor; }";
         _submeshes[index].Visible = visible;
     }
 
-    /// <summary>Set a submesh texture layer: 0 diffuse · 1 mask · 2 gradient · 3 emissive (0 = none).</summary>
+    /// <summary>Set a submesh texture layer: 0 diffuse · 1 mask · 2 gradient · 3 emissive · 4 matcap ·
+    /// 5 matcap-mask · 6 lightmap (0 = none).</summary>
     public void SetSubmeshLayer(int index, int slot, uint textureId)
     {
         if (!_ready || !_hasMesh || index < 0 || index >= _submeshes.Length) return;
@@ -396,6 +436,7 @@ void main() { FragColor = uColor; }";
             case 3: _submeshes[index].Emissive = textureId; break;
             case 4: _submeshes[index].MatCap = textureId; break;
             case 5: _submeshes[index].MatCapMask = textureId; break;
+            case 6: _submeshes[index].Lightmap = textureId; break;
         }
     }
 
@@ -542,6 +583,7 @@ void main() { FragColor = uColor; }";
                 _gl.Uniform1(_mEmissive, 3);
                 _gl.Uniform1(_mMatCap, 4);
                 _gl.Uniform1(_mMatCapMask, 5);
+                _gl.Uniform1(_mLightmap, 6);
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
 
                 foreach (var s in _submeshes)
@@ -570,6 +612,9 @@ void main() { FragColor = uColor; }";
                     _gl.ActiveTexture(TextureUnit.Texture5);
                     _gl.BindTexture(TextureTarget.Texture2D, s.MatCapMask != 0 ? s.MatCapMask : _whiteTex);
                     _gl.Uniform1(_mHasMatCapMask, s.MatCapMask != 0 ? 1 : 0);
+                    _gl.ActiveTexture(TextureUnit.Texture6);
+                    _gl.BindTexture(TextureTarget.Texture2D, s.Lightmap != 0 ? s.Lightmap : _whiteTex);
+                    _gl.Uniform1(_mHasLightmap, (s.Lightmap != 0 && _hasLightmapUv) ? 1 : 0);
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
                 }
             }
@@ -707,8 +752,10 @@ void main() { FragColor = uColor; }";
         _gl.DeleteBuffer(_ebo);
         _gl.DeleteBuffer(_wireEbo);
         if (_colorVbo != 0) { _gl.DeleteBuffer(_colorVbo); _colorVbo = 0; }
+        if (_lightmapUvVbo != 0) { _gl.DeleteBuffer(_lightmapUvVbo); _lightmapUvVbo = 0; }
         _gl.DeleteVertexArray(_vao);
         _hasVertexColor = false;
+        _hasLightmapUv = false;
         _hasMesh = false;
     }
 

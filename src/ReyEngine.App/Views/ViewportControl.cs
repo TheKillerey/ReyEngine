@@ -41,6 +41,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelMatCapTextures));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelMatCapMaskTexturesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelMatCapMaskTextures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelLightmapTexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelLightmapTextures));
     public static readonly StyledProperty<IReadOnlyList<bool>?> ModelSubmeshVisibleProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<bool>?>(nameof(ModelSubmeshVisible));
     public static readonly StyledProperty<IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?> ModelSubmeshMaterialsProperty =
@@ -78,6 +80,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public IReadOnlyList<TextureImage?>? ModelEmissiveTextures { get => GetValue(ModelEmissiveTexturesProperty); set => SetValue(ModelEmissiveTexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelMatCapTextures { get => GetValue(ModelMatCapTexturesProperty); set => SetValue(ModelMatCapTexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelMatCapMaskTextures { get => GetValue(ModelMatCapMaskTexturesProperty); set => SetValue(ModelMatCapMaskTexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? ModelLightmapTextures { get => GetValue(ModelLightmapTexturesProperty); set => SetValue(ModelLightmapTexturesProperty, value); }
     public IReadOnlyList<bool>? ModelSubmeshVisible { get => GetValue(ModelSubmeshVisibleProperty); set => SetValue(ModelSubmeshVisibleProperty, value); }
     public IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? ModelSubmeshMaterials { get => GetValue(ModelSubmeshMaterialsProperty); set => SetValue(ModelSubmeshMaterialsProperty, value); }
     public int MeshVerticesRevision { get => GetValue(MeshVerticesRevisionProperty); set => SetValue(MeshVerticesRevisionProperty, value); }
@@ -250,7 +253,7 @@ public sealed class ViewportControl : OpenGlControlBase
             if (Mesh is { } m)
             {
                 var subs = m.SubMeshes.Select(s => (s.StartIndex, s.IndexCount)).ToList();
-                _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax, subs, m.Colors);
+                _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax, subs, m.Colors, m.LightmapUvs);
                 _needFrame = true;
                 _texturesDirty = true;
                 _skinDirty = true;
@@ -270,6 +273,7 @@ public sealed class ViewportControl : OpenGlControlBase
             UploadLayer(ModelEmissiveTextures, 3, uploaded);    // emissive
             UploadLayer(ModelMatCapTextures, 4, uploaded);      // matcap
             UploadLayer(ModelMatCapMaskTextures, 5, uploaded);  // matcap mask
+            UploadLayer(ModelLightmapTextures, 6, uploaded);    // baked lightmap atlas
             _texturesDirty = false;
         }
         if (_visibilityDirty && _meshRenderer.HasMesh)
@@ -410,7 +414,8 @@ public sealed class ViewportControl : OpenGlControlBase
         if (change.Property == MeshProperty) { _meshDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelTexturesProperty || change.Property == ModelMaskTexturesProperty
                  || change.Property == ModelGradientTexturesProperty || change.Property == ModelEmissiveTexturesProperty
-                 || change.Property == ModelMatCapTexturesProperty || change.Property == ModelMatCapMaskTexturesProperty)
+                 || change.Property == ModelMatCapTexturesProperty || change.Property == ModelMatCapMaskTexturesProperty
+                 || change.Property == ModelLightmapTexturesProperty)
         { _texturesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelSubmeshVisibleProperty) { _visibilityDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelSubmeshMaterialsProperty) { _materialsDirty = true; RequestNextFrameRendering(); }

@@ -108,6 +108,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelEmissiveTextures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelMatCapTextures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelMatCapMaskTextures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelLightmapTextures; // M33: per-submesh baked lightmap atlas
     [ObservableProperty] private IReadOnlyList<bool>? _currentModelSubmeshVisible;
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
     [ObservableProperty] private AnimationClip? _currentAnimation;
@@ -230,6 +231,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MapGeoAsset Map, byte[] MapBytes, WadAssetEntry Entry, MapVisibilityControllers? Controllers,
         MeshAsset Mesh, IReadOnlyList<TextureImage?>? Textures,
         IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials,
+        IReadOnlyList<TextureImage?>? Lightmaps,
         int DragonIndex, int BaronIndex, bool HasMoves, int[] SelectedMeshIndices,
         List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces);
 
@@ -307,7 +309,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_currentMap is not { } map || _currentMapBytes is null || _currentMapEntry is not { } entry || CurrentMesh is not { } mesh)
             return null;
         return new MapScene(map, _currentMapBytes, entry, _mapControllers, mesh,
-            CurrentModelTextures, CurrentModelSubmeshMaterials,
+            CurrentModelTextures, CurrentModelSubmeshMaterials, CurrentModelLightmapTextures,
             SelectedDragonIndex, SelectedBaronIndex, HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList());
@@ -322,6 +324,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentMesh = s.Mesh;
         CurrentModelTextures = s.Textures;
         ClearSecondaryTextures();
+        CurrentModelLightmapTextures = s.Lightmaps;
         CurrentModelSubmeshMaterials = s.Materials;
         MapGeoInspector.Show(s.Map, s.Entry.Path);
         MapContent.SetLayerGroups(s.LayerGroups);
@@ -813,6 +816,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelEmissiveTextures = null;
         CurrentModelMatCapTextures = null;
         CurrentModelMatCapMaskTextures = null;
+        // NOTE: CurrentModelLightmapTextures is NOT reset here — like CurrentModelSubmeshMaterials it is
+        // published by BuildMapTextures (which runs before the UI-thread ClearSecondaryTextures call) and
+        // reset explicitly on the mesh/clear paths, so clearing it here would wipe a freshly-loaded map's.
     }
 
     private void ClearViewport()
@@ -829,6 +835,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasMapMoves = false;
         CurrentModelTextures = null;
         ClearSecondaryTextures();
+        CurrentModelLightmapTextures = null;
         CurrentModelSubmeshMaterials = null;
         CurrentModelSubmeshVisible = null;
         CurrentAnimation = null;
@@ -1488,6 +1495,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 CurrentMesh = mesh;
                 CurrentSkeleton = skeleton;
                 CurrentModelTextures = textures;
+                CurrentModelLightmapTextures = null; // champions/skinned meshes have no map baked lightmaps
                 if (textures is null) CurrentModelSubmeshMaterials = null; // flat mesh — no per-material data
                 ShowBones = skeleton is not null;
                 MeshInspector.ShowMesh(mesh, skeleton);
@@ -1522,6 +1530,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     Normals = m.Normals,
                     Uvs = m.Uvs,
                     Colors = m.Colors,
+                    LightmapUvs = m.LightmapUvs,
                     Indices = m.Indices,
                     VertexCount = m.VertexCount,
                     SubMeshes = m.Groups.Select(g => new SubMeshInfo(g.Material, g.StartIndex, g.IndexCount, 0)).ToList(),
@@ -1675,7 +1684,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
 
         var result = new TextureImage?[map.Groups.Count];
+        var lightmaps = new TextureImage?[map.Groups.Count];
         var submeshMats = new ViewportMeshRenderer.SubmeshMaterial[map.Groups.Count];
+        int lmGroups = 0;
         for (int i = 0; i < map.Groups.Count; i++)
         {
             var matName = map.Groups[i].Material;
@@ -1687,13 +1698,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 LogUvTransform(prof, matName);
             }
             else submeshMats[i] = ViewportMeshRenderer.SubmeshMaterial.Default;
+
+            // Baked lightmap: the group's BakedLight atlas (mesh already carries the uv7*scale+bias UVs).
+            var lmPath = map.Groups[i].LightmapTexture;
+            if (!string.IsNullOrEmpty(lmPath)) { lightmaps[i] = Load(lmPath); if (lightmaps[i] is not null) lmGroups++; }
         }
         CurrentModelSubmeshMaterials = submeshMats;
+        CurrentModelLightmapTextures = lmGroups > 0 ? lightmaps : null;
 
         int unique = cache.Values.Count(v => v is not null);
         int spec = submeshMats.Count(m => m.UsesSpecular);
         _log.Success("MapGeo", $"Loaded {unique} unique textures ({materialToTexture.Count}/{materialCount} materials resolved)" +
-                               (spec > 0 ? $", {spec} group(s) with specular." : "."));
+                               (spec > 0 ? $", {spec} group(s) with specular." : ".") +
+                               (lmGroups > 0 ? $" {lmGroups} group(s) with baked lightmaps." : ""));
         return result;
     }
 

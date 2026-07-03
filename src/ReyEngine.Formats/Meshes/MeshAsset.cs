@@ -9,6 +9,7 @@ public sealed class MeshAsset
     public required float[] Normals { get; init; }    // 3 floats / vertex (zeros if absent)
     public required float[] Uvs { get; init; }        // 2 floats / vertex (zeros if absent)
     public float[]? Colors { get; init; }             // 4 floats / vertex (RGBA 0..1); null if no vertex color
+    public float[]? LightmapUvs { get; init; }         // 2 floats / vertex; null if no baked lightmap
     public required uint[] Indices { get; init; }
     public required IReadOnlyList<SubMeshInfo> SubMeshes { get; init; }
 
