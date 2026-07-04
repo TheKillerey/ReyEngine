@@ -119,9 +119,9 @@ public sealed class ViewportControl : OpenGlControlBase
     private bool _particlesDirty;
     private Vector3? _pendingFocus;
 
-    // M36: live VFX particle playback
+    // M36: live VFX particle playback (one simulator per played placement)
     private VfxParticleRenderer? _particleRenderer;
-    private VfxParticleSimulator? _particleSim;
+    private readonly List<VfxParticleSimulator> _particleSims = new();
     private bool _particlePlaybackDirty;
     private uint _softDotTex;
     private readonly System.Diagnostics.Stopwatch _particleClock = new();
@@ -276,7 +276,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _grid = null;
         _meshRenderer = null;
         _particleRenderer = null;
-        _particleSim = null;
+        _particleSims.Clear();
         _gl = null;
     }
 
@@ -346,7 +346,7 @@ public sealed class ViewportControl : OpenGlControlBase
         if (_particlesDirty)
         {
             var pts = ParticleMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>();
-            float size = Mesh is { } pm ? Math.Clamp(pm.Radius * 0.012f, 8f, 400f) : 40f;
+            float size = Mesh is { } pm ? Math.Clamp(pm.Radius * 0.004f, 4f, 90f) : 20f;
             _meshRenderer.SetParticleMarkers(pts, SelectedParticlePosition, size);
             _particlesDirty = false;
         }
@@ -391,12 +391,15 @@ public sealed class ViewportControl : OpenGlControlBase
         _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones, CullBackfaces);
 
         // M36: advance + draw live VFX particles on top of the scene, then keep requesting frames so they animate.
-        if (_particleSim is { } psim && _particleRenderer is { } prend && ParticlePlayback is not null)
+        if (_particleSims.Count > 0 && _particleRenderer is { } prend && ParticlePlayback is not null)
         {
             float dt = _particleClock.IsRunning ? (float)_particleClock.Elapsed.TotalSeconds : 1f / 60f;
             _particleClock.Restart();
-            psim.Update(dt);
-            prend.Render(psim, viewProj, view);
+            foreach (var psim in _particleSims)
+            {
+                psim.Update(dt);
+                prend.Render(psim, viewProj, view);
+            }
             RequestNextFrameRendering();
         }
 
@@ -468,24 +471,37 @@ public sealed class ViewportControl : OpenGlControlBase
     private void RebuildParticleSim()
     {
         if (_particleRenderer is null) return;
-        var pb = ParticlePlayback;
-        if (pb is null || pb.System.Emitters.Count == 0) { _particleSim = null; _particleClock.Stop(); return; }
+        _particleSims.Clear();
 
+        var pb = ParticlePlayback;
+        if (pb is null || pb.Items.Count == 0) { _particleClock.Stop(); return; }
+
+        // Upload every unique sprite once (shared across placements of the same system) + a soft-dot fallback.
         _particleRenderer.ClearTextures();
         _softDotTex = _particleRenderer.UploadTexture(SoftDot(64), 64, 64);
+        var uploaded = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
 
-        var sim = new VfxParticleSimulator();
-        sim.SetSystem(pb.System, pb.WorldPos);
-        foreach (var es in sim.Emitters)
+        foreach (var item in pb.Items)
         {
-            // match the state back to its emitter index (by reference — SetSystem keeps the instances)
-            int idx = -1;
-            for (int i = 0; i < pb.System.Emitters.Count; i++)
-                if (ReferenceEquals(pb.System.Emitters[i], es.Def)) { idx = i; break; }
-            var img = idx >= 0 && idx < pb.EmitterTextures.Count ? pb.EmitterTextures[idx] : null;
-            es.Texture = img is not null ? _particleRenderer.UploadTexture(img.Rgba, img.Width, img.Height) : _softDotTex;
+            if (item.System.Emitters.Count == 0) continue;
+            var sim = new VfxParticleSimulator();
+            sim.SetSystem(item.System, item.WorldPos);
+            foreach (var es in sim.Emitters)
+            {
+                // match the state back to its emitter index (by reference — SetSystem keeps the instances)
+                int idx = -1;
+                for (int i = 0; i < item.System.Emitters.Count; i++)
+                    if (ReferenceEquals(item.System.Emitters[i], es.Def)) { idx = i; break; }
+                var img = idx >= 0 && idx < item.EmitterTextures.Count ? item.EmitterTextures[idx] : null;
+                if (img is null) es.Texture = _softDotTex;
+                else
+                {
+                    if (!uploaded.TryGetValue(img, out var tex)) { tex = _particleRenderer.UploadTexture(img.Rgba, img.Width, img.Height); uploaded[img] = tex; }
+                    es.Texture = tex;
+                }
+            }
+            _particleSims.Add(sim);
         }
-        _particleSim = sim;
         _particleClock.Restart();
     }
 
@@ -498,7 +514,8 @@ public sealed class ViewportControl : OpenGlControlBase
         for (int x = 0; x < n; x++)
         {
             float dx = (x - c) / c, dy = (y - c) / c;
-            float a = Math.Clamp(1f - MathF.Sqrt(dx * dx + dy * dy), 0f, 1f);
+            // tight core: glow fades out by ~55% of the quad radius so the placeholder reads as a small dot
+            float a = Math.Clamp(1f - MathF.Sqrt(dx * dx + dy * dy) * 1.8f, 0f, 1f);
             a *= a;
             int i = (y * n + x) * 4;
             px[i] = px[i + 1] = px[i + 2] = 255;

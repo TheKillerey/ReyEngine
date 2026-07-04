@@ -198,6 +198,8 @@
           <TextBlock Text="Particles" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
           <TextBlock Text="{Binding MapContent.ParticleCount}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
           <ToggleButton Content="Show" IsChecked="{Binding ShowParticles}" FontSize="9" Padding="6,1" VerticalAlignment="Center" />
+          <ToggleButton Content="▶ Play All" IsChecked="{Binding PlayAllParticles}" FontSize="9" Padding="6,1" VerticalAlignment="Center"
+                        ToolTip.Tip="Simulate and play every placed particle system live (capped for performance)" />
         </StackPanel>
       </Expander.Header>
       <TreeView ItemsSource="{Binding MapContent.ParticleGroups}" SelectedItem="{Binding SelectedParticleTreeItem, Mode=TwoWay}"

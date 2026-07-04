@@ -147,27 +147,56 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // ---- Particle playback (M36) — simulate & render the selected placed system live in the viewport ----
     private static readonly IReadOnlyDictionary<uint, VfxSystemDefinition> EmptyVfx = new Dictionary<uint, VfxSystemDefinition>();
     private IReadOnlyDictionary<uint, VfxSystemDefinition> _vfxSystems = EmptyVfx;
+    private readonly Dictionary<uint, IReadOnlyList<TextureImage?>> _vfxTextureCache = new();  // system hash -> sprites
     [ObservableProperty] private bool _playParticlePreview;
+    [ObservableProperty] private bool _playAllParticles;
     [ObservableProperty] private VfxPlayback? _currentParticlePlayback;
 
-    partial void OnPlayParticlePreviewChanged(bool value) => RebuildParticlePlayback();
+    /// <summary>Cap on simultaneously-played placements for "Play All" (keeps the sim/draw cost sane).</summary>
+    private const int MaxPlayAllInstances = 250;
 
-    /// <summary>Rebuild the live playback request from the selected particle + its parsed system (M36).</summary>
+    partial void OnPlayParticlePreviewChanged(bool value) { if (value) PlayAllParticles = false; RebuildParticlePlayback(); }
+    partial void OnPlayAllParticlesChanged(bool value) { if (value) PlayParticlePreview = false; RebuildParticlePlayback(); }
+
+    /// <summary>Resolve (and cache) one sprite per emitter for a system; nulls → viewport soft-dot fallback.</summary>
+    private IReadOnlyList<TextureImage?> ResolveSystemTextures(VfxSystemDefinition sys)
+    {
+        if (_vfxTextureCache.TryGetValue(sys.PathHash, out var cached)) return cached;
+        var texs = new List<TextureImage?>(sys.Emitters.Count);
+        foreach (var e in sys.Emitters)
+            texs.Add(e.TexturePath is { } p ? LoadTextureByPath(p) : null);
+        _vfxTextureCache[sys.PathHash] = texs;
+        return texs;
+    }
+
+    /// <summary>Rebuild the live playback request (M36): all visible placements, or just the selected one.</summary>
     private void RebuildParticlePlayback()
     {
+        if (PlayAllParticles)
+        {
+            var items = new List<VfxPlaybackItem>();
+            foreach (var v in MapContent.AllParticles)
+            {
+                if (!_vfxSystems.TryGetValue(v.Placement.SystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
+                items.Add(new VfxPlaybackItem(s, v.CurrentPosition, ResolveSystemTextures(s)));
+                if (items.Count >= MaxPlayAllInstances) break;
+            }
+            CurrentParticlePlayback = items.Count > 0 ? new VfxPlayback(items) : null;
+            _log.Info("Particles", items.Count >= MaxPlayAllInstances
+                ? $"Playing all — capped at {MaxPlayAllInstances} placements (of {MapContent.ParticleCount})."
+                : $"Playing all — {items.Count} placement(s).");
+            return;
+        }
+
         if (!PlayParticlePreview || SelectedParticleNode is not { } node
             || !_vfxSystems.TryGetValue(node.Placement.SystemHash, out var sys) || sys.Emitters.Count == 0)
         {
             CurrentParticlePlayback = null;
             return;
         }
-        // Resolve one sprite per emitter (aligned to sys.Emitters); nulls become the viewport's soft-dot fallback.
-        var texs = new List<TextureImage?>(sys.Emitters.Count);
-        foreach (var e in sys.Emitters)
-            texs.Add(e.TexturePath is { } p ? LoadTextureByPath(p) : null);
-        CurrentParticlePlayback = new VfxPlayback(sys, node.CurrentPosition, texs);
-        int resolved = texs.Count(t => t is not null);
-        _log.Info("Particles", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {resolved} sprite(s) resolved.");
+        var texs = ResolveSystemTextures(sys);
+        CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, node.CurrentPosition, texs) });
+        _log.Info("Particles", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {texs.Count(t => t is not null)} sprite(s) resolved.");
     }
 
     // ---- Particle move (M35 adjustment) — reposition a placed particle, live + persisted to the mod ----
@@ -952,8 +981,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedParticleTreeItem = null;
         ParticleMarkers = null;
         PlayParticlePreview = false;
+        PlayAllParticles = false;
         CurrentParticlePlayback = null;
         _vfxSystems = EmptyVfx;
+        _vfxTextureCache.Clear();
         CurrentAnimation = null;
         AnimationTime = 0;
         Animation.Clear();
