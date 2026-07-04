@@ -5,6 +5,11 @@ namespace ReyEngine.Formats.Materials;
 /// <summary>Which RiotApprox preview profile a material maps to (drives which lighting features apply).</summary>
 public enum PreviewProfileKind { Unknown, ChampionSkin, MapStatic, MatCap, Specular }
 
+/// <summary>How a material composites, derived from its technique/pass blend state + shader name (M34).
+/// Opaque writes depth solidly; Cutout alpha-tests (discard) but stays opaque; Transparent alpha-blends
+/// over the scene (drawn after opaque, no depth write).</summary>
+public enum MaterialRenderMode { Opaque, Cutout, Transparent }
+
 /// <summary>
 /// The preview feature set + UV transform derived from a material's real .bin data (switches +
 /// paramValues + sampler names). This is what lets RiotApprox apply rim/specular/etc. per-material
@@ -21,7 +26,9 @@ public sealed record MaterialProfile(
     Vector2 UvOffset,
     float UvRotationDegrees,
     string? UvScaleSource,
-    string? UvOffsetSource)
+    string? UvOffsetSource,
+    MaterialRenderMode RenderMode = MaterialRenderMode.Opaque,
+    bool DoubleSided = false)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -51,6 +58,21 @@ public sealed record MaterialProfile(
             if (UsesEmissive) parts.Add("emissive");
             if (UsesMatCap) parts.Add("matcap");
             return string.Join(" + ", parts);
+        }
+    }
+
+    /// <summary>Blend/compositing label for the inspector (e.g. "Transparent, double-sided").</summary>
+    public string RenderModeLabel
+    {
+        get
+        {
+            string m = RenderMode switch
+            {
+                MaterialRenderMode.Cutout => "Cutout (alpha-test)",
+                MaterialRenderMode.Transparent => "Transparent (alpha-blend)",
+                _ => "Opaque",
+            };
+            return DoubleSided ? m + ", double-sided" : m;
         }
     }
 }
@@ -112,7 +134,35 @@ public static class MaterialProfiles
             : specular ? PreviewProfileKind.Specular
             : PreviewProfileKind.Unknown;
 
-        return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc);
+        var (renderMode, doubleSided) = ClassifyRenderMode(b, sourceKind);
+
+        return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
+            renderMode, doubleSided);
+    }
+
+    /// <summary>Derive the compositing mode from the material's technique/pass blend state + shader name (M34).
+    /// The shader name is the primary intent signal; blendEnable disambiguates opaque vs alpha-blend.</summary>
+    private static (MaterialRenderMode, bool) ClassifyRenderMode(MaterialBinding b, MaterialSourceKind sourceKind)
+    {
+        // real technique shader (e.g. Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest); may fall back to class name.
+        string shader = (b.RenderShader ?? b.ShaderName ?? "");
+        bool doubleSided = shader.Contains("DoubleSided", OIC) || shader.Contains("TwoSided", OIC);
+
+        // AlphaTest shaders cut out (discard) but stay opaque in the depth buffer — do NOT alpha-blend them.
+        if (shader.Contains("AlphaTest", OIC) || shader.Contains("Cutout", OIC))
+            return (MaterialRenderMode.Cutout, doubleSided);
+
+        // Anything the .bin marks blendEnable (glass, water/flowmap, decals, dynamic effects) composites over
+        // the scene. (Observed SR/HA data blends with SrcAlpha/InvSrcAlpha; we treat all as alpha-blend.)
+        if (b.BlendEnable)
+            return (MaterialRenderMode.Transparent, doubleSided);
+
+        // Champion skins historically relied on RiotApprox's global alpha-test discard; keep that (Cutout) so
+        // their alpha'd parts stay cut. Map static geometry with no blend flag is genuinely Opaque (and must
+        // NOT discard — that was the latent over-cut on solid ground).
+        return (sourceKind == MaterialSourceKind.ChampionSkin
+            ? (MaterialRenderMode.Cutout, doubleSided)
+            : (MaterialRenderMode.Opaque, doubleSided));
     }
 
     /// <summary>Classify every named material in a map .materials.bin. Returns material name → profile

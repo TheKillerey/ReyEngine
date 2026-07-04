@@ -1736,7 +1736,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Map a Formats <see cref="MaterialProfile"/> to the renderer's per-submesh material (M32).</summary>
     private static ViewportMeshRenderer.SubmeshMaterial ToSubmeshMaterial(MaterialProfile p) =>
-        new(p.UsesRim, p.UsesSpecular, p.UvScale, p.UvOffset, p.UvRotationDegrees);
+        new(p.UsesRim, p.UsesSpecular, p.UvScale, p.UvOffset, p.UvRotationDegrees,
+            AlphaMode: p.RenderMode switch
+            {
+                MaterialRenderMode.Cutout => 1,
+                MaterialRenderMode.Transparent => 2,
+                _ => 0,
+            });
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 

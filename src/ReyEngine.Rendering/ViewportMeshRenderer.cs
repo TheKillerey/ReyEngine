@@ -19,6 +19,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mUvScaleOffset, _mUvRot, _mUsesRim, _mUsesSpec;   // M32: per-material UV + feature flags
     private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
+    private int _mAlphaMode;                                       // M34: 0 opaque · 1 cutout · 2 transparent
     private int _lMvp, _lColor;
 
     private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo;
@@ -60,16 +61,18 @@ public sealed class ViewportMeshRenderer : IDisposable
         public float UvRotationRadians;
         public bool UsesRim;
         public bool UsesSpecular;
+        public int AlphaMode;           // M34: 0 opaque · 1 cutout (alpha-test) · 2 transparent (alpha-blend)
 
         public static SubmeshDraw Create(int start, int count) =>
             new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0) };
     }
 
-    /// <summary>Per-submesh preview material data pushed from the App's resolved <c>MaterialProfile</c> (M32).</summary>
+    /// <summary>Per-submesh preview material data pushed from the App's resolved <c>MaterialProfile</c> (M32/M34).</summary>
     public readonly record struct SubmeshMaterial(
-        bool UsesRim, bool UsesSpecular, Vector2 UvScale, Vector2 UvOffset, float UvRotationDegrees)
+        bool UsesRim, bool UsesSpecular, Vector2 UvScale, Vector2 UvOffset, float UvRotationDegrees,
+        int AlphaMode = 0)
     {
-        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
+        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0);
     }
 
     private const string MeshVert = @"
@@ -132,6 +135,7 @@ uniform int uUsesSpec;         // specular highlight only when the material prof
 uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map baked-term/mask data)
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
 uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
+uniform int uAlphaMode;        // M34: 0 opaque · 1 cutout (alpha-test discard) · 2 transparent (alpha-blend)
 
 // League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
 vec3 matcapColour(vec3 worldN) {
@@ -203,9 +207,8 @@ void main() {
     if (uMode == 9) { FragColor = vec4(vec3(specTerm), 1.0); return; }       // debug: specular only
 
     if (uMode == 1) {
-        // RiotApprox. Alpha cutout, then the fresnel rim (only if the material uses rim) coloured by its
-        // Gradient sampler and gated by its Mask, + matcap, + emissive glow, + optional specular.
-        if (alpha < 0.35) discard;
+        // RiotApprox. Fresnel rim (only if the material uses rim) coloured by its Gradient sampler and gated
+        // by its Mask, + matcap, + emissive glow, + optional specular. (Cutout/alpha handled below per uAlphaMode.)
         if (uUsesRim == 1) {
             float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
             vec3 rimCol = (uHasGradient == 1)
@@ -224,7 +227,11 @@ void main() {
         }
         col += specTerm * 0.5;   // white-ish highlight, only when uUsesSpec
     }
-    FragColor = vec4(col, 1.0);
+    // M34 compositing: cutout discards low-alpha texels (opaque depth); transparent keeps the texture alpha
+    // for the alpha-blend pass; opaque forces alpha 1. Applies to Basic (0) and RiotApprox (1).
+    if (uAlphaMode == 1 && alpha < 0.35) discard;
+    float outA = (uAlphaMode == 2) ? clamp(alpha, 0.0, 1.0) : 1.0;
+    FragColor = vec4(col, outA);
 }";
 
     private const string LineVert = @"
@@ -270,6 +277,7 @@ void main() { FragColor = uColor; }";
         _mHasVertexColor = gl.GetUniformLocation(_meshProgram, "uHasVertexColor");
         _mLightmap = gl.GetUniformLocation(_meshProgram, "uLightmap");
         _mHasLightmap = gl.GetUniformLocation(_meshProgram, "uHasLightmap");
+        _mAlphaMode = gl.GetUniformLocation(_meshProgram, "uAlphaMode");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -449,6 +457,7 @@ void main() { FragColor = uColor; }";
         _submeshes[index].UvRotationRadians = mat.UvRotationDegrees * (MathF.PI / 180f);
         _submeshes[index].UsesRim = mat.UsesRim;
         _submeshes[index].UsesSpecular = mat.UsesSpecular;
+        _submeshes[index].AlphaMode = mat.AlphaMode;
     }
 
     /// <summary>Reset every submesh's preview material to identity UV + no rim/specular (M32).</summary>
@@ -460,6 +469,7 @@ void main() { FragColor = uColor; }";
             _submeshes[i].UvRotationRadians = 0f;
             _submeshes[i].UsesRim = false;
             _submeshes[i].UsesSpecular = false;
+            _submeshes[i].AlphaMode = 0;
         }
     }
 
@@ -586,14 +596,14 @@ void main() { FragColor = uColor; }";
                 _gl.Uniform1(_mLightmap, 6);
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
 
-                foreach (var s in _submeshes)
+                void DrawSubmesh(SubmeshDraw s)
                 {
-                    if (!s.Visible) continue;
                     // M32 per-material: UV transform + rim/specular gates (identity/off by default).
                     _gl.Uniform4(_mUvScaleOffset, s.UvScaleOffset.X, s.UvScaleOffset.Y, s.UvScaleOffset.Z, s.UvScaleOffset.W);
                     _gl.Uniform1(_mUvRot, s.UvRotationRadians);
                     _gl.Uniform1(_mUsesRim, s.UsesRim ? 1 : 0);
                     _gl.Uniform1(_mUsesSpec, s.UsesSpecular ? 1 : 0);
+                    _gl.Uniform1(_mAlphaMode, s.AlphaMode);   // M34: 0 opaque · 1 cutout · 2 transparent
                     _gl.ActiveTexture(TextureUnit.Texture0);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);
                     _gl.Uniform1(_mHasTex, s.Texture != 0 ? 1 : 0);
@@ -616,6 +626,25 @@ void main() { FragColor = uColor; }";
                     _gl.BindTexture(TextureTarget.Texture2D, s.Lightmap != 0 ? s.Lightmap : _whiteTex);
                     _gl.Uniform1(_mHasLightmap, (s.Lightmap != 0 && _hasLightmapUv) ? 1 : 0);
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
+                }
+
+                // Pass 1: opaque + cutout (AlphaMode 0/1) with depth writes on.
+                foreach (var s in _submeshes)
+                    if (s.Visible && s.AlphaMode != 2) DrawSubmesh(s);
+
+                // Pass 2: transparent (AlphaMode 2) after solids — alpha-blend, depth-test on but NO depth
+                // write, so overlapping glass/water composites without occluding itself. (No back-to-front
+                // sort — acceptable for a preview.)
+                bool anyTransparent = false;
+                foreach (var s in _submeshes) if (s.Visible && s.AlphaMode == 2) { anyTransparent = true; break; }
+                if (anyTransparent)
+                {
+                    _gl.Enable(EnableCap.Blend);
+                    _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+                    _gl.DepthMask(false);
+                    foreach (var s in _submeshes)
+                        if (s.Visible && s.AlphaMode == 2) DrawSubmesh(s);
+                    _gl.DepthMask(true);
                 }
             }
             _gl.BindVertexArray(0);

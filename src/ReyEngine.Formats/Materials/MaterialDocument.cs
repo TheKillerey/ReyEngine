@@ -191,17 +191,43 @@ public sealed class MaterialDocument
                         switches[sn.Value] = on;
                     }
 
+            // Technique/pass render state (M34): the FIRST technique's FIRST pass carries the real shader
+            // link + blend state (the class-hash "shader" above is just "StaticMaterialDef").
+            string? renderShader = null;
+            bool blendEnable = false;
+            int srcBlend = -1, dstBlend = -1;
+            if (Field(o.Properties, "techniques") is BinTreeContainer techs
+                && techs.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } tech0
+                && Field(tech0.Properties, "passes") is BinTreeContainer passes
+                && passes.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } pass0)
+            {
+                if (Field(pass0.Properties, "shader") is BinTreeObjectLink shLink)
+                    renderShader = resolve(shLink.Value) ?? $"0x{shLink.Value:x8}";
+                blendEnable = Field(pass0.Properties, "blendEnable") switch
+                {
+                    BinTreeBool bb => bb.Value,
+                    BinTreeBitBool bbb => bbb.Value,
+                    _ => false,
+                };
+                srcBlend = AsByte(Field(pass0.Properties, "srcColorBlendFactor"));
+                dstBlend = AsByte(Field(pass0.Properties, "dstColorBlendFactor"));
+            }
+
             var subs = assignment.TryGetValue(pathHash, out var list2)
                 ? list2.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
                 : Array.Empty<string>();
             bool isDefault = defaultMaterialHash == pathHash;
 
-            materials.Add(new MaterialBinding(name, shader, subs, isDefault, slots, parameters)
+            materials.Add(new MaterialBinding(name, renderShader ?? shader, subs, isDefault, slots, parameters)
             {
                 SamplerContainer = samplers,
                 NameFieldHash = nameFieldHash,
                 PathFieldHash = pathFieldHash,
                 Switches = switches,
+                RenderShader = renderShader,
+                BlendEnable = blendEnable,
+                SrcBlendFactor = srcBlend,
+                DstBlendFactor = dstBlend,
             });
         }
 
@@ -216,6 +242,13 @@ public sealed class MaterialDocument
         if (props.TryGetValue(HashAlgorithms.Fnv1a(name), out p)) return p;
         return null;
     }
+
+    /// <summary>Read a small integer blend-factor field (stored as u8/byte); -1 when absent.</summary>
+    private static int AsByte(BinTreeProperty? p) => p switch
+    {
+        BinTreeU8 u => u.Value,
+        _ => p?.GetType().GetProperty("Value")?.GetValue(p) is { } v && int.TryParse(v.ToString(), out var n) ? n : -1,
+    };
 
     private static uint FieldHash(IReadOnlyDictionary<uint, BinTreeProperty> props, params string[] names)
     {
@@ -249,6 +282,16 @@ public sealed class MaterialBinding
     /// <summary>Shader feature switches (name → on). Only populated for StaticMaterialDef bindings (M32).</summary>
     public IReadOnlyDictionary<string, bool> Switches { get; init; } = EmptySwitches;
     private static readonly IReadOnlyDictionary<string, bool> EmptySwitches = new Dictionary<string, bool>();
+
+    /// <summary>The material's real technique-pass shader (e.g. Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest),
+    /// resolved from the first technique's first pass; null when the material has no techniques (M34).</summary>
+    public string? RenderShader { get; init; }
+    /// <summary>First pass's blendEnable — the .bin's own transparency flag (M34).</summary>
+    public bool BlendEnable { get; init; }
+    /// <summary>Raw src/dst colour blend factors from the first pass (Riot enum; -1 when absent). Observed
+    /// SR/HA values: 6 (SrcAlpha) / 7 (OneMinusSrcAlpha) for alpha blending.</summary>
+    public int SrcBlendFactor { get; init; } = -1;
+    public int DstBlendFactor { get; init; } = -1;
 
     /// <summary>The derived RiotApprox preview profile (features + UV transform). Set during parse (M32).</summary>
     public MaterialProfile Profile { get; internal set; } = MaterialProfile.Default;

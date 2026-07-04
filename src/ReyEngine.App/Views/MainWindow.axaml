@@ -549,6 +549,7 @@
                                     </StackPanel>
                                     <TextBlock Text="{Binding UvTransformText}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
                                     <TextBlock Text="{Binding UvSourceText}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="9" IsVisible="{Binding HasUvSource}" />
+                                    <TextBlock Text="{Binding RenderModeLabel, StringFormat='Blend: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
                                   </StackPanel>
                                 </Border>
 

@@ -179,6 +179,9 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     public string FeatureSummary => Model.Profile.FeatureSummary;
     public bool UsesSpecular => Model.Profile.UsesSpecular;
 
+    /// <summary>M34: compositing mode from the material's technique blend state (Opaque/Cutout/Transparent).</summary>
+    public string RenderModeLabel => Model.Profile.RenderModeLabel;
+
     /// <summary>Per-material UV transform display (scale/offset, and the source param name when known).</summary>
     public string UvTransformText
     {
