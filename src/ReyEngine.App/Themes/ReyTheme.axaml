@@ -1,0 +1,261 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- ============================================================================
+       ReyEngine · PROJECT KALISTA control styles (M39)
+       Premium Unreal/Unity-style editor chrome: consistent density, subtle borders,
+       cyan hover/active states, no chunky default controls.
+       ============================================================================ -->
+
+  <!-- ── typography ─────────────────────────────────────────────────────────── -->
+
+  <!-- Panel section header: small caps label with a cyan tick -->
+  <Style Selector="TextBlock.panelHeader">
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextDimBrush}" />
+    <Setter Property="FontSize" Value="10" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="LetterSpacing" Value="1.2" />
+    <Setter Property="Padding" Value="10,7" />
+  </Style>
+
+  <!-- Card section title inside inspector cards -->
+  <Style Selector="TextBlock.cardTitle">
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextDimBrush}" />
+    <Setter Property="FontSize" Value="10" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="LetterSpacing" Value="1.1" />
+  </Style>
+
+  <!-- monospace data readouts -->
+  <Style Selector="TextBlock.mono">
+    <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, monospace" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextDimBrush}" />
+  </Style>
+
+  <!-- ── panels / cards ─────────────────────────────────────────────────────── -->
+
+  <!-- Inspector/section card: rounded, bordered, subtle depth -->
+  <Style Selector="Border.card">
+    <Setter Property="Background" Value="{DynamicResource ReyCardBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderSoftBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="10" />
+  </Style>
+
+  <!-- Translucent HUD overlay (viewport hints) -->
+  <Style Selector="Border.glass">
+    <Setter Property="Background" Value="{DynamicResource ReyGlassBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderAccentBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="5" />
+  </Style>
+
+  <!-- ── badges / status pills ──────────────────────────────────────────────── -->
+
+  <Style Selector="Border.badge">
+    <Setter Property="CornerRadius" Value="3" />
+    <Setter Property="Padding" Value="5,1" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Background" Value="{DynamicResource ReyPanelAltBrush}" />
+  </Style>
+  <Style Selector="Border.badge > TextBlock">
+    <Setter Property="FontSize" Value="9" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextDimBrush}" />
+  </Style>
+  <Style Selector="Border.badge.accent">
+    <Setter Property="Background" Value="{DynamicResource ReyAccentBrush}" />
+  </Style>
+  <Style Selector="Border.badge.accent > TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource ReyOnAccentBrush}" />
+  </Style>
+  <Style Selector="Border.badge.violet">
+    <Setter Property="Background" Value="#4D6C5CE7" />
+  </Style>
+  <Style Selector="Border.badge.violet > TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrightBrush}" />
+  </Style>
+  <Style Selector="Border.badge.warn">
+    <Setter Property="Background" Value="#33FFB454" />
+  </Style>
+  <Style Selector="Border.badge.warn > TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource ReyWarningBrush}" />
+  </Style>
+  <Style Selector="Border.badge.outline">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderAccentBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="Border.badge.outline > TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource ReyAccentBrush}" />
+  </Style>
+
+  <!-- ── buttons ────────────────────────────────────────────────────────────── -->
+
+  <!-- Toolbar / utility button: dark, thin border, cyan hover edge -->
+  <Style Selector="Button.tool">
+    <Setter Property="Background" Value="{DynamicResource ReyPanelAltBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Padding" Value="10,5" />
+    <Setter Property="Margin" Value="0,0,4,0" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.tool:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyBorderBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccentBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyTextBrightBrush}" />
+  </Style>
+  <Style Selector="Button.tool:pressed /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyAccentDeepBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccentBrush}" />
+  </Style>
+  <Style Selector="Button.tool:disabled">
+    <Setter Property="Opacity" Value="0.45" />
+  </Style>
+
+  <!-- Primary call-to-action (Build / Save to Mod): cyan fill -->
+  <Style Selector="Button.primary">
+    <Setter Property="Background" Value="{DynamicResource ReyAccentBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyOnAccentBrush}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Padding" Value="11,5" />
+    <Setter Property="Margin" Value="0,0,4,0" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyAccentHoverBrush}" />
+  </Style>
+  <Style Selector="Button.primary:disabled">
+    <Setter Property="Opacity" Value="0.45" />
+  </Style>
+
+  <!-- Small icon-only button (tab close, ✓/↺ micro actions) -->
+  <Style Selector="Button.icon">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="3" />
+    <Setter Property="Padding" Value="5,2" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextDimBrush}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.icon:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyHoverBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyAccentBrush}" />
+  </Style>
+
+  <!-- ── toggle buttons (viewport pills, Show/Play toggles) ─────────────────── -->
+
+  <Style Selector="ToggleButton">
+    <Setter Property="CornerRadius" Value="4" />
+  </Style>
+  <Style Selector="ToggleButton.vp">
+    <Setter Property="Background" Value="{DynamicResource ReyGlassBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Padding" Value="8,3" />
+    <Setter Property="FontSize" Value="11" />
+  </Style>
+  <Style Selector="ToggleButton.vp:pointerover /template/ ContentPresenter">
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderAccentBrush}" />
+  </Style>
+  <Style Selector="ToggleButton.vp:checked /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyAccentDeepBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccentBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyAccentHoverBrush}" />
+  </Style>
+
+  <!-- ── menu bar ───────────────────────────────────────────────────────────── -->
+
+  <Style Selector="Menu > MenuItem">
+    <Setter Property="Padding" Value="9,5" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+  <Style Selector="Menu > MenuItem:pointerover /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{DynamicResource ReyHoverBrush}" />
+  </Style>
+
+  <!-- ── trees / lists (rows: compact, hover + selected translucent cyan) ───── -->
+
+  <Style Selector="TreeViewItem">
+    <Setter Property="Padding" Value="2,1" />
+    <Setter Property="MinHeight" Value="22" />
+  </Style>
+  <Style Selector="ListBoxItem">
+    <Setter Property="Padding" Value="6,2" />
+    <Setter Property="MinHeight" Value="22" />
+    <Setter Property="CornerRadius" Value="3" />
+  </Style>
+
+  <!-- Console rows: tighter still -->
+  <Style Selector="ListBox.console ListBoxItem">
+    <Setter Property="Padding" Value="2,0" />
+    <Setter Property="MinHeight" Value="17" />
+  </Style>
+
+  <!-- ── inputs ─────────────────────────────────────────────────────────────── -->
+
+  <Style Selector="TextBox">
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="MinHeight" Value="24" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+  <Style Selector="ComboBox">
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="MinHeight" Value="24" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+
+  <!-- ── tabs (inspector) ───────────────────────────────────────────────────── -->
+
+  <Style Selector="TabItem">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="MinHeight" Value="30" />
+    <Setter Property="Padding" Value="10,4" />
+  </Style>
+
+  <!-- ── expanders ──────────────────────────────────────────────────────────── -->
+
+  <Style Selector="Expander">
+    <Setter Property="MinHeight" Value="0" />
+  </Style>
+  <Style Selector="Expander /template/ ToggleButton#ExpanderHeader">
+    <Setter Property="MinHeight" Value="26" />
+    <Setter Property="Padding" Value="8,3" />
+  </Style>
+
+  <!-- ── splitters ──────────────────────────────────────────────────────────── -->
+
+  <Style Selector="GridSplitter">
+    <Setter Property="Background" Value="{DynamicResource ReyBorderSoftBrush}" />
+  </Style>
+  <Style Selector="GridSplitter:pointerover">
+    <Setter Property="Background" Value="{DynamicResource ReyAccentDeepBrush}" />
+  </Style>
+
+  <!-- ── scrollbars: slim, unobtrusive ──────────────────────────────────────── -->
+
+  <Style Selector="ScrollBar:vertical">
+    <Setter Property="Width" Value="10" />
+  </Style>
+  <Style Selector="ScrollBar:horizontal">
+    <Setter Property="Height" Value="10" />
+  </Style>
+
+  <!-- ── sliders: compact ───────────────────────────────────────────────────── -->
+
+  <Style Selector="Slider">
+    <Setter Property="MinHeight" Value="24" />
+  </Style>
+
+</Styles>
