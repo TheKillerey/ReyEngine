@@ -160,6 +160,29 @@
       </ScrollViewer>
     </Expander>
 
+    <!-- Placed particles (M35) — click to focus + highlight the marker. -->
+    <Expander DockPanel.Dock="Bottom" Margin="0,4,0,0" IsExpanded="False"
+              IsVisible="{Binding HasParticles}" FontSize="11">
+      <Expander.Header>
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Text="PARTICLES" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding ParticleCount}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+          <ToggleButton Content="Show" IsChecked="{Binding ShowParticles}" FontSize="9" Padding="6,1" VerticalAlignment="Center" />
+        </StackPanel>
+      </Expander.Header>
+      <ListBox ItemsSource="{Binding CurrentModelParticles}" SelectedItem="{Binding SelectedParticle}"
+               MaxHeight="240" Background="Transparent" BorderThickness="0">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <StackPanel Margin="0,1">
+              <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis" />
+              <TextBlock Text="{Binding SystemName}" FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Expander>
+
     <!-- Meshes → Layer Groups → mesh names.  Ctrl+click a mesh row toggles multi-select (M30). -->
     <TreeView x:Name="MapContentTree"
               ItemsSource="{Binding MapContent.LayerGroups}" SelectedItem="{Binding SelectedTreeItem, Mode=TwoWay}"

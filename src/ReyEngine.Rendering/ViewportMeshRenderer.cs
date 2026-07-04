@@ -42,7 +42,9 @@ public sealed class ViewportMeshRenderer : IDisposable
     private uint _highlightVao, _highlightVbo;
     private uint _groupBoundsVao, _groupBoundsVbo;
     private uint _gizmoVao, _gizmoVbo;
+    private uint _particleVao, _particleVbo, _particleSelVao, _particleSelVbo;   // M35: placed-particle markers
     private int _boundsVerts, _boneVerts, _highlightVerts, _groupBoundsVerts;
+    private int _particleVerts, _particleSelVerts;
     private bool _hasGizmo;
     private Vector3 _gizmoPivot;
     private float _gizmoArmLength;
@@ -335,6 +337,10 @@ void main() { FragColor = uColor; }";
         _groupBoundsVbo = gl.GenBuffer();
         _gizmoVao = gl.GenVertexArray();
         _gizmoVbo = gl.GenBuffer();
+        _particleVao = gl.GenVertexArray();
+        _particleVbo = gl.GenBuffer();
+        _particleSelVao = gl.GenVertexArray();
+        _particleSelVbo = gl.GenBuffer();
         _ready = true;
     }
 
@@ -589,6 +595,37 @@ void main() { FragColor = uColor; }";
         if (pivot.HasValue) { _gizmoPivot = pivot.Value; _gizmoArmLength = armLength; }
     }
 
+    /// <summary>Set the placed-particle markers (M35): a small 3D cross at each world position, plus a larger
+    /// highlighted cross at the selected one. An empty list clears them.</summary>
+    public void SetParticleMarkers(IReadOnlyList<Vector3> positions, Vector3? selected, float size)
+    {
+        if (!_ready) return;
+        if (positions.Count == 0) _particleVerts = 0;
+        else
+        {
+            var verts = new float[positions.Count * 3 * 2 * 3]; // 3 axes * 2 points * 3 floats
+            int k = 0;
+            foreach (var p in positions) AppendCross(verts, ref k, p, size);
+            UploadLines(_particleVao, _particleVbo, verts, out _particleVerts);
+        }
+        if (selected is { } sel)
+        {
+            var v = new float[3 * 2 * 3]; int k = 0; AppendCross(v, ref k, sel, size * 2.2f);
+            UploadLines(_particleSelVao, _particleSelVbo, v, out _particleSelVerts);
+        }
+        else _particleSelVerts = 0;
+    }
+
+    private static void AppendCross(float[] a, ref int k, Vector3 c, float s)
+    {
+        // X axis
+        a[k++] = c.X - s; a[k++] = c.Y; a[k++] = c.Z;  a[k++] = c.X + s; a[k++] = c.Y; a[k++] = c.Z;
+        // Y axis
+        a[k++] = c.X; a[k++] = c.Y - s; a[k++] = c.Z;  a[k++] = c.X; a[k++] = c.Y + s; a[k++] = c.Z;
+        // Z axis
+        a[k++] = c.X; a[k++] = c.Y; a[k++] = c.Z - s;  a[k++] = c.X; a[k++] = c.Y; a[k++] = c.Z + s;
+    }
+
     public void ClearMesh()
     {
         DeleteMeshBuffers();
@@ -596,6 +633,8 @@ void main() { FragColor = uColor; }";
         _boundsVerts = 0;
         _highlightVerts = 0;
         _groupBoundsVerts = 0;
+        _particleVerts = 0;
+        _particleSelVerts = 0;
         _hasGizmo = false;
     }
 
@@ -795,6 +834,30 @@ void main() { FragColor = uColor; }";
             _gl.LineWidth(1f);
             _gl.BindVertexArray(0);
         }
+
+        // M35 placed-particle markers: a cross at each placement (cyan), the selected one larger (yellow),
+        // always on top so they read through geometry.
+        if (_particleVerts > 0 || _particleSelVerts > 0)
+        {
+            _gl.UseProgram(_lineProgram);
+            _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+            _gl.Disable(EnableCap.DepthTest);
+            if (_particleVerts > 0)
+            {
+                _gl.Uniform4(_lColor, 0.30f, 0.85f, 0.95f, 1f); // particle cyan
+                _gl.BindVertexArray(_particleVao);
+                _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_particleVerts);
+            }
+            if (_particleSelVerts > 0)
+            {
+                _gl.LineWidth(2.5f);
+                _gl.Uniform4(_lColor, 1.0f, 0.85f, 0.2f, 1f); // selected particle amber-yellow
+                _gl.BindVertexArray(_particleSelVao);
+                _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_particleSelVerts);
+                _gl.LineWidth(1f);
+            }
+            _gl.BindVertexArray(0);
+        }
     }
 
     private unsafe uint MakeSolidTexture(byte r, byte g, byte b)
@@ -864,8 +927,12 @@ void main() { FragColor = uColor; }";
         _gl.DeleteTexture(_whiteTex);
         _gl.DeleteBuffer(_boundsVbo);
         _gl.DeleteBuffer(_boneVbo);
+        _gl.DeleteBuffer(_particleVbo);
+        _gl.DeleteBuffer(_particleSelVbo);
         _gl.DeleteVertexArray(_boundsVao);
         _gl.DeleteVertexArray(_boneVao);
+        _gl.DeleteVertexArray(_particleVao);
+        _gl.DeleteVertexArray(_particleSelVao);
         _gl.DeleteProgram(_meshProgram);
         _gl.DeleteProgram(_lineProgram);
         _ready = false;

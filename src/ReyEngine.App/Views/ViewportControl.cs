@@ -31,6 +31,12 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowBounds));
     public static readonly StyledProperty<bool> CullBackfacesProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(CullBackfaces));
+    public static readonly StyledProperty<IReadOnlyList<Vector3>?> ParticleMarkersProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ParticleMarkers));
+    public static readonly StyledProperty<Vector3?> SelectedParticlePositionProperty =
+        AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(SelectedParticlePosition));
+    public static readonly StyledProperty<Vector3?> FocusPointProperty =
+        AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(FocusPoint));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelTextures));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelMaskTexturesProperty =
@@ -90,6 +96,11 @@ public sealed class ViewportControl : OpenGlControlBase
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
     public bool Wireframe { get => GetValue(WireframeProperty); set => SetValue(WireframeProperty, value); }
     public bool CullBackfaces { get => GetValue(CullBackfacesProperty); set => SetValue(CullBackfacesProperty, value); }
+    /// <summary>World positions of placed-particle markers to draw (M35); null/empty hides them.</summary>
+    public IReadOnlyList<Vector3>? ParticleMarkers { get => GetValue(ParticleMarkersProperty); set => SetValue(ParticleMarkersProperty, value); }
+    public Vector3? SelectedParticlePosition { get => GetValue(SelectedParticlePositionProperty); set => SetValue(SelectedParticlePositionProperty, value); }
+    /// <summary>Set to a world point to recentre the camera on it (M35 focus); cleared after applying.</summary>
+    public Vector3? FocusPoint { get => GetValue(FocusPointProperty); set => SetValue(FocusPointProperty, value); }
     public bool ShowBones { get => GetValue(ShowBonesProperty); set => SetValue(ShowBonesProperty, value); }
     public bool ShowBounds { get => GetValue(ShowBoundsProperty); set => SetValue(ShowBoundsProperty, value); }
 
@@ -99,6 +110,8 @@ public sealed class ViewportControl : OpenGlControlBase
     private ViewportMeshRenderer? _meshRenderer;
     private readonly OrbitCamera _camera = new();
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
+    private bool _particlesDirty;
+    private Vector3? _pendingFocus;
 
     // Offscreen target with a real depth buffer (Avalonia's default FBO has none).
     private uint _fbo, _colorRb, _depthRb;
@@ -310,7 +323,15 @@ public sealed class ViewportControl : OpenGlControlBase
             ApplySkinning();
             _skinDirty = false;
         }
+        if (_particlesDirty)
+        {
+            var pts = ParticleMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>();
+            float size = Mesh is { } pm ? Math.Clamp(pm.Radius * 0.012f, 8f, 400f) : 40f;
+            _meshRenderer.SetParticleMarkers(pts, SelectedParticlePosition, size);
+            _particlesDirty = false;
+        }
         if (_needFrame) { FrameCamera(); _needFrame = false; }
+        if (_pendingFocus is { } fp) { FocusOnPoint(fp); _pendingFocus = null; }
 
         float scale = (float)(VisualRoot?.RenderScaling ?? 1.0);
         uint w = (uint)Math.Max(1, Bounds.Width * scale);
@@ -438,6 +459,10 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == ShowBoundsProperty || change.Property == PreviewModeProperty
                  || change.Property == CullBackfacesProperty)
         { _skinDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == ParticleMarkersProperty || change.Property == SelectedParticlePositionProperty)
+        { _particlesDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == FocusPointProperty && FocusPoint is { } fp)
+        { _pendingFocus = fp; RequestNextFrameRendering(); }
     }
 
     private void ApplySkinning()
@@ -472,6 +497,16 @@ public sealed class ViewportControl : OpenGlControlBase
         _camera.Distance = Math.Clamp(dist, 5f, 100000f);
         _camera.Near = MathF.Max(dist * 0.01f, 0.05f);
         _camera.Far = dist * 40f + radius * 20f;
+    }
+
+    /// <summary>Recentre the camera on a world point (M35 particle focus), keeping a close-in distance.</summary>
+    private void FocusOnPoint(Vector3 p)
+    {
+        _camera.Target = p;
+        _camera.Distance = Math.Clamp(_camera.Distance, 400f, 2500f);
+        _camera.Near = 5f;
+        _camera.Far = 200000f;
+        RequestNextFrameRendering();
     }
 
     private static float[] BuildBoneSegments(SkeletonAsset skeleton)

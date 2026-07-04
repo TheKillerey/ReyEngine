@@ -199,6 +199,9 @@
                 ShowBones="{Binding ShowBones}"
                 ShowBounds="{Binding ShowBounds}"
                 CullBackfaces="{Binding CullBackfaces}"
+                ParticleMarkers="{Binding ParticleMarkers}"
+                SelectedParticlePosition="{Binding SelectedParticleMarker}"
+                FocusPoint="{Binding ParticleFocusPoint}"
                 PreviewMode="{Binding PreviewMode}" />
 
             <!-- transparent surface that forwards pointer input to the viewport camera -->
@@ -241,6 +244,9 @@
                             ToolTip.Tip="Respect each material's cullEnable (single-sided materials cull backfaces; cullEnable=false renders two-sided with flipped-normal lighting). Off = force everything two-sided." />
               <ToggleButton Content="Bones" IsChecked="{Binding ShowBones}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Bounds" IsChecked="{Binding ShowBounds}" FontSize="11" Padding="8,3" />
+              <ToggleButton Content="Particles" IsChecked="{Binding ShowParticles}" FontSize="11" Padding="8,3"
+                            IsVisible="{Binding HasParticles}"
+                            ToolTip.Tip="Show placed particle-system markers (MapParticle)" />
               <Button Content="Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" />
             </StackPanel>
 

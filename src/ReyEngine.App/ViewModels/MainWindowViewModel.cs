@@ -110,6 +110,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelMatCapMaskTextures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _currentModelLightmapTextures; // M33: per-submesh baked lightmap atlas
     [ObservableProperty] private IReadOnlyList<bool>? _currentModelSubmeshVisible;
+
+    // M35: placed particle systems (MapParticle) on the current map.
+    [ObservableProperty] private IReadOnlyList<MapParticlePlacement>? _currentModelParticles;
+    [ObservableProperty] private bool _showParticles;
+    [ObservableProperty] private MapParticlePlacement? _selectedParticle;
+    [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _particleMarkers;      // positions shown in the viewport
+    [ObservableProperty] private System.Numerics.Vector3? _selectedParticleMarker;
+    [ObservableProperty] private System.Numerics.Vector3? _particleFocusPoint;                   // set to recentre the camera
+
+    public int ParticleCount => CurrentModelParticles?.Count ?? 0;
+    public bool HasParticles => ParticleCount > 0;
+
+    partial void OnShowParticlesChanged(bool value) => UpdateParticleMarkers();
+    partial void OnCurrentModelParticlesChanged(IReadOnlyList<MapParticlePlacement>? value)
+    { OnPropertyChanged(nameof(ParticleCount)); OnPropertyChanged(nameof(HasParticles)); UpdateParticleMarkers(); }
+    partial void OnSelectedParticleChanged(MapParticlePlacement? value)
+    {
+        SelectedParticleMarker = value?.Position;
+        if (value is { } p) { ShowParticles = true; ParticleFocusPoint = p.Position; }
+    }
+
+    private void UpdateParticleMarkers() =>
+        ParticleMarkers = (ShowParticles && CurrentModelParticles is { Count: > 0 } ps)
+            ? ps.Select(p => p.Position).ToList() : null;
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
@@ -234,6 +258,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshAsset Mesh, IReadOnlyList<TextureImage?>? Textures,
         IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials,
         IReadOnlyList<TextureImage?>? Lightmaps,
+        IReadOnlyList<MapParticlePlacement>? Particles,
         int DragonIndex, int BaronIndex, bool HasMoves, int[] SelectedMeshIndices,
         List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces);
 
@@ -312,6 +337,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return null;
         return new MapScene(map, _currentMapBytes, entry, _mapControllers, mesh,
             CurrentModelTextures, CurrentModelSubmeshMaterials, CurrentModelLightmapTextures,
+            CurrentModelParticles,
             SelectedDragonIndex, SelectedBaronIndex, HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList());
@@ -328,6 +354,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ClearSecondaryTextures();
         CurrentModelLightmapTextures = s.Lightmaps;
         CurrentModelSubmeshMaterials = s.Materials;
+        CurrentModelParticles = s.Particles;
+        SelectedParticle = null;
         MapGeoInspector.Show(s.Map, s.Entry.Path);
         MapContent.SetLayerGroups(s.LayerGroups);
         MapContent.ShowMap(s.MapName, s.Pieces);
@@ -841,6 +869,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelLightmapTextures = null;
         CurrentModelSubmeshMaterials = null;
         CurrentModelSubmeshVisible = null;
+        CurrentModelParticles = null;
+        SelectedParticle = null;
+        ParticleMarkers = null;
         CurrentAnimation = null;
         AnimationTime = 0;
         Animation.Clear();
@@ -1605,6 +1636,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Info("MapGeo", $"No materials .bin found for {mapEntry.DisplayName} — rendering flat.");
             return null;
         }
+
+        // M35: placed particle systems live in the same materials.bin (MapPlaceableContainer.items).
+        try
+        {
+            var particles = MapParticleExtractor.Extract(GetAssetBytes(binEntry), ResolveBinName);
+            CurrentModelParticles = particles.Count > 0 ? particles : null;
+            if (particles.Count > 0) _log.Info("MapGeo", $"{particles.Count:n0} placed particle system(s) ({particles.Select(p => p.SystemPath).Distinct().Count()} unique).");
+        }
+        catch { CurrentModelParticles = null; }
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
         var (materialToTexture, profiles) = ResolveMapMaterials(binEntry, names);
