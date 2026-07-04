@@ -28,8 +28,7 @@ public sealed record MaterialProfile(
     string? UvScaleSource,
     string? UvOffsetSource,
     MaterialRenderMode RenderMode = MaterialRenderMode.Opaque,
-    bool DoubleSided = false,
-    Vector4? Tint = null)   // M34: TintColor param (rgba) - multiplies diffuse exactly like the real shaders
+    bool DoubleSided = false)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -137,14 +136,8 @@ public static class MaterialProfiles
 
         var (renderMode, doubleSided) = ClassifyRenderMode(b, sourceKind);
 
-        // TintColor: multiplies the diffuse in Riot's shaders (rgb tint + alpha). Critical for texture-less
-        // effect materials like Indicator_Faelights (TintColor alpha 0.1 = near-invisible overlay in-game).
-        Vector4? tint = null;
-        foreach (var p in b.Parameters)
-            if (Norm(p.Name) == "tintcolor" && p.TryGetVector4(out var tv)) { tint = tv; break; }
-
         return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
-            renderMode, doubleSided, tint);
+            renderMode, doubleSided);
     }
 
     /// <summary>Derive the compositing mode from the material's technique/pass blend state + shader name (M34).

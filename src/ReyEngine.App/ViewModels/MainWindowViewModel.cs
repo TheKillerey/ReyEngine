@@ -1744,8 +1744,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MaterialRenderMode.Transparent => 2,
                 _ => 0,
             },
-            DoubleSided: p.DoubleSided,
-            Tint: p.Tint);
+            DoubleSided: p.DoubleSided);
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 
