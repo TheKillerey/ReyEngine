@@ -169,6 +169,40 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return texs;
     }
 
+    // ---- Champion-skin VFX (M37) — a loaded skin's effect library, played at the model origin ----
+    public ObservableCollection<VfxSystemItemViewModel> ChampionVfxSystems { get; } = new();
+    [ObservableProperty] private bool _hasChampionVfx;
+    [ObservableProperty] private VfxSystemItemViewModel? _selectedChampionVfx;
+
+    /// <summary>Populate the champion VFX list from a skin's parsed systems (visual systems only, sorted).</summary>
+    private void SetChampionVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems)
+    {
+        _vfxSystems = systems;
+        _vfxTextureCache.Clear();
+        ChampionVfxSystems.Clear();
+        foreach (var s in systems.Values
+                     .Where(s => s.Emitters.Any(e => e.IsVisual))
+                     .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
+            ChampionVfxSystems.Add(new VfxSystemItemViewModel { Hash = s.PathHash, Name = s.Name, EmitterCount = s.Emitters.Count(e => e.IsVisual) });
+        HasChampionVfx = ChampionVfxSystems.Count > 0;
+        SelectedChampionVfx = null;
+    }
+
+    partial void OnSelectedChampionVfxChanged(VfxSystemItemViewModel? value)
+    {
+        if (value is null || !_vfxSystems.TryGetValue(value.Hash, out var sys))
+        {
+            CurrentParticlePlayback = null;
+            return;
+        }
+        // champion VFX are authored around the character root (origin); play one system there.
+        CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, System.Numerics.Vector3.Zero, ResolveSystemTextures(sys)) });
+        _log.Info("VFX", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {ResolveSystemTextures(sys).Count(t => t is not null)} sprite(s) resolved.");
+    }
+
+    [RelayCommand]
+    private void StopChampionVfx() => SelectedChampionVfx = null;
+
     /// <summary>Rebuild the live playback request (M36): all visible placements, or just the selected one.</summary>
     private void RebuildParticlePlayback()
     {
@@ -983,6 +1017,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         PlayParticlePreview = false;
         PlayAllParticles = false;
         CurrentParticlePlayback = null;
+        SelectedChampionVfx = null;
+        ChampionVfxSystems.Clear();
+        HasChampionVfx = false;
         _vfxSystems = EmptyVfx;
         _vfxTextureCache.Clear();
         CurrentAnimation = null;
@@ -1682,12 +1719,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!ContentLoaded) return;
         try
         {
-            var (mesh, skeleton, textures) = await Task.Run(() =>
+            var (mesh, skeleton, textures, vfx) = await Task.Run(() =>
             {
                 var m = SkinnedMeshDecoder.Decode(ReadAsset(entry.PathHash));
                 var s = TryPairSkeleton(entry);
                 var t = TryLoadTextures(entry, m);
-                return (m, s, t);
+                var v = TryLoadChampionVfx(entry);
+                return (m, s, t, v);
             });
 
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1695,6 +1733,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 CurrentMesh = mesh;
                 CurrentSkeleton = skeleton;
                 CurrentModelTextures = textures;
+                SetChampionVfx(vfx);
                 CurrentModelLightmapTextures = null; // champions/skinned meshes have no map baked lightmaps
                 if (textures is null) CurrentModelSubmeshMaterials = null; // flat mesh — no per-material data
                 ShowBones = skeleton is not null;
@@ -1951,6 +1990,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return null;
         }
         return BuildSubmeshTextures(mesh, resolved, skn.DisplayName);
+    }
+
+    /// <summary>Parse the champion skin's VFX library from its .bin (M37). Empty when there's no skin bin.</summary>
+    private IReadOnlyDictionary<uint, VfxSystemDefinition> TryLoadChampionVfx(WadAssetEntry skn)
+    {
+        if (!ContentLoaded || !skn.IsResolved) return EmptyVfx;
+        var binPath = SkinPaths.BinPathForSkn(skn.Path);
+        if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return EmptyVfx;
+        try { return VfxSystemResolver.ExtractAll(GetAssetBytes(binEntry)); }
+        catch { return EmptyVfx; }
     }
 
     /// <summary>Map a Formats <see cref="MaterialProfile"/> to the renderer's per-submesh material (M32).</summary>

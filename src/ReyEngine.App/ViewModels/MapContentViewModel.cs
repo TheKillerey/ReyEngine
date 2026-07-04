@@ -28,6 +28,15 @@ public sealed class ParticleSystemGroupViewModel
     public string Header => $"{SystemName} — {Placements.Count}";
 }
 
+/// <summary>One VFX system in a loaded champion skin's effect library (M37) — select it to play it.</summary>
+public sealed class VfxSystemItemViewModel
+{
+    public required uint Hash { get; init; }
+    public required string Name { get; init; }
+    public required int EmitterCount { get; init; }
+    public string Display => $"{Name}   ·   {EmitterCount} emitter{(EmitterCount == 1 ? "" : "s")}";
+}
+
 public sealed partial class MapPieceViewModel : ObservableObject
 {
     public required string Name { get; init; }

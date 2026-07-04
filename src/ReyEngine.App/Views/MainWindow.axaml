@@ -493,6 +493,24 @@
                 </StackPanel>
               </StackPanel>
 
+              <!-- champion VFX (M37) — play the loaded skin's effects at the model -->
+              <StackPanel Spacing="6" IsVisible="{Binding HasChampionVfx}">
+                <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Grid.Column="0" Text="CHAMPION VFX" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" />
+                  <Button Grid.Column="1" Classes="tool" Content="Stop" Command="{Binding StopChampionVfxCommand}" FontSize="10" Padding="8,1" />
+                </Grid>
+                <TextBlock Text="Select an effect to play it at the model origin." Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" TextWrapping="Wrap" />
+                <ListBox ItemsSource="{Binding ChampionVfxSystems}" SelectedItem="{Binding SelectedChampionVfx, Mode=TwoWay}"
+                         MaxHeight="220" Background="Transparent" FontSize="11">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Display}" TextTrimming="CharacterEllipsis" />
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </StackPanel>
+
               <!-- mapgeo stats -->
               <StackPanel Spacing="8" IsVisible="{Binding MapGeoInspector.HasMap}">
                 <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
