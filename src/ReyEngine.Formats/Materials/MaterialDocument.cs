@@ -158,6 +158,7 @@ public sealed class MaterialDocument
 
             var slots = new List<TextureSlot>();
             uint nameFieldHash = 0, pathFieldHash = 0;
+            int diffuseAddrU = 0, diffuseAddrV = 0;   // M34: texture wrap mode for the diffuse sampler (1=Clamp)
             if (samplers is not null)
                 foreach (var el in samplers.Elements)
                 {
@@ -171,6 +172,9 @@ public sealed class MaterialDocument
                     var pathProp = (Field(s.Properties, "texturePath") as BinTreeString)
                                    ?? (Field(s.Properties, "textureName") as BinTreeString);
                     if (pathProp is null) continue;
+                    // Capture the diffuse sampler's addressU/V (else the first sampler) — decals use Clamp (1).
+                    if (diffuseAddrU == 0 && (sampler.Contains("Diffuse", StringComparison.OrdinalIgnoreCase) || slots.Count == 0))
+                    { diffuseAddrU = AsByte(Field(s.Properties, "addressU")); diffuseAddrV = AsByte(Field(s.Properties, "addressV")); }
                     slots.Add(new TextureSlot(sampler, pathProp, el));
                 }
 
@@ -244,6 +248,8 @@ public sealed class MaterialDocument
                 CullEnable = cullEnable,
                 SrcBlendFactor = srcBlend,
                 DstBlendFactor = dstBlend,
+                DiffuseAddressU = diffuseAddrU,
+                DiffuseAddressV = diffuseAddrV,
             });
         }
 
@@ -311,6 +317,9 @@ public sealed class MaterialBinding
     /// SR/HA values: 6 (SrcAlpha) / 7 (OneMinusSrcAlpha) for alpha blending.</summary>
     public int SrcBlendFactor { get; init; } = -1;
     public int DstBlendFactor { get; init; } = -1;
+    /// <summary>Diffuse sampler's addressU/V wrap mode (Riot enum: 1 = Clamp — used by decals; else Wrap). M34.</summary>
+    public int DiffuseAddressU { get; init; }
+    public int DiffuseAddressV { get; init; }
 
     /// <summary>The derived RiotApprox preview profile (features + UV transform). Set during parse (M32).</summary>
     public MaterialProfile Profile { get; internal set; } = MaterialProfile.Default;

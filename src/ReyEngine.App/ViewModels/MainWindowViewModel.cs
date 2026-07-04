@@ -1774,7 +1774,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             },
             DoubleSided: p.DoubleSided,
             Tint: p.Tint,
-            AlphaCutoff: p.AlphaCutoff ?? 0.35f);
+            AlphaCutoff: p.AlphaCutoff ?? 0.35f,
+            ClampU: p.ClampU,
+            ClampV: p.ClampV);
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 

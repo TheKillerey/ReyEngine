@@ -31,7 +31,9 @@ public sealed record MaterialProfile(
     bool DoubleSided = false,
     Vector4? Tint = null,   // M34: TintColor param (rgba); ONLY applied when the material has no diffuse texture
     bool BlendEnabled = false,   // M34: pass.blendEnable (real .bin flag)
-    float? AlphaCutoff = null)   // M34: AlphaTestValue param (real cutout threshold, e.g. 0.3); null = shader default 0.35
+    float? AlphaCutoff = null,   // M34: AlphaTestValue param (real cutout threshold, e.g. 0.3); null = shader default 0.35
+    bool ClampU = false,         // M34: diffuse addressU == Clamp (decals) — clamp UV instead of tiling
+    bool ClampV = false)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -185,8 +187,13 @@ public static class MaterialProfiles
             foreach (var p in b.Parameters)
                 if (Norm(p.Name) == "tintcolor" && p.TryGetVector4(out var tv)) { tint = tv; break; }
 
+        // Texture wrap: decals use Clamp (address 1; also treat D3D Clamp 3 / Border 4 as clamp) so their
+        // out-of-[0,1] UVs don't tile the decal over the whole mesh. Everything else (Wrap/Mirror) tiles.
+        static bool IsClamp(int a) => a == 1 || a == 3 || a == 4;
+        bool clampU = IsClamp(b.DiffuseAddressU), clampV = IsClamp(b.DiffuseAddressV);
+
         return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
-            renderMode, doubleSided, tint, b.BlendEnable, alphaCutoff);
+            renderMode, doubleSided, tint, b.BlendEnable, alphaCutoff, clampU, clampV);
     }
 
     /// <summary>Derive the compositing mode from the material's technique/pass blend state + shader name (M34).
