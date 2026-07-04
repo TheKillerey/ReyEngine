@@ -135,7 +135,7 @@ uniform int uUsesSpec;         // specular highlight only when the material prof
 uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map baked-term/mask data)
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
 uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
-uniform int uAlphaMode;        // M34: 0 opaque · 1 cutout (alpha-test discard) · 2 transparent (alpha-blend)
+uniform int uAlphaMode;        // M34: 0 opaque, 1 cutout (alpha-test discard), 2 transparent (alpha-blend)
 
 // League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
 vec3 matcapColour(vec3 worldN) {
