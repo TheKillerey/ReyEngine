@@ -68,8 +68,17 @@ public sealed class MapGeoAsset
 
             var on = new Vector3(_originalNormals[i], _originalNormals[i + 1], _originalNormals[i + 2]);
             var n = Vector3.Normalize(Vector3.TransformNormal(Vector3.TransformNormal(on, sr), group));
+            if (mesh.FlipNormals) n = -n;   // M34: per-mesh manual normal flip
             Normals[i] = n.X; Normals[i + 1] = n.Y; Normals[i + 2] = n.Z;
         }
+    }
+
+    /// <summary>Toggle a mesh's manual normal flip and rebake its normals (M34). Independent of transform edits;
+    /// negates every vertex normal in the mesh's range so the preview/lighting sees the flipped orientation.</summary>
+    public void SetFlipNormals(MapGeoMesh mesh, bool flip)
+    {
+        mesh.FlipNormals = flip;
+        ApplyMeshTransform(mesh); // recomputes from the pristine originals with the flip applied
     }
 
     /// <summary>Undo all edits on a mesh (single + group), restoring its original baked vertices.</summary>
@@ -79,6 +88,7 @@ public sealed class MapGeoAsset
         mesh.RotationDegrees = Vector3.Zero;
         mesh.Scale = Vector3.One;
         mesh.GroupMatrix = Matrix4x4.Identity;
+        mesh.FlipNormals = false;
         if (_originalPositions is null) return; // never edited — nothing to restore
         ApplyMeshTransform(mesh);
     }
@@ -175,6 +185,7 @@ public sealed class MapGeoMesh
     public Vector3 Offset;                                // accumulated single-select move (world space), default zero
     public Vector3 RotationDegrees;                        // accumulated single-select rotation (XYZ euler, degrees)
     public Vector3 Scale = Vector3.One;                     // accumulated single-select scale, default one
+    public bool FlipNormals;                               // M34: manual per-mesh normal flip (preview edit)
 
     /// <summary>
     /// World-space affine applied AFTER the self (pivot-relative euler/scale/offset) transform. This is where

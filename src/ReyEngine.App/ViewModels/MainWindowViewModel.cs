@@ -1210,6 +1210,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshScaleX = m.Scale.X.ToString("0.###", CultureInfo.InvariantCulture);
         MeshScaleY = m.Scale.Y.ToString("0.###", CultureInfo.InvariantCulture);
         MeshScaleZ = m.Scale.Z.ToString("0.###", CultureInfo.InvariantCulture);
+        SelectedMeshNormalsFlipped = m.FlipNormals;
     }
 
     private static bool TryParseVector3(string sx, string sy, string sz, out System.Numerics.Vector3 v)
@@ -1306,6 +1307,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshVerticesRevision++;
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
         _log.Info("MapGeo", $"Reset '{m.Name}' to its original transform.");
+    }
+
+    /// <summary>True when the selected mesh has its normals manually flipped (drives the toggle's checked state).</summary>
+    [ObservableProperty] private bool _selectedMeshNormalsFlipped;
+
+    /// <summary>M34: flip the selected mesh's vertex normals (live preview edit). Useful for meshes that a
+    /// converter exported with inward-facing normals. Note: for two-sided (cullEnable=false) materials the
+    /// two-sided lighting already lights both faces, so flipping there darkens rather than fixes.</summary>
+    [RelayCommand]
+    private void FlipMeshNormals()
+    {
+        if (SelectedMapMesh is not { } m || _currentMap is not { } map) return;
+        map.SetFlipNormals(m, !m.FlipNormals);
+        SelectedMeshNormalsFlipped = m.FlipNormals;
+        MeshVerticesRevision++; // re-upload the flipped normals to the viewport (GL thread)
+        RefreshMeshDetails();
+        _log.Info("MapGeo", $"{(m.FlipNormals ? "Flipped" : "Restored")} normals on '{m.Name}'.");
     }
 
     // ---- Batch transform commands (M30) — operate on the whole selection around its center -------------

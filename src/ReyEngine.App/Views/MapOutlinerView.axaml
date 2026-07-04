@@ -128,6 +128,10 @@
                   IsEnabled="{Binding HasMapMoves}"
                   Background="{DynamicResource ReyAccentBrush}" Foreground="#08221E" />
         </StackPanel>
+        <ToggleButton Content="Flip Normals" IsChecked="{Binding SelectedMeshNormalsFlipped, Mode=OneWay}"
+                      Command="{Binding FlipMeshNormalsCommand}" FontSize="11" Padding="8,2" Margin="0,4,0,0"
+                      HorizontalAlignment="Left"
+                      ToolTip.Tip="Flip this mesh's vertex normals (live preview). For two-sided (cullEnable=false) materials the two-sided lighting already lights both faces, so flipping darkens instead of fixing." />
       </StackPanel>
     </Border>
 
