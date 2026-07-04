@@ -146,7 +146,11 @@ public static class MaterialProfiles
     {
         // real technique shader (e.g. Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest); may fall back to class name.
         string shader = (b.RenderShader ?? b.ShaderName ?? "");
-        bool doubleSided = shader.Contains("DoubleSided", OIC) || shader.Contains("TwoSided", OIC);
+        // Double-sided is authoritative from the pass's cullEnable (false = double-sided); only when that
+        // field is absent do we fall back to the shader-name heuristic.
+        bool doubleSided = b.CullEnable is bool cull
+            ? !cull
+            : shader.Contains("DoubleSided", OIC) || shader.Contains("TwoSided", OIC);
 
         // AlphaTest shaders cut out (discard) but stay opaque in the depth buffer — do NOT alpha-blend them.
         if (shader.Contains("AlphaTest", OIC) || shader.Contains("Cutout", OIC))

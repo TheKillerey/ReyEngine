@@ -195,6 +195,7 @@ public sealed class MaterialDocument
             // link + blend state (the class-hash "shader" above is just "StaticMaterialDef").
             string? renderShader = null;
             bool blendEnable = false;
+            bool? cullEnable = null;
             int srcBlend = -1, dstBlend = -1;
             if (Field(o.Properties, "techniques") is BinTreeContainer techs
                 && techs.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } tech0
@@ -208,6 +209,14 @@ public sealed class MaterialDocument
                     BinTreeBool bb => bb.Value,
                     BinTreeBitBool bbb => bbb.Value,
                     _ => false,
+                };
+                // Riot's real backface-culling flag (StaticMaterialPassDef.cullEnable): true = single-sided
+                // (cull back faces), false = double-sided. Null when absent (schema default).
+                cullEnable = Field(pass0.Properties, "cullEnable") switch
+                {
+                    BinTreeBool cb => cb.Value,
+                    BinTreeBitBool cbb => cbb.Value,
+                    _ => (bool?)null,
                 };
                 srcBlend = AsByte(Field(pass0.Properties, "srcColorBlendFactor"));
                 dstBlend = AsByte(Field(pass0.Properties, "dstColorBlendFactor"));
@@ -226,6 +235,7 @@ public sealed class MaterialDocument
                 Switches = switches,
                 RenderShader = renderShader,
                 BlendEnable = blendEnable,
+                CullEnable = cullEnable,
                 SrcBlendFactor = srcBlend,
                 DstBlendFactor = dstBlend,
             });
@@ -288,6 +298,9 @@ public sealed class MaterialBinding
     public string? RenderShader { get; init; }
     /// <summary>First pass's blendEnable — the .bin's own transparency flag (M34).</summary>
     public bool BlendEnable { get; init; }
+    /// <summary>First pass's cullEnable — Riot's backface-culling flag: true = single-sided (cull back),
+    /// false = double-sided. Null when the field is absent (M34).</summary>
+    public bool? CullEnable { get; init; }
     /// <summary>Raw src/dst colour blend factors from the first pass (Riot enum; -1 when absent). Observed
     /// SR/HA values: 6 (SrcAlpha) / 7 (OneMinusSrcAlpha) for alpha blending.</summary>
     public int SrcBlendFactor { get; init; } = -1;
