@@ -75,6 +75,8 @@ public partial class MainWindow : Window
         {
             vm.Dialogs.Owner = this;
             vm.RequestProjectSettings += () => ShowProjectSettings(vm);
+            vm.RequestSettings += () => ShowSettings(vm);
+            ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
         }
     }
 
@@ -85,6 +87,33 @@ public partial class MainWindow : Window
         settings.CloseRequested += () => win.Close();
         await win.ShowDialog(this);
         if (settings.Saved) vm.ApplyProjectSettings(settings);
+    }
+
+    private async void ShowSettings(MainWindowViewModel vm)
+    {
+        var settings = new SettingsViewModel(vm.Settings.Clone());
+        var win = new SettingsWindow { DataContext = settings };
+        settings.CloseRequested += () => win.Close();
+        await win.ShowDialog(this);
+        if (settings.Saved)
+        {
+            vm.ApplyEditorSettings(settings);
+            ApplyEditorSettings(vm.Settings);
+        }
+    }
+
+    // ---- M40: parsed viewport keybinds + camera feel, refreshed from EditorSettings ----
+    private Key _kFwd = Key.W, _kBack = Key.S, _kLeft = Key.A, _kRight = Key.D, _kUp = Key.E, _kDown = Key.Q, _kFocus = Key.F;
+
+    private void ApplyEditorSettings(ReyEngine.Core.Settings.EditorSettings s)
+    {
+        static Key P(string name, Key fallback) => System.Enum.TryParse<Key>(name, out var k) ? k : fallback;
+        _kFwd = P(s.FlyForward, Key.W); _kBack = P(s.FlyBack, Key.S);
+        _kLeft = P(s.FlyLeft, Key.A); _kRight = P(s.FlyRight, Key.D);
+        _kUp = P(s.FlyUp, Key.E); _kDown = P(s.FlyDown, Key.Q);
+        _kFocus = P(s.FocusSelected, Key.F);
+        Viewport.ApplyCameraSettings((float)s.MouseLookSensitivity, (float)s.OrbitSensitivity,
+            (float)s.PanSensitivity, (float)s.ZoomSensitivity, s.InvertLookY, (float)s.FlySpeed);
     }
 
     // ---- Unreal-style viewport camera input (forwarded from the transparent overlay) ----
@@ -198,7 +227,7 @@ public partial class MainWindow : Window
 
     private void OnViewportKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.F) { Viewport.FocusSelected(); return; }
+        if (e.Key == _kFocus) { Viewport.FocusSelected(); return; }
         _heldKeys.Add(e.Key);
     }
 
@@ -224,12 +253,12 @@ public partial class MainWindow : Window
     {
         if (!_lmb) { StopFly(); return; }
         float f = 0, r = 0, u = 0;
-        if (_heldKeys.Contains(Key.W)) f += 1;
-        if (_heldKeys.Contains(Key.S)) f -= 1;
-        if (_heldKeys.Contains(Key.D)) r += 1;
-        if (_heldKeys.Contains(Key.A)) r -= 1;
-        if (_heldKeys.Contains(Key.E)) u += 1;
-        if (_heldKeys.Contains(Key.Q)) u -= 1;
+        if (_heldKeys.Contains(_kFwd)) f += 1;
+        if (_heldKeys.Contains(_kBack)) f -= 1;
+        if (_heldKeys.Contains(_kRight)) r += 1;
+        if (_heldKeys.Contains(_kLeft)) r -= 1;
+        if (_heldKeys.Contains(_kUp)) u += 1;
+        if (_heldKeys.Contains(_kDown)) u -= 1;
         if (f != 0 || r != 0 || u != 0) Viewport.FlyBy(f, r, u, 0.016f);
     }
 
@@ -249,5 +278,6 @@ public partial class MainWindow : Window
         bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         if (e.Key == Key.Z && !shift) { vm.UndoCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.Y || (e.Key == Key.Z && shift)) { vm.RedoCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.OemComma) { vm.OpenSettingsCommand.Execute(null); e.Handled = true; }
     }
 }

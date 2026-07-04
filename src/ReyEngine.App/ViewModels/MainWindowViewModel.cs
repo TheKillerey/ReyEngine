@@ -337,6 +337,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MainWindowViewModel()
     {
         _log.AddSink(Console);
+        _cullBackfaces = Settings.CullBackfacesDefault;   // M40: honor saved viewport default
         Project.GameDirectory = ReyProject.GuessGameDirectory();
         _log.Info("ReyEngine", "Editor started.");
         if (!string.IsNullOrEmpty(Project.GameDirectory))
@@ -2583,6 +2584,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (!ProjectMode) { _log.Warn("Project", "Open a project folder first."); return; }
         RequestProjectSettings?.Invoke();
+    }
+
+    // ---- Editor preferences (M40): keybinds + camera feel, persisted to %AppData%/ReyEngine ----
+    public ReyEngine.Core.Settings.EditorSettings Settings { get; } = ReyEngine.Core.Settings.EditorSettings.Load();
+    public event Action? RequestSettings;
+
+    [RelayCommand]
+    private void OpenSettings() => RequestSettings?.Invoke();
+
+    /// <summary>Called by the view after the Preferences dialog is saved: persist + let the view re-apply.</summary>
+    public void ApplyEditorSettings(SettingsViewModel vm)
+    {
+        Settings.CopyFrom(vm.ToSettings());
+        Settings.Save();
+        CullBackfaces = Settings.CullBackfacesDefault;
+        _log.Success("Settings", "Preferences saved.");
     }
 
     /// <summary>Called by the view after the settings dialog is saved.</summary>

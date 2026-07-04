@@ -140,16 +140,28 @@ public sealed class ViewportControl : OpenGlControlBase
 
     // ---- Public camera API (driven by the input overlay) ----
 
+    // M40: user camera-feel multipliers (1 = default), driven by EditorSettings.
+    private float _lookSens = 1f, _orbitSens = 1f, _panSens = 1f, _zoomSens = 1f;
+    private bool _invertLookY;
+
+    /// <summary>Apply the user's camera preferences (sensitivities are multipliers; base fly speed in u/s).</summary>
+    public void ApplyCameraSettings(float look, float orbit, float pan, float zoom, bool invertLookY, float flySpeed)
+    {
+        _lookSens = look; _orbitSens = orbit; _panSens = pan; _zoomSens = zoom;
+        _invertLookY = invertLookY;
+        _camera.FlySpeed = flySpeed;
+    }
+
     public void OrbitBy(float dx, float dy)
     {
-        _camera.Orbit(dx * 0.01f, dy * 0.01f);
+        _camera.Orbit(dx * 0.01f * _orbitSens, dy * 0.01f * _orbitSens);
         RequestNextFrameRendering();
     }
 
     /// <summary>LMB mouse-look (rotate the view in place). Direct mapping: cursor up→look up, left→look left.</summary>
     public void LookBy(float dx, float dy)
     {
-        _camera.Look(-dx * 0.005f, dy * 0.005f);
+        _camera.Look(-dx * 0.005f * _lookSens, dy * 0.005f * _lookSens * (_invertLookY ? -1f : 1f));
         RequestNextFrameRendering();
     }
 
@@ -168,13 +180,14 @@ public sealed class ViewportControl : OpenGlControlBase
 
     public void PanBy(float dx, float dy)
     {
-        _camera.Pan(-dx, dy);
+        _camera.Pan(-dx * _panSens, dy * _panSens);
         RequestNextFrameRendering();
     }
 
     public void ZoomBy(float wheelDelta)
     {
-        _camera.Zoom(wheelDelta > 0 ? 0.9f : 1.1f);
+        float step = 0.1f * _zoomSens;
+        _camera.Zoom(wheelDelta > 0 ? 1f - step : 1f + step);
         RequestNextFrameRendering();
     }
 

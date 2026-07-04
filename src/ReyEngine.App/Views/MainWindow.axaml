@@ -36,9 +36,13 @@
                    Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
       </StackPanel>
       <!-- right margin clears the native caption buttons overlaid on the extended client area -->
-      <TextBlock Grid.Column="3" Text="{Binding Title}" FontSize="11" Margin="10,0,150,0"
-                 Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center"
-                 TextTrimming="CharacterEllipsis" MaxWidth="420" ToolTip.Tip="Active project (* = unsaved changes)" />
+      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" Margin="10,0,150,0" VerticalAlignment="Center">
+        <TextBlock Text="{Binding Title}" FontSize="11"
+                   Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center"
+                   TextTrimming="CharacterEllipsis" MaxWidth="380" ToolTip.Tip="Active project (* = unsaved changes)" />
+        <Button Classes="icon" Content="⚙" FontSize="14" Command="{Binding OpenSettingsCommand}"
+                ToolTip.Tip="Preferences — keybinds &amp; camera (Ctrl+,)" />
+      </StackPanel>
     <Menu Grid.Column="2" Background="Transparent">
       <MenuItem Header="_File">
         <MenuItem Header="Open Project Folder…" Command="{Binding OpenProjectFolderCommand}" />
@@ -66,6 +70,8 @@
         <MenuItem Header="{Binding RedoLabel}" Command="{Binding RedoCommand}" IsEnabled="{Binding CanRedo}" InputGesture="Ctrl+Y" />
         <Separator />
         <MenuItem Header="Clear Console" Command="{Binding ClearConsoleCommand}" />
+        <Separator />
+        <MenuItem Header="Preferences…" Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+," />
       </MenuItem>
       <MenuItem Header="_View">
         <MenuItem Header="Reload WAD" Command="{Binding ReloadWadCommand}" />
@@ -95,6 +101,8 @@
         <MenuItem Header="Sync Hashes" Command="{Binding SyncHashesCommand}" />
       </MenuItem>
       <MenuItem Header="_Help">
+        <MenuItem Header="Preferences…" Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+," />
+        <Separator />
         <MenuItem Header="About ReyEngine" IsEnabled="False" />
       </MenuItem>
     </Menu>
