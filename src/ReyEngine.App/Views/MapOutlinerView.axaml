@@ -13,7 +13,7 @@
 
     <!-- dragon / baron visibility layer selectors -->
     <StackPanel DockPanel.Dock="Top" Margin="8,2,8,4" Spacing="3">
-      <TextBlock Text="VISIBILITY LAYERS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+      <TextBlock Classes="cardTitle" Text="VISIBILITY LAYERS" />
       <Grid ColumnDefinitions="*,*">
         <StackPanel Grid.Column="0" Margin="0,0,3,0">
           <TextBlock Text="Dragon" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
@@ -33,7 +33,7 @@
     <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyPanelAltBrush}" Padding="8,6" Margin="0,4,0,0"
             IsVisible="{Binding IsMultiSelect}">
       <StackPanel Spacing="4">
-        <TextBlock Text="BATCH TRANSFORM" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+        <TextBlock Classes="cardTitle" Text="BATCH TRANSFORM" />
         <TextBlock Text="{Binding SelectionStatus}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" />
         <TextBlock Text="Rotate/scale act around the selection center. Move is a world delta added to every mesh."
                    FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
@@ -75,9 +75,9 @@
           <Button Content="Reset Selected" Command="{Binding ResetSelectedCommand}" FontSize="11" Padding="8,2"
                   ToolTip.Tip="Restore every selected mesh to its original transform" />
           <Button Content="Clear Selection" Command="{Binding ClearSelectionCommand}" FontSize="11" Padding="8,2" />
-          <Button Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
+          <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
                   IsEnabled="{Binding HasMapMoves}"
-                  Background="{DynamicResource ReyAccentBrush}" Foreground="#08221E" />
+                  />
         </StackPanel>
       </StackPanel>
     </Border>
@@ -86,7 +86,7 @@
     <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyPanelAltBrush}" Padding="8,6" Margin="0,4,0,0"
             IsVisible="{Binding IsSingleSelect}">
       <StackPanel Spacing="4">
-        <TextBlock Text="TRANSFORM MESH" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+        <TextBlock Classes="cardTitle" Text="TRANSFORM MESH" />
         <TextBlock Text="{Binding SelectedMapMesh.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
 
         <TextBlock Text="Position" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
@@ -124,11 +124,11 @@
                   ToolTip.Tip="Apply position/rotation/scale live in the viewport" />
           <Button Content="Reset" Command="{Binding ResetMeshTransformCommand}" FontSize="11" Padding="8,2"
                   ToolTip.Tip="Restore this mesh's original transform" />
-          <Button Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
+          <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
                   IsEnabled="{Binding HasMapMoves}"
-                  Background="{DynamicResource ReyAccentBrush}" Foreground="#08221E" />
+                  />
         </StackPanel>
-        <ToggleButton Content="Flip Normals" IsChecked="{Binding SelectedMeshNormalsFlipped, Mode=OneWay}"
+        <ToggleButton Classes="vp" Content="⇅ Flip Normals" IsChecked="{Binding SelectedMeshNormalsFlipped, Mode=OneWay}"
                       Command="{Binding FlipMeshNormalsCommand}" FontSize="11" Padding="8,2" Margin="0,4,0,0"
                       HorizontalAlignment="Left"
                       ToolTip.Tip="Flip this mesh's vertex normals (live preview). For two-sided (cullEnable=false) materials the two-sided lighting already lights both faces, so flipping darkens instead of fixing." />
@@ -165,8 +165,8 @@
             Background="{DynamicResource ReyPanelAltBrush}" IsVisible="{Binding SelectedParticleNode, Converter={x:Static ObjectConverters.IsNotNull}}">
       <StackPanel Spacing="3">
         <Grid ColumnDefinitions="*,Auto">
-          <TextBlock Grid.Column="0" Text="MOVE PARTICLE" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
-          <ToggleButton Grid.Column="1" Content="▶ Play VFX" IsChecked="{Binding PlayParticlePreview}" FontSize="10" Padding="6,1"
+          <TextBlock Classes="cardTitle" Grid.Column="0" Text="MOVE PARTICLE" VerticalAlignment="Center" />
+          <ToggleButton Classes="vp" Grid.Column="1" Content="▶ Play VFX" IsChecked="{Binding PlayParticlePreview}" FontSize="10" Padding="6,1"
                         ToolTip.Tip="Simulate and play this particle system live in the viewport (M36)" />
         </Grid>
         <TextBlock Text="{Binding SelectedParticleNode.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
@@ -182,9 +182,9 @@
           <Button Content="Apply" Command="{Binding ApplyParticleMoveCommand}" FontSize="11" Padding="8,2"
                   ToolTip.Tip="Move the particle to this position live in the viewport" />
           <Button Content="Reset" Command="{Binding ResetParticleMoveCommand}" FontSize="11" Padding="8,2" />
-          <Button Content="Save to Mod" Command="{Binding SaveParticleMovesCommand}" FontSize="11" Padding="8,2"
+          <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveParticleMovesCommand}" FontSize="11" Padding="8,2"
                   IsEnabled="{Binding HasParticleMoves}"
-                  Background="{DynamicResource ReyAccentBrush}" Foreground="#08221E" />
+                  />
         </StackPanel>
       </StackPanel>
     </Border>
@@ -197,8 +197,8 @@
           <TextBlock Text="📁" FontSize="10" VerticalAlignment="Center" />
           <TextBlock Text="Particles" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
           <TextBlock Text="{Binding MapContent.ParticleCount}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
-          <ToggleButton Content="Show" IsChecked="{Binding ShowParticles}" FontSize="9" Padding="6,1" VerticalAlignment="Center" />
-          <ToggleButton Content="▶ Play All" IsChecked="{Binding PlayAllParticles}" FontSize="9" Padding="6,1" VerticalAlignment="Center"
+          <ToggleButton Classes="vp" Content="👁 Show" IsChecked="{Binding ShowParticles}" FontSize="9" Padding="6,1" VerticalAlignment="Center" />
+          <ToggleButton Classes="vp" Content="▶ Play All" IsChecked="{Binding PlayAllParticles}" FontSize="9" Padding="6,1" VerticalAlignment="Center"
                         ToolTip.Tip="Simulate and play every placed particle system live (capped for performance)" />
         </StackPanel>
       </Expander.Header>

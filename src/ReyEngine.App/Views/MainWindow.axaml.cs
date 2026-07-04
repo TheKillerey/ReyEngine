@@ -34,6 +34,19 @@ public partial class MainWindow : Window
         LoadBranding();
     }
 
+    /// <summary>M39 custom title bar: drag to move, double-click to maximize/restore. The menu and other
+    /// interactive children handle their own presses, so this only fires on empty header space.</summary>
+    private void OnTitleBarPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        if (e.ClickCount == 2)
+        {
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+            return;
+        }
+        BeginMoveDrag(e);
+    }
+
     /// <summary>Load the logo (copied next to the exe) for the titlebar icon + the menu-bar wordmark.</summary>
     private void LoadBranding()
     {

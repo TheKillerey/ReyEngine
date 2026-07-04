@@ -9,7 +9,10 @@
         MinWidth="1000" MinHeight="640"
         Background="{DynamicResource ReyBgBrush}"
         Foreground="{DynamicResource ReyTextBrush}"
-        FontFamily="Inter, Segoe UI, sans-serif">
+        FontFamily="Inter, Segoe UI, sans-serif"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaChromeHints="PreferSystemChrome"
+        ExtendClientAreaTitleBarHeightHint="32">
 
   <Window.Resources>
     <conv:LogLevelToBrushConverter x:Key="LevelToBrush" />
@@ -20,8 +23,9 @@
 
   <DockPanel>
 
-    <!-- ============ TOP APP BAR (M39: brand + menu + project) ============ -->
-    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,*,Auto" Background="{DynamicResource ReyHeaderBrush}">
+    <!-- ============ TOP APP BAR (M39: custom title bar — brand + menu + project) ============ -->
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,*,Auto" Background="{DynamicResource ReyHeaderBrush}"
+          MinHeight="32" PointerPressed="OnTitleBarPointerPressed">
       <Image x:Name="LogoImage" Grid.Column="0" Height="24" Margin="10,3,6,3"
              VerticalAlignment="Center" ToolTip.Tip="ReyEngine" />
       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center" Margin="0,0,14,0">
@@ -31,7 +35,8 @@
         <TextBlock Text="PROJECT KALISTA" FontSize="9" FontWeight="SemiBold" LetterSpacing="2"
                    Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
       </StackPanel>
-      <TextBlock Grid.Column="3" Text="{Binding Title}" FontSize="11" Margin="10,0,12,0"
+      <!-- right margin clears the native caption buttons overlaid on the extended client area -->
+      <TextBlock Grid.Column="3" Text="{Binding Title}" FontSize="11" Margin="10,0,150,0"
                  Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center"
                  TextTrimming="CharacterEllipsis" MaxWidth="420" ToolTip.Tip="Active project (* = unsaved changes)" />
     <Menu Grid.Column="2" Background="Transparent">
@@ -475,23 +480,26 @@
         <DockPanel>
           <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="INSPECTOR" />
           <ScrollViewer>
-            <StackPanel Margin="12" Spacing="10">
-              <TextBlock Text="{Binding Inspector.Title}" Foreground="{DynamicResource ReyTextBrush}"
-                         FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" />
-              <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="3"
-                      Padding="6,2" HorizontalAlignment="Left">
-                <TextBlock Text="{Binding Inspector.Subtitle}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
+            <StackPanel Margin="10" Spacing="8">
+              <!-- M39: asset identity card — name + type badge + source/modified status -->
+              <Border Classes="card">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="{Binding Inspector.Title}" Foreground="{DynamicResource ReyTextBrightBrush}"
+                             FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Border Classes="badge outline">
+                      <TextBlock Text="{Binding Inspector.Subtitle}" />
+                    </Border>
+                    <Border Classes="badge violet" IsVisible="{Binding Inspector.IsModified}">
+                      <TextBlock Text="MODIFIED" />
+                    </Border>
+                  </StackPanel>
+                  <TextBlock Text="{Binding Inspector.AssetStatus}" FontSize="11"
+                             Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding Inspector.AssetSource}" FontSize="10"
+                             Foreground="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding Inspector.IsModified}" TextWrapping="Wrap" />
+                </StackPanel>
               </Border>
-
-              <!-- project asset status -->
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
-                         Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding Inspector.IsModified}" />
-                <TextBlock Text="{Binding Inspector.AssetStatus}" FontSize="11"
-                           Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
-              </StackPanel>
-              <TextBlock Text="{Binding Inspector.AssetSource}" FontSize="10"
-                         Foreground="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding Inspector.IsModified}" />
 
               <!-- texture preview -->
               <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8"
@@ -516,23 +524,23 @@
                   <StackPanel Spacing="10" Margin="0,8,0,0">
 
               <!-- mesh stats (SKN) -->
-              <StackPanel Spacing="8" IsVisible="{Binding MeshInspector.HasMesh}">
-                <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
-                <TextBlock Text="MESH" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" />
-                <TextBlock Text="{Binding MeshInspector.Stats}" Foreground="{DynamicResource ReyTextDimBrush}"
-                           FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
-                <TextBlock Text="{Binding MeshInspector.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
-                <Button Classes="tool" Content="Assign Skeleton…" HorizontalAlignment="Left"
-                        Command="{Binding AssignSkeletonCommand}" />
-                <TextBlock Text="Submeshes / materials" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
-                <TextBlock Text="{Binding MeshInspector.SubMeshes}" Foreground="{DynamicResource ReyTextBrush}"
-                           FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
-              </StackPanel>
+              <Border Classes="card" IsVisible="{Binding MeshInspector.HasMesh}">
+                <StackPanel Spacing="7">
+                  <TextBlock Classes="cardTitle" Text="MESH" />
+                  <TextBlock Classes="mono" Text="{Binding MeshInspector.Stats}" />
+                  <TextBlock Text="{Binding MeshInspector.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
+                  <Button Classes="tool" Content="Assign Skeleton…" HorizontalAlignment="Left"
+                          Command="{Binding AssignSkeletonCommand}" />
+                  <TextBlock Text="Submeshes / materials" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
+                  <TextBlock Classes="mono" Text="{Binding MeshInspector.SubMeshes}"
+                             Foreground="{DynamicResource ReyTextBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
 
               <!-- animation -->
-              <StackPanel Spacing="6" IsVisible="{Binding MeshInspector.HasMesh}">
-                <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
-                <TextBlock Text="ANIMATION" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" />
+              <Border Classes="card" IsVisible="{Binding MeshInspector.HasMesh}">
+              <StackPanel Spacing="6">
+                <TextBlock Classes="cardTitle" Text="ANIMATION" />
                 <TextBlock Text="{Binding Animation.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
 
                 <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Select animation…"
@@ -564,13 +572,14 @@
                   <TextBlock Text="{Binding Animation.Speed, StringFormat='{}{0:0.0}x'}" Foreground="{DynamicResource ReyTextBrush}" FontSize="11" VerticalAlignment="Center" />
                 </StackPanel>
               </StackPanel>
+              </Border>
 
               <!-- champion VFX (M37) — play the loaded skin's effects at the model -->
-              <StackPanel Spacing="6" IsVisible="{Binding HasChampionVfx}">
-                <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
+              <Border Classes="card" IsVisible="{Binding HasChampionVfx}">
+              <StackPanel Spacing="6">
                 <Grid ColumnDefinitions="*,Auto">
-                  <TextBlock Grid.Column="0" Text="CHAMPION VFX" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" />
-                  <Button Grid.Column="1" Classes="tool" Content="Stop" Command="{Binding StopChampionVfxCommand}" FontSize="10" Padding="8,1" />
+                  <TextBlock Classes="cardTitle" Grid.Column="0" Text="CHAMPION VFX" VerticalAlignment="Center" />
+                  <Button Grid.Column="1" Classes="tool" Content="⏹ Stop" Command="{Binding StopChampionVfxCommand}" FontSize="10" Padding="8,1" />
                 </Grid>
                 <TextBlock Text="Select an effect to play it at the model origin." Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" TextWrapping="Wrap" />
                 <ListBox ItemsSource="{Binding ChampionVfxSystems}" SelectedItem="{Binding SelectedChampionVfx, Mode=TwoWay}"
@@ -582,16 +591,17 @@
                   </ListBox.ItemTemplate>
                 </ListBox>
               </StackPanel>
+              </Border>
 
               <!-- mapgeo stats -->
-              <StackPanel Spacing="8" IsVisible="{Binding MapGeoInspector.HasMap}">
-                <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
-                <TextBlock Text="MAP GEOMETRY" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" />
-                <TextBlock Text="{Binding MapGeoInspector.Stats}" Foreground="{DynamicResource ReyTextDimBrush}"
-                           FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
+              <Border Classes="card" IsVisible="{Binding MapGeoInspector.HasMap}">
+              <StackPanel Spacing="7">
+                <TextBlock Classes="cardTitle" Text="MAP GEOMETRY" />
+                <TextBlock Classes="mono" Text="{Binding MapGeoInspector.Stats}" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding MapGeoInspector.Warnings}" Foreground="{DynamicResource ReyAccent2Brush}"
                            FontSize="11" TextWrapping="Wrap" IsVisible="{Binding MapGeoInspector.HasWarnings}" />
               </StackPanel>
+              </Border>
 
                   </StackPanel>
                 </TabItem>
