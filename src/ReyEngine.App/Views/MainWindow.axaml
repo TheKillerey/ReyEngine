@@ -12,7 +12,7 @@
         FontFamily="Inter, Segoe UI, sans-serif"
         ExtendClientAreaToDecorationsHint="True"
         ExtendClientAreaChromeHints="PreferSystemChrome"
-        ExtendClientAreaTitleBarHeightHint="32">
+        ExtendClientAreaTitleBarHeightHint="-1">
 
   <Window.Resources>
     <conv:LogLevelToBrushConverter x:Key="LevelToBrush" />

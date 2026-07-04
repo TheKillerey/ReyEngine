@@ -34,11 +34,18 @@ public partial class MainWindow : Window
         LoadBranding();
     }
 
-    /// <summary>M39 custom title bar: drag to move, double-click to maximize/restore. The menu and other
-    /// interactive children handle their own presses, so this only fires on empty header space.</summary>
+    /// <summary>M39 custom title bar: drag to move, double-click to maximize/restore — but ONLY from
+    /// non-interactive header space. Clicks that originate inside the menu (or any button) must reach it,
+    /// so bail if the press came from an interactive child.</summary>
     private void OnTitleBarPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        if (e.Source is Avalonia.Visual v)
+        {
+            foreach (var a in Avalonia.VisualTree.VisualExtensions.GetVisualAncestors(v))
+                if (a is Menu or MenuItem or Button) return;
+            if (v is Menu or MenuItem or Button) return;
+        }
         if (e.ClickCount == 2)
         {
             WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
