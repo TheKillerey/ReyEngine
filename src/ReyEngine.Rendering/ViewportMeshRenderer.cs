@@ -21,6 +21,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
     private int _mAlphaMode;                                       // M34: 0 opaque · 1 cutout · 2 transparent
     private int _mTint;                                            // M34: TintColor for untextured effect materials
+    private int _mAlphaCutoff;                                     // M34: per-material alpha-test threshold (AlphaTestValue)
     private int _mTwoSided, _mMirrored;                            // M34: two-sided lighting + mirrored-transform debug
     private int _lMvp, _lColor;
 
@@ -64,21 +65,22 @@ public sealed class ViewportMeshRenderer : IDisposable
         public bool UsesRim;
         public bool UsesSpecular;
         public int AlphaMode;           // M34: 0 opaque, 1 cutout (alpha-test), 2 transparent (alpha-blend)
+        public float AlphaCutoff;       // M34: alpha-test threshold for cutout (default 0.35)
         public bool DoubleSided;        // M34: two-sided material (cullEnable=false) — never culled
         public bool Mirrored;           // M34: source mesh has a negative-determinant (mirrored) transform
         public Vector4 Tint;            // M34: TintColor, applied to the UNTEXTURED fallback only; default 1,1,1,1
 
         public static SubmeshDraw Create(int start, int count) =>
-            new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One };
+            new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One, AlphaCutoff = 0.35f };
     }
 
     /// <summary>Per-submesh preview material data pushed from the App's resolved <c>MaterialProfile</c> (M32/M34).
     /// <paramref name="Mirrored"/> is a per-mesh geometric flag (negative-determinant transform), not a material one.</summary>
     public readonly record struct SubmeshMaterial(
         bool UsesRim, bool UsesSpecular, Vector2 UvScale, Vector2 UvOffset, float UvRotationDegrees,
-        int AlphaMode = 0, bool DoubleSided = false, Vector4? Tint = null, bool Mirrored = false)
+        int AlphaMode = 0, bool DoubleSided = false, Vector4? Tint = null, bool Mirrored = false, float AlphaCutoff = 0.35f)
     {
-        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0, false, null, false);
+        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0, false, null, false, 0.35f);
     }
 
     private const string MeshVert = @"
@@ -142,6 +144,7 @@ uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map bake
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
 uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
 uniform int uAlphaMode;        // M34: 0 opaque, 1 cutout (alpha-test discard), 2 transparent (alpha-blend)
+uniform float uAlphaCutoff;    // M34: alpha-test threshold for cutout mode (from AlphaTestValue; default 0.35)
 uniform vec4 uTint;            // M34: TintColor (rgba) for UNTEXTURED effect materials; 1,1,1,1 = none
 uniform int uTwoSided;         // M34: 1 when this face renders two-sided (flip backface normals for lighting)
 uniform int uMirrored;         // M34: 1 when the source mesh transform is mirrored (negative determinant)
@@ -253,7 +256,7 @@ void main() {
     }
     // M34 compositing: cutout discards low-alpha texels (opaque depth); transparent keeps the texture alpha
     // for the alpha-blend pass; opaque forces alpha 1. Applies to Basic (0) and RiotApprox (1).
-    if (uAlphaMode == 1 && alpha < 0.35) discard;
+    if (uAlphaMode == 1 && alpha < uAlphaCutoff) discard;
     float outA = (uAlphaMode == 2) ? clamp(alpha, 0.0, 1.0) : 1.0;
     FragColor = vec4(col, outA);
 }";
@@ -303,6 +306,7 @@ void main() { FragColor = uColor; }";
         _mHasLightmap = gl.GetUniformLocation(_meshProgram, "uHasLightmap");
         _mAlphaMode = gl.GetUniformLocation(_meshProgram, "uAlphaMode");
         _mTint = gl.GetUniformLocation(_meshProgram, "uTint");
+        _mAlphaCutoff = gl.GetUniformLocation(_meshProgram, "uAlphaCutoff");
         _mTwoSided = gl.GetUniformLocation(_meshProgram, "uTwoSided");
         _mMirrored = gl.GetUniformLocation(_meshProgram, "uMirrored");
 
@@ -485,6 +489,7 @@ void main() { FragColor = uColor; }";
         _submeshes[index].UsesRim = mat.UsesRim;
         _submeshes[index].UsesSpecular = mat.UsesSpecular;
         _submeshes[index].AlphaMode = mat.AlphaMode;
+        _submeshes[index].AlphaCutoff = mat.AlphaCutoff;
         _submeshes[index].DoubleSided = mat.DoubleSided;
         _submeshes[index].Tint = mat.Tint ?? Vector4.One;
         _submeshes[index].Mirrored = mat.Mirrored;
@@ -500,6 +505,7 @@ void main() { FragColor = uColor; }";
             _submeshes[i].UsesRim = false;
             _submeshes[i].UsesSpecular = false;
             _submeshes[i].AlphaMode = 0;
+            _submeshes[i].AlphaCutoff = 0.35f;
             _submeshes[i].DoubleSided = false;
             _submeshes[i].Tint = Vector4.One;
             _submeshes[i].Mirrored = false;
@@ -652,6 +658,7 @@ void main() { FragColor = uColor; }";
                     _gl.Uniform1(_mUsesRim, s.UsesRim ? 1 : 0);
                     _gl.Uniform1(_mUsesSpec, s.UsesSpecular ? 1 : 0);
                     _gl.Uniform1(_mAlphaMode, s.AlphaMode);   // M34: 0 opaque · 1 cutout · 2 transparent
+                    _gl.Uniform1(_mAlphaCutoff, s.AlphaCutoff);
                     _gl.Uniform4(_mTint, s.Tint.X, s.Tint.Y, s.Tint.Z, s.Tint.W);
                     _gl.ActiveTexture(TextureUnit.Texture0);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);

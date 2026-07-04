@@ -30,7 +30,8 @@ public sealed record MaterialProfile(
     MaterialRenderMode RenderMode = MaterialRenderMode.Opaque,
     bool DoubleSided = false,
     Vector4? Tint = null,   // M34: TintColor param (rgba); ONLY applied when the material has no diffuse texture
-    bool BlendEnabled = false)   // M34: pass.blendEnable (real .bin flag)
+    bool BlendEnabled = false,   // M34: pass.blendEnable (real .bin flag)
+    float? AlphaCutoff = null)   // M34: AlphaTestValue param (real cutout threshold, e.g. 0.3); null = shader default 0.35
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -167,7 +168,14 @@ public static class MaterialProfiles
             : specular ? PreviewProfileKind.Specular
             : PreviewProfileKind.Unknown;
 
-        var (renderMode, doubleSided) = ClassifyRenderMode(b, sourceKind);
+        // AlphaTestValue param = the real alpha-test cutoff (foliage/decals). Its PRESENCE means the material
+        // is alpha-tested (cutout), even when the shader name doesn't say "AlphaTest" (e.g. converted NVR mods
+        // use SRX_Blend_Master + AlphaTestValue). This is what lets mod foliage cut out like Riot's own.
+        float? alphaCutoff = null;
+        foreach (var p in b.Parameters)
+            if (Norm(p.Name) == "alphatestvalue" && p.TryGetVector4(out var av) && av.X > 0f) { alphaCutoff = av.X; break; }
+
+        var (renderMode, doubleSided) = ClassifyRenderMode(b, sourceKind, alphaCutoff);
 
         // TintColor: for sampler-less effect/indicator materials (no diffuse texture) the tint IS the colour
         // and its alpha the opacity (e.g. FaeLights <0,1,1,0.1>). The renderer only applies this on the
@@ -178,12 +186,12 @@ public static class MaterialProfiles
                 if (Norm(p.Name) == "tintcolor" && p.TryGetVector4(out var tv)) { tint = tv; break; }
 
         return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
-            renderMode, doubleSided, tint, b.BlendEnable);
+            renderMode, doubleSided, tint, b.BlendEnable, alphaCutoff);
     }
 
     /// <summary>Derive the compositing mode from the material's technique/pass blend state + shader name (M34).
     /// The shader name is the primary intent signal; blendEnable disambiguates opaque vs alpha-blend.</summary>
-    private static (MaterialRenderMode, bool) ClassifyRenderMode(MaterialBinding b, MaterialSourceKind sourceKind)
+    private static (MaterialRenderMode, bool) ClassifyRenderMode(MaterialBinding b, MaterialSourceKind sourceKind, float? alphaCutoff)
     {
         // real technique shader (e.g. Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest); may fall back to class name.
         string shader = (b.RenderShader ?? b.ShaderName ?? "");
@@ -193,8 +201,11 @@ public static class MaterialProfiles
             ? !cull
             : shader.Contains("DoubleSided", OIC) || shader.Contains("TwoSided", OIC);
 
-        // AlphaTest shaders cut out (discard) but stay opaque in the depth buffer — do NOT alpha-blend them.
-        if (shader.Contains("AlphaTest", OIC) || shader.Contains("Cutout", OIC))
+        // Alpha-tested cutout: either the shader name says so, OR the material carries an AlphaTestValue param.
+        // The latter catches converted materials (NVR mods use SRX_Blend_Master + AlphaTestValue + blendEnable)
+        // that would otherwise be mis-classified as plain transparent and render as ghosts. Cutout stays opaque
+        // in the depth buffer (discard the hard cutoff), so foliage reads correctly regardless of blendEnable.
+        if (alphaCutoff is not null || shader.Contains("AlphaTest", OIC) || shader.Contains("Cutout", OIC))
             return (MaterialRenderMode.Cutout, doubleSided);
 
         // Anything the .bin marks blendEnable (glass, water/flowmap, decals, dynamic effects) composites over

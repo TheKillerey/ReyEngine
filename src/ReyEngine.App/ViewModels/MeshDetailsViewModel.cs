@@ -59,7 +59,7 @@ public sealed partial class MeshDetailsViewModel : ViewModelBase
             Add("cullEnable", p.CullEnabled ? "true (cull backfaces)" : "false (two-sided)", em: !p.CullEnabled);
             Add("blendEnable", p.BlendEnabled ? "true" : "false");
             Add("Depth write", p.DepthWrite ? "yes" : "no (transparent)");
-            Add("Alpha cutout", p.AlphaCutout ? "yes (alpha-test)" : "no");
+            Add("Alpha cutout", p.AlphaCutout ? $"yes (cutoff {(p.AlphaCutoff ?? 0.35f):0.##})" : "no");
             Add("Two-sided lighting", p.TwoSided ? "active (backface normals flipped)" : "off (single-sided)", em: p.TwoSided);
         }
         else if (m.DisableBackfaceCulling)

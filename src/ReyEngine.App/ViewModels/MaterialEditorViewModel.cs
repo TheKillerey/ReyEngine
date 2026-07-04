@@ -186,7 +186,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     public string CullEnabledText => Model.Profile.CullEnabled ? "Yes (cull backfaces)" : "No (two-sided)";
     public string BlendEnabledText => Model.Profile.BlendEnabled ? "Yes" : "No";
     public string DepthWriteText => Model.Profile.DepthWrite ? "Yes" : "No (transparent)";
-    public string AlphaCutoutText => Model.Profile.AlphaCutout ? "Yes (alpha-test)" : "No";
+    public string AlphaCutoutText => Model.Profile.AlphaCutout ? $"Yes (cutoff {(Model.Profile.AlphaCutoff ?? 0.35f):0.##})" : "No";
     public string TwoSidedText => Model.Profile.TwoSided ? "Active" : "Off";
 
     /// <summary>Per-material UV transform display (scale/offset, and the source param name when known).</summary>
