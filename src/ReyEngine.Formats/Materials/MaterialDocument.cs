@@ -146,27 +146,33 @@ public sealed class MaterialDocument
         // Every StaticMaterialDef (shared by champions and maps).
         foreach (var (pathHash, o) in tree.Objects)
         {
-            if (Field(o.Properties, "samplerValues") is not BinTreeContainer samplers) continue;
+            var samplers = Field(o.Properties, "samplerValues") as BinTreeContainer;
+            // Also parse sampler-LESS StaticMaterialDefs — effect/indicator materials (e.g. FaeLights:
+            // no textures, just TintColor + blend) so they get a real profile instead of the opaque grey
+            // fallback. Non-material objects (vfx/controllers) still get skipped.
+            bool isStaticMat = string.Equals(resolve(o.ClassHash), "StaticMaterialDef", StringComparison.OrdinalIgnoreCase);
+            if (samplers is null && !isStaticMat) continue;
 
             string name = (Field(o.Properties, "name") as BinTreeString)?.Value ?? resolve(pathHash) ?? $"0x{pathHash:x8}";
             string shader = resolve(o.ClassHash) ?? "StaticMaterialDef";
 
             var slots = new List<TextureSlot>();
             uint nameFieldHash = 0, pathFieldHash = 0;
-            foreach (var el in samplers.Elements)
-            {
-                if (el is not BinTreeStruct s) continue;
-                // League sampler structs: 'TextureName' holds the sampler name (e.g. Diffuse_Texture),
-                // 'texturePath' holds the .tex path. (Some schemas fall back to samplerName/textureName.)
-                if (nameFieldHash == 0) nameFieldHash = FieldHash(s.Properties, "TextureName", "samplerName");
-                if (pathFieldHash == 0) pathFieldHash = FieldHash(s.Properties, "texturePath", "textureName");
-                string sampler = (Field(s.Properties, "TextureName") as BinTreeString)?.Value
-                                 ?? (Field(s.Properties, "samplerName") as BinTreeString)?.Value ?? "(sampler)";
-                var pathProp = (Field(s.Properties, "texturePath") as BinTreeString)
-                               ?? (Field(s.Properties, "textureName") as BinTreeString);
-                if (pathProp is null) continue;
-                slots.Add(new TextureSlot(sampler, pathProp, el));
-            }
+            if (samplers is not null)
+                foreach (var el in samplers.Elements)
+                {
+                    if (el is not BinTreeStruct s) continue;
+                    // League sampler structs: 'TextureName' holds the sampler name (e.g. Diffuse_Texture),
+                    // 'texturePath' holds the .tex path. (Some schemas fall back to samplerName/textureName.)
+                    if (nameFieldHash == 0) nameFieldHash = FieldHash(s.Properties, "TextureName", "samplerName");
+                    if (pathFieldHash == 0) pathFieldHash = FieldHash(s.Properties, "texturePath", "textureName");
+                    string sampler = (Field(s.Properties, "TextureName") as BinTreeString)?.Value
+                                     ?? (Field(s.Properties, "samplerName") as BinTreeString)?.Value ?? "(sampler)";
+                    var pathProp = (Field(s.Properties, "texturePath") as BinTreeString)
+                                   ?? (Field(s.Properties, "textureName") as BinTreeString);
+                    if (pathProp is null) continue;
+                    slots.Add(new TextureSlot(sampler, pathProp, el));
+                }
 
             var parameters = new List<MaterialParameter>();
             if (Field(o.Properties, "paramValues") is BinTreeContainer pv)

@@ -28,7 +28,8 @@ public sealed record MaterialProfile(
     string? UvScaleSource,
     string? UvOffsetSource,
     MaterialRenderMode RenderMode = MaterialRenderMode.Opaque,
-    bool DoubleSided = false)
+    bool DoubleSided = false,
+    Vector4? Tint = null)   // M34: TintColor param (rgba); ONLY applied when the material has no diffuse texture
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -136,8 +137,16 @@ public static class MaterialProfiles
 
         var (renderMode, doubleSided) = ClassifyRenderMode(b, sourceKind);
 
+        // TintColor: for sampler-less effect/indicator materials (no diffuse texture) the tint IS the colour
+        // and its alpha the opacity (e.g. FaeLights <0,1,1,0.1>). The renderer only applies this on the
+        // untextured fallback path, so textured materials that also carry a TintColor are never recoloured.
+        Vector4? tint = null;
+        if (b.Slots.All(s => !s.SamplerName.Contains("Diffuse", OIC)))   // no diffuse sampler present
+            foreach (var p in b.Parameters)
+                if (Norm(p.Name) == "tintcolor" && p.TryGetVector4(out var tv)) { tint = tv; break; }
+
         return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
-            renderMode, doubleSided);
+            renderMode, doubleSided, tint);
     }
 
     /// <summary>Derive the compositing mode from the material's technique/pass blend state + shader name (M34).

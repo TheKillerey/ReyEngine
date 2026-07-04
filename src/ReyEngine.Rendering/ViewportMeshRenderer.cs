@@ -20,6 +20,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
     private int _mAlphaMode;                                       // M34: 0 opaque · 1 cutout · 2 transparent
+    private int _mTint;                                            // M34: TintColor for untextured effect materials
     private int _lMvp, _lColor;
 
     private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo;
@@ -63,17 +64,18 @@ public sealed class ViewportMeshRenderer : IDisposable
         public bool UsesSpecular;
         public int AlphaMode;           // M34: 0 opaque, 1 cutout (alpha-test), 2 transparent (alpha-blend)
         public bool DoubleSided;        // M34: never backface-culled even when culling is on
+        public Vector4 Tint;            // M34: TintColor, applied to the UNTEXTURED fallback only; default 1,1,1,1
 
         public static SubmeshDraw Create(int start, int count) =>
-            new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0) };
+            new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One };
     }
 
     /// <summary>Per-submesh preview material data pushed from the App's resolved <c>MaterialProfile</c> (M32/M34).</summary>
     public readonly record struct SubmeshMaterial(
         bool UsesRim, bool UsesSpecular, Vector2 UvScale, Vector2 UvOffset, float UvRotationDegrees,
-        int AlphaMode = 0, bool DoubleSided = false)
+        int AlphaMode = 0, bool DoubleSided = false, Vector4? Tint = null)
     {
-        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0, false);
+        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0, false, null);
     }
 
     private const string MeshVert = @"
@@ -137,6 +139,7 @@ uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map bake
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
 uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
 uniform int uAlphaMode;        // M34: 0 opaque, 1 cutout (alpha-test discard), 2 transparent (alpha-blend)
+uniform vec4 uTint;            // M34: TintColor (rgba) for UNTEXTURED effect materials; 1,1,1,1 = none
 
 // League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
 vec3 matcapColour(vec3 worldN) {
@@ -157,9 +160,11 @@ vec2 xformUv(vec2 uv0) {
 void main() {
     vec3 n = length(vN) > 0.001 ? normalize(vN) : vec3(0.0, 1.0, 0.0);
     vec2 uv = xformUv(vUv);
-    vec4 tex = (uHasTex == 1) ? texture(uTex, uv) : vec4(uBaseColor, 1.0);
+    // Textured materials sample the diffuse untouched (uTint never affects them). Untextured effect/indicator
+    // materials (FaeLights etc.) use their TintColor as the colour + alpha instead of the plain grey fallback.
+    vec4 tex = (uHasTex == 1) ? texture(uTex, uv) : vec4(uBaseColor * uTint.rgb, uTint.a);
     vec3 base = tex.rgb;
-    float alpha = (uHasTex == 1) ? tex.a : 1.0;
+    float alpha = tex.a;
 
     if (uMode == 2) { FragColor = vec4(base, 1.0); return; }                 // debug: base/diffuse
     if (uMode == 3) { FragColor = vec4(vec3(alpha), 1.0); return; }          // debug: alpha
@@ -279,6 +284,7 @@ void main() { FragColor = uColor; }";
         _mLightmap = gl.GetUniformLocation(_meshProgram, "uLightmap");
         _mHasLightmap = gl.GetUniformLocation(_meshProgram, "uHasLightmap");
         _mAlphaMode = gl.GetUniformLocation(_meshProgram, "uAlphaMode");
+        _mTint = gl.GetUniformLocation(_meshProgram, "uTint");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -460,6 +466,7 @@ void main() { FragColor = uColor; }";
         _submeshes[index].UsesSpecular = mat.UsesSpecular;
         _submeshes[index].AlphaMode = mat.AlphaMode;
         _submeshes[index].DoubleSided = mat.DoubleSided;
+        _submeshes[index].Tint = mat.Tint ?? Vector4.One;
     }
 
     /// <summary>Reset every submesh's preview material to identity UV + no rim/specular (M32).</summary>
@@ -473,6 +480,7 @@ void main() { FragColor = uColor; }";
             _submeshes[i].UsesSpecular = false;
             _submeshes[i].AlphaMode = 0;
             _submeshes[i].DoubleSided = false;
+            _submeshes[i].Tint = Vector4.One;
         }
     }
 
@@ -615,6 +623,7 @@ void main() { FragColor = uColor; }";
                     _gl.Uniform1(_mUsesRim, s.UsesRim ? 1 : 0);
                     _gl.Uniform1(_mUsesSpec, s.UsesSpecular ? 1 : 0);
                     _gl.Uniform1(_mAlphaMode, s.AlphaMode);   // M34: 0 opaque · 1 cutout · 2 transparent
+                    _gl.Uniform4(_mTint, s.Tint.X, s.Tint.Y, s.Tint.Z, s.Tint.W);
                     _gl.ActiveTexture(TextureUnit.Texture0);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);
                     _gl.Uniform1(_mHasTex, s.Texture != 0 ? 1 : 0);
