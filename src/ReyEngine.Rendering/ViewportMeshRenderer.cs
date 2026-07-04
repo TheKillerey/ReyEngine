@@ -568,11 +568,11 @@ void main() { FragColor = uColor; }";
             _gl.Enable(EnableCap.DepthTest);
             _gl.DepthFunc(DepthFunction.Lequal);
             _gl.Disable(EnableCap.CullFace);
-            // League is a D3D engine: source front faces are wound clockwise. The viewport mirrors world X
-            // (CreateScale(-1,1,1)) which flips winding once (CW -> CCW), so in window space front faces are
-            // CCW = GL's default. Set it explicitly and cull the back faces. (If this culls the wrong side,
-            // flip to FrontFaceDirection.CW.)
-            if (cullBackfaces) { _gl.FrontFace(FrontFaceDirection.Ccw); _gl.CullFace(TriangleFace.Back); }
+            // FrontFace=CW is the verified winding for THIS pipeline: the viewport mirrors world X
+            // (CreateScale(-1,1,1)), which flips triangle orientation once, so front faces land clockwise in
+            // window space. Confirmed by headless-rendering base_srx through the exact mirror+view/proj the app
+            // uses (CCW culls the ground away; CW keeps the full map). Cull the back faces.
+            if (cullBackfaces) { _gl.FrontFace(FrontFaceDirection.CW); _gl.CullFace(TriangleFace.Back); }
             _gl.BindVertexArray(_vao);
 
             if (wireframe)
