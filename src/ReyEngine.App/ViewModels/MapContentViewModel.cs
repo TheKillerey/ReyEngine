@@ -1,8 +1,32 @@
 using System.Collections.ObjectModel;
+using System.Numerics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ReyEngine.Formats.MapGeo;
 
 namespace ReyEngine.App.ViewModels;
+
+/// <summary>One placed particle in the outliner tree (M35): wraps a <see cref="MapParticlePlacement"/> and
+/// carries a live move <see cref="Offset"/> so it can be repositioned like a mesh.</summary>
+public sealed partial class ParticlePlacementViewModel : ObservableObject
+{
+    public required MapParticlePlacement Placement { get; init; }
+    public string Name => Placement.Name;
+    public string SystemName => Placement.SystemName;
+    [ObservableProperty] private bool _isSelected;
+
+    public Vector3 Offset;                                   // accumulated move (world space), default zero
+    public Vector3 CurrentPosition => Placement.Position + Offset;
+    public bool IsMoved => Offset != Vector3.Zero;
+}
+
+/// <summary>A particle-system group folder (all placements that reference the same VFX system).</summary>
+public sealed class ParticleSystemGroupViewModel
+{
+    public required string SystemName { get; init; }
+    public ObservableCollection<ParticlePlacementViewModel> Placements { get; } = new();
+    public string Header => $"{SystemName} — {Placements.Count}";
+}
 
 public sealed partial class MapPieceViewModel : ObservableObject
 {
@@ -39,6 +63,27 @@ public sealed partial class MapContentViewModel : ViewModelBase
     public ObservableCollection<AssetNodeViewModel> Maps { get; } = new();
     public ObservableCollection<MapPieceViewModel> Pieces { get; } = new();
     public ObservableCollection<MapLayerGroupViewModel> LayerGroups { get; } = new();
+    /// <summary>Placed particle systems grouped by VFX system (M35), shown as a "Particles" folder in the tree.</summary>
+    public ObservableCollection<ParticleSystemGroupViewModel> ParticleGroups { get; } = new();
+
+    [ObservableProperty] private bool _hasParticles;
+    public int ParticleCount => ParticleGroups.Sum(g => g.Placements.Count);
+
+    public void SetParticles(IReadOnlyList<MapParticlePlacement> particles)
+    {
+        ParticleGroups.Clear();
+        foreach (var g in particles.GroupBy(p => p.SystemName).OrderBy(g => g.Key, System.StringComparer.OrdinalIgnoreCase))
+        {
+            var grp = new ParticleSystemGroupViewModel { SystemName = g.Key };
+            foreach (var p in g.OrderBy(p => p.Name, System.StringComparer.OrdinalIgnoreCase))
+                grp.Placements.Add(new ParticlePlacementViewModel { Placement = p });
+            ParticleGroups.Add(grp);
+        }
+        HasParticles = ParticleGroups.Count > 0;
+        OnPropertyChanged(nameof(ParticleCount));
+    }
+
+    public IEnumerable<ParticlePlacementViewModel> AllParticles => ParticleGroups.SelectMany(g => g.Placements);
 
     [ObservableProperty] private string _mapName = "";
     [ObservableProperty] private bool _hasMap;
@@ -73,6 +118,8 @@ public sealed partial class MapContentViewModel : ViewModelBase
         MapName = "";
         Pieces.Clear();
         LayerGroups.Clear();
+        ParticleGroups.Clear();
+        HasParticles = false;
         HasMap = false;
     }
 

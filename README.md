@@ -5,20 +5,24 @@ for LoL art assets, minus the gameplay runtime and the Play button. Browse and u
 `.wad.client` archives, preview textures/meshes/maps, inspect `.bin` metadata, resolve
 hashes, and export/repack assets.
 
-> Status: **M32 complete.** **RiotApprox preview correctness — real UV tiling + no more fake specular.** The
-> preview now reads each material's real `.bin` data to decide what lighting to apply, instead of shading every
-> surface the same way. **UV tiling/offset** is read from `paramValues` (`UV_Scale`, `UV_Offset`, `Decal_UV_Tile`,
-> `UV_Translate`, `UV_Rotation`, …) and applied per-submesh as `uv = uv·scale + offset` (default identity). The
-> **fresnel rim** that used to be drawn on *everything* (which read as fake specular) is now gated on real rim
-> data — the `USE_RIM` switch or a Gradient sampler — so League's plain diffuse materials render flat/lambert.
-> **Specular is off by default** and only turns on for materials that actually carry it (`Specular_Intensity` /
-> `Spec_Color` params, or a gloss/metal switch) — on Summoner's Rift that's 49 of ~5,600 materials, not all of
-> them. A data-driven **profile** per material (Champion Skin · Map Static · MatCap · Specular) chooses the
-> feature set; the Material Editor shows the profile, whether specular is active, and the UV scale/offset (with
-> the source param name), and the viewport gains **UV-checker** and **specular-only** debug views. Verified on
-> real Aatrox + Map11 data: Aatrox's rim materials keep their rim, the SR base kit renders flat, `UV_Scale` is
-> read from the bin, and only the specular-tagged materials get a highlight. Basic mode is unchanged; the
-> renderer was extended, not rewritten.
+> Status: **M35 complete.** **Placed particles — browse & move.** A map's `.materials.bin` carries every placed
+> particle system (`MapParticle` items in `MapPlaceableContainer`); ReyEngine now reads them all, groups them by
+> VFX system into a **Particles** folder in the Map Content outliner, and draws a cyan cross marker at each
+> placement in the viewport (the selected one turns amber and always reads through geometry, with a **Show**
+> toggle). Select a particle and you can **reposition** it: type an absolute X/Y/Z, hit **Apply** for a live
+> marker preview (or **Reset**), then **Save to Mod** to persist. Saving byte-patches only that particle's
+> transform translation in place — it locates the item by the exact 64 bytes of its original matrix and
+> overwrites just the 12 translation bytes, so the rest of the `.bin` stays byte-for-byte identical and is
+> re-parse-validated before it lands in the override + Build Package. Round-trip verified on Old Summoner's Rift
+> v2 (1,194 particles across 69 systems): moved placements land exactly on target, every other particle is
+> untouched, and the file size is unchanged. (Full VFX playback is out of scope — this is placement browse/move.)
+>
+> Previously (**M34**): **map material render-state fidelity** — real `blendEnable`/`cullEnable`/blend-factor
+> fields + `AlphaTestValue` parsed into a per-material profile (Opaque/Cutout/Transparent), per-submesh backface
+> culling (no global mode), two-sided lighting via `gl_FrontFacing`, mirrored-transform normal fix, a per-mesh
+> Flip Normals tool, texture address-mode Clamp (decals stop tiling), and face/two-sided/mirrored debug views.
+> **M33**: baked lightmap rendering (Map12 `BakedLight`+`Texcoord7`), material virtual-assets + thumbnails in the
+> Content Browser, viewport/document tabs, and the Map Content panel folded into the Inspector.
 >
 > Previously (**M30**): **Multi-select + batch transform for MAPGEO meshes.** Hold **Ctrl** and click
 > meshes in the viewport (or Ctrl+click rows in the Map Content tree) to build a selection; a plain click
@@ -379,6 +383,9 @@ No Play button — this is an editor, not a runtime.
 | **M24–M25 ✅** | **Mesh move/reposition** — per-mesh vertex tracking + live viewport translate; persist by surgically patching the transform translation via its `[BoundingBox][Transform]` signature (LeagueToolkit's `EnvironmentAsset.Write` is lossy, so we never re-serialize) → saved to the override + Build Package |
 | **M26 ✅** | **Mesh rotate + scale** (around the mesh's own pivot) — live viewport preview via a pristine-vertex snapshot; persist by patching the *full* transform matrix + recomputed bounding box; Reset button; verified against hand-computed matrices + round-trip re-decode on two real maps |
 | **M27 ✅** | **Selection highlight + translate gizmo** — amber wireframe box around the selected mesh (always on top); click-drag 3-axis gizmo (X/Y/Z) to move it live via real 3D ray-picking (`ViewportPicking`: project/unproject/closest-point-on-axis, independently verified with 9 round-trip checks); numeric fields stay in sync; Save to Mod persists via the M25/M26 patcher |
+| **M35 ✅** | **Placed particles browser + move** — read `MapParticle` placements from the map's `.materials.bin` (`MapPlaceableContainer.items` → world transform + name + VFX-system link), grouped by system into a **Particles** folder in the Map Content outliner · cyan cross markers at every placement in the viewport (selected one amber, always-on-top), **Show** toggle · numeric X/Y/Z **move** with live marker preview + Reset · **Save to Mod** byte-patches each moved particle's transform translation in place (located by its original 64-byte matrix, translation-only overwrite, re-parse-validated → override + Build Package) · round-trip verified on Old-SR v2 (1,194 particles / 69 systems, size-exact) |
+| **M34 ✅** | **Map material render-state fidelity** — parse real `StaticMaterialPassDef` fields (`blendEnable`/`cullEnable`/blend factors/`writeMask`) + `AlphaTestValue` param into `MaterialProfile` (Opaque/Cutout/Transparent, double-sided, alpha cutoff) · per-submesh `cullEnable` in the renderer (no global cull mode) · two-sided lighting via `gl_FrontFacing` (backface normals flipped) · negative/mirrored transform detection + inverse-transpose normal matrix · per-mesh **Flip Normals** tool · Face-Orientation / Two-Sided / Mirrored debug views · honor texture `addressU/V` (Clamp stops decals tiling over the mesh) · Inspector + Material Editor show render state · verified via headless MapVisRender on Old SR |
+| **M33 ✅** | **Map lighting + content polish** — Dragon/Baron visibility resolver fix + diagnostics · vertex-color/lightmap attribute metadata · **baked lightmap rendering** (Map12 `BakedLight` + `Texcoord7` convention: `diffuse × lightmap`) · mesh-details inspector · material **virtual assets** + lazy thumbnails (textures + material diffuse) in the Content Browser · viewport/document tabs (the loaded map survives tab switches) · Map Content panel folded into the Inspector |
 | **M32 ✅** | **RiotApprox UV + specular correctness** — data-driven per-material preview `MaterialProfile` (features + UV transform) classified from real `.bin` data: `switches` (`USE_RIM` …), `paramValues` (`UV_Scale`/`UV_Offset`/`Decal_UV_Tile`/…), specular `Specular_*`/`Spec_Color` params · per-submesh UV transform (`uv·scale+offset`, optional rotation) in the shader · **rim gated on real rim data**, **specular off by default** (only for specular-tagged materials — 49/5,600 on SR, not global) · profiles: Champion Skin · Map Static · MatCap · Specular · Material Editor shows profile + specular flag + UV scale/offset + source param · **UV-checker** & **specular-only** debug views · renderer extended (per-submesh `SubmeshMaterial` uniforms), not rewritten; Basic mode unchanged · verified on real Aatrox + Map11 |
 | **M30 ✅** | **Multi-select + batch transform** — `Core/Selection` (`SelectionSet<T>`: primary anchor, toggle/re-anchor, Changed event) · Ctrl+click viewport + tree multi-select, per-mesh amber highlight boxes + cool-blue group bounds, one gizmo at the selection center · **Batch Transform** inspector (move Δ · rotate/scale about center · Reset Selected · Clear Selection) · world-space `GroupMatrix` applied after each mesh's own transform so batch ops compose rigidly · one `BatchTransformCommand` per batch edit (drag or numeric) → one Undo step restoring every mesh exactly · byte-patch persistence carries the GroupMatrix · visibility-filtered meshes pruned from the selection · 20-check suite on real Map11 |
 | **M29 ✅** | **Undo/Redo** — `Core/Undo` (`IEditorCommand`, `UndoRedoService` with merge/purge/savepoint, `CompositeCommand` for M30 multi-select) · typed commands: `MeshTransformCommand` (drag = one step), `BinEditCommand`, `TexturePathEditCommand`, `MaterialParamEditCommand`, `SamplerAddRemoveCommand` (exact-element reinsert) · Ctrl+Z/Y + Edit menu + ↶/↷ buttons · title-bar dirty savepoint · stale-document purge |

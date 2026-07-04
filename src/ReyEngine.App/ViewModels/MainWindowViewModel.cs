@@ -113,27 +113,74 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // M35: placed particle systems (MapParticle) on the current map.
     [ObservableProperty] private IReadOnlyList<MapParticlePlacement>? _currentModelParticles;
-    [ObservableProperty] private bool _showParticles;
-    [ObservableProperty] private MapParticlePlacement? _selectedParticle;
-    [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _particleMarkers;      // positions shown in the viewport
+    [ObservableProperty] private bool _showParticles = true;
+    [ObservableProperty] private object? _selectedParticleTreeItem;                               // TreeView selection (group or leaf)
+    [ObservableProperty] private ParticlePlacementViewModel? _selectedParticleNode;               // the selected placement (leaf)
+    [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _particleMarkers;         // positions shown in the viewport
     [ObservableProperty] private System.Numerics.Vector3? _selectedParticleMarker;
-    [ObservableProperty] private System.Numerics.Vector3? _particleFocusPoint;                   // set to recentre the camera
+    [ObservableProperty] private System.Numerics.Vector3? _particleFocusPoint;                     // set to recentre the camera
 
-    public int ParticleCount => CurrentModelParticles?.Count ?? 0;
-    public bool HasParticles => ParticleCount > 0;
+    public bool HasParticles => MapContent.HasParticles;
 
     partial void OnShowParticlesChanged(bool value) => UpdateParticleMarkers();
     partial void OnCurrentModelParticlesChanged(IReadOnlyList<MapParticlePlacement>? value)
-    { OnPropertyChanged(nameof(ParticleCount)); OnPropertyChanged(nameof(HasParticles)); UpdateParticleMarkers(); }
-    partial void OnSelectedParticleChanged(MapParticlePlacement? value)
     {
-        SelectedParticleMarker = value?.Position;
-        if (value is { } p) { ShowParticles = true; ParticleFocusPoint = p.Position; }
+        MapContent.SetParticles(value ?? Array.Empty<MapParticlePlacement>());
+        OnPropertyChanged(nameof(HasParticles));
+        UpdateParticleMarkers();
+    }
+    partial void OnSelectedParticleTreeItemChanged(object? value)
+        => SelectedParticleNode = value as ParticlePlacementViewModel;
+    partial void OnSelectedParticleNodeChanged(ParticlePlacementViewModel? value)
+    {
+        SelectedParticleMarker = value?.CurrentPosition;
+        RefreshParticleMoveFields(value);
+        if (value is { } p) { ShowParticles = true; ParticleFocusPoint = p.CurrentPosition; }
     }
 
     private void UpdateParticleMarkers() =>
-        ParticleMarkers = (ShowParticles && CurrentModelParticles is { Count: > 0 } ps)
-            ? ps.Select(p => p.Position).ToList() : null;
+        ParticleMarkers = (ShowParticles && MapContent.HasParticles)
+            ? MapContent.AllParticles.Select(v => v.CurrentPosition).ToList() : null;
+
+    // ---- Particle move (M35 adjustment) — reposition a placed particle, live + persisted to the mod ----
+    [ObservableProperty] private string _particleMoveX = "0";
+    [ObservableProperty] private string _particleMoveY = "0";
+    [ObservableProperty] private string _particleMoveZ = "0";
+    /// <summary>Dirty flag: at least one particle has been moved and can be saved to the mod.</summary>
+    [ObservableProperty] private bool _hasParticleMoves;
+
+    private void RefreshParticleMoveFields(ParticlePlacementViewModel? node)
+    {
+        var p = node?.CurrentPosition ?? System.Numerics.Vector3.Zero;
+        ParticleMoveX = p.X.ToString("0.###", CultureInfo.InvariantCulture);
+        ParticleMoveY = p.Y.ToString("0.###", CultureInfo.InvariantCulture);
+        ParticleMoveZ = p.Z.ToString("0.###", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>Apply the numeric X/Y/Z as the selected particle's new absolute world position (live preview).</summary>
+    [RelayCommand]
+    private void ApplyParticleMove()
+    {
+        if (SelectedParticleNode is not { } node) return;
+        if (!TryParseVector3(ParticleMoveX, ParticleMoveY, ParticleMoveZ, out var target))
+        { _log.Warn("Particles", "Enter valid X/Y/Z numbers."); return; }
+        node.Offset = target - node.Placement.Position;
+        SelectedParticleMarker = node.CurrentPosition;
+        UpdateParticleMarkers();
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved);
+        _log.Info("Particles", $"Moved '{node.Name}' to ({target.X:0.#}, {target.Y:0.#}, {target.Z:0.#}).");
+    }
+
+    [RelayCommand]
+    private void ResetParticleMove()
+    {
+        if (SelectedParticleNode is not { } node) return;
+        node.Offset = System.Numerics.Vector3.Zero;
+        RefreshParticleMoveFields(node);
+        SelectedParticleMarker = node.CurrentPosition;
+        UpdateParticleMarkers();
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved);
+    }
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
@@ -355,7 +402,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelLightmapTextures = s.Lightmaps;
         CurrentModelSubmeshMaterials = s.Materials;
         CurrentModelParticles = s.Particles;
-        SelectedParticle = null;
+        SelectedParticleTreeItem = null;
         MapGeoInspector.Show(s.Map, s.Entry.Path);
         MapContent.SetLayerGroups(s.LayerGroups);
         MapContent.ShowMap(s.MapName, s.Pieces);
@@ -870,7 +917,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelSubmeshMaterials = null;
         CurrentModelSubmeshVisible = null;
         CurrentModelParticles = null;
-        SelectedParticle = null;
+        SelectedParticleTreeItem = null;
         ParticleMarkers = null;
         CurrentAnimation = null;
         AnimationTime = 0;
@@ -1439,6 +1486,40 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Success("MapGeo", $"Saved {moved} mesh move(s) to override ({bytes.Length:n0} bytes). Build Package will include it.");
         }
         catch (Exception ex) { _log.Error("MapGeo", ex.Message); }
+    }
+
+    /// <summary>Persist the moved particles into the map's .materials.bin override (M35).</summary>
+    [RelayCommand]
+    private async Task SaveParticleMoves()
+    {
+        if (_currentMapEntry is not { } mapEntry) return;
+        var moved = MapContent.AllParticles.Where(v => v.IsMoved).ToList();
+        if (moved.Count == 0) { _log.Info("Particles", "No particle moves to save."); return; }
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) { _log.Error("Particles", "No materials .bin to save into."); return; }
+        if (!GuardEditable(binEntry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        var moves = moved.Select(v => (v.Placement.Transform, v.CurrentPosition)).ToList();
+        var bytes = MapParticleWriter.WriteMoves(GetAssetBytes(binEntry), moves, out var err);
+        if (bytes is null) { _log.Error("Particles", $"Could not save particle moves: {err}"); return; }
+        if (err is not null) _log.Warn("Particles", err);
+        try
+        {
+            var dest = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = binEntry.PathHash,
+                ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                OverrideFile = dest,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            UpdateTitle();
+            HasParticleMoves = false;
+            _log.Success("Particles", $"Saved {moved.Count} particle move(s) to the materials.bin override. Build Package will include it.");
+        }
+        catch (Exception ex) { _log.Error("Particles", ex.Message); }
     }
 
     private async Task LoadBinAsync(WadAssetEntry entry)
