@@ -28,6 +28,34 @@ public sealed class ParticleSystemGroupViewModel
     public string Header => $"{SystemName} — {Placements.Count}";
 }
 
+/// <summary>One placed animated prop / character in the outliner (M38).</summary>
+public sealed partial class AnimatedPropViewModel : ObservableObject
+{
+    public required MapAnimatedProp Prop { get; init; }
+    public string Name => Prop.Display;
+    public string Info => Prop.CharacterRecord;
+    public Vector3 Position => Prop.Position;
+    [ObservableProperty] private bool _isSelected;
+}
+
+/// <summary>A prop group folder (all placements of the same character).</summary>
+public sealed class AnimatedPropGroupViewModel
+{
+    public required string CharacterName { get; init; }
+    public ObservableCollection<AnimatedPropViewModel> Props { get; } = new();
+    public string Header => $"{CharacterName} — {Props.Count}";
+}
+
+/// <summary>One placed cubemap reflection probe in the outliner (M38).</summary>
+public sealed partial class CubemapProbeViewModel : ObservableObject
+{
+    public required MapCubemapProbe Probe { get; init; }
+    public string Name => Probe.Name;
+    public string Info => Probe.CubemapFile ?? "(no cubemap)";
+    public Vector3 Position => Probe.Position;
+    [ObservableProperty] private bool _isSelected;
+}
+
 /// <summary>One VFX system in a loaded champion skin's effect library (M37) — select it to play it.</summary>
 public sealed class VfxSystemItemViewModel
 {
@@ -77,6 +105,35 @@ public sealed partial class MapContentViewModel : ViewModelBase
 
     [ObservableProperty] private bool _hasParticles;
     public int ParticleCount => ParticleGroups.Sum(g => g.Placements.Count);
+
+    /// <summary>Placed animated props / characters grouped by character (M38).</summary>
+    public ObservableCollection<AnimatedPropGroupViewModel> PropGroups { get; } = new();
+    /// <summary>Placed cubemap reflection probes (M38).</summary>
+    public ObservableCollection<CubemapProbeViewModel> Probes { get; } = new();
+    [ObservableProperty] private bool _hasProps;
+    [ObservableProperty] private bool _hasProbes;
+    public int PropCount => PropGroups.Sum(g => g.Props.Count);
+    public IEnumerable<AnimatedPropViewModel> AllProps => PropGroups.SelectMany(g => g.Props);
+
+    public void SetProps(IReadOnlyList<MapAnimatedProp> props)
+    {
+        PropGroups.Clear();
+        foreach (var g in props.GroupBy(p => p.CharacterName).OrderBy(g => g.Key, System.StringComparer.OrdinalIgnoreCase))
+        {
+            var grp = new AnimatedPropGroupViewModel { CharacterName = g.Key };
+            foreach (var p in g) grp.Props.Add(new AnimatedPropViewModel { Prop = p });
+            PropGroups.Add(grp);
+        }
+        HasProps = PropGroups.Count > 0;
+        OnPropertyChanged(nameof(PropCount));
+    }
+
+    public void SetProbes(IReadOnlyList<MapCubemapProbe> probes)
+    {
+        Probes.Clear();
+        foreach (var p in probes) Probes.Add(new CubemapProbeViewModel { Probe = p });
+        HasProbes = Probes.Count > 0;
+    }
 
     public void SetParticles(IReadOnlyList<MapParticlePlacement> particles)
     {
@@ -129,6 +186,10 @@ public sealed partial class MapContentViewModel : ViewModelBase
         LayerGroups.Clear();
         ParticleGroups.Clear();
         HasParticles = false;
+        PropGroups.Clear();
+        Probes.Clear();
+        HasProps = false;
+        HasProbes = false;
         HasMap = false;
     }
 

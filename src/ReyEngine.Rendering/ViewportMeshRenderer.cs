@@ -43,8 +43,9 @@ public sealed class ViewportMeshRenderer : IDisposable
     private uint _groupBoundsVao, _groupBoundsVbo;
     private uint _gizmoVao, _gizmoVbo;
     private uint _particleVao, _particleVbo, _particleSelVao, _particleSelVbo;   // M35: placed-particle markers
+    private uint _propVao, _propVbo, _probeVao, _probeVbo;                       // M38: prop / cubemap-probe markers
     private int _boundsVerts, _boneVerts, _highlightVerts, _groupBoundsVerts;
-    private int _particleVerts, _particleSelVerts;
+    private int _particleVerts, _particleSelVerts, _propVerts, _probeVerts;
     private bool _hasGizmo;
     private Vector3 _gizmoPivot;
     private float _gizmoArmLength;
@@ -341,6 +342,10 @@ void main() { FragColor = uColor; }";
         _particleVbo = gl.GenBuffer();
         _particleSelVao = gl.GenVertexArray();
         _particleSelVbo = gl.GenBuffer();
+        _propVao = gl.GenVertexArray();
+        _propVbo = gl.GenBuffer();
+        _probeVao = gl.GenVertexArray();
+        _probeVbo = gl.GenBuffer();
         _ready = true;
     }
 
@@ -616,6 +621,21 @@ void main() { FragColor = uColor; }";
         else _particleSelVerts = 0;
     }
 
+    /// <summary>Set the animated-prop markers (M38): a small cross at each placed character's position.</summary>
+    public void SetPropMarkers(IReadOnlyList<Vector3> positions, float size) => SetCrossMarkers(_propVao, _propVbo, positions, size, out _propVerts);
+
+    /// <summary>Set the cubemap-probe markers (M38).</summary>
+    public void SetProbeMarkers(IReadOnlyList<Vector3> positions, float size) => SetCrossMarkers(_probeVao, _probeVbo, positions, size, out _probeVerts);
+
+    private void SetCrossMarkers(uint vao, uint vbo, IReadOnlyList<Vector3> positions, float size, out int vertCount)
+    {
+        if (!_ready || positions.Count == 0) { vertCount = 0; return; }
+        var verts = new float[positions.Count * 3 * 2 * 3];
+        int k = 0;
+        foreach (var p in positions) AppendCross(verts, ref k, p, size);
+        UploadLines(vao, vbo, verts, out vertCount);
+    }
+
     private static void AppendCross(float[] a, ref int k, Vector3 c, float s)
     {
         // X axis
@@ -635,6 +655,8 @@ void main() { FragColor = uColor; }";
         _groupBoundsVerts = 0;
         _particleVerts = 0;
         _particleSelVerts = 0;
+        _propVerts = 0;
+        _probeVerts = 0;
         _hasGizmo = false;
     }
 
@@ -835,29 +857,34 @@ void main() { FragColor = uColor; }";
             _gl.BindVertexArray(0);
         }
 
-        // M35 placed-particle markers: a cross at each placement (cyan), the selected one larger (yellow),
-        // always on top so they read through geometry.
-        if (_particleVerts > 0 || _particleSelVerts > 0)
+        // Placed-object markers, always on top: particles cyan (M35), animated props orange + cubemap probes
+        // green (M38); the selected one larger + bright yellow.
+        if (_particleVerts > 0 || _particleSelVerts > 0 || _propVerts > 0 || _probeVerts > 0)
         {
             _gl.UseProgram(_lineProgram);
             _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
             _gl.Disable(EnableCap.DepthTest);
-            if (_particleVerts > 0)
-            {
-                _gl.Uniform4(_lColor, 0.30f, 0.85f, 0.95f, 1f); // particle cyan
-                _gl.BindVertexArray(_particleVao);
-                _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_particleVerts);
-            }
+            DrawMarkerSet(_particleVao, _particleVerts, 0.30f, 0.85f, 0.95f); // particles cyan
+            DrawMarkerSet(_propVao, _propVerts, 1.0f, 0.55f, 0.15f);          // animated props orange
+            DrawMarkerSet(_probeVao, _probeVerts, 0.30f, 0.95f, 0.45f);       // cubemap probes green
             if (_particleSelVerts > 0)
             {
                 _gl.LineWidth(2.5f);
-                _gl.Uniform4(_lColor, 1.0f, 0.85f, 0.2f, 1f); // selected particle amber-yellow
+                _gl.Uniform4(_lColor, 1.0f, 0.9f, 0.2f, 1f); // selected placeable bright yellow
                 _gl.BindVertexArray(_particleSelVao);
                 _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_particleSelVerts);
                 _gl.LineWidth(1f);
             }
             _gl.BindVertexArray(0);
         }
+    }
+
+    private void DrawMarkerSet(uint vao, int vertCount, float r, float g, float b)
+    {
+        if (vertCount == 0) return;
+        _gl.Uniform4(_lColor, r, g, b, 1f);
+        _gl.BindVertexArray(vao);
+        _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)vertCount);
     }
 
     private unsafe uint MakeSolidTexture(byte r, byte g, byte b)
@@ -929,10 +956,14 @@ void main() { FragColor = uColor; }";
         _gl.DeleteBuffer(_boneVbo);
         _gl.DeleteBuffer(_particleVbo);
         _gl.DeleteBuffer(_particleSelVbo);
+        _gl.DeleteBuffer(_propVbo);
+        _gl.DeleteBuffer(_probeVbo);
         _gl.DeleteVertexArray(_boundsVao);
         _gl.DeleteVertexArray(_boneVao);
         _gl.DeleteVertexArray(_particleVao);
         _gl.DeleteVertexArray(_particleSelVao);
+        _gl.DeleteVertexArray(_propVao);
+        _gl.DeleteVertexArray(_probeVao);
         _gl.DeleteProgram(_meshProgram);
         _gl.DeleteProgram(_lineProgram);
         _ready = false;

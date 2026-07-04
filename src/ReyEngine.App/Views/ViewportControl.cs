@@ -37,6 +37,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ParticleMarkers));
     public static readonly StyledProperty<Vector3?> SelectedParticlePositionProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(SelectedParticlePosition));
+    public static readonly StyledProperty<IReadOnlyList<Vector3>?> PropMarkersProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(PropMarkers));
+    public static readonly StyledProperty<IReadOnlyList<Vector3>?> ProbeMarkersProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ProbeMarkers));
     public static readonly StyledProperty<VfxPlayback?> ParticlePlaybackProperty =
         AvaloniaProperty.Register<ViewportControl, VfxPlayback?>(nameof(ParticlePlayback));
     public static readonly StyledProperty<Vector3?> FocusPointProperty =
@@ -103,6 +107,10 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>World positions of placed-particle markers to draw (M35); null/empty hides them.</summary>
     public IReadOnlyList<Vector3>? ParticleMarkers { get => GetValue(ParticleMarkersProperty); set => SetValue(ParticleMarkersProperty, value); }
     public Vector3? SelectedParticlePosition { get => GetValue(SelectedParticlePositionProperty); set => SetValue(SelectedParticlePositionProperty, value); }
+    /// <summary>World positions of animated-prop markers (M38); orange.</summary>
+    public IReadOnlyList<Vector3>? PropMarkers { get => GetValue(PropMarkersProperty); set => SetValue(PropMarkersProperty, value); }
+    /// <summary>World positions of cubemap-probe markers (M38); green.</summary>
+    public IReadOnlyList<Vector3>? ProbeMarkers { get => GetValue(ProbeMarkersProperty); set => SetValue(ProbeMarkersProperty, value); }
     /// <summary>Set to a world point to recentre the camera on it (M35 focus); cleared after applying.</summary>
     public Vector3? FocusPoint { get => GetValue(FocusPointProperty); set => SetValue(FocusPointProperty, value); }
     /// <summary>The placed VFX system to simulate and play live (M36); null stops playback.</summary>
@@ -348,6 +356,8 @@ public sealed class ViewportControl : OpenGlControlBase
             var pts = ParticleMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>();
             float size = Mesh is { } pm ? Math.Clamp(pm.Radius * 0.004f, 4f, 90f) : 20f;
             _meshRenderer.SetParticleMarkers(pts, SelectedParticlePosition, size);
+            _meshRenderer.SetPropMarkers(PropMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), size);
+            _meshRenderer.SetProbeMarkers(ProbeMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), size * 1.4f);
             _particlesDirty = false;
         }
         if (_particlePlaybackDirty) { RebuildParticleSim(); _particlePlaybackDirty = false; }
@@ -551,7 +561,8 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == ShowBoundsProperty || change.Property == PreviewModeProperty
                  || change.Property == CullBackfacesProperty)
         { _skinDirty = true; RequestNextFrameRendering(); }
-        else if (change.Property == ParticleMarkersProperty || change.Property == SelectedParticlePositionProperty)
+        else if (change.Property == ParticleMarkersProperty || change.Property == SelectedParticlePositionProperty
+                 || change.Property == PropMarkersProperty || change.Property == ProbeMarkersProperty)
         { _particlesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticlePlaybackProperty)
         { _particlePlaybackDirty = true; RequestNextFrameRendering(); }

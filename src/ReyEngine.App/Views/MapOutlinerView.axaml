@@ -216,6 +216,57 @@
       </TreeView>
     </Expander>
 
+    <!-- Selected placeable info (M38) -->
+    <Border DockPanel.Dock="Bottom" Margin="0,4,0,0" Padding="6" CornerRadius="4"
+            Background="{DynamicResource ReyPanelAltBrush}"
+            IsVisible="{Binding SelectedPlaceableInfo, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <TextBlock Text="{Binding SelectedPlaceableInfo}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}" TextWrapping="Wrap" />
+    </Border>
+
+    <!-- Animated props (M38) — placed characters grouped by character; click to focus. -->
+    <Expander DockPanel.Dock="Bottom" Margin="0,4,0,0" IsExpanded="False"
+              IsVisible="{Binding MapContent.HasProps}" FontSize="11">
+      <Expander.Header>
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Text="🎭" FontSize="10" VerticalAlignment="Center" />
+          <TextBlock Text="Animated Props" FontSize="11" FontWeight="SemiBold" Foreground="#FF8C26" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding MapContent.PropCount}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+        </StackPanel>
+      </Expander.Header>
+      <TreeView ItemsSource="{Binding MapContent.PropGroups}" SelectedItem="{Binding SelectedPropTreeItem, Mode=TwoWay}"
+                MaxHeight="240" Background="Transparent" BorderThickness="0">
+        <TreeView.DataTemplates>
+          <TreeDataTemplate DataType="vm:AnimatedPropGroupViewModel" ItemsSource="{Binding Props}">
+            <TextBlock Text="{Binding Header}" FontSize="10" FontWeight="SemiBold"
+                       Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis" />
+          </TreeDataTemplate>
+          <TreeDataTemplate DataType="vm:AnimatedPropViewModel">
+            <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+          </TreeDataTemplate>
+        </TreeView.DataTemplates>
+      </TreeView>
+    </Expander>
+
+    <!-- Cubemap reflection probes (M38) -->
+    <Expander DockPanel.Dock="Bottom" Margin="0,4,0,0" IsExpanded="False"
+              IsVisible="{Binding MapContent.HasProbes}" FontSize="11">
+      <Expander.Header>
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Text="🪞" FontSize="10" VerticalAlignment="Center" />
+          <TextBlock Text="Reflection Probes" FontSize="11" FontWeight="SemiBold" Foreground="#4CE27A" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding MapContent.Probes.Count}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+        </StackPanel>
+      </Expander.Header>
+      <ListBox ItemsSource="{Binding MapContent.Probes}" SelectedItem="{Binding SelectedProbe, Mode=TwoWay}"
+               MaxHeight="160" Background="Transparent" BorderThickness="0" FontSize="10">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Expander>
+
     <!-- Meshes → Layer Groups → mesh names.  Ctrl+click a mesh row toggles multi-select (M30). -->
     <TreeView x:Name="MapContentTree"
               ItemsSource="{Binding MapContent.LayerGroups}" SelectedItem="{Binding SelectedTreeItem, Mode=TwoWay}"

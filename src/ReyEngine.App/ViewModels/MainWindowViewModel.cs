@@ -144,6 +144,48 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleMarkers = (ShowParticles && MapContent.HasParticles)
             ? MapContent.AllParticles.Select(v => v.CurrentPosition).ToList() : null;
 
+    // ---- M38: cubemap probes + animated props (placed characters) ----
+    [ObservableProperty] private IReadOnlyList<MapCubemapProbe>? _currentModelProbes;
+    [ObservableProperty] private IReadOnlyList<MapAnimatedProp>? _currentModelProps;
+    [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _propMarkers;
+    [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _probeMarkers;
+    [ObservableProperty] private bool _showPlaceables = true;
+    [ObservableProperty] private object? _selectedPropTreeItem;
+    [ObservableProperty] private AnimatedPropViewModel? _selectedPropNode;
+    [ObservableProperty] private CubemapProbeViewModel? _selectedProbe;
+    [ObservableProperty] private string _selectedPlaceableInfo = "";
+
+    partial void OnCurrentModelProbesChanged(IReadOnlyList<MapCubemapProbe>? value)
+    { MapContent.SetProbes(value ?? Array.Empty<MapCubemapProbe>()); UpdatePlaceableMarkers(); }
+    partial void OnCurrentModelPropsChanged(IReadOnlyList<MapAnimatedProp>? value)
+    { MapContent.SetProps(value ?? Array.Empty<MapAnimatedProp>()); UpdatePlaceableMarkers(); }
+    partial void OnShowPlaceablesChanged(bool value) => UpdatePlaceableMarkers();
+
+    private void UpdatePlaceableMarkers()
+    {
+        PropMarkers = (ShowPlaceables && MapContent.HasProps) ? MapContent.AllProps.Select(p => p.Position).ToList() : null;
+        ProbeMarkers = (ShowPlaceables && MapContent.HasProbes) ? MapContent.Probes.Select(p => p.Position).ToList() : null;
+    }
+
+    partial void OnSelectedPropTreeItemChanged(object? value)
+    { if (value is AnimatedPropViewModel p) SelectedPropNode = p; }
+    partial void OnSelectedPropNodeChanged(AnimatedPropViewModel? value)
+    {
+        if (value is not { } p) return;
+        SelectedProbe = null;
+        SelectedParticleMarker = p.Position;
+        ParticleFocusPoint = p.Position;
+        SelectedPlaceableInfo = $"{p.Name}\n{p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
+    }
+    partial void OnSelectedProbeChanged(CubemapProbeViewModel? value)
+    {
+        if (value is not { } p) return;
+        SelectedPropNode = null;
+        SelectedParticleMarker = p.Position;
+        ParticleFocusPoint = p.Position;
+        SelectedPlaceableInfo = $"{p.Name}\ncubemap: {p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
+    }
+
     // ---- Particle playback (M36) — simulate & render the selected placed system live in the viewport ----
     private static readonly IReadOnlyDictionary<uint, VfxSystemDefinition> EmptyVfx = new Dictionary<uint, VfxSystemDefinition>();
     private IReadOnlyDictionary<uint, VfxSystemDefinition> _vfxSystems = EmptyVfx;
@@ -400,6 +442,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyList<TextureImage?>? Lightmaps,
         IReadOnlyList<MapParticlePlacement>? Particles,
         IReadOnlyDictionary<uint, VfxSystemDefinition> VfxSystems,
+        IReadOnlyList<MapCubemapProbe>? Probes, IReadOnlyList<MapAnimatedProp>? Props,
         int DragonIndex, int BaronIndex, bool HasMoves, int[] SelectedMeshIndices,
         List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces);
 
@@ -478,7 +521,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return null;
         return new MapScene(map, _currentMapBytes, entry, _mapControllers, mesh,
             CurrentModelTextures, CurrentModelSubmeshMaterials, CurrentModelLightmapTextures,
-            CurrentModelParticles, _vfxSystems,
+            CurrentModelParticles, _vfxSystems, CurrentModelProbes, CurrentModelProps,
             SelectedDragonIndex, SelectedBaronIndex, HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList());
@@ -497,6 +540,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelSubmeshMaterials = s.Materials;
         CurrentModelParticles = s.Particles;
         _vfxSystems = s.VfxSystems;
+        CurrentModelProbes = s.Probes;
+        CurrentModelProps = s.Props;
         SelectedParticleTreeItem = null;
         MapGeoInspector.Show(s.Map, s.Entry.Path);
         MapContent.SetLayerGroups(s.LayerGroups);
@@ -1014,6 +1059,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelParticles = null;
         SelectedParticleTreeItem = null;
         ParticleMarkers = null;
+        CurrentModelProbes = null;
+        CurrentModelProps = null;
+        PropMarkers = null;
+        ProbeMarkers = null;
+        SelectedPropTreeItem = null;
+        SelectedPropNode = null;
+        SelectedProbe = null;
+        SelectedPlaceableInfo = "";
         PlayParticlePreview = false;
         PlayAllParticles = false;
         CurrentParticlePlayback = null;
@@ -1832,8 +1885,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             CurrentModelParticles = particles.Count > 0 ? particles : null;
             _vfxSystems = VfxSystemResolver.ExtractAll(binBytes);
             if (particles.Count > 0) _log.Info("MapGeo", $"{particles.Count:n0} placed particle system(s) ({particles.Select(p => p.SystemPath).Distinct().Count()} unique, {_vfxSystems.Count} definitions).");
+
+            // M38: cubemap reflection probes + animated props (placed characters) from the same bin.
+            var (probes, props) = MapPlaceableExtractor.Extract(binBytes);
+            CurrentModelProbes = probes.Count > 0 ? probes : null;
+            CurrentModelProps = props.Count > 0 ? props : null;
+            if (probes.Count > 0 || props.Count > 0)
+                _log.Info("MapGeo", $"{probes.Count} cubemap probe(s), {props.Count} animated prop(s) ({props.Select(p => p.CharacterName).Distinct().Count()} characters).");
         }
-        catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; }
+        catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; }
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
         var (materialToTexture, profiles) = ResolveMapMaterials(binEntry, names);
