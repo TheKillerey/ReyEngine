@@ -19,6 +19,7 @@ using ReyEngine.Core.Undo;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Animation;
 using ReyEngine.Formats.MapGeo;
+using ReyEngine.Formats.Vfx;
 using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Meta;
@@ -136,11 +137,38 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedParticleMarker = value?.CurrentPosition;
         RefreshParticleMoveFields(value);
         if (value is { } p) { ShowParticles = true; ParticleFocusPoint = p.CurrentPosition; }
+        RebuildParticlePlayback();   // M36: play the newly-selected system (or stop if none)
     }
 
     private void UpdateParticleMarkers() =>
         ParticleMarkers = (ShowParticles && MapContent.HasParticles)
             ? MapContent.AllParticles.Select(v => v.CurrentPosition).ToList() : null;
+
+    // ---- Particle playback (M36) — simulate & render the selected placed system live in the viewport ----
+    private static readonly IReadOnlyDictionary<uint, VfxSystemDefinition> EmptyVfx = new Dictionary<uint, VfxSystemDefinition>();
+    private IReadOnlyDictionary<uint, VfxSystemDefinition> _vfxSystems = EmptyVfx;
+    [ObservableProperty] private bool _playParticlePreview;
+    [ObservableProperty] private VfxPlayback? _currentParticlePlayback;
+
+    partial void OnPlayParticlePreviewChanged(bool value) => RebuildParticlePlayback();
+
+    /// <summary>Rebuild the live playback request from the selected particle + its parsed system (M36).</summary>
+    private void RebuildParticlePlayback()
+    {
+        if (!PlayParticlePreview || SelectedParticleNode is not { } node
+            || !_vfxSystems.TryGetValue(node.Placement.SystemHash, out var sys) || sys.Emitters.Count == 0)
+        {
+            CurrentParticlePlayback = null;
+            return;
+        }
+        // Resolve one sprite per emitter (aligned to sys.Emitters); nulls become the viewport's soft-dot fallback.
+        var texs = new List<TextureImage?>(sys.Emitters.Count);
+        foreach (var e in sys.Emitters)
+            texs.Add(e.TexturePath is { } p ? LoadTextureByPath(p) : null);
+        CurrentParticlePlayback = new VfxPlayback(sys, node.CurrentPosition, texs);
+        int resolved = texs.Count(t => t is not null);
+        _log.Info("Particles", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {resolved} sprite(s) resolved.");
+    }
 
     // ---- Particle move (M35 adjustment) — reposition a placed particle, live + persisted to the mod ----
     [ObservableProperty] private string _particleMoveX = "0";
@@ -168,6 +196,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedParticleMarker = node.CurrentPosition;
         UpdateParticleMarkers();
         HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved);
+        RebuildParticlePlayback();   // M36: follow the moved particle if it's playing
         _log.Info("Particles", $"Moved '{node.Name}' to ({target.X:0.#}, {target.Y:0.#}, {target.Z:0.#}).");
     }
 
@@ -180,6 +209,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedParticleMarker = node.CurrentPosition;
         UpdateParticleMarkers();
         HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved);
+        RebuildParticlePlayback();
     }
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
     [ObservableProperty] private AnimationClip? _currentAnimation;
@@ -306,6 +336,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials,
         IReadOnlyList<TextureImage?>? Lightmaps,
         IReadOnlyList<MapParticlePlacement>? Particles,
+        IReadOnlyDictionary<uint, VfxSystemDefinition> VfxSystems,
         int DragonIndex, int BaronIndex, bool HasMoves, int[] SelectedMeshIndices,
         List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces);
 
@@ -384,7 +415,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return null;
         return new MapScene(map, _currentMapBytes, entry, _mapControllers, mesh,
             CurrentModelTextures, CurrentModelSubmeshMaterials, CurrentModelLightmapTextures,
-            CurrentModelParticles,
+            CurrentModelParticles, _vfxSystems,
             SelectedDragonIndex, SelectedBaronIndex, HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList());
@@ -402,6 +433,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelLightmapTextures = s.Lightmaps;
         CurrentModelSubmeshMaterials = s.Materials;
         CurrentModelParticles = s.Particles;
+        _vfxSystems = s.VfxSystems;
         SelectedParticleTreeItem = null;
         MapGeoInspector.Show(s.Map, s.Entry.Path);
         MapContent.SetLayerGroups(s.LayerGroups);
@@ -919,6 +951,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelParticles = null;
         SelectedParticleTreeItem = null;
         ParticleMarkers = null;
+        PlayParticlePreview = false;
+        CurrentParticlePlayback = null;
+        _vfxSystems = EmptyVfx;
         CurrentAnimation = null;
         AnimationTime = 0;
         Animation.Clear();
@@ -1719,13 +1754,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
 
         // M35: placed particle systems live in the same materials.bin (MapPlaceableContainer.items).
+        // M36: the VfxSystemDefinitions they reference live in the same bin too — parse them for playback.
         try
         {
-            var particles = MapParticleExtractor.Extract(GetAssetBytes(binEntry), ResolveBinName);
+            var binBytes = GetAssetBytes(binEntry);
+            var particles = MapParticleExtractor.Extract(binBytes, ResolveBinName);
             CurrentModelParticles = particles.Count > 0 ? particles : null;
-            if (particles.Count > 0) _log.Info("MapGeo", $"{particles.Count:n0} placed particle system(s) ({particles.Select(p => p.SystemPath).Distinct().Count()} unique).");
+            _vfxSystems = VfxSystemResolver.ExtractAll(binBytes);
+            if (particles.Count > 0) _log.Info("MapGeo", $"{particles.Count:n0} placed particle system(s) ({particles.Select(p => p.SystemPath).Distinct().Count()} unique, {_vfxSystems.Count} definitions).");
         }
-        catch { CurrentModelParticles = null; }
+        catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; }
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
         var (materialToTexture, profiles) = ResolveMapMaterials(binEntry, names);

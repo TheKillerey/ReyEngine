@@ -6,7 +6,9 @@ using ReyEngine.Core.Decoding;
 using ReyEngine.Formats.Animation;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Skeletons;
+using ReyEngine.App.ViewModels;
 using ReyEngine.Rendering;
+using ReyEngine.Rendering.Vfx;
 using Silk.NET.OpenGL;
 
 namespace ReyEngine.App.Views;
@@ -35,6 +37,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ParticleMarkers));
     public static readonly StyledProperty<Vector3?> SelectedParticlePositionProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(SelectedParticlePosition));
+    public static readonly StyledProperty<VfxPlayback?> ParticlePlaybackProperty =
+        AvaloniaProperty.Register<ViewportControl, VfxPlayback?>(nameof(ParticlePlayback));
     public static readonly StyledProperty<Vector3?> FocusPointProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(FocusPoint));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
@@ -101,6 +105,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public Vector3? SelectedParticlePosition { get => GetValue(SelectedParticlePositionProperty); set => SetValue(SelectedParticlePositionProperty, value); }
     /// <summary>Set to a world point to recentre the camera on it (M35 focus); cleared after applying.</summary>
     public Vector3? FocusPoint { get => GetValue(FocusPointProperty); set => SetValue(FocusPointProperty, value); }
+    /// <summary>The placed VFX system to simulate and play live (M36); null stops playback.</summary>
+    public VfxPlayback? ParticlePlayback { get => GetValue(ParticlePlaybackProperty); set => SetValue(ParticlePlaybackProperty, value); }
     public bool ShowBones { get => GetValue(ShowBonesProperty); set => SetValue(ShowBonesProperty, value); }
     public bool ShowBounds { get => GetValue(ShowBoundsProperty); set => SetValue(ShowBoundsProperty, value); }
 
@@ -112,6 +118,13 @@ public sealed class ViewportControl : OpenGlControlBase
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
     private bool _particlesDirty;
     private Vector3? _pendingFocus;
+
+    // M36: live VFX particle playback
+    private VfxParticleRenderer? _particleRenderer;
+    private VfxParticleSimulator? _particleSim;
+    private bool _particlePlaybackDirty;
+    private uint _softDotTex;
+    private readonly System.Diagnostics.Stopwatch _particleClock = new();
 
     // Offscreen target with a real depth buffer (Avalonia's default FBO has none).
     private uint _fbo, _colorRb, _depthRb;
@@ -245,6 +258,10 @@ public sealed class ViewportControl : OpenGlControlBase
         _meshRenderer = new ViewportMeshRenderer();
         _meshRenderer.Initialize(_gl, _gles);
 
+        _particleRenderer = new VfxParticleRenderer();
+        _particleRenderer.Initialize(_gl);
+        _softDotTex = _particleRenderer.UploadTexture(SoftDot(64), 64, 64);
+
         if (Mesh is not null) { _meshDirty = true; }
         if (Skeleton is not null) _bonesDirty = true;
         RequestNextFrameRendering();
@@ -254,9 +271,12 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         _grid?.Dispose();
         _meshRenderer?.Dispose();
+        _particleRenderer?.Dispose();
         DeleteFbo();
         _grid = null;
         _meshRenderer = null;
+        _particleRenderer = null;
+        _particleSim = null;
         _gl = null;
     }
 
@@ -330,6 +350,7 @@ public sealed class ViewportControl : OpenGlControlBase
             _meshRenderer.SetParticleMarkers(pts, SelectedParticlePosition, size);
             _particlesDirty = false;
         }
+        if (_particlePlaybackDirty) { RebuildParticleSim(); _particlePlaybackDirty = false; }
         if (_needFrame) { FrameCamera(); _needFrame = false; }
         if (_pendingFocus is { } fp) { FocusOnPoint(fp); _pendingFocus = null; }
 
@@ -368,6 +389,16 @@ public sealed class ViewportControl : OpenGlControlBase
         _grid.Render(viewProj);
         var view = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.View; // same X-mirror as viewProj, for the matcap lookup
         _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones, CullBackfaces);
+
+        // M36: advance + draw live VFX particles on top of the scene, then keep requesting frames so they animate.
+        if (_particleSim is { } psim && _particleRenderer is { } prend && ParticlePlayback is not null)
+        {
+            float dt = _particleClock.IsRunning ? (float)_particleClock.Elapsed.TotalSeconds : 1f / 60f;
+            _particleClock.Restart();
+            psim.Update(dt);
+            prend.Render(psim, viewProj, view);
+            RequestNextFrameRendering();
+        }
 
         // Resolve our offscreen color into Avalonia's framebuffer.
         _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _fbo);
@@ -432,6 +463,50 @@ public sealed class ViewportControl : OpenGlControlBase
         }
     }
 
+    /// <summary>(Re)build the particle simulator from <see cref="ParticlePlayback"/> and upload each emitter's
+    /// sprite (procedural soft-dot fallback when unresolved). Runs on the GL thread. M36.</summary>
+    private void RebuildParticleSim()
+    {
+        if (_particleRenderer is null) return;
+        var pb = ParticlePlayback;
+        if (pb is null || pb.System.Emitters.Count == 0) { _particleSim = null; _particleClock.Stop(); return; }
+
+        _particleRenderer.ClearTextures();
+        _softDotTex = _particleRenderer.UploadTexture(SoftDot(64), 64, 64);
+
+        var sim = new VfxParticleSimulator();
+        sim.SetSystem(pb.System, pb.WorldPos);
+        foreach (var es in sim.Emitters)
+        {
+            // match the state back to its emitter index (by reference — SetSystem keeps the instances)
+            int idx = -1;
+            for (int i = 0; i < pb.System.Emitters.Count; i++)
+                if (ReferenceEquals(pb.System.Emitters[i], es.Def)) { idx = i; break; }
+            var img = idx >= 0 && idx < pb.EmitterTextures.Count ? pb.EmitterTextures[idx] : null;
+            es.Texture = img is not null ? _particleRenderer.UploadTexture(img.Rgba, img.Width, img.Height) : _softDotTex;
+        }
+        _particleSim = sim;
+        _particleClock.Restart();
+    }
+
+    /// <summary>A soft radial-gradient RGBA sprite used when a particle's real texture can't be resolved.</summary>
+    private static byte[] SoftDot(int n)
+    {
+        var px = new byte[n * n * 4];
+        float c = (n - 1) / 2f;
+        for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+        {
+            float dx = (x - c) / c, dy = (y - c) / c;
+            float a = Math.Clamp(1f - MathF.Sqrt(dx * dx + dy * dy), 0f, 1f);
+            a *= a;
+            int i = (y * n + x) * 4;
+            px[i] = px[i + 1] = px[i + 2] = 255;
+            px[i + 3] = (byte)(a * 255);
+        }
+        return px;
+    }
+
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
@@ -461,6 +536,8 @@ public sealed class ViewportControl : OpenGlControlBase
         { _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticleMarkersProperty || change.Property == SelectedParticlePositionProperty)
         { _particlesDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == ParticlePlaybackProperty)
+        { _particlePlaybackDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == FocusPointProperty && FocusPoint is { } fp)
         { _pendingFocus = fp; RequestNextFrameRendering(); }
     }

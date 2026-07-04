@@ -144,6 +144,14 @@ public sealed class VfxParticleRenderer
 
     private static bool IsAdditive(int blendMode) => blendMode is 0 or 1 or 4 or 5;
 
+    /// <summary>Delete all sprite textures uploaded so far (call before re-uploading a new system's sprites).</summary>
+    public void ClearTextures()
+    {
+        if (!_ready) return;
+        foreach (var t in _ownedTextures) _gl.DeleteTexture(t);
+        _ownedTextures.Clear();
+    }
+
     public void Dispose()
     {
         if (!_ready) return;

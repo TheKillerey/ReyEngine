@@ -201,6 +201,7 @@
                 CullBackfaces="{Binding CullBackfaces}"
                 ParticleMarkers="{Binding ParticleMarkers}"
                 SelectedParticlePosition="{Binding SelectedParticleMarker}"
+                ParticlePlayback="{Binding CurrentParticlePlayback}"
                 FocusPoint="{Binding ParticleFocusPoint}"
                 PreviewMode="{Binding PreviewMode}" />
 

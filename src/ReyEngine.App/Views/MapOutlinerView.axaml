@@ -164,7 +164,11 @@
     <Border DockPanel.Dock="Bottom" Margin="0,4,0,0" Padding="6" CornerRadius="4"
             Background="{DynamicResource ReyPanelAltBrush}" IsVisible="{Binding SelectedParticleNode, Converter={x:Static ObjectConverters.IsNotNull}}">
       <StackPanel Spacing="3">
-        <TextBlock Text="MOVE PARTICLE" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Text="MOVE PARTICLE" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+          <ToggleButton Grid.Column="1" Content="▶ Play VFX" IsChecked="{Binding PlayParticlePreview}" FontSize="10" Padding="6,1"
+                        ToolTip.Tip="Simulate and play this particle system live in the viewport (M36)" />
+        </Grid>
         <TextBlock Text="{Binding SelectedParticleNode.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
         <Grid ColumnDefinitions="14,*,14,*,14,*" Margin="0,2,0,0">
           <TextBlock Grid.Column="0" Text="X" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
