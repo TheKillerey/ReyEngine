@@ -198,6 +198,7 @@
                 Wireframe="{Binding ShowWireframe}"
                 ShowBones="{Binding ShowBones}"
                 ShowBounds="{Binding ShowBounds}"
+                CullBackfaces="{Binding CullBackfaces}"
                 PreviewMode="{Binding PreviewMode}" />
 
             <!-- transparent surface that forwards pointer input to the viewport camera -->
@@ -233,6 +234,8 @@
                 <ComboBoxItem>Debug · Lightmap</ComboBoxItem>
               </ComboBox>
               <ToggleButton Content="Wireframe" IsChecked="{Binding ShowWireframe}" FontSize="11" Padding="8,3" />
+              <ToggleButton Content="Cull" IsChecked="{Binding CullBackfaces}" FontSize="11" Padding="8,3"
+                            ToolTip.Tip="Backface culling (single-sided materials only; double-sided ones stay 2-sided)" />
               <ToggleButton Content="Bones" IsChecked="{Binding ShowBones}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Bounds" IsChecked="{Binding ShowBounds}" FontSize="11" Padding="8,3" />
               <Button Content="Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" />

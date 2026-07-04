@@ -61,7 +61,8 @@ public sealed class ViewportMeshRenderer : IDisposable
         public float UvRotationRadians;
         public bool UsesRim;
         public bool UsesSpecular;
-        public int AlphaMode;           // M34: 0 opaque · 1 cutout (alpha-test) · 2 transparent (alpha-blend)
+        public int AlphaMode;           // M34: 0 opaque, 1 cutout (alpha-test), 2 transparent (alpha-blend)
+        public bool DoubleSided;        // M34: never backface-culled even when culling is on
 
         public static SubmeshDraw Create(int start, int count) =>
             new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0) };
@@ -70,9 +71,9 @@ public sealed class ViewportMeshRenderer : IDisposable
     /// <summary>Per-submesh preview material data pushed from the App's resolved <c>MaterialProfile</c> (M32/M34).</summary>
     public readonly record struct SubmeshMaterial(
         bool UsesRim, bool UsesSpecular, Vector2 UvScale, Vector2 UvOffset, float UvRotationDegrees,
-        int AlphaMode = 0)
+        int AlphaMode = 0, bool DoubleSided = false)
     {
-        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0);
+        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0, false);
     }
 
     private const string MeshVert = @"
@@ -458,6 +459,7 @@ void main() { FragColor = uColor; }";
         _submeshes[index].UsesRim = mat.UsesRim;
         _submeshes[index].UsesSpecular = mat.UsesSpecular;
         _submeshes[index].AlphaMode = mat.AlphaMode;
+        _submeshes[index].DoubleSided = mat.DoubleSided;
     }
 
     /// <summary>Reset every submesh's preview material to identity UV + no rim/specular (M32).</summary>
@@ -470,6 +472,7 @@ void main() { FragColor = uColor; }";
             _submeshes[i].UsesRim = false;
             _submeshes[i].UsesSpecular = false;
             _submeshes[i].AlphaMode = 0;
+            _submeshes[i].DoubleSided = false;
         }
     }
 
@@ -555,7 +558,7 @@ void main() { FragColor = uColor; }";
     public unsafe void Render(Matrix4x4 viewProjection, Vector3 camPos, int previewMode, bool wireframe, bool showBounds, bool showBones)
         => Render(viewProjection, Matrix4x4.Identity, camPos, previewMode, wireframe, showBounds, showBones);
 
-    public unsafe void Render(Matrix4x4 viewProjection, Matrix4x4 view, Vector3 camPos, int previewMode, bool wireframe, bool showBounds, bool showBones)
+    public unsafe void Render(Matrix4x4 viewProjection, Matrix4x4 view, Vector3 camPos, int previewMode, bool wireframe, bool showBounds, bool showBones, bool cullBackfaces = false)
     {
         if (!_ready) return;
         var m = viewProjection;
@@ -565,6 +568,11 @@ void main() { FragColor = uColor; }";
             _gl.Enable(EnableCap.DepthTest);
             _gl.DepthFunc(DepthFunction.Lequal);
             _gl.Disable(EnableCap.CullFace);
+            // League is a D3D engine: source front faces are wound clockwise. The viewport mirrors world X
+            // (CreateScale(-1,1,1)) which flips winding once (CW -> CCW), so in window space front faces are
+            // CCW = GL's default. Set it explicitly and cull the back faces. (If this culls the wrong side,
+            // flip to FrontFaceDirection.CW.)
+            if (cullBackfaces) { _gl.FrontFace(FrontFaceDirection.Ccw); _gl.CullFace(TriangleFace.Back); }
             _gl.BindVertexArray(_vao);
 
             if (wireframe)
@@ -598,6 +606,9 @@ void main() { FragColor = uColor; }";
 
                 void DrawSubmesh(SubmeshDraw s)
                 {
+                    // M34 backface culling (opt-in): cull single-sided materials; double-sided ones show both faces.
+                    if (cullBackfaces && !s.DoubleSided) _gl.Enable(EnableCap.CullFace);
+                    else _gl.Disable(EnableCap.CullFace);
                     // M32 per-material: UV transform + rim/specular gates (identity/off by default).
                     _gl.Uniform4(_mUvScaleOffset, s.UvScaleOffset.X, s.UvScaleOffset.Y, s.UvScaleOffset.Z, s.UvScaleOffset.W);
                     _gl.Uniform1(_mUvRot, s.UvRotationRadians);
@@ -646,6 +657,7 @@ void main() { FragColor = uColor; }";
                         if (s.Visible && s.AlphaMode == 2) DrawSubmesh(s);
                     _gl.DepthMask(true);
                 }
+                _gl.Disable(EnableCap.CullFace); // restore default so the line/gizmo overlays are unaffected
             }
             _gl.BindVertexArray(0);
         }

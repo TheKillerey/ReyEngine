@@ -116,6 +116,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showWireframe;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;
+    [ObservableProperty] private bool _cullBackfaces; // M34: opt-in backface culling (default off = double-sided)
     [ObservableProperty] private bool _hasMaterialData;
     [ObservableProperty] private bool _hasInspectorBody;
     [ObservableProperty] private int _inspectorTab;
@@ -1742,7 +1743,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MaterialRenderMode.Cutout => 1,
                 MaterialRenderMode.Transparent => 2,
                 _ => 0,
-            });
+            },
+            DoubleSided: p.DoubleSided);
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 

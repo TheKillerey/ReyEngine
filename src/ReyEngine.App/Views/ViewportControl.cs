@@ -29,6 +29,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowBones));
     public static readonly StyledProperty<bool> ShowBoundsProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowBounds));
+    public static readonly StyledProperty<bool> CullBackfacesProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(CullBackfaces));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelTextures));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelMaskTexturesProperty =
@@ -87,6 +89,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
     public bool Wireframe { get => GetValue(WireframeProperty); set => SetValue(WireframeProperty, value); }
+    public bool CullBackfaces { get => GetValue(CullBackfacesProperty); set => SetValue(CullBackfacesProperty, value); }
     public bool ShowBones { get => GetValue(ShowBonesProperty); set => SetValue(ShowBonesProperty, value); }
     public bool ShowBounds { get => GetValue(ShowBoundsProperty); set => SetValue(ShowBoundsProperty, value); }
 
@@ -343,7 +346,7 @@ public sealed class ViewportControl : OpenGlControlBase
 
         _grid.Render(viewProj);
         var view = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.View; // same X-mirror as viewProj, for the matcap lookup
-        _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones);
+        _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones, CullBackfaces);
 
         // Resolve our offscreen color into Avalonia's framebuffer.
         _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _fbo);
@@ -432,7 +435,8 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimationClipProperty || change.Property == AnimationTimeProperty) { _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == WireframeProperty || change.Property == ShowBonesProperty
-                 || change.Property == ShowBoundsProperty || change.Property == PreviewModeProperty)
+                 || change.Property == ShowBoundsProperty || change.Property == PreviewModeProperty
+                 || change.Property == CullBackfacesProperty)
         { _skinDirty = true; RequestNextFrameRendering(); }
     }
 
