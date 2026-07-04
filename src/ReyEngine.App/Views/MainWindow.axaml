@@ -14,15 +14,27 @@
   <Window.Resources>
     <conv:LogLevelToBrushConverter x:Key="LevelToBrush" />
     <conv:BoolToBrushConverter x:Key="SelectionHighlight" TrueBrush="#3336E2C2" FalseBrush="Transparent" />
+    <conv:BoolToBrushConverter x:Key="ActiveTabUnderline" TrueBrush="#36E2C2" FalseBrush="Transparent" />
+    <conv:BoolToBrushConverter x:Key="ActiveTabBg" TrueBrush="#1A36E2C2" FalseBrush="Transparent" />
   </Window.Resources>
 
   <DockPanel>
 
-    <!-- ============ TOP MENU ============ -->
-    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Background="{DynamicResource ReyHeaderBrush}">
+    <!-- ============ TOP APP BAR (M39: brand + menu + project) ============ -->
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,*,Auto" Background="{DynamicResource ReyHeaderBrush}">
       <Image x:Name="LogoImage" Grid.Column="0" Height="24" Margin="10,3,6,3"
              VerticalAlignment="Center" ToolTip.Tip="ReyEngine" />
-    <Menu Grid.Column="1" Background="Transparent">
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center" Margin="0,0,14,0">
+        <TextBlock Text="REYENGINE" FontSize="13" FontWeight="Bold" LetterSpacing="1.5"
+                   Foreground="{DynamicResource ReyTextBrightBrush}" VerticalAlignment="Center" />
+        <Border Width="1" Height="12" Background="{DynamicResource ReyBorderAccentBrush}" VerticalAlignment="Center" />
+        <TextBlock Text="PROJECT KALISTA" FontSize="9" FontWeight="SemiBold" LetterSpacing="2"
+                   Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+      </StackPanel>
+      <TextBlock Grid.Column="3" Text="{Binding Title}" FontSize="11" Margin="10,0,12,0"
+                 Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center"
+                 TextTrimming="CharacterEllipsis" MaxWidth="420" ToolTip.Tip="Active project (* = unsaved changes)" />
+    <Menu Grid.Column="2" Background="Transparent">
       <MenuItem Header="_File">
         <MenuItem Header="Open Project Folder…" Command="{Binding OpenProjectFolderCommand}" />
         <MenuItem Header="Open Recent" ItemsSource="{Binding RecentProjectList}">
@@ -83,23 +95,46 @@
     </Menu>
     </Grid>
 
-    <!-- ============ TOOLBAR ============ -->
+    <!-- ============ MAIN TOOLBAR (M39: icon + text, grouped) ============ -->
     <Border DockPanel.Dock="Top"
             Background="{DynamicResource ReyHeaderBrush}"
             BorderBrush="{DynamicResource ReyBorderBrush}"
-            BorderThickness="0,1,0,1" Padding="8,6">
+            BorderThickness="0,1,0,1" Padding="8,5">
       <StackPanel Orientation="Horizontal">
-        <Button Classes="tool" Content="Import" Command="{Binding OpenWadCommand}" />
-        <Button Classes="tool" Content="Export" Command="{Binding ExportSelectedCommand}" />
-        <Button Classes="tool" Content="Reload WAD" Command="{Binding ReloadWadCommand}" />
-        <Button Classes="tool" Content="Sync Hashes" Command="{Binding SyncHashesCommand}" />
-        <Button Classes="tool" Content="Build Package" Command="{Binding BuildPackageCommand}" />
-        <Button Classes="tool" Content="Shader Preview" Command="{Binding ShaderPreviewCommand}" />
-        <Border Width="1" Background="{DynamicResource ReyBorderBrush}" Margin="6,2" />
-        <TextBox Width="240" VerticalAlignment="Center" Margin="0,0,4,0"
-                 Watermark="path or string to hash"
+        <!-- assets -->
+        <Button Classes="tool" Command="{Binding OpenWadCommand}" ToolTip.Tip="Open a WAD archive for inspection">
+          <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="📥" FontSize="11"/><TextBlock Text="Import"/></StackPanel>
+        </Button>
+        <Button Classes="tool" Command="{Binding ExportSelectedCommand}" ToolTip.Tip="Export the selected asset to disk">
+          <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="📤" FontSize="11"/><TextBlock Text="Export"/></StackPanel>
+        </Button>
+        <Button Classes="tool" Command="{Binding ReloadWadCommand}" ToolTip.Tip="Reload the current WAD/project content">
+          <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="⟳" FontSize="12"/><TextBlock Text="Reload"/></StackPanel>
+        </Button>
+        <Border Width="1" Height="18" Background="{DynamicResource ReyBorderBrush}" Margin="5,0" VerticalAlignment="Center" />
+        <!-- data -->
+        <Button Classes="tool" Command="{Binding SyncHashesCommand}" ToolTip.Tip="Sync hash tables from CommunityDragon">
+          <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="⇅" FontSize="11"/><TextBlock Text="Sync Hashes"/></StackPanel>
+        </Button>
+        <Button Classes="tool" Command="{Binding ShaderPreviewCommand}" ToolTip.Tip="Riot shader inspection / preview">
+          <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="✦" FontSize="11"/><TextBlock Text="Shaders"/></StackPanel>
+        </Button>
+        <Border Width="1" Height="18" Background="{DynamicResource ReyBorderBrush}" Margin="5,0" VerticalAlignment="Center" />
+        <!-- build / ship -->
+        <Button Classes="primary" Command="{Binding BuildPackageCommand}" ToolTip.Tip="Build the mod package (repack + validate)">
+          <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="📦" FontSize="11"/><TextBlock Text="Build Package"/></StackPanel>
+        </Button>
+        <Button Classes="tool" Command="{Binding ExportFantomeCommand}" ToolTip.Tip="Export the mod as a .fantome package">
+          <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="👻" FontSize="11"/><TextBlock Text=".fantome"/></StackPanel>
+        </Button>
+        <Border Width="1" Height="18" Background="{DynamicResource ReyBorderBrush}" Margin="5,0" VerticalAlignment="Center" />
+        <!-- hash lookup -->
+        <TextBox Width="230" VerticalAlignment="Center" Margin="0,0,4,0"
+                 Watermark="path or string to hash…"
                  Text="{Binding HashInput, Mode=TwoWay}" />
-        <Button Classes="tool" Content="Hash Lookup" Command="{Binding HashLookupCommand}" />
+        <Button Classes="tool" Command="{Binding HashLookupCommand}" ToolTip.Tip="Resolve a path or hash">
+          <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="🔎" FontSize="11"/><TextBlock Text="Hash Lookup"/></StackPanel>
+        </Button>
       </StackPanel>
     </Border>
 
@@ -110,15 +145,21 @@
                  Foreground="#FFD9A0" FontSize="11" />
     </Border>
 
-    <!-- ============ STATUS BAR ============ -->
+    <!-- ============ STATUS BAR (M39) ============ -->
     <Border DockPanel.Dock="Bottom"
             Background="{DynamicResource ReyHeaderBrush}"
             BorderBrush="{DynamicResource ReyBorderBrush}"
-            BorderThickness="0,1,0,0" Padding="10,4">
+            BorderThickness="0,1,0,0" Padding="10,3">
       <DockPanel>
-        <TextBlock DockPanel.Dock="Right" Text="{Binding SelectionStatus}" Foreground="{DynamicResource ReyAccentBrush}"
-                   FontSize="11" IsVisible="{Binding SelectionStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-        <TextBlock Text="{Binding Status}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="{Binding SelectionStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" VerticalAlignment="Center"
+                     IsVisible="{Binding SelectionStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          <Border Width="1" Height="11" Background="{DynamicResource ReyBorderBrush}" VerticalAlignment="Center" />
+          <TextBlock Text="REYENGINE · PROJECT KALISTA" FontSize="9" LetterSpacing="1.2" FontWeight="SemiBold"
+                     Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+        </StackPanel>
+        <TextBlock Text="{Binding Status}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center"
+                   TextTrimming="CharacterEllipsis" />
       </DockPanel>
     </Border>
 
@@ -151,24 +192,30 @@
                   </ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                      <Border Margin="2,3,0,0" CornerRadius="4,4,0,0"
-                              Background="{Binding IsActive, Converter={StaticResource SelectionHighlight}}">
-                        <StackPanel Orientation="Horizontal" Margin="7,4,4,4" Spacing="4">
-                          <Button Background="Transparent" BorderThickness="0" Padding="0"
-                                  Command="{Binding $parent[ItemsControl].DataContext.ActivateDocumentCommand}" CommandParameter="{Binding}"
-                                  ToolTip.Tip="{Binding Title}">
-                            <StackPanel Orientation="Horizontal" Spacing="5">
-                              <TextBlock Text="{Binding Glyph}" FontSize="11" VerticalAlignment="Center" />
-                              <TextBlock Text="{Binding Title}" FontSize="11" VerticalAlignment="Center"
-                                         MaxWidth="150" TextTrimming="CharacterEllipsis"
-                                         Foreground="{DynamicResource ReyTextBrush}" />
-                              <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
-                            </StackPanel>
-                          </Button>
-                          <Button Content="✕" FontSize="10" Padding="4,0" Background="Transparent" BorderThickness="0"
-                                  Command="{Binding $parent[ItemsControl].DataContext.CloseDocumentCommand}" CommandParameter="{Binding}"
-                                  ToolTip.Tip="Close tab" />
-                        </StackPanel>
+                      <!-- M39: document tab — translucent cyan when active + accent underline -->
+                      <Border Margin="2,3,0,0" CornerRadius="4,4,0,0" ClipToBounds="True"
+                              Background="{Binding IsActive, Converter={StaticResource ActiveTabBg}}">
+                        <DockPanel>
+                          <Border DockPanel.Dock="Bottom" Height="2" CornerRadius="1"
+                                  Background="{Binding IsActive, Converter={StaticResource ActiveTabUnderline}}" />
+                          <StackPanel Orientation="Horizontal" Margin="8,4,4,3" Spacing="4">
+                            <Button Background="Transparent" BorderThickness="0" Padding="0"
+                                    Command="{Binding $parent[ItemsControl].DataContext.ActivateDocumentCommand}" CommandParameter="{Binding}"
+                                    ToolTip.Tip="{Binding Title}">
+                              <StackPanel Orientation="Horizontal" Spacing="5">
+                                <TextBlock Text="{Binding Glyph}" FontSize="11" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Title}" FontSize="11" VerticalAlignment="Center"
+                                           MaxWidth="150" TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource ReyTextBrush}" />
+                                <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}"
+                                         ToolTip.Tip="Unsaved changes" />
+                              </StackPanel>
+                            </Button>
+                            <Button Classes="icon" Content="✕" FontSize="10"
+                                    Command="{Binding $parent[ItemsControl].DataContext.CloseDocumentCommand}" CommandParameter="{Binding}"
+                                    ToolTip.Tip="Close tab" />
+                          </StackPanel>
+                        </DockPanel>
                       </Border>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
@@ -220,9 +267,9 @@
             <!-- view toggles (above the input surface so they stay clickable) -->
             <StackPanel Orientation="Horizontal" Spacing="4" Margin="10"
                         HorizontalAlignment="Right" VerticalAlignment="Top">
-              <Button Content="↶" FontSize="13" Padding="7,2" Command="{Binding UndoCommand}"
+              <Button Classes="tool" Content="↶" FontSize="13" Padding="7,2" Command="{Binding UndoCommand}"
                       IsEnabled="{Binding CanUndo}" ToolTip.Tip="{Binding UndoLabel}" />
-              <Button Content="↷" FontSize="13" Padding="7,2" Command="{Binding RedoCommand}"
+              <Button Classes="tool" Content="↷" FontSize="13" Padding="7,2" Command="{Binding RedoCommand}"
                       IsEnabled="{Binding CanRedo}" ToolTip.Tip="{Binding RedoLabel}" />
               <ComboBox SelectedIndex="{Binding PreviewMode}" FontSize="11" MinWidth="120" VerticalAlignment="Center"
                         ToolTip.Tip="Preview shading mode">
@@ -242,21 +289,27 @@
                 <ComboBoxItem>Debug · Two-Sided</ComboBoxItem>
                 <ComboBoxItem>Debug · Mirrored</ComboBoxItem>
               </ComboBox>
-              <ToggleButton Content="Wireframe" IsChecked="{Binding ShowWireframe}" FontSize="11" Padding="8,3" />
-              <ToggleButton Content="Cull" IsChecked="{Binding CullBackfaces}" FontSize="11" Padding="8,3"
+              <ToggleButton Classes="vp" Content="◫ Wire" IsChecked="{Binding ShowWireframe}" ToolTip.Tip="Wireframe overlay" />
+              <ToggleButton Classes="vp" Content="◪ Cull" IsChecked="{Binding CullBackfaces}"
                             ToolTip.Tip="Respect each material's cullEnable (single-sided materials cull backfaces; cullEnable=false renders two-sided with flipped-normal lighting). Off = force everything two-sided." />
-              <ToggleButton Content="Bones" IsChecked="{Binding ShowBones}" FontSize="11" Padding="8,3" />
-              <ToggleButton Content="Bounds" IsChecked="{Binding ShowBounds}" FontSize="11" Padding="8,3" />
-              <ToggleButton Content="Particles" IsChecked="{Binding ShowParticles}" FontSize="11" Padding="8,3"
+              <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" ToolTip.Tip="Show skeleton bones" />
+              <ToggleButton Classes="vp" Content="▣ Bounds" IsChecked="{Binding ShowBounds}" ToolTip.Tip="Show bounding boxes" />
+              <ToggleButton Classes="vp" Content="✧ Particles" IsChecked="{Binding ShowParticles}"
                             IsVisible="{Binding HasParticles}"
                             ToolTip.Tip="Show placed particle-system markers (MapParticle)" />
-              <Button Content="Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" />
+              <Button Classes="tool" Content="⛶ Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" Margin="0"
+                      ToolTip.Tip="Frame the camera on the loaded content" />
             </StackPanel>
 
-            <Border Background="#66000000" CornerRadius="4" Padding="8,3"
+            <Border Classes="glass" Padding="9,4"
                     HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10" IsHitTestVisible="False">
-              <TextBlock Text="VIEWPORT  ·  LMB orbit · Shift+LMB pan · wheel zoom"
-                         FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <StackPanel Orientation="Horizontal" Spacing="7">
+                <TextBlock Text="VIEWPORT" FontSize="9" FontWeight="SemiBold" LetterSpacing="1.5"
+                           Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+                <Border Width="1" Height="10" Background="{DynamicResource ReyBorderAccentBrush}" VerticalAlignment="Center" />
+                <TextBlock Text="LMB orbit · Shift+LMB pan · wheel zoom"
+                           FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+              </StackPanel>
             </Border>
           </Grid>
           </DockPanel>
@@ -271,11 +324,15 @@
               <TextBlock Classes="panelHeader" Text="CONTENT BROWSER" VerticalAlignment="Center" />
               <Button Grid.Column="1" Classes="tool" Content="↑ Up" Margin="6,4"
                       Command="{Binding ContentBrowser.GoUpCommand}" IsEnabled="{Binding ContentBrowser.CanGoUp}" />
-              <TextBlock Grid.Column="2" Text="{Binding ContentBrowser.LocationText}" VerticalAlignment="Center"
-                         Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontFamily="Cascadia Mono, Consolas, monospace"
-                         TextTrimming="CharacterEllipsis" />
-              <TextBox Grid.Column="3" Width="150" Watermark="Filter…" Text="{Binding ContentBrowser.Filter}"
-                       FontSize="11" Margin="6,4,8,4" Padding="4,2" />
+              <!-- breadcrumb path -->
+              <Border Grid.Column="2" Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4"
+                      Padding="8,3" Margin="2,4" VerticalAlignment="Center">
+                <TextBlock Text="{Binding ContentBrowser.LocationText}" VerticalAlignment="Center"
+                           Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontFamily="Cascadia Mono, Consolas, monospace"
+                           TextTrimming="CharacterEllipsis" />
+              </Border>
+              <TextBox Grid.Column="3" Width="170" Watermark="🔎 Search assets…" Text="{Binding ContentBrowser.Filter}"
+                       FontSize="11" Margin="6,4,8,4" Padding="6,2" />
             </Grid>
             <Grid ColumnDefinitions="200,4,*">
               <TreeView Grid.Column="0" ItemsSource="{Binding ContentBrowser.FolderRoots}"
@@ -333,7 +390,7 @@
                   </ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                      <Button Width="94" Height="82" Margin="4" Padding="2" Background="Transparent"
+                      <Button Width="94" Height="86" Margin="4" Padding="2" Background="Transparent" CornerRadius="5"
                               Command="{Binding $parent[ItemsControl].DataContext.ContentBrowser.OpenCommand}"
                               CommandParameter="{Binding}" ToolTip.Tip="{Binding Name}">
                         <Button.ContextMenu>
@@ -347,20 +404,27 @@
                             <MenuItem Header="Copy Hash" Command="{Binding $parent[Window].DataContext.CopyHashCommand}" />
                           </ContextMenu>
                         </Button.ContextMenu>
+                        <!-- M39: Unreal-style asset tile — thumb card + type badge + status icons -->
                         <StackPanel>
-                          <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Width="58" Height="42" HorizontalAlignment="Center" ClipToBounds="True">
+                          <Border Background="{DynamicResource ReyPanelAltBrush}" BorderBrush="{DynamicResource ReyBorderSoftBrush}"
+                                  BorderThickness="1" CornerRadius="5" Width="66" Height="46" HorizontalAlignment="Center" ClipToBounds="True">
                             <Grid>
                               <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" IsVisible="{Binding HasThumbnail}" />
                               <TextBlock Text="{Binding Icon}" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"
                                          IsVisible="{Binding !HasThumbnail}" />
-                              <TextBlock Text="{Binding Kind}" FontSize="7" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                         Margin="0,0,3,2" Foreground="{DynamicResource ReyAccentBrush}" />
+                              <Border Classes="badge accent" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,2,2"
+                                      Padding="3,0" IsVisible="{Binding Kind, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Text="{Binding Kind}" FontSize="7" />
+                              </Border>
+                              <TextBlock Text="🔒" FontSize="9" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="3,2,0,0"
+                                         IsVisible="{Binding IsReadOnly}" ToolTip.Tip="Read-only Riot reference" />
                             </Grid>
                           </Border>
                           <StackPanel Orientation="Horizontal" Spacing="2" HorizontalAlignment="Center" Margin="0,3,0,0">
-                            <TextBlock Text="🔒" FontSize="8" VerticalAlignment="Center" IsVisible="{Binding IsReadOnly}" />
-                            <TextBlock Text="⚠" FontSize="8" Foreground="#FFB454" VerticalAlignment="Center" IsVisible="{Binding HasConflict}" />
-                            <Ellipse Width="6" Height="6" VerticalAlignment="Center" Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsModified}" />
+                            <TextBlock Text="⚠" FontSize="8" Foreground="{DynamicResource ReyWarningBrush}" VerticalAlignment="Center"
+                                       IsVisible="{Binding HasConflict}" ToolTip.Tip="Conflicts with another mount" />
+                            <Ellipse Width="6" Height="6" VerticalAlignment="Center" Fill="{DynamicResource ReyAccent2Brush}"
+                                     IsVisible="{Binding IsModified}" ToolTip.Tip="Modified in this project" />
                             <TextBlock Text="{Binding Name}" FontSize="9" Foreground="{DynamicResource ReyTextBrush}"
                                        TextTrimming="CharacterEllipsis" MaxWidth="78" VerticalAlignment="Center" />
                           </StackPanel>
@@ -379,10 +443,16 @@
 
         <Border Grid.Row="4" Background="{DynamicResource ReyPanelBrush}">
           <DockPanel>
-            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto">
               <TextBlock Classes="panelHeader" Text="CONSOLE · IMPORT LOG" />
-              <Button Grid.Column="1" Classes="tool" Content="Clear"
-                      Command="{Binding ClearConsoleCommand}" Margin="0,4,8,0" />
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="8,0">
+                <StackPanel Orientation="Horizontal" Spacing="3"><Ellipse Width="6" Height="6" Fill="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center"/><TextBlock Text="info" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}"/></StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="3"><Ellipse Width="6" Height="6" Fill="{DynamicResource ReySuccessBrush}" VerticalAlignment="Center"/><TextBlock Text="success" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}"/></StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="3"><Ellipse Width="6" Height="6" Fill="{DynamicResource ReyWarningBrush}" VerticalAlignment="Center"/><TextBlock Text="warning" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}"/></StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="3"><Ellipse Width="6" Height="6" Fill="{DynamicResource ReyErrorBrush}" VerticalAlignment="Center"/><TextBlock Text="error" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}"/></StackPanel>
+              </StackPanel>
+              <Button Grid.Column="2" Classes="tool" Content="🗑 Clear"
+                      Command="{Binding ClearConsoleCommand}" Margin="0,4,8,0" FontSize="11" />
             </Grid>
             <ListBox Classes="console" ItemsSource="{Binding Console.Entries}"
                      Background="Transparent" BorderThickness="0" Padding="6,0">
