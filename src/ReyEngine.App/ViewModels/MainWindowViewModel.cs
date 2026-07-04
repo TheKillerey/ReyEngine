@@ -116,13 +116,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showWireframe;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;
-    [ObservableProperty] private bool _cullBackfaces; // M34: opt-in backface culling (default off = double-sided)
+    [ObservableProperty] private bool _cullBackfaces = true; // M34: respect per-material cullEnable by default (off = force all two-sided)
     [ObservableProperty] private bool _hasMaterialData;
     [ObservableProperty] private bool _hasInspectorBody;
     [ObservableProperty] private int _inspectorTab;
     [ObservableProperty] private int _previewMode; // 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal
     [ObservableProperty] private string _shaderDbStatus = "Riot shaders not scanned.";
     private MapGeoAsset? _currentMap;
+    private IReadOnlyDictionary<string, MaterialProfile>? _currentMapProfiles; // M34: material name → render-state profile
     private MapVisibilityControllers? _mapControllers;
     private MapVisibilityResolver? _visibilityResolver;
     private ShaderDatabase? _shaderDb;
@@ -828,6 +829,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentSkeleton = null;
         if (_currentMap is { } clearedMap) UndoService.PurgeContext(clearedMap);
         _currentMap = null;
+        _currentMapProfiles = null;
         _mapControllers = null;
         _visibilityResolver = null;
         _currentMapBytes = null;
@@ -897,7 +899,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             string? material = _currentMap?.Groups.FirstOrDefault(g => g.MeshIndex == m.Index)?.Material;
             string? source = _currentMapEntry is { } e ? Path.GetFileName(MapGeoMaterialResolver.MaterialsBinPathFor(e.Path)) : null;
-            MeshDetails.Load(m, material, source, d);
+            MaterialProfile? profile = material is not null ? _currentMapProfiles?.GetValueOrDefault(material) : null;
+            MeshDetails.Load(m, material, source, d, profile);
         }
         else MeshDetails.Clear(); // multi-select uses the batch panel, not per-mesh details
     }
@@ -1684,9 +1687,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return cache[path] = LoadTextureByPath(path);
         }
 
+        _currentMapProfiles = profilesByName; // M34: cache for the mesh inspector's render-state rows
+
         var result = new TextureImage?[map.Groups.Count];
         var lightmaps = new TextureImage?[map.Groups.Count];
         var submeshMats = new ViewportMeshRenderer.SubmeshMaterial[map.Groups.Count];
+        // Per-mesh mirrored (negative-determinant) flag, for the two-sided/mirrored render state (M34).
+        var mirroredByMesh = map.Meshes.ToDictionary(m => m.Index, m => m.IsMirrored);
         int lmGroups = 0;
         for (int i = 0; i < map.Groups.Count; i++)
         {
@@ -1699,6 +1706,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 LogUvTransform(prof, matName);
             }
             else submeshMats[i] = ViewportMeshRenderer.SubmeshMaterial.Default;
+
+            if (mirroredByMesh.TryGetValue(map.Groups[i].MeshIndex, out var mir) && mir)
+                submeshMats[i] = submeshMats[i] with { Mirrored = true };
 
             // Baked lightmap: the group's BakedLight atlas (mesh already carries the uv7*scale+bias UVs).
             var lmPath = map.Groups[i].LightmapTexture;

@@ -164,6 +164,14 @@ public sealed class MapGeoMesh
     public bool DisableBackfaceCulling { get; init; }
     public string? StationaryLightTexture { get; init; }  // baked lightmap (empty/null on modern SR)
 
+    // ---- M34 transform diagnostics ----
+    /// <summary>Signed determinant of the mesh's world transform (from the file, before edits).</summary>
+    public float TransformDeterminant => Transform.GetDeterminant();
+    /// <summary>True when the transform is mirrored (negative determinant) — winding is flipped vs the norm.</summary>
+    public bool IsMirrored => TransformDeterminant < 0f;
+    /// <summary>Whether the source mesh carries a vertex Normal attribute (else normals are synthesized).</summary>
+    public bool HasNormals => System.Array.IndexOf(Attributes, "Normal") >= 0;
+
     public Vector3 Offset;                                // accumulated single-select move (world space), default zero
     public Vector3 RotationDegrees;                        // accumulated single-select rotation (XYZ euler, degrees)
     public Vector3 Scale = Vector3.One;                     // accumulated single-select scale, default one

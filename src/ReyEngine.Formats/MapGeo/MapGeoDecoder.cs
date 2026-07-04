@@ -44,6 +44,13 @@ public static class MapGeoDecoder
                 int baseVertex = positions.Count / 3;
                 var transform = mesh.Transform;
 
+                // Normal matrix = inverse-transpose of the world transform. Correct for mirrored (negative
+                // determinant) and non-uniform-scale meshes; identical to the plain 3x3 for the common
+                // rotation + uniform-scale case (so no change for most SR geometry). Falls back to the raw
+                // transform if it isn't invertible (M34).
+                var normalMatrix = Matrix4x4.Invert(transform, out var invT)
+                    ? Matrix4x4.Transpose(invT) : transform;
+
                 var meshPos = ReadVector3(view.GetAccessor(ElementName.Position), vc);
                 var meshNrm = view.TryGetAccessor(ElementName.Normal, out var nAcc) ? ReadVector3(nAcc, vc) : null;
                 var meshUv = view.TryGetAccessor(ElementName.Texcoord0, out var tAcc) ? ReadVector2(tAcc, vc) : null;
@@ -73,7 +80,9 @@ public static class MapGeoDecoder
 
                     if (meshNrm is not null)
                     {
-                        Vector3 n = Vector3.TransformNormal(meshNrm[i], transform);
+                        Vector3 n = Vector3.TransformNormal(meshNrm[i], normalMatrix);
+                        float len = n.Length();
+                        if (len > 1e-6f) n /= len;
                         normals.Add(n.X); normals.Add(n.Y); normals.Add(n.Z);
                     }
                     else { normals.Add(0f); normals.Add(1f); normals.Add(0f); }

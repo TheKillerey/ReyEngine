@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Numerics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using ReyEngine.Formats.MapGeo;
+using ReyEngine.Formats.Materials;
 
 namespace ReyEngine.App.ViewModels;
 
@@ -20,7 +21,7 @@ public sealed partial class MeshDetailsViewModel : ViewModelBase
 
     public void Clear() { HasMesh = false; Title = ""; Rows.Clear(); }
 
-    public void Load(MapGeoMesh m, string? material, string? materialSource, VisibilityDiagnostic vis)
+    public void Load(MapGeoMesh m, string? material, string? materialSource, VisibilityDiagnostic vis, MaterialProfile? profile = null)
     {
         Rows.Clear();
         Title = string.IsNullOrEmpty(m.Name) ? $"Mesh #{m.Index}" : m.Name;
@@ -50,7 +51,22 @@ public sealed partial class MeshDetailsViewModel : ViewModelBase
         Add("Tangents", m.Attributes.Contains("Tangent") ? "yes" : "no");
         Add("Lightmap texture", string.IsNullOrEmpty(m.StationaryLightTexture) ? "none (no baked lightmap)" : m.StationaryLightTexture!);
         Add("Render flags", string.IsNullOrEmpty(m.RenderFlags) ? "(none)" : m.RenderFlags);
-        if (m.DisableBackfaceCulling) Add("Culling", "backface culling disabled (double-sided)");
+
+        // ---- M34 render state (from the material) + transform diagnostics (from the mesh) ----
+        if (profile is { } p)
+        {
+            Add("Render mode", p.RenderModeLabel, em: p.RenderMode != MaterialRenderMode.Opaque);
+            Add("cullEnable", p.CullEnabled ? "true (cull backfaces)" : "false (two-sided)", em: !p.CullEnabled);
+            Add("blendEnable", p.BlendEnabled ? "true" : "false");
+            Add("Depth write", p.DepthWrite ? "yes" : "no (transparent)");
+            Add("Alpha cutout", p.AlphaCutout ? "yes (alpha-test)" : "no");
+            Add("Two-sided lighting", p.TwoSided ? "active (backface normals flipped)" : "off (single-sided)", em: p.TwoSided);
+        }
+        else if (m.DisableBackfaceCulling)
+            Add("Culling", "backface culling disabled (double-sided)");
+        Add("Winding", "CW (world-X mirrored pipeline)");
+        Add("Transform determinant", $"{m.TransformDeterminant:0.###}");
+        Add("Mirrored", m.IsMirrored ? "YES (negative determinant)" : "no", em: m.IsMirrored);
 
         // ---- visibility ----
         Add("Dragon layers", $"{vis.FlagLabel} · mask {vis.Flags} (0b{System.Convert.ToString(vis.Flags & 0xFF, 2).PadLeft(8, '0')})");

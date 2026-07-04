@@ -21,6 +21,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
     private int _mAlphaMode;                                       // M34: 0 opaque · 1 cutout · 2 transparent
     private int _mTint;                                            // M34: TintColor for untextured effect materials
+    private int _mTwoSided, _mMirrored;                            // M34: two-sided lighting + mirrored-transform debug
     private int _lMvp, _lColor;
 
     private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo;
@@ -63,19 +64,21 @@ public sealed class ViewportMeshRenderer : IDisposable
         public bool UsesRim;
         public bool UsesSpecular;
         public int AlphaMode;           // M34: 0 opaque, 1 cutout (alpha-test), 2 transparent (alpha-blend)
-        public bool DoubleSided;        // M34: never backface-culled even when culling is on
+        public bool DoubleSided;        // M34: two-sided material (cullEnable=false) — never culled
+        public bool Mirrored;           // M34: source mesh has a negative-determinant (mirrored) transform
         public Vector4 Tint;            // M34: TintColor, applied to the UNTEXTURED fallback only; default 1,1,1,1
 
         public static SubmeshDraw Create(int start, int count) =>
             new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One };
     }
 
-    /// <summary>Per-submesh preview material data pushed from the App's resolved <c>MaterialProfile</c> (M32/M34).</summary>
+    /// <summary>Per-submesh preview material data pushed from the App's resolved <c>MaterialProfile</c> (M32/M34).
+    /// <paramref name="Mirrored"/> is a per-mesh geometric flag (negative-determinant transform), not a material one.</summary>
     public readonly record struct SubmeshMaterial(
         bool UsesRim, bool UsesSpecular, Vector2 UvScale, Vector2 UvOffset, float UvRotationDegrees,
-        int AlphaMode = 0, bool DoubleSided = false, Vector4? Tint = null)
+        int AlphaMode = 0, bool DoubleSided = false, Vector4? Tint = null, bool Mirrored = false)
     {
-        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0, false, null);
+        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0, false, null, false);
     }
 
     private const string MeshVert = @"
@@ -102,7 +105,7 @@ void main() {
 
     // uMode: 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal · 5 Debug mask
     //        6 Debug emissive · 7 Debug matcap · 8 Debug UV checker · 9 Debug specular · 10 Debug vertex color
-    //        11 Debug lightmap
+    //        11 Debug lightmap · 12 Face orientation · 13 Two-sided highlight · 14 Mirrored highlight
     // M32: rim + specular are gated per-material (uUsesRim/uUsesSpec) — no fake specular by default.
     // The base UV is transformed per-material by uUvScaleOffset (xy scale, zw offset) + uUvRot (radians).
     // M33: when a mesh carries a baked lightmap (uHasLightmap), the atlas replaces the fake directional
@@ -140,6 +143,8 @@ uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
 uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
 uniform int uAlphaMode;        // M34: 0 opaque, 1 cutout (alpha-test discard), 2 transparent (alpha-blend)
 uniform vec4 uTint;            // M34: TintColor (rgba) for UNTEXTURED effect materials; 1,1,1,1 = none
+uniform int uTwoSided;         // M34: 1 when this face renders two-sided (flip backface normals for lighting)
+uniform int uMirrored;         // M34: 1 when the source mesh transform is mirrored (negative determinant)
 
 // League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
 vec3 matcapColour(vec3 worldN) {
@@ -159,6 +164,10 @@ vec2 xformUv(vec2 uv0) {
 }
 void main() {
     vec3 n = length(vN) > 0.001 ? normalize(vN) : vec3(0.0, 1.0, 0.0);
+    // M34 two-sided lighting: a back-facing fragment of a two-sided (cullEnable=false) material would shade
+    // with an away-pointing normal (dark/black). gl_FrontFacing tells us which side we're on; flip so the
+    // normal faces the viewer. Single-sided materials keep their normal (their backfaces are culled anyway).
+    if (uTwoSided == 1 && !gl_FrontFacing) n = -n;
     vec2 uv = xformUv(vUv);
     // Textured materials sample the diffuse untouched (uTint never affects them). Untextured effect/indicator
     // materials (FaeLights etc.) use their TintColor as the colour + alpha instead of the plain grey fallback.
@@ -191,6 +200,15 @@ void main() {
     }
     if (uMode == 11) {                                                       // debug: lightmap (dark blue if none)
         FragColor = uHasLightmap == 1 ? vec4(texture(uLightmap, vLmUv).rgb, 1.0) : vec4(0.03, 0.03, 0.08, 1.0); return;
+    }
+    if (uMode == 12) {                                                       // debug: face orientation (front green / back red)
+        FragColor = gl_FrontFacing ? vec4(0.15, 0.80, 0.30, 1.0) : vec4(0.90, 0.20, 0.20, 1.0); return;
+    }
+    if (uMode == 13) {                                                       // debug: two-sided (cullEnable=false) materials
+        FragColor = uTwoSided == 1 ? vec4(0.25, 0.65, 1.0, 1.0) : vec4(0.13, 0.14, 0.17, 1.0); return;
+    }
+    if (uMode == 14) {                                                       // debug: mirrored (negative-determinant) meshes
+        FragColor = uMirrored == 1 ? vec4(1.0, 0.55, 0.12, 1.0) : vec4(0.13, 0.14, 0.17, 1.0); return;
     }
 
     vec3 viewDir = normalize(uCamPos - vWorld);
@@ -285,6 +303,8 @@ void main() { FragColor = uColor; }";
         _mHasLightmap = gl.GetUniformLocation(_meshProgram, "uHasLightmap");
         _mAlphaMode = gl.GetUniformLocation(_meshProgram, "uAlphaMode");
         _mTint = gl.GetUniformLocation(_meshProgram, "uTint");
+        _mTwoSided = gl.GetUniformLocation(_meshProgram, "uTwoSided");
+        _mMirrored = gl.GetUniformLocation(_meshProgram, "uMirrored");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -467,6 +487,7 @@ void main() { FragColor = uColor; }";
         _submeshes[index].AlphaMode = mat.AlphaMode;
         _submeshes[index].DoubleSided = mat.DoubleSided;
         _submeshes[index].Tint = mat.Tint ?? Vector4.One;
+        _submeshes[index].Mirrored = mat.Mirrored;
     }
 
     /// <summary>Reset every submesh's preview material to identity UV + no rim/specular (M32).</summary>
@@ -481,6 +502,7 @@ void main() { FragColor = uColor; }";
             _submeshes[i].AlphaMode = 0;
             _submeshes[i].DoubleSided = false;
             _submeshes[i].Tint = Vector4.One;
+            _submeshes[i].Mirrored = false;
         }
     }
 
@@ -579,8 +601,10 @@ void main() { FragColor = uColor; }";
             // FrontFace=CW is the verified winding for THIS pipeline: the viewport mirrors world X
             // (CreateScale(-1,1,1)), which flips triangle orientation once, so front faces land clockwise in
             // window space. Confirmed by headless-rendering base_srx through the exact mirror+view/proj the app
-            // uses (CCW culls the ground away; CW keeps the full map). Cull the back faces.
-            if (cullBackfaces) { _gl.FrontFace(FrontFaceDirection.CW); _gl.CullFace(TriangleFace.Back); }
+            // uses (CCW culls the ground away; CW keeps the full map). Set it ALWAYS (not just when culling) so
+            // gl_FrontFacing is meaningful for two-sided lighting; cull the back faces.
+            _gl.FrontFace(FrontFaceDirection.CW);
+            _gl.CullFace(TriangleFace.Back);
             _gl.BindVertexArray(_vao);
 
             if (wireframe)
@@ -614,9 +638,14 @@ void main() { FragColor = uColor; }";
 
                 void DrawSubmesh(SubmeshDraw s)
                 {
-                    // M34 backface culling (opt-in): cull single-sided materials; double-sided ones show both faces.
-                    if (cullBackfaces && !s.DoubleSided) _gl.Enable(EnableCap.CullFace);
-                    else _gl.Disable(EnableCap.CullFace);
+                    // M34 render state: cull the back faces of single-sided (cullEnable=true) materials; render
+                    // two-sided (cullEnable=false) materials both sides. The master toggle can force everything
+                    // two-sided (cullBackfaces=false). A face renders two-sided exactly when it is NOT culled,
+                    // and then the shader flips its backface normals so they light correctly.
+                    bool cull = cullBackfaces && !s.DoubleSided;
+                    if (cull) _gl.Enable(EnableCap.CullFace); else _gl.Disable(EnableCap.CullFace);
+                    _gl.Uniform1(_mTwoSided, cull ? 0 : 1);
+                    _gl.Uniform1(_mMirrored, s.Mirrored ? 1 : 0);
                     // M32 per-material: UV transform + rim/specular gates (identity/off by default).
                     _gl.Uniform4(_mUvScaleOffset, s.UvScaleOffset.X, s.UvScaleOffset.Y, s.UvScaleOffset.Z, s.UvScaleOffset.W);
                     _gl.Uniform1(_mUvRot, s.UvRotationRadians);

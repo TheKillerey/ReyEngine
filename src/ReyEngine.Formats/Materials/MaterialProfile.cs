@@ -29,10 +29,21 @@ public sealed record MaterialProfile(
     string? UvOffsetSource,
     MaterialRenderMode RenderMode = MaterialRenderMode.Opaque,
     bool DoubleSided = false,
-    Vector4? Tint = null)   // M34: TintColor param (rgba); ONLY applied when the material has no diffuse texture
+    Vector4? Tint = null,   // M34: TintColor param (rgba); ONLY applied when the material has no diffuse texture
+    bool BlendEnabled = false)   // M34: pass.blendEnable (real .bin flag)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
+
+    // ---- M34 render state (only cullEnable + blendEnable exist in the .bin; the rest are derived) ----
+    /// <summary>Backface culling flag (true = single-sided/cull; the .bin default when cullEnable is absent).</summary>
+    public bool CullEnabled => !DoubleSided;
+    /// <summary>Two-sided lighting is needed exactly when the material is not culled.</summary>
+    public bool TwoSided => DoubleSided;
+    /// <summary>Depth is written for opaque/cutout, not for transparent (alpha-blended) surfaces.</summary>
+    public bool DepthWrite => RenderMode != MaterialRenderMode.Transparent;
+    /// <summary>Alpha-test/cutout (fixed shader threshold; no explicit cutoff value exists in the schema).</summary>
+    public bool AlphaCutout => RenderMode == MaterialRenderMode.Cutout;
 
     /// <summary>True when the UV transform actually changes the mapping (identity 1,1/0,0 is not flagged,
     /// even if a UV param is present but set to identity).</summary>
@@ -74,6 +85,27 @@ public sealed record MaterialProfile(
                 _ => "Opaque",
             };
             return DoubleSided ? m + ", double-sided" : m;
+        }
+    }
+
+    /// <summary>Full render-state summary for the inspector/material editor (M34).</summary>
+    public string RenderStateSummary
+    {
+        get
+        {
+            var parts = new List<string>
+            {
+                RenderMode switch
+                {
+                    MaterialRenderMode.Cutout => "cutout",
+                    MaterialRenderMode.Transparent => "transparent",
+                    _ => "opaque",
+                },
+                CullEnabled ? "cull backfaces" : "two-sided",
+            };
+            if (BlendEnabled) parts.Add("blend");
+            if (!DepthWrite) parts.Add("no depth-write");
+            return string.Join(" · ", parts);
         }
     }
 }
@@ -146,7 +178,7 @@ public static class MaterialProfiles
                 if (Norm(p.Name) == "tintcolor" && p.TryGetVector4(out var tv)) { tint = tv; break; }
 
         return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
-            renderMode, doubleSided, tint);
+            renderMode, doubleSided, tint, b.BlendEnable);
     }
 
     /// <summary>Derive the compositing mode from the material's technique/pass blend state + shader name (M34).

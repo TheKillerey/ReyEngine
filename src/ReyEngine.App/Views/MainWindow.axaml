@@ -232,10 +232,13 @@
                 <ComboBoxItem>Debug · Specular</ComboBoxItem>
                 <ComboBoxItem>Debug · Vertex Color</ComboBoxItem>
                 <ComboBoxItem>Debug · Lightmap</ComboBoxItem>
+                <ComboBoxItem>Debug · Face Orientation</ComboBoxItem>
+                <ComboBoxItem>Debug · Two-Sided</ComboBoxItem>
+                <ComboBoxItem>Debug · Mirrored</ComboBoxItem>
               </ComboBox>
               <ToggleButton Content="Wireframe" IsChecked="{Binding ShowWireframe}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Cull" IsChecked="{Binding CullBackfaces}" FontSize="11" Padding="8,3"
-                            ToolTip.Tip="Backface culling per material (respects each material's cullEnable; cullEnable=false stays double-sided)" />
+                            ToolTip.Tip="Respect each material's cullEnable (single-sided materials cull backfaces; cullEnable=false renders two-sided with flipped-normal lighting). Off = force everything two-sided." />
               <ToggleButton Content="Bones" IsChecked="{Binding ShowBones}" FontSize="11" Padding="8,3" />
               <ToggleButton Content="Bounds" IsChecked="{Binding ShowBounds}" FontSize="11" Padding="8,3" />
               <Button Content="Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" />
@@ -553,6 +556,19 @@
                                     <TextBlock Text="{Binding UvTransformText}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
                                     <TextBlock Text="{Binding UvSourceText}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="9" IsVisible="{Binding HasUvSource}" />
                                     <TextBlock Text="{Binding RenderModeLabel, StringFormat='Blend: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
+                                    <!-- M34 render state (read-only, from technique/pass) -->
+                                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" Margin="0,3,0,0">
+                                      <TextBlock Grid.Row="0" Grid.Column="0" Text="Cull Enabled" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CullEnabledText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
+                                      <TextBlock Grid.Row="1" Grid.Column="0" Text="Blend Enabled" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding BlendEnabledText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
+                                      <TextBlock Grid.Row="2" Grid.Column="0" Text="Depth Write" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DepthWriteText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
+                                      <TextBlock Grid.Row="3" Grid.Column="0" Text="Alpha Cutout" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AlphaCutoutText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
+                                      <TextBlock Grid.Row="4" Grid.Column="0" Text="Two-Sided Lighting" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding TwoSidedText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
+                                    </Grid>
                                   </StackPanel>
                                 </Border>
 

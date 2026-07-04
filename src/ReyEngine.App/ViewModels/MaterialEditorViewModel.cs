@@ -182,6 +182,13 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     /// <summary>M34: compositing mode from the material's technique blend state (Opaque/Cutout/Transparent).</summary>
     public string RenderModeLabel => Model.Profile.RenderModeLabel;
 
+    // ---- M34 render state (read-only; from the material's technique/pass) ----
+    public string CullEnabledText => Model.Profile.CullEnabled ? "Yes (cull backfaces)" : "No (two-sided)";
+    public string BlendEnabledText => Model.Profile.BlendEnabled ? "Yes" : "No";
+    public string DepthWriteText => Model.Profile.DepthWrite ? "Yes" : "No (transparent)";
+    public string AlphaCutoutText => Model.Profile.AlphaCutout ? "Yes (alpha-test)" : "No";
+    public string TwoSidedText => Model.Profile.TwoSided ? "Active" : "Off";
+
     /// <summary>Per-material UV transform display (scale/offset, and the source param name when known).</summary>
     public string UvTransformText
     {
