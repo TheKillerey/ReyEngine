@@ -265,16 +265,17 @@ void main() {
     // B = specular mask. A tiled water-wave normal (Flowing_Normal_Map, slot 2) is flow-advected in two
     // cross-faded phases and drives a sharp SPECULAR glint; a fresnel term tints deep(Inside) -> edge(Outside).
     if (uIsFlowmap == 1) {
-        // Flow_Map channels: R = flow, G = transparency (HIGH green = no water), B = specular mask.
-        // Missing-texture fallback: no flow (R 0.5), fully opaque (G 0), specular on (B 1).
-        vec4 fm = (uHasMask == 1) ? texture(uMask, uv) : vec4(0.5, 0.0, 1.0, 1.0);
-        // The G gradient is soft-painted + DXT-compressed, so the 'transparent' green plateaus around ~0.6
-        // rather than 1.0. A linear 1-g leaves a ~40% ghost sheet there; remap steeply so mid-green already
-        // reads fully transparent while the low-green river swirls stay solid water.
-        float opacity  = 1.0 - smoothstep(0.20, 0.55, fm.g);
-        float specMask = fm.b;   // B: specular mask
+        // Flow_Map channels (author-confirmed by splitting the real texture):
+        //   B = alpha mask: white stream lines = where the water IS; black = nothing drawn.
+        //   R = gradient along each stream: animation phase (light travels down the line) + reflection gate.
+        //   G = signed flow component centred on 0.5 (advects the wave normal).
+        // Missing-texture fallback: opaque (B 1), neutral flow (G 0.5), no phase gradient (R 0).
+        vec4 fm = (uHasMask == 1) ? texture(uMask, uv) : vec4(0.0, 0.5, 1.0, 1.0);
+        float waterMask = fm.b;
+        // Energy pulse travelling along the stream, driven by the R progress gradient.
+        float pulse = 0.8 + 0.3 * sin((fm.r * 4.0 - uTime * uFlowSpeed * 3.0) * 6.2831853);
         vec2 fuv = uv * uFlowTile;
-        vec2 flow = (uHasMask == 1) ? (vec2(fm.r) * 2.0 - 1.0) * uFlowStrength * vec2(1.0, 0.6) : vec2(0.0); // R: flow
+        vec2 flow = (fm.rg * 2.0 - 1.0) * uFlowStrength;
         float ph0 = fract(uTime * uFlowSpeed);
         float ph1 = fract(uTime * uFlowSpeed + 0.5);
         float bw = abs(ph0 - 0.5) * 2.0;                                  // ping-pong cross-fade weight
@@ -301,11 +302,11 @@ void main() {
         float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
         vec3 body = mix(uColorInside.rgb, uColorOutside.rgb, clamp(fres, 0.0, 1.0));
         float caustic = 0.5 + 0.5 * sin(wh * 1.6);
-        float spark = pow(ndh, 90.0) * 1.2 * specMask;
-        vec3 colw = body * (0.78 + 0.34 * caustic) + vec3(spark);
-        // Translucent: TranslucentControl scaled by the G opacity mask, so the water is see-through / cut to
-        // its actual shape where the flow map says there is no water. Sparkle reads a touch more solid.
-        float a = clamp((uWaterAlpha * (0.8 + 0.2 * fres) + spark * 0.4) * opacity, 0.0, 1.0);
+        float spark = pow(ndh, 90.0) * 1.2 * (0.3 + 0.7 * fm.r);   // reflection concentrated where R is bright
+        vec3 colw = body * (0.72 + 0.28 * caustic) * pulse + vec3(spark);
+        // The B mask cuts the water to its real stream shape (soft antialiased edges); TranslucentControl
+        // sets how solid the visible water is. Sparkle reads a touch more solid.
+        float a = clamp((uWaterAlpha * (0.8 + 0.2 * fres) + spark * 0.4) * waterMask, 0.0, 1.0);
         FragColor = vec4(colw, a);
         return;
     }

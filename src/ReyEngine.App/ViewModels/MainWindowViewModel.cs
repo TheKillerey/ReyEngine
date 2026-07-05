@@ -2191,16 +2191,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     flowGroups++;
                     if (flowGroups <= 3)   // M44 diagnostic: confirm detection + texture loads for the first few
                     {
-                        // G-channel histogram of the flow map (G = transparency mask) to calibrate the shader's
-                        // opacity remap against the real texture values.
+                        // Channel histogram of the flow map (B = water mask, R = phase, G = flow) so the
+                        // shader's channel mapping can be sanity-checked against the real texture values.
                         string gstat = "";
                         if (flowMaps[i] is { } fmImg && fmImg.Rgba.Length >= 4)
                         {
-                            long cnt = 0, lo = 0, hi = 0; double sum = 0;
+                            long cnt = 0, bHi = 0; double rSum = 0, gSum = 0, bSum = 0;
                             var px = fmImg.Rgba;
-                            for (int o = 1; o < px.Length; o += 64)   // every 16th pixel, G channel
-                            { double v = px[o] / 255.0; sum += v; cnt++; if (v < 0.20) lo++; else if (v > 0.55) hi++; }
-                            if (cnt > 0) gstat = $" G[mean={sum / cnt:0.00} lo{lo * 100 / cnt}% hi{hi * 100 / cnt}%]";
+                            for (int o = 0; o + 2 < px.Length; o += 64)   // every 16th pixel
+                            {
+                                rSum += px[o]; gSum += px[o + 1]; bSum += px[o + 2]; cnt++;
+                                if (px[o + 2] > 128) bHi++;
+                            }
+                            if (cnt > 0) gstat = $" R={rSum / cnt / 255.0:0.00} G={gSum / cnt / 255.0:0.00} " +
+                                                 $"B={bSum / cnt / 255.0:0.00} (water {bHi * 100 / cnt}%)";
                         }
                         _log.Info("Water", $"flowmap '{matName}': flowMap={(flowMaps[i] is not null ? "OK" : "miss")} " +
                                            $"normal={(flowNormals[i] is not null ? "OK" : "miss")} " +
