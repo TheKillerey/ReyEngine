@@ -80,7 +80,12 @@ public static class TolerantBinReader
             objects.Add(new BinTreeObject(pathHash, classHashes[i], props.Values));
         }
 
-        return new BinTree(objects, dependencies);
+        // The BinTree ctor keys objects by path-hash (ToDictionary) — so duplicate object hashes (also seen in
+        // old-tooling / hand-edited bins, e.g. some bloom.materials.bin copies) would throw. De-dupe here too,
+        // last object wins, so those bins load instead of failing outright.
+        var byHash = new Dictionary<uint, BinTreeObject>(objects.Count);
+        foreach (var o in objects) byHash[o.PathHash] = o;
+        return new BinTree(byHash.Values, dependencies);
     }
 }
 

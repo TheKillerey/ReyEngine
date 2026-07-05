@@ -138,6 +138,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
     private bool _particlesDirty;
     private bool _propMeshesDirty;   // M41
+    private float _markerSize = 40f; // world-size for placement markers, fixed once the mesh loads
     private Vector3? _pendingFocus;
 
     // M36: live VFX particle playback (one simulator per played placement)
@@ -359,6 +360,7 @@ public sealed class ViewportControl : OpenGlControlBase
             {
                 var subs = m.SubMeshes.Select(s => (s.StartIndex, s.IndexCount)).ToList();
                 _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax, subs, m.Colors, m.LightmapUvs);
+                _markerSize = Math.Clamp(m.Radius * 0.004f, 4f, 90f); // fixed from the mesh so toggling Show doesn't resize markers
                 _needFrame = true;
                 _texturesDirty = true;
                 _skinDirty = true;
@@ -415,10 +417,9 @@ public sealed class ViewportControl : OpenGlControlBase
         if (_particlesDirty)
         {
             var pts = ParticleMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>();
-            float size = Mesh is { } pm ? Math.Clamp(pm.Radius * 0.004f, 4f, 90f) : 20f;
-            _meshRenderer.SetParticleMarkers(pts, SelectedParticlePosition, size);
-            _meshRenderer.SetPropMarkers(PropMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), size);
-            _meshRenderer.SetProbeMarkers(ProbeMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), size * 1.4f);
+            _meshRenderer.SetParticleMarkers(pts, SelectedParticlePosition, _markerSize);
+            _meshRenderer.SetPropMarkers(PropMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize);
+            _meshRenderer.SetProbeMarkers(ProbeMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.4f);
             _particlesDirty = false;
         }
         if (_particlePlaybackDirty) { RebuildParticleSim(); _particlePlaybackDirty = false; }
