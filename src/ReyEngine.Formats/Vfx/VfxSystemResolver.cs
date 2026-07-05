@@ -58,6 +58,8 @@ public static class VfxSystemResolver
     private static readonly uint F_simpleMesh    = HashAlgorithms.Fnv1a("mSimpleMeshName");
     private static readonly uint F_meshName      = HashAlgorithms.Fnv1a("mMeshName");   // skinned (.skn) mesh primitive (butterflies)
     private static readonly uint F_birthUvScroll = HashAlgorithms.Fnv1a("birthUvScrollRate");
+    private static readonly uint F_meshSkeleton  = 0x90595a15; // VfxMeshDefinitionData skeleton (.skl) field (observed)
+    private static readonly uint F_meshAnim      = HashAlgorithms.Fnv1a("mAnimationName");
 
     // primitive class hashes we treat as "mesh" (billboarded as fallback)
     private static readonly uint PrimMesh = HashAlgorithms.Fnv1a("VfxPrimitiveMesh");
@@ -109,10 +111,15 @@ public static class VfxSystemResolver
         var birthColor = ReadCurve4(p, F_birthColor) ?? VfxCurve4.Const(Vector4.One);
 
         bool isMesh = p.TryGetValue(F_primitive, out var prim) && prim is BinTreeStruct ps && ps.ClassHash == PrimMesh;
-        // M47: the mesh primitive carries its .scb/.sco path (VfxMeshDefinitionData.mSimpleMeshName)
-        string? meshPath = null;
+        // M47: the mesh primitive carries its .scb/.sco path (VfxMeshDefinitionData.mSimpleMeshName) or,
+        // for skinned primitives (butterflies), mMeshName (.skn) + skeleton (.skl) + mAnimationName (.anm).
+        string? meshPath = null, meshSkl = null, meshAnm = null;
         if (isMesh && prim is BinTreeStruct ps2 && Get(ps2.Properties, F_meshDef) is BinTreeStruct md)
+        {
             meshPath = GetString(md.Properties, F_simpleMesh) ?? GetString(md.Properties, F_meshName);
+            meshSkl = GetString(md.Properties, F_meshSkeleton);
+            meshAnm = GetString(md.Properties, F_meshAnim);
+        }
 
         return new VfxEmitterDefinition(
             Name: GetString(p, F_emitterName) ?? "(emitter)",
@@ -139,7 +146,9 @@ public static class VfxSystemResolver
             IsMeshPrimitive: isMesh,
             MeshPath: meshPath,
             UvScrollRate: (ReadCurve3(p, F_birthUvScroll) ?? VfxCurve3.Const(Vector3.Zero)).Constant is var uvs
-                ? new Vector2(uvs.X, uvs.Y) : Vector2.Zero);
+                ? new Vector2(uvs.X, uvs.Y) : Vector2.Zero,
+            MeshSkeletonPath: meshSkl,
+            MeshAnimationPath: meshAnm);
     }
 
     // ---- Value* curve readers (constantValue + optional dynamics{times,values}) ----

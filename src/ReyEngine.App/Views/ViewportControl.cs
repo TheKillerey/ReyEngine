@@ -156,6 +156,7 @@ public sealed class ViewportControl : OpenGlControlBase
     // M36: live VFX particle playback (one simulator per played placement)
     private VfxParticleRenderer? _particleRenderer;
     private readonly List<VfxParticleSimulator> _particleSims = new();
+    private readonly List<(VfxParticleSimulator.EmitterState Es, VfxMeshAnimation Anim)> _animatedMeshEmitters = new(); // M48
     private bool _particlePlaybackDirty;
     private uint _softDotTex;
     private readonly System.Diagnostics.Stopwatch _particleClock = new();
@@ -489,6 +490,14 @@ public sealed class ViewportControl : OpenGlControlBase
             float dt = _particleClock.IsRunning ? (float)_particleClock.Elapsed.TotalSeconds : 1f / 60f;
             _particleClock.Restart();
             dt = ParticlePaused ? 0f : dt * (float)ParticleSpeed;   // M46: editor speed/pause controls
+            // M48 wing flap: CPU-skin animated mesh primitives (butterflies) at the looping emitter age
+            // and push the new positions before drawing. Tiny meshes (~100 verts) — negligible cost.
+            foreach (var (es, anim) in _animatedMeshEmitters)
+            {
+                float t = anim.Clip.Duration > 1e-3f ? es.EmitterAge % anim.Clip.Duration : 0f;
+                var frame = SkinnedMeshAnimator.Skin(anim.Mesh, anim.Skeleton, anim.Clip, t);
+                prend.UpdateEmitterMeshPositions(es, frame.Positions);
+            }
             foreach (var psim in _particleSims)
             {
                 psim.Update(dt);
@@ -598,6 +607,7 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         if (_particleRenderer is null) return;
         _particleSims.Clear();
+        _animatedMeshEmitters.Clear();   // M48: rebuilt with the sims
 
         var pb = ParticlePlayback;
         if (pb is null || pb.Items.Count == 0) { _particleClock.Stop(); return; }
@@ -629,8 +639,10 @@ public sealed class ViewportControl : OpenGlControlBase
                 var mesh = item.EmitterMeshes is { } ms && idx >= 0 && idx < ms.Count ? ms[idx] : null;
                 if (mesh is not null)
                 {
-                    _particleRenderer.UploadEmitterMesh(es, mesh.Positions, mesh.Uvs);
+                    _particleRenderer.UploadEmitterMesh(es, mesh.Positions, mesh.Uvs,
+                        mesh.Animation is not null ? mesh.Indices : null);   // skn = indexed; scb = triangle soup
                     if (img is null) es.Texture = 0; // white fallback inside the mesh path, not the soft dot
+                    if (mesh.Animation is { } anim) _animatedMeshEmitters.Add((es, anim));   // M48 wing flap
                 }
             }
             _particleSims.Add(sim);

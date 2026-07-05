@@ -157,7 +157,7 @@ public sealed class VfxParticleRenderer
         if (!_ready) return;
         foreach (var t in _ownedTextures) _gl.DeleteTexture(t);
         _ownedTextures.Clear();
-        foreach (var (vao, vbo) in _ownedMeshes) { _gl.DeleteVertexArray(vao); _gl.DeleteBuffer(vbo); }
+        foreach (var (vao, vbo, ebo) in _ownedMeshes) { _gl.DeleteVertexArray(vao); _gl.DeleteBuffer(vbo); if (ebo != 0) _gl.DeleteBuffer(ebo); }
         _ownedMeshes.Clear();
         _whiteTex = 0; // owned-texture list held it; EnsureMeshProgram re-creates on demand
     }
@@ -195,8 +195,9 @@ public sealed class VfxParticleRenderer
         if (_whiteTex == 0) _whiteTex = UploadTexture(new byte[] { 255, 255, 255, 255 }, 1, 1);
     }
 
-    /// <summary>Upload an emitter's static-object mesh (triangle soup: pos3 + uv2 per vertex).</summary>
-    public unsafe void UploadEmitterMesh(VfxParticleSimulator.EmitterState es, float[] positions, float[] uvs)
+    /// <summary>Upload an emitter's mesh (pos3 + uv2 per vertex). Pass <paramref name="indices"/> for
+    /// indexed (.skn) meshes — drawn with DrawElements; triangle-soup .scb meshes draw sequentially.</summary>
+    public unsafe void UploadEmitterMesh(VfxParticleSimulator.EmitterState es, float[] positions, float[] uvs, uint[]? indices = null)
     {
         if (!_ready) return;
         EnsureMeshProgram();
@@ -215,16 +216,44 @@ public sealed class VfxParticleRenderer
         _gl.BindVertexArray(vao);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
         fixed (float* p = inter)
-            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(inter.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(inter.Length * sizeof(float)), p, BufferUsageARB.DynamicDraw);
         _gl.EnableVertexAttribArray(0);
         _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 5 * sizeof(float), (void*)0);
         _gl.EnableVertexAttribArray(1);
         _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+        uint ebo = 0;
+        if (indices is { Length: > 0 })
+        {
+            ebo = _gl.GenBuffer();
+            _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, ebo);
+            fixed (uint* ip = indices)
+                _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), ip, BufferUsageARB.StaticDraw);
+        }
         _gl.BindVertexArray(0);
-        es.MeshVao = vao; es.MeshVbo = vbo; es.MeshVertexCount = verts;
-        _ownedMeshes.Add((vao, vbo));
+        es.MeshVao = vao; es.MeshVbo = vbo; es.MeshEbo = ebo;
+        es.MeshVertexCount = verts;
+        es.MeshIndexCount = indices?.Length ?? 0;
+        es.MeshInterleaved = inter;
+        _ownedMeshes.Add((vao, vbo, ebo));
     }
-    private readonly List<(uint Vao, uint Vbo)> _ownedMeshes = new();
+    private readonly List<(uint Vao, uint Vbo, uint Ebo)> _ownedMeshes = new();
+
+    /// <summary>M48: replace the mesh's positions (CPU-skinned wing-flap frame); UVs are kept.</summary>
+    public unsafe void UpdateEmitterMeshPositions(VfxParticleSimulator.EmitterState es, float[] positions)
+    {
+        if (!_ready || es.MeshVbo == 0 || es.MeshInterleaved is not { } inter) return;
+        int verts = Math.Min(es.MeshVertexCount, positions.Length / 3);
+        for (int i = 0; i < verts; i++)
+        {
+            inter[i * 5 + 0] = positions[i * 3 + 0];
+            inter[i * 5 + 1] = positions[i * 3 + 1];
+            inter[i * 5 + 2] = positions[i * 3 + 2];
+        }
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, es.MeshVbo);
+        fixed (float* p = inter)
+            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(verts * 5 * sizeof(float)), p);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+    }
 
     /// <summary>Draw a mesh-primitive emitter: one textured draw per live particle (counts are small).</summary>
     private void RenderMeshEmitter(VfxParticleSimulator.EmitterState es, Matrix4x4 viewProj)
@@ -251,7 +280,11 @@ public sealed class VfxParticleRenderer
             _gl.Uniform1(_muScale, sc);
             _gl.Uniform1(_muRot, es.Instances[o + 9]);
             _gl.Uniform4(_muColor, es.Instances[o + 5], es.Instances[o + 6], es.Instances[o + 7], es.Instances[o + 8]);
-            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)es.MeshVertexCount);
+            unsafe
+            {
+                if (es.MeshIndexCount > 0) _gl.DrawElements(PrimitiveType.Triangles, (uint)es.MeshIndexCount, DrawElementsType.UnsignedInt, (void*)0);
+                else _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)es.MeshVertexCount);
+            }
         }
         _gl.UseProgram(_program);   // back to the billboard program for the next emitter
         _gl.BindVertexArray(_vao);

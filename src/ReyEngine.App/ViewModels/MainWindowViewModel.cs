@@ -295,7 +295,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     try
                     {
                         var m = SkinnedMeshDecoder.Decode(bytes);
-                        mesh = new Formats.Meshes.StaticMeshData(m.Positions, m.Uvs, m.Indices, Path.GetFileName(e.MeshPath));
+                        // M48: wing-flap — load the primitive's skeleton + idle animation so the viewport
+                        // can CPU-skin the mesh per frame (falls back to bind pose when either is missing).
+                        Formats.Meshes.VfxMeshAnimation? anim = null;
+                        if (m.CanSkin && e.MeshSkeletonPath is { } sklP && e.MeshAnimationPath is { } anmP)
+                        {
+                            try
+                            {
+                                var sklB = ReadAssetByPath(sklP);
+                                var anmB = ReadAssetByPath(anmP);
+                                if (sklB is not null && anmB is not null)
+                                    anim = new Formats.Meshes.VfxMeshAnimation(m,
+                                        SkeletonDecoder.Decode(sklB),
+                                        AnimationDecoder.Decode(anmB, Path.GetFileName(anmP)));
+                            }
+                            catch { /* bind pose fallback */ }
+                        }
+                        mesh = new Formats.Meshes.StaticMeshData(m.Positions, m.Uvs, m.Indices, Path.GetFileName(e.MeshPath))
+                        { Animation = anim };
                     }
                     catch { /* keep billboard fallback */ }
                 }

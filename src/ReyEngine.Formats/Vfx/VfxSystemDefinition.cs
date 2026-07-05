@@ -38,7 +38,9 @@ public sealed record VfxEmitterDefinition(
     bool RandomStartFrame,
     bool IsMeshPrimitive,           // primitive is a mesh (billboarded only when the mesh can't load)
     string? MeshPath = null,        // M47: VfxPrimitiveMesh -> VfxMeshDefinitionData.mSimpleMeshName (.scb/.sco)
-    Vector2 UvScrollRate = default) // M47c: birthUvScrollRate — mesh particles FLOW by scrolling UVs (waterfalls)
+    Vector2 UvScrollRate = default, // M47c: birthUvScrollRate — mesh particles FLOW by scrolling UVs (waterfalls)
+    string? MeshSkeletonPath = null, // M48: skinned mesh primitive (.skl) — butterflies
+    string? MeshAnimationPath = null) // M48: idle animation (.anm) — the wing flap
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) || !string.IsNullOrEmpty(MeshPath));

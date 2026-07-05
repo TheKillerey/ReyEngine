@@ -29,8 +29,11 @@ public sealed class VfxParticleSimulator
 
         // M47: mesh-primitive emitters — GL handles set by VfxParticleRenderer.UploadEmitterMesh
         // (0 = billboard). The renderer draws the .scb/.sco geometry per particle instead of a quad.
-        public uint MeshVao, MeshVbo;
-        public int MeshVertexCount;
+        public uint MeshVao, MeshVbo, MeshEbo;
+        public int MeshVertexCount, MeshIndexCount;
+        public float[]? MeshInterleaved;      // cached pos3+uv2 stream, re-skinned per frame (M48)
+        /// <summary>Emitter age in seconds — drives UV scroll + wing-flap animation time.</summary>
+        public float EmitterAge => Age;
     }
 
     internal struct Particle

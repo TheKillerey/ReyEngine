@@ -2,11 +2,20 @@ using LeagueToolkit.Core.Mesh;
 
 namespace ReyEngine.Formats.Meshes;
 
-/// <summary>Decoded static object (.scb/.sco) as a flat triangle soup for particle-mesh rendering (M47).</summary>
+/// <summary>Decoded static object (.scb/.sco) as a flat triangle soup for particle-mesh rendering (M47).
+/// Skinned primitives (.skn) attach an <see cref="Animation"/> payload so the viewport can CPU-skin the
+/// wing-flap idle per frame (M48); their Positions/Uvs/Indices are the indexed bind-pose mesh.</summary>
 public sealed record StaticMeshData(float[] Positions, float[] Uvs, uint[] Indices, string Name)
 {
     public int TriangleCount => Indices.Length / 3;
+    public VfxMeshAnimation? Animation { get; init; }
 }
+
+/// <summary>M48: skinning payload for an animated mesh primitive (butterflies/dragonflies).</summary>
+public sealed record VfxMeshAnimation(
+    MeshAsset Mesh,
+    ReyEngine.Formats.Skeletons.SkeletonAsset Skeleton,
+    ReyEngine.Formats.Animation.AnimationClip Clip);
 
 /// <summary>M47: decodes League .scb (binary) / .sco (ascii) static objects via LeagueToolkit's
 /// <see cref="StaticMesh"/> reader. Faces carry their own UVs, so vertices are un-shared into a
