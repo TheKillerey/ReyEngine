@@ -101,19 +101,36 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
         CanGoUp = false;
     }
 
+    /// <summary>Cap on flattened search results so a broad filter over a huge tree can't stall the UI.</summary>
+    private const int SearchCap = 4000;
+    /// <summary>True when a broad filter matched more files than <see cref="SearchCap"/> (results truncated).</summary>
+    [ObservableProperty] private bool _searchTruncated;
+
     public void NavigateTo(AssetNodeViewModel? folder)
     {
         CurrentFolder = folder;
         var source = folder?.Children ?? (IEnumerable<AssetNodeViewModel>)FolderRoots;
-
         var kinds = KindsFor(TypeFilter);
+        bool searching = !string.IsNullOrWhiteSpace(Filter) || kinds is not null;
+
         Items.Clear();
-        foreach (var c in source)
+        SearchTruncated = false;
+        if (searching)
         {
-            if (!string.IsNullOrWhiteSpace(Filter) && !c.Name.Contains(Filter, StringComparison.OrdinalIgnoreCase)) continue;
-            // the type filter applies to files only — folders stay visible so you can still navigate.
-            if (kinds is not null && !c.IsFolder && !kinds.Contains(c.Kind)) continue;
-            Items.Add(c);
+            // Filter/type search recurses the whole subtree and shows matching FILES flat (search-results
+            // view) — otherwise a filter only ever sees the current folder's direct children.
+            foreach (var f in EnumerateFiles(source))
+            {
+                if (!string.IsNullOrWhiteSpace(Filter) && !f.Name.Contains(Filter, StringComparison.OrdinalIgnoreCase)) continue;
+                if (kinds is not null && !kinds.Contains(f.Kind)) continue;
+                if (Items.Count >= SearchCap) { SearchTruncated = true; break; }
+                Items.Add(f);
+            }
+        }
+        else
+        {
+            // Unfiltered: normal folder view — subfolders + files at this level.
+            foreach (var c in source) Items.Add(c);
         }
         ItemCount = Items.Count;
 
@@ -125,6 +142,19 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
         // Lazily load thumbnails only for what's now on screen.
         if (RequestThumbnails is { } req)
             req(Items.Where(i => i.WantsThumbnail && !i.HasThumbnail).ToList());
+    }
+
+    /// <summary>All non-folder descendants of the given nodes, depth-first.</summary>
+    private static IEnumerable<AssetNodeViewModel> EnumerateFiles(IEnumerable<AssetNodeViewModel> nodes)
+    {
+        foreach (var n in nodes)
+        {
+            if (n.IsFolder)
+            {
+                foreach (var f in EnumerateFiles(n.Children)) yield return f;
+            }
+            else yield return n;
+        }
     }
 
     [RelayCommand]

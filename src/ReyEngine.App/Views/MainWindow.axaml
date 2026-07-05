@@ -381,8 +381,12 @@
                   </StackPanel>
                 </ScrollViewer>
               </Border>
-              <TextBlock Grid.Column="3" Text="{Binding ContentBrowser.ItemCount, StringFormat='{}{0} items'}"
-                         VerticalAlignment="Center" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" Margin="6,0,2,0" />
+              <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="3" VerticalAlignment="Center" Margin="6,0,2,0">
+                <TextBlock Text="{Binding ContentBrowser.ItemCount, StringFormat='{}{0} items'}"
+                           VerticalAlignment="Center" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBlock Text="(capped)" VerticalAlignment="Center" FontSize="10" Foreground="{DynamicResource ReyWarningBrush}"
+                           IsVisible="{Binding ContentBrowser.SearchTruncated}" ToolTip.Tip="Too many matches — showing the first 4000. Narrow the search or filter." />
+              </StackPanel>
               <ComboBox Grid.Column="4" ItemsSource="{Binding ContentBrowser.TypeFilters}" SelectedItem="{Binding ContentBrowser.TypeFilter}"
                         FontSize="11" MinWidth="98" Margin="2,4" ToolTip.Tip="Filter by asset type" />
               <ToggleButton Grid.Column="5" Classes="vp" Content="☰" FontSize="12" Padding="8,3" Margin="2,4"
