@@ -57,6 +57,7 @@ public static class VfxSystemResolver
     private static readonly uint F_meshDef       = 0x0d89732d; // VfxPrimitiveMesh's VfxMeshDefinitionData field (observed)
     private static readonly uint F_simpleMesh    = HashAlgorithms.Fnv1a("mSimpleMeshName");
     private static readonly uint F_meshName      = HashAlgorithms.Fnv1a("mMeshName");   // skinned (.skn) mesh primitive (butterflies)
+    private static readonly uint F_birthUvScroll = HashAlgorithms.Fnv1a("birthUvScrollRate");
 
     // primitive class hashes we treat as "mesh" (billboarded as fallback)
     private static readonly uint PrimMesh = HashAlgorithms.Fnv1a("VfxPrimitiveMesh");
@@ -136,7 +137,9 @@ public static class VfxSystemResolver
             NumFrames: GetU16(p, F_numFrames) ?? 1,
             RandomStartFrame: GetBool(p, F_randomStart),
             IsMeshPrimitive: isMesh,
-            MeshPath: meshPath);
+            MeshPath: meshPath,
+            UvScrollRate: (ReadCurve3(p, F_birthUvScroll) ?? VfxCurve3.Const(Vector3.Zero)).Constant is var uvs
+                ? new Vector2(uvs.X, uvs.Y) : Vector2.Zero);
     }
 
     // ---- Value* curve readers (constantValue + optional dynamics{times,values}) ----

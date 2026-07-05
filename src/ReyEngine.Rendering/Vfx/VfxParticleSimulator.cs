@@ -153,9 +153,15 @@ public sealed class VfxParticleSimulator
         float sizeRef = MathF.Max(MathF.Abs(birthScale.X), MathF.Abs(birthScale.Y));
         bool hasVelProb = d.BirthVelocity is { } bv && bv.HasProb;
         float speed = vel.Length();
-        if (!hasVelProb && speed > 1e-3f) vel += RandUnit() * speed * 0.30f;   // ~17 degree cone + magnitude spread
-        var posJitter = RandUnit() * sizeRef * 0.35f;
-        if (d.ParticleLifetime.Prob is null) life *= 0.8f + 0.4f * (float)_rng.NextDouble();
+        // M47c: mesh primitives (waterfalls...) are placed EXACTLY and animate by UV scroll — no jitter,
+        // no random billboard spin (the real shader keeps the authored mesh orientation).
+        Vector3 posJitter = Vector3.Zero;
+        if (!d.IsMeshPrimitive)
+        {
+            if (!hasVelProb && speed > 1e-3f) vel += RandUnit() * speed * 0.30f;   // ~17 degree cone + magnitude spread
+            posJitter = RandUnit() * sizeRef * 0.35f;
+            if (d.ParticleLifetime.Prob is null) life *= 0.8f + 0.4f * (float)_rng.NextDouble();
+        }
 
         s.Particles.Add(new Particle
         {
@@ -165,7 +171,7 @@ public sealed class VfxParticleSimulator
             Life = life,
             BirthSize = new Vector2(MathF.Abs(birthScale.X), MathF.Abs(birthScale.Y == 0 ? birthScale.X : birthScale.Y)),
             BirthColor = d.BirthColor.Sample(0f),
-            Rot = (float)(_rng.NextDouble() * MathF.Tau),
+            Rot = d.IsMeshPrimitive ? 0f : (float)(_rng.NextDouble() * MathF.Tau),
             RotVel = rotVel.Z * (MathF.PI / 180f),          // degrees/s -> rad/s
             StartFrame = d.RandomStartFrame && d.NumFrames > 1 ? _rng.Next(d.NumFrames) : 0,
         });

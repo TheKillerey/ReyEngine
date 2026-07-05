@@ -74,8 +74,9 @@ public sealed class VfxParticleRenderer
         _gl.GenerateMipmap(TextureTarget.Texture2D);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        // Repeat so mesh particles can scroll their UVs (waterfall flow); billboard/flipbook UVs stay in [0,1].
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _ownedTextures.Add(tex);
         return tex;
@@ -175,7 +176,7 @@ public sealed class VfxParticleRenderer
 
     // ---- M47 mesh-primitive particles (.scb/.sco): per-particle uniforms, simple textured draw ----
     private uint _meshProgram;
-    private int _muViewProj, _muWorldPos, _muScale, _muRot, _muColor, _muTex;
+    private int _muViewProj, _muWorldPos, _muScale, _muRot, _muColor, _muTex, _muUvOffset;
     private uint _whiteTex;
 
     private unsafe void EnsureMeshProgram()
@@ -189,6 +190,7 @@ public sealed class VfxParticleRenderer
             _muRot = _gl.GetUniformLocation(_meshProgram, "uRot");
             _muColor = _gl.GetUniformLocation(_meshProgram, "uColor");
             _muTex = _gl.GetUniformLocation(_meshProgram, "uTex");
+            _muUvOffset = _gl.GetUniformLocation(_meshProgram, "uUvOffset");
         }
         if (_whiteTex == 0) _whiteTex = UploadTexture(new byte[] { 255, 255, 255, 255 }, 1, 1);
     }
@@ -236,6 +238,10 @@ public sealed class VfxParticleRenderer
         _gl.BindTexture(TextureTarget.Texture2D, es.Texture != 0 ? es.Texture : _whiteTex);
         if (IsAdditive(es.Def.BlendMode)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
         else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        // M47c: mesh particles animate by SCROLLING their texture along the mesh UVs (waterfall flow) —
+        // matches Riot's particle-system shader (Scrolling_Rate cbuffer + birthUvScrollRate data).
+        var scroll = es.Def.UvScrollRate * es.Age;
+        _gl.Uniform2(_muUvOffset, scroll.X, scroll.Y);
         for (int i = 0; i < es.InstanceCount; i++)
         {
             int o = i * Stride;   // [cx,cy,cz, sx,sy, r,g,b,a, rot, frame]
@@ -258,12 +264,13 @@ uniform mat4 uViewProj;
 uniform vec3 uWorldPos;
 uniform float uScale;
 uniform float uRot;
+uniform vec2 uUvOffset;
 out vec2 vUv;
 void main(){
     float s = sin(uRot); float c = cos(uRot);
     vec3 p = vec3(aPos.x * c - aPos.z * s, aPos.y, aPos.x * s + aPos.z * c) * uScale + uWorldPos;
     gl_Position = uViewProj * vec4(p, 1.0);
-    vUv = aUv;
+    vUv = aUv + uUvOffset;
 }";
 
     private const string MeshFrag = @"
