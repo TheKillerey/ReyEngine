@@ -380,6 +380,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
     [ObservableProperty] private bool _hasFlowmapWater; // M44: current map has flowmap-river water → viewport animates it
+    public ParticleEditorViewModel ParticleEditor { get; } = new(); // M46 Particle Editor
+    [ObservableProperty] private bool _isParticleEditorActive;      // M46: overlay visible for the active tab
     [ObservableProperty] private double _currentLightmapScale = 1.0; // M45: MapSunProperties.lightMapColorScale
     private Formats.MapGeo.MapSunProperties? _currentSunProps; // M45: full sun/atmosphere component (future use)
     [ObservableProperty] private AnimationClip? _currentAnimation;
@@ -454,6 +456,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.ReplaceTextureAsset = ReplaceTextureForSlot;
         MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
         MaterialEditor.SaveOverride = SaveMaterialOverride;
+
+        // M46 Particle Editor wiring
+        ParticleEditor.ResolveTextures = ResolveSystemTextures;
+        ParticleEditor.Info = m => _log.Info("Particle", m);
+        ParticleEditor.Error = m => _log.Error("Particle", m);
+        ParticleEditor.MarkDocumentDirty = () =>
+        {
+            var d = Documents.FirstOrDefault(x => x.Kind == DocumentKind.Particle && ParticleEditor.Entry is { } pe && x.Key == pe.PathHash);
+            if (d is not null) d.IsDirty = true;
+        };
+        ParticleEditor.SaveOverrideAsync = SaveParticleOverride;
 
         ContentBrowser.FileSelected = OpenAssetDocument;
         ContentBrowser.ExtractMaterials = ExtractMaterialsForNode;
@@ -535,10 +548,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var doc = Documents.FirstOrDefault(d => d.Key == entry.PathHash);
         if (doc is null)
         {
+            var kind = EditorDocument.KindOf(entry.Type);
+            // M46: dedicated particle bins (path mentions particles) open straight in the Particle Editor.
+            // Other VFX-bearing bins (skin bins, map materials.bin) keep their normal editor; use
+            // Tools -> Open in Particle Editor for those.
+            if (kind == DocumentKind.Bin && entry.IsResolved && entry.Path.Contains("particles", StringComparison.OrdinalIgnoreCase))
+                kind = DocumentKind.Particle;
             doc = new EditorDocument
             {
                 Title = entry.DisplayName,
-                Kind = EditorDocument.KindOf(entry.Type),
+                Kind = kind,
                 Key = entry.PathHash,
                 Entry = entry,
             };
@@ -558,6 +577,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ActiveDocument = doc;
 
         var node = doc.Entry is { } e && _nodesByHash.TryGetValue(e.PathHash, out var n) ? n : null;
+
+        // M46: particle documents show the Particle Editor overlay instead of the standard viewport;
+        // the outgoing map scene stays captured (tab restores it untouched).
+        if (doc.Kind == DocumentKind.Particle)
+        {
+            LoadParticleDocument(doc);
+            return;
+        }
+        IsParticleEditorActive = false;
+
         if (doc.Scene is MapScene scene)
         {
             _restoringScene = true;
@@ -568,6 +597,86 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             SelectedNode = node; // triggers the normal load path (OnSelectedNodeChanged)
         }
+    }
+
+    /// <summary>M46: (re)load a particle .bin into the Particle Editor and show the overlay.</summary>
+    private void LoadParticleDocument(EditorDocument doc)
+    {
+        if (doc.Entry is not { } entry) return;
+        try
+        {
+            var bytes = ReadAsset(entry.PathHash);
+            bool editable = !entry.ReadOnly;
+            if (!ParticleEditor.Load(entry, bytes, editable))
+            {
+                _log.Warn("Particle", $"{entry.DisplayName} contains no VFX systems.");
+                return;
+            }
+            IsParticleEditorActive = true;
+            _log.Info("Particle", $"Particle Editor: {entry.DisplayName} — {ParticleEditor.Systems.Count} system(s){(editable ? "" : " (read-only Riot reference)")}.");
+        }
+        catch (Exception ex) { _log.Error("Particle", ex.Message); }
+    }
+
+    /// <summary>M46 Tools menu: open the ACTIVE document's .bin in the Particle Editor (for skin bins /
+    /// map materials.bin whose default tab is the material/bin editor).</summary>
+    [RelayCommand]
+    private void OpenActiveInParticleEditor()
+    {
+        if (ActiveDocument?.Entry is not { } entry) { _log.Info("Particle", "Open a .bin document first."); return; }
+        var doc = Documents.FirstOrDefault(d => d.Kind == DocumentKind.Particle && d.Key == entry.PathHash);
+        if (doc is null)
+        {
+            // probe before creating a tab so non-VFX bins don't produce an empty editor
+            try
+            {
+                if (Formats.Particles.ParticleDocument.Parse(ReadAsset(entry.PathHash)) is null)
+                { _log.Warn("Particle", $"{entry.DisplayName} contains no VFX systems."); return; }
+            }
+            catch (Exception ex) { _log.Error("Particle", ex.Message); return; }
+            doc = new EditorDocument
+            {
+                Title = entry.DisplayName + " (VFX)",
+                Kind = DocumentKind.Particle,
+                Key = entry.PathHash,
+                Entry = entry,
+            };
+            Documents.Add(doc);
+        }
+        ActivateDocument(doc);
+    }
+
+    /// <summary>M46: write the edited particle .bin to the project override (mirrors SaveMaterialOverride).</summary>
+    private async Task SaveParticleOverride()
+    {
+        if (ParticleEditor.Entry is not { } entry) { _log.Warn("Particle", "No particle .bin open."); return; }
+        if (!GuardEditable(entry)) return;
+        if (ParticleEditor.Document is not { } pdoc) return;
+        if (!pdoc.IsDirty) { _log.Info("Particle", "No particle edits to save."); return; }
+        if (!await EnsureProjectSavedAsync()) return;
+
+        var bytes = pdoc.Serialize();
+        try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
+        catch (Exception ex) { _log.Error("Particle", $"Edited particle .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
+
+        try
+        {
+            var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".bin");
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = entry.PathHash,
+                ResolvedPath = entry.IsResolved ? entry.Path : null,
+                OverrideFile = dest,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            UpdateTitle();
+            var d = Documents.FirstOrDefault(x => x.Kind == DocumentKind.Particle && x.Key == entry.PathHash);
+            if (d is not null) d.IsDirty = false;
+            _log.Success("Particle", $"Saved edited particles {entry.DisplayName} to override ({bytes.Length:n0} bytes, re-parse OK). Build Package will include it.");
+        }
+        catch (Exception ex) { _log.Error("Particle", ex.Message); }
     }
 
     [RelayCommand]
@@ -581,6 +690,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!wasActive) return;
 
         ActiveDocument = null; // so activating the next tab doesn't snapshot the dying scene
+        IsParticleEditorActive = false; // M46: closing an active particle tab hides the overlay
         var next = Documents.LastOrDefault();
         if (next is not null) ActivateDocument(next);
         else ClearViewport();

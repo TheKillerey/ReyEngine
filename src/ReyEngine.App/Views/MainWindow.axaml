@@ -88,6 +88,8 @@
         <MenuItem Header="Export Shader Dump…" Command="{Binding ExportShaderDumpCommand}" />
         <MenuItem Header="Map Material Diagnostics" Command="{Binding MapMaterialDiagnosticsCommand}"
                   ToolTip.Tip="Scan the loaded map's bins + mapgeo and write an honest diagnostics report (classes, unknown fields, lighting/lightmap/visibility) to .reyengine/reports/" />
+        <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"
+                  ToolTip.Tip="Open the active document's .bin in the Particle Editor (works for skin bins and map materials.bin that contain VFX systems)" />
         <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
       </MenuItem>
       <MenuItem Header="_Project">
@@ -351,6 +353,10 @@
                               ToolTip.Tip="Snap to increments — 100u move · 15° rotate · 0.25× scale" />
               </StackPanel>
             </Border>
+
+            <!-- M46: Particle Editor overlay — replaces the viewport area while a ✨ particle tab is active -->
+            <views:ParticleEditorView DataContext="{Binding ParticleEditor}"
+                                      IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).IsParticleEditorActive}" />
           </Grid>
           </DockPanel>
         </Border>

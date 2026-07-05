@@ -3,7 +3,7 @@ using ReyEngine.Core.Assets;
 
 namespace ReyEngine.App.Documents;
 
-public enum DocumentKind { Map, Mesh, Texture, Bin, Material, Animation, Other }
+public enum DocumentKind { Map, Mesh, Texture, Bin, Material, Animation, Particle, Other }
 
 /// <summary>
 /// One open editor document = one asset the user opened, shown as a viewport/inspector tab (M33). Heavy
@@ -31,6 +31,7 @@ public sealed partial class EditorDocument : ObservableObject
         DocumentKind.Bin => "📦",
         DocumentKind.Material => "🎨",
         DocumentKind.Animation => "🎞",
+        DocumentKind.Particle => "✨",
         _ => "📄",
     };
 

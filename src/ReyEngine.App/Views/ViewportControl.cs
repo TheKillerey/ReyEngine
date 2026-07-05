@@ -49,6 +49,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(AnimateWater));
     public static readonly StyledProperty<double> LightmapScaleProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(LightmapScale), 1.0);
+    public static readonly StyledProperty<double> ParticleSpeedProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(ParticleSpeed), 1.0);   // M46: sim speed multiplier
+    public static readonly StyledProperty<bool> ParticlePausedProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(ParticlePaused));         // M46: freeze the sim
     public static readonly StyledProperty<Vector3?> FocusPointProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(FocusPoint));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
@@ -133,6 +137,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public VfxPlayback? ParticlePlayback { get => GetValue(ParticlePlaybackProperty); set => SetValue(ParticlePlaybackProperty, value); }
     public bool AnimateWater { get => GetValue(AnimateWaterProperty); set => SetValue(AnimateWaterProperty, value); }
     public double LightmapScale { get => GetValue(LightmapScaleProperty); set => SetValue(LightmapScaleProperty, value); }
+    public double ParticleSpeed { get => GetValue(ParticleSpeedProperty); set => SetValue(ParticleSpeedProperty, value); }
+    public bool ParticlePaused { get => GetValue(ParticlePausedProperty); set => SetValue(ParticlePausedProperty, value); }
     public bool ShowBones { get => GetValue(ShowBonesProperty); set => SetValue(ShowBonesProperty, value); }
     public bool ShowBounds { get => GetValue(ShowBoundsProperty); set => SetValue(ShowBoundsProperty, value); }
 
@@ -482,6 +488,7 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             float dt = _particleClock.IsRunning ? (float)_particleClock.Elapsed.TotalSeconds : 1f / 60f;
             _particleClock.Restart();
+            dt = ParticlePaused ? 0f : dt * (float)ParticleSpeed;   // M46: editor speed/pause controls
             foreach (var psim in _particleSims)
             {
                 psim.Update(dt);

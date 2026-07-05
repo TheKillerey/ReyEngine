@@ -1,0 +1,169 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:ReyEngine.App.Views"
+             xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+             x:Class="ReyEngine.App.Views.ParticleEditorView"
+             x:DataType="vm:ParticleEditorViewModel">
+  <!-- M46 Particle Editor (Particle Town layout): toolbar / tree / emitter cards / inspector / curves+preview -->
+  <Border Background="{DynamicResource ReyBgBrush}">
+    <DockPanel>
+
+      <!-- toolbar -->
+      <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
+              BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="8,4">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+            <TextBlock Text="{Binding Status}" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+            <TextBlock Text="✨ PARTICLE EDITOR" FontSize="11" FontWeight="Bold"
+                       Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding AssetName}" FontSize="11" Opacity="0.85" VerticalAlignment="Center" />
+            <Border Classes="badge" IsVisible="{Binding !IsEditable}">
+              <TextBlock Text="READ-ONLY" FontSize="9" />
+            </Border>
+            <Button Classes="tool" Content="💾 Save Override" Command="{Binding SaveOverrideCommand}"
+                    IsEnabled="{Binding IsEditable}" ToolTip.Tip="Write the edited particle .bin to the project override" />
+            <Button Classes="tool" Content="⟲ Restart" Command="{Binding RestartCommand}" ToolTip.Tip="Restart the preview simulation" />
+            <ToggleButton Classes="vp" Content="⏯ Pause" IsChecked="{Binding Paused}" />
+            <TextBlock Text="Speed" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
+            <Slider Minimum="0.1" Maximum="3" Value="{Binding Speed}" Width="110" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Speed, StringFormat={}{0:0.0}x}" FontSize="10" Width="30" VerticalAlignment="Center" />
+          </StackPanel>
+        </DockPanel>
+      </Border>
+
+      <Grid ColumnDefinitions="230,4,*,4,290" RowDefinitions="*,4,190">
+
+        <!-- left: system / emitter tree -->
+        <Border Grid.Column="0" Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource ReyPanelBrush}">
+          <DockPanel>
+            <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="SYSTEMS" />
+            <ListBox ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem}"
+                     Background="Transparent" Padding="2">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:ParticleSystemNodeViewModel">
+                  <StackPanel Margin="2">
+                    <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding Detail}" FontSize="9" Opacity="0.55" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+        <GridSplitter Grid.Column="1" Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource ReyBorderBrush}" />
+
+        <!-- center: emitter cards (horizontal, Particle Town style) -->
+        <Border Grid.Column="2" Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{Binding Cards}" Margin="6">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ParticleEmitterCardViewModel">
+                  <Border Classes="card" Width="215" Padding="0" VerticalAlignment="Top">
+                    <DockPanel>
+                      <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}" Padding="8,5">
+                        <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
+                      </Border>
+                      <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding Modules}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ParticleModuleGroupViewModel">
+                              <Expander Header="{Binding Name}" FontSize="10" IsExpanded="False" Padding="0" Margin="0">
+                                <ItemsControl ItemsSource="{Binding Rows}">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ParticlePropertyRowViewModel">
+                                      <Button Background="Transparent" BorderThickness="0" Padding="6,2"
+                                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                              Command="{Binding SelectCommand}">
+                                        <DockPanel>
+                                          <TextBlock DockPanel.Dock="Right" Text="{Binding CurrentText}" FontSize="9"
+                                                     Opacity="0.6" MaxWidth="80" TextTrimming="CharacterEllipsis" />
+                                          <TextBlock Text="{Binding Name}" FontSize="10" />
+                                        </DockPanel>
+                                      </Button>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                              </Expander>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </ScrollViewer>
+                    </DockPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </Border>
+
+        <GridSplitter Grid.Column="2" Grid.Row="1" Background="{DynamicResource ReyBorderBrush}" />
+
+        <!-- bottom-center: curve display + preview viewport -->
+        <Grid Grid.Column="2" Grid.Row="2" ColumnDefinitions="*,4,320">
+          <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}">
+            <DockPanel>
+              <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="CURVE (over particle lifetime)" />
+              <Grid>
+                <views:CurvePreview Times="{Binding SelectedProperty.CurveTimes, FallbackValue={x:Null}}"
+                                    Channels="{Binding SelectedProperty.CurveChannels, FallbackValue={x:Null}}"
+                                    Margin="6" />
+                <TextBlock Text="Select a property with a curve (name shows '+ curve')" FontSize="10" Opacity="0.4"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           IsVisible="{Binding SelectedProperty.HasCurve, FallbackValue=True, Converter={x:Static BoolConverters.Not}}" />
+              </Grid>
+            </DockPanel>
+          </Border>
+          <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
+          <Border Grid.Column="2" Background="Black">
+            <Grid>
+              <views:ViewportControl x:Name="PreviewViewport"
+                                     ParticlePlayback="{Binding Playback}"
+                                     ParticleSpeed="{Binding Speed}"
+                                     ParticlePaused="{Binding Paused}" />
+              <Border x:Name="PreviewInput" Background="Transparent" />
+              <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
+                         Margin="6,4" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />
+            </Grid>
+          </Border>
+        </Grid>
+
+        <GridSplitter Grid.Column="3" Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource ReyBorderBrush}" />
+
+        <!-- right: property inspector -->
+        <Border Grid.Column="4" Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource ReyPanelBrush}">
+          <DockPanel>
+            <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="PROPERTY" />
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+              <StackPanel Margin="10" Spacing="6" IsVisible="{Binding SelectedProperty, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <TextBlock Text="{Binding SelectedProperty.Name, FallbackValue=''}" FontSize="13" FontWeight="Bold" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Border Classes="badge"><TextBlock Text="{Binding SelectedProperty.Module, FallbackValue=''}" FontSize="9" /></Border>
+                  <TextBlock Text="{Binding SelectedProperty.TypeName, FallbackValue=''}" FontSize="10" Opacity="0.6" VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBlock Text="Value" FontSize="10" Opacity="0.7" Margin="0,6,0,0" />
+                <TextBox Text="{Binding SelectedProperty.EditText, Mode=TwoWay}" FontSize="11"
+                         IsEnabled="{Binding SelectedProperty.IsReadOnly, Converter={x:Static BoolConverters.Not}, FallbackValue=False}"
+                         AcceptsReturn="False" />
+                <Button Classes="primary" Content="Apply" HorizontalAlignment="Left"
+                        Command="{Binding ApplyEditCommand}" CommandParameter="{Binding SelectedProperty}"
+                        IsEnabled="{Binding SelectedProperty.IsReadOnly, Converter={x:Static BoolConverters.Not}, FallbackValue=False}" />
+                <TextBlock Text="{Binding SelectedProperty.ErrorText, FallbackValue=''}" FontSize="10"
+                           Foreground="#E5645B" TextWrapping="Wrap"
+                           IsVisible="{Binding SelectedProperty.ErrorText, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}" />
+                <TextBlock Text="Read-only property (unsupported type or Riot reference)." FontSize="10" Opacity="0.5" TextWrapping="Wrap"
+                           IsVisible="{Binding SelectedProperty.IsReadOnly, FallbackValue=False}" />
+                <TextBlock FontSize="10" Opacity="0.5" TextWrapping="Wrap" Margin="0,10,0,0"
+                           Text="Vectors: comma-separated (x, y, z). Colours: r, g, b, a (0..1). Edits update the preview immediately; Save Override writes to the project." />
+              </StackPanel>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+      </Grid>
+    </DockPanel>
+  </Border>
+</UserControl>
