@@ -123,6 +123,24 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     {
         if (SaveOverrideAsync is not null) await SaveOverrideAsync();
     }
+
+    /// <summary>M49: enable/disable one emitter — edits its 'disabled' bool on the live tree and refreshes
+    /// the preview (the resolver skips disabled emitters, so it stops/starts immediately).</summary>
+    internal void SetEmitterEnabled(ParticleEmitterCardViewModel card, bool enabled)
+    {
+        if (Document is null || card.Entry.Disabled == !enabled) return;
+        if (!IsEditable)
+        {
+            Error?.Invoke("Read-only Riot reference: Copy To Project to toggle emitters.");
+            card.IsEnabled = !card.Entry.Disabled;   // revert the checkbox
+            return;
+        }
+        card.Entry.SetDisabled(!enabled);
+        MarkDocumentDirty?.Invoke();
+        _defs = VfxSystemResolver.ExtractAll(Document.Serialize());
+        RebuildPlayback();
+        Info?.Invoke($"Emitter '{card.Name}' {(enabled ? "enabled" : "disabled")} (save Override to persist).");
+    }
 }
 
 /// <summary>Left-tree node: one VFX system with its emitter names.</summary>
@@ -141,17 +159,29 @@ public sealed partial class ParticleSystemNodeViewModel : ObservableObject
 }
 
 /// <summary>Center card: one emitter as a column of module groups (Particle Town style).</summary>
-public sealed class ParticleEmitterCardViewModel
+public sealed partial class ParticleEmitterCardViewModel : ObservableObject
 {
+    private readonly ParticleEditorViewModel _owner;
+    public ParticleEmitterEntry Entry { get; }
     public string Name { get; }
     public IReadOnlyList<ParticleModuleGroupViewModel> Modules { get; }
     /// <summary>The emitter's sprite texture, decoded as a small preview (null when unresolved).</summary>
     public Avalonia.Media.Imaging.Bitmap? Thumbnail { get; }
     public bool HasThumbnail => Thumbnail is not null;
+    public bool CanToggle => _owner.IsEditable;
+
+    /// <summary>Emitter on/off — edits the VfxEmitterDefinitionData's 'disabled' bool on the live tree
+    /// (persists via Save Override); the preview re-extracts so the emitter stops/starts immediately.</summary>
+    [ObservableProperty] private bool _isEnabled;
+
+    partial void OnIsEnabledChanged(bool value) => _owner.SetEmitterEnabled(this, value);
 
     public ParticleEmitterCardViewModel(ParticleEmitterEntry emitter, ParticleEditorViewModel owner)
     {
+        _owner = owner;
+        Entry = emitter;
         Name = emitter.Name;
+        _isEnabled = !emitter.Disabled;
         Modules = emitter.Modules
             .Select(m => new ParticleModuleGroupViewModel(m,
                 emitter.Properties.Where(p => p.Module == m)

@@ -66,7 +66,14 @@
                   <Border Classes="card" Width="215" Padding="0" VerticalAlignment="Top">
                     <DockPanel>
                       <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}" Padding="8,5">
-                        <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
+                        <DockPanel>
+                          <!-- M49: emitter on/off — edits the emitter's 'disabled' flag (persists via Save Override) -->
+                          <CheckBox DockPanel.Dock="Left" IsChecked="{Binding IsEnabled}" Padding="0" Margin="0,0,6,0"
+                                    MinWidth="0" VerticalAlignment="Center"
+                                    ToolTip.Tip="Enable/disable this emitter (edits the 'disabled' flag; Save Override to persist)" />
+                          <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="Bold" TextTrimming="CharacterEllipsis"
+                                     VerticalAlignment="Center" />
+                        </DockPanel>
                       </Border>
                       <!-- particle sprite preview (Particle Town texture strip) -->
                       <Border DockPanel.Dock="Top" Background="#10141B" Height="52" IsVisible="{Binding HasThumbnail}">

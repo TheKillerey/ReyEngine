@@ -78,7 +78,38 @@ public sealed class ParticleEmitterEntry
 {
     public string Name { get; private init; } = "(emitter)";
     public IReadOnlyList<ParticleProperty> Properties { get; private init; } = Array.Empty<ParticleProperty>();
-    public bool IsDirty => Properties.Any(p => p.IsDirty);
+    internal BinTreeStruct EmitterStruct { get; init; } = null!;
+    private BinTreeStruct _struct => EmitterStruct;
+    private bool _disabledEdited;
+    public bool IsDirty => _disabledEdited || Properties.Any(p => p.IsDirty);
+
+    private static readonly uint DisabledHash = HashAlgorithms.Fnv1a("disabled");
+
+    /// <summary>Live 'disabled' flag of this VfxEmitterDefinitionData (absent = enabled).</summary>
+    public bool Disabled => _struct.Properties.TryGetValue(DisabledHash, out var p) && p switch
+    {
+        BinTreeBool b => b.Value,
+        BinTreeBitBool bb => bb.Value,
+        _ => false,
+    };
+
+    /// <summary>Enable/disable the emitter by editing (or adding) its 'disabled' bool on the live tree —
+    /// persists through Serialize/Save Override, exactly like toggling it in the real data.</summary>
+    public void SetDisabled(bool disabled)
+    {
+        if (Disabled == disabled) return;
+        if (_struct.Properties.TryGetValue(DisabledHash, out var p))
+        {
+            switch (p)
+            {
+                case BinTreeBool b: b.Value = disabled; break;
+                case BinTreeBitBool bb: bb.Value = disabled; break;
+                default: return; // unexpected type: leave untouched
+            }
+        }
+        else _struct.Properties[DisabledHash] = new BinTreeBool(DisabledHash, disabled);
+        _disabledEdited = true;
+    }
 
     /// <summary>Distinct module names, in the canonical Particle Town order.</summary>
     public IReadOnlyList<string> Modules =>
@@ -122,7 +153,7 @@ public sealed class ParticleEmitterEntry
             int m = Array.IndexOf(ModuleOrder, a.Module).CompareTo(Array.IndexOf(ModuleOrder, b.Module));
             return m != 0 ? m : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
         });
-        return new ParticleEmitterEntry { Name = name, Properties = props };
+        return new ParticleEmitterEntry { Name = name, Properties = props, EmitterStruct = emitter };
     }
 
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> p, string name) =>
