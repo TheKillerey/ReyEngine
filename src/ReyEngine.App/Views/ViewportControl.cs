@@ -47,6 +47,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, VfxPlayback?>(nameof(ParticlePlayback));
     public static readonly StyledProperty<bool> AnimateWaterProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(AnimateWater));
+    public static readonly StyledProperty<double> LightmapScaleProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(LightmapScale), 1.0);
     public static readonly StyledProperty<Vector3?> FocusPointProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(FocusPoint));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
@@ -130,6 +132,7 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>The placed VFX system to simulate and play live (M36); null stops playback.</summary>
     public VfxPlayback? ParticlePlayback { get => GetValue(ParticlePlaybackProperty); set => SetValue(ParticlePlaybackProperty, value); }
     public bool AnimateWater { get => GetValue(AnimateWaterProperty); set => SetValue(AnimateWaterProperty, value); }
+    public double LightmapScale { get => GetValue(LightmapScaleProperty); set => SetValue(LightmapScaleProperty, value); }
     public bool ShowBones { get => GetValue(ShowBonesProperty); set => SetValue(ShowBonesProperty, value); }
     public bool ShowBounds { get => GetValue(ShowBoundsProperty); set => SetValue(ShowBoundsProperty, value); }
 
@@ -470,6 +473,7 @@ public sealed class ViewportControl : OpenGlControlBase
         // M44: advance the flowmap-water clock so the river flows; only ticks while water is on screen.
         if (AnimateWater) { if (!_waterClock.IsRunning) _waterClock.Start(); _meshRenderer.SetTime((float)_waterClock.Elapsed.TotalSeconds); }
         else if (_waterClock.IsRunning) _waterClock.Reset();
+        _meshRenderer.SetLightmapScale((float)LightmapScale);   // M45: MapSunProperties.lightMapColorScale
         _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones, CullBackfaces);
         if (AnimateWater) RequestNextFrameRendering(); // keep frames coming so the water animates
 
@@ -672,8 +676,8 @@ public sealed class ViewportControl : OpenGlControlBase
         { _particlesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticlePlaybackProperty)
         { _particlePlaybackDirty = true; RequestNextFrameRendering(); }
-        else if (change.Property == AnimateWaterProperty)
-        { RequestNextFrameRendering(); } // M44: start/stop the flowmap-water animation loop
+        else if (change.Property == AnimateWaterProperty || change.Property == LightmapScaleProperty)
+        { RequestNextFrameRendering(); } // M44/M45: water animation loop + lightmap scale
         else if (change.Property == PropMeshesProperty)
         { _propMeshesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == FocusPointProperty && FocusPoint is { } fp)

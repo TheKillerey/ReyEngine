@@ -26,8 +26,10 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mTwoSided, _mMirrored;                            // M34: two-sided lighting + mirrored-transform debug
     private int _mIsFlowmap, _mTime, _mFlowSpeed, _mFlowStrength;  // M44: flowmap river water
     private int _mFlowTile, _mColorInside, _mColorOutside, _mWaterAlpha;
+    private int _mLightmapScale;                                  // M45: MapSunProperties.lightMapColorScale
     private int _lMvp, _lColor;
     private float _time;                                          // M44: animation clock (seconds), fed to uTime
+    private float _lightmapScale = 1f;                            // M45: baked-light multiplier (1 = neutral)
 
     private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo;
     private bool _hasVertexColor, _hasLightmapUv;
@@ -180,6 +182,7 @@ uniform vec4 uTint;            // M34: TintColor (rgba) for UNTEXTURED effect ma
 uniform int uTwoSided;         // M34: 1 when this face renders two-sided (flip backface normals for lighting)
 uniform int uMirrored;         // M34: 1 when the source mesh transform is mirrored (negative determinant)
 // M44 flowmap river water: Flow_Map (rg = flow dir) reuses slot 1, Flowing_Normal_Map reuses slot 2.
+uniform float uLightmapScale;  // M45: MapSunProperties.lightMapColorScale (baked-light multiplier; 1 when absent)
 uniform int uIsFlowmap;        // 1 when this submesh is a Flowmap_River water material
 uniform float uTime;           // seconds, drives the flow animation
 uniform float uFlowSpeed;      // FlowMap_Speed
@@ -308,7 +311,7 @@ void main() {
         // grid on big planes), and the animated highlight rides the R streaks in the Outside colour.
         vec3 colw = body * (0.9 + 0.1 * caustic) + uColorOutside.rgb * (fm.r * pulse * 0.7) + vec3(spark);
         // Sit the water in the baked scene lighting like every other lightmapped surface (night maps darken it).
-        if (uHasLightmap == 1) colw *= texture(uLightmap, vLmUv).rgb * 1.6;
+        if (uHasLightmap == 1) colw *= texture(uLightmap, vLmUv).rgb * uLightmapScale;
         // The B mask cuts the water to its real stream shape (soft antialiased edges); TranslucentControl
         // sets how solid the visible water is. Sparkle reads a touch more solid.
         float a = clamp((uWaterAlpha * (0.75 + 0.25 * fres) + spark * 0.3) * waterMask, 0.0, 1.0);
@@ -321,9 +324,9 @@ void main() {
     vec3 col = base * light;
 
     // Baked lightmap: when the mesh carries a real BakedLight atlas, that IS the lighting for this
-    // surface, so it replaces the fake directional term (finalColor = diffuse * lightmap). Only kicks
-    // in where genuine baked data exists (Map12-style maps); Old-Rift meshes keep the directional look.
-    if (uHasLightmap == 1) col = base * texture(uLightmap, vLmUv).rgb;
+    // surface, so it replaces the fake directional term (finalColor = diffuse * lightmap * scale). The
+    // scale is MapSunProperties.lightMapColorScale (2.0 on live Map12) - without it the map is too dark.
+    if (uHasLightmap == 1) col = base * texture(uLightmap, vLmUv).rgb * uLightmapScale;
 
     // Specular highlight - computed only when the material's profile enables it (League materials are
     // diffuse/lambert by default). Blinn-Phong half-vector term.
@@ -419,6 +422,7 @@ void main() { FragColor = uColor; }";
         _mColorInside = gl.GetUniformLocation(_meshProgram, "uColorInside");
         _mColorOutside = gl.GetUniformLocation(_meshProgram, "uColorOutside");
         _mWaterAlpha = gl.GetUniformLocation(_meshProgram, "uWaterAlpha");
+        _mLightmapScale = gl.GetUniformLocation(_meshProgram, "uLightmapScale");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -676,6 +680,9 @@ void main() { FragColor = uColor; }";
     /// <summary>M44: advance the shared animation clock (seconds). Drives flowmap river water; the App only
     /// needs to keep rendering frames (SetTime + RequestRender) while a flowmap submesh is present.</summary>
     public void SetTime(float seconds) => _time = seconds;
+
+    /// <summary>M45: baked-lightmap multiplier from MapSunProperties.lightMapColorScale (1 = neutral).</summary>
+    public void SetLightmapScale(float scale) => _lightmapScale = Math.Clamp(scale, 0.05f, 8f);
 
     public void SetSubmeshMaterial(int index, SubmeshMaterial mat)
     {
@@ -936,6 +943,7 @@ void main() { FragColor = uColor; }";
                 _gl.Uniform1(_mMatCapMask, 5);
                 _gl.Uniform1(_mLightmap, 6);
                 _gl.Uniform1(_mTime, _time);   // M44: shared animation clock (flowmap water)
+                _gl.Uniform1(_mLightmapScale, _lightmapScale);   // M45: baked-light multiplier
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
 
                 void DrawSubmesh(SubmeshDraw s)

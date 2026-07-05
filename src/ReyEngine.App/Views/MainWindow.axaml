@@ -272,6 +272,7 @@
                 PropMeshes="{Binding CurrentPropMeshes}"
                 ParticlePlayback="{Binding CurrentParticlePlayback}"
                 AnimateWater="{Binding HasFlowmapWater}"
+                LightmapScale="{Binding CurrentLightmapScale}"
                 FocusPoint="{Binding ParticleFocusPoint}"
                 PreviewMode="{Binding PreviewMode}" />
 

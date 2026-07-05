@@ -380,6 +380,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
     [ObservableProperty] private bool _hasFlowmapWater; // M44: current map has flowmap-river water → viewport animates it
+    [ObservableProperty] private double _currentLightmapScale = 1.0; // M45: MapSunProperties.lightMapColorScale
+    private Formats.MapGeo.MapSunProperties? _currentSunProps; // M45: full sun/atmosphere component (future use)
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
     [ObservableProperty] private bool _showWireframe;
@@ -519,6 +521,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials,
         IReadOnlyList<TextureImage?>? Lightmaps,
         IReadOnlyList<TextureImage?>? FlowMasks, IReadOnlyList<TextureImage?>? FlowGrads, // M44 flow-water
+        double LightmapScale, Formats.MapGeo.MapSunProperties? SunProps, // M45 sun properties
         IReadOnlyList<MapParticlePlacement>? Particles,
         IReadOnlyDictionary<uint, VfxSystemDefinition> VfxSystems,
         IReadOnlyList<MapCubemapProbe>? Probes, IReadOnlyList<MapAnimatedProp>? Props,
@@ -601,6 +604,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return new MapScene(map, _currentMapBytes, entry, _mapControllers, mesh,
             CurrentModelTextures, CurrentModelSubmeshMaterials, CurrentModelLightmapTextures,
             _mapFlowMasks, _mapFlowGrads,
+            CurrentLightmapScale, _currentSunProps,
             CurrentModelParticles, _vfxSystems, CurrentModelProbes, CurrentModelProps,
             SelectedDragonIndex, SelectedBaronIndex, HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
@@ -618,6 +622,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ClearSecondaryTextures();
         CurrentModelLightmapTextures = s.Lightmaps;
         _mapFlowMasks = s.FlowMasks; _mapFlowGrads = s.FlowGrads; PublishMapFlowWater(); // M44
+        CurrentLightmapScale = s.LightmapScale; _currentSunProps = s.SunProps;           // M45
         CurrentModelSubmeshMaterials = s.Materials;
         CurrentModelParticles = s.Particles;
         _vfxSystems = s.VfxSystems;
@@ -1140,6 +1145,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasFlowmapWater = false;
         _mapFlowMasks = null;
         _mapFlowGrads = null;
+        CurrentLightmapScale = 1.0;
+        _currentSunProps = null;
         CurrentModelParticles = null;
         SelectedParticleTreeItem = null;
         ParticleMarkers = null;
@@ -2081,7 +2088,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var bytes = GetAssetBytes(binEntry);
             var r = MapGeoMaterialResolver.Resolve(bytes, names);
-            if (r.Count > 0) return (r, MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName));
+            if (r.Count > 0)
+            {
+                ApplySunProperties(bytes);   // M45: MapContainer -> MapSunProperties (lightMapColorScale etc.)
+                return (r, MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName));
+            }
         }
         catch (Exception ex) { _log.Warn("MapGeo", $"project materials.bin parse failed: {ex.Message}"); }
 
@@ -2094,12 +2105,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (r.Count > 0)
                 {
                     _log.Info("MapGeo", "Used the original game materials.bin (the project's copy was broken/empty).");
+                    ApplySunProperties(fb);
                     return (r, MaterialProfiles.ForMapMaterials(fb, names, ResolveBinName));
                 }
             }
             catch (Exception ex) { _log.Warn("MapGeo", $"game materials.bin parse failed: {ex.Message}"); }
         }
         return (new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), new Dictionary<string, MaterialProfile>(StringComparer.OrdinalIgnoreCase));
+    }
+
+    /// <summary>M45: read the MapContainer's MapSunProperties component and publish what the renderer uses
+    /// (lightMapColorScale — the game's baked-light multiplier, e.g. 2.0 on Map12 Bloom).</summary>
+    private void ApplySunProperties(byte[] materialsBin)
+    {
+        var sun = Formats.MapGeo.MapSunProperties.Extract(materialsBin);
+        _currentSunProps = sun;
+        CurrentLightmapScale = sun?.LightMapColorScale ?? 1.0;
+        if (sun is not null)
+            _log.Info("Map", $"MapSunProperties: lightMapColorScale={sun.LightMapColorScale:0.##}, " +
+                             $"skyLightScale={sun.SkyLightScale:0.##}, sunColor=({sun.SunColor.X:0.##}, {sun.SunColor.Y:0.##}, {sun.SunColor.Z:0.##}), " +
+                             $"fog {sun.FogStartAndEnd.X:0}..{sun.FogStartAndEnd.Y:0}");
     }
 
     /// <summary>
