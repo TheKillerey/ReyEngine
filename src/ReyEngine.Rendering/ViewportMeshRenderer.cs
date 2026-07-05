@@ -270,25 +270,33 @@ void main() {
         float ph0 = fract(uTime * uFlowSpeed);
         float ph1 = fract(uTime * uFlowSpeed + 0.5);
         float bw = abs(ph0 - 0.5) * 2.0;                                  // ping-pong cross-fade weight
-        vec2 wave0 = (texture(uGradient, fuv + flow * ph0).xy * 2.0 - 1.0); // Flowing_Normal_Map, phase 0
-        vec2 wave1 = (texture(uGradient, fuv + flow * ph1).xy * 2.0 - 1.0); // phase 1
-        vec2 waveXY = mix(wave0, wave1, bw);
-        // Procedural ripple floor so the surface is never static even when the (subchunked/shared) Flow/normal
-        // textures fail to load: adds a couple of world-space travelling waves to the tangent perturbation.
-        vec2 wc = vWorld.xz * 0.02;
-        waveXY += vec2(sin(wc.x * 2.3 + uTime * 1.6) + sin((wc.x + wc.y) * 1.7 - uTime * 1.1),
-                       cos(wc.y * 2.1 - uTime * 1.3) + sin((wc.x - wc.y) * 1.9 + uTime * 0.9)) * 0.22;
-        // Perturb the surface normal in its (approx horizontal) tangent plane so the specular glints travel.
-        vec3 N = normalize(n + vec3(waveXY.x, 0.0, waveXY.y) * 0.6);
+        // Travelling wave field (world-space) drives BOTH a view-independent caustic shimmer and the normal
+        // that breaks the sun reflection into moving sparkles. High-ish frequency so a flat water plane still
+        // shows moving light bands rather than one broad sheet. Runs even with no textures.
+        vec2 wc = vWorld.xz * 0.012;   // ~250-unit ripple wavelength (map world units); low enough to not alias
+        float wh = sin(wc.x * 2.0 + uTime * 1.5) + sin((wc.x + wc.y) * 1.4 - uTime * 1.1) + sin(wc.y * 2.6 - uTime * 0.9);
+        vec2 waveXY = vec2(cos(wc.x * 2.0 + uTime * 1.5) + cos(wc.y * 2.6 - uTime * 0.9),
+                           cos((wc.x + wc.y) * 1.4 - uTime * 1.1) - sin(wc.x * 2.0 + uTime * 1.5)) * 0.35;
+        // Add the real Flowing_Normal_Map ripples when it loaded (uHasGradient). A MISSING normal is the white
+        // fallback (1,1,1) whose 2*x-1 = (1,1) would tilt the whole surface and wash it out, so skip it then.
+        if (uHasGradient == 1) {
+            vec2 w0 = texture(uGradient, fuv + flow * ph0).xy * 2.0 - 1.0;
+            vec2 w1 = texture(uGradient, fuv + flow * ph1).xy * 2.0 - 1.0;
+            waveXY += mix(w0, w1, bw);
+        }
+        vec3 N = normalize(n + vec3(waveXY.x, 0.0, waveXY.y) * 0.5);
         vec3 V = viewDir;
         vec3 Hh = normalize(normalize(-uLight) + V);
         float ndh = max(dot(N, Hh), 0.0);
-        float glint = pow(ndh, 140.0) * 2.4 + pow(ndh, 24.0) * 0.30;      // tight sun glint + broad sheen
-        float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+        // Deep(Inside) body tinting toward Outside at grazing edges, modulated by travelling caustic bands
+        // (subtle brightness ripples), with a sharp sun sparkle on the crests.
+        float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
         vec3 body = mix(uColorInside.rgb, uColorOutside.rgb, clamp(fres, 0.0, 1.0));
-        vec3 colw = body + vec3(glint);
-        // Highlights read as slightly foamy/opaque; the still body keeps its base translucency.
-        float a = clamp(uWaterAlpha + glint * 0.5 + fres * 0.12, 0.0, 1.0);
+        float caustic = 0.5 + 0.5 * sin(wh * 1.6);
+        float spark = pow(ndh, 90.0) * 1.2;
+        vec3 colw = body * (0.78 + 0.34 * caustic) + vec3(spark);
+        // Translucent by the material's TranslucentControl; sparkle points read a touch more solid.
+        float a = clamp(uWaterAlpha * (0.8 + 0.2 * fres) + spark * 0.4, 0.0, 1.0);
         FragColor = vec4(colw, a);
         return;
     }
