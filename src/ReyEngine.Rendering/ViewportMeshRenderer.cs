@@ -273,7 +273,7 @@ void main() {
         vec4 fm = (uHasMask == 1) ? texture(uMask, uv) : vec4(0.0, 0.5, 1.0, 1.0);
         float waterMask = fm.b;
         // Energy pulse travelling along the stream, driven by the R progress gradient.
-        float pulse = 0.8 + 0.3 * sin((fm.r * 4.0 - uTime * uFlowSpeed * 3.0) * 6.2831853);
+        float pulse = 0.5 + 0.5 * sin((fm.r * 4.0 - uTime * uFlowSpeed * 3.0) * 6.2831853);
         vec2 fuv = uv * uFlowTile;
         vec2 flow = (fm.rg * 2.0 - 1.0) * uFlowStrength;
         float ph0 = fract(uTime * uFlowSpeed);
@@ -302,11 +302,16 @@ void main() {
         float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
         vec3 body = mix(uColorInside.rgb, uColorOutside.rgb, clamp(fres, 0.0, 1.0));
         float caustic = 0.5 + 0.5 * sin(wh * 1.6);
-        float spark = pow(ndh, 90.0) * 1.2 * (0.3 + 0.7 * fm.r);   // reflection concentrated where R is bright
-        vec3 colw = body * (0.72 + 0.28 * caustic) * pulse + vec3(spark);
+        float spark = pow(ndh, 90.0) * (0.3 + 0.7 * fm.r);   // reflection concentrated where R is bright
+        // In game the river reads as DARK scene-lit water with bright streaks travelling along the R-gradient
+        // lines, not a uniformly bright sheet. So: subtle caustic only (a strong 3-sine term reads as a dot
+        // grid on big planes), and the animated highlight rides the R streaks in the Outside colour.
+        vec3 colw = body * (0.9 + 0.1 * caustic) + uColorOutside.rgb * (fm.r * pulse * 0.7) + vec3(spark);
+        // Sit the water in the baked scene lighting like every other lightmapped surface (night maps darken it).
+        if (uHasLightmap == 1) colw *= texture(uLightmap, vLmUv).rgb * 1.6;
         // The B mask cuts the water to its real stream shape (soft antialiased edges); TranslucentControl
         // sets how solid the visible water is. Sparkle reads a touch more solid.
-        float a = clamp((uWaterAlpha * (0.8 + 0.2 * fres) + spark * 0.4) * waterMask, 0.0, 1.0);
+        float a = clamp((uWaterAlpha * (0.75 + 0.25 * fres) + spark * 0.3) * waterMask, 0.0, 1.0);
         FragColor = vec4(colw, a);
         return;
     }
