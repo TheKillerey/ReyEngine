@@ -24,7 +24,10 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mAlphaCutoff;                                     // M34: per-material alpha-test threshold (AlphaTestValue)
     private int _mClampUv;                                         // M34: per-axis UV clamp (decals; addressU/V == Clamp)
     private int _mTwoSided, _mMirrored;                            // M34: two-sided lighting + mirrored-transform debug
+    private int _mIsFlowmap, _mTime, _mFlowSpeed, _mFlowStrength;  // M44: flowmap river water
+    private int _mFlowTile, _mColorInside, _mColorOutside, _mWaterAlpha;
     private int _lMvp, _lColor;
+    private float _time;                                          // M44: animation clock (seconds), fed to uTime
 
     private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo;
     private bool _hasVertexColor, _hasLightmapUv;
@@ -83,6 +86,15 @@ public sealed class ViewportMeshRenderer : IDisposable
         public Vector2 ClampUv;         // M34: per-axis UV clamp (1 = clamp/decal, 0 = tile); default 0,0
         public Vector4 Tint;            // M34: TintColor, applied to the UNTEXTURED fallback only; default 1,1,1,1
 
+        // M44 flowmap river water (Bloom_FlowMapRiver_*). Flow_Map -> Mask (slot 1), Flowing_Normal -> Gradient (slot 2).
+        public bool IsFlowmap;
+        public float FlowSpeed;
+        public float FlowStrength;
+        public Vector2 FlowTile;
+        public Vector4 ColorInside;
+        public Vector4 ColorOutside;
+        public float WaterAlpha;
+
         public static SubmeshDraw Create(int start, int count) =>
             new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One, AlphaCutoff = 0.35f };
     }
@@ -92,7 +104,11 @@ public sealed class ViewportMeshRenderer : IDisposable
     public readonly record struct SubmeshMaterial(
         bool UsesRim, bool UsesSpecular, Vector2 UvScale, Vector2 UvOffset, float UvRotationDegrees,
         int AlphaMode = 0, bool DoubleSided = false, Vector4? Tint = null, bool Mirrored = false, float AlphaCutoff = 0.35f,
-        bool ClampU = false, bool ClampV = false)
+        bool ClampU = false, bool ClampV = false,
+        // M44 flowmap river water: a Flowmap_River material animates flowing water; Flow_Map on tex slot 1,
+        // Flowing_Normal_Map on slot 2, diffuse on slot 0. FlowTile/Speed/Strength drive the animation.
+        bool IsFlowmap = false, float FlowSpeed = 0f, float FlowStrength = 0f, Vector2 FlowTile = default,
+        Vector4 ColorInside = default, Vector4 ColorOutside = default, float WaterAlpha = 1f)
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0, false, null, false, 0.35f, false, false);
     }
@@ -163,6 +179,15 @@ uniform vec2 uClampUv;         // M34: per-axis UV clamp (1 = clamp to [0,1] for
 uniform vec4 uTint;            // M34: TintColor (rgba) for UNTEXTURED effect materials; 1,1,1,1 = none
 uniform int uTwoSided;         // M34: 1 when this face renders two-sided (flip backface normals for lighting)
 uniform int uMirrored;         // M34: 1 when the source mesh transform is mirrored (negative determinant)
+// M44 flowmap river water: Flow_Map (rg = flow dir) reuses slot 1, Flowing_Normal_Map reuses slot 2.
+uniform int uIsFlowmap;        // 1 when this submesh is a Flowmap_River water material
+uniform float uTime;           // seconds, drives the flow animation
+uniform float uFlowSpeed;      // FlowMap_Speed
+uniform float uFlowStrength;   // Flowmap_Strength
+uniform vec2 uFlowTile;        // FlowNormal_Tile
+uniform vec4 uColorInside;     // Color_Inside (deep water)
+uniform vec4 uColorOutside;    // Color_Outside (edge water)
+uniform float uWaterAlpha;     // TranslucentControl
 
 // League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
 vec3 matcapColour(vec3 worldN) {
@@ -234,6 +259,30 @@ void main() {
     }
 
     vec3 viewDir = normalize(uCamPos - vWorld);
+
+    // M44 flowmap river water: two flow-offset phases of the normal + diffuse are cross-faded (Valve-style
+    // ping-pong) so the surface flows continuously without a visible reset; the water is tinted between its
+    // inside/outside colours by a fresnel term, with a moving specular sparkle and its own translucency.
+    if (uIsFlowmap == 1) {
+        vec2 fuv = uv * uFlowTile;
+        vec2 flow = (texture(uMask, uv).rg * 2.0 - 1.0) * uFlowStrength;   // Flow_Map on slot 1
+        float p0 = fract(uTime * uFlowSpeed);
+        float p1 = fract(uTime * uFlowSpeed + 0.5);
+        float bw = abs(0.5 - p0) * 2.0;
+        vec3 nrm0 = texture(uGradient, fuv - flow * p0).rgb * 2.0 - 1.0;   // Flowing_Normal_Map on slot 2
+        vec3 nrm1 = texture(uGradient, fuv - flow * p1).rgb * 2.0 - 1.0;
+        vec3 wn = normalize(mix(nrm0, nrm1, bw) + vec3(0.0, 0.0, 2.5));
+        float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
+        vec3 water = mix(uColorInside.rgb, uColorOutside.rgb, clamp(fres, 0.0, 1.0));
+        vec3 h = normalize(normalize(-uLight) + viewDir);
+        float sp = pow(max(dot(wn, h), 0.0), 60.0);
+        float diffMod = 0.7 + 0.5 * dot(mix(texture(uTex, fuv - flow * p0).rgb, texture(uTex, fuv - flow * p1).rgb, bw), vec3(0.333));
+        vec3 colw = water * diffMod + vec3(sp) * 0.8;
+        if (uHasLightmap == 1) colw *= texture(uLightmap, vLmUv).rgb * 1.6;
+        FragColor = vec4(colw, uWaterAlpha);
+        return;
+    }
+
     float d = max(dot(n, normalize(-uLight)), 0.0);
     float light = 0.35 + 0.75 * d;
     vec3 col = base * light;
@@ -329,6 +378,14 @@ void main() { FragColor = uColor; }";
         _mClampUv = gl.GetUniformLocation(_meshProgram, "uClampUv");
         _mTwoSided = gl.GetUniformLocation(_meshProgram, "uTwoSided");
         _mMirrored = gl.GetUniformLocation(_meshProgram, "uMirrored");
+        _mIsFlowmap = gl.GetUniformLocation(_meshProgram, "uIsFlowmap");
+        _mTime = gl.GetUniformLocation(_meshProgram, "uTime");
+        _mFlowSpeed = gl.GetUniformLocation(_meshProgram, "uFlowSpeed");
+        _mFlowStrength = gl.GetUniformLocation(_meshProgram, "uFlowStrength");
+        _mFlowTile = gl.GetUniformLocation(_meshProgram, "uFlowTile");
+        _mColorInside = gl.GetUniformLocation(_meshProgram, "uColorInside");
+        _mColorOutside = gl.GetUniformLocation(_meshProgram, "uColorOutside");
+        _mWaterAlpha = gl.GetUniformLocation(_meshProgram, "uWaterAlpha");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -583,6 +640,10 @@ void main() { FragColor = uColor; }";
 
     /// <summary>Push a submesh's preview material (M32): UV transform + rim/specular feature flags.
     /// No-op outside range; unset submeshes keep the identity/off defaults (render exactly as before).</summary>
+    /// <summary>M44: advance the shared animation clock (seconds). Drives flowmap river water; the App only
+    /// needs to keep rendering frames (SetTime + RequestRender) while a flowmap submesh is present.</summary>
+    public void SetTime(float seconds) => _time = seconds;
+
     public void SetSubmeshMaterial(int index, SubmeshMaterial mat)
     {
         if (!_ready || !_hasMesh || index < 0 || index >= _submeshes.Length) return;
@@ -596,6 +657,13 @@ void main() { FragColor = uColor; }";
         _submeshes[index].Tint = mat.Tint ?? Vector4.One;
         _submeshes[index].Mirrored = mat.Mirrored;
         _submeshes[index].ClampUv = new Vector2(mat.ClampU ? 1f : 0f, mat.ClampV ? 1f : 0f);
+        _submeshes[index].IsFlowmap = mat.IsFlowmap;
+        _submeshes[index].FlowSpeed = mat.FlowSpeed;
+        _submeshes[index].FlowStrength = mat.FlowStrength;
+        _submeshes[index].FlowTile = mat.FlowTile;
+        _submeshes[index].ColorInside = mat.ColorInside;
+        _submeshes[index].ColorOutside = mat.ColorOutside;
+        _submeshes[index].WaterAlpha = mat.WaterAlpha;
     }
 
     /// <summary>Reset every submesh's preview material to identity UV + no rim/specular (M32).</summary>
@@ -613,6 +681,7 @@ void main() { FragColor = uColor; }";
             _submeshes[i].Tint = Vector4.One;
             _submeshes[i].Mirrored = false;
             _submeshes[i].ClampUv = Vector2.Zero;
+            _submeshes[i].IsFlowmap = false;
         }
     }
 
@@ -833,6 +902,7 @@ void main() { FragColor = uColor; }";
                 _gl.Uniform1(_mMatCap, 4);
                 _gl.Uniform1(_mMatCapMask, 5);
                 _gl.Uniform1(_mLightmap, 6);
+                _gl.Uniform1(_mTime, _time);   // M44: shared animation clock (flowmap water)
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
 
                 void DrawSubmesh(SubmeshDraw s)
@@ -854,6 +924,17 @@ void main() { FragColor = uColor; }";
                     _gl.Uniform1(_mAlphaCutoff, s.AlphaCutoff);
                     _gl.Uniform2(_mClampUv, s.ClampUv.X, s.ClampUv.Y);
                     _gl.Uniform4(_mTint, s.Tint.X, s.Tint.Y, s.Tint.Z, s.Tint.W);
+                    // M44 flowmap river water: animated flowing water (Flow_Map on slot 1, normal on slot 2).
+                    _gl.Uniform1(_mIsFlowmap, s.IsFlowmap ? 1 : 0);
+                    if (s.IsFlowmap)
+                    {
+                        _gl.Uniform1(_mFlowSpeed, s.FlowSpeed);
+                        _gl.Uniform1(_mFlowStrength, s.FlowStrength);
+                        _gl.Uniform2(_mFlowTile, s.FlowTile.X, s.FlowTile.Y);
+                        _gl.Uniform4(_mColorInside, s.ColorInside.X, s.ColorInside.Y, s.ColorInside.Z, s.ColorInside.W);
+                        _gl.Uniform4(_mColorOutside, s.ColorOutside.X, s.ColorOutside.Y, s.ColorOutside.Z, s.ColorOutside.W);
+                        _gl.Uniform1(_mWaterAlpha, s.WaterAlpha);
+                    }
                     _gl.ActiveTexture(TextureUnit.Texture0);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);
                     _gl.Uniform1(_mHasTex, s.Texture != 0 ? 1 : 0);
@@ -920,6 +1001,7 @@ void main() { FragColor = uColor; }";
             _gl.Uniform1(_mAlphaMode, 1); _gl.Uniform1(_mAlphaCutoff, 0.35f);   // cutout so fur/wing alpha reads
             _gl.Uniform4(_mUvScaleOffset, 1f, 1f, 0f, 0f); _gl.Uniform1(_mUvRot, 0f);
             _gl.Uniform2(_mClampUv, 0f, 0f); _gl.Uniform4(_mTint, 1f, 1f, 1f, 1f); _gl.Uniform1(_mMirrored, 0);
+            _gl.Uniform1(_mIsFlowmap, 0);   // M44: props never flow
             for (int u = 1; u <= 6; u++) { _gl.ActiveTexture(TextureUnit.Texture0 + u); _gl.BindTexture(TextureTarget.Texture2D, _whiteTex); }
 
             _gl.Enable(EnableCap.DepthTest);

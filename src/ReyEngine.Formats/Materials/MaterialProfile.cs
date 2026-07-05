@@ -33,7 +33,19 @@ public sealed record MaterialProfile(
     bool BlendEnabled = false,   // M34: pass.blendEnable (real .bin flag)
     float? AlphaCutoff = null,   // M34: AlphaTestValue param (real cutout threshold, e.g. 0.3); null = shader default 0.35
     bool ClampU = false,         // M34: diffuse addressU == Clamp (decals) — clamp UV instead of tiling
-    bool ClampV = false)
+    bool ClampV = false,
+    // ---- M44: Flowmap_River animated water (Bloom_FlowMapRiver_*). When IsFlowmap, the preview renders
+    // flowing tinted translucent water instead of a flat diffuse. FlowMapPath/FlowNormalPath are the sampler
+    // .tex paths the App resolves and binds (Flow_Map -> mask slot, Flowing_Normal_Map -> gradient slot). ----
+    bool IsFlowmap = false,
+    float FlowSpeed = 0f,
+    float FlowStrength = 0f,
+    Vector2 FlowTile = default,
+    Vector4 ColorInside = default,
+    Vector4 ColorOutside = default,
+    float WaterAlpha = 1f,
+    string? FlowMapPath = null,
+    string? FlowNormalPath = null)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -192,8 +204,44 @@ public static class MaterialProfiles
         static bool IsClamp(int a) => a == 1 || a == 3 || a == 4;
         bool clampU = IsClamp(b.DiffuseAddressU), clampV = IsClamp(b.DiffuseAddressV);
 
+        var flow = ClassifyFlowmap(b);
+
         return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
-            renderMode, doubleSided, tint, b.BlendEnable, alphaCutoff, clampU, clampV);
+            renderMode, doubleSided, tint, b.BlendEnable, alphaCutoff, clampU, clampV,
+            flow.IsFlowmap, flow.Speed, flow.Strength, flow.Tile, flow.Inside, flow.Outside, flow.Alpha,
+            flow.FlowMapPath, flow.FlowNormalPath);
+    }
+
+    /// <summary>M44: detect + read a Flowmap_River water material (Bloom_FlowMapRiver_*). A flowmap material
+    /// has a Flow_Map sampler AND a FlowMap_Speed/Flowmap_Strength param (or "FlowMap" in its shader/name).
+    /// Returns the flow textures + tint/tile/speed params so the preview can animate flowing water.</summary>
+    private static (bool IsFlowmap, float Speed, float Strength, Vector2 Tile, Vector4 Inside, Vector4 Outside,
+        float Alpha, string? FlowMapPath, string? FlowNormalPath) ClassifyFlowmap(MaterialBinding b)
+    {
+        // Flow_Map sampler carries the per-texel flow direction; the flowing normal map is a Normal sampler
+        // whose name also mentions "Flow" (Flowing_Normal_Map) so it isn't confused with a regular normal map.
+        var flowMap = b.Slots.FirstOrDefault(s => s.SamplerName.Contains("Flow", OIC) && !s.SamplerName.Contains("Normal", OIC));
+        var flowNormal = b.Slots.FirstOrDefault(s => s.SamplerName.Contains("Flow", OIC) && s.SamplerName.Contains("Normal", OIC));
+
+        bool named = (b.RenderShader ?? b.ShaderName ?? "").Contains("Flow", OIC) || b.Name.Contains("FlowMap", OIC);
+        bool hasFlowParam = b.Parameters.Any(p => { var n = Norm(p.Name); return n.Contains("flowmapspeed") || n.Contains("flowmapstrength"); });
+        if (!(flowMap is not null && (named || hasFlowParam))) return (false, 0, 0, default, default, default, 1f, null, null);
+
+        float speed = 0.15f, strength = 1f, alpha = 0.9f;
+        Vector2 tile = new(5f, 10f);
+        Vector4 inside = new(0.44f, 0.87f, 0.92f, 1f), outside = new(0.57f, 0.64f, 0.70f, 1f);
+        foreach (var p in b.Parameters)
+        {
+            var n = Norm(p.Name);
+            if (!p.TryGetVector4(out var v)) continue;
+            if (n == "flowmapspeed") speed = v.X;
+            else if (n == "flowmapstrength") strength = v.X;
+            else if (n == "flownormaltile") tile = new Vector2(v.X != 0 ? v.X : 5f, v.Y != 0 ? v.Y : 10f);
+            else if (n == "colorinside") inside = v;
+            else if (n == "coloroutside") outside = v;
+            else if (n == "translucentcontrol") alpha = Math.Clamp(v.X, 0.15f, 1f);
+        }
+        return (true, speed, strength, tile, inside, outside, alpha, flowMap!.Path, flowNormal?.Path);
     }
 
     /// <summary>Derive the compositing mode from the material's technique/pass blend state + shader name (M34).
