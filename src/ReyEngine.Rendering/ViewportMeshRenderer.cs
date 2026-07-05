@@ -260,31 +260,36 @@ void main() {
 
     vec3 viewDir = normalize(uCamPos - vWorld);
 
-    // M44 flowmap river water: two flow-offset phases of the normal + diffuse are cross-faded (Valve-style
-    // ping-pong) so the surface flows continuously without a visible reset; the water is tinted between its
-    // inside/outside colours by a fresnel term, with a moving specular sparkle and its own translucency.
+    // M44 Flowmap_River water (real material: USE_DIFFUSE_TEXTURE=off, colour is pure Color_Inside/Outside,
+    // NOT a diffuse map). A tiled water-wave normal (Flowing_Normal_Map, slot 2) is flow-advected in two
+    // cross-faded phases (Flow_Map RG on slot 1); its ripples drive a bright sharp SPECULAR glint (the visible
+    // shine) while a fresnel term tints deep(Inside) -> edge(Outside). Translucent by TranslucentControl.
     if (uIsFlowmap == 1) {
         vec2 fuv = uv * uFlowTile;
         vec2 flow = (texture(uMask, uv).rg * 2.0 - 1.0) * uFlowStrength;   // Flow_Map on slot 1
-        float p0 = fract(uTime * uFlowSpeed);
-        float p1 = fract(uTime * uFlowSpeed + 0.5);
-        float bw = abs(0.5 - p0) * 2.0;
-        vec3 nrm0 = texture(uGradient, fuv - flow * p0).rgb * 2.0 - 1.0;   // Flowing_Normal_Map on slot 2
-        vec3 nrm1 = texture(uGradient, fuv - flow * p1).rgb * 2.0 - 1.0;
-        // Procedural ripple floor: a couple of world-space sine waves keep the surface visibly alive even when
-        // the (sometimes subchunked/shared) Flow/normal textures fail to load, so the water is never static.
-        vec2 wcoord = vWorld.xz * 0.012;
-        float wave = sin(wcoord.x * 3.0 + uTime * 1.7) * 0.5 + sin((wcoord.x + wcoord.y) * 2.3 - uTime * 1.1) * 0.5;
-        vec2 waveN = vec2(cos(wcoord.x * 3.0 + uTime * 1.7), cos((wcoord.x + wcoord.y) * 2.3 - uTime * 1.1)) * 0.35;
-        vec3 wn = normalize(mix(nrm0, nrm1, bw) + vec3(waveN, 2.5));
-        float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
-        vec3 water = mix(uColorInside.rgb, uColorOutside.rgb, clamp(fres, 0.0, 1.0));
-        vec3 h = normalize(normalize(-uLight) + viewDir);
-        float sp = pow(max(dot(wn, h), 0.0), 60.0);
-        float diffMod = 0.7 + 0.5 * dot(mix(texture(uTex, fuv - flow * p0).rgb, texture(uTex, fuv - flow * p1).rgb, bw), vec3(0.333));
-        vec3 colw = water * (diffMod + 0.08 * wave) + vec3(sp) * 0.8;
-        if (uHasLightmap == 1) colw *= texture(uLightmap, vLmUv).rgb * 1.6;
-        FragColor = vec4(colw, uWaterAlpha);
+        float ph0 = fract(uTime * uFlowSpeed);
+        float ph1 = fract(uTime * uFlowSpeed + 0.5);
+        float bw = abs(ph0 - 0.5) * 2.0;                                  // ping-pong cross-fade weight
+        vec2 wave0 = (texture(uGradient, fuv + flow * ph0).xy * 2.0 - 1.0); // Flowing_Normal_Map, phase 0
+        vec2 wave1 = (texture(uGradient, fuv + flow * ph1).xy * 2.0 - 1.0); // phase 1
+        vec2 waveXY = mix(wave0, wave1, bw);
+        // Procedural ripple floor so the surface is never static even when the (subchunked/shared) Flow/normal
+        // textures fail to load: adds a couple of world-space travelling waves to the tangent perturbation.
+        vec2 wc = vWorld.xz * 0.02;
+        waveXY += vec2(sin(wc.x * 2.3 + uTime * 1.6) + sin((wc.x + wc.y) * 1.7 - uTime * 1.1),
+                       cos(wc.y * 2.1 - uTime * 1.3) + sin((wc.x - wc.y) * 1.9 + uTime * 0.9)) * 0.22;
+        // Perturb the surface normal in its (approx horizontal) tangent plane so the specular glints travel.
+        vec3 N = normalize(n + vec3(waveXY.x, 0.0, waveXY.y) * 0.6);
+        vec3 V = viewDir;
+        vec3 Hh = normalize(normalize(-uLight) + V);
+        float ndh = max(dot(N, Hh), 0.0);
+        float glint = pow(ndh, 140.0) * 2.4 + pow(ndh, 24.0) * 0.30;      // tight sun glint + broad sheen
+        float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+        vec3 body = mix(uColorInside.rgb, uColorOutside.rgb, clamp(fres, 0.0, 1.0));
+        vec3 colw = body + vec3(glint);
+        // Highlights read as slightly foamy/opaque; the still body keeps its base translucency.
+        float a = clamp(uWaterAlpha + glint * 0.5 + fres * 0.12, 0.0, 1.0);
+        FragColor = vec4(colw, a);
         return;
     }
 
