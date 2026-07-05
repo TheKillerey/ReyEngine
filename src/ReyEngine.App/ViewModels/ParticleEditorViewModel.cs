@@ -21,6 +21,7 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
 {
     // wired by MainWindowViewModel
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveTextures;
+    public Func<string, Avalonia.Media.Imaging.Bitmap?>? LoadThumbnail;   // particle sprite preview on cards
     public Action<string>? Info;
     public Action<string>? Error;
     public Action? MarkDocumentDirty;
@@ -142,6 +143,9 @@ public sealed class ParticleEmitterCardViewModel
 {
     public string Name { get; }
     public IReadOnlyList<ParticleModuleGroupViewModel> Modules { get; }
+    /// <summary>The emitter's sprite texture, decoded as a small preview (null when unresolved).</summary>
+    public Avalonia.Media.Imaging.Bitmap? Thumbnail { get; }
+    public bool HasThumbnail => Thumbnail is not null;
 
     public ParticleEmitterCardViewModel(ParticleEmitterEntry emitter, ParticleEditorViewModel owner)
     {
@@ -151,6 +155,9 @@ public sealed class ParticleEmitterCardViewModel
                 emitter.Properties.Where(p => p.Module == m)
                     .Select(p => new ParticlePropertyRowViewModel(p, owner)).ToList()))
             .ToList();
+        var texPath = emitter.Properties.FirstOrDefault(p => p.Name == "texture")?.CurrentText;
+        if (!string.IsNullOrWhiteSpace(texPath))
+            try { Thumbnail = owner.LoadThumbnail?.Invoke(texPath); } catch { Thumbnail = null; }
     }
 }
 

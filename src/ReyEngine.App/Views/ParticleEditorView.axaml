@@ -68,6 +68,10 @@
                       <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}" Padding="8,5">
                         <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
                       </Border>
+                      <!-- particle sprite preview (Particle Town texture strip) -->
+                      <Border DockPanel.Dock="Top" Background="#10141B" Height="52" IsVisible="{Binding HasThumbnail}">
+                        <Image Source="{Binding Thumbnail}" Stretch="Uniform" Margin="3" />
+                      </Border>
                       <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <ItemsControl ItemsSource="{Binding Modules}">
                           <ItemsControl.ItemTemplate>

@@ -80,8 +80,22 @@ public partial class MainWindow : Window
             vm.Dialogs.Owner = this;
             vm.RequestProjectSettings += () => ShowProjectSettings(vm);
             vm.RequestSettings += () => ShowSettings(vm);
+            vm.ShowParticleEditorWindow = () => ShowParticleEditor(vm);   // M46
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
         }
+    }
+
+    // M46: the Particle Editor lives in its own (non-modal) window; reuse one instance while open.
+    private ParticleEditorWindow? _particleEditorWindow;
+    private void ShowParticleEditor(MainWindowViewModel vm)
+    {
+        if (_particleEditorWindow is null)
+        {
+            _particleEditorWindow = new ParticleEditorWindow { DataContext = vm.ParticleEditor };
+            _particleEditorWindow.Closed += (_, _) => _particleEditorWindow = null;
+            _particleEditorWindow.Show(this);
+        }
+        else _particleEditorWindow.Activate();
     }
 
     private async void ShowProjectSettings(MainWindowViewModel vm)

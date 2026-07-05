@@ -353,10 +353,6 @@
                               ToolTip.Tip="Snap to increments — 100u move · 15° rotate · 0.25× scale" />
               </StackPanel>
             </Border>
-
-            <!-- M46: Particle Editor overlay — replaces the viewport area while a ✨ particle tab is active -->
-            <views:ParticleEditorView DataContext="{Binding ParticleEditor}"
-                                      IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).IsParticleEditorActive}" />
           </Grid>
           </DockPanel>
         </Border>
