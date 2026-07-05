@@ -625,6 +625,13 @@ public sealed class ViewportControl : OpenGlControlBase
                     if (!uploaded.TryGetValue(img, out var tex)) { tex = _particleRenderer.UploadTexture(img.Rgba, img.Width, img.Height); uploaded[img] = tex; }
                     es.Texture = tex;
                 }
+                // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
+                var mesh = item.EmitterMeshes is { } ms && idx >= 0 && idx < ms.Count ? ms[idx] : null;
+                if (mesh is not null)
+                {
+                    _particleRenderer.UploadEmitterMesh(es, mesh.Positions, mesh.Uvs);
+                    if (img is null) es.Texture = 0; // white fallback inside the mesh path, not the soft dot
+                }
             }
             _particleSims.Add(sim);
         }

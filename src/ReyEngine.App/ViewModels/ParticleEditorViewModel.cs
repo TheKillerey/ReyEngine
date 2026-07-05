@@ -21,6 +21,7 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
 {
     // wired by MainWindowViewModel
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveTextures;
+    public Func<VfxSystemDefinition, IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>?>? ResolveMeshes; // M47
     public Func<string, Avalonia.Media.Imaging.Bitmap?>? LoadThumbnail;   // particle sprite preview on cards
     public Action<string>? Info;
     public Action<string>? Error;
@@ -90,7 +91,8 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         if (SelectedSystem is null) { Playback = null; return; }
         if (!_defs.TryGetValue(SelectedSystem.Entry.PathHash, out var def)) { Playback = null; return; }
         var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
-        Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs) });
+        var meshes = ResolveMeshes?.Invoke(def);
+        Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs, meshes) });
     }
 
     [RelayCommand] private void Restart() => RebuildPlayback();

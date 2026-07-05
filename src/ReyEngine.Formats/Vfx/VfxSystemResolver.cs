@@ -50,6 +50,13 @@ public static class VfxSystemResolver
     private static readonly uint F_dynamics      = HashAlgorithms.Fnv1a("dynamics");
     private static readonly uint F_times         = HashAlgorithms.Fnv1a("times");
     private static readonly uint F_values        = HashAlgorithms.Fnv1a("values");
+    // M47: per-particle randomisation (VfxProbabilityTableData) + mesh primitive fields
+    private static readonly uint F_probTables    = HashAlgorithms.Fnv1a("probabilityTables");
+    private static readonly uint F_keyTimes      = HashAlgorithms.Fnv1a("keyTimes");
+    private static readonly uint F_keyValues     = HashAlgorithms.Fnv1a("keyValues");
+    private static readonly uint F_meshDef       = 0x0d89732d; // VfxPrimitiveMesh's VfxMeshDefinitionData field (observed)
+    private static readonly uint F_simpleMesh    = HashAlgorithms.Fnv1a("mSimpleMeshName");
+    private static readonly uint F_meshName      = HashAlgorithms.Fnv1a("meshName");
 
     // primitive class hashes we treat as "mesh" (billboarded as fallback)
     private static readonly uint PrimMesh = HashAlgorithms.Fnv1a("VfxPrimitiveMesh");
@@ -101,6 +108,10 @@ public static class VfxSystemResolver
         var birthColor = ReadCurve4(p, F_birthColor) ?? VfxCurve4.Const(Vector4.One);
 
         bool isMesh = p.TryGetValue(F_primitive, out var prim) && prim is BinTreeStruct ps && ps.ClassHash == PrimMesh;
+        // M47: the mesh primitive carries its .scb/.sco path (VfxMeshDefinitionData.mSimpleMeshName)
+        string? meshPath = null;
+        if (isMesh && prim is BinTreeStruct ps2 && Get(ps2.Properties, F_meshDef) is BinTreeStruct md)
+            meshPath = GetString(md.Properties, F_simpleMesh) ?? GetString(md.Properties, F_meshName);
 
         return new VfxEmitterDefinition(
             Name: GetString(p, F_emitterName) ?? "(emitter)",
@@ -124,7 +135,8 @@ public static class VfxSystemResolver
             TexDiv: GetVec2(p, F_texDiv) ?? Vector2.One,
             NumFrames: GetU16(p, F_numFrames) ?? 1,
             RandomStartFrame: GetBool(p, F_randomStart),
-            IsMeshPrimitive: isMesh);
+            IsMeshPrimitive: isMesh,
+            MeshPath: meshPath);
     }
 
     // ---- Value* curve readers (constantValue + optional dynamics{times,values}) ----
@@ -135,7 +147,7 @@ public static class VfxSystemResolver
         {
             float c = AsF32(Get(v.Properties, F_constantValue)) ?? 0f;
             var (times, vals) = ReadDynamics(v.Properties, AsF32);
-            return new VfxCurveF(c, times, vals);
+            return new VfxCurveF(c, times, vals, ReadProbTables(v.Properties));
         }
         return null;
     }
@@ -146,7 +158,7 @@ public static class VfxSystemResolver
         {
             var c = AsVec3(Get(v.Properties, F_constantValue)) ?? Vector3.Zero;
             var (times, vals) = ReadDynamics(v.Properties, AsVec3);
-            return new VfxCurve3(c, times, vals);
+            return new VfxCurve3(c, times, vals, ReadProbTables(v.Properties));
         }
         return null;
     }
@@ -157,9 +169,34 @@ public static class VfxSystemResolver
         {
             var c = AsVec4(Get(v.Properties, F_constantValue)) ?? Vector4.One;
             var (times, vals) = ReadDynamics(v.Properties, AsVec4);
-            return new VfxCurve4(c, times, vals);
+            return new VfxCurve4(c, times, vals, ReadProbTables(v.Properties));
         }
         return null;
+    }
+
+    /// <summary>M47: read a Value* struct's probabilityTables (container of VfxProbabilityTableData
+    /// { keyTimes:[f32], keyValues:[f32] }, one per component) — Riot's exact per-particle randomisation.
+    /// Null when absent (most map VFX) so callers keep the constant + approximate jitter path.</summary>
+    private static VfxProbTable[]? ReadProbTables(IReadOnlyDictionary<uint, BinTreeProperty> valueProps)
+    {
+        if (Get(valueProps, F_probTables) is not BinTreeContainer pc || pc.Elements.Count == 0) return null;
+        var list = new List<VfxProbTable>(pc.Elements.Count);
+        foreach (var el in pc.Elements)
+        {
+            if (el is not BinTreeStruct s) continue;
+            if (Get(s.Properties, F_keyTimes) is not BinTreeContainer tc ||
+                Get(s.Properties, F_keyValues) is not BinTreeContainer vc) continue;
+            int n = Math.Min(tc.Elements.Count, vc.Elements.Count);
+            if (n == 0) continue;
+            var times = new float[n]; var vals = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                times[i] = AsF32(tc.Elements[i]) ?? 0f;
+                vals[i] = AsF32(vc.Elements[i]) ?? 0f;
+            }
+            list.Add(new VfxProbTable(times, vals));
+        }
+        return list.Count > 0 ? list.ToArray() : null;
     }
 
     /// <summary>Read a dynamics{ times:[f32], values:[T] } sub-struct into parallel arrays, or (null,null).</summary>

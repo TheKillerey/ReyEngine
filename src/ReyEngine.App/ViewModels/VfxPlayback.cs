@@ -14,7 +14,8 @@ namespace ReyEngine.App.ViewModels;
 public sealed record VfxPlaybackItem(
     VfxSystemDefinition System,
     Vector3 WorldPos,
-    IReadOnlyList<TextureImage?> EmitterTextures);
+    IReadOnlyList<TextureImage?> EmitterTextures,
+    IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>? EmitterMeshes = null);   // M47: .scb/.sco per emitter
 
 /// <summary>
 /// A request to play one or more placed VFX systems live in the viewport (M36). One item for a single

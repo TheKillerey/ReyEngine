@@ -20,10 +20,13 @@ public sealed class VfxParticleRenderer
 
     private const int Stride = 11; // floats per instance: cx,cy,cz, sx,sy, r,g,b,a, rot, frame
 
+    private bool _gles;
+
     public unsafe void Initialize(GL gl)
     {
         _gl = gl;
         bool gles = ShaderUtil.DetectGles(gl);
+        _gles = gles;
         _program = ShaderUtil.CreateProgram(gl, gles, Vert, Frag);
         _uViewProj = gl.GetUniformLocation(_program, "uViewProj");
         _uCamRight = gl.GetUniformLocation(_program, "uCamRight");
@@ -108,7 +111,10 @@ public sealed class VfxParticleRenderer
 
         foreach (var es in sim.Emitters)
         {
-            if (es.InstanceCount == 0 || es.Texture == 0) continue;
+            if (es.InstanceCount == 0) continue;
+            // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
+            if (es.MeshVao != 0) { RenderMeshEmitter(es, viewProj); continue; }
+            if (es.Texture == 0) continue;
 
             int floats = es.InstanceCount * Stride;
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _instVbo);
@@ -144,12 +150,15 @@ public sealed class VfxParticleRenderer
 
     private static bool IsAdditive(int blendMode) => blendMode is 0 or 1 or 4 or 5;
 
-    /// <summary>Delete all sprite textures uploaded so far (call before re-uploading a new system's sprites).</summary>
+    /// <summary>Delete all sprite textures + emitter meshes uploaded so far (before a new system uploads).</summary>
     public void ClearTextures()
     {
         if (!_ready) return;
         foreach (var t in _ownedTextures) _gl.DeleteTexture(t);
         _ownedTextures.Clear();
+        foreach (var (vao, vbo) in _ownedMeshes) { _gl.DeleteVertexArray(vao); _gl.DeleteBuffer(vbo); }
+        _ownedMeshes.Clear();
+        _whiteTex = 0; // owned-texture list held it; EnsureMeshProgram re-creates on demand
     }
 
     public void Dispose()
@@ -163,6 +172,108 @@ public sealed class VfxParticleRenderer
         _gl.DeleteProgram(_program);
         _ready = false;
     }
+
+    // ---- M47 mesh-primitive particles (.scb/.sco): per-particle uniforms, simple textured draw ----
+    private uint _meshProgram;
+    private int _muViewProj, _muWorldPos, _muScale, _muRot, _muColor, _muTex;
+    private uint _whiteTex;
+
+    private unsafe void EnsureMeshProgram()
+    {
+        if (_meshProgram == 0)
+        {
+            _meshProgram = ShaderUtil.CreateProgram(_gl, _gles, MeshVert, MeshFrag);
+            _muViewProj = _gl.GetUniformLocation(_meshProgram, "uViewProj");
+            _muWorldPos = _gl.GetUniformLocation(_meshProgram, "uWorldPos");
+            _muScale = _gl.GetUniformLocation(_meshProgram, "uScale");
+            _muRot = _gl.GetUniformLocation(_meshProgram, "uRot");
+            _muColor = _gl.GetUniformLocation(_meshProgram, "uColor");
+            _muTex = _gl.GetUniformLocation(_meshProgram, "uTex");
+        }
+        if (_whiteTex == 0) _whiteTex = UploadTexture(new byte[] { 255, 255, 255, 255 }, 1, 1);
+    }
+
+    /// <summary>Upload an emitter's static-object mesh (triangle soup: pos3 + uv2 per vertex).</summary>
+    public unsafe void UploadEmitterMesh(VfxParticleSimulator.EmitterState es, float[] positions, float[] uvs)
+    {
+        if (!_ready) return;
+        EnsureMeshProgram();
+        int verts = positions.Length / 3;
+        var inter = new float[verts * 5];
+        for (int i = 0; i < verts; i++)
+        {
+            inter[i * 5 + 0] = positions[i * 3 + 0];
+            inter[i * 5 + 1] = positions[i * 3 + 1];
+            inter[i * 5 + 2] = positions[i * 3 + 2];
+            inter[i * 5 + 3] = i * 2 + 0 < uvs.Length ? uvs[i * 2 + 0] : 0f;
+            inter[i * 5 + 4] = i * 2 + 1 < uvs.Length ? uvs[i * 2 + 1] : 0f;
+        }
+        var vao = _gl.GenVertexArray();
+        var vbo = _gl.GenBuffer();
+        _gl.BindVertexArray(vao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
+        fixed (float* p = inter)
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(inter.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 5 * sizeof(float), (void*)0);
+        _gl.EnableVertexAttribArray(1);
+        _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+        _gl.BindVertexArray(0);
+        es.MeshVao = vao; es.MeshVbo = vbo; es.MeshVertexCount = verts;
+        _ownedMeshes.Add((vao, vbo));
+    }
+    private readonly List<(uint Vao, uint Vbo)> _ownedMeshes = new();
+
+    /// <summary>Draw a mesh-primitive emitter: one textured draw per live particle (counts are small).</summary>
+    private void RenderMeshEmitter(VfxParticleSimulator.EmitterState es, Matrix4x4 viewProj)
+    {
+        EnsureMeshProgram();
+        _gl.UseProgram(_meshProgram);
+        _gl.BindVertexArray(es.MeshVao);
+        _gl.UniformMatrix4(_muViewProj, 1, false, in viewProj.M11);
+        _gl.Uniform1(_muTex, 0);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, es.Texture != 0 ? es.Texture : _whiteTex);
+        if (IsAdditive(es.Def.BlendMode)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
+        else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        for (int i = 0; i < es.InstanceCount; i++)
+        {
+            int o = i * Stride;   // [cx,cy,cz, sx,sy, r,g,b,a, rot, frame]
+            _gl.Uniform3(_muWorldPos, es.Instances[o], es.Instances[o + 1], es.Instances[o + 2]);
+            // mesh particles use birthScale.x as a uniform scale; a scale of ~1 means unscaled geometry
+            float sc = MathF.Max(0.01f, es.Instances[o + 3]);
+            _gl.Uniform1(_muScale, sc);
+            _gl.Uniform1(_muRot, es.Instances[o + 9]);
+            _gl.Uniform4(_muColor, es.Instances[o + 5], es.Instances[o + 6], es.Instances[o + 7], es.Instances[o + 8]);
+            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)es.MeshVertexCount);
+        }
+        _gl.UseProgram(_program);   // back to the billboard program for the next emitter
+        _gl.BindVertexArray(_vao);
+    }
+
+    private const string MeshVert = @"
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec2 aUv;
+uniform mat4 uViewProj;
+uniform vec3 uWorldPos;
+uniform float uScale;
+uniform float uRot;
+out vec2 vUv;
+void main(){
+    float s = sin(uRot); float c = cos(uRot);
+    vec3 p = vec3(aPos.x * c - aPos.z * s, aPos.y, aPos.x * s + aPos.z * c) * uScale + uWorldPos;
+    gl_Position = uViewProj * vec4(p, 1.0);
+    vUv = aUv;
+}";
+
+    private const string MeshFrag = @"
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec4 uColor;
+out vec4 fragColor;
+void main(){
+    fragColor = texture(uTex, vUv) * uColor;
+}";
 
     private const string Vert = @"
 layout(location=0) in vec2 aCorner;    // base quad corner in [-0.5, 0.5]

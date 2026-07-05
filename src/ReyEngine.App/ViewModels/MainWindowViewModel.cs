@@ -273,6 +273,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return texs;
     }
 
+    /// <summary>M47: resolve each emitter's .scb/.sco mesh primitive (null when not a mesh emitter or
+    /// the mesh doesn't resolve — those billboard as before). Cached per system.</summary>
+    private readonly Dictionary<uint, IReadOnlyList<Formats.Meshes.StaticMeshData?>?> _vfxMeshCache = new();
+    private IReadOnlyList<Formats.Meshes.StaticMeshData?>? ResolveSystemMeshes(VfxSystemDefinition sys)
+    {
+        if (_vfxMeshCache.TryGetValue(sys.PathHash, out var cached)) return cached;
+        List<Formats.Meshes.StaticMeshData?>? meshes = null;
+        for (int i = 0; i < sys.Emitters.Count; i++)
+        {
+            var e = sys.Emitters[i];
+            if (!e.IsMeshPrimitive || string.IsNullOrEmpty(e.MeshPath)) continue;
+            var bytes = ReadAssetByPath(e.MeshPath);
+            var mesh = bytes is null ? null : Formats.Meshes.StaticObjectDecoder.Decode(bytes, e.MeshPath);
+            if (mesh is null) continue;
+            meshes ??= Enumerable.Repeat<Formats.Meshes.StaticMeshData?>(null, sys.Emitters.Count).ToList();
+            meshes[i] = mesh;
+        }
+        return _vfxMeshCache[sys.PathHash] = meshes;
+    }
+
     // ---- Champion-skin VFX (M37) — a loaded skin's effect library, played at the model origin ----
     public ObservableCollection<VfxSystemItemViewModel> ChampionVfxSystems { get; } = new();
     [ObservableProperty] private bool _hasChampionVfx;
@@ -282,7 +302,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void SetChampionVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems)
     {
         _vfxSystems = systems;
-        _vfxTextureCache.Clear();
+        _vfxTextureCache.Clear(); _vfxMeshCache.Clear();
         ChampionVfxSystems.Clear();
         foreach (var s in systems.Values
                      .Where(s => s.Emitters.Any(e => e.IsVisual))
@@ -300,7 +320,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return;
         }
         // champion VFX are authored around the character root (origin); play one system there.
-        CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, System.Numerics.Vector3.Zero, ResolveSystemTextures(sys)) });
+        CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, System.Numerics.Vector3.Zero, ResolveSystemTextures(sys), ResolveSystemMeshes(sys)) });
         _log.Info("VFX", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {ResolveSystemTextures(sys).Count(t => t is not null)} sprite(s) resolved.");
     }
 
@@ -316,7 +336,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var v in MapContent.AllParticles)
             {
                 if (!_vfxSystems.TryGetValue(v.Placement.SystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
-                items.Add(new VfxPlaybackItem(s, v.CurrentPosition, ResolveSystemTextures(s)));
+                items.Add(new VfxPlaybackItem(s, v.CurrentPosition, ResolveSystemTextures(s), ResolveSystemMeshes(s)));
                 if (items.Count >= MaxPlayAllInstances) break;
             }
             CurrentParticlePlayback = items.Count > 0 ? new VfxPlayback(items) : null;
@@ -333,7 +353,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return;
         }
         var texs = ResolveSystemTextures(sys);
-        CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, node.CurrentPosition, texs) });
+        CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, node.CurrentPosition, texs, ResolveSystemMeshes(sys)) });
         _log.Info("Particles", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {texs.Count(t => t is not null)} sprite(s) resolved.");
     }
 
@@ -459,6 +479,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         // M46 Particle Editor wiring
         ParticleEditor.ResolveTextures = ResolveSystemTextures;
+        ParticleEditor.ResolveMeshes = ResolveSystemMeshes;   // M47: .scb/.sco mesh primitives
         ParticleEditor.Info = m => _log.Info("Particle", m);
         ParticleEditor.Error = m => _log.Error("Particle", m);
         ParticleEditor.MarkDocumentDirty = () => { }; // window has its own dirty state via Document.IsDirty
@@ -1247,7 +1268,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ChampionVfxSystems.Clear();
         HasChampionVfx = false;
         _vfxSystems = EmptyVfx;
-        _vfxTextureCache.Clear();
+        _vfxTextureCache.Clear(); _vfxMeshCache.Clear();
         CurrentAnimation = null;
         AnimationTime = 0;
         Animation.Clear();

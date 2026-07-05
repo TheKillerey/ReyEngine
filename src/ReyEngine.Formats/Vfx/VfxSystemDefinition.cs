@@ -36,42 +36,74 @@ public sealed record VfxEmitterDefinition(
     Vector2 TexDiv,                 // flipbook grid (cols, rows); (1,1) = single frame
     int NumFrames,
     bool RandomStartFrame,
-    bool IsMeshPrimitive)           // primitive is a mesh (we billboard it as a fallback)
+    bool IsMeshPrimitive,           // primitive is a mesh (billboarded only when the mesh can't load)
+    string? MeshPath = null)        // M47: VfxPrimitiveMesh -> VfxMeshDefinitionData.mSimpleMeshName (.scb/.sco)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
-    public bool IsVisual => !Disabled && !string.IsNullOrEmpty(TexturePath);
+    public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) || !string.IsNullOrEmpty(MeshPath));
+}
+
+/// <summary>M47: one per-component probability table (VfxProbabilityTableData): a particle rolls r in 0..1
+/// at birth and takes the piecewise-linear value at r — Riot's exact per-particle randomisation.</summary>
+public readonly record struct VfxProbTable(float[] Times, float[] Values)
+{
+    public float Sample(float r) => VfxCurve.Interp(Times, Values, r, static (a, b, f) => a + (b - a) * f);
 }
 
 /// <summary>A scalar value that is either constant or an animation curve over normalised age (0..1).</summary>
-public readonly record struct VfxCurveF(float Constant, float[]? Times, float[]? Values)
+public readonly record struct VfxCurveF(float Constant, float[]? Times, float[]? Values, VfxProbTable[]? Prob = null)
 {
     public float Sample(float t)
     {
         if (Times is null || Values is null || Times.Length == 0) return Constant;
         return VfxCurve.Interp(Times, Values, t, static (a, b, f) => a + (b - a) * f);
     }
+    /// <summary>Birth-time value: exact per-particle randomisation via the probability table when present.</summary>
+    public float SampleBirth(Random rng) =>
+        Prob is { Length: > 0 } ? Prob[0].Sample((float)rng.NextDouble()) : Sample(0f);
     public static readonly VfxCurveF Zero = new(0f, null, null);
     public static VfxCurveF Const(float v) => new(v, null, null);
 }
 
 /// <summary>A Vector3 value that is either constant or an animation curve over normalised age.</summary>
-public readonly record struct VfxCurve3(Vector3 Constant, float[]? Times, Vector3[]? Values)
+public readonly record struct VfxCurve3(Vector3 Constant, float[]? Times, Vector3[]? Values, VfxProbTable[]? Prob = null)
 {
     public Vector3 Sample(float t)
     {
         if (Times is null || Values is null || Times.Length == 0) return Constant;
         return VfxCurve.Interp(Times, Values, t, static (a, b, f) => Vector3.Lerp(a, b, f));
     }
+    /// <summary>Birth-time value with per-component probability tables (independent rolls, Riot-style).</summary>
+    public Vector3 SampleBirth(Random rng)
+    {
+        if (Prob is not { Length: > 0 }) return Sample(0f);
+        var v = Sample(0f);
+        return new Vector3(
+            Prob.Length > 0 ? Prob[0].Sample((float)rng.NextDouble()) : v.X,
+            Prob.Length > 1 ? Prob[1].Sample((float)rng.NextDouble()) : v.Y,
+            Prob.Length > 2 ? Prob[2].Sample((float)rng.NextDouble()) : v.Z);
+    }
+    public bool HasProb => Prob is { Length: > 0 };
     public static VfxCurve3 Const(Vector3 v) => new(v, null, null);
 }
 
 /// <summary>A Vector4/colour value that is either constant or an animation curve over normalised age.</summary>
-public readonly record struct VfxCurve4(Vector4 Constant, float[]? Times, Vector4[]? Values)
+public readonly record struct VfxCurve4(Vector4 Constant, float[]? Times, Vector4[]? Values, VfxProbTable[]? Prob = null)
 {
     public Vector4 Sample(float t)
     {
         if (Times is null || Values is null || Times.Length == 0) return Constant;
         return VfxCurve.Interp(Times, Values, t, static (a, b, f) => Vector4.Lerp(a, b, f));
+    }
+    public Vector4 SampleBirth(Random rng)
+    {
+        if (Prob is not { Length: > 0 }) return Sample(0f);
+        var v = Sample(0f);
+        return new Vector4(
+            Prob.Length > 0 ? Prob[0].Sample((float)rng.NextDouble()) : v.X,
+            Prob.Length > 1 ? Prob[1].Sample((float)rng.NextDouble()) : v.Y,
+            Prob.Length > 2 ? Prob[2].Sample((float)rng.NextDouble()) : v.Z,
+            Prob.Length > 3 ? Prob[3].Sample((float)rng.NextDouble()) : v.W);
     }
     public static VfxCurve4 Const(Vector4 v) => new(v, null, null);
 }

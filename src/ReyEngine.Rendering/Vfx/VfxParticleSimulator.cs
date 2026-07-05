@@ -26,6 +26,11 @@ public sealed class VfxParticleSimulator
         /// [cx,cy,cz, sizeX,sizeY, r,g,b,a, rot, frame]. Rebuilt each Update.</summary>
         public float[] Instances = System.Array.Empty<float>();
         public int InstanceCount;
+
+        // M47: mesh-primitive emitters — GL handles set by VfxParticleRenderer.UploadEmitterMesh
+        // (0 = billboard). The renderer draws the .scb/.sco geometry per particle instead of a quad.
+        public uint MeshVao, MeshVbo;
+        public int MeshVertexCount;
     }
 
     internal struct Particle
@@ -129,15 +134,16 @@ public sealed class VfxParticleSimulator
     private void Spawn(EmitterState s)
     {
         var d = s.Def;
-        float life = MathF.Max(0.05f, d.ParticleLifetime.Sample(0f));
-        var birthScale = d.BirthScale.Sample(0f);
-        var vel = d.BirthVelocity?.Sample(0f) ?? Vector3.Zero;
-        var rotVel = d.BirthRotationalVelocity?.Sample(0f) ?? Vector3.Zero;
+        // M47: exact per-particle randomisation — Value* probability tables (VfxProbabilityTableData)
+        // are rolled per particle when the data carries them; SampleBirth falls back to the constant.
+        float life = MathF.Max(0.05f, d.ParticleLifetime.SampleBirth(_rng));
+        var birthScale = d.BirthScale.SampleBirth(_rng);
+        var vel = d.BirthVelocity?.SampleBirth(_rng) ?? Vector3.Zero;
+        var rotVel = d.BirthRotationalVelocity?.SampleBirth(_rng) ?? Vector3.Zero;
 
-        // M46: per-particle variance. Riot's real emitters randomise most birth values (probability
-        // tables we don't parse yet); without ANY jitter every particle follows the identical path and
-        // a fire plume renders as a thin line. Approximate with: velocity direction/magnitude spread,
-        // spawn-position jitter scaled by the sprite size, and lifetime variance.
+        // M46 approximate variance, ONLY where no probability tables exist (most map VFX): velocity
+        // direction/magnitude spread, spawn-position jitter scaled by sprite size, lifetime variance —
+        // without any randomness every particle follows the identical path (fire renders as a line).
         Vector3 RandUnit()
         {
             var v = new Vector3((float)(_rng.NextDouble() * 2 - 1), (float)(_rng.NextDouble() * 2 - 1), (float)(_rng.NextDouble() * 2 - 1));
@@ -145,10 +151,11 @@ public sealed class VfxParticleSimulator
             return len > 1e-4f ? v / len : Vector3.UnitY;
         }
         float sizeRef = MathF.Max(MathF.Abs(birthScale.X), MathF.Abs(birthScale.Y));
+        bool hasVelProb = d.BirthVelocity is { } bv && bv.HasProb;
         float speed = vel.Length();
-        if (speed > 1e-3f) vel += RandUnit() * speed * 0.30f;              // ~17 degree cone + magnitude spread
+        if (!hasVelProb && speed > 1e-3f) vel += RandUnit() * speed * 0.30f;   // ~17 degree cone + magnitude spread
         var posJitter = RandUnit() * sizeRef * 0.35f;
-        life *= 0.8f + 0.4f * (float)_rng.NextDouble();
+        if (d.ParticleLifetime.Prob is null) life *= 0.8f + 0.4f * (float)_rng.NextDouble();
 
         s.Particles.Add(new Particle
         {
