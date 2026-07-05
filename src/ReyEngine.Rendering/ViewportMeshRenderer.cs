@@ -265,10 +265,13 @@ void main() {
     // B = specular mask. A tiled water-wave normal (Flowing_Normal_Map, slot 2) is flow-advected in two
     // cross-faded phases and drives a sharp SPECULAR glint; a fresnel term tints deep(Inside) -> edge(Outside).
     if (uIsFlowmap == 1) {
-        // Flow_Map channels (only meaningful when it actually loaded; the white fallback would read 1,1,1,1
-        // = fully opaque with no flow, which is the sensible default when the texture is missing).
-        vec4 fm = (uHasMask == 1) ? texture(uMask, uv) : vec4(1.0);
-        float opacity  = 1.0 - fm.g;   // G: transparency mask (HIGH green = fully transparent, so invert to opacity)
+        // Flow_Map channels: R = flow, G = transparency (HIGH green = no water), B = specular mask.
+        // Missing-texture fallback: no flow (R 0.5), fully opaque (G 0), specular on (B 1).
+        vec4 fm = (uHasMask == 1) ? texture(uMask, uv) : vec4(0.5, 0.0, 1.0, 1.0);
+        // The G gradient is soft-painted + DXT-compressed, so the 'transparent' green plateaus around ~0.6
+        // rather than 1.0. A linear 1-g leaves a ~40% ghost sheet there; remap steeply so mid-green already
+        // reads fully transparent while the low-green river swirls stay solid water.
+        float opacity  = 1.0 - smoothstep(0.20, 0.55, fm.g);
         float specMask = fm.b;   // B: specular mask
         vec2 fuv = uv * uFlowTile;
         vec2 flow = (uHasMask == 1) ? (vec2(fm.r) * 2.0 - 1.0) * uFlowStrength * vec2(1.0, 0.6) : vec2(0.0); // R: flow

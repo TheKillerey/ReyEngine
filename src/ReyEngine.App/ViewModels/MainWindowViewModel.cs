@@ -2190,9 +2190,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (!string.IsNullOrEmpty(prof.FlowNormalPath)) flowNormals[i] = Load(prof.FlowNormalPath);
                     flowGroups++;
                     if (flowGroups <= 3)   // M44 diagnostic: confirm detection + texture loads for the first few
+                    {
+                        // G-channel histogram of the flow map (G = transparency mask) to calibrate the shader's
+                        // opacity remap against the real texture values.
+                        string gstat = "";
+                        if (flowMaps[i] is { } fmImg && fmImg.Rgba.Length >= 4)
+                        {
+                            long cnt = 0, lo = 0, hi = 0; double sum = 0;
+                            var px = fmImg.Rgba;
+                            for (int o = 1; o < px.Length; o += 64)   // every 16th pixel, G channel
+                            { double v = px[o] / 255.0; sum += v; cnt++; if (v < 0.20) lo++; else if (v > 0.55) hi++; }
+                            if (cnt > 0) gstat = $" G[mean={sum / cnt:0.00} lo{lo * 100 / cnt}% hi{hi * 100 / cnt}%]";
+                        }
                         _log.Info("Water", $"flowmap '{matName}': flowMap={(flowMaps[i] is not null ? "OK" : "miss")} " +
                                            $"normal={(flowNormals[i] is not null ? "OK" : "miss")} " +
-                                           $"speed={prof.FlowSpeed:0.###} alpha={prof.WaterAlpha:0.##} inside={prof.ColorInside}");
+                                           $"speed={prof.FlowSpeed:0.###} alpha={prof.WaterAlpha:0.##}{gstat}");
+                    }
                 }
             }
             else submeshMats[i] = ViewportMeshRenderer.SubmeshMaterial.Default;
