@@ -84,11 +84,18 @@ public sealed class MapLayerGroupViewModel
     public ObservableCollection<MapPieceViewModel> Meshes { get; } = new();
 }
 
-public sealed class RecentProjectViewModel
+public sealed partial class RecentProjectViewModel : ObservableObject
 {
     public string Path { get; }
     public string Name => System.IO.Path.GetFileName(Path.TrimEnd('/', '\\'));
-    public RecentProjectViewModel(string path) => Path = path;
+
+    private readonly Action<string>? _open;
+    public RecentProjectViewModel(string path, Action<string>? open = null) { Path = path; _open = open; }
+
+    /// <summary>Self-contained open command (M43 fix): menu items bind to this directly, so no fragile
+    /// $parent[Menu] ancestor lookup is needed inside the submenu popup.</summary>
+    [RelayCommand]
+    private void Open() => _open?.Invoke(Path);
 }
 
 /// <summary>

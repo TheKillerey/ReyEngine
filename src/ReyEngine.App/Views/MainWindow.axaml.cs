@@ -42,11 +42,13 @@ public partial class MainWindow : Window
     private void OnTitleBarPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        // Only real interactive controls swallow the drag — a MenuItem (opens its menu) or a Button.
+        // The Menu container's own transparent fill (the wide empty stretch of the bar) stays draggable.
         if (e.Source is Avalonia.Visual v)
         {
             foreach (var a in Avalonia.VisualTree.VisualExtensions.GetVisualAncestors(v))
-                if (a is Menu or MenuItem or Button) return;
-            if (v is Menu or MenuItem or Button) return;
+                if (a is MenuItem or Button) return;
+            if (v is MenuItem or Button) return;
         }
         if (e.ClickCount == 2)
         {

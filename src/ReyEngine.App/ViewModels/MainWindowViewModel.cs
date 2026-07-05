@@ -2346,6 +2346,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _overrides.LoadFrom(proj);
             if (proj.SourceWadPath is not null && File.Exists(proj.SourceWadPath)) LoadWad(proj.SourceWadPath);
             else _log.Warn("Project", "Source WAD not found — open it manually.");
+            LoadRecentProjects(RecentProjects.Add(Path.GetDirectoryName(path) ?? path));
             _log.Success("Project", $"Opened '{proj.Name}' with {_overrides.Count} override(s).");
             UpdateTitle();
         }
@@ -2513,7 +2514,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         RecentProjectList.Clear();
         foreach (var f in folders)
-            RecentProjectList.Add(new RecentProjectViewModel(f));
+            RecentProjectList.Add(new RecentProjectViewModel(f, OpenRecentProject));
+        OnPropertyChanged(nameof(HasRecentProjects));
     }
 
     private void BuildMounts()

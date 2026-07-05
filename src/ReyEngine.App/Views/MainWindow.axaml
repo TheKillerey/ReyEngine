@@ -46,12 +46,13 @@
     <Menu Grid.Column="2" Background="Transparent">
       <MenuItem Header="_File">
         <MenuItem Header="Open Project Folder…" Command="{Binding OpenProjectFolderCommand}" />
-        <MenuItem Header="Open Recent" ItemsSource="{Binding RecentProjectList}">
+        <MenuItem Header="Open Recent" ItemsSource="{Binding RecentProjectList}"
+                  IsEnabled="{Binding HasRecentProjects}">
           <MenuItem.ItemContainerTheme>
             <ControlTheme TargetType="MenuItem">
               <Setter Property="Header" Value="{Binding Name}" />
-              <Setter Property="Command" Value="{Binding $parent[Menu].DataContext.OpenRecentProjectCommand}" />
-              <Setter Property="CommandParameter" Value="{Binding Path}" />
+              <Setter Property="Command" Value="{Binding OpenCommand}" />
+              <Setter Property="ToolTip.Tip" Value="{Binding Path}" />
             </ControlTheme>
           </MenuItem.ItemContainerTheme>
         </MenuItem>
@@ -190,8 +191,11 @@
 
       <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
 
-      <!-- CENTER: Viewport + Console -->
-      <Grid Grid.Column="2" RowDefinitions="*,4,300,4,170">
+      <!-- CENTER: Viewport + Content Browser (top block) · Console (bottom).
+           Nesting the viewport + browser means the console splitter trades height with the VIEWPORT,
+           not the content browser (M43 fix). -->
+      <Grid Grid.Column="2" RowDefinitions="*,4,170">
+      <Grid Grid.Row="0" RowDefinitions="*,4,300">
         <Border Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
           <DockPanel>
             <!-- Document / viewport tabs (M33): the loaded map stays alive while other assets are inspected -->
@@ -539,10 +543,11 @@
             </Grid>
           </DockPanel>
         </Border>
+      </Grid>
 
-        <GridSplitter Grid.Row="3" Background="{DynamicResource ReyBorderBrush}" />
+        <GridSplitter Grid.Row="1" Background="{DynamicResource ReyBorderBrush}" />
 
-        <Border Grid.Row="4" Background="{DynamicResource ReyPanelBrush}">
+        <Border Grid.Row="2" Background="{DynamicResource ReyPanelBrush}">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto">
               <TextBlock Classes="panelHeader" Text="CONSOLE · IMPORT LOG" />
