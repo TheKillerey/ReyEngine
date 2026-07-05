@@ -41,6 +41,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(PropMarkers));
     public static readonly StyledProperty<IReadOnlyList<Vector3>?> ProbeMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ProbeMarkers));
+    public static readonly StyledProperty<PropRenderSet?> PropMeshesProperty =
+        AvaloniaProperty.Register<ViewportControl, PropRenderSet?>(nameof(PropMeshes));
     public static readonly StyledProperty<VfxPlayback?> ParticlePlaybackProperty =
         AvaloniaProperty.Register<ViewportControl, VfxPlayback?>(nameof(ParticlePlayback));
     public static readonly StyledProperty<Vector3?> FocusPointProperty =
@@ -111,6 +113,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public IReadOnlyList<Vector3>? PropMarkers { get => GetValue(PropMarkersProperty); set => SetValue(PropMarkersProperty, value); }
     /// <summary>World positions of cubemap-probe markers (M38); green.</summary>
     public IReadOnlyList<Vector3>? ProbeMarkers { get => GetValue(ProbeMarkersProperty); set => SetValue(ProbeMarkersProperty, value); }
+    /// <summary>Decoded placed prop meshes to render at their transforms (M41); null clears them.</summary>
+    public PropRenderSet? PropMeshes { get => GetValue(PropMeshesProperty); set => SetValue(PropMeshesProperty, value); }
     /// <summary>Set to a world point to recentre the camera on it (M35 focus); cleared after applying.</summary>
     public Vector3? FocusPoint { get => GetValue(FocusPointProperty); set => SetValue(FocusPointProperty, value); }
     /// <summary>The placed VFX system to simulate and play live (M36); null stops playback.</summary>
@@ -125,6 +129,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly OrbitCamera _camera = new();
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
     private bool _particlesDirty;
+    private bool _propMeshesDirty;   // M41
     private Vector3? _pendingFocus;
 
     // M36: live VFX particle playback (one simulator per played placement)
@@ -374,6 +379,7 @@ public sealed class ViewportControl : OpenGlControlBase
             _particlesDirty = false;
         }
         if (_particlePlaybackDirty) { RebuildParticleSim(); _particlePlaybackDirty = false; }
+        if (_propMeshesDirty) { RebuildPropMeshes(); _propMeshesDirty = false; }
         if (_needFrame) { FrameCamera(); _needFrame = false; }
         if (_pendingFocus is { } fp) { FocusOnPoint(fp); _pendingFocus = null; }
 
@@ -489,6 +495,38 @@ public sealed class ViewportControl : OpenGlControlBase
         }
     }
 
+    /// <summary>(Re)build the placed prop meshes on the GL thread (M41): register each unique geometry +
+    /// texture once (shared by reference), then instance per placement.</summary>
+    private void RebuildPropMeshes()
+    {
+        if (_meshRenderer is null) return;
+        _meshRenderer.ClearProps();
+        var set = PropMeshes;
+        if (set is null || set.Instances.Count == 0) return;
+
+        var geoByMesh = new Dictionary<PropMesh, int>(ReferenceEqualityComparer.Instance);
+        var texByImage = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
+        foreach (var inst in set.Instances)
+        {
+            if (!geoByMesh.TryGetValue(inst.Mesh, out var handle))
+            {
+                var subs = inst.Mesh.Submeshes.Select(s =>
+                {
+                    uint tex = 0;
+                    if (s.Texture is { } img)
+                    {
+                        if (!texByImage.TryGetValue(img, out tex))
+                            tex = texByImage[img] = _meshRenderer.UploadPropTexture(img.Rgba, img.Width, img.Height);
+                    }
+                    return (s.Start, s.Count, tex);
+                }).ToList();
+                handle = _meshRenderer.RegisterPropGeometry(inst.Mesh.Positions, inst.Mesh.Normals, inst.Mesh.Uvs, inst.Mesh.Indices, subs);
+                geoByMesh[inst.Mesh] = handle;
+            }
+            _meshRenderer.AddPropInstance(handle, inst.Transform);
+        }
+    }
+
     /// <summary>(Re)build the particle simulator from <see cref="ParticlePlayback"/> and upload each emitter's
     /// sprite (procedural soft-dot fallback when unresolved). Runs on the GL thread. M36.</summary>
     private void RebuildParticleSim()
@@ -579,6 +617,8 @@ public sealed class ViewportControl : OpenGlControlBase
         { _particlesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticlePlaybackProperty)
         { _particlePlaybackDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == PropMeshesProperty)
+        { _propMeshesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == FocusPointProperty && FocusPoint is { } fp)
         { _pendingFocus = fp; RequestNextFrameRendering(); }
     }

@@ -231,6 +231,8 @@
           <TextBlock Text="🎭" FontSize="10" VerticalAlignment="Center" />
           <TextBlock Text="Animated Props" FontSize="11" FontWeight="SemiBold" Foreground="#FF8C26" VerticalAlignment="Center" />
           <TextBlock Text="{Binding MapContent.PropCount}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+          <ToggleButton Classes="vp" Content="🧊 Meshes" IsChecked="{Binding ShowPropMeshes}" FontSize="9" Padding="6,1" VerticalAlignment="Center"
+                        ToolTip.Tip="Render the actual prop meshes (Baron, dragons, camps, turrets…) at their placements (M41)" />
         </StackPanel>
       </Expander.Header>
       <TreeView ItemsSource="{Binding MapContent.PropGroups}" SelectedItem="{Binding SelectedPropTreeItem, Mode=TwoWay}"

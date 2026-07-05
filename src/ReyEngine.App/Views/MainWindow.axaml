@@ -263,6 +263,7 @@
                 SelectedParticlePosition="{Binding SelectedParticleMarker}"
                 PropMarkers="{Binding PropMarkers}"
                 ProbeMarkers="{Binding ProbeMarkers}"
+                PropMeshes="{Binding CurrentPropMeshes}"
                 ParticlePlayback="{Binding CurrentParticlePlayback}"
                 FocusPoint="{Binding ParticleFocusPoint}"
                 PreviewMode="{Binding PreviewMode}" />

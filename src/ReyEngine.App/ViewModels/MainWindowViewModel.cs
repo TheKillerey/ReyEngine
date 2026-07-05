@@ -158,7 +158,69 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnCurrentModelProbesChanged(IReadOnlyList<MapCubemapProbe>? value)
     { MapContent.SetProbes(value ?? Array.Empty<MapCubemapProbe>()); UpdatePlaceableMarkers(); }
     partial void OnCurrentModelPropsChanged(IReadOnlyList<MapAnimatedProp>? value)
-    { MapContent.SetProps(value ?? Array.Empty<MapAnimatedProp>()); UpdatePlaceableMarkers(); }
+    { MapContent.SetProps(value ?? Array.Empty<MapAnimatedProp>()); UpdatePlaceableMarkers(); _ = RefreshPropMeshesAsync(); }
+
+    // ---- M41: render the placed prop meshes (SRU_Baron, dragons, camps…) at their placements ----
+    [ObservableProperty] private bool _showPropMeshes;
+    [ObservableProperty] private PropRenderSet? _currentPropMeshes;
+
+    partial void OnShowPropMeshesChanged(bool value) => _ = RefreshPropMeshesAsync();
+
+    private async System.Threading.Tasks.Task RefreshPropMeshesAsync()
+    {
+        if (!ShowPropMeshes || CurrentModelProps is not { Count: > 0 } props) { CurrentPropMeshes = null; return; }
+        var snapshot = props.ToList();
+        var (set, resolved, failed) = await System.Threading.Tasks.Task.Run(() => BuildPropRenderSet(snapshot));
+        if (!ShowPropMeshes) return;   // toggled off while decoding
+        CurrentPropMeshes = set;
+        _log.Info("Props", $"Rendering {resolved} prop mesh(es); {failed} couldn't be resolved (shown as markers).");
+    }
+
+    /// <summary>Decode each unique prop skin once (mesh + per-submesh diffuse) and place an instance per
+    /// placement. Runs off the UI thread. Returns the set + resolved/failed counts (logged on return).</summary>
+    private (PropRenderSet? set, int resolved, int failed) BuildPropRenderSet(IReadOnlyList<MapAnimatedProp> props)
+    {
+        var meshBySkin = new Dictionary<string, PropMesh?>(StringComparer.OrdinalIgnoreCase);
+        var texByPath = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
+        var instances = new List<PropInstanceData>();
+        int failed = 0;
+        foreach (var p in props)
+        {
+            if (string.IsNullOrEmpty(p.Skin)) { failed++; continue; }
+            if (!meshBySkin.TryGetValue(p.Skin, out var mesh))
+                meshBySkin[p.Skin] = mesh = TryBuildPropMesh(p.Skin, texByPath);
+            if (mesh is not null) instances.Add(new PropInstanceData(mesh, p.Transform));
+            else failed++;
+        }
+        return (instances.Count > 0 ? new PropRenderSet(instances) : null, instances.Count, failed);
+    }
+
+    private PropMesh? TryBuildPropMesh(string skin, Dictionary<string, TextureImage?> texCache)
+    {
+        try
+        {
+            var binBytes = ReadAssetByPath("data/" + skin.ToLowerInvariant() + ".bin");
+            if (binBytes is null) return null;
+            var meshRef = SkinMeshExtractor.Extract(binBytes);
+            if (meshRef?.SimpleSkin is not { } sknPath) return null;
+            var sknBytes = ReadAssetByPath(sknPath);
+            if (sknBytes is null) return null;
+
+            var mesh = SkinnedMeshDecoder.Decode(sknBytes);
+            var mat = ChampionMaterialResolver.Resolve(binBytes, ResolveBinName);
+            TextureImage? Tex(string? path)
+            {
+                if (string.IsNullOrEmpty(path)) return null;
+                if (texCache.TryGetValue(path, out var img)) return img;
+                return texCache[path] = LoadTextureByPath(path);
+            }
+            var subs = mesh.SubMeshes
+                .Select(s => new PropSubmesh(s.StartIndex, s.IndexCount, Tex(mat.For(s.Material) ?? meshRef.DefaultTexture)))
+                .ToList();
+            return new PropMesh(skin, mesh.Positions, mesh.Normals, mesh.Uvs, mesh.Indices, subs);
+        }
+        catch { return null; }
+    }
     partial void OnShowPlaceablesChanged(bool value) => UpdatePlaceableMarkers();
 
     private void UpdatePlaceableMarkers()
@@ -1062,6 +1124,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleMarkers = null;
         CurrentModelProbes = null;
         CurrentModelProps = null;
+        CurrentPropMeshes = null;
+        ShowPropMeshes = false;
         PropMarkers = null;
         ProbeMarkers = null;
         SelectedPropTreeItem = null;
