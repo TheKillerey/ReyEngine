@@ -354,19 +354,41 @@
         <!-- CONTENT BROWSER (Unreal/Windows-style: folder tree + tiles) -->
         <Border Grid.Row="2" Background="{DynamicResource ReyPanelBrush}">
           <DockPanel>
-            <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,*,Auto">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto">
               <TextBlock Classes="panelHeader" Text="CONTENT BROWSER" VerticalAlignment="Center" />
               <Button Grid.Column="1" Classes="tool" Content="↑ Up" Margin="6,4"
                       Command="{Binding ContentBrowser.GoUpCommand}" IsEnabled="{Binding ContentBrowser.CanGoUp}" />
-              <!-- breadcrumb path -->
+              <!-- M43: clickable breadcrumb path -->
               <Border Grid.Column="2" Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4"
-                      Padding="8,3" Margin="2,4" VerticalAlignment="Center">
-                <TextBlock Text="{Binding ContentBrowser.LocationText}" VerticalAlignment="Center"
-                           Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontFamily="Cascadia Mono, Consolas, monospace"
-                           TextTrimming="CharacterEllipsis" />
+                      Padding="4,1" Margin="2,4" VerticalAlignment="Center">
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                  <StackPanel Orientation="Horizontal" Spacing="0">
+                    <Button Classes="icon" Content="⌂" FontSize="12" Command="{Binding ContentBrowser.NavigateCrumbCommand}"
+                            CommandParameter="{x:Null}" ToolTip.Tip="Project root" />
+                    <ItemsControl ItemsSource="{Binding ContentBrowser.Breadcrumbs}">
+                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="0" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                          <StackPanel Orientation="Horizontal" Spacing="0">
+                            <TextBlock Text="›" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" FontSize="11" Margin="1,0" />
+                            <Button Classes="icon" Content="{Binding Name}" FontSize="11"
+                                    Command="{Binding $parent[ItemsControl].DataContext.ContentBrowser.NavigateCrumbCommand}"
+                                    CommandParameter="{Binding}" />
+                          </StackPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </ScrollViewer>
               </Border>
-              <TextBox Grid.Column="3" Width="170" Watermark="🔎 Search assets…" Text="{Binding ContentBrowser.Filter}"
-                       FontSize="11" Margin="6,4,8,4" Padding="6,2" />
+              <TextBlock Grid.Column="3" Text="{Binding ContentBrowser.ItemCount, StringFormat='{}{0} items'}"
+                         VerticalAlignment="Center" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" Margin="6,0,2,0" />
+              <ComboBox Grid.Column="4" ItemsSource="{Binding ContentBrowser.TypeFilters}" SelectedItem="{Binding ContentBrowser.TypeFilter}"
+                        FontSize="11" MinWidth="98" Margin="2,4" ToolTip.Tip="Filter by asset type" />
+              <ToggleButton Grid.Column="5" Classes="vp" Content="☰" FontSize="12" Padding="8,3" Margin="2,4"
+                            IsChecked="{Binding ContentBrowser.ListView}" ToolTip.Tip="Toggle grid / list view" />
+              <TextBox Grid.Column="6" Width="150" Watermark="🔎 Search…" Text="{Binding ContentBrowser.Filter}"
+                       FontSize="11" Margin="4,4,8,4" Padding="6,2" />
             </Grid>
             <Grid ColumnDefinitions="200,4,*">
               <TreeView Grid.Column="0" ItemsSource="{Binding ContentBrowser.FolderRoots}"
@@ -417,7 +439,8 @@
                     </ScrollViewer>
                   </DockPanel>
                 </Border>
-                <ScrollViewer Padding="6,4">
+                <Grid>
+                <ScrollViewer Padding="6,4" IsVisible="{Binding !ContentBrowser.ListView}">
                 <ItemsControl ItemsSource="{Binding ContentBrowser.Items}">
                   <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
@@ -468,6 +491,46 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 </ScrollViewer>
+
+                <!-- M43: compact list view (alternative to the tile grid) -->
+                <ScrollViewer Padding="4,2" IsVisible="{Binding ContentBrowser.ListView}">
+                  <ItemsControl ItemsSource="{Binding ContentBrowser.Items}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Background="Transparent"
+                                BorderThickness="0" CornerRadius="3" Padding="6,3"
+                                Command="{Binding $parent[ItemsControl].DataContext.ContentBrowser.OpenCommand}"
+                                CommandParameter="{Binding}" ToolTip.Tip="{Binding Name}">
+                          <Button.ContextMenu>
+                            <ContextMenu>
+                              <MenuItem Header="Copy Asset To Project" Command="{Binding $parent[Window].DataContext.CopyAssetToProjectCommand}" />
+                              <MenuItem Header="Replace Selected Asset…" Command="{Binding $parent[Window].DataContext.ReplaceSelectedCommand}" />
+                              <MenuItem Header="Revert Asset" Command="{Binding $parent[Window].DataContext.RevertSelectedCommand}" />
+                              <Separator />
+                              <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />
+                              <MenuItem Header="Copy Resolved Path" Command="{Binding $parent[Window].DataContext.CopyResolvedPathCommand}" />
+                              <MenuItem Header="Copy Hash" Command="{Binding $parent[Window].DataContext.CopyHashCommand}" />
+                            </ContextMenu>
+                          </Button.ContextMenu>
+                          <Grid ColumnDefinitions="Auto,32,*,Auto,Auto">
+                            <TextBlock Grid.Column="0" Text="{Binding Icon}" FontSize="14" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <Border Grid.Column="1" Classes="badge accent" VerticalAlignment="Center" Padding="3,0"
+                                    IsVisible="{Binding Kind, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                              <TextBlock Text="{Binding Kind}" FontSize="7" />
+                            </Border>
+                            <TextBlock Grid.Column="2" Text="{Binding Name}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}"
+                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="6,0" />
+                            <TextBlock Grid.Column="3" Text="🔒" FontSize="9" VerticalAlignment="Center" Margin="2,0"
+                                       IsVisible="{Binding IsReadOnly}" ToolTip.Tip="Read-only Riot reference" />
+                            <Ellipse Grid.Column="4" Width="6" Height="6" VerticalAlignment="Center" Margin="4,0" Fill="{DynamicResource ReyAccent2Brush}"
+                                     IsVisible="{Binding IsModified}" ToolTip.Tip="Modified in this project" />
+                          </Grid>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+                </Grid>
               </DockPanel>
             </Grid>
           </DockPanel>

@@ -23,6 +23,30 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
     [ObservableProperty] private bool _canGoUp;
     [ObservableProperty] private string _filter = "";
 
+    // M43: type filter + grid/list view
+    /// <summary>Asset-type categories for the filter dropdown; "All" shows everything.</summary>
+    public IReadOnlyList<string> TypeFilters { get; } =
+        new[] { "All", "Maps", "Bins", "Textures", "Meshes", "Skeletons", "Animations", "Materials", "Shaders", "Audio" };
+    [ObservableProperty] private string _typeFilter = "All";
+    [ObservableProperty] private bool _listView;
+    /// <summary>Count of items shown in the current folder after filtering (for the header).</summary>
+    [ObservableProperty] private int _itemCount;
+
+    /// <summary>The <see cref="AssetNodeViewModel.Kind"/> tag(s) a type-filter category accepts; null = all.</summary>
+    private static string[]? KindsFor(string typeFilter) => typeFilter switch
+    {
+        "Maps" => new[] { "MAP" },
+        "Bins" => new[] { "BIN" },
+        "Textures" => new[] { "IMG" },
+        "Meshes" => new[] { "MSH" },
+        "Skeletons" => new[] { "SKL" },
+        "Animations" => new[] { "ANM" },
+        "Materials" => new[] { "MAT" },
+        "Shaders" => new[] { "FX" },
+        "Audio" => new[] { "SND" },
+        _ => null,
+    };
+
     /// <summary>Invoked when a file (non-folder) is chosen — the host loads it.</summary>
     public Action<AssetNodeViewModel?>? FileSelected { get; set; }
 
@@ -82,12 +106,16 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
         CurrentFolder = folder;
         var source = folder?.Children ?? (IEnumerable<AssetNodeViewModel>)FolderRoots;
 
+        var kinds = KindsFor(TypeFilter);
         Items.Clear();
         foreach (var c in source)
         {
             if (!string.IsNullOrWhiteSpace(Filter) && !c.Name.Contains(Filter, StringComparison.OrdinalIgnoreCase)) continue;
+            // the type filter applies to files only — folders stay visible so you can still navigate.
+            if (kinds is not null && !c.IsFolder && !kinds.Contains(c.Kind)) continue;
             Items.Add(c);
         }
+        ItemCount = Items.Count;
 
         Breadcrumbs.Clear();
         for (var n = folder; n is not null; n = n.Parent) Breadcrumbs.Insert(0, n);
@@ -124,4 +152,8 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
     }
 
     partial void OnFilterChanged(string value) => NavigateTo(CurrentFolder);
+    partial void OnTypeFilterChanged(string value) => NavigateTo(CurrentFolder);
+
+    [RelayCommand]
+    private void ToggleView() => ListView = !ListView;
 }
