@@ -56,7 +56,7 @@ public static class VfxSystemResolver
     private static readonly uint F_keyValues     = HashAlgorithms.Fnv1a("keyValues");
     private static readonly uint F_meshDef       = 0x0d89732d; // VfxPrimitiveMesh's VfxMeshDefinitionData field (observed)
     private static readonly uint F_simpleMesh    = HashAlgorithms.Fnv1a("mSimpleMeshName");
-    private static readonly uint F_meshName      = HashAlgorithms.Fnv1a("meshName");
+    private static readonly uint F_meshName      = HashAlgorithms.Fnv1a("mMeshName");   // skinned (.skn) mesh primitive (butterflies)
 
     // primitive class hashes we treat as "mesh" (billboarded as fallback)
     private static readonly uint PrimMesh = HashAlgorithms.Fnv1a("VfxPrimitiveMesh");

@@ -28,11 +28,13 @@ public static class StaticObjectDecoder
             var uv = new float[faces * 3 * 2];
             var idx = new uint[faces * 3];
             int vp = 0, vu = 0;
+            Span<int> vid = stackalloc int[3];
+            Span<System.Numerics.Vector2> fuv = stackalloc System.Numerics.Vector2[3];
             for (int f = 0; f < faces; f++)
             {
                 var face = mesh.Faces[f];
-                Span<int> vid = stackalloc int[] { face.VertexId0, face.VertexId1, face.VertexId2 };
-                Span<System.Numerics.Vector2> fuv = stackalloc[] { face.UV0, face.UV1, face.UV2 };
+                vid[0] = face.VertexId0; vid[1] = face.VertexId1; vid[2] = face.VertexId2;
+                fuv[0] = face.UV0; fuv[1] = face.UV1; fuv[2] = face.UV2;
                 for (int k = 0; k < 3; k++)
                 {
                     var v = mesh.Vertices[vid[k]];

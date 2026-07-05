@@ -285,7 +285,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var e = sys.Emitters[i];
             if (!e.IsMeshPrimitive || string.IsNullOrEmpty(e.MeshPath)) continue;
             var bytes = ReadAssetByPath(e.MeshPath);
-            var mesh = bytes is null ? null : Formats.Meshes.StaticObjectDecoder.Decode(bytes, e.MeshPath);
+            Formats.Meshes.StaticMeshData? mesh = null;
+            if (bytes is not null)
+            {
+                // M47b: skinned mesh primitives (butterflies/dragonflies, .skn) render in bind pose via
+                // the same mesh-particle path (no per-particle wing animation yet); .scb/.sco are static.
+                if (e.MeshPath.EndsWith(".skn", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var m = SkinnedMeshDecoder.Decode(bytes);
+                        mesh = new Formats.Meshes.StaticMeshData(m.Positions, m.Uvs, m.Indices, Path.GetFileName(e.MeshPath));
+                    }
+                    catch { /* keep billboard fallback */ }
+                }
+                else mesh = Formats.Meshes.StaticObjectDecoder.Decode(bytes, e.MeshPath);
+            }
             if (mesh is null) continue;
             meshes ??= Enumerable.Repeat<Formats.Meshes.StaticMeshData?>(null, sys.Emitters.Count).ToList();
             meshes[i] = mesh;
