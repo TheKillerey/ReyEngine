@@ -606,3 +606,20 @@ WAD's tree refreshes `0x…` → readable paths in place. The full sync is ~250 
 4. **Project ▸ Build Package** → builds to `<project>/Build/` (folder projects are staged with overrides applied;
    project WADs are repacked). Reopen the built folder via **Open Project Folder** to confirm the edit is present.
 5. **File ▸ Open WAD (inspect)** still opens a single WAD in read-only inspection mode (yellow banner).
+
+## Particle Editor (M46) — test steps
+
+1. Open a project that mounts a Riot map WAD (e.g. Map12), open `bloom.materials.bin`
+   (or any skin `.bin`), then **Tools ▸ Open in Particle Editor**. Bins with `particles`
+   in their path open in the Particle Editor directly on double-click (✨ tab).
+2. The left tree lists VFX systems; select one → its emitters appear as cards with
+   module groups (Emission / Birth / … / Texture). The bottom-right preview plays the
+   system live (LMB orbit · MMB pan · wheel zoom); use Restart / Pause / Speed.
+3. Click a property row → the right inspector shows name/type/value. Properties whose
+   type shows `+ curve(N keys)` draw their keyframes in the bottom curve panel.
+4. Edit a value (e.g. `birthColor` → `1, 0, 0, 1`) → **Apply** → the preview updates
+   immediately and the tab shows a dirty dot. Riot references are read-only until
+   **Copy Asset To Project**.
+5. **💾 Save Override** validates the edited `.bin` re-parses, writes it to the project
+   override, and **Project ▸ Build Package** includes it. Reopen the built project to
+   confirm the edited particle parses again.
