@@ -46,6 +46,12 @@ public sealed class ViewportMeshRenderer : IDisposable
     private uint _propVao, _propVbo, _probeVao, _probeVbo;                       // M38: prop / cubemap-probe markers
     private int _boundsVerts, _boneVerts, _highlightVerts, _groupBoundsVerts;
     private int _particleVerts, _particleSelVerts, _propVerts, _probeVerts;
+
+    // M41: placed animated-prop meshes — unique geometry registered once, instanced per placement.
+    private sealed class PropGeometry { public uint Vao, Vbo, Ebo; public (int Start, int Count, uint Tex)[] Submeshes = System.Array.Empty<(int, int, uint)>(); }
+    private readonly List<PropGeometry> _propGeoms = new();
+    private readonly List<(int Geo, Matrix4x4 Model)> _propMeshInstances = new();
+    private readonly List<uint> _propTextures = new();
     private bool _hasGizmo;
     private Vector3 _gizmoPivot;
     private float _gizmoArmLength;
@@ -456,7 +462,22 @@ void main() { FragColor = uColor; }";
     }
 
     /// <summary>Uploads a texture once and returns its GL id (caller shares it across submeshes).</summary>
-    public unsafe uint UploadTexture(byte[] rgba, int width, int height)
+    public uint UploadTexture(byte[] rgba, int width, int height)
+    {
+        uint tex = UploadTextureInternal(rgba, width, height);
+        _ownedTextures.Add(tex);
+        return tex;
+    }
+
+    /// <summary>Upload a prop-mesh texture (M41): tracked separately so ClearProps frees it on map switch.</summary>
+    public uint UploadPropTexture(byte[] rgba, int width, int height)
+    {
+        uint tex = UploadTextureInternal(rgba, width, height);
+        _propTextures.Add(tex);
+        return tex;
+    }
+
+    private unsafe uint UploadTextureInternal(byte[] rgba, int width, int height)
     {
         uint tex = _gl.GenTexture();
         _gl.BindTexture(TextureTarget.Texture2D, tex);
@@ -469,8 +490,67 @@ void main() { FragColor = uColor; }";
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
-        _ownedTextures.Add(tex);
         return tex;
+    }
+
+    /// <summary>Register a unique prop mesh's geometry (M41). Returns a handle to instance with
+    /// <see cref="AddPropInstance"/>. Submeshes carry their diffuse texture id (0 = untextured).</summary>
+    public unsafe int RegisterPropGeometry(float[] positions, float[] normals, float[] uvs, uint[] indices,
+        IReadOnlyList<(int start, int count, uint tex)> submeshes)
+    {
+        if (!_ready) return -1;
+        int vc = positions.Length / 3;
+        var inter = new float[vc * 8];
+        for (int i = 0; i < vc; i++)
+        {
+            int o = i * 8;
+            inter[o] = positions[i * 3]; inter[o + 1] = positions[i * 3 + 1]; inter[o + 2] = positions[i * 3 + 2];
+            inter[o + 3] = normals.Length >= (i * 3 + 3) ? normals[i * 3] : 0f;
+            inter[o + 4] = normals.Length >= (i * 3 + 3) ? normals[i * 3 + 1] : 1f;
+            inter[o + 5] = normals.Length >= (i * 3 + 3) ? normals[i * 3 + 2] : 0f;
+            inter[o + 6] = uvs.Length >= (i * 2 + 2) ? uvs[i * 2] : 0f;
+            inter[o + 7] = uvs.Length >= (i * 2 + 2) ? uvs[i * 2 + 1] : 0f;
+        }
+
+        var g = new PropGeometry();
+        g.Vao = _gl.GenVertexArray();
+        _gl.BindVertexArray(g.Vao);
+        g.Vbo = _gl.GenBuffer();
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, g.Vbo);
+        fixed (float* p = inter) _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(inter.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+        uint stride = 8 * sizeof(float);
+        _gl.EnableVertexAttribArray(0); _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
+        _gl.EnableVertexAttribArray(1); _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
+        _gl.EnableVertexAttribArray(2); _gl.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, stride, (void*)(6 * sizeof(float)));
+        _gl.DisableVertexAttribArray(3); _gl.VertexAttrib4(3, 1f, 1f, 1f, 1f);   // constant white vertex colour
+        _gl.DisableVertexAttribArray(4); _gl.VertexAttrib2(4, 0f, 0f);           // no lightmap uv
+        g.Ebo = _gl.GenBuffer();
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, g.Ebo);
+        fixed (uint* p = indices) _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), p, BufferUsageARB.StaticDraw);
+        _gl.BindVertexArray(0);
+
+        g.Submeshes = submeshes.Select(s => (s.start, s.count, s.tex)).ToArray();
+        _propGeoms.Add(g);
+        return _propGeoms.Count - 1;
+    }
+
+    /// <summary>Place a registered prop geometry at a world transform (M41).</summary>
+    public void AddPropInstance(int geometry, Matrix4x4 model)
+    {
+        if (geometry >= 0 && geometry < _propGeoms.Count) _propMeshInstances.Add((geometry, model));
+    }
+
+    public int PropInstanceCount => _propMeshInstances.Count;
+
+    /// <summary>Free all prop geometry + textures (M41) — call on map switch before re-registering.</summary>
+    public void ClearProps()
+    {
+        if (!_ready) return;
+        foreach (var g in _propGeoms) { _gl.DeleteVertexArray(g.Vao); _gl.DeleteBuffer(g.Vbo); _gl.DeleteBuffer(g.Ebo); }
+        foreach (var t in _propTextures) _gl.DeleteTexture(t);
+        _propGeoms.Clear();
+        _propMeshInstances.Clear();
+        _propTextures.Clear();
     }
 
     public void SetSubmeshTextureId(int index, uint textureId) => SetSubmeshLayer(index, 0, textureId);
@@ -780,6 +860,56 @@ void main() { FragColor = uColor; }";
             _gl.BindVertexArray(0);
         }
 
+        // M41: placed prop meshes (SRU_Baron, dragons, jungle camps…) — each unique geometry instanced at its
+        // world transform. Basic lit + diffuse only (props don't use the map's mask/gradient/emissive/lightmap).
+        if (_propMeshInstances.Count > 0 && !wireframe)
+        {
+            _gl.UseProgram(_meshProgram);
+            _gl.Uniform3(_mLight, -0.4f, -0.85f, -0.45f);
+            _gl.Uniform3(_mBaseColor, 0.62f, 0.66f, 0.74f);
+            _gl.Uniform1(_mMode, previewMode);
+            _gl.Uniform1(_mHasVertexColor, 0);
+            _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);
+            _gl.UniformMatrix4(_mView, 1, false, in view.M11);
+            _gl.Uniform1(_mTex, 0); _gl.Uniform1(_mMask, 1); _gl.Uniform1(_mGradient, 2);
+            _gl.Uniform1(_mEmissive, 3); _gl.Uniform1(_mMatCap, 4); _gl.Uniform1(_mMatCapMask, 5); _gl.Uniform1(_mLightmap, 6);
+            _gl.Uniform1(_mHasMask, 0); _gl.Uniform1(_mHasGradient, 0); _gl.Uniform1(_mHasEmissive, 0);
+            _gl.Uniform1(_mHasMatCap, 0); _gl.Uniform1(_mHasMatCapMask, 0); _gl.Uniform1(_mHasLightmap, 0);
+            _gl.Uniform1(_mUsesRim, 0); _gl.Uniform1(_mUsesSpec, 0);
+            _gl.Uniform1(_mAlphaMode, 1); _gl.Uniform1(_mAlphaCutoff, 0.35f);   // cutout so fur/wing alpha reads
+            _gl.Uniform4(_mUvScaleOffset, 1f, 1f, 0f, 0f); _gl.Uniform1(_mUvRot, 0f);
+            _gl.Uniform2(_mClampUv, 0f, 0f); _gl.Uniform4(_mTint, 1f, 1f, 1f, 1f); _gl.Uniform1(_mMirrored, 0);
+            for (int u = 1; u <= 6; u++) { _gl.ActiveTexture(TextureUnit.Texture0 + u); _gl.BindTexture(TextureTarget.Texture2D, _whiteTex); }
+
+            _gl.Enable(EnableCap.DepthTest);
+            bool propCull = cullBackfaces;
+            if (propCull) { _gl.Enable(EnableCap.CullFace); _gl.CullFace(TriangleFace.Back); } else _gl.Disable(EnableCap.CullFace);
+            _gl.Uniform1(_mTwoSided, propCull ? 0 : 1);
+
+            foreach (var (geo, model) in _propMeshInstances)
+            {
+                var mvp = model * m;
+                _gl.UniformMatrix4(_mMvp, 1, false, in mvp.M11);
+                _gl.UniformMatrix4(_mModel, 1, false, in model.M11);
+                // the -X mirror flips winding once; a mirrored placement (negative determinant) flips it back,
+                // so pick the front-face winding per instance to keep culling + two-sided lighting correct.
+                _gl.FrontFace(model.GetDeterminant() < 0 ? FrontFaceDirection.Ccw : FrontFaceDirection.CW);
+
+                var g = _propGeoms[geo];
+                _gl.BindVertexArray(g.Vao);
+                _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, g.Ebo);
+                foreach (var (start, count, tex) in g.Submeshes)
+                {
+                    _gl.ActiveTexture(TextureUnit.Texture0);
+                    _gl.BindTexture(TextureTarget.Texture2D, tex != 0 ? tex : _whiteTex);
+                    _gl.Uniform1(_mHasTex, tex != 0 ? 1 : 0);
+                    _gl.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)(start * sizeof(uint)));
+                }
+            }
+            _gl.Disable(EnableCap.CullFace);
+            _gl.BindVertexArray(0);
+        }
+
         if ((showBounds && _boundsVerts > 0) || (showBones && _boneVerts > 0))
         {
             _gl.UseProgram(_lineProgram);
@@ -964,6 +1094,7 @@ void main() { FragColor = uColor; }";
         _gl.DeleteVertexArray(_particleSelVao);
         _gl.DeleteVertexArray(_propVao);
         _gl.DeleteVertexArray(_probeVao);
+        ClearProps();
         _gl.DeleteProgram(_meshProgram);
         _gl.DeleteProgram(_lineProgram);
         _ready = false;
