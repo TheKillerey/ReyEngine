@@ -261,19 +261,24 @@ void main() {
     vec3 viewDir = normalize(uCamPos - vWorld);
 
     // M44 Flowmap_River water (real material: USE_DIFFUSE_TEXTURE=off, colour is pure Color_Inside/Outside,
-    // NOT a diffuse map). A tiled water-wave normal (Flowing_Normal_Map, slot 2) is flow-advected in two
-    // cross-faded phases (Flow_Map RG on slot 1); its ripples drive a bright sharp SPECULAR glint (the visible
-    // shine) while a fresnel term tints deep(Inside) -> edge(Outside). Translucent by TranslucentControl.
+    // NOT a diffuse map). The Flow_Map on slot 1 packs its channels: R = flow, G = opacity (where water IS),
+    // B = specular mask. A tiled water-wave normal (Flowing_Normal_Map, slot 2) is flow-advected in two
+    // cross-faded phases and drives a sharp SPECULAR glint; a fresnel term tints deep(Inside) -> edge(Outside).
     if (uIsFlowmap == 1) {
+        // Flow_Map channels (only meaningful when it actually loaded; the white fallback would read 1,1,1,1
+        // = fully opaque with no flow, which is the sensible default when the texture is missing).
+        vec4 fm = (uHasMask == 1) ? texture(uMask, uv) : vec4(1.0);
+        float opacity  = fm.g;   // G: transparency/where-water-is mask
+        float specMask = fm.b;   // B: specular mask
         vec2 fuv = uv * uFlowTile;
-        vec2 flow = (texture(uMask, uv).rg * 2.0 - 1.0) * uFlowStrength;   // Flow_Map on slot 1
+        vec2 flow = (uHasMask == 1) ? (vec2(fm.r) * 2.0 - 1.0) * uFlowStrength * vec2(1.0, 0.6) : vec2(0.0); // R: flow
         float ph0 = fract(uTime * uFlowSpeed);
         float ph1 = fract(uTime * uFlowSpeed + 0.5);
         float bw = abs(ph0 - 0.5) * 2.0;                                  // ping-pong cross-fade weight
         // Travelling wave field (world-space) drives BOTH a view-independent caustic shimmer and the normal
-        // that breaks the sun reflection into moving sparkles. High-ish frequency so a flat water plane still
-        // shows moving light bands rather than one broad sheet. Runs even with no textures.
-        vec2 wc = vWorld.xz * 0.012;   // ~250-unit ripple wavelength (map world units); low enough to not alias
+        // that breaks the sun reflection into moving sparkles. Low frequency so it does not alias on the huge
+        // map scale, and runs even when the wave-normal texture is missing.
+        vec2 wc = vWorld.xz * 0.012;   // ~250-unit ripple wavelength (map world units)
         float wh = sin(wc.x * 2.0 + uTime * 1.5) + sin((wc.x + wc.y) * 1.4 - uTime * 1.1) + sin(wc.y * 2.6 - uTime * 0.9);
         vec2 waveXY = vec2(cos(wc.x * 2.0 + uTime * 1.5) + cos(wc.y * 2.6 - uTime * 0.9),
                            cos((wc.x + wc.y) * 1.4 - uTime * 1.1) - sin(wc.x * 2.0 + uTime * 1.5)) * 0.35;
@@ -289,14 +294,15 @@ void main() {
         vec3 Hh = normalize(normalize(-uLight) + V);
         float ndh = max(dot(N, Hh), 0.0);
         // Deep(Inside) body tinting toward Outside at grazing edges, modulated by travelling caustic bands
-        // (subtle brightness ripples), with a sharp sun sparkle on the crests.
+        // (subtle brightness ripples), with a sharp sun sparkle (gated by the B specular mask) on the crests.
         float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
         vec3 body = mix(uColorInside.rgb, uColorOutside.rgb, clamp(fres, 0.0, 1.0));
         float caustic = 0.5 + 0.5 * sin(wh * 1.6);
-        float spark = pow(ndh, 90.0) * 1.2;
+        float spark = pow(ndh, 90.0) * 1.2 * specMask;
         vec3 colw = body * (0.78 + 0.34 * caustic) + vec3(spark);
-        // Translucent by the material's TranslucentControl; sparkle points read a touch more solid.
-        float a = clamp(uWaterAlpha * (0.8 + 0.2 * fres) + spark * 0.4, 0.0, 1.0);
+        // Translucent: TranslucentControl scaled by the G opacity mask, so the water is see-through / cut to
+        // its actual shape where the flow map says there is no water. Sparkle reads a touch more solid.
+        float a = clamp((uWaterAlpha * (0.8 + 0.2 * fres) + spark * 0.4) * opacity, 0.0, 1.0);
         FragColor = vec4(colw, a);
         return;
     }
