@@ -379,6 +379,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         RebuildParticlePlayback();
     }
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
+    [ObservableProperty] private bool _hasFlowmapWater; // M44: current map has flowmap-river water → viewport animates it
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
     [ObservableProperty] private bool _showWireframe;
@@ -392,6 +393,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _shaderDbStatus = "Riot shaders not scanned.";
     private MapGeoAsset? _currentMap;
     private IReadOnlyDictionary<string, MaterialProfile>? _currentMapProfiles; // M34: material name → render-state profile
+    // M44: the current map's flowmap-water Flow_Map / Flowing_Normal textures (per group; null when the map has
+    // no water). Kept in fields so they survive the ClearSecondaryTextures() that follows a map load and can be
+    // re-published — the same reason baked lightmaps are handled outside ClearSecondaryTextures.
+    private IReadOnlyList<TextureImage?>? _mapFlowMasks;
+    private IReadOnlyList<TextureImage?>? _mapFlowGrads;
+
+    /// <summary>M44: (re)publish the map's flow-water textures onto the mask/gradient channels (slots 1/2) the
+    /// water shader samples, and flag the viewport to animate. Safe to call after ClearSecondaryTextures().</summary>
+    private void PublishMapFlowWater()
+    {
+        CurrentModelMaskTextures = _mapFlowMasks;
+        CurrentModelGradientTextures = _mapFlowGrads;
+        HasFlowmapWater = _mapFlowMasks is not null;
+    }
     private MapVisibilityControllers? _mapControllers;
     private MapVisibilityResolver? _visibilityResolver;
     private ShaderDatabase? _shaderDb;
@@ -503,6 +518,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshAsset Mesh, IReadOnlyList<TextureImage?>? Textures,
         IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials,
         IReadOnlyList<TextureImage?>? Lightmaps,
+        IReadOnlyList<TextureImage?>? FlowMasks, IReadOnlyList<TextureImage?>? FlowGrads, // M44 flow-water
         IReadOnlyList<MapParticlePlacement>? Particles,
         IReadOnlyDictionary<uint, VfxSystemDefinition> VfxSystems,
         IReadOnlyList<MapCubemapProbe>? Probes, IReadOnlyList<MapAnimatedProp>? Props,
@@ -584,6 +600,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return null;
         return new MapScene(map, _currentMapBytes, entry, _mapControllers, mesh,
             CurrentModelTextures, CurrentModelSubmeshMaterials, CurrentModelLightmapTextures,
+            _mapFlowMasks, _mapFlowGrads,
             CurrentModelParticles, _vfxSystems, CurrentModelProbes, CurrentModelProps,
             SelectedDragonIndex, SelectedBaronIndex, HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
@@ -600,6 +617,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelTextures = s.Textures;
         ClearSecondaryTextures();
         CurrentModelLightmapTextures = s.Lightmaps;
+        _mapFlowMasks = s.FlowMasks; _mapFlowGrads = s.FlowGrads; PublishMapFlowWater(); // M44
         CurrentModelSubmeshMaterials = s.Materials;
         CurrentModelParticles = s.Particles;
         _vfxSystems = s.VfxSystems;
@@ -1119,6 +1137,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelLightmapTextures = null;
         CurrentModelSubmeshMaterials = null;
         CurrentModelSubmeshVisible = null;
+        HasFlowmapWater = false;
+        _mapFlowMasks = null;
+        _mapFlowGrads = null;
         CurrentModelParticles = null;
         SelectedParticleTreeItem = null;
         ParticleMarkers = null;
@@ -1933,6 +1954,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 CurrentModelTextures = textures;
                 SetChampionVfx(vfx);
                 CurrentModelLightmapTextures = null; // champions/skinned meshes have no map baked lightmaps
+                HasFlowmapWater = false;             // M44: only maps carry flowmap water
                 if (textures is null) CurrentModelSubmeshMaterials = null; // flat mesh — no per-material data
                 ShowBones = skeleton is not null;
                 MeshInspector.ShowMesh(mesh, skeleton);
@@ -1990,6 +2012,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _selection.Clear();
                 CurrentModelTextures = textures;
                 ClearSecondaryTextures(); // maps don't use champion secondary samplers
+                PublishMapFlowWater();    // M44: re-apply flow-water textures wiped by ClearSecondaryTextures
                 MapGeoInspector.Show(map, entry.Path);
                 MapContent.ShowMap(entry.DisplayName, map.Groups
                     .Select((g, i) => new MapPieceViewModel { Name = string.IsNullOrEmpty(g.Material) ? $"Mesh {i}" : g.Material, Info = $"{g.IndexCount / 3:n0} tris" })
@@ -2143,10 +2166,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var result = new TextureImage?[map.Groups.Count];
         var lightmaps = new TextureImage?[map.Groups.Count];
+        var flowMaps = new TextureImage?[map.Groups.Count];    // M44: Flow_Map -> mask slot (1)
+        var flowNormals = new TextureImage?[map.Groups.Count]; // M44: Flowing_Normal_Map -> gradient slot (2)
         var submeshMats = new ViewportMeshRenderer.SubmeshMaterial[map.Groups.Count];
         // Per-mesh mirrored (negative-determinant) flag, for the two-sided/mirrored render state (M34).
         var mirroredByMesh = map.Meshes.ToDictionary(m => m.Index, m => m.IsMirrored);
-        int lmGroups = 0;
+        int lmGroups = 0, flowGroups = 0;
         for (int i = 0; i < map.Groups.Count; i++)
         {
             var matName = map.Groups[i].Material;
@@ -2156,6 +2181,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 submeshMats[i] = ToSubmeshMaterial(prof);
                 LogUvTransform(prof, matName);
+
+                // M44 flowmap river water: load the Flow_Map + Flowing_Normal textures into the mask/gradient
+                // slots the water shader samples (slots 1/2). Falls back to a flat animated look if missing.
+                if (prof.IsFlowmap)
+                {
+                    if (!string.IsNullOrEmpty(prof.FlowMapPath)) flowMaps[i] = Load(prof.FlowMapPath);
+                    if (!string.IsNullOrEmpty(prof.FlowNormalPath)) flowNormals[i] = Load(prof.FlowNormalPath);
+                    flowGroups++;
+                }
             }
             else submeshMats[i] = ViewportMeshRenderer.SubmeshMaterial.Default;
 
@@ -2168,12 +2202,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         CurrentModelSubmeshMaterials = submeshMats;
         CurrentModelLightmapTextures = lmGroups > 0 ? lightmaps : null;
+        // M44: stash the flow textures (mask/gradient channels) and publish them. A later ClearSecondaryTextures()
+        // on the load path wipes the channels, so the load code re-calls PublishMapFlowWater() from these fields.
+        _mapFlowMasks = flowGroups > 0 ? flowMaps : null;
+        _mapFlowGrads = flowGroups > 0 ? flowNormals : null;
+        PublishMapFlowWater();
 
         int unique = cache.Values.Count(v => v is not null);
         int spec = submeshMats.Count(m => m.UsesSpecular);
         _log.Success("MapGeo", $"Loaded {unique} unique textures ({materialToTexture.Count}/{materialCount} materials resolved)" +
                                (spec > 0 ? $", {spec} group(s) with specular." : ".") +
-                               (lmGroups > 0 ? $" {lmGroups} group(s) with baked lightmaps." : ""));
+                               (lmGroups > 0 ? $" {lmGroups} group(s) with baked lightmaps." : "") +
+                               (flowGroups > 0 ? $" {flowGroups} flowmap-water group(s)." : ""));
         return result;
     }
 
@@ -2220,7 +2260,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Tint: p.Tint,
             AlphaCutoff: p.AlphaCutoff ?? 0.35f,
             ClampU: p.ClampU,
-            ClampV: p.ClampV);
+            ClampV: p.ClampV,
+            IsFlowmap: p.IsFlowmap,
+            FlowSpeed: p.FlowSpeed,
+            FlowStrength: p.FlowStrength,
+            FlowTile: p.FlowTile,
+            ColorInside: p.ColorInside,
+            ColorOutside: p.ColorOutside,
+            WaterAlpha: p.WaterAlpha);
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 
@@ -2273,6 +2320,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             LogUvTransform(material.Profile(sub), sub);
         }
         CurrentModelSubmeshMaterials = submeshMats;
+        HasFlowmapWater = false; // M44: champion skins never carry flowmap water
         // Publish the secondary layers (mask/gradient/emissive/matcap) for the RiotApprox preview.
         CurrentModelMaskTextures = material.SubmeshMask.Count > 0 || material.DefaultMask is not null ? masks : null;
         CurrentModelGradientTextures = material.SubmeshGradient.Count > 0 || material.DefaultGradient is not null ? grads : null;

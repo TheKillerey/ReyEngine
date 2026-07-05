@@ -271,13 +271,18 @@ void main() {
         float bw = abs(0.5 - p0) * 2.0;
         vec3 nrm0 = texture(uGradient, fuv - flow * p0).rgb * 2.0 - 1.0;   // Flowing_Normal_Map on slot 2
         vec3 nrm1 = texture(uGradient, fuv - flow * p1).rgb * 2.0 - 1.0;
-        vec3 wn = normalize(mix(nrm0, nrm1, bw) + vec3(0.0, 0.0, 2.5));
+        // Procedural ripple floor: a couple of world-space sine waves keep the surface visibly alive even when
+        // the (sometimes subchunked/shared) Flow/normal textures fail to load, so the water is never static.
+        vec2 wcoord = vWorld.xz * 0.012;
+        float wave = sin(wcoord.x * 3.0 + uTime * 1.7) * 0.5 + sin((wcoord.x + wcoord.y) * 2.3 - uTime * 1.1) * 0.5;
+        vec2 waveN = vec2(cos(wcoord.x * 3.0 + uTime * 1.7), cos((wcoord.x + wcoord.y) * 2.3 - uTime * 1.1)) * 0.35;
+        vec3 wn = normalize(mix(nrm0, nrm1, bw) + vec3(waveN, 2.5));
         float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
         vec3 water = mix(uColorInside.rgb, uColorOutside.rgb, clamp(fres, 0.0, 1.0));
         vec3 h = normalize(normalize(-uLight) + viewDir);
         float sp = pow(max(dot(wn, h), 0.0), 60.0);
         float diffMod = 0.7 + 0.5 * dot(mix(texture(uTex, fuv - flow * p0).rgb, texture(uTex, fuv - flow * p1).rgb, bw), vec3(0.333));
-        vec3 colw = water * diffMod + vec3(sp) * 0.8;
+        vec3 colw = water * (diffMod + 0.08 * wave) + vec3(sp) * 0.8;
         if (uHasLightmap == 1) colw *= texture(uLightmap, vLmUv).rgb * 1.6;
         FragColor = vec4(colw, uWaterAlpha);
         return;
