@@ -22,6 +22,8 @@ public partial class MainWindow : Window
     private float _gizmoDragStartT;
     private Vector3 _gizmoDragStartOffset;
     private Vector3 _gizmoDragOrigin;   // pivot at drag start — the axis line must NOT re-anchor mid-drag
+    private Vector3 _gizmoStartRotation; // M42: rotate/scale drag-start state
+    private Vector3 _gizmoStartScale;
 
     // Click-to-select: a press+release with almost no movement is a pick, not a camera drag.
     private Point _pressPos;
@@ -129,6 +131,10 @@ public partial class MainWindow : Window
         _ => Vector3.UnitZ,
     };
 
+    private static float ComponentOf(Vector3 v, int comp) => comp == 0 ? v.X : comp == 1 ? v.Y : v.Z;
+    private static Vector3 WithComponent(Vector3 v, int comp, float value) =>
+        comp == 0 ? new Vector3(value, v.Y, v.Z) : comp == 1 ? new Vector3(v.X, value, v.Z) : new Vector3(v.X, v.Y, value);
+
     private void OnViewportPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         var pt = e.GetCurrentPoint(ViewportInput);
@@ -153,6 +159,9 @@ public partial class MainWindow : Window
                 _gizmoDragOrigin = pivot;   // frozen for the whole drag
                 _gizmoDragStartT = t0;
                 _gizmoDragStartOffset = mesh.Offset;
+                var (rot, scale) = vm.SelectedMeshRotScale;
+                _gizmoStartRotation = rot;
+                _gizmoStartScale = scale;
                 vm.BeginMeshDrag();         // capture the before-state → the whole drag = ONE undo step
                 return; // gizmo drag takes over this stroke — don't also start camera fly
             }
@@ -166,14 +175,38 @@ public partial class MainWindow : Window
         if (Math.Abs(p.X - _pressPos.X) > ClickSlopPixels || Math.Abs(p.Y - _pressPos.Y) > ClickSlopPixels)
             _pressMoved = true;
 
-        if (_gizmoDragAxis is { } axis)
+        if (_gizmoDragAxis is { } axis && DataContext is MainWindowViewModel gvm)
         {
-            // Measure along the FROZEN drag-start axis line; the live pivot moves with the mesh and
-            // would re-anchor the line every frame (feedback loop → oscillation).
-            if (DataContext is MainWindowViewModel vm && Viewport.TryGetAxisParameter(axis, p, _gizmoDragOrigin, out var t))
+            var axisDir = Viewport.AxisDir(axis);      // world or the mesh's local axis
+            int comp = axis == ViewportControl.GizmoAxis.X ? 0 : axis == ViewportControl.GizmoAxis.Y ? 1 : 2;
+            switch (gvm.TransformMode)
             {
-                var delta = AxisUnitVector(axis) * (t - _gizmoDragStartT);
-                vm.DragSelectedMeshTo(_gizmoDragStartOffset + delta);
+                case 1: // ROTATE — horizontal drag → degrees about this axis
+                {
+                    float deg = gvm.ApplyRotateSnap((float)(p.X - _pressPos.X) * 0.5f);
+                    gvm.RotateSelectedMeshTo(WithComponent(_gizmoStartRotation, comp, ComponentOf(_gizmoStartRotation, comp) + deg));
+                    break;
+                }
+                case 2: // SCALE — drag along the axis arm; ratio to the grab distance scales that axis
+                {
+                    if (Viewport.TryGetAxisParameter(axis, p, _gizmoDragOrigin, out var t))
+                    {
+                        float f = MathF.Abs(_gizmoDragStartT) > 1e-3f ? t / _gizmoDragStartT : 1f;
+                        f = Math.Clamp(f, 0.05f, 50f);
+                        float target = gvm.ApplyScaleSnap(Math.Clamp(ComponentOf(_gizmoStartScale, comp) * f, 0.05f, 50f));
+                        gvm.ScaleSelectedMeshTo(WithComponent(_gizmoStartScale, comp, target));
+                    }
+                    break;
+                }
+                default: // MOVE — slide along the FROZEN drag-start axis line (live pivot would re-anchor → oscillate)
+                {
+                    if (Viewport.TryGetAxisParameter(axis, p, _gizmoDragOrigin, out var t))
+                    {
+                        float dist = gvm.ApplyMoveSnap(t - _gizmoDragStartT);
+                        gvm.DragSelectedMeshTo(_gizmoDragStartOffset + axisDir * dist);
+                    }
+                    break;
+                }
             }
             _lastPointer = p;
             return;

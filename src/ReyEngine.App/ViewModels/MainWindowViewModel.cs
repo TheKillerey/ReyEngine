@@ -1478,21 +1478,101 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshVerticesRevision++;
     }
 
+    // ---- M42: transform gizmo mode / space / snap ----
+    /// <summary>Active gizmo: 0 = Move, 1 = Rotate, 2 = Scale.</summary>
+    [ObservableProperty] private int _transformMode;
+    /// <summary>Gizmo axes follow the mesh's own rotation (Local) instead of world axes.</summary>
+    [ObservableProperty] private bool _gizmoLocalSpace;
+    [ObservableProperty] private bool _snapEnabled;
+
+    public bool IsMoveMode => TransformMode == 0;
+    public bool IsRotateMode => TransformMode == 1;
+    public bool IsScaleMode => TransformMode == 2;
+    public string GizmoSpaceLabel => GizmoLocalSpace ? "Local" : "World";
+
+    // snap increments (world units / degrees / scale ratio)
+    public const float MoveSnap = 100f, RotateSnap = 15f, ScaleSnap = 0.25f;
+    public float ApplyMoveSnap(float v) => SnapEnabled ? MathF.Round(v / MoveSnap) * MoveSnap : v;
+    public float ApplyRotateSnap(float v) => SnapEnabled ? MathF.Round(v / RotateSnap) * RotateSnap : v;
+    public float ApplyScaleSnap(float v) => SnapEnabled ? MathF.Max(0.05f, MathF.Round(v / ScaleSnap) * ScaleSnap) : v;
+
+    partial void OnTransformModeChanged(int value)
+    {
+        OnPropertyChanged(nameof(IsMoveMode));
+        OnPropertyChanged(nameof(IsRotateMode));
+        OnPropertyChanged(nameof(IsScaleMode));
+        GizmoRevision++;
+    }
+    partial void OnGizmoLocalSpaceChanged(bool value) { OnPropertyChanged(nameof(GizmoSpaceLabel)); OnPropertyChanged(nameof(GizmoAxes)); GizmoRevision++; }
+
+    /// <summary>Bumped whenever the gizmo's mode/space changes so the viewport rebuilds its handles.</summary>
+    [ObservableProperty] private int _gizmoRevision;
+
+    [RelayCommand] private void SetTransformMode(string mode) { if (int.TryParse(mode, out var m)) TransformMode = m; }
+    [RelayCommand] private void ToggleGizmoSpace() => GizmoLocalSpace = !GizmoLocalSpace;
+
+    /// <summary>Live rotate the selected mesh about its pivot (M42 gizmo). Single-select only.</summary>
+    public void RotateSelectedMeshTo(System.Numerics.Vector3 rotationDegrees)
+    {
+        if (_selection.Primary is not { } primary || _currentMap is not { } map) return;
+        map.RotateMesh(primary, rotationDegrees);
+        RefreshMeshTransformFields(primary);
+        RefreshSelectionVisuals();
+        MeshVerticesRevision++;
+    }
+
+    /// <summary>Live scale the selected mesh about its pivot (M42 gizmo). Single-select only.</summary>
+    public void ScaleSelectedMeshTo(System.Numerics.Vector3 scale)
+    {
+        if (_selection.Primary is not { } primary || _currentMap is not { } map) return;
+        map.ScaleMesh(primary, scale);
+        RefreshMeshTransformFields(primary);
+        RefreshSelectionVisuals();
+        MeshVerticesRevision++;
+    }
+
+    /// <summary>The selected mesh's current rotation/scale — the drag's start state for gizmo rotate/scale.</summary>
+    public (System.Numerics.Vector3 rot, System.Numerics.Vector3 scale) SelectedMeshRotScale =>
+        _selection.Primary is { } p ? (p.RotationDegrees, p.Scale) : (System.Numerics.Vector3.Zero, System.Numerics.Vector3.One);
+
+    /// <summary>The selected mesh's local axes (its rotation applied to world X/Y/Z) for Local-space gizmo.</summary>
+    public (System.Numerics.Vector3 x, System.Numerics.Vector3 y, System.Numerics.Vector3 z) SelectedMeshLocalAxes
+    {
+        get
+        {
+            if (!GizmoLocalSpace || _selection.Primary is not { } p)
+                return (System.Numerics.Vector3.UnitX, System.Numerics.Vector3.UnitY, System.Numerics.Vector3.UnitZ);
+            var r = p.RotationDegrees * (MathF.PI / 180f);
+            var q = System.Numerics.Quaternion.CreateFromYawPitchRoll(r.Y, r.X, r.Z);
+            return (System.Numerics.Vector3.Transform(System.Numerics.Vector3.UnitX, q),
+                    System.Numerics.Vector3.Transform(System.Numerics.Vector3.UnitY, q),
+                    System.Numerics.Vector3.Transform(System.Numerics.Vector3.UnitZ, q));
+        }
+    }
+
+    /// <summary>The three gizmo axis directions (world, or the selected mesh's local axes) for the viewport.</summary>
+    public IReadOnlyList<System.Numerics.Vector3> GizmoAxes
+    {
+        get { var (x, y, z) = SelectedMeshLocalAxes; return new[] { x, y, z }; }
+    }
+
+    partial void OnGizmoPivotChanged(System.Numerics.Vector3? value) => OnPropertyChanged(nameof(GizmoAxes));
+
     public void EndMeshDrag()
     {
         if (_selection.Primary is not { } primary || _currentMap is not { } map || _dragBefore.Length == 0) return;
+        string verb = TransformMode == 1 ? "Rotate" : TransformMode == 2 ? "Scale" : "Move";
         if (_selection.IsMulti)
         {
             var entries = _dragBefore.Select(b => (b.mesh, b.before, MeshTransformCommand.State.Capture(b.mesh)));
-            var cmd = new BatchTransformCommand("Move Meshes", map, entries, MakeBatchRefresh(map));
+            var cmd = new BatchTransformCommand($"{verb} Meshes", map, entries, MakeBatchRefresh(map));
             if (cmd.HasChange) UndoService.PushApplied(cmd);
-            _log.Info("MapGeo", $"Moved {_dragBefore.Length} meshes via gizmo.");
+            _log.Info("MapGeo", $"{verb}d {_dragBefore.Length} meshes via gizmo.");
         }
         else
         {
-            PushTransformCommand("Move Mesh", map, primary, _dragBefore[0].before, MeshTransformCommand.State.Capture(primary));
-            var pos = primary.Pivot + primary.Offset;
-            _log.Info("MapGeo", $"Moved '{primary.Name}' to ({pos.X:0.#}, {pos.Y:0.#}, {pos.Z:0.#}) via gizmo.");
+            PushTransformCommand($"{verb} Mesh", map, primary, _dragBefore[0].before, MeshTransformCommand.State.Capture(primary));
+            _log.Info("MapGeo", $"{verb}d '{primary.Name}' via gizmo.");
         }
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
     }

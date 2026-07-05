@@ -55,6 +55,8 @@ public sealed class ViewportMeshRenderer : IDisposable
     private bool _hasGizmo;
     private Vector3 _gizmoPivot;
     private float _gizmoArmLength;
+    private int _gizmoMode;                                   // M42: 0 move · 1 rotate · 2 scale
+    private Vector3 _gizmoAxX = Vector3.UnitX, _gizmoAxY = Vector3.UnitY, _gizmoAxZ = Vector3.UnitZ;
 
     private struct SubmeshDraw
     {
@@ -672,12 +674,51 @@ void main() { FragColor = uColor; }";
         UploadLines(_groupBoundsVao, _groupBoundsVbo, BuildBoxLines(a, b), out _groupBoundsVerts);
     }
 
-    /// <summary>Set (or clear, with pivot=null) the translate gizmo: 3 axis lines from the pivot,
-    /// each <paramref name="armLength"/> world units long.</summary>
-    public void SetGizmo(Vector3? pivot, float armLength)
+    /// <summary>Set (or clear, with pivot=null) the transform gizmo (M42). <paramref name="mode"/> selects
+    /// move (0, axis arrows) / rotate (1, rings) / scale (2, axis arms with box tips); the axis vectors let
+    /// the gizmo follow world or local space.</summary>
+    public void SetGizmo(Vector3? pivot, float armLength, int mode = 0, Vector3? ax = null, Vector3? ay = null, Vector3? az = null)
     {
         _hasGizmo = pivot.HasValue && armLength > 0f;
         if (pivot.HasValue) { _gizmoPivot = pivot.Value; _gizmoArmLength = armLength; }
+        _gizmoMode = mode;
+        _gizmoAxX = ax ?? Vector3.UnitX; _gizmoAxY = ay ?? Vector3.UnitY; _gizmoAxZ = az ?? Vector3.UnitZ;
+    }
+
+    /// <summary>Build the line-segment vertices for one gizmo axis handle in the given mode (M42).</summary>
+    private static float[] BuildGizmoAxis(int mode, Vector3 pivot, Vector3 axis, float arm)
+    {
+        var v = new List<float>();
+        void Seg(Vector3 a, Vector3 b) { v.Add(a.X); v.Add(a.Y); v.Add(a.Z); v.Add(b.X); v.Add(b.Y); v.Add(b.Z); }
+        axis = Vector3.Normalize(axis);
+        var u = Vector3.Normalize(MathF.Abs(axis.Y) < 0.99f ? Vector3.Cross(axis, Vector3.UnitY) : Vector3.Cross(axis, Vector3.UnitX));
+        var w = Vector3.Cross(axis, u);
+
+        if (mode == 1) // rotate: ring in the plane perpendicular to the axis
+        {
+            const int N = 48;
+            Vector3 prev = pivot + u * arm;
+            for (int i = 1; i <= N; i++)
+            {
+                float t = i / (float)N * MathF.Tau;
+                var p = pivot + (u * MathF.Cos(t) + w * MathF.Sin(t)) * arm;
+                Seg(prev, p); prev = p;
+            }
+        }
+        else // move / scale: an arm from the pivot
+        {
+            var tip = pivot + axis * arm;
+            Seg(pivot, tip);
+            if (mode == 2) // scale: a small box at the tip
+            {
+                float s = arm * 0.06f;
+                Vector3 C(int sx, int sy, int sz) => tip + axis * (sz * s) + u * (sx * s) + w * (sy * s);
+                var c = new[] { C(-1, -1, -1), C(1, -1, -1), C(1, 1, -1), C(-1, 1, -1), C(-1, -1, 1), C(1, -1, 1), C(1, 1, 1), C(-1, 1, 1) };
+                int[,] e = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
+                for (int i = 0; i < 12; i++) Seg(c[e[i, 0]], c[e[i, 1]]);
+            }
+        }
+        return v.ToArray();
     }
 
     /// <summary>Set the placed-particle markers (M35): a small 3D cross at each world position, plus a larger
@@ -953,22 +994,20 @@ void main() { FragColor = uColor; }";
             _gl.BindVertexArray(0);
         }
 
-        // Translate gizmo: 3 axis lines from the selected mesh's pivot (X=red, Y=green, Z=blue), always
-        // on top so it stays clickable regardless of what's behind it.
+        // Transform gizmo (M42): move arrows / rotate rings / scale arms, along the selected mesh's axes
+        // from its pivot (X=red, Y=green, Z=blue), always on top so it stays clickable.
         if (_hasGizmo)
         {
-            Span<float> verts = stackalloc float[]
-            {
-                _gizmoPivot.X, _gizmoPivot.Y, _gizmoPivot.Z, _gizmoPivot.X + _gizmoArmLength, _gizmoPivot.Y, _gizmoPivot.Z,
-                _gizmoPivot.X, _gizmoPivot.Y, _gizmoPivot.Z, _gizmoPivot.X, _gizmoPivot.Y + _gizmoArmLength, _gizmoPivot.Z,
-                _gizmoPivot.X, _gizmoPivot.Y, _gizmoPivot.Z, _gizmoPivot.X, _gizmoPivot.Y, _gizmoPivot.Z + _gizmoArmLength,
-            };
+            var xg = BuildGizmoAxis(_gizmoMode, _gizmoPivot, _gizmoAxX, _gizmoArmLength);
+            var yg = BuildGizmoAxis(_gizmoMode, _gizmoPivot, _gizmoAxY, _gizmoArmLength);
+            var zg = BuildGizmoAxis(_gizmoMode, _gizmoPivot, _gizmoAxZ, _gizmoArmLength);
+            var all = new float[xg.Length + yg.Length + zg.Length];
+            System.Array.Copy(xg, 0, all, 0, xg.Length);
+            System.Array.Copy(yg, 0, all, xg.Length, yg.Length);
+            System.Array.Copy(zg, 0, all, xg.Length + yg.Length, zg.Length);
+
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _gizmoVbo);
-            unsafe
-            {
-                fixed (float* p = verts)
-                    _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(verts.Length * sizeof(float)), p, BufferUsageARB.DynamicDraw);
-            }
+            unsafe { fixed (float* p = all) _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(all.Length * sizeof(float)), p, BufferUsageARB.DynamicDraw); }
             _gl.BindVertexArray(_gizmoVao);
             _gl.EnableVertexAttribArray(0);
             _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
@@ -977,12 +1016,10 @@ void main() { FragColor = uColor; }";
             _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
             _gl.Disable(EnableCap.DepthTest);
             _gl.LineWidth(2.5f);
-            _gl.Uniform4(_lColor, 0.95f, 0.25f, 0.25f, 1f); // X red
-            _gl.DrawArrays(PrimitiveType.Lines, 0, 2);
-            _gl.Uniform4(_lColor, 0.3f, 0.9f, 0.35f, 1f);   // Y green
-            _gl.DrawArrays(PrimitiveType.Lines, 2, 2);
-            _gl.Uniform4(_lColor, 0.3f, 0.55f, 0.98f, 1f);  // Z blue
-            _gl.DrawArrays(PrimitiveType.Lines, 4, 2);
+            int xN = xg.Length / 3, yN = yg.Length / 3, zN = zg.Length / 3;
+            _gl.Uniform4(_lColor, 0.95f, 0.25f, 0.25f, 1f); _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)xN);         // X red
+            _gl.Uniform4(_lColor, 0.3f, 0.9f, 0.35f, 1f); _gl.DrawArrays(PrimitiveType.Lines, xN, (uint)yN);          // Y green
+            _gl.Uniform4(_lColor, 0.3f, 0.55f, 0.98f, 1f); _gl.DrawArrays(PrimitiveType.Lines, xN + yN, (uint)zN);    // Z blue
             _gl.LineWidth(1f);
             _gl.BindVertexArray(0);
         }

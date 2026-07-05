@@ -81,6 +81,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GroupBoundsMax));
     public static readonly StyledProperty<Vector3?> GizmoPivotProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GizmoPivot));
+    public static readonly StyledProperty<int> GizmoModeProperty =
+        AvaloniaProperty.Register<ViewportControl, int>(nameof(GizmoMode));
+    public static readonly StyledProperty<IReadOnlyList<Vector3>?> GizmoAxesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(GizmoAxes));
 
     public int PreviewMode { get => GetValue(PreviewModeProperty); set => SetValue(PreviewModeProperty, value); }
     /// <summary>World-space bounds of every selected map mesh, for the amber highlight boxes.</summary>
@@ -90,6 +94,10 @@ public sealed class ViewportControl : OpenGlControlBase
     public Vector3? GroupBoundsMax { get => GetValue(GroupBoundsMaxProperty); set => SetValue(GroupBoundsMaxProperty, value); }
     /// <summary>World-space center of the selection — the translate-gizmo origin (null = no selection).</summary>
     public Vector3? GizmoPivot { get => GetValue(GizmoPivotProperty); set => SetValue(GizmoPivotProperty, value); }
+    /// <summary>Transform gizmo mode (M42): 0 move · 1 rotate · 2 scale.</summary>
+    public int GizmoMode { get => GetValue(GizmoModeProperty); set => SetValue(GizmoModeProperty, value); }
+    /// <summary>The 3 gizmo axis directions (world or the mesh's local axes).</summary>
+    public IReadOnlyList<Vector3>? GizmoAxes { get => GetValue(GizmoAxesProperty); set => SetValue(GizmoAxesProperty, value); }
     public AnimationClip? AnimationClip { get => GetValue(AnimationClipProperty); set => SetValue(AnimationClipProperty, value); }
     public double AnimationTime { get => GetValue(AnimationTimeProperty); set => SetValue(AnimationTimeProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelTextures { get => GetValue(ModelTexturesProperty); set => SetValue(ModelTexturesProperty, value); }
@@ -210,28 +218,63 @@ public sealed class ViewportControl : OpenGlControlBase
     private Vector3 _lastCamPos;
     private const float GizmoHitPixels = 10f;
 
-    private static Vector3 AxisDir(GizmoAxis axis) => axis switch
+    /// <summary>The world direction of a gizmo axis — the mesh's local axes when supplied, else world.</summary>
+    public Vector3 AxisDir(GizmoAxis axis)
     {
-        GizmoAxis.X => Vector3.UnitX,
-        GizmoAxis.Y => Vector3.UnitY,
-        _ => Vector3.UnitZ,
-    };
+        var ax = GizmoAxes;
+        if (ax is { Count: 3 })
+            return axis switch { GizmoAxis.X => ax[0], GizmoAxis.Y => ax[1], _ => ax[2] };
+        return axis switch { GizmoAxis.X => Vector3.UnitX, GizmoAxis.Y => Vector3.UnitY, _ => Vector3.UnitZ };
+    }
 
-    /// <summary>Which gizmo axis (if any) is under the given control-relative point, within a pixel threshold.</summary>
+    /// <summary>Which gizmo handle (if any) is under the point. Move/Scale hit the axis arms; Rotate hits the
+    /// nearest ring (a circle in the plane perpendicular to each axis).</summary>
     public GizmoAxis? HitTestGizmoAxis(Point screenPos)
     {
         if (GizmoPivot is not { } pivot || _lastViewportW <= 0 || _lastViewportH <= 0) return null;
         float armLength = GizmoArmLength(pivot);
         if (armLength <= 0f) return null;
+        var sp = new Vector2((float)screenPos.X, (float)screenPos.Y);
 
         GizmoAxis? best = null;
         float bestDist = GizmoHitPixels;
-        foreach (var axis in new[] { GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z })
+
+        if (GizmoMode == 1) // rotate: nearest ring
+        {
+            foreach (var axis in new[] { GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z })
+            {
+                float d = DistanceToRing(sp, pivot, AxisDir(axis), armLength);
+                if (d < bestDist) { bestDist = d; best = axis; }
+            }
+            return best;
+        }
+
+        foreach (var axis in new[] { GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z }) // move / scale: axis arm
         {
             if (!ViewportPicking.ProjectToScreen(pivot, _lastViewProj, _lastViewportW, _lastViewportH, out var p0)) continue;
             if (!ViewportPicking.ProjectToScreen(pivot + AxisDir(axis) * armLength, _lastViewProj, _lastViewportW, _lastViewportH, out var p1)) continue;
-            float d = DistancePointToSegment(new Vector2((float)screenPos.X, (float)screenPos.Y), p0, p1);
+            float d = DistancePointToSegment(sp, p0, p1);
             if (d < bestDist) { bestDist = d; best = axis; }
+        }
+        return best;
+    }
+
+    /// <summary>Screen distance from a point to a world-space ring (circle perpendicular to <paramref name="axis"/>).</summary>
+    private float DistanceToRing(Vector2 sp, Vector3 center, Vector3 axis, float radius)
+    {
+        axis = Vector3.Normalize(axis);
+        var u = Vector3.Normalize(MathF.Abs(axis.Y) < 0.99f ? Vector3.Cross(axis, Vector3.UnitY) : Vector3.Cross(axis, Vector3.UnitX));
+        var w = Vector3.Cross(axis, u);
+        float best = float.MaxValue;
+        const int N = 32;
+        Vector2 prev = default; bool havePrev = false;
+        for (int i = 0; i <= N; i++)
+        {
+            float t = i / (float)N * MathF.Tau;
+            var p = center + (u * MathF.Cos(t) + w * MathF.Sin(t)) * radius;
+            if (!ViewportPicking.ProjectToScreen(p, _lastViewProj, _lastViewportW, _lastViewportH, out var s)) { havePrev = false; continue; }
+            if (havePrev) best = MathF.Min(best, DistancePointToSegment(sp, prev, s));
+            prev = s; havePrev = true;
         }
         return best;
     }
@@ -413,7 +456,9 @@ public sealed class ViewportControl : OpenGlControlBase
 
         _meshRenderer.SetHighlightBoxes(SelectionBoxes ?? Array.Empty<(Vector3, Vector3)>());
         _meshRenderer.SetGroupBounds(GroupBoundsMin, GroupBoundsMax);
-        _meshRenderer.SetGizmo(GizmoPivot, GizmoPivot is { } piv ? GizmoArmLength(piv) : 0f);
+        var gax = GizmoAxes;
+        _meshRenderer.SetGizmo(GizmoPivot, GizmoPivot is { } piv ? GizmoArmLength(piv) : 0f, GizmoMode,
+            gax is { Count: 3 } ? gax[0] : null, gax is { Count: 3 } ? gax[1] : null, gax is { Count: 3 } ? gax[2] : null);
 
         _grid.Render(viewProj);
         var view = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.View; // same X-mirror as viewProj, for the matcap lookup
@@ -604,7 +649,8 @@ public sealed class ViewportControl : OpenGlControlBase
             RequestNextFrameRendering();
         }
         else if (change.Property == SelectionBoxesProperty || change.Property == GroupBoundsMinProperty
-                 || change.Property == GroupBoundsMaxProperty || change.Property == GizmoPivotProperty)
+                 || change.Property == GroupBoundsMaxProperty || change.Property == GizmoPivotProperty
+                 || change.Property == GizmoModeProperty || change.Property == GizmoAxesProperty)
         { RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimationClipProperty || change.Property == AnimationTimeProperty) { _skinDirty = true; RequestNextFrameRendering(); }

@@ -252,6 +252,8 @@
                 GroupBoundsMin="{Binding GroupBoundsMin}"
                 GroupBoundsMax="{Binding GroupBoundsMax}"
                 GizmoPivot="{Binding GizmoPivot}"
+                GizmoMode="{Binding TransformMode}"
+                GizmoAxes="{Binding GizmoAxes}"
                 Skeleton="{Binding CurrentSkeleton}"
                 AnimationClip="{Binding CurrentAnimation}"
                 AnimationTime="{Binding AnimationTime}"
@@ -323,6 +325,24 @@
                 <Border Width="1" Height="10" Background="{DynamicResource ReyBorderAccentBrush}" VerticalAlignment="Center" />
                 <TextBlock Text="LMB orbit · Shift+LMB pan · wheel zoom"
                            FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+              </StackPanel>
+            </Border>
+
+            <!-- M42: transform gizmo tools (Move/Rotate/Scale · Local/World · Snap) -->
+            <Border Classes="glass" Padding="4,3" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,46,0,0"
+                    IsVisible="{Binding MapGeoInspector.HasMap}">
+              <StackPanel Orientation="Horizontal" Spacing="3">
+                <ToggleButton Classes="vp" Content="✥ Move" IsChecked="{Binding IsMoveMode, Mode=OneWay}"
+                              Command="{Binding SetTransformModeCommand}" CommandParameter="0" ToolTip.Tip="Move gizmo (translate along an axis)" />
+                <ToggleButton Classes="vp" Content="⟳ Rotate" IsChecked="{Binding IsRotateMode, Mode=OneWay}"
+                              Command="{Binding SetTransformModeCommand}" CommandParameter="1" ToolTip.Tip="Rotate gizmo (drag a ring — horizontal drag = degrees)" />
+                <ToggleButton Classes="vp" Content="⇲ Scale" IsChecked="{Binding IsScaleMode, Mode=OneWay}"
+                              Command="{Binding SetTransformModeCommand}" CommandParameter="2" ToolTip.Tip="Scale gizmo (drag an axis handle out/in)" />
+                <Border Width="1" Height="14" Background="{DynamicResource ReyBorderAccentBrush}" Margin="3,0" VerticalAlignment="Center" />
+                <ToggleButton Classes="vp" Content="{Binding GizmoSpaceLabel}" IsChecked="{Binding GizmoLocalSpace}"
+                              MinWidth="52" ToolTip.Tip="Gizmo axes: World or the mesh's Local space" />
+                <ToggleButton Classes="vp" Content="⊞ Snap" IsChecked="{Binding SnapEnabled}"
+                              ToolTip.Tip="Snap to increments — 100u move · 15° rotate · 0.25× scale" />
               </StackPanel>
             </Border>
           </Grid>
