@@ -268,7 +268,7 @@ void main() {
         // Flow_Map channels (only meaningful when it actually loaded; the white fallback would read 1,1,1,1
         // = fully opaque with no flow, which is the sensible default when the texture is missing).
         vec4 fm = (uHasMask == 1) ? texture(uMask, uv) : vec4(1.0);
-        float opacity  = fm.g;   // G: transparency/where-water-is mask
+        float opacity  = 1.0 - fm.g;   // G: transparency mask (HIGH green = fully transparent, so invert to opacity)
         float specMask = fm.b;   // B: specular mask
         vec2 fuv = uv * uFlowTile;
         vec2 flow = (uHasMask == 1) ? (vec2(fm.r) * 2.0 - 1.0) * uFlowStrength * vec2(1.0, 0.6) : vec2(0.0); // R: flow
