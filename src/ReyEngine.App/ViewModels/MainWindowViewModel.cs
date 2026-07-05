@@ -2189,6 +2189,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (!string.IsNullOrEmpty(prof.FlowMapPath)) flowMaps[i] = Load(prof.FlowMapPath);
                     if (!string.IsNullOrEmpty(prof.FlowNormalPath)) flowNormals[i] = Load(prof.FlowNormalPath);
                     flowGroups++;
+                    if (flowGroups <= 3)   // M44 diagnostic: confirm detection + texture loads for the first few
+                        _log.Info("Water", $"flowmap '{matName}': flowMap={(flowMaps[i] is not null ? "OK" : "miss")} " +
+                                           $"normal={(flowNormals[i] is not null ? "OK" : "miss")} " +
+                                           $"speed={prof.FlowSpeed:0.###} alpha={prof.WaterAlpha:0.##} inside={prof.ColorInside}");
                 }
             }
             else submeshMats[i] = ViewportMeshRenderer.SubmeshMaterial.Default;
