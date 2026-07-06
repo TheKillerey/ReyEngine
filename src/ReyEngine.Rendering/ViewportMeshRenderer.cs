@@ -684,6 +684,10 @@ void main() { FragColor = uColor; }";
     /// <summary>M45: baked-lightmap multiplier from MapSunProperties.lightMapColorScale (1 = neutral).</summary>
     public void SetLightmapScale(float scale) => _lightmapScale = Math.Clamp(scale, 0.05f, 8f);
 
+    // M50b: selected submeshes render an accent wireframe OUTLINE overlay (replaces the AABB boxes).
+    private IReadOnlyList<int>? _highlightSubmeshes;
+    public void SetSubmeshHighlight(IReadOnlyList<int>? groupIndices) => _highlightSubmeshes = groupIndices;
+
     public void SetSubmeshMaterial(int index, SubmeshMaterial mat)
     {
         if (!_ready || !_hasMesh || index < 0 || index >= _submeshes.Length) return;
@@ -1019,6 +1023,24 @@ void main() { FragColor = uColor; }";
                     _gl.DepthMask(true);
                 }
                 _gl.Disable(EnableCap.CullFace); // restore default so the line/gizmo overlays are unaffected
+
+                // M50b: selection OUTLINE — draw the selected submeshes' triangles as an accent wireframe
+                // overlay (polygon-offset lines over the shaded mesh), Unity/Unreal-style, instead of AABBs.
+                if (_highlightSubmeshes is { Count: > 0 } hl)
+                {
+                    _gl.UseProgram(_lineProgram);
+                    _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+                    _gl.Uniform4(_lColor, 0.21f, 0.89f, 0.76f, 1f);   // Kalista accent
+                    _gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Line);
+                    _gl.Enable(EnableCap.PolygonOffsetLine);
+                    _gl.PolygonOffset(-1.5f, -1.5f);
+                    foreach (var gi in hl)
+                        if (gi >= 0 && gi < _submeshes.Length && _submeshes[gi].Visible)
+                            _gl.DrawElements(PrimitiveType.Triangles, (uint)_submeshes[gi].Count,
+                                DrawElementsType.UnsignedInt, (void*)(_submeshes[gi].Start * sizeof(uint)));
+                    _gl.Disable(EnableCap.PolygonOffsetLine);
+                    _gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
+                }
             }
             _gl.BindVertexArray(0);
         }

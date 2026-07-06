@@ -107,27 +107,55 @@
       </StackPanel>
     </Border>
 
-    <!-- MESH DETAILS (materials, lightmap, flags — mapgeo metadata for the selection) -->
-    <Border Classes="card" IsVisible="{Binding MeshDetails.HasMesh}">
-      <StackPanel Spacing="4">
-        <StackPanel Orientation="Horizontal" Spacing="6">
-          <TextBlock Classes="cardTitle" Text="MESH DETAILS" VerticalAlignment="Center" />
-          <TextBlock Text="{Binding MeshDetails.Title}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}"
-                     TextTrimming="CharacterEllipsis" MaxWidth="180" VerticalAlignment="Center" />
-        </StackPanel>
-        <ItemsControl ItemsSource="{Binding MeshDetails.Rows}" Margin="2,0">
+    <!-- MATERIALS — the materials assigned to the selected mesh (Unity Mesh-Renderer style) -->
+    <Border Classes="card" IsVisible="{Binding HasSelectedMeshMaterials}">
+      <StackPanel Spacing="3">
+        <TextBlock Classes="cardTitle" Text="MATERIALS" />
+        <ItemsControl ItemsSource="{Binding SelectedMeshMaterials}">
           <ItemsControl.ItemTemplate>
             <DataTemplate>
-              <Grid ColumnDefinitions="120,*" Margin="0,1">
-                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Top" />
-                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" TextWrapping="Wrap"
-                           Foreground="{DynamicResource ReyTextBrush}" />
-              </Grid>
+              <Button Background="Transparent" BorderThickness="0" Padding="4,2"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                      Command="{Binding $parent[ItemsControl].DataContext.EditSelectedMaterialCommand}"
+                      CommandParameter="{Binding}"
+                      ToolTip.Tip="Open this material in the Materials editor">
+                <StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="🎨" FontSize="10" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding Name}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}"
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding Detail}" FontSize="9" Opacity="0.55" Margin="20,0,0,0"
+                             TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+              </Button>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
       </StackPanel>
     </Border>
+
+    <!-- MESH DETAILS — full mapgeo metadata, collapsed by default (advanced) -->
+    <Expander IsExpanded="False" IsVisible="{Binding MeshDetails.HasMesh}" FontSize="11">
+      <Expander.Header>
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Text="MESH DETAILS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding MeshDetails.Title}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}"
+                     TextTrimming="CharacterEllipsis" MaxWidth="160" VerticalAlignment="Center" />
+        </StackPanel>
+      </Expander.Header>
+      <ItemsControl ItemsSource="{Binding MeshDetails.Rows}" Margin="2,0">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Grid ColumnDefinitions="120,*" Margin="0,1">
+              <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Top" />
+              <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+            </Grid>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </Expander>
 
     <!-- MOVE PARTICLE (selected placed particle) -->
     <Border Classes="card" IsVisible="{Binding SelectedParticleNode, Converter={x:Static ObjectConverters.IsNotNull}}">

@@ -136,8 +136,34 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         SelectedParticleMarker = value?.CurrentPosition;
         RefreshParticleMoveFields(value);
-        if (value is { } p) { ShowParticles = true; ParticleFocusPoint = p.CurrentPosition; }
+        if (value is { } p)
+        {
+            ShowParticles = true;
+            ParticleFocusPoint = p.CurrentPosition;
+            // M50b: exclusive selection — a particle selection deselects meshes/props/probes
+            _selection.Clear();
+            if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
+            if (SelectedProbe is not null) SelectedProbe = null;
+        }
         RebuildParticlePlayback();   // M36: play the newly-selected system (or stop if none)
+    }
+
+    /// <summary>M50b: one material slot of the selected mesh (Unity Mesh-Renderer style).</summary>
+    public sealed record MeshMaterialSlotViewModel(string Name, string Detail);
+
+    [ObservableProperty] private IReadOnlyList<int>? _selectedSubmeshIndices;              // M50b: outline highlight
+    [ObservableProperty] private IReadOnlyList<MeshMaterialSlotViewModel>? _selectedMeshMaterials;
+    [ObservableProperty] private bool _hasSelectedMeshMaterials;
+    [ObservableProperty] private bool _assetDataExpanded;   // M50b: Overview/Materials/Raw-BIN hidden until wanted
+
+    /// <summary>Open a selected-mesh material in the full Materials editor (expands the asset-data area).</summary>
+    [RelayCommand]
+    private void EditSelectedMaterial(MeshMaterialSlotViewModel? slot)
+    {
+        if (slot is null) return;
+        AssetDataExpanded = true;
+        InspectorTab = 1;
+        MaterialEditor.Search = slot.Name;
     }
 
     private void UpdateParticleMarkers() =>
@@ -235,6 +261,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (value is not { } p) return;
         SelectedProbe = null;
+        _selection.Clear();                       // M50b: exclusive selection
+        if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
         SelectedParticleMarker = p.Position;
         ParticleFocusPoint = p.Position;
         SelectedPlaceableInfo = $"{p.Name}\n{p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
@@ -243,6 +271,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (value is not { } p) return;
         SelectedPropNode = null;
+        _selection.Clear();                       // M50b: exclusive selection
+        if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
         SelectedParticleMarker = p.Position;
         ParticleFocusPoint = p.Position;
         SelectedPlaceableInfo = $"{p.Name}\ncubemap: {p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
@@ -1153,7 +1183,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // M50: the materials list lives in the Inspector's Materials tab now (the Content
                 // Browser quick-list was removed) — jump straight to it for materials.bin selections.
                 if (binEntry.Path.EndsWith(".materials.bin", StringComparison.OrdinalIgnoreCase))
-                    InspectorTab = 1;
+                { InspectorTab = 1; AssetDataExpanded = true; }
                 if (MaterialEditor.UnresolvedCount > 0)
                     _log.Warn("Material", $"{binEntry.DisplayName}: {matDoc.Materials.Count} material(s), {MaterialEditor.UnresolvedCount} texture path(s) unresolved in this WAD.");
                 else
@@ -1579,8 +1609,34 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_selection.IsEmpty || _currentMap is not { } map)
         {
             SelectionBoxes = null; GroupBoundsMin = GroupBoundsMax = GizmoPivot = null;
+            SelectedSubmeshIndices = null; SelectedMeshMaterials = null; HasSelectedMeshMaterials = false;
             return;
         }
+
+        // M50b: a mesh selection is EXCLUSIVE — deselect placeables so the inspector doesn't keep
+        // showing the previously-selected particle/prop/probe next to the mesh sections (Unity-style).
+        if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
+        if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
+        if (SelectedProbe is not null) SelectedProbe = null;
+        SelectedPlaceableInfo = "";
+
+        // M50b: outline highlight (mesh wireframe overlay) + the selection's assigned materials.
+        var meshIdx = _selection.Items.Select(m => m.Index).ToHashSet();
+        var subIdx = new List<int>();
+        var mats = new List<MeshMaterialSlotViewModel>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < map.Groups.Count; i++)
+        {
+            if (!meshIdx.Contains(map.Groups[i].MeshIndex)) continue;
+            subIdx.Add(i);
+            var name = map.Groups[i].Material;
+            if (name.Length > 0 && seen.Add(name))
+                mats.Add(new MeshMaterialSlotViewModel(name,
+                    _currentMapProfiles?.GetValueOrDefault(name)?.RenderStateSummary ?? ""));
+        }
+        SelectedSubmeshIndices = subIdx;
+        SelectedMeshMaterials = mats;
+        HasSelectedMeshMaterials = mats.Count > 0;
         var boxes = new List<(System.Numerics.Vector3 min, System.Numerics.Vector3 max)>(_selection.Count);
         var gmin = new System.Numerics.Vector3(float.MaxValue);
         var gmax = new System.Numerics.Vector3(float.MinValue);
@@ -1601,7 +1657,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             gmax = System.Numerics.Vector3.Max(gmax, max);
         }
         if (boxes.Count == 0) { SelectionBoxes = null; GroupBoundsMin = GroupBoundsMax = GizmoPivot = null; return; }
-        SelectionBoxes = boxes;
+        SelectionBoxes = null;   // M50b: selection reads as a mesh OUTLINE now, not AABB boxes
         // Group bounds box only makes sense for a multi-selection; a single mesh already has its highlight box.
         GroupBoundsMin = _selection.IsMulti ? gmin : null;
         GroupBoundsMax = _selection.IsMulti ? gmax : null;

@@ -255,6 +255,7 @@
                 ModelSubmeshMaterials="{Binding CurrentModelSubmeshMaterials}"
                 MeshVerticesRevision="{Binding MeshVerticesRevision}"
                 SelectionBoxes="{Binding SelectionBoxes}"
+                HighlightSubmeshes="{Binding SelectedSubmeshIndices}"
                 GroupBoundsMin="{Binding GroupBoundsMin}"
                 GroupBoundsMax="{Binding GroupBoundsMax}"
                 GizmoPivot="{Binding GizmoPivot}"
@@ -594,8 +595,14 @@
                            FontSize="11" TextWrapping="Wrap" />
               </Border>
 
-              <!-- INSPECTOR TABS (M8): Overview / Materials / Raw BIN Tree -->
-              <TabControl SelectedIndex="{Binding InspectorTab}" IsVisible="{Binding HasInspectorBody}" Padding="0" Margin="0,4,0,0">
+              <!-- INSPECTOR TABS (M8): Overview / Materials / Raw BIN Tree — hidden by default (M50b);
+                   expand on demand, or automatically when a .materials.bin is opened. -->
+              <Expander IsExpanded="{Binding AssetDataExpanded, Mode=TwoWay}" IsVisible="{Binding HasInspectorBody}" FontSize="11" Margin="0,4,0,0">
+                <Expander.Header>
+                  <TextBlock Text="ASSET DATA · Overview / Materials / Raw BIN" FontSize="10" FontWeight="SemiBold"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                </Expander.Header>
+              <TabControl SelectedIndex="{Binding InspectorTab}" Padding="0">
                 <TabItem FontSize="12">
                   <TabItem.Header><TextBlock Text="Overview" FontSize="12" /></TabItem.Header>
                   <StackPanel Spacing="10" Margin="0,8,0,0">
@@ -879,6 +886,7 @@
               </StackPanel>
                 </TabItem>
               </TabControl>
+              </Expander>
             </StackPanel>
           </ScrollViewer>
         </DockPanel>
