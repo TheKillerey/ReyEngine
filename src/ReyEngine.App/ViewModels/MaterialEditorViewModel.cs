@@ -111,6 +111,9 @@ public sealed partial class MaterialParameterViewModel : ViewModelBase
     public string TypeName => Model.TypeName;
     public bool IsEditable => Model.IsEditable;
     public bool IsDirty => Model.IsDirty;
+    /// <summary>M50c: colour-ish params (TintColor, Color_Inside…) show a live swatch preview.</summary>
+    public bool IsColorLike =>
+        Name.Contains("Color", StringComparison.OrdinalIgnoreCase) || Name.Contains("Tint", StringComparison.OrdinalIgnoreCase);
 
     public void RaiseDirty() => OnPropertyChanged(nameof(IsDirty));
 
@@ -311,6 +314,15 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
     public bool HasUnresolved => UnresolvedCount > 0;
     partial void OnUnresolvedCountChanged(int value) => OnPropertyChanged(nameof(HasUnresolved));
+
+    /// <summary>M50c: auto-load the diffuse thumbnail of one material — used when the user opens a
+    /// material from the selected mesh's MATERIALS card, so the texture preview shows immediately.</summary>
+    public void AutoPreviewDiffuse(string materialName)
+    {
+        var m = Materials.FirstOrDefault(x => string.Equals(x.Name, materialName, StringComparison.OrdinalIgnoreCase));
+        var slot = m?.Slots.FirstOrDefault(s => s.IsDiffuse) ?? m?.Slots.FirstOrDefault();
+        if (slot is not null && slot.PreviewCommand.CanExecute(null)) slot.PreviewCommand.Execute(null);
+    }
 
     // Wired by MainWindowViewModel.
     public Func<string, bool>? TextureExists { get; set; }

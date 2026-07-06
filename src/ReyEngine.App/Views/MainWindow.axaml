@@ -807,6 +807,11 @@
                                       <DataTemplate>
                                         <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
                                           <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" MinWidth="110" VerticalAlignment="Center" />
+                                          <!-- M50c: live colour swatch for Tint/Color params -->
+                                          <Border Width="16" Height="16" CornerRadius="3" BorderThickness="1" VerticalAlignment="Center"
+                                                  BorderBrush="{DynamicResource ReyBorderBrush}" IsVisible="{Binding IsColorLike}"
+                                                  Background="{Binding EditedText, Converter={x:Static conv:VecColorBrushConverter.Instance}}"
+                                                  ToolTip.Tip="Colour preview (r, g, b as 0..1)" />
                                           <TextBox Text="{Binding EditedText}" MinWidth="150" FontSize="10" Padding="4,1" IsEnabled="{Binding IsEditable}" FontFamily="Cascadia Mono, Consolas, monospace">
                                             <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" /></TextBox.KeyBindings>
                                           </TextBox>

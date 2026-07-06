@@ -228,10 +228,22 @@
 
   <Style Selector="Expander">
     <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Background" Value="{DynamicResource ReyPanelAltBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderSoftBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="4" />
   </Style>
+  <!-- M50c: theme the expander header/body — Fluent's near-black defaults clashed with the Kalista navy -->
   <Style Selector="Expander /template/ ToggleButton#ExpanderHeader">
     <Setter Property="MinHeight" Value="26" />
     <Setter Property="Padding" Value="8,3" />
+    <Setter Property="Background" Value="{DynamicResource ReyPanelAltBrush}" />
+    <Setter Property="CornerRadius" Value="4" />
+  </Style>
+  <Style Selector="Expander /template/ Border#ExpanderContent">
+    <Setter Property="Background" Value="{DynamicResource ReyPanelBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderSoftBrush}" />
+    <Setter Property="Padding" Value="6" />
   </Style>
 
   <!-- ── splitters ──────────────────────────────────────────────────────────── -->

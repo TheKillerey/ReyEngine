@@ -164,6 +164,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         AssetDataExpanded = true;
         InspectorTab = 1;
         MaterialEditor.Search = slot.Name;
+        MaterialEditor.AutoPreviewDiffuse(slot.Name);   // M50c: show the texture immediately
     }
 
     private void UpdateParticleMarkers() =>
