@@ -1150,6 +1150,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 MaterialEditor.Load(matDoc, binEntry);
                 HasMaterialData = true;
+                // M50: the materials list lives in the Inspector's Materials tab now (the Content
+                // Browser quick-list was removed) — jump straight to it for materials.bin selections.
+                if (binEntry.Path.EndsWith(".materials.bin", StringComparison.OrdinalIgnoreCase))
+                    InspectorTab = 1;
                 if (MaterialEditor.UnresolvedCount > 0)
                     _log.Warn("Material", $"{binEntry.DisplayName}: {matDoc.Materials.Count} material(s), {MaterialEditor.UnresolvedCount} texture path(s) unresolved in this WAD.");
                 else

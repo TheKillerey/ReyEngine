@@ -1,0 +1,169 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ReyEngine.App.Views.SceneObjectInspectorView">
+  <!-- M50: Unity/Unreal-style scene-object inspector — Transform / Details / Materials for whatever is
+       selected in the outliner or viewport. Lives in the RIGHT panel (moved out of the left outliner). -->
+  <StackPanel Spacing="8">
+
+    <!-- TRANSFORM (single mesh) -->
+    <Border Classes="card" IsVisible="{Binding IsSingleSelect}">
+      <StackPanel Spacing="4">
+        <TextBlock Classes="cardTitle" Text="TRANSFORM" />
+        <TextBlock Text="{Binding SelectedMapMesh.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
+
+        <TextBlock Text="Position" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBox Grid.Column="1" Text="{Binding MeshMoveX}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBox Grid.Column="3" Text="{Binding MeshMoveY}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBox Grid.Column="5" Text="{Binding MeshMoveZ}" FontSize="10" Padding="3,1" />
+        </Grid>
+
+        <TextBlock Text="Rotation (degrees)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBox Grid.Column="1" Text="{Binding MeshRotateX}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBox Grid.Column="3" Text="{Binding MeshRotateY}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBox Grid.Column="5" Text="{Binding MeshRotateZ}" FontSize="10" Padding="3,1" />
+        </Grid>
+
+        <TextBlock Text="Scale" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBox Grid.Column="1" Text="{Binding MeshScaleX}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBox Grid.Column="3" Text="{Binding MeshScaleY}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBox Grid.Column="5" Text="{Binding MeshScaleZ}" FontSize="10" Padding="3,1" />
+        </Grid>
+
+        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+          <Button Content="Apply" Command="{Binding ApplyMeshMoveCommand}" FontSize="11" Padding="8,2"
+                  ToolTip.Tip="Apply position/rotation/scale live in the viewport" />
+          <Button Content="Reset" Command="{Binding ResetMeshTransformCommand}" FontSize="11" Padding="8,2"
+                  ToolTip.Tip="Restore this mesh's original transform" />
+          <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
+                  IsEnabled="{Binding HasMapMoves}" />
+        </StackPanel>
+        <ToggleButton Classes="vp" Content="⇅ Flip Normals" IsChecked="{Binding SelectedMeshNormalsFlipped, Mode=OneWay}"
+                      Command="{Binding FlipMeshNormalsCommand}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
+                      HorizontalAlignment="Left"
+                      ToolTip.Tip="Flip this mesh's vertex normals (live preview). For two-sided (cullEnable=false) materials the two-sided lighting already lights both faces, so flipping darkens instead of fixing." />
+      </StackPanel>
+    </Border>
+
+    <!-- BATCH TRANSFORM (multi select) -->
+    <Border Classes="card" IsVisible="{Binding IsMultiSelect}">
+      <StackPanel Spacing="4">
+        <TextBlock Classes="cardTitle" Text="BATCH TRANSFORM" />
+        <TextBlock Text="{Binding SelectionStatus}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" />
+        <TextBlock Text="Rotate/scale act around the selection center. Move is a world delta added to every mesh."
+                   FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+
+        <TextBlock Text="Move Δ (world)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBox Grid.Column="1" Text="{Binding BatchMoveX}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBox Grid.Column="3" Text="{Binding BatchMoveY}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBox Grid.Column="5" Text="{Binding BatchMoveZ}" FontSize="10" Padding="3,1" />
+        </Grid>
+        <Button Content="Move Selection" Command="{Binding ApplyBatchMoveCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
+
+        <TextBlock Text="Rotate Δ (degrees, about center)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBox Grid.Column="1" Text="{Binding BatchRotateX}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBox Grid.Column="3" Text="{Binding BatchRotateY}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBox Grid.Column="5" Text="{Binding BatchRotateZ}" FontSize="10" Padding="3,1" />
+        </Grid>
+        <Button Content="Rotate Selection" Command="{Binding ApplyBatchRotateCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
+
+        <TextBlock Text="Scale Δ (about center)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBox Grid.Column="1" Text="{Binding BatchScaleX}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBox Grid.Column="3" Text="{Binding BatchScaleY}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBox Grid.Column="5" Text="{Binding BatchScaleZ}" FontSize="10" Padding="3,1" />
+        </Grid>
+        <Button Content="Scale Selection" Command="{Binding ApplyBatchScaleCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
+
+        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+          <Button Content="Reset Selected" Command="{Binding ResetSelectedCommand}" FontSize="11" Padding="8,2"
+                  ToolTip.Tip="Restore every selected mesh to its original transform" />
+          <Button Content="Clear Selection" Command="{Binding ClearSelectionCommand}" FontSize="11" Padding="8,2" />
+          <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
+                  IsEnabled="{Binding HasMapMoves}" />
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <!-- MESH DETAILS (materials, lightmap, flags — mapgeo metadata for the selection) -->
+    <Border Classes="card" IsVisible="{Binding MeshDetails.HasMesh}">
+      <StackPanel Spacing="4">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Classes="cardTitle" Text="MESH DETAILS" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding MeshDetails.Title}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}"
+                     TextTrimming="CharacterEllipsis" MaxWidth="180" VerticalAlignment="Center" />
+        </StackPanel>
+        <ItemsControl ItemsSource="{Binding MeshDetails.Rows}" Margin="2,0">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Grid ColumnDefinitions="120,*" Margin="0,1">
+                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Top" />
+                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" TextWrapping="Wrap"
+                           Foreground="{DynamicResource ReyTextBrush}" />
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+    </Border>
+
+    <!-- MOVE PARTICLE (selected placed particle) -->
+    <Border Classes="card" IsVisible="{Binding SelectedParticleNode, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <StackPanel Spacing="3">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Classes="cardTitle" Grid.Column="0" Text="PARTICLE" VerticalAlignment="Center" />
+          <ToggleButton Classes="vp" Grid.Column="1" Content="▶ Play VFX" IsChecked="{Binding PlayParticlePreview}" FontSize="10" Padding="6,1"
+                        ToolTip.Tip="Simulate and play this particle system live in the viewport" />
+        </Grid>
+        <TextBlock Text="{Binding SelectedParticleNode.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
+        <TextBlock Text="Position" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+        <Grid ColumnDefinitions="14,*,14,*,14,*">
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" Foreground="#E5645B" VerticalAlignment="Center" />
+          <TextBox Grid.Column="1" Text="{Binding ParticleMoveX}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" Foreground="#53C67A" VerticalAlignment="Center" Margin="3,0,0,0" />
+          <TextBox Grid.Column="3" Text="{Binding ParticleMoveY}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" Foreground="#4C9FE8" VerticalAlignment="Center" Margin="3,0,0,0" />
+          <TextBox Grid.Column="5" Text="{Binding ParticleMoveZ}" FontSize="10" Padding="3,1" />
+        </Grid>
+        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+          <Button Content="Apply" Command="{Binding ApplyParticleMoveCommand}" FontSize="11" Padding="8,2"
+                  ToolTip.Tip="Move the particle to this position live in the viewport" />
+          <Button Content="Reset" Command="{Binding ResetParticleMoveCommand}" FontSize="11" Padding="8,2" />
+          <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveParticleMovesCommand}" FontSize="11" Padding="8,2"
+                  IsEnabled="{Binding HasParticleMoves}" />
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <!-- PLACEABLE INFO (props / probes) -->
+    <Border Classes="card"
+            IsVisible="{Binding SelectedPlaceableInfo, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <StackPanel Spacing="3">
+        <TextBlock Classes="cardTitle" Text="PLACEABLE" />
+        <TextBlock Text="{Binding SelectedPlaceableInfo}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}" TextWrapping="Wrap" />
+      </StackPanel>
+    </Border>
+  </StackPanel>
+</UserControl>
