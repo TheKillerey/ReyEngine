@@ -1024,22 +1024,24 @@ void main() { FragColor = uColor; }";
                 }
                 _gl.Disable(EnableCap.CullFace); // restore default so the line/gizmo overlays are unaffected
 
-                // M50b: selection OUTLINE — draw the selected submeshes' triangles as an accent wireframe
-                // overlay (polygon-offset lines over the shaded mesh), Unity/Unreal-style, instead of AABBs.
+                // M50b: selection OUTLINE — draw the selected submeshes' wireframe (from the prebuilt
+                // per-triangle line EBO: triangle t occupies wire indices [t*6, t*6+6), so a submesh's
+                // index range [Start, Start+Count) maps to wire range [Start*2, Count*2)). GLES-safe —
+                // no glPolygonMode (ANGLE lacks it; using it crashed on select). LEQUAL so the lines,
+                // which share the mesh's exact vertices, pass the depth test on the visible surface.
                 if (_highlightSubmeshes is { Count: > 0 } hl)
                 {
                     _gl.UseProgram(_lineProgram);
                     _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
                     _gl.Uniform4(_lColor, 0.21f, 0.89f, 0.76f, 1f);   // Kalista accent
-                    _gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Line);
-                    _gl.Enable(EnableCap.PolygonOffsetLine);
-                    _gl.PolygonOffset(-1.5f, -1.5f);
+                    _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _wireEbo);
+                    _gl.DepthFunc(DepthFunction.Lequal);
                     foreach (var gi in hl)
                         if (gi >= 0 && gi < _submeshes.Length && _submeshes[gi].Visible)
-                            _gl.DrawElements(PrimitiveType.Triangles, (uint)_submeshes[gi].Count,
-                                DrawElementsType.UnsignedInt, (void*)(_submeshes[gi].Start * sizeof(uint)));
-                    _gl.Disable(EnableCap.PolygonOffsetLine);
-                    _gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
+                            _gl.DrawElements(PrimitiveType.Lines, (uint)(_submeshes[gi].Count * 2),
+                                DrawElementsType.UnsignedInt, (void*)((long)_submeshes[gi].Start * 2 * sizeof(uint)));
+                    _gl.DepthFunc(DepthFunction.Less);
+                    _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
                 }
             }
             _gl.BindVertexArray(0);
