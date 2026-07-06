@@ -1,0 +1,40 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.MeshPreviewWindow"
+        x:DataType="vm:MeshPreviewViewModel"
+        Title="ReyEngine — Model Preview" Width="980" Height="760"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource ReyBgBrush}">
+  <!-- M50: character/mesh preview in its own window; the main viewport stays on the map -->
+  <DockPanel>
+    <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="8,5">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+          <ToggleButton Classes="vp" Content="⌗ Wire" IsChecked="{Binding Wireframe}" />
+          <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" />
+          <ToggleButton Classes="vp" Content="✂ Cull" IsChecked="{Binding CullBackfaces}" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <TextBlock Text="🧊 MODEL" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding Title}" FontSize="11" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding Stats}" FontSize="10" Opacity="0.6" VerticalAlignment="Center" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+    <Grid>
+      <views:ViewportControl x:Name="PreviewViewport"
+                             Mesh="{Binding Mesh}"
+                             Skeleton="{Binding Skeleton}"
+                             ModelTextures="{Binding Textures}"
+                             ShowBones="{Binding ShowBones}"
+                             Wireframe="{Binding Wireframe}"
+                             CullBackfaces="{Binding CullBackfaces}" />
+      <Border x:Name="PreviewInput" Background="Transparent" />
+      <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
+                 Margin="8,6" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />
+    </Grid>
+  </DockPanel>
+</Window>

@@ -81,8 +81,22 @@ public partial class MainWindow : Window
             vm.RequestProjectSettings += () => ShowProjectSettings(vm);
             vm.RequestSettings += () => ShowSettings(vm);
             vm.ShowParticleEditorWindow = () => ShowParticleEditor(vm);   // M46
+            vm.ShowMeshPreviewWindow = () => ShowMeshPreview(vm);         // M50
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
         }
+    }
+
+    // M50: the model preview lives in its own (non-modal) window; reuse one instance while open.
+    private MeshPreviewWindow? _meshPreviewWindow;
+    private void ShowMeshPreview(MainWindowViewModel vm)
+    {
+        if (_meshPreviewWindow is null)
+        {
+            _meshPreviewWindow = new MeshPreviewWindow { DataContext = vm.MeshPreview };
+            _meshPreviewWindow.Closed += (_, _) => _meshPreviewWindow = null;
+            _meshPreviewWindow.Show(this);
+        }
+        else _meshPreviewWindow.Activate();
     }
 
     // M46: the Particle Editor lives in its own (non-modal) window; reuse one instance while open.

@@ -1088,7 +1088,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _ = TryPreviewTextureAsync(entry);
                 break;
             case AssetType.SkinnedMesh:
-                _ = LoadMeshAsync(entry);
+                _ = LoadMeshPreviewAsync(entry);   // M50: separate model window — the map viewport stays untouched
                 TryLoadMaterialBin(entry, alsoRawBin: true);
                 break;
             case AssetType.MapGeometry:
@@ -2075,6 +2075,54 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             });
         }
         catch (Exception ex) { _log.Error("Preview", $"{entry.DisplayName}: {ex.Message}"); }
+    }
+
+    // ---- M50: model preview window (separate viewport; main viewport stays on the map) ----
+    public MeshPreviewViewModel MeshPreview { get; } = new();
+    public Action? ShowMeshPreviewWindow;   // wired by MainWindow (owns the window instance)
+
+    private async Task LoadMeshPreviewAsync(WadAssetEntry entry)
+    {
+        if (!ContentLoaded) return;
+        try
+        {
+            var (mesh, skeleton, textures) = await Task.Run(() =>
+            {
+                var m = SkinnedMeshDecoder.Decode(ReadAsset(entry.PathHash));
+                var s = TryPairSkeleton(entry);
+                var t = TryLoadPreviewDiffuse(entry, m);
+                return (m, s, t);
+            });
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                MeshPreview.Show(entry.DisplayName, mesh, skeleton, textures);
+                MeshInspector.ShowMesh(mesh, skeleton);
+                ShowMeshPreviewWindow?.Invoke();
+                _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris — model preview window.");
+            });
+        }
+        catch (Exception ex) { _log.Error("Mesh", ex.Message); }
+    }
+
+    /// <summary>Per-submesh diffuse textures for the model-preview window — NO side effects on the main
+    /// viewport's texture/material state (unlike BuildSubmeshTextures, which publishes to it).</summary>
+    private IReadOnlyList<TextureImage?>? TryLoadPreviewDiffuse(WadAssetEntry skn, MeshAsset mesh)
+    {
+        if (!ContentLoaded || !skn.IsResolved) return null;
+        var binPath = SkinPaths.BinPathForSkn(skn.Path);
+        if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return null;
+        var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName);
+        if (!resolved.HasAny) return null;
+        var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
+        var result = new TextureImage?[mesh.SubMeshes.Count];
+        for (int i = 0; i < mesh.SubMeshes.Count; i++)
+        {
+            var p = resolved.For(mesh.SubMeshes[i].Material);
+            if (string.IsNullOrEmpty(p)) continue;
+            if (!cache.TryGetValue(p, out var img)) cache[p] = img = LoadTextureByPath(p);
+            result[i] = img;
+        }
+        return result;
     }
 
     private async Task LoadMeshAsync(WadAssetEntry entry)
