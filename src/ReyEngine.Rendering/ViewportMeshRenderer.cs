@@ -378,7 +378,7 @@ void main() { FragColor = uColor; }";
     public bool HasMesh => _hasMesh;
     public int SubmeshCount => _submeshes.Length;
 
-    public void Initialize(GL gl, bool gles)
+    public unsafe void Initialize(GL gl, bool gles)
     {
         _gl = gl;
         _meshProgram = ShaderUtil.CreateProgram(gl, gles, MeshVert, MeshFrag);
@@ -448,8 +448,152 @@ void main() { FragColor = uColor; }";
         _propVbo = gl.GenBuffer();
         _probeVao = gl.GenVertexArray();
         _probeVbo = gl.GenBuffer();
+
+        // M53: Unity-style placement ICONS — instanced camera-facing billboards (sparkle/person/ring
+        // sprites, tinted per type) instead of "+" line crosses.
+        _markerProgram = ShaderUtil.CreateProgram(gl, gles, MarkerVert, MarkerFrag);
+        _mkViewProj = gl.GetUniformLocation(_markerProgram, "uViewProj");
+        _mkCamRight = gl.GetUniformLocation(_markerProgram, "uCamRight");
+        _mkCamUp = gl.GetUniformLocation(_markerProgram, "uCamUp");
+        _mkSize = gl.GetUniformLocation(_markerProgram, "uSize");
+        _mkColor = gl.GetUniformLocation(_markerProgram, "uColor");
+        _mkTex = gl.GetUniformLocation(_markerProgram, "uTex");
+        float[] quad = { -0.5f, -0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f };   // triangle strip
+        _markerQuadVbo = gl.GenBuffer();
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, _markerQuadVbo);
+        fixed (float* q = quad)
+            gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(quad.Length * sizeof(float)), q, BufferUsageARB.StaticDraw);
+        ConfigureMarkerVao(_particleVao, _particleVbo);
+        ConfigureMarkerVao(_particleSelVao, _particleSelVbo);
+        ConfigureMarkerVao(_propVao, _propVbo);
+        ConfigureMarkerVao(_probeVao, _probeVbo);
+        _icoSparkle = UploadIcon(IconSparkle(48));
+        _icoPerson = UploadIcon(IconPerson(48));
+        _icoRing = UploadIcon(IconRing(48));
+
         _ready = true;
     }
+
+    // ---- M53 placement icons ----
+    private uint _markerProgram, _markerQuadVbo, _icoSparkle, _icoPerson, _icoRing;
+    private int _mkViewProj, _mkCamRight, _mkCamUp, _mkSize, _mkColor, _mkTex;
+    private float _particleMarkerSize = 20f, _propMarkerSize = 20f, _probeMarkerSize = 20f, _particleSelSize = 20f;
+
+    private unsafe void ConfigureMarkerVao(uint vao, uint instVbo)
+    {
+        _gl.BindVertexArray(vao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _markerQuadVbo);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 2 * sizeof(float), (void*)0);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, instVbo);
+        _gl.EnableVertexAttribArray(1);
+        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+        _gl.VertexAttribDivisor(1, 1);
+        _gl.BindVertexArray(0);
+    }
+
+    private unsafe uint UploadIcon((byte[] Rgba, int N) icon)
+    {
+        var tex = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, tex);
+        fixed (byte* p = icon.Rgba)
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)icon.N, (uint)icon.N, 0,
+                PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+        return tex;
+    }
+
+    /// <summary>4-point sparkle (particles): thin horizontal+vertical rays + a bright core.</summary>
+    private static (byte[], int) IconSparkle(int n)
+    {
+        var px = new byte[n * n * 4];
+        float c = (n - 1) / 2f;
+        for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;
+            float r = MathF.Sqrt(u * u + v * v);
+            float rayH = MathF.Max(0f, 1f - MathF.Abs(v) * 7f) * MathF.Max(0f, 1f - MathF.Abs(u));
+            float rayV = MathF.Max(0f, 1f - MathF.Abs(u) * 7f) * MathF.Max(0f, 1f - MathF.Abs(v));
+            float core = MathF.Max(0f, 1f - r * 3.2f);
+            float a = MathF.Min(1f, rayH + rayV + core * core);
+            int o = (y * n + x) * 4;
+            px[o] = px[o + 1] = px[o + 2] = 255;
+            px[o + 3] = (byte)(a * 255f);
+        }
+        return (px, n);
+    }
+
+    /// <summary>Person silhouette (mobs/props): head circle over a rounded body.</summary>
+    private static (byte[], int) IconPerson(int n)
+    {
+        var px = new byte[n * n * 4];
+        float c = (n - 1) / 2f;
+        for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;   // v: -1 top .. +1 bottom
+            float dHead = MathF.Sqrt(u * u + (v + 0.42f) * (v + 0.42f));
+            float head = MathF.Max(0f, 1f - MathF.Max(0f, dHead - 0.22f) * 14f);
+            float bu = u / 0.34f, bv = (v - 0.28f) / 0.42f;
+            float dBody = MathF.Sqrt(bu * bu + bv * bv);
+            float body = MathF.Max(0f, 1f - MathF.Max(0f, dBody - 0.75f) * 8f);
+            float a = MathF.Min(1f, head + body);
+            int o = (y * n + x) * 4;
+            px[o] = px[o + 1] = px[o + 2] = 255;
+            px[o + 3] = (byte)(a * 255f);
+        }
+        return (px, n);
+    }
+
+    /// <summary>Ring with a centre ball (reflection probes).</summary>
+    private static (byte[], int) IconRing(int n)
+    {
+        var px = new byte[n * n * 4];
+        float c = (n - 1) / 2f;
+        for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;
+            float r = MathF.Sqrt(u * u + v * v);
+            float ring = MathF.Max(0f, 1f - MathF.Abs(r - 0.62f) * 12f);
+            float ball = MathF.Max(0f, 1f - r * 3.4f);
+            float a = MathF.Min(1f, ring + ball);
+            int o = (y * n + x) * 4;
+            px[o] = px[o + 1] = px[o + 2] = 255;
+            px[o + 3] = (byte)(a * 255f);
+        }
+        return (px, n);
+    }
+
+    private const string MarkerVert = @"
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec3 aCenter;
+uniform mat4 uViewProj;
+uniform vec3 uCamRight;
+uniform vec3 uCamUp;
+uniform float uSize;
+out vec2 vUv;
+void main(){
+    vec3 world = aCenter + uCamRight * (aCorner.x * uSize) + uCamUp * (aCorner.y * uSize);
+    gl_Position = uViewProj * vec4(world, 1.0);
+    vUv = aCorner + vec2(0.5, 0.5);
+}";
+
+    private const string MarkerFrag = @"
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec4 uColor;
+out vec4 fragColor;
+void main(){
+    float a = texture(uTex, vUv).a * uColor.a;
+    if (a < 0.02) discard;
+    fragColor = vec4(uColor.rgb, a);
+}";
 
     public unsafe void SetMesh(float[] positions, float[] normals, float[] uvs, uint[] indices,
         int vertexCount, Vector3 min, Vector3 max, IReadOnlyList<(int start, int count)> submeshes,
@@ -834,50 +978,45 @@ void main() { FragColor = uColor; }";
         return v.ToArray();
     }
 
-    /// <summary>Set the placed-particle markers (M35): a small 3D cross at each world position, plus a larger
-    /// highlighted cross at the selected one. An empty list clears them.</summary>
+    /// <summary>Set the placed-particle markers (M35/M53): an icon billboard at each world position, plus a
+    /// larger highlighted one at the selected. An empty list clears them.</summary>
     public void SetParticleMarkers(IReadOnlyList<Vector3> positions, Vector3? selected, float size)
     {
         if (!_ready) return;
-        if (positions.Count == 0) _particleVerts = 0;
-        else
-        {
-            var verts = new float[positions.Count * 3 * 2 * 3]; // 3 axes * 2 points * 3 floats
-            int k = 0;
-            foreach (var p in positions) AppendCross(verts, ref k, p, size);
-            UploadLines(_particleVao, _particleVbo, verts, out _particleVerts);
-        }
+        _particleMarkerSize = size * 1.6f;
+        SetIconMarkers(_particleVbo, positions, out _particleVerts);
         if (selected is { } sel)
         {
-            var v = new float[3 * 2 * 3]; int k = 0; AppendCross(v, ref k, sel, size * 2.2f);
-            UploadLines(_particleSelVao, _particleSelVbo, v, out _particleSelVerts);
+            _particleSelSize = size * 3.2f;
+            SetIconMarkers(_particleSelVbo, new[] { sel }, out _particleSelVerts);
         }
         else _particleSelVerts = 0;
     }
 
-    /// <summary>Set the animated-prop markers (M38): a small cross at each placed character's position.</summary>
-    public void SetPropMarkers(IReadOnlyList<Vector3> positions, float size) => SetCrossMarkers(_propVao, _propVbo, positions, size, out _propVerts);
+    /// <summary>Set the animated-prop markers (M38/M53): a person icon at each placed character.</summary>
+    public void SetPropMarkers(IReadOnlyList<Vector3> positions, float size)
+    { _propMarkerSize = size * 1.6f; SetIconMarkers(_propVbo, positions, out _propVerts); }
 
-    /// <summary>Set the cubemap-probe markers (M38).</summary>
-    public void SetProbeMarkers(IReadOnlyList<Vector3> positions, float size) => SetCrossMarkers(_probeVao, _probeVbo, positions, size, out _probeVerts);
+    /// <summary>Set the cubemap-probe markers (M38/M53): a ring icon at each probe.</summary>
+    public void SetProbeMarkers(IReadOnlyList<Vector3> positions, float size)
+    { _probeMarkerSize = size * 1.6f; SetIconMarkers(_probeVbo, positions, out _probeVerts); }
 
-    private void SetCrossMarkers(uint vao, uint vbo, IReadOnlyList<Vector3> positions, float size, out int vertCount)
+    /// <summary>Upload marker instance centers (xyz per marker) for the icon billboards (M53).</summary>
+    private unsafe void SetIconMarkers(uint instVbo, IReadOnlyList<Vector3> positions, out int count)
     {
-        if (!_ready || positions.Count == 0) { vertCount = 0; return; }
-        var verts = new float[positions.Count * 3 * 2 * 3];
-        int k = 0;
-        foreach (var p in positions) AppendCross(verts, ref k, p, size);
-        UploadLines(vao, vbo, verts, out vertCount);
-    }
-
-    private static void AppendCross(float[] a, ref int k, Vector3 c, float s)
-    {
-        // X axis
-        a[k++] = c.X - s; a[k++] = c.Y; a[k++] = c.Z;  a[k++] = c.X + s; a[k++] = c.Y; a[k++] = c.Z;
-        // Y axis
-        a[k++] = c.X; a[k++] = c.Y - s; a[k++] = c.Z;  a[k++] = c.X; a[k++] = c.Y + s; a[k++] = c.Z;
-        // Z axis
-        a[k++] = c.X; a[k++] = c.Y; a[k++] = c.Z - s;  a[k++] = c.X; a[k++] = c.Y; a[k++] = c.Z + s;
+        if (!_ready || positions.Count == 0) { count = 0; return; }
+        var data = new float[positions.Count * 3];
+        for (int i = 0; i < positions.Count; i++)
+        {
+            data[i * 3 + 0] = positions[i].X;
+            data[i * 3 + 1] = positions[i].Y;
+            data[i * 3 + 2] = positions[i].Z;
+        }
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, instVbo);
+        fixed (float* p = data)
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), p, BufferUsageARB.DynamicDraw);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        count = positions.Count;
     }
 
     public void ClearMesh()
@@ -1171,34 +1310,42 @@ void main() { FragColor = uColor; }";
             _gl.BindVertexArray(0);
         }
 
-        // Placed-object markers, always on top: particles cyan (M35), animated props orange + cubemap probes
-        // green (M38); the selected one larger + bright yellow.
+        // M53: placement ICONS (Unity-style camera-facing sprites), always on top: particles = cyan
+        // sparkle, mobs/props = orange person, probes = green ring; selected = larger bright yellow.
         if (_particleVerts > 0 || _particleSelVerts > 0 || _propVerts > 0 || _probeVerts > 0)
         {
-            _gl.UseProgram(_lineProgram);
-            _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+            Matrix4x4.Invert(view, out var invView);
+            var camRight = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitX, invView));
+            var camUp = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitY, invView));
+
+            _gl.UseProgram(_markerProgram);
+            _gl.UniformMatrix4(_mkViewProj, 1, false, in m.M11);
+            _gl.Uniform3(_mkCamRight, camRight.X, camRight.Y, camRight.Z);
+            _gl.Uniform3(_mkCamUp, camUp.X, camUp.Y, camUp.Z);
+            _gl.Uniform1(_mkTex, 0);
+            _gl.ActiveTexture(TextureUnit.Texture0);
             _gl.Disable(EnableCap.DepthTest);
-            DrawMarkerSet(_particleVao, _particleVerts, 0.30f, 0.85f, 0.95f); // particles cyan
-            DrawMarkerSet(_propVao, _propVerts, 1.0f, 0.55f, 0.15f);          // animated props orange
-            DrawMarkerSet(_probeVao, _probeVerts, 0.30f, 0.95f, 0.45f);       // cubemap probes green
-            if (_particleSelVerts > 0)
-            {
-                _gl.LineWidth(2.5f);
-                _gl.Uniform4(_lColor, 1.0f, 0.9f, 0.2f, 1f); // selected placeable bright yellow
-                _gl.BindVertexArray(_particleSelVao);
-                _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_particleSelVerts);
-                _gl.LineWidth(1f);
-            }
+            _gl.Enable(EnableCap.Blend);
+            _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+
+            DrawIconSet(_particleVao, _particleVerts, _icoSparkle, _particleMarkerSize, 0.30f, 0.89f, 0.95f, 0.85f);
+            DrawIconSet(_propVao, _propVerts, _icoPerson, _propMarkerSize, 1.00f, 0.58f, 0.18f, 0.9f);
+            DrawIconSet(_probeVao, _probeVerts, _icoRing, _probeMarkerSize, 0.32f, 0.93f, 0.47f, 0.9f);
+            DrawIconSet(_particleSelVao, _particleSelVerts, _icoSparkle, _particleSelSize, 1.0f, 0.92f, 0.25f, 1f);
+
+            _gl.Disable(EnableCap.Blend);
             _gl.BindVertexArray(0);
         }
     }
 
-    private void DrawMarkerSet(uint vao, int vertCount, float r, float g, float b)
+    private unsafe void DrawIconSet(uint vao, int count, uint icon, float size, float r, float g, float b, float a)
     {
-        if (vertCount == 0) return;
-        _gl.Uniform4(_lColor, r, g, b, 1f);
+        if (count == 0) return;
+        _gl.Uniform4(_mkColor, r, g, b, a);
+        _gl.Uniform1(_mkSize, size);
+        _gl.BindTexture(TextureTarget.Texture2D, icon);
         _gl.BindVertexArray(vao);
-        _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)vertCount);
+        _gl.DrawArraysInstanced(PrimitiveType.TriangleStrip, 0, 4, (uint)count);
     }
 
     private unsafe uint MakeSolidTexture(byte r, byte g, byte b)
