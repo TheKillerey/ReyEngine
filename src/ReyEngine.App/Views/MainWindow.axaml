@@ -274,6 +274,7 @@
                 ProbeMarkers="{Binding ProbeMarkers}"
                 PropMeshes="{Binding CurrentPropMeshes}"
                 ParticlePlayback="{Binding CurrentParticlePlayback}"
+                PlayPropAnimations="{Binding PlayPropAnimations}"
                 AnimateWater="{Binding HasFlowmapWater}"
                 LightmapScale="{Binding CurrentLightmapScale}"
                 FocusPoint="{Binding ParticleFocusPoint}"

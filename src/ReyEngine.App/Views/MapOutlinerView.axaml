@@ -39,6 +39,9 @@
                     ToolTip.Tip="Simulate and play every placed particle system live (capped for performance)" />
       <ToggleButton Classes="vp" Content="🎭 Props" IsChecked="{Binding ShowPropMeshes}" FontSize="9" Padding="6,1"
                     ToolTip.Tip="Render the actual prop meshes (Baron, dragons, camps…) at their placements" />
+      <ToggleButton Classes="vp" Content="▶ Anim" IsChecked="{Binding PlayPropAnimations}" FontSize="9" Padding="6,1"
+                    IsEnabled="{Binding ShowPropMeshes}"
+                    ToolTip.Tip="Play each prop's idle animation (Baron breathing, camps shuffling…). Needs Props enabled." />
     </StackPanel>
 
     <!-- the hierarchy -->

@@ -51,6 +51,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, double>(nameof(LightmapScale), 1.0);
     public static readonly StyledProperty<IReadOnlyList<int>?> HighlightSubmeshesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<int>?>(nameof(HighlightSubmeshes));   // M50b outline
+    public static readonly StyledProperty<bool> PlayPropAnimationsProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(PlayPropAnimations));   // M54 prop idles
     public static readonly StyledProperty<double> ParticleSpeedProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(ParticleSpeed), 1.0);   // M46: sim speed multiplier
     public static readonly StyledProperty<bool> ParticlePausedProperty =
@@ -140,6 +142,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool AnimateWater { get => GetValue(AnimateWaterProperty); set => SetValue(AnimateWaterProperty, value); }
     public double LightmapScale { get => GetValue(LightmapScaleProperty); set => SetValue(LightmapScaleProperty, value); }
     public IReadOnlyList<int>? HighlightSubmeshes { get => GetValue(HighlightSubmeshesProperty); set => SetValue(HighlightSubmeshesProperty, value); }
+    public bool PlayPropAnimations { get => GetValue(PlayPropAnimationsProperty); set => SetValue(PlayPropAnimationsProperty, value); }
     public double ParticleSpeed { get => GetValue(ParticleSpeedProperty); set => SetValue(ParticleSpeedProperty, value); }
     public bool ParticlePaused { get => GetValue(ParticlePausedProperty); set => SetValue(ParticlePausedProperty, value); }
     public bool ShowBones { get => GetValue(ShowBonesProperty); set => SetValue(ShowBonesProperty, value); }
@@ -160,6 +163,8 @@ public sealed class ViewportControl : OpenGlControlBase
     private VfxParticleRenderer? _particleRenderer;
     private readonly List<VfxParticleSimulator> _particleSims = new();
     private readonly List<(VfxParticleSimulator.EmitterState Es, VfxMeshAnimation Anim)> _animatedMeshEmitters = new(); // M48
+    private readonly List<(int Geo, PropMesh Mesh)> _animatedPropGeoms = new();   // M54: prop idle animations
+    private readonly System.Diagnostics.Stopwatch _propAnimClock = new();
     private bool _particlePlaybackDirty;
     private uint _softDotTex;
     private readonly System.Diagnostics.Stopwatch _particleClock = new();
@@ -485,6 +490,21 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (_waterClock.IsRunning) _waterClock.Reset();
         _meshRenderer.SetLightmapScale((float)LightmapScale);   // M45: MapSunProperties.lightMapColorScale
         _meshRenderer.SetSubmeshHighlight(HighlightSubmeshes);  // M50b: selection outline overlay
+        // M54: prop idle animations — CPU-skin each animated prop geometry at the shared looping clock
+        // (all placements of a mesh share the pose) and keep frames pumping while playing.
+        if (PlayPropAnimations && _animatedPropGeoms.Count > 0)
+        {
+            if (!_propAnimClock.IsRunning) _propAnimClock.Start();
+            float t = (float)_propAnimClock.Elapsed.TotalSeconds;
+            foreach (var (geo, pm) in _animatedPropGeoms)
+            {
+                float dur = pm.IdleClip!.Duration > 1e-3f ? pm.IdleClip.Duration : 1f;
+                var frame = SkinnedMeshAnimator.Skin(pm.SknMesh!, pm.Skeleton!, pm.IdleClip, t % dur);
+                _meshRenderer.UpdatePropGeometryVertices(geo, frame.Positions, frame.Normals);
+            }
+            RequestNextFrameRendering();
+        }
+        else if (_propAnimClock.IsRunning) _propAnimClock.Reset();
         _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones, CullBackfaces);
         if (AnimateWater) RequestNextFrameRendering(); // keep frames coming so the water animates
 
@@ -579,6 +599,7 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         if (_meshRenderer is null) return;
         _meshRenderer.ClearProps();
+        _animatedPropGeoms.Clear();   // M54: rebuilt with the geometries
         var set = PropMeshes;
         if (set is null || set.Instances.Count == 0) return;
 
@@ -600,6 +621,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 }).ToList();
                 handle = _meshRenderer.RegisterPropGeometry(inst.Mesh.Positions, inst.Mesh.Normals, inst.Mesh.Uvs, inst.Mesh.Indices, subs);
                 geoByMesh[inst.Mesh] = handle;
+                if (inst.Mesh.CanAnimate) _animatedPropGeoms.Add((handle, inst.Mesh));   // M54 idle playback
             }
             _meshRenderer.AddPropInstance(handle, inst.Transform);
         }
@@ -707,8 +729,8 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == ParticlePlaybackProperty)
         { _particlePlaybackDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimateWaterProperty || change.Property == LightmapScaleProperty
-                 || change.Property == HighlightSubmeshesProperty)
-        { RequestNextFrameRendering(); } // M44/M45/M50b: water loop + lightmap scale + selection outline
+                 || change.Property == HighlightSubmeshesProperty || change.Property == PlayPropAnimationsProperty)
+        { RequestNextFrameRendering(); } // M44/M45/M50b/M54: water + lightmap scale + outline + prop idles
         else if (change.Property == PropMeshesProperty)
         { _propMeshesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == FocusPointProperty && FocusPoint is { } fp)

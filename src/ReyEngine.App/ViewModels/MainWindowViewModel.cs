@@ -177,6 +177,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _propMarkers;
     [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _probeMarkers;
     [ObservableProperty] private bool _showPlaceables = true;
+    [ObservableProperty] private bool _playPropAnimations;   // M54: play prop idle animations in the viewport
     [ObservableProperty] private object? _selectedPropTreeItem;
     [ObservableProperty] private AnimatedPropViewModel? _selectedPropNode;
     [ObservableProperty] private CubemapProbeViewModel? _selectedProbe;
@@ -244,8 +245,47 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var subs = mesh.SubMeshes
                 .Select(s => new PropSubmesh(s.StartIndex, s.IndexCount, Tex(mat.For(s.Material) ?? meshRef.DefaultTexture)))
                 .ToList();
-            return new PropMesh(skin, mesh.Positions, mesh.Normals, mesh.Uvs, mesh.Indices, subs);
+
+            // M54: idle-animation payload — the character's skeleton + a best-match idle .anm, so the
+            // viewport can play the ambient idles (Baron breathing, camps shuffling...).
+            SkeletonAsset? skeleton = null;
+            AnimationClip? idle = null;
+            if (mesh.CanSkin && meshRef.Skeleton is { } sklPath)
+            {
+                try
+                {
+                    var sklBytes = ReadAssetByPath(sklPath);
+                    if (sklBytes is not null) skeleton = SkeletonDecoder.Decode(sklBytes);
+                    if (skeleton is not null) idle = TryFindIdleClip(skin);
+                }
+                catch { skeleton = null; idle = null; }
+            }
+            return new PropMesh(skin, mesh.Positions, mesh.Normals, mesh.Uvs, mesh.Indices, subs)
+            { SknMesh = mesh, Skeleton = skeleton, IdleClip = idle };
         }
+        catch { return null; }
+    }
+
+    /// <summary>M54: pick the best idle .anm for a prop skin ("characters/<name>/..."): prefer idle1/
+    /// idle_base, then any idle. Null when the character ships no idle animation.</summary>
+    private AnimationClip? TryFindIdleClip(string skin)
+    {
+        const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+        var parts = skin.ToLowerInvariant().Split('/');
+        int ci = Array.IndexOf(parts, "characters");
+        if (ci < 0 || ci + 1 >= parts.Length) return null;
+        string marker = $"characters/{parts[ci + 1]}/";
+        WadAssetEntry? best = null; int bestScore = 0;
+        foreach (var e in AssetEntries)
+        {
+            if (!e.IsResolved || !e.Path.EndsWith(".anm", OIC) || !e.Path.Contains(marker, OIC)) continue;
+            var n = Path.GetFileNameWithoutExtension(e.Path);
+            int score = n.Contains("idle1", OIC) || n.Contains("idle_base", OIC) || n.Contains("idle01", OIC) ? 3
+                : n.Contains("idle", OIC) ? 2 : 0;
+            if (score > bestScore) { bestScore = score; best = e; }
+        }
+        if (best is null) return null;
+        try { return AnimationDecoder.Decode(ReadAsset(best.PathHash), best.DisplayName); }
         catch { return null; }
     }
     partial void OnShowPlaceablesChanged(bool value) => UpdatePlaceableMarkers();

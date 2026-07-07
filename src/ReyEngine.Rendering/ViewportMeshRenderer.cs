@@ -53,7 +53,12 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _particleVerts, _particleSelVerts, _propVerts, _probeVerts;
 
     // M41: placed animated-prop meshes — unique geometry registered once, instanced per placement.
-    private sealed class PropGeometry { public uint Vao, Vbo, Ebo; public (int Start, int Count, uint Tex)[] Submeshes = System.Array.Empty<(int, int, uint)>(); }
+    private sealed class PropGeometry
+    {
+        public uint Vao, Vbo, Ebo;
+        public (int Start, int Count, uint Tex)[] Submeshes = System.Array.Empty<(int, int, uint)>();
+        public float[]? Interleaved;   // M54: cached stride-8 stream so idle animation can re-skin pos/normals
+    }
     private readonly List<PropGeometry> _propGeoms = new();
     private readonly List<(int Geo, Matrix4x4 Model)> _propMeshInstances = new();
     private readonly List<uint> _propTextures = new();
@@ -752,12 +757,12 @@ void main(){
             inter[o + 7] = uvs.Length >= (i * 2 + 2) ? uvs[i * 2 + 1] : 0f;
         }
 
-        var g = new PropGeometry();
+        var g = new PropGeometry { Interleaved = inter };
         g.Vao = _gl.GenVertexArray();
         _gl.BindVertexArray(g.Vao);
         g.Vbo = _gl.GenBuffer();
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, g.Vbo);
-        fixed (float* p = inter) _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(inter.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+        fixed (float* p = inter) _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(inter.Length * sizeof(float)), p, BufferUsageARB.DynamicDraw);
         uint stride = 8 * sizeof(float);
         _gl.EnableVertexAttribArray(0); _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
         _gl.EnableVertexAttribArray(1); _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
@@ -772,6 +777,26 @@ void main(){
         g.Submeshes = submeshes.Select(s => (s.start, s.count, s.tex)).ToArray();
         _propGeoms.Add(g);
         return _propGeoms.Count - 1;
+    }
+
+    /// <summary>M54: replace a prop geometry's positions + normals (CPU-skinned idle frame); UVs kept.</summary>
+    public unsafe void UpdatePropGeometryVertices(int geometry, float[] positions, float[] normals)
+    {
+        if (!_ready || geometry < 0 || geometry >= _propGeoms.Count) return;
+        var g = _propGeoms[geometry];
+        if (g.Interleaved is not { } inter) return;
+        int vc = Math.Min(inter.Length / 8, positions.Length / 3);
+        for (int i = 0; i < vc; i++)
+        {
+            int o = i * 8, s = i * 3;
+            inter[o] = positions[s]; inter[o + 1] = positions[s + 1]; inter[o + 2] = positions[s + 2];
+            if (s + 2 < normals.Length)
+            { inter[o + 3] = normals[s]; inter[o + 4] = normals[s + 1]; inter[o + 5] = normals[s + 2]; }
+        }
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, g.Vbo);
+        fixed (float* p = inter)
+            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(vc * 8 * sizeof(float)), p);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
     }
 
     /// <summary>Place a registered prop geometry at a world transform (M41).</summary>
