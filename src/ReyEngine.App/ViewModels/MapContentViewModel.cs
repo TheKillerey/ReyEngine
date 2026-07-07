@@ -102,8 +102,23 @@ public sealed partial class RecentProjectViewModel : ObservableObject
 /// Left "Map Content" panel (Unreal World-Outliner style): the project's map geometry files, and —
 /// when one is loaded — its mesh groups as a scene outline.
 /// </summary>
+/// <summary>M51: a top-level folder of the unified Unity-style hierarchy. Items reference the LIVE
+/// observable collections, so the folders never need rebuilding.</summary>
+public sealed record OutlinerFolderViewModel(string Icon, string Name, System.Collections.IEnumerable Items);
+
 public sealed partial class MapContentViewModel : ViewModelBase
 {
+    /// <summary>M51: one unified hierarchy (Meshes / Particles / Mobs / Probes as plain folders).</summary>
+    public ObservableCollection<OutlinerFolderViewModel> OutlinerRoots { get; } = new();
+
+    public MapContentViewModel()
+    {
+        OutlinerRoots.Add(new("🧊", "Meshes", LayerGroups));
+        OutlinerRoots.Add(new("✨", "Particles", ParticleGroups));
+        OutlinerRoots.Add(new("🎭", "Mobs / Props", PropGroups));
+        OutlinerRoots.Add(new("🪞", "Reflection Probes", Probes));
+    }
+
     public ObservableCollection<AssetNodeViewModel> Maps { get; } = new();
     public ObservableCollection<MapPieceViewModel> Pieces { get; } = new();
     public ObservableCollection<MapLayerGroupViewModel> LayerGroups { get; } = new();

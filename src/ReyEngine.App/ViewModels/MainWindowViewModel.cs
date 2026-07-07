@@ -1526,6 +1526,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _batchScaleY = "1";
     [ObservableProperty] private string _batchScaleZ = "1";
 
+    /// <summary>M51: single selection over the unified hierarchy — routes by node type (mesh piece,
+    /// particle placement, animated prop, probe). Folder/group clicks are ignored.</summary>
+    [ObservableProperty] private object? _selectedOutlinerItem;
+    partial void OnSelectedOutlinerItemChanged(object? value)
+    {
+        if (_syncingTreeSelection) return;
+        switch (value)
+        {
+            case MapPieceViewModel { MeshIndex: >= 0 } p when _currentMap is { } map
+                && map.Meshes.FirstOrDefault(x => x.Index == p.MeshIndex) is { } m:
+                _selection.SetSingle(m);
+                break;
+            case ParticlePlacementViewModel pp:
+                SelectedParticleNode = pp;
+                break;
+            case AnimatedPropViewModel ap:
+                SelectedPropTreeItem = ap;
+                break;
+            case CubemapProbeViewModel pr:
+                SelectedProbe = pr;
+                break;
+        }
+    }
+
     partial void OnSelectedTreeItemChanged(object? value)
     {
         if (_syncingTreeSelection) return; // sync is pushing the selection INTO the tree — don't loop back
@@ -1600,6 +1624,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
         _syncingTreeSelection = true;
         SelectedTreeItem = primaryPiece; // scrolls/anchors the tree to the primary without re-triggering select
+        SelectedOutlinerItem = primaryPiece; // M51: unified hierarchy mirrors the selection
         _syncingTreeSelection = false;
     }
 

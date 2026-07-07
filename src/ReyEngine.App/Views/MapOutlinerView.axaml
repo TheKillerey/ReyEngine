@@ -7,9 +7,8 @@
     <conv:BoolToBrushConverter x:Key="SelectionHighlight" TrueBrush="#3336E2C2" FalseBrush="Transparent" />
   </UserControl.Resources>
 
-  <!-- M50: Unity/Unreal-style scene outliner — one structured hierarchy of categories (Meshes /
-       Particles / Animated Props / Reflection Probes). Selection details (Transform, Materials,
-       Mesh Details, Move Particle) live in the RIGHT inspector, not here. -->
+  <!-- M51: ONE unified hierarchy (Unity/Unreal style) — plain folders (Meshes / Particles / Mobs /
+       Probes) in a single tree; select any object type here. No per-category collapse sections. -->
   <DockPanel IsVisible="{Binding MapContent.HasMap}">
     <TextBlock DockPanel.Dock="Top" Text="{Binding MapContent.MapName}" Foreground="{DynamicResource ReyAccentBrush}"
                FontSize="11" FontWeight="SemiBold" Margin="8,4,8,2" />
@@ -32,115 +31,85 @@
       </Grid>
     </StackPanel>
 
-    <!-- structured hierarchy -->
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled">
-      <StackPanel Margin="4,0" Spacing="2">
+    <!-- view toggles (what renders in the viewport) -->
+    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="3" Margin="8,0,8,4">
+      <ToggleButton Classes="vp" Content="✨ Particles" IsChecked="{Binding ShowParticles}" FontSize="9" Padding="6,1"
+                    ToolTip.Tip="Show particle markers in the viewport" />
+      <ToggleButton Classes="vp" Content="▶ Play All" IsChecked="{Binding PlayAllParticles}" FontSize="9" Padding="6,1"
+                    ToolTip.Tip="Simulate and play every placed particle system live (capped for performance)" />
+      <ToggleButton Classes="vp" Content="🎭 Props" IsChecked="{Binding ShowPropMeshes}" FontSize="9" Padding="6,1"
+                    ToolTip.Tip="Render the actual prop meshes (Baron, dragons, camps…) at their placements" />
+    </StackPanel>
 
-        <!-- 🧊 MESHES: layer groups -> mapgeo meshes. Ctrl+click multi-selects (M30). -->
-        <Expander IsExpanded="True" FontSize="11">
-          <Expander.Header>
-            <StackPanel Orientation="Horizontal" Spacing="6">
-              <TextBlock Text="🧊" FontSize="10" VerticalAlignment="Center" />
-              <TextBlock Text="Meshes" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
-              <TextBlock Text="{Binding MapContent.Pieces.Count}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
-            </StackPanel>
-          </Expander.Header>
-          <TreeView x:Name="MapContentTree"
-                    ItemsSource="{Binding MapContent.LayerGroups}" SelectedItem="{Binding SelectedTreeItem, Mode=TwoWay}"
-                    Background="Transparent" BorderThickness="0" Padding="4,0" MaxHeight="420">
-            <TreeView.DataTemplates>
-              <TreeDataTemplate DataType="vm:MapLayerGroupViewModel" ItemsSource="{Binding Meshes}">
-                <StackPanel Orientation="Horizontal" Spacing="5">
-                  <TextBlock Text="🗂" FontSize="10" VerticalAlignment="Center" />
-                  <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
-                             Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
-                </StackPanel>
-              </TreeDataTemplate>
-              <DataTemplate DataType="vm:MapPieceViewModel">
-                <Border Background="{Binding IsSelected, Converter={StaticResource SelectionHighlight}}"
-                        CornerRadius="2" Padding="3,0" Margin="-3,0">
-                  <StackPanel Orientation="Horizontal" Spacing="5">
-                    <TextBlock Text="🧊" FontSize="9" VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
-                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                  </StackPanel>
-                </Border>
-              </DataTemplate>
-            </TreeView.DataTemplates>
-          </TreeView>
-        </Expander>
+    <!-- the hierarchy -->
+    <TreeView x:Name="MapContentTree"
+              ItemsSource="{Binding MapContent.OutlinerRoots}" SelectedItem="{Binding SelectedOutlinerItem, Mode=TwoWay}"
+              Background="Transparent" BorderThickness="0" Padding="4,0">
+      <TreeView.DataTemplates>
+        <TreeDataTemplate DataType="vm:OutlinerFolderViewModel" ItemsSource="{Binding Items}">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <TextBlock Text="{Binding Icon}" FontSize="10" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
+                       Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+          </StackPanel>
+        </TreeDataTemplate>
 
-        <!-- ✨ PARTICLES: grouped by VFX system -->
-        <Expander IsExpanded="False" FontSize="11" IsVisible="{Binding MapContent.HasParticles}">
-          <Expander.Header>
-            <StackPanel Orientation="Horizontal" Spacing="6">
-              <TextBlock Text="✨" FontSize="10" VerticalAlignment="Center" />
-              <TextBlock Text="Particles" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
-              <TextBlock Text="{Binding MapContent.ParticleCount}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
-              <ToggleButton Classes="vp" Content="👁" IsChecked="{Binding ShowParticles}" FontSize="9" Padding="5,1" VerticalAlignment="Center"
-                            ToolTip.Tip="Show particle markers in the viewport" />
-              <ToggleButton Classes="vp" Content="▶" IsChecked="{Binding PlayAllParticles}" FontSize="9" Padding="5,1" VerticalAlignment="Center"
-                            ToolTip.Tip="Simulate and play every placed particle system live (capped for performance)" />
+        <TreeDataTemplate DataType="vm:MapLayerGroupViewModel" ItemsSource="{Binding Meshes}">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <TextBlock Text="🗂" FontSize="10" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Name}" FontSize="10" FontWeight="SemiBold"
+                       Foreground="{DynamicResource ReyTextBrush}" VerticalAlignment="Center" />
+          </StackPanel>
+        </TreeDataTemplate>
+        <DataTemplate DataType="vm:MapPieceViewModel">
+          <Border Background="{Binding IsSelected, Converter={StaticResource SelectionHighlight}}"
+                  CornerRadius="2" Padding="3,0" Margin="-3,0">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <TextBlock Text="🧊" FontSize="9" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
+                         TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
             </StackPanel>
-          </Expander.Header>
-          <TreeView ItemsSource="{Binding MapContent.ParticleGroups}" SelectedItem="{Binding SelectedParticleTreeItem, Mode=TwoWay}"
-                    MaxHeight="300" Background="Transparent" BorderThickness="0">
-            <TreeView.DataTemplates>
-              <TreeDataTemplate DataType="vm:ParticleSystemGroupViewModel" ItemsSource="{Binding Placements}">
-                <TextBlock Text="{Binding Header}" FontSize="10" FontWeight="SemiBold"
-                           Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis" />
-              </TreeDataTemplate>
-              <TreeDataTemplate DataType="vm:ParticlePlacementViewModel">
-                <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
-              </TreeDataTemplate>
-            </TreeView.DataTemplates>
-          </TreeView>
-        </Expander>
+          </Border>
+        </DataTemplate>
 
-        <!-- 🎭 MOBS / ANIMATED PROPS: placed characters grouped by character -->
-        <Expander IsExpanded="False" FontSize="11" IsVisible="{Binding MapContent.HasProps}">
-          <Expander.Header>
-            <StackPanel Orientation="Horizontal" Spacing="6">
-              <TextBlock Text="🎭" FontSize="10" VerticalAlignment="Center" />
-              <TextBlock Text="Mobs / Props" FontSize="11" FontWeight="SemiBold" Foreground="#FF8C26" VerticalAlignment="Center" />
-              <TextBlock Text="{Binding MapContent.PropCount}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
-              <ToggleButton Classes="vp" Content="🧊" IsChecked="{Binding ShowPropMeshes}" FontSize="9" Padding="5,1" VerticalAlignment="Center"
-                            ToolTip.Tip="Render the actual prop meshes (Baron, dragons, camps, turrets…) at their placements" />
-            </StackPanel>
-          </Expander.Header>
-          <TreeView ItemsSource="{Binding MapContent.PropGroups}" SelectedItem="{Binding SelectedPropTreeItem, Mode=TwoWay}"
-                    MaxHeight="300" Background="Transparent" BorderThickness="0">
-            <TreeView.DataTemplates>
-              <TreeDataTemplate DataType="vm:AnimatedPropGroupViewModel" ItemsSource="{Binding Props}">
-                <TextBlock Text="{Binding Header}" FontSize="10" FontWeight="SemiBold"
-                           Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis" />
-              </TreeDataTemplate>
-              <TreeDataTemplate DataType="vm:AnimatedPropViewModel">
-                <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
-              </TreeDataTemplate>
-            </TreeView.DataTemplates>
-          </TreeView>
-        </Expander>
+        <TreeDataTemplate DataType="vm:ParticleSystemGroupViewModel" ItemsSource="{Binding Placements}">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <TextBlock Text="✨" FontSize="9" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Header}" FontSize="10" FontWeight="SemiBold"
+                       Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          </StackPanel>
+        </TreeDataTemplate>
+        <DataTemplate DataType="vm:ParticlePlacementViewModel">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <TextBlock Text="✦" FontSize="9" Foreground="#36E2C2" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          </StackPanel>
+        </DataTemplate>
 
-        <!-- 🪞 REFLECTION PROBES -->
-        <Expander IsExpanded="False" FontSize="11" IsVisible="{Binding MapContent.HasProbes}">
-          <Expander.Header>
-            <StackPanel Orientation="Horizontal" Spacing="6">
-              <TextBlock Text="🪞" FontSize="10" VerticalAlignment="Center" />
-              <TextBlock Text="Reflection Probes" FontSize="11" FontWeight="SemiBold" Foreground="#4CE27A" VerticalAlignment="Center" />
-              <TextBlock Text="{Binding MapContent.Probes.Count}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
-            </StackPanel>
-          </Expander.Header>
-          <ListBox ItemsSource="{Binding MapContent.Probes}" SelectedItem="{Binding SelectedProbe, Mode=TwoWay}"
-                   MaxHeight="200" Background="Transparent" BorderThickness="0" FontSize="10">
-            <ListBox.ItemTemplate>
-              <DataTemplate>
-                <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-        </Expander>
-      </StackPanel>
-    </ScrollViewer>
+        <TreeDataTemplate DataType="vm:AnimatedPropGroupViewModel" ItemsSource="{Binding Props}">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <TextBlock Text="🎭" FontSize="9" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Header}" FontSize="10" FontWeight="SemiBold"
+                       Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          </StackPanel>
+        </TreeDataTemplate>
+        <DataTemplate DataType="vm:AnimatedPropViewModel">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <TextBlock Text="🐾" FontSize="9" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:CubemapProbeViewModel">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <TextBlock Text="🪞" FontSize="9" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          </StackPanel>
+        </DataTemplate>
+      </TreeView.DataTemplates>
+    </TreeView>
   </DockPanel>
 </UserControl>
