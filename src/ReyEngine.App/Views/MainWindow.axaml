@@ -769,6 +769,21 @@
                                   <Button Classes="tool" Content="+ Add Sampler" Command="{Binding AddSamplerCommand}" IsVisible="{Binding CanEditSamplers}" />
                                 </StackPanel>
 
+                                <!-- M52: shader selector — swap the pass shader; missing sampler slots the
+                                     target shader uses (learned from this document's materials) are auto-added -->
+                                <StackPanel Spacing="2" Margin="0,4,0,0" IsVisible="{Binding CanChangeShader}">
+                                  <TextBlock Text="Shader" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                                  <StackPanel Orientation="Horizontal" Spacing="3">
+                                    <AutoCompleteBox Text="{Binding EditedShader}" MinWidth="250" FontSize="10"
+                                                     ItemsSource="{Binding Owner.KnownShaders}" FilterMode="Contains"
+                                                     Watermark="Shaders/StaticMesh/…" />
+                                    <Button Content="Set" Command="{Binding ApplyShaderCommand}" FontSize="10" Padding="7,1"
+                                            ToolTip.Tip="Switch to this shader and auto-add the sampler slots materials of that shader use" />
+                                  </StackPanel>
+                                  <TextBlock Text="{Binding ShaderChangeStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}"
+                                             TextWrapping="Wrap" IsVisible="{Binding ShaderChangeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                </StackPanel>
+
                                 <ItemsControl ItemsSource="{Binding Slots}">
                                   <ItemsControl.ItemTemplate>
                                     <DataTemplate>

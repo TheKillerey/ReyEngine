@@ -315,7 +315,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var e = sys.Emitters[i];
             if (!e.IsMeshPrimitive || string.IsNullOrEmpty(e.MeshPath)) continue;
-            var bytes = ReadAssetByPath(e.MeshPath);
+            // Never let one broken mesh (subchunked chunk, missing file) kill the whole playback build —
+            // that silently froze "Play All" at the previously-playing single system.
+            byte[]? bytes;
+            try { bytes = ReadAssetByPath(e.MeshPath); }
+            catch { bytes = null; }
             Formats.Meshes.StaticMeshData? mesh = null;
             if (bytes is not null)
             {
@@ -844,9 +848,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private TextureImage? LoadTextureByPath(string path)
     {
-        var bytes = ReadAssetByPath(path);
-        if (bytes is null) return null;
-        try { return TextureDecoder.Decode(bytes); } catch { return null; }
+        try
+        {
+            var bytes = ReadAssetByPath(path);
+            if (bytes is null) return null;
+            return TextureDecoder.Decode(bytes);
+        }
+        catch { return null; }   // subchunked/corrupt chunks throw inside the mount read — never propagate
     }
 
     private Avalonia.Media.Imaging.Bitmap? LoadThumbnailByPath(string path)

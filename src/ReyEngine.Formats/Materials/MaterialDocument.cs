@@ -207,13 +207,17 @@ public sealed class MaterialDocument
             bool blendEnable = false;
             bool? cullEnable = null;
             int srcBlend = -1, dstBlend = -1;
+            BinTreeObjectLink? shaderLink = null;   // M52: kept live so the shader can be CHANGED
             if (Field(o.Properties, "techniques") is BinTreeContainer techs
                 && techs.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } tech0
                 && Field(tech0.Properties, "passes") is BinTreeContainer passes
                 && passes.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } pass0)
             {
                 if (Field(pass0.Properties, "shader") is BinTreeObjectLink shLink)
+                {
+                    shaderLink = shLink;
                     renderShader = resolve(shLink.Value) ?? $"0x{shLink.Value:x8}";
+                }
                 blendEnable = Field(pass0.Properties, "blendEnable") switch
                 {
                     BinTreeBool bb => bb.Value,
@@ -244,6 +248,7 @@ public sealed class MaterialDocument
                 PathFieldHash = pathFieldHash,
                 Switches = switches,
                 RenderShader = renderShader,
+                ShaderLink = shaderLink,
                 BlendEnable = blendEnable,
                 CullEnable = cullEnable,
                 SrcBlendFactor = srcBlend,
@@ -307,7 +312,22 @@ public sealed class MaterialBinding
 
     /// <summary>The material's real technique-pass shader (e.g. Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest),
     /// resolved from the first technique's first pass; null when the material has no techniques (M34).</summary>
-    public string? RenderShader { get; init; }
+    public string? RenderShader { get; internal set; }
+
+    /// <summary>M52: the live pass 'shader' objlink, kept so the shader can be swapped in place.</summary>
+    internal BinTreeObjectLink? ShaderLink { get; init; }
+    public bool CanChangeShader => ShaderLink is not null;
+
+    /// <summary>M52: point this material's first pass at a different shader (objlink = FNV1a of the shader
+    /// path, same hashing the game uses for bin object links). Serialize() persists it.</summary>
+    public bool SetRenderShader(string shaderPath)
+    {
+        if (ShaderLink is null || string.IsNullOrWhiteSpace(shaderPath)) return false;
+        ShaderLink.Value = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(shaderPath.Trim());
+        RenderShader = shaderPath.Trim();
+        _structurallyEdited = true;
+        return true;
+    }
     /// <summary>First pass's blendEnable — the .bin's own transparency flag (M34).</summary>
     public bool BlendEnable { get; init; }
     /// <summary>First pass's cullEnable — Riot's backface-culling flag: true = single-sided (cull back),

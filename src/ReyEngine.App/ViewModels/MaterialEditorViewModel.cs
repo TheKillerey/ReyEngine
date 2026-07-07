@@ -165,6 +165,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     {
         Model = model;
         Owner = owner;
+        _editedShader = model.RenderShader ?? "";
         foreach (var s in model.Slots) Slots.Add(new TextureSlotViewModel(s, owner) { Binding = this });
         foreach (var p in model.Parameters) Parameters.Add(new MaterialParameterViewModel(p, owner));
     }
@@ -172,6 +173,23 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     public string Name => Model.Name;
     public string ShaderName => Model.ShaderName;
     public string AssignedTo => Model.AssignedTo;
+
+    // ---- M52: shader selector ----
+    [ObservableProperty] private string _editedShader = "";
+    [ObservableProperty] private string _shaderChangeStatus = "";
+    public bool CanChangeShader => Model.CanChangeShader;
+    public string CurrentShaderText => Model.RenderShader ?? Model.ShaderName;
+
+    [RelayCommand]
+    private void ApplyShader() => Owner?.ChangeShader(this, EditedShader);
+
+    /// <summary>Refresh shader-related display after ChangeShader swapped the pass link.</summary>
+    public void RaiseShaderChanged()
+    {
+        OnPropertyChanged(nameof(CurrentShaderText));
+        OnPropertyChanged(nameof(ShaderName));
+        OnPropertyChanged(nameof(IsDirty));
+    }
     public bool HasAssignment => !string.IsNullOrEmpty(Model.AssignedTo);
     public bool HasParameters => Parameters.Count > 0;
     public bool CanEditSamplers => Model.CanEditSamplers;
@@ -315,6 +333,54 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     public bool HasUnresolved => UnresolvedCount > 0;
     partial void OnUnresolvedCountChanged(int value) => OnPropertyChanged(nameof(HasUnresolved));
 
+    // ---- M52: shader selector — swap the pass shader + auto-add the samplers that shader uses ----
+    /// <summary>Distinct shaders seen in the loaded document (the realistic choices for this map/skin).</summary>
+    public ObservableCollection<string> KnownShaders { get; } = new();
+    private readonly Dictionary<string, HashSet<string>> _shaderSamplers = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Learn shader -> sampler-set from every material in the document (data-driven "required
+    /// samplers": what materials using that shader actually bind).</summary>
+    private void BuildShaderIndex()
+    {
+        KnownShaders.Clear();
+        _shaderSamplers.Clear();
+        if (_doc is null) return;
+        foreach (var b in _doc.Materials)
+        {
+            if (string.IsNullOrEmpty(b.RenderShader) || b.RenderShader.StartsWith("0x")) continue;
+            if (!_shaderSamplers.TryGetValue(b.RenderShader, out var set))
+                _shaderSamplers[b.RenderShader] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var s in b.Slots) set.Add(s.SamplerName);
+        }
+        foreach (var name in _shaderSamplers.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            KnownShaders.Add(name);
+    }
+
+    /// <summary>Switch a material to another shader and add any sampler slots that the target shader's
+    /// materials use but this one lacks (empty path — fill it in afterwards).</summary>
+    public void ChangeShader(MaterialBindingViewModel vm, string shader)
+    {
+        if (string.IsNullOrWhiteSpace(shader)) return;
+        if (!vm.Model.SetRenderShader(shader))
+        {
+            vm.ShaderChangeStatus = "This material has no technique pass — shader can't be changed.";
+            return;
+        }
+        int added = 0;
+        if (_shaderSamplers.TryGetValue(shader.Trim(), out var required))
+            foreach (var samplerName in required.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                if (!vm.Model.Slots.Any(x => string.Equals(x.SamplerName, samplerName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var slot = vm.Model.AddSampler(samplerName, "");
+                    if (slot is not null) { vm.Slots.Add(new TextureSlotViewModel(slot, this) { Binding = vm }); added++; }
+                }
+        vm.RaiseShaderChanged();
+        IsDirty = _doc?.IsDirty ?? true;
+        vm.ShaderChangeStatus = added > 0
+            ? $"Shader set. Added {added} sampler slot(s) used by this shader — fill in their texture paths."
+            : "Shader set. All of this shader's usual samplers are already present.";
+    }
+
     /// <summary>M50c: auto-load the diffuse thumbnail of one material — used when the user opens a
     /// material from the selected mesh's MATERIALS card, so the texture preview shows immediately.</summary>
     public void AutoPreviewDiffuse(string materialName)
@@ -352,6 +418,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         HasMaterials = Materials.Count > 0;
         IsDirty = false;
         Search = ""; OnlyUnresolved = false;
+        BuildShaderIndex();   // M52: shader -> sampler-set map for the shader selector
         UpdateUnresolved();
         Summary = $"{(Kind == MaterialSourceKind.ChampionSkin ? "Champion" : "Map")} — {Materials.Count} material(s)";
     }
