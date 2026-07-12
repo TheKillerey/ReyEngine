@@ -1615,6 +1615,49 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// select the nearest-hit mesh. Plain click = single-select; <paramref name="additive"/> (Ctrl) toggles
     /// the hit mesh in/out of the current set; an empty non-additive click clears the selection.
     /// </summary>
+    /// <summary>M55: click-select ANY scene object — meshes (triangles) or placeable icon markers
+    /// (particles/props/probes, ray-vs-sphere at the marker's world size); nearest hit wins.</summary>
+    public void SelectAnyFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir, bool additive = false)
+    {
+        rayDir = System.Numerics.Vector3.Normalize(rayDir);   // same t units for mesh + marker tests
+        // mesh hit distance (float.MaxValue when none)
+        float meshT = float.MaxValue;
+        if (_currentMap is { } map0 && map0.Groups.Count > 0)
+        {
+            var subs = map0.Groups.Select(g => (g.StartIndex, g.IndexCount)).ToList();
+            if (ViewportMeshPicker.PickSubmesh(map0.Positions, map0.Indices, subs,
+                    CurrentModelSubmeshVisible, rayOrigin, rayDir, out var t) >= 0)
+                meshT = t;
+        }
+
+        // placeable markers: same size formula the viewport uses for the icons (Mesh.Radius-scaled)
+        float radius = CurrentMesh is { } cm ? Math.Clamp(cm.Radius * 0.004f, 4f, 90f) * 1.6f : 40f;
+        object? bestNode = null;
+        float bestT = float.MaxValue;
+        void Test(object node, System.Numerics.Vector3 pos)
+        {
+            var toC = pos - rayOrigin;
+            float t = System.Numerics.Vector3.Dot(toC, rayDir);            // rayDir is normalized
+            if (t <= 0f || t >= bestT) return;
+            float d = (toC - rayDir * t).Length();                          // perpendicular distance
+            if (d <= radius) { bestT = t; bestNode = node; }
+        }
+        if (ShowParticles && MapContent.HasParticles && !additive)
+            foreach (var p in MapContent.AllParticles) Test(p, p.CurrentPosition);
+        if (ShowPlaceables && MapContent.HasProps && !additive)
+            foreach (var p in MapContent.AllProps) Test(p, p.Position);
+        if (ShowPlaceables && MapContent.HasProbes && !additive)
+            foreach (var p in MapContent.Probes) Test(p, p.Position);
+
+        // nearest placeable beats a farther mesh face (icons draw on top, so this matches what you see)
+        if (bestNode is not null && bestT < meshT)
+        {
+            SelectedOutlinerItem = bestNode;   // routes by type + highlights the hierarchy
+            return;
+        }
+        SelectMeshFromViewport(rayOrigin, rayDir, additive);
+    }
+
     public void SelectMeshFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir, bool additive = false)
     {
         if (_currentMap is not { } map || map.Groups.Count == 0) return;

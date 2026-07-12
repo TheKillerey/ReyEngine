@@ -277,7 +277,7 @@ public partial class MainWindow : Window
             && Viewport.TryGetPickRay(e.GetPosition(ViewportInput), out var origin, out var dir))
         {
             bool additive = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-            vm.SelectMeshFromViewport(origin, dir, additive);
+            vm.SelectAnyFromViewport(origin, dir, additive);   // M55: meshes AND placeable icons
         }
     }
 
