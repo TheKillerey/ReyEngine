@@ -162,16 +162,19 @@ public static class MapGeoDecoder
         // M55: capture the scene bucket grid(s) — the culling grid League uses; one per visibility
         // controller. Kept as summary info + bounds for the outliner showcase + viewport overlay.
         var bucketGrids = new List<MapBucketGridInfo>();
-        foreach (var sg in env.SceneGraphs)
+        MapGeoSceneGraphSection.TryLocate(data, env, version, out var rawSceneGraphs);
+        for (int sceneGraphIndex = 0; sceneGraphIndex < env.SceneGraphs.Count; sceneGraphIndex++)
         {
+            var sg = env.SceneGraphs[sceneGraphIndex];
             try
             {
                 bucketGrids.Add(new MapBucketGridInfo(
-                    sg.VisibilityControllerPathHash,
+                    rawSceneGraphs?.Grids[sceneGraphIndex].ControllerHash ?? sg.VisibilityControllerPathHash,
                     sg.MinX, sg.MinZ, sg.MaxX, sg.MaxZ,
                     sg.BucketSizeX, sg.BucketSizeZ,
                     sg.Buckets.Width, sg.Buckets.Height,
-                    sg.IsDisabled, sg.Vertices.Count, sg.Indices.Count));
+                    sg.IsDisabled, sg.Vertices.Count, sg.Indices.Count,
+                    rawSceneGraphs?.Grids[sceneGraphIndex].RegionHash ?? 0));
             }
             catch { /* malformed grid: skip */ }
         }

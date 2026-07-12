@@ -5,12 +5,9 @@ using LeagueToolkit.Core.Environment;
 namespace ReyEngine.Formats.MapGeo;
 
 /// <summary>
-/// Persists mesh moves/rotations/scales into a .mapgeo by surgically patching each edited mesh's
-/// transform (and bounding box) in place, leaving the rest of the file byte-exact. LeagueToolkit's
-/// <c>EnvironmentAsset.Write</c> is lossy for these versions (it produces an unreadable file), so we
-/// never re-serialize — instead we locate each mesh via its unique <c>[BoundingBox(24)][Transform(64)]</c>
-/// byte signature (the AABB disambiguates the many identical/identity transforms) and overwrite both
-/// blocks with the recomputed values.
+/// Persists mapgeo edits without LeagueToolkit's lossy whole-file serializer. Mesh transforms/AABBs
+/// are patched by exact byte signature; then the variable-length BucketedGeometry section is rebuilt
+/// while every byte before it and after it (including planar reflectors) is preserved.
 /// </summary>
 public static class MapGeoWriter
 {
@@ -65,6 +62,44 @@ public static class MapGeoWriter
                 WriteMatrix(result, off + 24, newTransform);
             }
         }
+        MapGeoAsset movedAsset = MapGeoDecoder.Decode(result);
+        return WriteWithRegeneratedBucketGrids(result, movedAsset);
+    }
+
+    /// <summary>
+    /// Rebuild all scene bucket grids from <paramref name="asset"/>'s current world-space geometry and
+    /// replace only the original BucketedGeometry byte section. No internal LeagueToolkit constructors,
+    /// mutable backing fields, or <c>EnvironmentAsset.Write</c> calls are used.
+    /// </summary>
+    public static byte[] WriteWithRegeneratedBucketGrids(byte[] originalMapgeo, MapGeoAsset asset)
+    {
+        ArgumentNullException.ThrowIfNull(originalMapgeo);
+        ArgumentNullException.ThrowIfNull(asset);
+        int version = originalMapgeo.Length >= 8
+            ? BinaryPrimitives.ReadInt32LittleEndian(originalMapgeo.AsSpan(4, 4))
+            : 0;
+        if (asset.Version != version)
+            throw new InvalidDataException($"Decoded mapgeo version {asset.Version} does not match source version {version}.");
+
+        using var input = new MemoryStream(originalMapgeo, writable: false);
+        using var environment = new EnvironmentAsset(input);
+        MapGeoSceneGraphSection oldSection = MapGeoSceneGraphSection.Locate(originalMapgeo, environment, version);
+        IReadOnlyList<MapBucketGridData> grids = MapBucketGridBuilder.Rebuild(asset);
+        byte[] newSection = SerializeSceneGraphs(version, grids);
+
+        int suffixOffset = oldSection.Offset + oldSection.Length;
+        var result = new byte[checked(oldSection.Offset + newSection.Length + originalMapgeo.Length - suffixOffset)];
+        Buffer.BlockCopy(originalMapgeo, 0, result, 0, oldSection.Offset);
+        Buffer.BlockCopy(newSection, 0, result, oldSection.Offset, newSection.Length);
+        Buffer.BlockCopy(
+            originalMapgeo, suffixOffset,
+            result, oldSection.Offset + newSection.Length,
+            originalMapgeo.Length - suffixOffset);
+
+        using var verifyStream = new MemoryStream(result, writable: false);
+        using var verifiedEnvironment = new EnvironmentAsset(verifyStream);
+        MapGeoSceneGraphSection verifiedSection = MapGeoSceneGraphSection.Locate(result, verifiedEnvironment, version);
+        ValidateWrittenGrids(grids, verifiedSection);
         return result;
     }
 
@@ -131,6 +166,89 @@ public static class MapGeoWriter
         WriteVector3(b, 12, box.Max);
         WriteMatrix(b, 24, m.Transform);
         return b;
+    }
+
+    private static byte[] SerializeSceneGraphs(int version, IReadOnlyList<MapBucketGridData> grids)
+    {
+        if (version < 15 && grids.Count != 1)
+            throw new InvalidDataException($"Mapgeo version {version} requires exactly one implicit bucket grid.");
+
+        using var output = new MemoryStream();
+        using var writer = new BinaryWriter(output, System.Text.Encoding.UTF8, leaveOpen: true);
+        if (version >= 15)
+            writer.Write(grids.Count);
+        foreach (MapBucketGridData grid in grids)
+        {
+            if (version >= 18)
+            {
+                writer.Write(grid.Key.RegionHash);
+                writer.Write(grid.Key.ControllerHash);
+            }
+            else if (version >= 15)
+            {
+                writer.Write(grid.Key.ControllerHash);
+            }
+            writer.Write(grid.MinX);
+            writer.Write(grid.MinZ);
+            writer.Write(grid.MaxX);
+            writer.Write(grid.MaxZ);
+            writer.Write(grid.MaxStickOutX);
+            writer.Write(grid.MaxStickOutZ);
+            writer.Write(grid.BucketSizeX);
+            writer.Write(grid.BucketSizeZ);
+            writer.Write(grid.BucketsPerSide);
+            writer.Write(false);
+            writer.Write((byte)1); // HasFaceVisibilityFlags
+            writer.Write(checked((uint)grid.Vertices.Count));
+            writer.Write(checked((uint)grid.Indices.Count));
+
+            foreach (Vector3 vertex in grid.Vertices)
+            {
+                writer.Write(vertex.X);
+                writer.Write(vertex.Y);
+                writer.Write(vertex.Z);
+            }
+            foreach (ushort index in grid.Indices)
+                writer.Write(index);
+            if (grid.Buckets.Count != grid.BucketsPerSide * grid.BucketsPerSide)
+                throw new InvalidDataException("Generated bucket descriptor count does not match its square resolution.");
+            foreach (MapBucketCell bucket in grid.Buckets)
+            {
+                writer.Write(bucket.MaxStickOutX);
+                writer.Write(bucket.MaxStickOutZ);
+                writer.Write(bucket.StartIndex);
+                writer.Write(bucket.BaseVertex);
+                writer.Write(bucket.InsideFaceCount);
+                writer.Write(bucket.StickingOutFaceCount);
+            }
+            if (grid.FaceVisibilityFlags.Count != grid.Indices.Count / 3)
+                throw new InvalidDataException("Generated face visibility count does not match its index count.");
+            foreach (byte flag in grid.FaceVisibilityFlags)
+                writer.Write(flag);
+        }
+        writer.Flush();
+        return output.ToArray();
+    }
+
+    private static void ValidateWrittenGrids(
+        IReadOnlyList<MapBucketGridData> expected,
+        MapGeoSceneGraphSection actual)
+    {
+        if (actual.Grids.Count != expected.Count)
+            throw new InvalidDataException("Written bucket-grid count does not match the generated grid count.");
+        for (int i = 0; i < expected.Count; i++)
+        {
+            MapBucketGridData grid = expected[i];
+            MapGeoSceneGraphSection.RawGridHeader raw = actual.Grids[i];
+            if (raw.ControllerHash != grid.Key.ControllerHash
+                || raw.RegionHash != grid.Key.RegionHash
+                || raw.BucketsPerSide != grid.BucketsPerSide
+                || raw.VertexCount != grid.Vertices.Count
+                || raw.IndexCount != grid.Indices.Count
+                || raw.Flags != 1
+                || raw.IsDisabled)
+                throw new InvalidDataException($"Written bucket grid {i} failed byte-level header validation.");
+        }
     }
 
     private static void WriteVector3(byte[] b, int offset, Vector3 v)
