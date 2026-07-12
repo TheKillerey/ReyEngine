@@ -187,6 +187,27 @@
       </StackPanel>
     </Border>
 
+    <!-- SOUND (MapAudio placement) — M56: resolve the Wwise event through the map's banks and play it -->
+    <Border Classes="card" IsVisible="{Binding SelectedSound, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <StackPanel Spacing="4">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Classes="cardTitle" Grid.Column="0" Text="SOUND" VerticalAlignment="Center" />
+          <Button Classes="tool" Grid.Column="1" Content="🎯 Focus" Command="{Binding FocusSelectedPlaceableCommand}"
+                  FontSize="10" Padding="6,1" ToolTip.Tip="Frame the camera on this sound" />
+        </Grid>
+        <TextBlock Text="{Binding SelectedSound.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
+        <TextBlock Text="{Binding SelectedSound.EventName}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                   FontFamily="Cascadia Mono, Consolas, monospace" TextWrapping="Wrap" />
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <Button Classes="primary" Content="▶ Play" Command="{Binding PlaySelectedSoundCommand}" FontSize="11" Padding="10,2"
+                  ToolTip.Tip="Resolve the Wwise event through the map's banks, decode the wem (vgmstream) and play it" />
+          <Button Classes="tool" Content="⏹ Stop All" Command="{Binding StopAllSoundsCommand}" FontSize="11" Padding="8,2" />
+        </StackPanel>
+        <TextBlock Text="{Binding AudioStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap"
+                   IsVisible="{Binding AudioStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      </StackPanel>
+    </Border>
+
     <!-- PLACEABLE INFO (props / probes) -->
     <Border Classes="card"
             IsVisible="{Binding SelectedPlaceableInfo, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">

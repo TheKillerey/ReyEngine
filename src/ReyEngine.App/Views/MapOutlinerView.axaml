@@ -44,6 +44,8 @@
                     ToolTip.Tip="Play each prop's idle animation (Baron breathing, camps shuffling…). Needs Props enabled." />
       <ToggleButton Classes="vp" Content="⌗ Grid" IsChecked="{Binding ShowBucketGrid}" FontSize="9" Padding="6,1"
                     ToolTip.Tip="Show the mapgeo's scene bucket grid (League's culling grid) as a ground overlay" />
+      <ToggleButton Classes="vp" Content="🔊 Hear" IsChecked="{Binding AmbienceEnabled}" FontSize="9" Padding="6,1"
+                    ToolTip.Tip="Positional ambience: loop the nearest sound placements with distance-based volume as you fly the camera (needs vgmstream-cli)" />
     </StackPanel>
 
     <!-- the hierarchy -->

@@ -171,6 +171,11 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly List<(VfxParticleSimulator.EmitterState Es, VfxMeshAnimation Anim)> _animatedMeshEmitters = new(); // M48
     private readonly List<(int Geo, PropMesh Mesh)> _animatedPropGeoms = new();   // M54: prop idle animations
     private readonly System.Diagnostics.Stopwatch _propAnimClock = new();
+
+    /// <summary>M56: fired (on the UI thread) when the camera has moved ~100+ world units — drives
+    /// positional map ambience volume without polling.</summary>
+    public event Action<Vector3>? CameraMoved;
+    private Vector3 _lastAudioCamPos = new(float.MaxValue, 0, 0);
     private bool _particlePlaybackDirty;
     private uint _softDotTex;
     private readonly System.Diagnostics.Stopwatch _particleClock = new();
@@ -484,6 +489,13 @@ public sealed class ViewportControl : OpenGlControlBase
         _lastViewportW = Bounds.Width;
         _lastViewportH = Bounds.Height;
         _lastCamPos = new Vector3(-_camera.Position.X, _camera.Position.Y, _camera.Position.Z);
+        // M56: notify camera movement for positional map ambience (coarse: every ~100 world units)
+        if (CameraMoved is not null && Vector3.DistanceSquared(_lastCamPos, _lastAudioCamPos) > 100f * 100f)
+        {
+            _lastAudioCamPos = _lastCamPos;
+            var pos = _lastCamPos;
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => CameraMoved?.Invoke(pos));
+        }
 
         _meshRenderer.SetHighlightBoxes(SelectionBoxes ?? Array.Empty<(Vector3, Vector3)>());
         _meshRenderer.SetGroupBounds(GroupBoundsMin, GroupBoundsMax);

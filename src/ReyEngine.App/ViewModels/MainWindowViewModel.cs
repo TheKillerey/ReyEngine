@@ -188,6 +188,120 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnCurrentModelSoundsChanged(IReadOnlyList<MapSoundPlacement>? value)
     { MapContent.SetSounds(value ?? Array.Empty<MapSoundPlacement>()); UpdatePlaceableMarkers(); }
 
+    // ---- M56: Wwise audio — banks, one-shot playback, positional map ambience ----
+    public Services.SoundPlaybackService Sound { get; } = new();
+    private Formats.Audio.AudioBankSet? _mapAudioBanks;
+    [ObservableProperty] private MapSoundViewModel? _selectedSound;
+    [ObservableProperty] private bool _ambienceEnabled;
+    [ObservableProperty] private string _audioStatus = "";
+    private System.Numerics.Vector3 _lastCamPosForAudio;
+
+    /// <summary>Load the map's Wwise banks (env/mus events + audio bnk/wpk under sounds/wwise matching
+    /// mapN). Called from the map-load background task; cheap misses are fine.</summary>
+    private void LoadMapAudioBanks(string mapgeoPath)
+    {
+        _mapAudioBanks = null;
+        AudioStatus = "";
+        var m = System.Text.RegularExpressions.Regex.Match(mapgeoPath, @"map(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!m.Success) return;
+        string tag = $"map{m.Groups[1].Value}";
+        var set = new Formats.Audio.AudioBankSet();
+        int banks = 0, packs = 0;
+        foreach (var e in AssetEntries)
+        {
+            if (!e.IsResolved) continue;
+            var p = e.Path;
+            // only the map's own ambience/music banks (env_mapN_*, mus_mapN_* under sfx/shared) -
+            // NOT the hundreds of per-character banks in the same wad.
+            if (!p.Contains("sounds/wwise", StringComparison.OrdinalIgnoreCase)
+                || !p.Contains("/sfx/shared/", StringComparison.OrdinalIgnoreCase)) continue;
+            var file = Path.GetFileName(p);
+            if (!(file.StartsWith("env_", StringComparison.OrdinalIgnoreCase) || file.StartsWith("mus_", StringComparison.OrdinalIgnoreCase))
+                || !file.Contains(tag, StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                if (p.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase))
+                { if (Formats.Audio.BnkFile.Parse(ReadAsset(e.PathHash)) is { } b) { set.AddBank(b); banks++; } }
+                else if (p.EndsWith(".wpk", StringComparison.OrdinalIgnoreCase))
+                { if (Formats.Audio.WpkFile.Parse(ReadAsset(e.PathHash)) is { } w) { set.AddPack(w); packs++; } }
+            }
+            catch { /* skip broken/subchunked banks */ }
+        }
+        if (!set.IsEmpty)
+        {
+            _mapAudioBanks = set;
+            _log.Info("Audio", $"{tag}: {banks} bank(s) + {packs} wem pack(s) — {set.EventCount} event(s), {set.WemCount} wem(s)." +
+                               (Sound.IsAvailable ? "" : " vgmstream-cli NOT found — playback disabled."));
+        }
+    }
+
+    /// <summary>Resolve + decode + play one wem of the selected sound's event (one-shot).</summary>
+    [RelayCommand]
+    private void PlaySelectedSound()
+    {
+        if (SelectedSound is not { } snd) return;
+        if (_mapAudioBanks is null) { AudioStatus = "No audio banks loaded for this map."; return; }
+        if (!Sound.IsAvailable) { AudioStatus = "vgmstream-cli.exe not found (needed to decode Wwise Vorbis)."; return; }
+        var wems = _mapAudioBanks.ResolveEvent(snd.EventName);
+        if (wems.Count == 0) { AudioStatus = $"Event not found in the loaded banks: {snd.EventName}"; return; }
+        var wemData = wems.Select(id => (Id: id, Data: _mapAudioBanks.GetWemData(id))).FirstOrDefault(x => x.Data is not null);
+        if (wemData.Data is null) { AudioStatus = $"wem data missing ({wems.Count} candidate id(s))."; return; }
+        var wav = Sound.DecodeToWav(wemData.Id, wemData.Data);
+        if (wav is null) { AudioStatus = "Decode failed."; return; }
+        Sound.PlayWav(wav, 1f, loop: false, tag: "oneshot");
+        AudioStatus = $"Playing {snd.EventName} (wem {wemData.Id}, {wems.Count} candidate(s)).";
+    }
+
+    [RelayCommand]
+    private void StopAllSounds() { Sound.StopAll(); AudioStatus = ""; }
+
+    partial void OnAmbienceEnabledChanged(bool value)
+    {
+        if (!value) { Sound.StopAll(); return; }
+        UpdateAmbience(_lastCamPosForAudio, force: true);
+    }
+
+    /// <summary>M56: positional ambience — loop the nearest sound placements with distance-based volume.
+    /// Called from the viewport when the camera moves.</summary>
+    public void UpdateAmbience(System.Numerics.Vector3 camPos, bool force = false)
+    {
+        _lastCamPosForAudio = camPos;
+        if (!AmbienceEnabled || _mapAudioBanks is null || !Sound.IsAvailable || CurrentModelSounds is not { } sounds) return;
+
+        const float radius = 4000f;   // audible range (world units)
+        const int maxVoices = 6;
+        var nearest = sounds
+            .Select((s, i) => (Sound: s, Index: i, Dist: System.Numerics.Vector3.Distance(s.Position, camPos)))
+            .Where(x => x.Dist < radius)
+            .OrderBy(x => x.Dist)
+            .Take(maxVoices)
+            .ToList();
+
+        var wanted = new HashSet<string>(nearest.Select(x => $"amb:{x.Index}"));
+        // stop voices out of range
+        foreach (var s in _activeAmbience.ToList())
+            if (!wanted.Contains(s)) { Sound.StopTag(s); _activeAmbience.Remove(s); }
+        // start/adjust in-range voices
+        foreach (var x in nearest)
+        {
+            string voiceTag = $"amb:{x.Index}";
+            float vol = Math.Clamp(1f - x.Dist / radius, 0f, 1f);
+            if (_activeAmbience.Contains(voiceTag) && Sound.IsTagPlaying(voiceTag))
+            {
+                Sound.SetTagVolume(voiceTag, vol);
+                continue;
+            }
+            var wems = _mapAudioBanks.ResolveEvent(x.Sound.EventName);
+            var wem = wems.Select(id => (Id: id, Data: _mapAudioBanks.GetWemData(id))).FirstOrDefault(w => w.Data is not null);
+            if (wem.Data is null) continue;
+            var wav = Sound.DecodeToWav(wem.Id, wem.Data);
+            if (wav is null) continue;
+            Sound.PlayWav(wav, vol, loop: true, tag: voiceTag);
+            _activeAmbience.Add(voiceTag);
+        }
+    }
+    private readonly HashSet<string> _activeAmbience = new();
+
     partial void OnShowBucketGridChanged(bool value) => RebuildBucketGridLines();
 
     /// <summary>M55b: explicitly frame the camera on the selected placeable (selection itself no longer
@@ -350,6 +464,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedProbe = null;
         _selection.Clear();                       // M50b: exclusive selection
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
+        if (SelectedSound is not null) SelectedSound = null;   // M56
         SelectedParticleMarker = p.Position;   // M55b: highlight only — camera stays (use Focus)
         SelectedPlaceableInfo = $"{p.Name}\n{p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
     }
@@ -359,6 +474,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedPropNode = null;
         _selection.Clear();                       // M50b: exclusive selection
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
+        if (SelectedSound is not null) SelectedSound = null;   // M56
         SelectedParticleMarker = p.Position;   // M55b: highlight only — camera stays (use Focus)
         SelectedPlaceableInfo = $"{p.Name}\ncubemap: {p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
     }
@@ -1423,6 +1539,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelProbes = null;
         CurrentModelProps = null;
         CurrentModelSounds = null;                                        // M55
+        Sound.StopAll(); _activeAmbience.Clear(); _mapAudioBanks = null;   // M56
+        SelectedSound = null; AmbienceEnabled = false;
         BucketGridLines = null;
         MapContent.SetBucketGrids(Array.Empty<MapBucketGridInfo>());
         CurrentPropMeshes = null;
@@ -1658,7 +1776,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
                 if (SelectedProbe is not null) SelectedProbe = null;
                 SelectedParticleMarker = snd.Position;   // M55b: highlight only — camera stays
-                SelectedPlaceableInfo = $"{snd.Name}\nWwise event: {snd.EventName}\n({snd.Position.X:0}, {snd.Position.Y:0}, {snd.Position.Z:0})";
+                SelectedSound = snd;                      // M56: enables the SOUND card (Play button)
+                SelectedPlaceableInfo = "";
                 break;
             case BucketGridViewModel bg:  // M55
                 SelectedPlaceableInfo = $"{bg.Name}\n{bg.Info}";
@@ -1806,6 +1925,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
         if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
         if (SelectedProbe is not null) SelectedProbe = null;
+        if (SelectedSound is not null) SelectedSound = null;   // M56
         SelectedPlaceableInfo = "";
 
         // M50b: outline highlight (mesh wireframe overlay) + the selection's assigned materials.
@@ -2505,6 +2625,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             CurrentModelSounds = sounds.Count > 0 ? sounds : null;
             if (probes.Count > 0 || props.Count > 0 || sounds.Count > 0)
                 _log.Info("MapGeo", $"{probes.Count} cubemap probe(s), {props.Count} animated prop(s) ({props.Select(p => p.CharacterName).Distinct().Count()} characters), {sounds.Count} sound placement(s).");
+            LoadMapAudioBanks(binEntry.Path);   // M56: Wwise banks for event playback
         }
         catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; CurrentModelSounds = null; }
 

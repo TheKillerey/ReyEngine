@@ -82,6 +82,7 @@ public partial class MainWindow : Window
             vm.RequestSettings += () => ShowSettings(vm);
             vm.ShowParticleEditorWindow = () => ShowParticleEditor(vm);   // M46
             vm.ShowMeshPreviewWindow = () => ShowMeshPreview(vm);         // M50
+            Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
         }
     }
