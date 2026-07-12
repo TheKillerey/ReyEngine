@@ -818,6 +818,16 @@
                                 </ItemsControl>
 
                                 <Expander Header="Parameters" IsVisible="{Binding HasParameters}" FontSize="11" Margin="0,4,0,0">
+                                  <StackPanel>
+                                  <!-- M55: add a parameter (clones an existing one's schema; edit the value after) -->
+                                  <StackPanel Orientation="Horizontal" Spacing="3" Margin="0,0,0,4" IsVisible="{Binding CanEditParameters}">
+                                    <TextBox Text="{Binding NewParamName}" Watermark="new param name (e.g. AlphaTestValue)"
+                                             MinWidth="180" FontSize="10" Padding="4,1">
+                                      <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding AddParameterCommand}" /></TextBox.KeyBindings>
+                                    </TextBox>
+                                    <Button Content="+ Add" Command="{Binding AddParameterCommand}" FontSize="10" Padding="6,1"
+                                            ToolTip.Tip="Add a parameter (value type is cloned from this material's first param — edit it after)" />
+                                  </StackPanel>
                                   <ItemsControl ItemsSource="{Binding Parameters}">
                                     <ItemsControl.ItemTemplate>
                                       <DataTemplate>
@@ -833,12 +843,16 @@
                                           </TextBox>
                                           <Button Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" />
                                           <Button Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" />
+                                          <Button Content="✕" FontSize="10" Padding="5,0" IsVisible="{Binding IsRemovable}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.RemoveParameterCommand}"
+                                                  CommandParameter="{Binding}" ToolTip.Tip="Remove this parameter" />
                                           <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
                                           <TextBlock Text="{Binding ErrorText}" Foreground="#FF6B6B" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding HasError}" />
                                         </StackPanel>
                                       </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                   </ItemsControl>
+                                  </StackPanel>
                                 </Expander>
                               </StackPanel>
                             </Border>

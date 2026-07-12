@@ -179,12 +179,16 @@ public sealed class MaterialDocument
                 }
 
             var parameters = new List<MaterialParameter>();
+            BinTreeContainer? paramContainer = null;
             if (Field(o.Properties, "paramValues") is BinTreeContainer pv)
+            {
+                paramContainer = pv;
                 foreach (var el in pv.Elements)
                     if (el is BinTreeStruct ps
                         && Field(ps.Properties, "name") is BinTreeString pn
                         && Field(ps.Properties, "value") is { } valProp)
-                        parameters.Add(new MaterialParameter(pn.Value, valProp));
+                        parameters.Add(new MaterialParameter(pn.Value, valProp, ps));
+            }
 
             // Shader feature switches (StaticMaterialSwitchDef: 'name' + optional 'on'; absent 'on' = true).
             var switches = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
@@ -249,6 +253,7 @@ public sealed class MaterialDocument
                 Switches = switches,
                 RenderShader = renderShader,
                 ShaderLink = shaderLink,
+                ParamContainer = paramContainer,
                 BlendEnable = blendEnable,
                 CullEnable = cullEnable,
                 SrcBlendFactor = srcBlend,
@@ -293,18 +298,21 @@ public sealed class MaterialDocument
 public sealed class MaterialBinding
 {
     private readonly List<TextureSlot> _slots;
+    private readonly List<MaterialParameter> _params;
 
     public string Name { get; }
     public string ShaderName { get; }
     public IReadOnlyList<string> Submeshes { get; }
     public bool IsDefault { get; }
     public IReadOnlyList<TextureSlot> Slots => _slots;
-    public IReadOnlyList<MaterialParameter> Parameters { get; }
+    public IReadOnlyList<MaterialParameter> Parameters => _params;
 
     // Set for StaticMaterialDef bindings — enables add/remove of sampler slots (M10).
     internal BinTreeContainer? SamplerContainer { get; init; }
     internal uint NameFieldHash { get; init; }
     internal uint PathFieldHash { get; init; }
+    // M55: the live paramValues container — enables add/remove of parameters.
+    internal BinTreeContainer? ParamContainer { get; init; }
 
     /// <summary>Shader feature switches (name → on). Only populated for StaticMaterialDef bindings (M32).</summary>
     public IReadOnlyDictionary<string, bool> Switches { get; init; } = EmptySwitches;
@@ -351,7 +359,7 @@ public sealed class MaterialBinding
         List<TextureSlot> slots, IReadOnlyList<MaterialParameter> parameters)
     {
         Name = name; ShaderName = shaderName; Submeshes = submeshes; IsDefault = isDefault;
-        _slots = slots; Parameters = parameters;
+        _slots = slots; _params = parameters.ToList();
     }
 
     /// <summary>Display string for the submesh(es)/group this material drives.</summary>
@@ -422,6 +430,48 @@ public sealed class MaterialBinding
     }
 
     public void Revert() { foreach (var s in _slots) s.Revert(); foreach (var p in Parameters) p.Revert(); }
+
+    // ---- M55: parameter add/remove (same clone-the-schema approach as samplers) ----
+
+    /// <summary>True when parameters can be added (needs at least one existing param to clone the schema).</summary>
+    public bool CanEditParameters => ParamContainer is not null && ParamContainer.Elements.OfType<BinTreeStruct>().Any();
+
+    /// <summary>Add a parameter by cloning an existing one (keeps the value TYPE of the prototype — edit the
+    /// value afterwards). Null when this material has no parameter to clone from.</summary>
+    public MaterialParameter? AddParameter(string name)
+    {
+        if (ParamContainer is null) return null;
+        if (ParamContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault() is not { } proto) return null;
+
+        var clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
+        static uint HashOf(IReadOnlyDictionary<uint, BinTreeProperty> props, string n)
+        {
+            uint h = HashAlgorithms.Fnv1aRaw(n);
+            if (props.ContainsKey(h)) return h;
+            h = HashAlgorithms.Fnv1a(n);
+            return props.ContainsKey(h) ? h : 0u;
+        }
+        uint nameHash = HashOf(clone.Properties, "name");
+        uint valueHash = HashOf(clone.Properties, "value");
+        if (nameHash == 0 || valueHash == 0) return null;
+        if (clone.Properties[nameHash] is not BinTreeString ns) return null;
+        ns.Value = name;
+
+        ParamContainer.Add(clone);
+        var p = new MaterialParameter(name, clone.Properties[valueHash], clone);
+        _params.Add(p);
+        _structurallyEdited = true;
+        return p;
+    }
+
+    public bool RemoveParameter(MaterialParameter p)
+    {
+        if (ParamContainer is null || p.Element is null) return false;
+        if (!ParamContainer.Remove(p.Element)) return false;
+        _params.Remove(p);
+        _structurallyEdited = true;
+        return true;
+    }
 }
 
 /// <summary>One texture sampler slot whose path is an editable live BinTree string.</summary>
@@ -483,10 +533,15 @@ public sealed class MaterialParameter
     public string OriginalText { get; }
     public string TypeName { get; }
 
-    public MaterialParameter(string name, BinTreeProperty prop)
+    /// <summary>The underlying paramValues element (struct), for removal. Null for non-removable params.</summary>
+    internal BinTreeProperty? Element { get; }
+    public bool IsRemovable => Element is not null;
+
+    public MaterialParameter(string name, BinTreeProperty prop, BinTreeProperty? element = null)
     {
         Name = name;
         _prop = prop;
+        Element = element;
         OriginalText = BinValueEditor.Format(prop, _ => null);
         TypeName = prop.Type.ToString();
     }

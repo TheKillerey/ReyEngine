@@ -111,6 +111,8 @@ public sealed partial class MaterialParameterViewModel : ViewModelBase
     public string TypeName => Model.TypeName;
     public bool IsEditable => Model.IsEditable;
     public bool IsDirty => Model.IsDirty;
+    public bool IsRemovable => Model.IsRemovable;   // M55
+
     /// <summary>M50c: colour-ish params (TintColor, Color_Inside…) show a live swatch preview.</summary>
     public bool IsColorLike =>
         Name.Contains("Color", StringComparison.OrdinalIgnoreCase) || Name.Contains("Tint", StringComparison.OrdinalIgnoreCase);
@@ -282,6 +284,35 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         foreach (var s in Slots) s.RaiseDirty();
         foreach (var p in Parameters) p.RaiseDirty();
     }
+
+    // ---- M55: parameter add/remove ----
+    [ObservableProperty] private string _newParamName = "";
+
+    [RelayCommand]
+    private void AddParameter()
+    {
+        var name = NewParamName.Trim();
+        if (name.Length == 0) return;
+        var p = Model.AddParameter(name);
+        if (p is null) return;   // no prototype param to clone the schema from
+        Parameters.Add(new MaterialParameterViewModel(p, Owner!));
+        NewParamName = "";
+        OnPropertyChanged(nameof(HasParameters));
+        RaiseDirty();
+        Owner!.NotifyChanged();
+    }
+
+    [RelayCommand]
+    private void RemoveParameter(MaterialParameterViewModel? pvm)
+    {
+        if (pvm is null || !Model.RemoveParameter(pvm.Model)) return;
+        Parameters.Remove(pvm);
+        OnPropertyChanged(nameof(HasParameters));
+        RaiseDirty();
+        Owner!.NotifyChanged();
+    }
+
+    public bool CanEditParameters => Model.CanEditParameters;
 
     [RelayCommand]
     private async Task CopyName() => await Owner!.Copy(Name);
