@@ -116,6 +116,7 @@ public static class MapGeoDecoder
                 {
                     Index = meshIndex, Name = meshName, VertexStart = baseVertex, VertexCount = vc,
                     Transform = transform, VisibilityFlags = vis, ControllerHash = ctrl,
+                    RegionHash = mesh.UnknownVersion18Int,
                     Pivot = vc > 0 ? (meshMin + meshMax) * 0.5f : transform.Translation,
                     IndexCount = ia.Count,
                     BoundsMin = vc > 0 ? meshMin : transform.Translation,

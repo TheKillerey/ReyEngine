@@ -151,7 +151,8 @@ public sealed record MapBucketGridInfo(
     float MinX, float MinZ, float MaxX, float MaxZ,
     float BucketSizeX, float BucketSizeZ,
     int CellsX, int CellsZ,
-    bool IsDisabled, int VertexCount, int IndexCount);
+    bool IsDisabled, int VertexCount, int IndexCount,
+    uint RegionHash = 0);
 
 /// <summary>
 /// An index range in the combined buffer for one mesh-submesh: its material plus the source mesh's
@@ -174,6 +175,8 @@ public sealed class MapGeoMesh
     public required Vector3 Pivot { get; init; }         // local bbox center of the baked vertices — the rotate/scale origin
     public int VisibilityFlags { get; init; }
     public uint ControllerHash { get; init; }
+    /// <summary>Version 18 render-region hash (LeagueToolkit 4.1 names this UnknownVersion18Int).</summary>
+    public uint RegionHash { get; init; }
 
     // ---- M33 mesh metadata (for the inspector; captured from the EnvironmentAssetMesh at decode) ----
     public int IndexCount { get; init; }
