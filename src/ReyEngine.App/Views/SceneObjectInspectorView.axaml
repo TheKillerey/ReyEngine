@@ -160,9 +160,11 @@
     <!-- MOVE PARTICLE (selected placed particle) -->
     <Border Classes="card" IsVisible="{Binding SelectedParticleNode, Converter={x:Static ObjectConverters.IsNotNull}}">
       <StackPanel Spacing="3">
-        <Grid ColumnDefinitions="*,Auto">
+        <Grid ColumnDefinitions="*,Auto,Auto">
           <TextBlock Classes="cardTitle" Grid.Column="0" Text="PARTICLE" VerticalAlignment="Center" />
-          <ToggleButton Classes="vp" Grid.Column="1" Content="▶ Play VFX" IsChecked="{Binding PlayParticlePreview}" FontSize="10" Padding="6,1"
+          <Button Classes="tool" Grid.Column="1" Content="🎯 Focus" Command="{Binding FocusSelectedPlaceableCommand}"
+                  FontSize="10" Padding="6,1" Margin="0,0,4,0" ToolTip.Tip="Frame the camera on this particle" />
+          <ToggleButton Classes="vp" Grid.Column="2" Content="▶ Play VFX" IsChecked="{Binding PlayParticlePreview}" FontSize="10" Padding="6,1"
                         ToolTip.Tip="Simulate and play this particle system live in the viewport" />
         </Grid>
         <TextBlock Text="{Binding SelectedParticleNode.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
@@ -189,7 +191,11 @@
     <Border Classes="card"
             IsVisible="{Binding SelectedPlaceableInfo, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
       <StackPanel Spacing="3">
-        <TextBlock Classes="cardTitle" Text="PLACEABLE" />
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Classes="cardTitle" Grid.Column="0" Text="PLACEABLE" VerticalAlignment="Center" />
+          <Button Classes="tool" Grid.Column="1" Content="🎯 Focus" Command="{Binding FocusSelectedPlaceableCommand}"
+                  FontSize="10" Padding="6,1" ToolTip.Tip="Frame the camera on this object" />
+        </Grid>
         <TextBlock Text="{Binding SelectedPlaceableInfo}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}" TextWrapping="Wrap" />
       </StackPanel>
     </Border>

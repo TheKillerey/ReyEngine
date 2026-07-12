@@ -139,7 +139,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (value is { } p)
         {
             ShowParticles = true;
-            ParticleFocusPoint = p.CurrentPosition;
+            // M55b: selection no longer moves the camera — use the Focus button/command instead
             // M50b: exclusive selection — a particle selection deselects meshes/props/probes
             _selection.Clear();
             if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
@@ -189,6 +189,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     { MapContent.SetSounds(value ?? Array.Empty<MapSoundPlacement>()); UpdatePlaceableMarkers(); }
 
     partial void OnShowBucketGridChanged(bool value) => RebuildBucketGridLines();
+
+    /// <summary>M55b: explicitly frame the camera on the selected placeable (selection itself no longer
+    /// moves the camera — Unity-style: select is passive, Focus is an action).</summary>
+    [RelayCommand]
+    private void FocusSelectedPlaceable()
+    {
+        if (SelectedParticleMarker is { } pos) ParticleFocusPoint = pos;
+    }
 
     /// <summary>M55: grid overlay lines — world XZ lines per bucket grid, at just above the map's floor.
     /// World cell anchor is MinX/MinZ (LeagueToolkit's GetBucketBox is grid-local — verified).</summary>
@@ -342,8 +350,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedProbe = null;
         _selection.Clear();                       // M50b: exclusive selection
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
-        SelectedParticleMarker = p.Position;
-        ParticleFocusPoint = p.Position;
+        SelectedParticleMarker = p.Position;   // M55b: highlight only — camera stays (use Focus)
         SelectedPlaceableInfo = $"{p.Name}\n{p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
     }
     partial void OnSelectedProbeChanged(CubemapProbeViewModel? value)
@@ -352,8 +359,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedPropNode = null;
         _selection.Clear();                       // M50b: exclusive selection
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
-        SelectedParticleMarker = p.Position;
-        ParticleFocusPoint = p.Position;
+        SelectedParticleMarker = p.Position;   // M55b: highlight only — camera stays (use Focus)
         SelectedPlaceableInfo = $"{p.Name}\ncubemap: {p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
     }
 
@@ -1651,8 +1657,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
                 if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
                 if (SelectedProbe is not null) SelectedProbe = null;
-                SelectedParticleMarker = snd.Position;
-                ParticleFocusPoint = snd.Position;
+                SelectedParticleMarker = snd.Position;   // M55b: highlight only — camera stays
                 SelectedPlaceableInfo = $"{snd.Name}\nWwise event: {snd.EventName}\n({snd.Position.X:0}, {snd.Position.Y:0}, {snd.Position.Z:0})";
                 break;
             case BucketGridViewModel bg:  // M55
