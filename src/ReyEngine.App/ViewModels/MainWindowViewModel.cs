@@ -178,6 +178,43 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _probeMarkers;
     [ObservableProperty] private bool _showPlaceables = true;
     [ObservableProperty] private bool _playPropAnimations;   // M54: play prop idle animations in the viewport
+
+    // ---- M55: sound placements (MapAudio) + bucket-grid overlay ----
+    [ObservableProperty] private IReadOnlyList<MapSoundPlacement>? _currentModelSounds;
+    [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _soundMarkers;
+    [ObservableProperty] private bool _showBucketGrid;
+    [ObservableProperty] private float[]? _bucketGridLines;
+
+    partial void OnCurrentModelSoundsChanged(IReadOnlyList<MapSoundPlacement>? value)
+    { MapContent.SetSounds(value ?? Array.Empty<MapSoundPlacement>()); UpdatePlaceableMarkers(); }
+
+    partial void OnShowBucketGridChanged(bool value) => RebuildBucketGridLines();
+
+    /// <summary>M55: grid overlay lines — world XZ lines per bucket grid, at just above the map's floor.
+    /// World cell anchor is MinX/MinZ (LeagueToolkit's GetBucketBox is grid-local — verified).</summary>
+    private void RebuildBucketGridLines()
+    {
+        if (!ShowBucketGrid || _currentMap is not { } map || map.BucketGrids.Count == 0)
+        { BucketGridLines = null; return; }
+        float y = map.BoundsMin.Y + 25f;
+        var verts = new List<float>();
+        foreach (var g in map.BucketGrids)
+        {
+            for (int x = 0; x <= g.CellsX; x++)
+            {
+                float wx = g.MinX + x * g.BucketSizeX;
+                verts.Add(wx); verts.Add(y); verts.Add(g.MinZ);
+                verts.Add(wx); verts.Add(y); verts.Add(g.MaxZ);
+            }
+            for (int z = 0; z <= g.CellsZ; z++)
+            {
+                float wz = g.MinZ + z * g.BucketSizeZ;
+                verts.Add(g.MinX); verts.Add(y); verts.Add(wz);
+                verts.Add(g.MaxX); verts.Add(y); verts.Add(wz);
+            }
+        }
+        BucketGridLines = verts.ToArray();
+    }
     [ObservableProperty] private object? _selectedPropTreeItem;
     [ObservableProperty] private AnimatedPropViewModel? _selectedPropNode;
     [ObservableProperty] private CubemapProbeViewModel? _selectedProbe;
@@ -294,6 +331,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         PropMarkers = (ShowPlaceables && MapContent.HasProps) ? MapContent.AllProps.Select(p => p.Position).ToList() : null;
         ProbeMarkers = (ShowPlaceables && MapContent.HasProbes) ? MapContent.Probes.Select(p => p.Position).ToList() : null;
+        SoundMarkers = (ShowPlaceables && MapContent.HasSounds) ? MapContent.Sounds.Select(s => s.Position).ToList() : null;   // M55
     }
 
     partial void OnSelectedPropTreeItemChanged(object? value)
@@ -668,6 +706,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyList<MapParticlePlacement>? Particles,
         IReadOnlyDictionary<uint, VfxSystemDefinition> VfxSystems,
         IReadOnlyList<MapCubemapProbe>? Probes, IReadOnlyList<MapAnimatedProp>? Props,
+        IReadOnlyList<MapSoundPlacement>? Sounds,
         int DragonIndex, int BaronIndex, bool HasMoves, int[] SelectedMeshIndices,
         List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces);
 
@@ -819,6 +858,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _mapFlowMasks, _mapFlowGrads,
             CurrentLightmapScale, _currentSunProps,
             CurrentModelParticles, _vfxSystems, CurrentModelProbes, CurrentModelProps,
+            CurrentModelSounds,
             SelectedDragonIndex, SelectedBaronIndex, HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList());
@@ -841,6 +881,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _vfxSystems = s.VfxSystems;
         CurrentModelProbes = s.Probes;
         CurrentModelProps = s.Props;
+        CurrentModelSounds = s.Sounds;                 // M55
+        MapContent.SetBucketGrids(s.Map.BucketGrids);  // M55
+        RebuildBucketGridLines();
         SelectedParticleTreeItem = null;
         MapGeoInspector.Show(s.Map, s.Entry.Path);
         MapContent.SetLayerGroups(s.LayerGroups);
@@ -1373,6 +1416,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleMarkers = null;
         CurrentModelProbes = null;
         CurrentModelProps = null;
+        CurrentModelSounds = null;                                        // M55
+        BucketGridLines = null;
+        MapContent.SetBucketGrids(Array.Empty<MapBucketGridInfo>());
         CurrentPropMeshes = null;
         ShowPropMeshes = false;
         PropMarkers = null;
@@ -1600,6 +1646,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             case CubemapProbeViewModel pr:
                 SelectedProbe = pr;
                 break;
+            case MapSoundViewModel snd:   // M55
+                _selection.Clear();
+                if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
+                if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
+                if (SelectedProbe is not null) SelectedProbe = null;
+                SelectedParticleMarker = snd.Position;
+                ParticleFocusPoint = snd.Position;
+                SelectedPlaceableInfo = $"{snd.Name}\nWwise event: {snd.EventName}\n({snd.Position.X:0}, {snd.Position.Y:0}, {snd.Position.Z:0})";
+                break;
+            case BucketGridViewModel bg:  // M55
+                SelectedPlaceableInfo = $"{bg.Name}\n{bg.Info}";
+                ShowBucketGrid = true;    // selecting the grid shows the overlay
+                break;
         }
     }
 
@@ -1653,6 +1712,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var p in MapContent.AllProps) Test(p, p.Position);
         if (ShowPlaceables && MapContent.HasProbes && !additive)
             foreach (var p in MapContent.Probes) Test(p, p.Position);
+        if (ShowPlaceables && MapContent.HasSounds && !additive)
+            foreach (var s in MapContent.Sounds) Test(s, s.Position);   // M55
 
         // nearest placeable beats a farther mesh face (icons draw on top, so this matches what you see)
         if (bestNode is not null && bestT < meshT)
@@ -2389,6 +2450,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 ClearSecondaryTextures(); // maps don't use champion secondary samplers
                 PublishMapFlowWater();    // M44: re-apply flow-water textures wiped by ClearSecondaryTextures
                 MapGeoInspector.Show(map, entry.Path);
+                MapContent.SetBucketGrids(map.BucketGrids);   // M55: culling grid showcase
+                RebuildBucketGridLines();
                 MapContent.ShowMap(entry.DisplayName, map.Groups
                     .Select((g, i) => new MapPieceViewModel { Name = string.IsNullOrEmpty(g.Material) ? $"Mesh {i}" : g.Material, Info = $"{g.IndexCount / 3:n0} tris" })
                     .ToList());
@@ -2430,13 +2493,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (particles.Count > 0) _log.Info("MapGeo", $"{particles.Count:n0} placed particle system(s) ({particles.Select(p => p.SystemPath).Distinct().Count()} unique, {_vfxSystems.Count} definitions).");
 
             // M38: cubemap reflection probes + animated props (placed characters) from the same bin.
-            var (probes, props) = MapPlaceableExtractor.Extract(binBytes);
+            // M55: + MapAudio sound placements (Wwise events at world positions).
+            var (probes, props, sounds) = MapPlaceableExtractor.Extract(binBytes);
             CurrentModelProbes = probes.Count > 0 ? probes : null;
             CurrentModelProps = props.Count > 0 ? props : null;
-            if (probes.Count > 0 || props.Count > 0)
-                _log.Info("MapGeo", $"{probes.Count} cubemap probe(s), {props.Count} animated prop(s) ({props.Select(p => p.CharacterName).Distinct().Count()} characters).");
+            CurrentModelSounds = sounds.Count > 0 ? sounds : null;
+            if (probes.Count > 0 || props.Count > 0 || sounds.Count > 0)
+                _log.Info("MapGeo", $"{probes.Count} cubemap probe(s), {props.Count} animated prop(s) ({props.Select(p => p.CharacterName).Distinct().Count()} characters), {sounds.Count} sound placement(s).");
         }
-        catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; }
+        catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; CurrentModelSounds = null; }
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
         var (materialToTexture, profiles) = ResolveMapMaterials(binEntry, names);

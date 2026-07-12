@@ -272,6 +272,8 @@
                 SelectedParticlePosition="{Binding SelectedParticleMarker}"
                 PropMarkers="{Binding PropMarkers}"
                 ProbeMarkers="{Binding ProbeMarkers}"
+                SoundMarkers="{Binding SoundMarkers}"
+                BucketGridLines="{Binding BucketGridLines}"
                 PropMeshes="{Binding CurrentPropMeshes}"
                 ParticlePlayback="{Binding CurrentParticlePlayback}"
                 PlayPropAnimations="{Binding PlayPropAnimations}"

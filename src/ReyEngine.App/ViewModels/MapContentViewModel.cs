@@ -106,6 +106,27 @@ public sealed partial class RecentProjectViewModel : ObservableObject
 /// observable collections, so the folders never need rebuilding.</summary>
 public sealed record OutlinerFolderViewModel(string Icon, string Name, System.Collections.IEnumerable Items);
 
+/// <summary>M55: one placed ambient sound (MapAudio) — name + Wwise event + world position.</summary>
+public sealed class MapSoundViewModel
+{
+    public required MapSoundPlacement Sound { get; init; }
+    public string Name => Sound.Name;
+    public string EventName => Sound.EventName;
+    public System.Numerics.Vector3 Position => Sound.Position;
+}
+
+/// <summary>M55: one scene bucket grid (culling grid) of the loaded mapgeo.</summary>
+public sealed class BucketGridViewModel
+{
+    public required MapBucketGridInfo Grid { get; init; }
+    public string Name => Grid.ControllerHash == 0 ? "Bucket Grid (default)" : $"Bucket Grid 0x{Grid.ControllerHash:x8}";
+    public string Info =>
+        $"{Grid.CellsX} x {Grid.CellsZ} cells · cell {Grid.BucketSizeX:0.#} x {Grid.BucketSizeZ:0.#}\n" +
+        $"bounds X {Grid.MinX:0}..{Grid.MaxX:0} · Z {Grid.MinZ:0}..{Grid.MaxZ:0}\n" +
+        $"scene mesh: {Grid.VertexCount:n0} verts / {Grid.IndexCount / 3:n0} tris" +
+        (Grid.IsDisabled ? " · DISABLED" : "");
+}
+
 public sealed partial class MapContentViewModel : ViewModelBase
 {
     /// <summary>M51: one unified hierarchy (Meshes / Particles / Mobs / Probes as plain folders).</summary>
@@ -117,6 +138,27 @@ public sealed partial class MapContentViewModel : ViewModelBase
         OutlinerRoots.Add(new("✨", "Particles", ParticleGroups));
         OutlinerRoots.Add(new("🎭", "Mobs / Props", PropGroups));
         OutlinerRoots.Add(new("🪞", "Reflection Probes", Probes));
+        OutlinerRoots.Add(new("🔊", "Sounds", Sounds));           // M55: MapAudio placements
+        OutlinerRoots.Add(new("⌗", "Bucket Grid", BucketGrids)); // M55: scene culling grid(s)
+    }
+
+    // ---- M55: sound placements (MapAudio) + bucket grids ----
+    public ObservableCollection<MapSoundViewModel> Sounds { get; } = new();
+    public ObservableCollection<BucketGridViewModel> BucketGrids { get; } = new();
+    [ObservableProperty] private bool _hasSounds;
+
+    public void SetSounds(IReadOnlyList<MapSoundPlacement> sounds)
+    {
+        Sounds.Clear();
+        foreach (var s in sounds.OrderBy(s => s.Name, System.StringComparer.OrdinalIgnoreCase))
+            Sounds.Add(new MapSoundViewModel { Sound = s });
+        HasSounds = Sounds.Count > 0;
+    }
+
+    public void SetBucketGrids(IReadOnlyList<MapBucketGridInfo> grids)
+    {
+        BucketGrids.Clear();
+        foreach (var g in grids) BucketGrids.Add(new BucketGridViewModel { Grid = g });
     }
 
     public ObservableCollection<AssetNodeViewModel> Maps { get; } = new();

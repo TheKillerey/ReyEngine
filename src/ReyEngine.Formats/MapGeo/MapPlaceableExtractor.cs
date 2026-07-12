@@ -17,6 +17,11 @@ public sealed record MapCubemapProbe(string Name, Vector3 Position, Matrix4x4 Tr
 
 /// <summary>A placed character/animated prop (M38): a creature or prop with a character record + skin
 /// (Baron, jungle camps, etc.) positioned on the map.</summary>
+/// <summary>M55: a placed ambient sound (MapAudio, class 0xa783cfd5) — a Wwise event at a world position.
+/// Map12-style maps place these directly (58 on Bloom); Map11 instead drives ambience via audio-emitter
+/// VFX MapParticles + a painted-region tag registry (so it may have none).</summary>
+public sealed record MapSoundPlacement(string Name, string EventName, Vector3 Position, Matrix4x4 Transform);
+
 public sealed record MapAnimatedProp(string Name, Vector3 Position, Matrix4x4 Transform, string CharacterRecord, string Skin)
 {
     /// <summary>Short character identity, e.g. "SRU_Baron" from "Characters/SRU_Baron/CharacterRecords/Root".</summary>
@@ -46,19 +51,22 @@ public static class MapPlaceableExtractor
 {
     private static readonly uint ContainerClass = HashAlgorithms.Fnv1a("MapPlaceableContainer");
     private static readonly uint CubemapProbeClass = HashAlgorithms.Fnv1a("MapCubemapProbe");
+    private static readonly uint MapAudioClass = HashAlgorithms.Fnv1a("MapAudio");   // 0xa783cfd5
+    private static readonly uint F_eventName = HashAlgorithms.Fnv1a("eventName");    // 0x2a078c9c (Wwise event)
     private static readonly uint F_transform = HashAlgorithms.Fnv1a("transform");
     private static readonly uint F_name = HashAlgorithms.Fnv1a("name");
     private static readonly uint F_characterRecord = HashAlgorithms.Fnv1a("characterRecord");
     private static readonly uint F_skin = HashAlgorithms.Fnv1a("skin");
     private static readonly uint F_cubemapTexture = 0xfe380acfu;   // texture path string on MapCubemapProbe
 
-    public static (IReadOnlyList<MapCubemapProbe> Probes, IReadOnlyList<MapAnimatedProp> Props) Extract(byte[] materialsBin)
+    public static (IReadOnlyList<MapCubemapProbe> Probes, IReadOnlyList<MapAnimatedProp> Props, IReadOnlyList<MapSoundPlacement> Sounds) Extract(byte[] materialsBin)
     {
         var probes = new List<MapCubemapProbe>();
         var props = new List<MapAnimatedProp>();
+        var sounds = new List<MapSoundPlacement>();
         BinTree bin;
         try { bin = SafeBinTree.Parse(materialsBin); }
-        catch { return (probes, props); }
+        catch { return (probes, props, sounds); }
 
         foreach (var o in bin.Objects.Values)
         {
@@ -68,6 +76,7 @@ public static class MapPlaceableExtractor
             foreach (var it in en)
             {
                 if (it.GetType().GetProperty("Value")?.GetValue(it) is not BinTreeStruct s) continue;
+                if (s.ClassHash == 0) continue;   // null map entries (thousands per bin) — skip
                 var transform = s.Properties.TryGetValue(F_transform, out var tp) && tp is BinTreeMatrix44 m ? m.Value : Matrix4x4.Identity;
 
                 if (s.ClassHash == CubemapProbeClass)
@@ -76,13 +85,20 @@ public static class MapPlaceableExtractor
                         NameOf(s), transform.Translation, transform,
                         (Get(s, F_cubemapTexture) as BinTreeString)?.Value));
                 }
+                else if (s.ClassHash == MapAudioClass)
+                {
+                    sounds.Add(new MapSoundPlacement(
+                        NameOf(s),
+                        (Get(s, F_eventName) as BinTreeString)?.Value ?? "",
+                        transform.Translation, transform));
+                }
                 else if (FindCharacterData(s) is ({ } cr, var skin))
                 {
                     props.Add(new MapAnimatedProp(NameOf(s), transform.Translation, transform, cr, skin ?? ""));
                 }
             }
         }
-        return (probes, props);
+        return (probes, props, sounds);
     }
 
     /// <summary>Placed characters wrap their character record + skin in an embedded "character data" struct.

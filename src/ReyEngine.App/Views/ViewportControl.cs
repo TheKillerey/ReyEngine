@@ -41,6 +41,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(PropMarkers));
     public static readonly StyledProperty<IReadOnlyList<Vector3>?> ProbeMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ProbeMarkers));
+    public static readonly StyledProperty<IReadOnlyList<Vector3>?> SoundMarkersProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(SoundMarkers));      // M55
+    public static readonly StyledProperty<float[]?> BucketGridLinesProperty =
+        AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(BucketGridLines));                  // M55
     public static readonly StyledProperty<PropRenderSet?> PropMeshesProperty =
         AvaloniaProperty.Register<ViewportControl, PropRenderSet?>(nameof(PropMeshes));
     public static readonly StyledProperty<VfxPlayback?> ParticlePlaybackProperty =
@@ -133,6 +137,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public IReadOnlyList<Vector3>? PropMarkers { get => GetValue(PropMarkersProperty); set => SetValue(PropMarkersProperty, value); }
     /// <summary>World positions of cubemap-probe markers (M38); green.</summary>
     public IReadOnlyList<Vector3>? ProbeMarkers { get => GetValue(ProbeMarkersProperty); set => SetValue(ProbeMarkersProperty, value); }
+    public IReadOnlyList<Vector3>? SoundMarkers { get => GetValue(SoundMarkersProperty); set => SetValue(SoundMarkersProperty, value); }
+    public float[]? BucketGridLines { get => GetValue(BucketGridLinesProperty); set => SetValue(BucketGridLinesProperty, value); }
     /// <summary>Decoded placed prop meshes to render at their transforms (M41); null clears them.</summary>
     public PropRenderSet? PropMeshes { get => GetValue(PropMeshesProperty); set => SetValue(PropMeshesProperty, value); }
     /// <summary>Set to a world point to recentre the camera on it (M35 focus); cleared after applying.</summary>
@@ -442,6 +448,8 @@ public sealed class ViewportControl : OpenGlControlBase
             _meshRenderer.SetParticleMarkers(pts, SelectedParticlePosition, _markerSize);
             _meshRenderer.SetPropMarkers(PropMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize);
             _meshRenderer.SetProbeMarkers(ProbeMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.4f);
+            _meshRenderer.SetSoundMarkers(SoundMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.2f);
+            _meshRenderer.SetBucketGridLines(BucketGridLines);
             _particlesDirty = false;
         }
         if (_particlePlaybackDirty) { RebuildParticleSim(); _particlePlaybackDirty = false; }
@@ -724,7 +732,8 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == CullBackfacesProperty)
         { _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticleMarkersProperty || change.Property == SelectedParticlePositionProperty
-                 || change.Property == PropMarkersProperty || change.Property == ProbeMarkersProperty)
+                 || change.Property == PropMarkersProperty || change.Property == ProbeMarkersProperty
+                 || change.Property == SoundMarkersProperty || change.Property == BucketGridLinesProperty)
         { _particlesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticlePlaybackProperty)
         { _particlePlaybackDirty = true; RequestNextFrameRendering(); }

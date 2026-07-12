@@ -453,6 +453,10 @@ void main() { FragColor = uColor; }";
         _propVbo = gl.GenBuffer();
         _probeVao = gl.GenVertexArray();
         _probeVbo = gl.GenBuffer();
+        _soundVao = gl.GenVertexArray();   // M55: sound placements
+        _soundVbo = gl.GenBuffer();
+        _bucketVao = gl.GenVertexArray();  // M55: bucket-grid overlay lines
+        _bucketVbo = gl.GenBuffer();
 
         // M53: Unity-style placement ICONS — instanced camera-facing billboards (sparkle/person/ring
         // sprites, tinted per type) instead of "+" line crosses.
@@ -472,17 +476,21 @@ void main() { FragColor = uColor; }";
         ConfigureMarkerVao(_particleSelVao, _particleSelVbo);
         ConfigureMarkerVao(_propVao, _propVbo);
         ConfigureMarkerVao(_probeVao, _probeVbo);
+        ConfigureMarkerVao(_soundVao, _soundVbo);
         _icoSparkle = UploadIcon(IconSparkle(48));
         _icoPerson = UploadIcon(IconPerson(48));
         _icoRing = UploadIcon(IconRing(48));
+        _icoSpeaker = UploadIcon(IconSpeaker(48));
 
         _ready = true;
     }
 
     // ---- M53 placement icons ----
-    private uint _markerProgram, _markerQuadVbo, _icoSparkle, _icoPerson, _icoRing;
+    private uint _markerProgram, _markerQuadVbo, _icoSparkle, _icoPerson, _icoRing, _icoSpeaker;
+    private uint _soundVao, _soundVbo, _bucketVao, _bucketVbo;   // M55: sounds + bucket-grid overlay
+    private int _soundVerts, _bucketVerts;
     private int _mkViewProj, _mkCamRight, _mkCamUp, _mkSize, _mkColor, _mkTex;
-    private float _particleMarkerSize = 20f, _propMarkerSize = 20f, _probeMarkerSize = 20f, _particleSelSize = 20f;
+    private float _particleMarkerSize = 20f, _propMarkerSize = 20f, _probeMarkerSize = 20f, _particleSelSize = 20f, _soundMarkerSize = 20f;
 
     private unsafe void ConfigureMarkerVao(uint vao, uint instVbo)
     {
@@ -551,6 +559,37 @@ void main() { FragColor = uColor; }";
             int o = (y * n + x) * 4;
             px[o] = px[o + 1] = px[o + 2] = 255;
             px[o + 3] = (byte)(a * 255f);
+        }
+        return (px, n);
+    }
+
+    /// <summary>Speaker with sound waves (M55 sound placements).</summary>
+    private static (byte[], int) IconSpeaker(int n)
+    {
+        var px = new byte[n * n * 4];
+        float c = (n - 1) / 2f;
+        for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;
+            float a = 0f;
+            // speaker body (small box) + cone (widening triangle)
+            if (u >= -0.62f && u <= -0.30f && MathF.Abs(v) <= 0.20f) a = 1f;
+            else if (u > -0.30f && u <= 0.05f)
+            {
+                float half = 0.20f + (u + 0.30f) * 0.9f;
+                if (MathF.Abs(v) <= half) a = 1f;
+            }
+            // two sound-wave arcs to the right
+            float r = MathF.Sqrt((u - 0.02f) * (u - 0.02f) + v * v);
+            if (u > 0.1f && MathF.Abs(v) < r * 0.85f)
+            {
+                a = MathF.Max(a, MathF.Max(0f, 1f - MathF.Abs(r - 0.42f) * 16f));
+                a = MathF.Max(a, MathF.Max(0f, 1f - MathF.Abs(r - 0.68f) * 16f));
+            }
+            int o = (y * n + x) * 4;
+            px[o] = px[o + 1] = px[o + 2] = 255;
+            px[o + 3] = (byte)(Math.Clamp(a, 0f, 1f) * 255f);
         }
         return (px, n);
     }
@@ -1026,6 +1065,18 @@ void main(){
     public void SetProbeMarkers(IReadOnlyList<Vector3> positions, float size)
     { _probeMarkerSize = size * 1.6f; SetIconMarkers(_probeVbo, positions, out _probeVerts); }
 
+    /// <summary>M55: sound placements — a speaker icon at each MapAudio position.</summary>
+    public void SetSoundMarkers(IReadOnlyList<Vector3> positions, float size)
+    { _soundMarkerSize = size * 1.6f; SetIconMarkers(_soundVbo, positions, out _soundVerts); }
+
+    /// <summary>M55: bucket-grid overlay — world-space line list (pairs of xyz endpoints); null/empty clears.</summary>
+    public void SetBucketGridLines(float[]? lineVerts)
+    {
+        if (!_ready) return;
+        if (lineVerts is null || lineVerts.Length == 0) { _bucketVerts = 0; return; }
+        UploadLines(_bucketVao, _bucketVbo, lineVerts, out _bucketVerts);
+    }
+
     /// <summary>Upload marker instance centers (xyz per marker) for the icon billboards (M53).</summary>
     private unsafe void SetIconMarkers(uint instVbo, IReadOnlyList<Vector3> positions, out int count)
     {
@@ -1055,6 +1106,8 @@ void main(){
         _particleSelVerts = 0;
         _propVerts = 0;
         _probeVerts = 0;
+        _soundVerts = 0;
+        _bucketVerts = 0;
         _hasGizmo = false;
     }
 
@@ -1335,9 +1388,21 @@ void main(){
             _gl.BindVertexArray(0);
         }
 
+        // M55: bucket-grid overlay (depth-tested violet lines on the ground plane)
+        if (_bucketVerts > 0)
+        {
+            _gl.UseProgram(_lineProgram);
+            _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+            _gl.Uniform4(_lColor, 0.62f, 0.45f, 0.95f, 1f);
+            _gl.BindVertexArray(_bucketVao);
+            _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_bucketVerts);
+            _gl.BindVertexArray(0);
+        }
+
         // M53: placement ICONS (Unity-style camera-facing sprites), always on top: particles = cyan
-        // sparkle, mobs/props = orange person, probes = green ring; selected = larger bright yellow.
-        if (_particleVerts > 0 || _particleSelVerts > 0 || _propVerts > 0 || _probeVerts > 0)
+        // sparkle, mobs/props = orange person, probes = green ring, sounds = violet speaker;
+        // selected = larger bright yellow.
+        if (_particleVerts > 0 || _particleSelVerts > 0 || _propVerts > 0 || _probeVerts > 0 || _soundVerts > 0)
         {
             Matrix4x4.Invert(view, out var invView);
             var camRight = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitX, invView));
@@ -1356,6 +1421,7 @@ void main(){
             DrawIconSet(_particleVao, _particleVerts, _icoSparkle, _particleMarkerSize, 0.30f, 0.89f, 0.95f, 0.85f);
             DrawIconSet(_propVao, _propVerts, _icoPerson, _propMarkerSize, 1.00f, 0.58f, 0.18f, 0.9f);
             DrawIconSet(_probeVao, _probeVerts, _icoRing, _probeMarkerSize, 0.32f, 0.93f, 0.47f, 0.9f);
+            DrawIconSet(_soundVao, _soundVerts, _icoSpeaker, _soundMarkerSize, 0.78f, 0.55f, 1.0f, 0.9f);
             DrawIconSet(_particleSelVao, _particleSelVerts, _icoSparkle, _particleSelSize, 1.0f, 0.92f, 0.25f, 1f);
 
             _gl.Disable(EnableCap.Blend);

@@ -42,6 +42,8 @@
       <ToggleButton Classes="vp" Content="▶ Anim" IsChecked="{Binding PlayPropAnimations}" FontSize="9" Padding="6,1"
                     IsEnabled="{Binding ShowPropMeshes}"
                     ToolTip.Tip="Play each prop's idle animation (Baron breathing, camps shuffling…). Needs Props enabled." />
+      <ToggleButton Classes="vp" Content="⌗ Grid" IsChecked="{Binding ShowBucketGrid}" FontSize="9" Padding="6,1"
+                    ToolTip.Tip="Show the mapgeo's scene bucket grid (League's culling grid) as a ground overlay" />
     </StackPanel>
 
     <!-- the hierarchy -->
@@ -108,6 +110,22 @@
         <DataTemplate DataType="vm:CubemapProbeViewModel">
           <StackPanel Orientation="Horizontal" Spacing="5">
             <TextBlock Text="🪞" FontSize="9" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:MapSoundViewModel">
+          <StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding EventName}">
+            <TextBlock Text="🔊" FontSize="9" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:BucketGridViewModel">
+          <StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding Info}">
+            <TextBlock Text="⌗" FontSize="9" Foreground="#9E73F2" VerticalAlignment="Center" />
             <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
                        TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
           </StackPanel>

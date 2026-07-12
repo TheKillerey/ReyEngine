@@ -139,7 +139,19 @@ public sealed class MapGeoAsset
     public float Radius => MathF.Max(Size.Length() * 0.5f, 1f);
 
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+
+    /// <summary>M55: the mapgeo's scene bucket grid(s) — League's culling grid, one per visibility controller.</summary>
+    public IReadOnlyList<MapBucketGridInfo> BucketGrids { get; init; } = Array.Empty<MapBucketGridInfo>();
 }
+
+/// <summary>M55: summary of one scene bucket grid. World cell box anchors at MinX/MinZ:
+/// x-cell spans MinX + x*BucketSizeX .. MinX + (x+1)*BucketSizeX (LeagueToolkit's GetBucketBox is grid-local).</summary>
+public sealed record MapBucketGridInfo(
+    uint ControllerHash,
+    float MinX, float MinZ, float MaxX, float MaxZ,
+    float BucketSizeX, float BucketSizeZ,
+    int CellsX, int CellsZ,
+    bool IsDisabled, int VertexCount, int IndexCount);
 
 /// <summary>
 /// An index range in the combined buffer for one mesh-submesh: its material plus the source mesh's

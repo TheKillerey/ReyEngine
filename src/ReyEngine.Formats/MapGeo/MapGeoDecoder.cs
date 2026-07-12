@@ -158,8 +158,26 @@ public static class MapGeoDecoder
 
         if (positions.Count == 0) { min = Vector3.Zero; max = Vector3.Zero; }
 
+        // M55: capture the scene bucket grid(s) — the culling grid League uses; one per visibility
+        // controller. Kept as summary info + bounds for the outliner showcase + viewport overlay.
+        var bucketGrids = new List<MapBucketGridInfo>();
+        foreach (var sg in env.SceneGraphs)
+        {
+            try
+            {
+                bucketGrids.Add(new MapBucketGridInfo(
+                    sg.VisibilityControllerPathHash,
+                    sg.MinX, sg.MinZ, sg.MaxX, sg.MaxZ,
+                    sg.BucketSizeX, sg.BucketSizeZ,
+                    sg.Buckets.Width, sg.Buckets.Height,
+                    sg.IsDisabled, sg.Vertices.Count, sg.Indices.Count));
+            }
+            catch { /* malformed grid: skip */ }
+        }
+
         return new MapGeoAsset
         {
+            BucketGrids = bucketGrids,
             Positions = positions.ToArray(),
             Normals = normals.ToArray(),
             Uvs = uvs.ToArray(),
