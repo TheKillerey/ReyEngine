@@ -99,7 +99,7 @@ public static class MapGeoWriter
         using var verifyStream = new MemoryStream(result, writable: false);
         using var verifiedEnvironment = new EnvironmentAsset(verifyStream);
         MapGeoSceneGraphSection verifiedSection = MapGeoSceneGraphSection.Locate(result, verifiedEnvironment, version);
-        ValidateWrittenGrids(grids, verifiedSection);
+        ValidateWrittenGrids(grids, verifiedSection, verifiedEnvironment);
         return result;
     }
 
@@ -232,14 +232,16 @@ public static class MapGeoWriter
 
     private static void ValidateWrittenGrids(
         IReadOnlyList<MapBucketGridData> expected,
-        MapGeoSceneGraphSection actual)
+        MapGeoSceneGraphSection actual,
+        EnvironmentAsset parsed)
     {
-        if (actual.Grids.Count != expected.Count)
+        if (actual.Grids.Count != expected.Count || parsed.SceneGraphs.Count != expected.Count)
             throw new InvalidDataException("Written bucket-grid count does not match the generated grid count.");
         for (int i = 0; i < expected.Count; i++)
         {
             MapBucketGridData grid = expected[i];
             MapGeoSceneGraphSection.RawGridHeader raw = actual.Grids[i];
+            var reopened = parsed.SceneGraphs[i];
             if (raw.ControllerHash != grid.Key.ControllerHash
                 || raw.RegionHash != grid.Key.RegionHash
                 || raw.BucketsPerSide != grid.BucketsPerSide
@@ -248,6 +250,11 @@ public static class MapGeoWriter
                 || raw.Flags != 1
                 || raw.IsDisabled)
                 throw new InvalidDataException($"Written bucket grid {i} failed byte-level header validation.");
+            if (reopened.FaceVisibilityFlags.Count != grid.FaceVisibilityFlags.Count)
+                throw new InvalidDataException($"Written bucket grid {i} has an invalid face-visibility count.");
+            for (int face = 0; face < grid.FaceVisibilityFlags.Count; face++)
+                if ((byte)reopened.FaceVisibilityFlags[face] != grid.FaceVisibilityFlags[face])
+                    throw new InvalidDataException($"Written bucket grid {i} face {face} has the wrong visibility byte.");
         }
     }
 
