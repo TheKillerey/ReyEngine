@@ -221,9 +221,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             try
             {
                 if (p.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase))
-                { if (Formats.Audio.BnkFile.Parse(ReadAsset(e.PathHash)) is { } b) { set.AddBank(b); banks++; } }
+                { if (Formats.Audio.BnkFile.Parse(ReadAsset(e.PathHash)) is { } b) { set.AddBank(b, e.PathHash, e.Path); banks++; } }
                 else if (p.EndsWith(".wpk", StringComparison.OrdinalIgnoreCase))
-                { if (Formats.Audio.WpkFile.Parse(ReadAsset(e.PathHash)) is { } w) { set.AddPack(w); packs++; } }
+                { if (Formats.Audio.WpkFile.Parse(ReadAsset(e.PathHash)) is { } w) { set.AddPack(w, e.PathHash, e.Path); packs++; } }
             }
             catch { /* skip broken/subchunked banks */ }
         }
@@ -254,6 +254,60 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     [RelayCommand]
     private void StopAllSounds() { Sound.StopAll(); AudioStatus = ""; }
+
+    /// <summary>M57: replace the wem behind the selected sound's event with an imported .wem file, rebuild
+    /// the owning bank/pack, validate it re-parses + decodes, and save it to the project override.</summary>
+    [RelayCommand]
+    private async Task ReplaceSelectedSoundWem()
+    {
+        if (SelectedSound is not { } snd || _mapAudioBanks is null) return;
+        var wems = _mapAudioBanks.ResolveEvent(snd.EventName);
+        var targetId = wems.FirstOrDefault(id => _mapAudioBanks.SourceOf(id) is not null);
+        if (targetId == 0) { AudioStatus = "This event has no editable embedded wem in the loaded banks."; return; }
+        if (_mapAudioBanks.SourceOf(targetId) is not { } src) return;
+        if (!TryResolveEntry(src.PathHash, out var bankEntry)) { AudioStatus = "Bank asset not resolvable for override."; return; }
+        if (!GuardEditable(bankEntry)) return;
+
+        var file = await Dialogs.OpenFileAsync($"Replace wem {targetId} (.wem)",
+            new Avalonia.Platform.Storage.FilePickerFileType("Wwise wem") { Patterns = new[] { "*.wem" } }, DialogService.All);
+        if (file is null) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            var newData = await File.ReadAllBytesAsync(file);
+            // sanity: League wems are RIFF/WAVE
+            if (newData.Length < 12 || newData[0] != (byte)'R' || newData[1] != (byte)'I' || newData[2] != (byte)'F' || newData[3] != (byte)'F')
+            { AudioStatus = "Not a RIFF/WAVE .wem file. Convert to .wem first (e.g. via a Wwise tool)."; return; }
+
+            var rebuilt = _mapAudioBanks.ReplaceWem(targetId, newData);
+            if (rebuilt is not { } rb) { AudioStatus = "Rebuild failed (wem not embedded here)."; return; }
+
+            // validate: the rebuilt bank/pack must re-parse and the new wem must decode
+            bool reparse = src.Bnk is not null
+                ? Formats.Audio.BnkFile.Parse(rb.Bytes)?.GetWemData(targetId) is not null
+                : Formats.Audio.WpkFile.Parse(rb.Bytes)?.GetWemData(targetId) is not null;
+            if (!reparse) { AudioStatus = "Rebuilt bank failed to re-parse — NOT saved."; return; }
+            if (Sound.DecodeToWav(targetId, newData) is null)
+                _log.Warn("Audio", "Imported wem didn't decode with vgmstream — saving anyway (it may still be valid in-game).");
+
+            var dest = ProjectWorkspace.StoreOverrideBytes(Project, bankEntry.PathHash, rb.Bytes, Path.GetExtension(rb.Path));
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = bankEntry.PathHash,
+                ResolvedPath = bankEntry.IsResolved ? bankEntry.Path : null,
+                OverrideFile = dest,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            SetNodeStatus(bankEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            UpdateTitle();
+            Sound.ClearCache(targetId);   // so Play uses the new audio
+            AudioStatus = $"Replaced wem {targetId} in {Path.GetFileName(rb.Path)} ({rb.Bytes.Length:n0} B). Build Package will include it.";
+            _log.Success("Audio", $"Replaced wem {targetId} for '{snd.EventName}' in {Path.GetFileName(rb.Path)} → override.");
+        }
+        catch (Exception ex) { _log.Error("Audio", ex.Message); AudioStatus = ex.Message; }
+    }
 
     partial void OnAmbienceEnabledChanged(bool value)
     {

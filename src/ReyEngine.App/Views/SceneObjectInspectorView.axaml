@@ -203,6 +203,9 @@
                   ToolTip.Tip="Resolve the Wwise event through the map's banks, decode the wem (vgmstream) and play it" />
           <Button Classes="tool" Content="⏹ Stop All" Command="{Binding StopAllSoundsCommand}" FontSize="11" Padding="8,2" />
         </StackPanel>
+        <Button Classes="tool" Content="🔁 Replace wem…" Command="{Binding ReplaceSelectedSoundWemCommand}"
+                FontSize="11" Padding="8,2" HorizontalAlignment="Left"
+                ToolTip.Tip="Import a .wem to replace this sound's audio; rebuilds the bank and saves it to the project override (Build Package ships it)" />
         <TextBlock Text="{Binding AudioStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap"
                    IsVisible="{Binding AudioStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
       </StackPanel>

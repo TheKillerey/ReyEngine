@@ -52,6 +52,75 @@ public sealed class BnkFile
         catch { return null; }   // malformed/unknown-version bank: never throw
     }
 
+    /// <summary>M57: rewrite this bank with some embedded wems replaced (id → new .wem bytes). Every section
+    /// except DIDX/DATA is copied verbatim; DIDX offsets/sizes + DATA are regenerated (contiguous, matching
+    /// the layout LtMAO produces — proven in-game). Returns null when the bank has no embedded wems.</summary>
+    public byte[]? Rebuild(IReadOnlyDictionary<uint, byte[]> replacements)
+    {
+        if (!HasEmbeddedWems) return null;
+
+        // ordered wem list (preserve DIDX order); pull current bytes, apply replacements
+        var order = new List<uint>();
+        var bytesById = new Dictionary<uint, byte[]>();
+        using (var ms = new MemoryStream(_raw, writable: false))
+        using (var r = new BinaryReader(ms))
+        {
+            while (ms.Position + 8 <= ms.Length)
+            {
+                string sig = Encoding.ASCII.GetString(r.ReadBytes(4));
+                uint size = r.ReadUInt32();
+                long end = ms.Position + size;
+                if (sig == "DIDX")
+                    for (uint i = 0; i < size / 12; i++)
+                    { uint id = r.ReadUInt32(); r.ReadInt32(); r.ReadInt32(); order.Add(id); }
+                ms.Position = end;
+            }
+        }
+        foreach (var id in order)
+            bytesById[id] = replacements.TryGetValue(id, out var rep) ? rep : (GetWemData(id) ?? System.Array.Empty<byte>());
+
+        using var outMs = new MemoryStream();
+        using var w = new BinaryWriter(outMs);
+        // re-walk and copy sections, swapping DIDX + DATA
+        using (var ms = new MemoryStream(_raw, writable: false))
+        using (var r = new BinaryReader(ms))
+        {
+            while (ms.Position + 8 <= ms.Length)
+            {
+                long secStart = ms.Position;
+                string sig = Encoding.ASCII.GetString(r.ReadBytes(4));
+                uint size = r.ReadUInt32();
+                long end = ms.Position + size;
+                if (sig == "DIDX")
+                {
+                    w.Write(Encoding.ASCII.GetBytes("DIDX"));
+                    w.Write((uint)(order.Count * 12));
+                    int off = 0;
+                    foreach (var id in order)
+                    {
+                        int len = bytesById[id].Length;
+                        w.Write(id); w.Write(off); w.Write(len);
+                        off += len;
+                    }
+                }
+                else if (sig == "DATA")
+                {
+                    int totalLen = order.Sum(id => bytesById[id].Length);
+                    w.Write(Encoding.ASCII.GetBytes("DATA"));
+                    w.Write((uint)totalLen);
+                    foreach (var id in order) w.Write(bytesById[id]);
+                }
+                else
+                {
+                    ms.Position = secStart;
+                    w.Write(r.ReadBytes((int)(end - secStart)));
+                }
+                ms.Position = end;
+            }
+        }
+        return outMs.ToArray();
+    }
+
     private static BnkFile? ParseInner(byte[] data)
     {
         var bnk = new BnkFile { _raw = data };

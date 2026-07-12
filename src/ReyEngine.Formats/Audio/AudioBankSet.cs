@@ -5,23 +5,44 @@ namespace ReyEngine.Formats.Audio;
 /// wem sources (audio .bnk DIDX/DATA and/or .wpk packs). Resolves an event NAME to playable wem bytes:
 /// FNV-1(name) → Event → Action(s) → Sound / RanSeqContainer / SwitchContainer (recursive) → wem ids.
 /// </summary>
+/// <summary>M57: a wem source keyed by its wad origin so an edit can be rebuilt + saved to the exact
+/// file. Exactly one of Bnk/Wpk is set.</summary>
+public sealed record AudioSource(ulong PathHash, string Path, BnkFile? Bnk, WpkFile? Wpk)
+{
+    public bool Owns(uint wemId) => Bnk?.Wems.ContainsKey(wemId) ?? Wpk!.Wems.ContainsKey(wemId);
+}
+
 public sealed class AudioBankSet
 {
     private readonly List<BnkFile> _hircBanks = new();
-    private readonly List<BnkFile> _embeddedSources = new();
-    private readonly List<WpkFile> _wpkSources = new();
+    private readonly List<AudioSource> _sources = new();   // embedded bnk + wpk media sources
 
     public int EventCount => _hircBanks.Sum(b => b.Events.Count);
-    public int WemCount => _embeddedSources.Sum(b => b.Wems.Count) + _wpkSources.Sum(w => w.Wems.Count);
+    public int WemCount => _sources.Sum(s => s.Bnk?.Wems.Count ?? s.Wpk!.Wems.Count);
     public bool IsEmpty => _hircBanks.Count == 0 && WemCount == 0;
 
-    public void AddBank(BnkFile bnk)
+    public void AddBank(BnkFile bnk, ulong pathHash = 0, string path = "")
     {
         if (bnk.HasHirc) _hircBanks.Add(bnk);
-        if (bnk.HasEmbeddedWems) _embeddedSources.Add(bnk);
+        if (bnk.HasEmbeddedWems) _sources.Add(new AudioSource(pathHash, path, bnk, null));
     }
 
-    public void AddPack(WpkFile wpk) => _wpkSources.Add(wpk);
+    public void AddPack(WpkFile wpk, ulong pathHash = 0, string path = "")
+        => _sources.Add(new AudioSource(pathHash, path, null, wpk));
+
+    /// <summary>Find the source file that holds this wem (for a rebuild-and-save).</summary>
+    public AudioSource? SourceOf(uint wemId) => _sources.FirstOrDefault(s => s.Owns(wemId));
+
+    /// <summary>M57: rebuild the file owning <paramref name="wemId"/> with the wem replaced. Returns the
+    /// origin path hash + new bank/pack bytes to store as an override; null when the wem isn't owned here.</summary>
+    public (ulong PathHash, string Path, byte[] Bytes)? ReplaceWem(uint wemId, byte[] newData)
+    {
+        var src = SourceOf(wemId);
+        if (src is null) return null;
+        var map = new Dictionary<uint, byte[]> { [wemId] = newData };
+        byte[]? bytes = src.Bnk is { } b ? b.Rebuild(map) : src.Wpk!.Rebuild(map);
+        return bytes is null ? null : (src.PathHash, src.Path, bytes);
+    }
 
     /// <summary>All wem ids an event resolves to (empty when the event isn't in the loaded banks).</summary>
     public IReadOnlyList<uint> ResolveEvent(string eventName) => ResolveEvent(WwiseHash.Fnv1(eventName));
@@ -53,10 +74,11 @@ public sealed class AudioBankSet
     /// <summary>Raw wem bytes from any loaded source (embedded bnk DATA first, then wpk packs).</summary>
     public byte[]? GetWemData(uint wemId)
     {
-        foreach (var b in _embeddedSources)
-            if (b.GetWemData(wemId) is { } d) return d;
-        foreach (var w in _wpkSources)
-            if (w.GetWemData(wemId) is { } d) return d;
+        foreach (var s in _sources)
+        {
+            var d = s.Bnk?.GetWemData(wemId) ?? s.Wpk!.GetWemData(wemId);
+            if (d is not null) return d;
+        }
         return null;
     }
 

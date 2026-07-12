@@ -20,6 +20,52 @@ public sealed class WpkFile
         return data;
     }
 
+    /// <summary>Order of wem ids as they appear in the pack (preserved for rebuild).</summary>
+    private readonly List<uint> _order = new();
+
+    /// <summary>M57: rewrite the pack with some wems replaced (id → new .wem bytes). Layout matches
+    /// LtMAO's wpk.write: r3d2 / version 1 / offset table / entries {u32 dataOffset, u32 size, u32 nameLen,
+    /// UTF-16 "id.wem"} / concatenated data.</summary>
+    public byte[] Rebuild(IReadOnlyDictionary<uint, byte[]> replacements)
+    {
+        var data = new Dictionary<uint, byte[]>();
+        foreach (var id in _order)
+            data[id] = replacements.TryGetValue(id, out var rep) ? rep : (GetWemData(id) ?? System.Array.Empty<byte>());
+
+        using var ms = new MemoryStream();
+        using var w = new BinaryWriter(ms);
+        w.Write(Encoding.ASCII.GetBytes("r3d2"));
+        w.Write(1u);                            // version
+        w.Write((uint)_order.Count);
+        long offsetTablePos = ms.Position;
+        foreach (var _ in _order) w.Write(0u);  // entry offsets, filled below
+
+        var entryOffsets = new long[_order.Count];
+        var dataPatchPos = new long[_order.Count];
+        for (int i = 0; i < _order.Count; i++)
+        {
+            entryOffsets[i] = ms.Position;
+            var name = $"{_order[i]}.wem";
+            dataPatchPos[i] = ms.Position;
+            w.Write(0u);                        // dataOffset (patched after data written)
+            w.Write((uint)data[_order[i]].Length);
+            w.Write((uint)name.Length);
+            w.Write(Encoding.Unicode.GetBytes(name));
+        }
+        for (int i = 0; i < _order.Count; i++)
+        {
+            long dataStart = ms.Position;
+            w.Write(data[_order[i]]);
+            long resume = ms.Position;
+            ms.Position = dataPatchPos[i]; w.Write((uint)dataStart);
+            ms.Position = resume;
+        }
+        // write the entry-offset table
+        ms.Position = offsetTablePos;
+        foreach (var off in entryOffsets) w.Write((uint)off);
+        return ms.ToArray();
+    }
+
     public static WpkFile? Parse(byte[] data)
     {
         try
@@ -41,7 +87,7 @@ public sealed class WpkFile
                 int nameLen = r.ReadInt32();
                 var name = Encoding.Unicode.GetString(r.ReadBytes(nameLen * 2));
                 if (uint.TryParse(name.Replace(".wem", ""), out var id))
-                    wpk._wems[id] = (dataOffset, size);
+                { wpk._wems[id] = (dataOffset, size); wpk._order.Add(id); }
             }
             return wpk;
         }

@@ -118,6 +118,12 @@ public sealed class SoundPlaybackService : IDisposable
         foreach (var v in victims) { try { v.Item1.Stop(); } catch { } }
     }
 
+    /// <summary>M57: drop a wem's cached wav (after its bytes were replaced) so the next play re-decodes.</summary>
+    public void ClearCache(uint wemId)
+    {
+        try { var w = Path.Combine(_tempDir, $"{wemId}.wav"); if (File.Exists(w)) File.Delete(w); } catch { }
+    }
+
     public void Dispose() => StopAll();
 
     /// <summary>Endless loop over a wav (ambient beds). Rewinds the reader at end-of-stream.</summary>
