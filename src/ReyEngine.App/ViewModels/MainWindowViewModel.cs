@@ -587,6 +587,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M46 Particle Editor wiring
         ParticleEditor.ResolveTextures = ResolveSystemTextures;
         ParticleEditor.ResolveMeshes = ResolveSystemMeshes;   // M47: .scb/.sco mesh primitives
+
+        // M55: model-preview window — its own animation clock (AnimationInspectorViewModel) + VFX resolvers
+        MeshPreview.Animation.ClipLoader = DecodeAnimation;
+        MeshPreview.ResolveTextures = ResolveSystemTextures;
+        MeshPreview.ResolveMeshes = ResolveSystemMeshes;
         ParticleEditor.Info = m => _log.Info("Particle", m);
         ParticleEditor.Error = m => _log.Error("Particle", m);
         ParticleEditor.MarkDocumentDirty = () => { }; // window has its own dirty state via Document.IsDirty
@@ -2259,16 +2264,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!ContentLoaded) return;
         try
         {
-            var (mesh, skeleton, textures) = await Task.Run(() =>
+            var (mesh, skeleton, textures, vfx) = await Task.Run(() =>
             {
                 var m = SkinnedMeshDecoder.Decode(ReadAsset(entry.PathHash));
                 var s = TryPairSkeleton(entry);
                 var t = TryLoadPreviewDiffuse(entry, m);
-                return (m, s, t);
+                var v = TryLoadChampionVfx(entry);   // M55: skin VFX library, local to the window
+                return (m, s, t, v);
             });
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 MeshPreview.Show(entry.DisplayName, mesh, skeleton, textures);
+                MeshPreview.SetAnimations(mesh.CanSkin && skeleton is not null
+                    ? FindAnimations(entry)
+                    : Enumerable.Empty<AnimationEntryViewModel>());
+                MeshPreview.SetVfx(vfx);
                 MeshInspector.ShowMesh(mesh, skeleton);
                 ShowMeshPreviewWindow?.Invoke();
                 _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris — model preview window.");

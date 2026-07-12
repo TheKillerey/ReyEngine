@@ -24,11 +24,66 @@
         </StackPanel>
       </DockPanel>
     </Border>
+    <!-- M55: right panel — animation playback + champion VFX -->
+    <Border DockPanel.Dock="Right" Width="250" Background="{DynamicResource ReyPanelBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1,0,0,0">
+      <ScrollViewer>
+        <StackPanel Margin="10" Spacing="8">
+          <Border Classes="card">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="cardTitle" Text="ANIMATION" />
+              <TextBlock Text="{Binding Animation.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
+              <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Select animation…"
+                        ItemsSource="{Binding Animation.Animations}"
+                        SelectedItem="{Binding Animation.SelectedAnimation, Mode=TwoWay}"
+                        IsVisible="{Binding Animation.HasAnimations}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate><TextBlock Text="{Binding Name}" FontSize="11" /></DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Animation.HasClip}">
+                <Button Classes="tool" Content="◀|" Command="{Binding Animation.StepBackCommand}" />
+                <Button Classes="tool" Content="Play / Pause" Command="{Binding Animation.TogglePlayCommand}" />
+                <Button Classes="tool" Content="|▶" Command="{Binding Animation.StepForwardCommand}" />
+                <CheckBox Content="Loop" IsChecked="{Binding Animation.Loop}" VerticalAlignment="Center" FontSize="11" />
+              </StackPanel>
+              <Slider Minimum="0" Maximum="{Binding Animation.Duration}" Value="{Binding Animation.Time, Mode=TwoWay}"
+                      IsVisible="{Binding Animation.HasClip}" />
+              <TextBlock Text="{Binding Animation.TimeText}" Foreground="{DynamicResource ReyTextDimBrush}"
+                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" IsVisible="{Binding Animation.HasClip}" />
+              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding Animation.HasClip}">
+                <TextBlock Text="Speed" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" />
+                <Slider Minimum="0.1" Maximum="2" Value="{Binding Animation.Speed, Mode=TwoWay}" Width="110" />
+                <TextBlock Text="{Binding Animation.Speed, StringFormat='{}{0:0.0}x'}" FontSize="11" VerticalAlignment="Center" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card" IsVisible="{Binding HasVfx}">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="cardTitle" Text="CHAMPION VFX" />
+              <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Play effect…"
+                        ItemsSource="{Binding VfxSystems}"
+                        SelectedItem="{Binding SelectedVfx, Mode=TwoWay}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate><TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" /></DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <Button Classes="tool" Content="⏹ Stop VFX" Command="{Binding StopVfxCommand}" HorizontalAlignment="Left" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+
     <Grid>
       <views:ViewportControl x:Name="PreviewViewport"
                              Mesh="{Binding Mesh}"
                              Skeleton="{Binding Skeleton}"
                              ModelTextures="{Binding Textures}"
+                             AnimationClip="{Binding CurrentAnimation}"
+                             AnimationTime="{Binding AnimationTime}"
+                             ParticlePlayback="{Binding Playback}"
                              ShowBones="{Binding ShowBones}"
                              Wireframe="{Binding Wireframe}"
                              CullBackfaces="{Binding CullBackfaces}" />
