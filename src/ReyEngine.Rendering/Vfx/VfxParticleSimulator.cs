@@ -230,9 +230,9 @@ public sealed class VfxParticleSimulator
 
             float frame = 0f;
             if (d.NumFrames > 1)
-                frame = p.FrameRate > 0f
+                frame = MathF.Floor(p.FrameRate > 0f
                     ? (p.StartFrame + p.Age * p.FrameRate) % d.NumFrames
-                    : (p.StartFrame + t * d.NumFrames) % d.NumFrames;
+                    : (p.StartFrame + t * d.NumFrames) % d.NumFrames);
 
             buf[k++] = p.Pos.X; buf[k++] = p.Pos.Y; buf[k++] = p.Pos.Z;
             buf[k++] = p.BirthSize.X * scaleMul.X;

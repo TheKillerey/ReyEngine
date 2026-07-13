@@ -439,7 +439,9 @@ void main(){
     vec2 cell = aCorner + vec2(0.5, 0.5);      // [0,1] within the frame cell
     float cols = max(uTexDiv.x, 1.0);
     float rows = max(uTexDiv.y, 1.0);
-    float frame = aRotFrame.y;
+    // Flipbooks select complete atlas cells. Fractional frame coordinates slide the UV window
+    // across adjacent cells and visibly slice sprites whose pixels reach the cell boundary.
+    float frame = floor(aRotFrame.y + 0.0001);
     float fx = mod(frame, cols);
     float fy = floor(frame / cols);
     vUv = (vec2(fx, fy) + vec2(cell.x, 1.0 - cell.y)) / vec2(cols, rows)
