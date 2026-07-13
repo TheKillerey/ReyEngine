@@ -13,9 +13,20 @@ namespace ReyEngine.App.ViewModels;
 /// </summary>
 public sealed record VfxPlaybackItem(
     VfxSystemDefinition System,
-    Vector3 WorldPos,
+    Matrix4x4 Transform,
     IReadOnlyList<TextureImage?> EmitterTextures,
-    IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>? EmitterMeshes = null);   // M47: .scb/.sco per emitter
+    IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>? EmitterMeshes = null,
+    IReadOnlyList<TextureImage?>? EmitterMultTextures = null)   // Riot TEXTUREMULT stage
+{
+    /// <summary>Convenience for champion/editor previews authored at a translated root.</summary>
+    public VfxPlaybackItem(VfxSystemDefinition system, Vector3 worldPos,
+        IReadOnlyList<TextureImage?> emitterTextures,
+        IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>? emitterMeshes = null,
+        IReadOnlyList<TextureImage?>? emitterMultTextures = null)
+        : this(system, Matrix4x4.CreateTranslation(worldPos), emitterTextures, emitterMeshes, emitterMultTextures) { }
+
+    public Vector3 WorldPos => Transform.Translation;
+}
 
 /// <summary>
 /// A request to play one or more placed VFX systems live in the viewport (M36). One item for a single

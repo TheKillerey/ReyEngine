@@ -13,12 +13,15 @@ public sealed class VfxParticleRenderer
 {
     private GL _gl = null!;
     private uint _program, _vao, _quadVbo, _instVbo;
-    private int _uViewProj, _uCamRight, _uCamUp, _uTexDiv, _uTex;
+    private int _uViewProj, _uCamRight, _uCamUp, _uTexDiv, _uTex, _uUvScrollRate;
+    private int _uTexMult, _uHasTexMult, _uTexDivMult, _uUvScrollRateMult;
+    private int _uDirectionOriented, _uArbitraryQuad;
+    private int _uPlacementRight, _uPlacementUp, _uPlacementForward;
     private int _instCapFloats;
     private bool _ready;
     private readonly List<uint> _ownedTextures = new();
 
-    private const int Stride = 11; // floats per instance: cx,cy,cz, sx,sy, r,g,b,a, rot, frame
+    private const int Stride = 18;
 
     private bool _gles;
 
@@ -33,6 +36,16 @@ public sealed class VfxParticleRenderer
         _uCamUp = gl.GetUniformLocation(_program, "uCamUp");
         _uTexDiv = gl.GetUniformLocation(_program, "uTexDiv");
         _uTex = gl.GetUniformLocation(_program, "uTex");
+        _uTexMult = gl.GetUniformLocation(_program, "uTexMult");
+        _uHasTexMult = gl.GetUniformLocation(_program, "uHasTexMult");
+        _uTexDivMult = gl.GetUniformLocation(_program, "uTexDivMult");
+        _uUvScrollRateMult = gl.GetUniformLocation(_program, "uUvScrollRateMult");
+        _uUvScrollRate = gl.GetUniformLocation(_program, "uUvScrollRate");
+        _uDirectionOriented = gl.GetUniformLocation(_program, "uDirectionOriented");
+        _uArbitraryQuad = gl.GetUniformLocation(_program, "uArbitraryQuad");
+        _uPlacementRight = gl.GetUniformLocation(_program, "uPlacementRight");
+        _uPlacementUp = gl.GetUniformLocation(_program, "uPlacementUp");
+        _uPlacementForward = gl.GetUniformLocation(_program, "uPlacementForward");
 
         _vao = gl.GenVertexArray();
         gl.BindVertexArray(_vao);
@@ -54,10 +67,14 @@ public sealed class VfxParticleRenderer
         gl.EnableVertexAttribArray(2); gl.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, bstride, (void*)(3 * sizeof(float)));
         gl.EnableVertexAttribArray(3); gl.VertexAttribPointer(3, 4, VertexAttribPointerType.Float, false, bstride, (void*)(5 * sizeof(float)));
         gl.EnableVertexAttribArray(4); gl.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, bstride, (void*)(9 * sizeof(float)));
+        gl.EnableVertexAttribArray(5); gl.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, bstride, (void*)(11 * sizeof(float)));
+        gl.EnableVertexAttribArray(6); gl.VertexAttribPointer(6, 3, VertexAttribPointerType.Float, false, bstride, (void*)(15 * sizeof(float)));
         gl.VertexAttribDivisor(1, 1);
         gl.VertexAttribDivisor(2, 1);
         gl.VertexAttribDivisor(3, 1);
         gl.VertexAttribDivisor(4, 1);
+        gl.VertexAttribDivisor(5, 1);
+        gl.VertexAttribDivisor(6, 1);
 
         gl.BindVertexArray(0);
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
@@ -99,6 +116,7 @@ public sealed class VfxParticleRenderer
         _gl.Uniform3(_uCamRight, camRight.X, camRight.Y, camRight.Z);
         _gl.Uniform3(_uCamUp, camUp.X, camUp.Y, camUp.Z);
         _gl.Uniform1(_uTex, 0);
+        _gl.Uniform1(_uTexMult, 1);
 
         _gl.BindVertexArray(_vao);
         _gl.ActiveTexture(TextureUnit.Texture0);
@@ -137,7 +155,24 @@ public sealed class VfxParticleRenderer
             else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
             _gl.Uniform2(_uTexDiv, es.Def.TexDiv.X <= 0 ? 1f : es.Def.TexDiv.X, es.Def.TexDiv.Y <= 0 ? 1f : es.Def.TexDiv.Y);
+            _gl.Uniform2(_uUvScrollRate, es.Def.UvScrollRate.X, es.Def.UvScrollRate.Y);
+            _gl.Uniform1(_uHasTexMult, es.TextureMult != 0 ? 1 : 0);
+            var multDiv = es.Def.TextureMultTexDiv;
+            _gl.Uniform2(_uTexDivMult, multDiv.X <= 0 ? 1f : multDiv.X, multDiv.Y <= 0 ? 1f : multDiv.Y);
+            _gl.Uniform2(_uUvScrollRateMult, es.Def.TextureMultUvScrollRate.X, es.Def.TextureMultUvScrollRate.Y);
+            _gl.Uniform1(_uDirectionOriented, es.Def.IsDirectionOriented ? 1 : 0);
+            _gl.Uniform1(_uArbitraryQuad, es.Def.IsArbitraryQuad ? 1 : 0);
+            _gl.Uniform3(_uPlacementRight, es.PlacementRight.X, es.PlacementRight.Y, es.PlacementRight.Z);
+            _gl.Uniform3(_uPlacementUp, es.PlacementUp.X, es.PlacementUp.Y, es.PlacementUp.Z);
+            _gl.Uniform3(_uPlacementForward, es.PlacementForward.X, es.PlacementForward.Y, es.PlacementForward.Z);
+            _gl.ActiveTexture(TextureUnit.Texture0);
             _gl.BindTexture(TextureTarget.Texture2D, es.Texture);
+            if (es.TextureMult != 0)
+            {
+                _gl.ActiveTexture(TextureUnit.Texture1);
+                _gl.BindTexture(TextureTarget.Texture2D, es.TextureMult);
+                _gl.ActiveTexture(TextureUnit.Texture0);
+            }
             _gl.DrawArraysInstanced(PrimitiveType.TriangleFan, 0, 4, (uint)es.InstanceCount);
         }
 
@@ -147,6 +182,9 @@ public sealed class VfxParticleRenderer
         if (!depthTest) _gl.Disable(EnableCap.DepthTest);
         _gl.BindVertexArray(0);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _gl.ActiveTexture(TextureUnit.Texture1);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _gl.ActiveTexture(TextureUnit.Texture0);
     }
 
     private static bool IsAdditive(int blendMode) => blendMode is 0 or 1 or 4 or 5;
@@ -177,6 +215,8 @@ public sealed class VfxParticleRenderer
     // ---- M47 mesh-primitive particles (.scb/.sco): per-particle uniforms, simple textured draw ----
     private uint _meshProgram;
     private int _muViewProj, _muWorldPos, _muScale, _muRot, _muColor, _muTex, _muUvOffset;
+    private int _muTexMult, _muHasTexMult, _muUvOffsetMult;
+    private int _muPlacementRight, _muPlacementUp, _muPlacementForward;
     private uint _whiteTex;
 
     private unsafe void EnsureMeshProgram()
@@ -191,6 +231,12 @@ public sealed class VfxParticleRenderer
             _muColor = _gl.GetUniformLocation(_meshProgram, "uColor");
             _muTex = _gl.GetUniformLocation(_meshProgram, "uTex");
             _muUvOffset = _gl.GetUniformLocation(_meshProgram, "uUvOffset");
+            _muTexMult = _gl.GetUniformLocation(_meshProgram, "uTexMult");
+            _muHasTexMult = _gl.GetUniformLocation(_meshProgram, "uHasTexMult");
+            _muUvOffsetMult = _gl.GetUniformLocation(_meshProgram, "uUvOffsetMult");
+            _muPlacementRight = _gl.GetUniformLocation(_meshProgram, "uPlacementRight");
+            _muPlacementUp = _gl.GetUniformLocation(_meshProgram, "uPlacementUp");
+            _muPlacementForward = _gl.GetUniformLocation(_meshProgram, "uPlacementForward");
         }
         if (_whiteTex == 0) _whiteTex = UploadTexture(new byte[] { 255, 255, 255, 255 }, 1, 1);
     }
@@ -263,20 +309,34 @@ public sealed class VfxParticleRenderer
         _gl.BindVertexArray(es.MeshVao);
         _gl.UniformMatrix4(_muViewProj, 1, false, in viewProj.M11);
         _gl.Uniform1(_muTex, 0);
+        _gl.Uniform1(_muTexMult, 1);
+        _gl.Uniform1(_muHasTexMult, es.TextureMult != 0 ? 1 : 0);
+        _gl.Uniform3(_muPlacementRight, es.PlacementRight.X, es.PlacementRight.Y, es.PlacementRight.Z);
+        _gl.Uniform3(_muPlacementUp, es.PlacementUp.X, es.PlacementUp.Y, es.PlacementUp.Z);
+        _gl.Uniform3(_muPlacementForward, es.PlacementForward.X, es.PlacementForward.Y, es.PlacementForward.Z);
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.BindTexture(TextureTarget.Texture2D, es.Texture != 0 ? es.Texture : _whiteTex);
+        if (es.TextureMult != 0)
+        {
+            _gl.ActiveTexture(TextureUnit.Texture1);
+            _gl.BindTexture(TextureTarget.Texture2D, es.TextureMult);
+            _gl.ActiveTexture(TextureUnit.Texture0);
+        }
         if (IsAdditive(es.Def.BlendMode)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
         else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-        // M47c: mesh particles animate by SCROLLING their texture along the mesh UVs (waterfall flow) —
+        // M47c: mesh particles animate by SCROLLING their texture along the mesh UVs (waterfall flow) -
         // matches Riot's particle-system shader (Scrolling_Rate cbuffer + birthUvScrollRate data).
         var scroll = es.Def.UvScrollRate * es.Age;
         _gl.Uniform2(_muUvOffset, scroll.X, scroll.Y);
+        var scrollMult = es.Def.TextureMultUvScrollRate * es.Age;
+        _gl.Uniform2(_muUvOffsetMult, scrollMult.X, scrollMult.Y);
         for (int i = 0; i < es.InstanceCount; i++)
         {
             int o = i * Stride;   // [cx,cy,cz, sx,sy, r,g,b,a, rot, frame]
             _gl.Uniform3(_muWorldPos, es.Instances[o], es.Instances[o + 1], es.Instances[o + 2]);
             // mesh particles use birthScale.x as a uniform scale; a scale of ~1 means unscaled geometry
-            float sc = MathF.Max(0.01f, es.Instances[o + 3]);
+            float rawScale = es.Instances[o + 3];
+            float sc = MathF.Abs(rawScale) < 0.01f ? MathF.CopySign(0.01f, rawScale == 0f ? 1f : rawScale) : rawScale;
             _gl.Uniform1(_muScale, sc);
             _gl.Uniform1(_muRot, es.Instances[o + 9]);
             _gl.Uniform4(_muColor, es.Instances[o + 5], es.Instances[o + 6], es.Instances[o + 7], es.Instances[o + 8]);
@@ -298,21 +358,33 @@ uniform vec3 uWorldPos;
 uniform float uScale;
 uniform float uRot;
 uniform vec2 uUvOffset;
+uniform vec2 uUvOffsetMult;
+uniform vec3 uPlacementRight;
+uniform vec3 uPlacementUp;
+uniform vec3 uPlacementForward;
 out vec2 vUv;
+out vec2 vUvMult;
 void main(){
     float s = sin(uRot); float c = cos(uRot);
-    vec3 p = vec3(aPos.x * c - aPos.z * s, aPos.y, aPos.x * s + aPos.z * c) * uScale + uWorldPos;
+    vec3 local = vec3(aPos.x * c - aPos.z * s, aPos.y, aPos.x * s + aPos.z * c) * uScale;
+    vec3 p = uPlacementRight * local.x + uPlacementUp * local.y + uPlacementForward * local.z + uWorldPos;
     gl_Position = uViewProj * vec4(p, 1.0);
     vUv = aUv + uUvOffset;
+    vUvMult = aUv + uUvOffsetMult;
 }";
 
     private const string MeshFrag = @"
 in vec2 vUv;
+in vec2 vUvMult;
 uniform sampler2D uTex;
+uniform sampler2D uTexMult;
+uniform int uHasTexMult;
 uniform vec4 uColor;
 out vec4 fragColor;
 void main(){
-    fragColor = texture(uTex, vUv) * uColor;
+    vec4 texel = texture(uTex, vUv);
+    if (uHasTexMult != 0) texel *= texture(uTexMult, vUvMult);
+    fragColor = texel * uColor;
 }";
 
     private const string Vert = @"
@@ -321,17 +393,48 @@ layout(location=1) in vec3 aCenter;    // per-instance world center
 layout(location=2) in vec2 aSize;      // per-instance width, height
 layout(location=3) in vec4 aColor;     // per-instance rgba
 layout(location=4) in vec2 aRotFrame;  // per-instance rotation (rad), flipbook frame
+layout(location=5) in vec4 aAgeVelX;   // age, velocity xyz
+layout(location=6) in vec3 aRotation;  // Euler xyz in radians
 uniform mat4 uViewProj;
 uniform vec3 uCamRight;
 uniform vec3 uCamUp;
 uniform vec2 uTexDiv;                   // flipbook grid columns, rows
+uniform vec2 uUvScrollRate;
+uniform vec2 uTexDivMult;
+uniform vec2 uUvScrollRateMult;
+uniform int uDirectionOriented;
+uniform int uArbitraryQuad;
+uniform vec3 uPlacementRight;
+uniform vec3 uPlacementUp;
+uniform vec3 uPlacementForward;
 out vec2 vUv;
+out vec2 vUvMult;
 out vec4 vColor;
+vec3 rotateEuler(vec3 p, vec3 r){
+    float sx = sin(r.x); float cx = cos(r.x);
+    float sy = sin(r.y); float cy = cos(r.y);
+    float sz = sin(r.z); float cz = cos(r.z);
+    p = vec3(p.x, p.y * cx - p.z * sx, p.y * sx + p.z * cx);
+    p = vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
+    return vec3(p.x * cz - p.y * sz, p.x * sz + p.y * cz, p.z);
+}
 void main(){
-    float s = sin(aRotFrame.x);
-    float c = cos(aRotFrame.x);
+    float rotation = uArbitraryQuad != 0 ? 0.0 : aRotFrame.x;
+    if (uDirectionOriented != 0) {
+        float vx = dot(aAgeVelX.yzw, uCamRight);
+        float vy = dot(aAgeVelX.yzw, uCamUp);
+        if (abs(vx) + abs(vy) > 0.0001) rotation = atan(-vx, vy);
+    }
+    float s = sin(rotation);
+    float c = cos(rotation);
     vec2 rc = vec2(aCorner.x * c - aCorner.y * s, aCorner.x * s + aCorner.y * c);
-    vec3 world = aCenter + uCamRight * (rc.x * aSize.x) + uCamUp * (rc.y * aSize.y);
+    vec3 localRight = rotateEuler(vec3(1.0, 0.0, 0.0), aRotation);
+    vec3 localUp = rotateEuler(vec3(0.0, 1.0, 0.0), aRotation);
+    vec3 placedRight = uPlacementRight * localRight.x + uPlacementUp * localRight.y + uPlacementForward * localRight.z;
+    vec3 placedUp = uPlacementRight * localUp.x + uPlacementUp * localUp.y + uPlacementForward * localUp.z;
+    vec3 right = uArbitraryQuad != 0 ? placedRight : uCamRight;
+    vec3 up = uArbitraryQuad != 0 ? placedUp : uCamUp;
+    vec3 world = aCenter + right * (rc.x * aSize.x) + up * (rc.y * aSize.y);
     gl_Position = uViewProj * vec4(world, 1.0);
     vec2 cell = aCorner + vec2(0.5, 0.5);      // [0,1] within the frame cell
     float cols = max(uTexDiv.x, 1.0);
@@ -339,17 +442,24 @@ void main(){
     float frame = aRotFrame.y;
     float fx = mod(frame, cols);
     float fy = floor(frame / cols);
-    vUv = (vec2(fx, fy) + vec2(cell.x, 1.0 - cell.y)) / vec2(cols, rows);
+    vUv = (vec2(fx, fy) + vec2(cell.x, 1.0 - cell.y)) / vec2(cols, rows)
+        + uUvScrollRate * aAgeVelX.x;
+    vUvMult = vec2(cell.x, 1.0 - cell.y) / max(uTexDivMult, vec2(1.0))
+        + uUvScrollRateMult * aAgeVelX.x;
     vColor = aColor;
 }";
 
     private const string Frag = @"
 in vec2 vUv;
+in vec2 vUvMult;
 in vec4 vColor;
 uniform sampler2D uTex;
+uniform sampler2D uTexMult;
+uniform int uHasTexMult;
 out vec4 fragColor;
 void main(){
     vec4 t = texture(uTex, vUv);
+    if (uHasTexMult != 0) t *= texture(uTexMult, vUvMult);
     fragColor = t * vColor;
 }";
 }

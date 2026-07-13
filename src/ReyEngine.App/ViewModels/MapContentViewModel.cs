@@ -17,6 +17,15 @@ public sealed partial class ParticlePlacementViewModel : ObservableObject
 
     public Vector3 Offset;                                   // accumulated move (world space), default zero
     public Vector3 CurrentPosition => Placement.Position + Offset;
+    public Matrix4x4 CurrentTransform
+    {
+        get
+        {
+            var transform = Placement.Transform;
+            transform.Translation = CurrentPosition;
+            return transform;
+        }
+    }
     public bool IsMoved => Offset != Vector3.Zero;
 }
 

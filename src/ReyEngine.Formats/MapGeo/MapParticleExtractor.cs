@@ -9,7 +9,8 @@ namespace ReyEngine.Formats.MapGeo;
 /// <summary>One placed particle system on a map (M35): a <c>MapParticle</c> item inside a
 /// <c>MapPlaceableContainer</c> — its world position, name, referenced VFX system and group.</summary>
 public sealed record MapParticlePlacement(
-    string Name, Vector3 Position, Matrix4x4 Transform, string SystemPath, string GroupName, uint SystemHash = 0)
+    string Name, Vector3 Position, Matrix4x4 Transform, string SystemPath, string GroupName,
+    uint SystemHash = 0, int VisibilityFlags = 255)
 {
     /// <summary>The VFX system's short name (leaf of the resolved path) for display.</summary>
     public string SystemName => SystemPath.Contains('/') ? SystemPath[(SystemPath.LastIndexOf('/') + 1)..] : SystemPath;
@@ -44,8 +45,16 @@ public static class MapParticleExtractor
                 string name = (Field(s.Properties, "name") as BinTreeString)?.Value ?? "(particle)";
                 string group = (Field(s.Properties, "groupName") as BinTreeString)?.Value ?? "";
                 uint systemHash = Field(s.Properties, "system") is BinTreeObjectLink link ? link.Value : 0;
+                int visibilityFlags = Field(s.Properties, "mVisibilityFlags") switch
+                {
+                    BinTreeU8 v => v.Value,
+                    BinTreeU16 v => v.Value,
+                    BinTreeU32 v => unchecked((int)v.Value),
+                    BinTreeI32 v => v.Value,
+                    _ => 255,
+                };
                 string system = systemHash != 0 ? resolve(systemHash) ?? $"0x{systemHash:x8}" : "";
-                result.Add(new MapParticlePlacement(name, transform.Translation, transform, system, group, systemHash));
+                result.Add(new MapParticlePlacement(name, transform.Translation, transform, system, group, systemHash, visibilityFlags));
             }
         }
         return result;

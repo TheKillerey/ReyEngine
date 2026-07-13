@@ -666,8 +666,13 @@ public sealed class ViewportControl : OpenGlControlBase
         foreach (var item in pb.Items)
         {
             if (item.System.Emitters.Count == 0) continue;
-            var sim = new VfxParticleSimulator();
-            sim.SetSystem(item.System, item.WorldPos);
+            // A stable placement-specific seed prevents every repeated torch/brazier from animating in lockstep.
+            int seed = HashCode.Combine(item.System.PathHash,
+                BitConverter.SingleToInt32Bits(item.Transform.M41),
+                BitConverter.SingleToInt32Bits(item.Transform.M42),
+                BitConverter.SingleToInt32Bits(item.Transform.M43));
+            var sim = new VfxParticleSimulator(seed);
+            sim.SetSystem(item.System, item.Transform);
             foreach (var es in sim.Emitters)
             {
                 // match the state back to its emitter index (by reference — SetSystem keeps the instances)
@@ -680,6 +685,16 @@ public sealed class ViewportControl : OpenGlControlBase
                 {
                     if (!uploaded.TryGetValue(img, out var tex)) { tex = _particleRenderer.UploadTexture(img.Rgba, img.Width, img.Height); uploaded[img] = tex; }
                     es.Texture = tex;
+                }
+                var multImg = item.EmitterMultTextures is { } mts && idx >= 0 && idx < mts.Count ? mts[idx] : null;
+                if (multImg is not null)
+                {
+                    if (!uploaded.TryGetValue(multImg, out var multTex))
+                    {
+                        multTex = _particleRenderer.UploadTexture(multImg.Rgba, multImg.Width, multImg.Height);
+                        uploaded[multImg] = multTex;
+                    }
+                    es.TextureMult = multTex;
                 }
                 // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
                 var mesh = item.EmitterMeshes is { } ms && idx >= 0 && idx < ms.Count ? ms[idx] : null;

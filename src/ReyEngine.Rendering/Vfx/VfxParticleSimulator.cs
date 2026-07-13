@@ -16,14 +16,16 @@ public sealed class VfxParticleSimulator
     {
         public required VfxEmitterDefinition Def { get; init; }
         public Vector3 BasePos;                 // world spawn origin (placement + emitterPosition)
+        public Vector3 PlacementRight, PlacementUp, PlacementForward;
         public uint Texture;                    // GL handle for this emitter's sprite (0 = not uploaded/skip)
+        public uint TextureMult;                // optional Riot multiplier/noise texture stage
         internal float SpawnAccum;
         internal float Age;                     // emitter age (seconds)
         internal bool BurstDone;                // for isSingleParticle
         internal readonly List<Particle> Particles = new();
 
-        /// <summary>Packed instance data for the renderer: 11 floats per particle
-        /// [cx,cy,cz, sizeX,sizeY, r,g,b,a, rot, frame]. Rebuilt each Update.</summary>
+        /// <summary>Packed instance data for the renderer: 18 floats per particle:
+        /// position, size, color, rotation/frame, age/velocity, and Euler rotation.</summary>
         public float[] Instances = System.Array.Empty<float>();
         public int InstanceCount;
 
@@ -38,17 +40,20 @@ public sealed class VfxParticleSimulator
 
     internal struct Particle
     {
-        public Vector3 Pos, Vel;
+        public Vector3 Pos, Vel, BirthAccel, BirthOrbitalVelocity, BirthDrag;
         public float Age, Life;
         public Vector2 BirthSize;   // absolute (birthScale0 xy)
         public Vector4 BirthColor;
+        public Vector3 BirthRotation;
         public float Rot, RotVel;
-        public float StartFrame;
+        public float StartFrame, FrameRate;
     }
 
     public IReadOnlyList<EmitterState> Emitters => _emitters;
     private readonly List<EmitterState> _emitters = new();
     private readonly Random _rng;
+    private Matrix4x4 _worldTransform = Matrix4x4.Identity;
+    private Matrix4x4 _inverseWorldTransform = Matrix4x4.Identity;
     public int LiveParticleCount { get; private set; }
 
     // Emitters that never terminate loop forever; give a hard cap so a runaway rate can't explode memory.
@@ -58,15 +63,32 @@ public sealed class VfxParticleSimulator
 
     /// <summary>Configure from a system placed at <paramref name="worldPos"/>. Only visual emitters are simulated.</summary>
     public void SetSystem(VfxSystemDefinition system, Vector3 worldPos, bool includeNonVisual = false)
+        => SetSystem(system, Matrix4x4.CreateTranslation(worldPos), includeNonVisual);
+
+    /// <summary>Configure a system with its complete authored placement transform.</summary>
+    public void SetSystem(VfxSystemDefinition system, Matrix4x4 worldTransform, bool includeNonVisual = false)
     {
         _emitters.Clear();
+        _worldTransform = worldTransform;
+        if (!Matrix4x4.Invert(worldTransform, out _inverseWorldTransform))
+            _inverseWorldTransform = Matrix4x4.Identity;
         foreach (var e in system.Emitters)
         {
             if (!includeNonVisual && !e.IsVisual) continue;
-            _emitters.Add(new EmitterState { Def = e, BasePos = worldPos + e.EmitterPosition });
+            _emitters.Add(new EmitterState
+            {
+                Def = e,
+                BasePos = Vector3.Transform(e.EmitterPosition, worldTransform),
+                PlacementRight = SafeNormal(Vector3.TransformNormal(Vector3.UnitX, worldTransform), Vector3.UnitX),
+                PlacementUp = SafeNormal(Vector3.TransformNormal(Vector3.UnitY, worldTransform), Vector3.UnitY),
+                PlacementForward = SafeNormal(Vector3.TransformNormal(Vector3.UnitZ, worldTransform), Vector3.UnitZ),
+            });
         }
         Reset();
     }
+
+    private static Vector3 SafeNormal(Vector3 value, Vector3 fallback)
+        => value.LengthSquared() > 1e-8f ? Vector3.Normalize(value) : fallback;
 
     public void Reset()
     {
@@ -105,7 +127,10 @@ public sealed class VfxParticleSimulator
             }
             else
             {
-                float rate = MathF.Max(0f, d.Rate.Sample(0f));
+                float emitterT = d.EmitterLifetime is > 0f
+                    ? Math.Clamp((s.Age - d.TimeBeforeFirstEmission) / d.EmitterLifetime.Value, 0f, 1f)
+                    : 0f;
+                float rate = MathF.Max(0f, d.Rate.Sample(emitterT));
                 s.SpawnAccum += rate * dt;
                 while (s.SpawnAccum >= 1f && s.Particles.Count < MaxParticlesPerEmitter)
                 {
@@ -117,14 +142,27 @@ public sealed class VfxParticleSimulator
         }
 
         // integrate + cull
-        var accel = d.Acceleration?.Sample(0f) ?? Vector3.Zero;
         for (int i = s.Particles.Count - 1; i >= 0; i--)
         {
             var p = s.Particles[i];
             p.Age += dt;
-            if (p.Age >= p.Life + d.ParticleLinger) { s.Particles.RemoveAt(i); continue; }
-            p.Vel += accel * dt;
+            // particleLinger controls shutdown retention in Riot; it does not extend every live particle.
+            if (p.Age >= p.Life) { s.Particles.RemoveAt(i); continue; }
+            float particleT = float.IsPositiveInfinity(p.Life) ? 0f : Math.Clamp(p.Age / p.Life, 0f, 1f);
+            var worldAccel = d.Acceleration?.Sample(particleT) ?? Vector3.Zero;
+            worldAccel = Vector3.TransformNormal(worldAccel, _worldTransform);
+            p.Vel += (p.BirthAccel + worldAccel) * dt;
+            var dragOverLife = d.DragOverLife?.Sample(particleT) ?? Vector3.Zero;
+            var drag = Vector3.Max(Vector3.Zero, p.BirthDrag + dragOverLife);
+            p.Vel *= new Vector3(MathF.Exp(-drag.X * dt), MathF.Exp(-drag.Y * dt), MathF.Exp(-drag.Z * dt));
             p.Pos += p.Vel * dt;
+            if (p.BirthOrbitalVelocity.LengthSquared() > 1e-8f)
+            {
+                var localRelative = Vector3.TransformNormal(p.Pos - s.BasePos, _inverseWorldTransform);
+                var angularStep = p.BirthOrbitalVelocity * dt;
+                var orbit = Quaternion.CreateFromYawPitchRoll(angularStep.Y, angularStep.X, angularStep.Z);
+                p.Pos = s.BasePos + Vector3.TransformNormal(Vector3.Transform(localRelative, orbit), _worldTransform);
+            }
             p.Rot += p.RotVel * dt;
             s.Particles[i] = p;
         }
@@ -139,44 +177,39 @@ public sealed class VfxParticleSimulator
         var d = s.Def;
         // M47: exact per-particle randomisation — Value* probability tables (VfxProbabilityTableData)
         // are rolled per particle when the data carries them; SampleBirth falls back to the constant.
-        float life = MathF.Max(0.05f, d.ParticleLifetime.SampleBirth(_rng));
+        float sampledLife = d.ParticleLifetime.SampleBirth(_rng);
+        float life = sampledLife < 0f ? float.PositiveInfinity : MathF.Max(0.05f, sampledLife);
         var birthScale = d.BirthScale.SampleBirth(_rng);
         var vel = d.BirthVelocity?.SampleBirth(_rng) ?? Vector3.Zero;
+        var birthAccel = d.BirthAcceleration?.SampleBirth(_rng) ?? Vector3.Zero;
+        var birthOrbitalVelocity = d.BirthOrbitalVelocity?.SampleBirth(_rng) ?? Vector3.Zero;
+        var birthDrag = d.BirthDrag?.SampleBirth(_rng) ?? Vector3.Zero;
+        var birthRotation = d.BirthRotation?.SampleBirth(_rng) ?? Vector3.Zero;
         var rotVel = d.BirthRotationalVelocity?.SampleBirth(_rng) ?? Vector3.Zero;
 
-        // M46 approximate variance, ONLY where no probability tables exist (most map VFX): velocity
-        // direction/magnitude spread, spawn-position jitter scaled by sprite size, lifetime variance —
-        // without any randomness every particle follows the identical path (fire renders as a line).
-        Vector3 RandUnit()
-        {
-            var v = new Vector3((float)(_rng.NextDouble() * 2 - 1), (float)(_rng.NextDouble() * 2 - 1), (float)(_rng.NextDouble() * 2 - 1));
-            float len = v.Length();
-            return len > 1e-4f ? v / len : Vector3.UnitY;
-        }
-        float sizeRef = MathF.Max(MathF.Abs(birthScale.X), MathF.Abs(birthScale.Y));
-        bool hasVelProb = d.BirthVelocity is { } bv && bv.HasProb;
-        float speed = vel.Length();
-        // M47c: mesh primitives (waterfalls...) are placed EXACTLY and animate by UV scroll — no jitter,
-        // no random billboard spin (the real shader keeps the authored mesh orientation).
-        Vector3 posJitter = Vector3.Zero;
-        if (!d.IsMeshPrimitive)
-        {
-            if (!hasVelProb && speed > 1e-3f) vel += RandUnit() * speed * 0.30f;   // ~17 degree cone + magnitude spread
-            posJitter = RandUnit() * sizeRef * 0.35f;
-            if (d.ParticleLifetime.Prob is null) life *= 0.8f + 0.4f * (float)_rng.NextDouble();
-        }
+        // Riot spawn-shape and probability-table values are sampled independently for every particle.
+        // Mesh primitives keep their authored orientation; their movement comes from the same data path.
+        var localOffset = d.SpawnShape?.SampleOffset(_rng) ?? Vector3.Zero;
+        var worldOffset = Vector3.TransformNormal(localOffset, _worldTransform);
+        vel = Vector3.TransformNormal(vel, _worldTransform);
+        birthAccel = Vector3.TransformNormal(birthAccel, _worldTransform);
 
         s.Particles.Add(new Particle
         {
-            Pos = s.BasePos + posJitter,
+            Pos = s.BasePos + worldOffset,
             Vel = vel,
+            BirthAccel = birthAccel,
+            BirthOrbitalVelocity = birthOrbitalVelocity,
+            BirthDrag = birthDrag,
             Age = 0f,
             Life = life,
-            BirthSize = new Vector2(MathF.Abs(birthScale.X), MathF.Abs(birthScale.Y == 0 ? birthScale.X : birthScale.Y)),
-            BirthColor = d.BirthColor.Sample(0f),
-            Rot = d.IsMeshPrimitive ? 0f : (float)(_rng.NextDouble() * MathF.Tau),
-            RotVel = rotVel.Z * (MathF.PI / 180f),          // degrees/s -> rad/s
+            BirthSize = new Vector2(birthScale.X, birthScale.Y == 0 ? birthScale.X : birthScale.Y),
+            BirthColor = d.BirthColor.SampleBirth(_rng),
+            BirthRotation = birthRotation * (MathF.PI / 180f),
+            Rot = d.IsMeshPrimitive ? 0f : birthRotation.X * (MathF.PI / 180f),
+            RotVel = rotVel.X * (MathF.PI / 180f),
             StartFrame = d.RandomStartFrame && d.NumFrames > 1 ? _rng.Next(d.NumFrames) : 0,
+            FrameRate = d.BirthFrameRate?.SampleBirth(_rng) ?? d.FrameRate ?? 0f,
         });
     }
 
@@ -184,19 +217,22 @@ public sealed class VfxParticleSimulator
     {
         var d = s.Def;
         int n = s.Particles.Count;
-        if (s.Instances.Length < n * 11) s.Instances = new float[Math.Max(n * 11, 64)];
+        if (s.Instances.Length < n * 18) s.Instances = new float[Math.Max(n * 18, 72)];
         var buf = s.Instances;
         int k = 0;
         for (int i = 0; i < n; i++)
         {
             var p = s.Particles[i];
-            float t = Math.Clamp(p.Age / p.Life, 0f, 1f);
+            float t = float.IsPositiveInfinity(p.Life) ? 0f : Math.Clamp(p.Age / p.Life, 0f, 1f);
             var scaleMul = d.ScaleOverLife?.Sample(t) ?? Vector3.One;
             var colMul = d.ColorOverLife?.Sample(t) ?? Vector4.One;
             var col = p.BirthColor * colMul;
 
             float frame = 0f;
-            if (d.NumFrames > 1) frame = (p.StartFrame + t * d.NumFrames) % d.NumFrames;
+            if (d.NumFrames > 1)
+                frame = p.FrameRate > 0f
+                    ? (p.StartFrame + p.Age * p.FrameRate) % d.NumFrames
+                    : (p.StartFrame + t * d.NumFrames) % d.NumFrames;
 
             buf[k++] = p.Pos.X; buf[k++] = p.Pos.Y; buf[k++] = p.Pos.Z;
             buf[k++] = p.BirthSize.X * scaleMul.X;
@@ -204,6 +240,9 @@ public sealed class VfxParticleSimulator
             buf[k++] = col.X; buf[k++] = col.Y; buf[k++] = col.Z; buf[k++] = col.W;
             buf[k++] = p.Rot;
             buf[k++] = frame;
+            buf[k++] = p.Age;
+            buf[k++] = p.Vel.X; buf[k++] = p.Vel.Y; buf[k++] = p.Vel.Z;
+            buf[k++] = p.Rot; buf[k++] = p.BirthRotation.Y; buf[k++] = p.BirthRotation.Z;
         }
         s.InstanceCount = n;
     }

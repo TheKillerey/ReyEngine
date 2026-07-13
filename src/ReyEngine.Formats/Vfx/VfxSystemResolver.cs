@@ -36,13 +36,29 @@ public static class VfxSystemResolver
     private static readonly uint F_birthColor    = HashAlgorithms.Fnv1a("birthColor");
     private static readonly uint F_color         = HashAlgorithms.Fnv1a("color");
     private static readonly uint F_birthVelocity = HashAlgorithms.Fnv1a("birthVelocity");
+    private static readonly uint F_birthAccel    = HashAlgorithms.Fnv1a("birthAcceleration");
+    private static readonly uint F_accel         = HashAlgorithms.Fnv1a("acceleration");
+    private static readonly uint F_birthOrbital  = HashAlgorithms.Fnv1a("birthOrbitalVelocity");
     private static readonly uint F_worldAccel    = HashAlgorithms.Fnv1a("worldAcceleration");
+    private static readonly uint F_birthDrag     = HashAlgorithms.Fnv1a("birthDrag");
+    private static readonly uint F_drag          = HashAlgorithms.Fnv1a("drag");
+    private static readonly uint F_birthRotation = HashAlgorithms.Fnv1a("birthRotation0");
     private static readonly uint F_birthRotVel0  = HashAlgorithms.Fnv1a("birthRotationalVelocity0");
     private static readonly uint F_emitterPos    = HashAlgorithms.Fnv1a("emitterPosition");
+    private const uint F_spawnShape              = 0x3bf0b4ed; // SpawnShape, observed in current SR VFX
+    private static readonly uint F_emitOffset    = HashAlgorithms.Fnv1a("emitOffset");
+    private static readonly uint F_emitRotAxes   = HashAlgorithms.Fnv1a("emitRotationAxes");
+    private static readonly uint F_emitRotAngles = HashAlgorithms.Fnv1a("emitRotationAngles");
+    private static readonly uint F_direction     = HashAlgorithms.Fnv1a("isDirectionOriented");
     private static readonly uint F_texture       = HashAlgorithms.Fnv1a("texture");
+    private static readonly uint F_textureMult   = HashAlgorithms.Fnv1a("textureMult");
     private static readonly uint F_texDiv        = HashAlgorithms.Fnv1a("texDiv");
+    private static readonly uint F_texDivMult    = HashAlgorithms.Fnv1a("texDivMult");
     private static readonly uint F_numFrames     = HashAlgorithms.Fnv1a("numFrames");
     private static readonly uint F_randomStart   = HashAlgorithms.Fnv1a("isRandomStartFrame");
+    private static readonly uint F_birthFrameRate= HashAlgorithms.Fnv1a("birthFrameRate");
+    private static readonly uint F_frameRate     = HashAlgorithms.Fnv1a("frameRate");
+    private static readonly uint F_birthUvScrollMult = HashAlgorithms.Fnv1a("birthUvScrollRateMult");
     private static readonly uint F_primitive     = HashAlgorithms.Fnv1a("primitive");
 
     // Value* / dynamics inner fields
@@ -63,6 +79,7 @@ public static class VfxSystemResolver
 
     // primitive class hashes we treat as "mesh" (billboarded as fallback)
     private static readonly uint PrimMesh = HashAlgorithms.Fnv1a("VfxPrimitiveMesh");
+    private static readonly uint PrimArbitraryQuad = HashAlgorithms.Fnv1a("VfxPrimitiveArbitraryQuad");
 
     /// <summary>Parse every VfxSystemDefinitionData in the bin, keyed by object path-hash.</summary>
     public static IReadOnlyDictionary<uint, VfxSystemDefinition> ExtractAll(byte[] materialsBin)
@@ -111,6 +128,7 @@ public static class VfxSystemResolver
         var birthColor = ReadCurve4(p, F_birthColor) ?? VfxCurve4.Const(Vector4.One);
 
         bool isMesh = p.TryGetValue(F_primitive, out var prim) && prim is BinTreeStruct ps && ps.ClassHash == PrimMesh;
+        bool isArbitraryQuad = prim is BinTreeStruct aq && aq.ClassHash == PrimArbitraryQuad;
         // M47: the mesh primitive carries its .scb/.sco path (VfxMeshDefinitionData.mSimpleMeshName) or,
         // for skinned primitives (butterflies), mMeshName (.skn) + skeleton (.skl) + mAnimationName (.anm).
         string? meshPath = null, meshSkl = null, meshAnm = null;
@@ -119,6 +137,15 @@ public static class VfxSystemResolver
             meshPath = GetString(md.Properties, F_simpleMesh) ?? GetString(md.Properties, F_meshName);
             meshSkl = GetString(md.Properties, F_meshSkeleton);
             meshAnm = GetString(md.Properties, F_meshAnim);
+        }
+
+        string? textureMultPath = null;
+        Vector2 textureMultTexDiv = Vector2.One, textureMultUvScroll = Vector2.Zero;
+        if (Get(p, F_textureMult) is BinTreeStruct textureMult)
+        {
+            textureMultPath = GetString(textureMult.Properties, F_textureMult);
+            textureMultTexDiv = ReadValueVec2(Get(textureMult.Properties, F_texDivMult)) ?? Vector2.One;
+            textureMultUvScroll = ReadValueVec2(Get(textureMult.Properties, F_birthUvScrollMult)) ?? Vector2.Zero;
         }
 
         return new VfxEmitterDefinition(
@@ -145,34 +172,84 @@ public static class VfxSystemResolver
             RandomStartFrame: GetBool(p, F_randomStart),
             IsMeshPrimitive: isMesh,
             MeshPath: meshPath,
-            UvScrollRate: (ReadCurve3(p, F_birthUvScroll) ?? VfxCurve3.Const(Vector3.Zero)).Constant is var uvs
-                ? new Vector2(uvs.X, uvs.Y) : Vector2.Zero,
+            UvScrollRate: ReadValueVec2(Get(p, F_birthUvScroll)) ?? Vector2.Zero,
             MeshSkeletonPath: meshSkl,
-            MeshAnimationPath: meshAnm);
+            MeshAnimationPath: meshAnm,
+            SpawnShape: ReadSpawnShape(p),
+            BirthAcceleration: ReadCurve3(p, F_birthAccel) ?? ReadCurve3(p, F_accel),
+            BirthOrbitalVelocity: ReadCurve3(p, F_birthOrbital),
+            BirthDrag: ReadCurve3(p, F_birthDrag),
+            DragOverLife: ReadCurve3(p, F_drag),
+            BirthRotation: ReadCurve3(p, F_birthRotation),
+            IsDirectionOriented: GetBool(p, F_direction),
+            IsArbitraryQuad: isArbitraryQuad,
+            BirthFrameRate: ReadCurveF(p, F_birthFrameRate),
+            FrameRate: GetF32(p, F_frameRate),
+            TextureMultPath: textureMultPath,
+            TextureMultTexDiv: textureMultTexDiv,
+            TextureMultUvScrollRate: textureMultUvScroll);
+    }
+
+    private static VfxSpawnShape? ReadSpawnShape(IReadOnlyDictionary<uint, BinTreeProperty> emitterProps)
+    {
+        if (Get(emitterProps, F_spawnShape) is not BinTreeStruct shape) return null;
+
+        var offset = ReadCurve3Property(Get(shape.Properties, F_emitOffset)) ?? VfxCurve3.Const(Vector3.Zero);
+        var axes = ReadVector3Container(Get(shape.Properties, F_emitRotAxes));
+        var angles = ReadCurveFContainer(Get(shape.Properties, F_emitRotAngles));
+        return new VfxSpawnShape(offset, axes, angles);
+    }
+
+    private static IReadOnlyList<Vector3> ReadVector3Container(BinTreeProperty? prop)
+    {
+        if (prop is not BinTreeContainer c || c.Elements.Count == 0) return Array.Empty<Vector3>();
+        var values = new List<Vector3>(c.Elements.Count);
+        foreach (var el in c.Elements)
+            if (AsVec3(el) is { } value) values.Add(value);
+        return values;
+    }
+
+    private static IReadOnlyList<VfxCurveF> ReadCurveFContainer(BinTreeProperty? prop)
+    {
+        if (prop is not BinTreeContainer c || c.Elements.Count == 0) return Array.Empty<VfxCurveF>();
+        var values = new List<VfxCurveF>(c.Elements.Count);
+        foreach (var el in c.Elements)
+            if (ReadCurveFProperty(el) is { } value) values.Add(value);
+        return values;
     }
 
     // ---- Value* curve readers (constantValue + optional dynamics{times,values}) ----
 
     private static VfxCurveF? ReadCurveF(IReadOnlyDictionary<uint, BinTreeProperty> p, uint field)
     {
-        if (p.TryGetValue(field, out var prop) && prop is BinTreeStruct v)
+        return p.TryGetValue(field, out var prop) ? ReadCurveFProperty(prop) : null;
+    }
+
+    private static VfxCurveF? ReadCurveFProperty(BinTreeProperty? prop)
+    {
+        if (prop is BinTreeStruct v)
         {
             float c = AsF32(Get(v.Properties, F_constantValue)) ?? 0f;
             var (times, vals) = ReadDynamics(v.Properties, AsF32);
-            return new VfxCurveF(c, times, vals, ReadProbTables(v.Properties));
+            return new VfxCurveF(c, times, vals, ReadNestedProbTables(v.Properties));
         }
-        return null;
+        return AsF32(prop) is { } scalar ? VfxCurveF.Const(scalar) : null;
     }
 
     private static VfxCurve3? ReadCurve3(IReadOnlyDictionary<uint, BinTreeProperty> p, uint field)
     {
-        if (p.TryGetValue(field, out var prop) && prop is BinTreeStruct v)
+        return p.TryGetValue(field, out var prop) ? ReadCurve3Property(prop) : null;
+    }
+
+    private static VfxCurve3? ReadCurve3Property(BinTreeProperty? prop)
+    {
+        if (prop is BinTreeStruct v)
         {
             var c = AsVec3(Get(v.Properties, F_constantValue)) ?? Vector3.Zero;
             var (times, vals) = ReadDynamics(v.Properties, AsVec3);
-            return new VfxCurve3(c, times, vals, ReadProbTables(v.Properties));
+            return new VfxCurve3(c, times, vals, ReadNestedProbTables(v.Properties));
         }
-        return null;
+        return AsVec3(prop) is { } vector ? VfxCurve3.Const(vector) : null;
     }
 
     private static VfxCurve4? ReadCurve4(IReadOnlyDictionary<uint, BinTreeProperty> p, uint field)
@@ -181,20 +258,22 @@ public static class VfxSystemResolver
         {
             var c = AsVec4(Get(v.Properties, F_constantValue)) ?? Vector4.One;
             var (times, vals) = ReadDynamics(v.Properties, AsVec4);
-            return new VfxCurve4(c, times, vals, ReadProbTables(v.Properties));
+            return new VfxCurve4(c, times, vals, ReadNestedProbTables(v.Properties));
         }
         return null;
     }
 
     /// <summary>M47: read a Value* struct's probabilityTables (container of VfxProbabilityTableData
-    /// { keyTimes:[f32], keyValues:[f32] }, one per component) — Riot's exact per-particle randomisation.
-    /// Null when absent (most map VFX) so callers keep the constant + approximate jitter path.</summary>
+    /// { keyTimes:[f32], keyValues:[f32] }, one per component) - Riot's exact per-particle randomisation.
+    /// Null when the authored value has no per-particle probability multiplier.</summary>
     private static VfxProbTable[]? ReadProbTables(IReadOnlyDictionary<uint, BinTreeProperty> valueProps)
     {
         if (Get(valueProps, F_probTables) is not BinTreeContainer pc || pc.Elements.Count == 0) return null;
-        var list = new List<VfxProbTable>(pc.Elements.Count);
-        foreach (var el in pc.Elements)
+        var tables = new VfxProbTable[pc.Elements.Count];
+        bool any = false;
+        for (int tableIndex = 0; tableIndex < pc.Elements.Count; tableIndex++)
         {
+            var el = pc.Elements[tableIndex];
             if (el is not BinTreeStruct s) continue;
             if (Get(s.Properties, F_keyTimes) is not BinTreeContainer tc ||
                 Get(s.Properties, F_keyValues) is not BinTreeContainer vc) continue;
@@ -206,9 +285,19 @@ public static class VfxSystemResolver
                 times[i] = AsF32(tc.Elements[i]) ?? 0f;
                 vals[i] = AsF32(vc.Elements[i]) ?? 0f;
             }
-            list.Add(new VfxProbTable(times, vals));
+            tables[tableIndex] = new VfxProbTable(times, vals);
+            any = true;
         }
-        return list.Count > 0 ? list.ToArray() : null;
+        return any ? tables : null;
+    }
+
+    /// <summary>Current VFX stores probabilityTables below dynamics. Accept the old top-level layout too.</summary>
+    private static VfxProbTable[]? ReadNestedProbTables(IReadOnlyDictionary<uint, BinTreeProperty> valueProps)
+    {
+        if (Get(valueProps, F_dynamics) is BinTreeStruct dynamics &&
+            ReadProbTables(dynamics.Properties) is { } nested)
+            return nested;
+        return ReadProbTables(valueProps);
     }
 
     /// <summary>Read a dynamics{ times:[f32], values:[T] } sub-struct into parallel arrays, or (null,null).</summary>
@@ -253,6 +342,13 @@ public static class VfxSystemResolver
     private static Vector2? GetVec2(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash)
         => Get(p, hash) is BinTreeVector2 v ? v.Value : null;
 
+    /// <summary>Read either a plain Vector2 or a ValueVector2's authored constant.</summary>
+    private static Vector2? ReadValueVec2(BinTreeProperty? p) => p switch
+    {
+        BinTreeStruct value => AsVec2(Get(value.Properties, F_constantValue)),
+        _ => AsVec2(p),
+    };
+
     private static bool GetBool(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash) => Get(p, hash) switch
     {
         BinTreeBool b => b.Value,
@@ -275,6 +371,14 @@ public static class VfxSystemResolver
         BinTreeVector3 v => v.Value,
         BinTreeVector2 v => new Vector3(v.Value, 0f),
         BinTreeF32 f => new Vector3(f.Value),
+        _ => null
+    };
+
+    private static Vector2? AsVec2(BinTreeProperty? p) => p switch
+    {
+        BinTreeVector2 v => v.Value,
+        BinTreeVector3 v => new Vector2(v.Value.X, v.Value.Y),
+        BinTreeF32 f => new Vector2(f.Value),
         _ => null
     };
 

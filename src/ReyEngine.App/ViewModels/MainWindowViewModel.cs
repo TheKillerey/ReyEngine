@@ -537,6 +537,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private static readonly IReadOnlyDictionary<uint, VfxSystemDefinition> EmptyVfx = new Dictionary<uint, VfxSystemDefinition>();
     private IReadOnlyDictionary<uint, VfxSystemDefinition> _vfxSystems = EmptyVfx;
     private readonly Dictionary<uint, IReadOnlyList<TextureImage?>> _vfxTextureCache = new();  // system hash -> sprites
+    private readonly Dictionary<uint, IReadOnlyList<TextureImage?>> _vfxTextureMultCache = new();
     [ObservableProperty] private bool _playParticlePreview;
     [ObservableProperty] private bool _playAllParticles;
     [ObservableProperty] private VfxPlayback? _currentParticlePlayback;
@@ -555,6 +556,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         foreach (var e in sys.Emitters)
             texs.Add(e.TexturePath is { } p ? LoadTextureByPath(p) : null);
         _vfxTextureCache[sys.PathHash] = texs;
+        return texs;
+    }
+
+    private IReadOnlyList<TextureImage?> ResolveSystemMultTextures(VfxSystemDefinition sys)
+    {
+        if (_vfxTextureMultCache.TryGetValue(sys.PathHash, out var cached)) return cached;
+        var texs = new List<TextureImage?>(sys.Emitters.Count);
+        foreach (var e in sys.Emitters)
+            texs.Add(e.TextureMultPath is { } p ? LoadTextureByPath(p) : null);
+        _vfxTextureMultCache[sys.PathHash] = texs;
         return texs;
     }
 
@@ -623,7 +634,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void SetChampionVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems)
     {
         _vfxSystems = systems;
-        _vfxTextureCache.Clear(); _vfxMeshCache.Clear();
+        _vfxTextureCache.Clear(); _vfxTextureMultCache.Clear(); _vfxMeshCache.Clear();
         ChampionVfxSystems.Clear();
         foreach (var s in systems.Values
                      .Where(s => s.Emitters.Any(e => e.IsVisual))
@@ -641,7 +652,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return;
         }
         // champion VFX are authored around the character root (origin); play one system there.
-        CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, System.Numerics.Vector3.Zero, ResolveSystemTextures(sys), ResolveSystemMeshes(sys)) });
+        CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, System.Numerics.Vector3.Zero,
+            ResolveSystemTextures(sys), ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys)) });
         _log.Info("VFX", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {ResolveSystemTextures(sys).Count(t => t is not null)} sprite(s) resolved.");
     }
 
@@ -656,8 +668,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var items = new List<VfxPlaybackItem>();
             foreach (var v in MapContent.AllParticles)
             {
+                if (!MapVisibility.VisibleForDragon(v.Placement.VisibilityFlags, CurrentDragonBit)) continue;
                 if (!_vfxSystems.TryGetValue(v.Placement.SystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
-                items.Add(new VfxPlaybackItem(s, v.CurrentPosition, ResolveSystemTextures(s), ResolveSystemMeshes(s)));
+                items.Add(new VfxPlaybackItem(s, v.CurrentTransform, ResolveSystemTextures(s), ResolveSystemMeshes(s), ResolveSystemMultTextures(s)));
                 if (items.Count >= MaxPlayAllInstances) break;
             }
             CurrentParticlePlayback = items.Count > 0 ? new VfxPlayback(items) : null;
@@ -674,7 +687,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return;
         }
         var texs = ResolveSystemTextures(sys);
-        CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, node.CurrentPosition, texs, ResolveSystemMeshes(sys)) });
+        CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, node.CurrentTransform, texs,
+            ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys)) });
         _log.Info("Particles", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {texs.Count(t => t is not null)} sprite(s) resolved.");
     }
 
@@ -800,6 +814,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         // M46 Particle Editor wiring
         ParticleEditor.ResolveTextures = ResolveSystemTextures;
+        ParticleEditor.ResolveMultTextures = ResolveSystemMultTextures;
         ParticleEditor.ResolveMeshes = ResolveSystemMeshes;   // M47: .scb/.sco mesh primitives
 
         // M55: model-preview window — its own animation clock (AnimationInspectorViewModel) + VFX resolvers
@@ -1612,7 +1627,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ChampionVfxSystems.Clear();
         HasChampionVfx = false;
         _vfxSystems = EmptyVfx;
-        _vfxTextureCache.Clear(); _vfxMeshCache.Clear();
+        _vfxTextureCache.Clear(); _vfxTextureMultCache.Clear(); _vfxMeshCache.Clear();
         CurrentAnimation = null;
         AnimationTime = 0;
         Animation.Clear();
@@ -1649,6 +1664,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelSubmeshVisible = vis;
         RefreshMeshDetails();  // keep the inspector's mesh details + "why visible/hidden" in sync
         PruneSelectionToVisible(); // hidden (filtered-out) meshes must not stay selected/transformable
+        if (PlayAllParticles) RebuildParticlePlayback();
     }
 
     /// <summary>Current dragon/baron bits from the selectors (0 = "All").</summary>

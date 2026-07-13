@@ -19,7 +19,7 @@ public sealed record VfxEmitterDefinition(
     VfxCurveF Rate,                 // particles per second
     VfxCurveF ParticleLifetime,     // seconds a particle lives
     float? EmitterLifetime,         // emitter runtime; null = infinite (loops)
-    float ParticleLinger,           // extra fade time after emitter stops
+    float ParticleLinger,           // retention window used while an emitter shuts down
     float TimeBeforeFirstEmission,
     bool IsSingleParticle,          // burst of exactly one particle
     bool Disabled,
@@ -40,16 +40,56 @@ public sealed record VfxEmitterDefinition(
     string? MeshPath = null,        // M47: VfxPrimitiveMesh -> VfxMeshDefinitionData.mSimpleMeshName (.scb/.sco)
     Vector2 UvScrollRate = default, // M47c: birthUvScrollRate — mesh particles FLOW by scrolling UVs (waterfalls)
     string? MeshSkeletonPath = null, // M48: skinned mesh primitive (.skl) — butterflies
-    string? MeshAnimationPath = null) // M48: idle animation (.anm) — the wing flap
+    string? MeshAnimationPath = null, // M48: idle animation (.anm) — the wing flap
+    VfxSpawnShape? SpawnShape = null,
+    VfxCurve3? BirthAcceleration = null,
+    VfxCurve3? BirthOrbitalVelocity = null,
+    VfxCurve3? BirthDrag = null,
+    VfxCurve3? DragOverLife = null,
+    VfxCurve3? BirthRotation = null,
+    bool IsDirectionOriented = false,
+    bool IsArbitraryQuad = false,
+    VfxCurveF? BirthFrameRate = null,
+    float? FrameRate = null,
+    string? TextureMultPath = null,
+    Vector2 TextureMultTexDiv = default,
+    Vector2 TextureMultUvScrollRate = default)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
-    public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) || !string.IsNullOrEmpty(MeshPath));
+    public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
+        !string.IsNullOrEmpty(TextureMultPath) || !string.IsNullOrEmpty(MeshPath));
+}
+
+/// <summary>
+/// Authored particle spawn volume. <see cref="EmitOffset"/> is randomized by its ValueVector3
+/// probability tables, then the authored axis/angle rotations are applied in order.
+/// </summary>
+public sealed record VfxSpawnShape(
+    VfxCurve3 EmitOffset,
+    IReadOnlyList<Vector3> RotationAxes,
+    IReadOnlyList<VfxCurveF> RotationAngles)
+{
+    public Vector3 SampleOffset(Random rng)
+    {
+        var offset = EmitOffset.SampleBirth(rng);
+        int count = Math.Min(RotationAxes.Count, RotationAngles.Count);
+        for (int i = 0; i < count; i++)
+        {
+            var axis = RotationAxes[i];
+            if (axis.LengthSquared() <= 1e-8f) continue;
+            float radians = RotationAngles[i].SampleBirth(rng) * (MathF.PI / 180f);
+            offset = Vector3.Transform(offset,
+                Quaternion.CreateFromAxisAngle(Vector3.Normalize(axis), radians));
+        }
+        return offset;
+    }
 }
 
 /// <summary>M47: one per-component probability table (VfxProbabilityTableData): a particle rolls r in 0..1
 /// at birth and takes the piecewise-linear value at r — Riot's exact per-particle randomisation.</summary>
 public readonly record struct VfxProbTable(float[] Times, float[] Values)
 {
+    public bool IsEmpty => Times is not { Length: > 0 } || Values is not { Length: > 0 };
     public float Sample(float r) => VfxCurve.Interp(Times, Values, r, static (a, b, f) => a + (b - a) * f);
 }
 
@@ -62,8 +102,13 @@ public readonly record struct VfxCurveF(float Constant, float[]? Times, float[]?
         return VfxCurve.Interp(Times, Values, t, static (a, b, f) => a + (b - a) * f);
     }
     /// <summary>Birth-time value: exact per-particle randomisation via the probability table when present.</summary>
-    public float SampleBirth(Random rng) =>
-        Prob is { Length: > 0 } ? Prob[0].Sample((float)rng.NextDouble()) : Sample(0f);
+    public float SampleBirth(Random rng)
+    {
+        float value = Sample(0f);
+        return Prob is { Length: > 0 } && !Prob[0].IsEmpty
+            ? value * Prob[0].Sample((float)rng.NextDouble())
+            : value;
+    }
     public static readonly VfxCurveF Zero = new(0f, null, null);
     public static VfxCurveF Const(float v) => new(v, null, null);
 }
@@ -79,14 +124,14 @@ public readonly record struct VfxCurve3(Vector3 Constant, float[]? Times, Vector
     /// <summary>Birth-time value with per-component probability tables (independent rolls, Riot-style).</summary>
     public Vector3 SampleBirth(Random rng)
     {
-        if (Prob is not { Length: > 0 }) return Sample(0f);
         var v = Sample(0f);
+        if (Prob is not { Length: > 0 }) return v;
         return new Vector3(
-            Prob.Length > 0 ? Prob[0].Sample((float)rng.NextDouble()) : v.X,
-            Prob.Length > 1 ? Prob[1].Sample((float)rng.NextDouble()) : v.Y,
-            Prob.Length > 2 ? Prob[2].Sample((float)rng.NextDouble()) : v.Z);
+            Prob.Length > 0 && !Prob[0].IsEmpty ? v.X * Prob[0].Sample((float)rng.NextDouble()) : v.X,
+            Prob.Length > 1 && !Prob[1].IsEmpty ? v.Y * Prob[1].Sample((float)rng.NextDouble()) : v.Y,
+            Prob.Length > 2 && !Prob[2].IsEmpty ? v.Z * Prob[2].Sample((float)rng.NextDouble()) : v.Z);
     }
-    public bool HasProb => Prob is { Length: > 0 };
+    public bool HasProb => Prob is { Length: > 0 } && Prob.Any(static p => !p.IsEmpty);
     public static VfxCurve3 Const(Vector3 v) => new(v, null, null);
 }
 
@@ -100,13 +145,13 @@ public readonly record struct VfxCurve4(Vector4 Constant, float[]? Times, Vector
     }
     public Vector4 SampleBirth(Random rng)
     {
-        if (Prob is not { Length: > 0 }) return Sample(0f);
         var v = Sample(0f);
+        if (Prob is not { Length: > 0 }) return v;
         return new Vector4(
-            Prob.Length > 0 ? Prob[0].Sample((float)rng.NextDouble()) : v.X,
-            Prob.Length > 1 ? Prob[1].Sample((float)rng.NextDouble()) : v.Y,
-            Prob.Length > 2 ? Prob[2].Sample((float)rng.NextDouble()) : v.Z,
-            Prob.Length > 3 ? Prob[3].Sample((float)rng.NextDouble()) : v.W);
+            Prob.Length > 0 && !Prob[0].IsEmpty ? v.X * Prob[0].Sample((float)rng.NextDouble()) : v.X,
+            Prob.Length > 1 && !Prob[1].IsEmpty ? v.Y * Prob[1].Sample((float)rng.NextDouble()) : v.Y,
+            Prob.Length > 2 && !Prob[2].IsEmpty ? v.Z * Prob[2].Sample((float)rng.NextDouble()) : v.Z,
+            Prob.Length > 3 && !Prob[3].IsEmpty ? v.W * Prob[3].Sample((float)rng.NextDouble()) : v.W);
     }
     public static VfxCurve4 Const(Vector4 v) => new(v, null, null);
 }
