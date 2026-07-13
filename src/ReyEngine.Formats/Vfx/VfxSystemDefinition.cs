@@ -11,7 +11,10 @@ public sealed record VfxSystemDefinition(
     uint PathHash,
     string Name,
     string ParticlePath,
-    IReadOnlyList<VfxEmitterDefinition> Emitters);
+    IReadOnlyList<VfxEmitterDefinition> Emitters,
+    string? PersistentSoundEventName = null,
+    string? OnCreateSoundEventName = null,
+    float VisibilityRadius = 0f);
 
 /// <summary>One emitter inside a system. Curves are absolute-valued (sampled over normalised particle age 0..1).</summary>
 public sealed record VfxEmitterDefinition(
@@ -53,7 +56,9 @@ public sealed record VfxEmitterDefinition(
     float? FrameRate = null,
     string? TextureMultPath = null,
     Vector2 TextureMultTexDiv = default,
-    Vector2 TextureMultUvScrollRate = default)
+    Vector2 TextureMultUvScrollRate = default,
+    float StartFrame = 0f,
+    bool UseTextureAspect = false)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||

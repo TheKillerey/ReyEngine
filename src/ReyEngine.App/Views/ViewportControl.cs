@@ -168,6 +168,10 @@ public sealed class ViewportControl : OpenGlControlBase
     // M36: live VFX particle playback (one simulator per played placement)
     private VfxParticleRenderer? _particleRenderer;
     private readonly List<VfxParticleSimulator> _particleSims = new();
+    private readonly Dictionary<VfxPlaybackItem, VfxParticleSimulator> _particleSimCache = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<TextureImage, uint> _particleTextureCache = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<VfxParticleSimulator.EmitterState, VfxMeshAnimation> _particleMeshAnimations = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<VfxParticleSimulator> _wantedParticleSims = new(ReferenceEqualityComparer.Instance);
     private readonly List<(VfxParticleSimulator.EmitterState Es, VfxMeshAnimation Anim)> _animatedMeshEmitters = new(); // M48
     private readonly List<(int Geo, PropMesh Mesh)> _animatedPropGeoms = new();   // M54: prop idle animations
     private readonly System.Diagnostics.Stopwatch _propAnimClock = new();
@@ -528,8 +532,12 @@ public sealed class ViewportControl : OpenGlControlBase
         _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones, CullBackfaces);
         if (AnimateWater) RequestNextFrameRendering(); // keep frames coming so the water animates
 
-        // M36: advance + draw live VFX particles on top of the scene, then keep requesting frames so they animate.
-        if (_particleSims.Count > 0 && _particleRenderer is { } prend && ParticlePlayback is not null)
+        // M36/M60: for Play All, only keep placements near and inside the camera frustum active.
+        if (ParticlePlayback is { } playback)
+            UpdateActiveParticleSims(playback, viewProj);
+
+        // Advance + draw live VFX particles on top of the scene, then keep requesting frames so they animate.
+        if (_particleRenderer is { } prend && ParticlePlayback is not null)
         {
             float dt = _particleClock.IsRunning ? (float)_particleClock.Elapsed.TotalSeconds : 1f / 60f;
             _particleClock.Restart();
@@ -653,15 +661,17 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         if (_particleRenderer is null) return;
         _particleSims.Clear();
+        _particleSimCache.Clear();
+        _particleTextureCache.Clear();
+        _particleMeshAnimations.Clear();
         _animatedMeshEmitters.Clear();   // M48: rebuilt with the sims
 
         var pb = ParticlePlayback;
+        _particleRenderer.ClearTextures();
         if (pb is null || pb.Items.Count == 0) { _particleClock.Stop(); return; }
 
         // Upload every unique sprite once (shared across placements of the same system) + a soft-dot fallback.
-        _particleRenderer.ClearTextures();
         _softDotTex = _particleRenderer.UploadTexture(SoftDot(64), 64, 64);
-        var uploaded = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
 
         foreach (var item in pb.Items)
         {
@@ -683,32 +693,86 @@ public sealed class ViewportControl : OpenGlControlBase
                 if (img is null) es.Texture = _softDotTex;
                 else
                 {
-                    if (!uploaded.TryGetValue(img, out var tex)) { tex = _particleRenderer.UploadTexture(img.Rgba, img.Width, img.Height); uploaded[img] = tex; }
+                    if (!_particleTextureCache.TryGetValue(img, out var tex))
+                    {
+                        tex = _particleRenderer.UploadTexture(img.Rgba, img.Width, img.Height);
+                        _particleTextureCache[img] = tex;
+                    }
                     es.Texture = tex;
+                    if (es.Def.UseTextureAspect)
+                    {
+                        float cellWidth = img.Width / Math.Max(1f, es.Def.TexDiv.X);
+                        float cellHeight = img.Height / Math.Max(1f, es.Def.TexDiv.Y);
+                        if (cellHeight > 0f) es.SpriteAspect = Math.Clamp(cellWidth / cellHeight, 0.05f, 20f);
+                    }
                 }
                 var multImg = item.EmitterMultTextures is { } mts && idx >= 0 && idx < mts.Count ? mts[idx] : null;
                 if (multImg is not null)
                 {
-                    if (!uploaded.TryGetValue(multImg, out var multTex))
+                    if (!_particleTextureCache.TryGetValue(multImg, out var multTex))
                     {
                         multTex = _particleRenderer.UploadTexture(multImg.Rgba, multImg.Width, multImg.Height);
-                        uploaded[multImg] = multTex;
+                        _particleTextureCache[multImg] = multTex;
                     }
                     es.TextureMult = multTex;
                 }
                 // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
                 var mesh = item.EmitterMeshes is { } ms && idx >= 0 && idx < ms.Count ? ms[idx] : null;
-                if (mesh is not null)
+                if (mesh is not null && img is not null)
                 {
                     _particleRenderer.UploadEmitterMesh(es, mesh.Positions, mesh.Uvs,
                         mesh.Animation is not null ? mesh.Indices : null);   // skn = indexed; scb = triangle soup
-                    if (img is null) es.Texture = 0; // white fallback inside the mesh path, not the soft dot
-                    if (mesh.Animation is { } anim) _animatedMeshEmitters.Add((es, anim));   // M48 wing flap
+                    if (mesh.Animation is { } anim) _particleMeshAnimations[es] = anim;   // M48 wing flap
+                }
+                else if (mesh is not null)
+                {
+                    // Solid-white mesh fallbacks become huge opaque blocks in a full-map preview.
+                    // Keep the emitter dormant until its authored mesh texture can be resolved.
+                    es.Texture = 0;
                 }
             }
+            _particleSimCache[item] = sim;
             _particleSims.Add(sim);
         }
+        if (pb.CullByCamera) _particleSims.Clear();
+        RebuildActiveParticleAnimations();
         _particleClock.Restart();
+        RequestNextFrameRendering();
+    }
+
+    private void UpdateActiveParticleSims(VfxPlayback playback, Matrix4x4 viewProj)
+    {
+        if (!playback.CullByCamera) return;
+
+        float maxDistance = Math.Max(6000f, _camera.Distance * 1.35f);
+        float maxDistanceSq = maxDistance * maxDistance;
+        var wanted = _wantedParticleSims;
+        wanted.Clear();
+        foreach (var item in playback.Items)
+        {
+            if (Vector3.DistanceSquared(_lastCamPos, item.WorldPos) > maxDistanceSq) continue;
+            var clip = Vector4.Transform(new Vector4(item.WorldPos, 1f), viewProj);
+            if (clip.W <= 0f) continue;
+            float margin = clip.W * 1.25f;
+            if (MathF.Abs(clip.X) > margin || MathF.Abs(clip.Y) > margin || clip.Z < -margin || clip.Z > margin) continue;
+            if (_particleSimCache.TryGetValue(item, out var sim)) wanted.Add(sim);
+        }
+
+        bool changed = _particleSims.Count != wanted.Count || _particleSims.Any(sim => !wanted.Contains(sim));
+        if (!changed) return;
+        foreach (var sim in wanted)
+            if (!_particleSims.Contains(sim, ReferenceEqualityComparer.Instance)) sim.Reset();
+        _particleSims.Clear();
+        _particleSims.AddRange(wanted);
+        RebuildActiveParticleAnimations();
+    }
+
+    private void RebuildActiveParticleAnimations()
+    {
+        _animatedMeshEmitters.Clear();
+        foreach (var sim in _particleSims)
+        foreach (var es in sim.Emitters)
+            if (_particleMeshAnimations.TryGetValue(es, out var anim)) _animatedMeshEmitters.Add((es, anim));
     }
 
     /// <summary>A soft radial-gradient RGBA sprite used when a particle's real texture can't be resolved.</summary>
@@ -810,7 +874,9 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>Recentre the camera on a world point (M35 particle focus), keeping a close-in distance.</summary>
     private void FocusOnPoint(Vector3 p)
     {
-        _camera.Target = p;
+        // The viewport pre-mirrors Riot world X before applying the camera view. Camera state lives
+        // in that mirrored space too (CameraMoved converts it back), so mirror an external focus point.
+        _camera.Target = new Vector3(-p.X, p.Y, p.Z);
         _camera.Distance = Math.Clamp(_camera.Distance, 400f, 2500f);
         _camera.Near = 5f;
         _camera.Far = 200000f;

@@ -20,6 +20,9 @@ public static class VfxSystemResolver
     // system fields
     private static readonly uint F_particleName = HashAlgorithms.Fnv1a("particleName");
     private static readonly uint F_particlePath = HashAlgorithms.Fnv1a("particlePath");
+    private static readonly uint F_soundPersistent = HashAlgorithms.Fnv1a("soundPersistentDefault");
+    private static readonly uint F_soundOnCreate = HashAlgorithms.Fnv1a("soundOnCreateDefault");
+    private static readonly uint F_visibilityRadius = HashAlgorithms.Fnv1a("visibilityRadius");
 
     // emitter fields
     private static readonly uint F_emitterName   = HashAlgorithms.Fnv1a("emitterName");
@@ -60,6 +63,13 @@ public static class VfxSystemResolver
     private static readonly uint F_frameRate     = HashAlgorithms.Fnv1a("frameRate");
     private static readonly uint F_birthUvScrollMult = HashAlgorithms.Fnv1a("birthUvScrollRateMult");
     private static readonly uint F_primitive     = HashAlgorithms.Fnv1a("primitive");
+    private static readonly uint F_startFrame    = HashAlgorithms.Fnv1a("startFrame");
+    private static readonly uint F_legacySimple  = HashAlgorithms.Fnv1a("LegacySimple");
+    private static readonly uint F_legacyBirthScale = HashAlgorithms.Fnv1a("birthScale");
+    private static readonly uint F_legacyScale = HashAlgorithms.Fnv1a("scale");
+    private static readonly uint F_legacyBirthRotation = HashAlgorithms.Fnv1a("birthRotation");
+    private static readonly uint F_legacyBirthRotVel = HashAlgorithms.Fnv1a("birthRotationalVelocity");
+    private static readonly uint F_shape = HashAlgorithms.Fnv1a("shape");
 
     // Value* / dynamics inner fields
     private static readonly uint F_constantValue = HashAlgorithms.Fnv1a("constantValue");
@@ -117,14 +127,29 @@ public static class VfxSystemResolver
                 if (el is BinTreeStruct s && s.ClassHash == EmitterClass)
                     emitters.Add(ParseEmitter(s));
         }
-        return new VfxSystemDefinition(o.PathHash, name, path, emitters);
+        string? persistentSound = GetString(o.Properties, F_soundPersistent);
+        string? onCreateSound = GetString(o.Properties, F_soundOnCreate);
+        float radius = GetF32(o.Properties, F_visibilityRadius) ?? 0f;
+        return new VfxSystemDefinition(o.PathHash, name, path, emitters, persistentSound, onCreateSound, radius);
     }
 
     private static VfxEmitterDefinition ParseEmitter(BinTreeStruct s)
     {
         var p = s.Properties;
 
-        var birthScale = ReadCurve3(p, F_birthScale0) ?? VfxCurve3.Const(Vector3.One);
+        var legacy = Get(p, F_legacySimple) as BinTreeStruct;
+        var legacyBirthScale = legacy is null ? null : ReadCurveF(legacy.Properties, F_legacyBirthScale);
+        var birthScale = ReadCurve3(p, F_birthScale0)
+            ?? (legacyBirthScale is { } lbs ? ScalarSizeCurve(lbs) : VfxCurve3.Const(Vector3.One));
+        var scaleOverLife = ReadCurve3(p, F_scale0);
+        if (scaleOverLife is null && legacy is not null && ReadCurveF(legacy.Properties, F_legacyScale) is { } legacyScale)
+            scaleOverLife = ScalarScaleCurve(legacyScale);
+        var birthRotation = ReadCurve3(p, F_birthRotation);
+        if (birthRotation is null && legacy is not null && ReadCurveF(legacy.Properties, F_legacyBirthRotation) is { } legacyRotation)
+            birthRotation = ScalarRotationCurve(legacyRotation);
+        var birthRotationalVelocity = ReadCurve3(p, F_birthRotVel0);
+        if (birthRotationalVelocity is null && legacy is not null && ReadCurveF(legacy.Properties, F_legacyBirthRotVel) is { } legacyRotVel)
+            birthRotationalVelocity = ScalarRotationCurve(legacyRotVel);
         var birthColor = ReadCurve4(p, F_birthColor) ?? VfxCurve4.Const(Vector4.One);
 
         bool isMesh = p.TryGetValue(F_primitive, out var prim) && prim is BinTreeStruct ps && ps.ClassHash == PrimMesh;
@@ -159,12 +184,12 @@ public static class VfxSystemResolver
             Disabled: GetBool(p, F_disabled),
             BlendMode: GetU8(p, F_blendMode) ?? 1,
             BirthScale: birthScale,
-            ScaleOverLife: ReadCurve3(p, F_scale0),
+            ScaleOverLife: scaleOverLife,
             BirthColor: birthColor,
             ColorOverLife: ReadCurve4(p, F_color),
             BirthVelocity: ReadCurve3(p, F_birthVelocity),
             Acceleration: ReadCurve3(p, F_worldAccel),
-            BirthRotationalVelocity: ReadCurve3(p, F_birthRotVel0),
+            BirthRotationalVelocity: birthRotationalVelocity,
             EmitterPosition: (ReadCurve3(p, F_emitterPos) ?? VfxCurve3.Const(Vector3.Zero)).Constant,
             TexturePath: GetString(p, F_texture),
             TexDiv: GetVec2(p, F_texDiv) ?? Vector2.One,
@@ -180,25 +205,39 @@ public static class VfxSystemResolver
             BirthOrbitalVelocity: ReadCurve3(p, F_birthOrbital),
             BirthDrag: ReadCurve3(p, F_birthDrag),
             DragOverLife: ReadCurve3(p, F_drag),
-            BirthRotation: ReadCurve3(p, F_birthRotation),
+            BirthRotation: birthRotation,
             IsDirectionOriented: GetBool(p, F_direction),
             IsArbitraryQuad: isArbitraryQuad,
             BirthFrameRate: ReadCurveF(p, F_birthFrameRate),
             FrameRate: GetF32(p, F_frameRate),
             TextureMultPath: textureMultPath,
             TextureMultTexDiv: textureMultTexDiv,
-            TextureMultUvScrollRate: textureMultUvScroll);
+            TextureMultUvScrollRate: textureMultUvScroll,
+            StartFrame: GetU16(p, F_startFrame) ?? 0,
+            UseTextureAspect: legacy is not null);
     }
 
     private static VfxSpawnShape? ReadSpawnShape(IReadOnlyDictionary<uint, BinTreeProperty> emitterProps)
     {
-        if (Get(emitterProps, F_spawnShape) is not BinTreeStruct shape) return null;
+        if ((Get(emitterProps, F_spawnShape) ?? Get(emitterProps, F_shape)) is not BinTreeStruct shape) return null;
 
         var offset = ReadCurve3Property(Get(shape.Properties, F_emitOffset)) ?? VfxCurve3.Const(Vector3.Zero);
         var axes = ReadVector3Container(Get(shape.Properties, F_emitRotAxes));
         var angles = ReadCurveFContainer(Get(shape.Properties, F_emitRotAngles));
         return new VfxSpawnShape(offset, axes, angles);
     }
+
+    private static VfxCurve3 ScalarSizeCurve(VfxCurveF curve) => new(
+        new Vector3(curve.Constant, curve.Constant, 0f), curve.Times,
+        curve.Values?.Select(static v => new Vector3(v, v, 0f)).ToArray());
+
+    private static VfxCurve3 ScalarScaleCurve(VfxCurveF curve) => new(
+        new Vector3(curve.Constant, curve.Constant, 1f), curve.Times,
+        curve.Values?.Select(static v => new Vector3(v, v, 1f)).ToArray());
+
+    private static VfxCurve3 ScalarRotationCurve(VfxCurveF curve) => new(
+        new Vector3(curve.Constant, 0f, 0f), curve.Times,
+        curve.Values?.Select(static v => new Vector3(v, 0f, 0f)).ToArray());
 
     private static IReadOnlyList<Vector3> ReadVector3Container(BinTreeProperty? prop)
     {

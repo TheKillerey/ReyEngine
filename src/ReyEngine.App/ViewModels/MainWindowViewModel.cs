@@ -167,9 +167,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.AutoPreviewDiffuse(slot.Name);   // M50c: show the texture immediately
     }
 
+    private bool IsParticleVisible(MapParticlePlacement particle) =>
+        MapVisibility.VisibleForDragon(particle.VisibilityFlags, CurrentDragonBit);
+
+    private bool IsSoundVisible(MapSoundPlacement sound) =>
+        MapVisibility.VisibleForDragon(sound.VisibilityFlags, CurrentDragonBit);
+
     private void UpdateParticleMarkers() =>
         ParticleMarkers = (ShowParticles && MapContent.HasParticles)
-            ? MapContent.AllParticles.Select(v => v.CurrentPosition).ToList() : null;
+            ? MapContent.AllParticles.Where(v => IsParticleVisible(v.Placement)).Select(v => v.CurrentPosition).ToList() : null;
 
     // ---- M38: cubemap probes + animated props (placed characters) ----
     [ObservableProperty] private IReadOnlyList<MapCubemapProbe>? _currentModelProbes;
@@ -198,26 +204,38 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Load the map's Wwise banks (env/mus events + audio bnk/wpk under sounds/wwise matching
     /// mapN). Called from the map-load background task; cheap misses are fine.</summary>
-    private void LoadMapAudioBanks(string mapgeoPath)
+    private void LoadMapAudioBanks(string mapgeoPath, IReadOnlyList<MapSoundPlacement> sounds)
     {
         _mapAudioBanks = null;
         AudioStatus = "";
         var m = System.Text.RegularExpressions.Regex.Match(mapgeoPath, @"map(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (!m.Success) return;
-        string tag = $"map{m.Groups[1].Value}";
+        var tags = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { $"map{m.Groups[1].Value}" };
+        var families = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "env_", "mus_" };
+        foreach (var sound in sounds)
+        {
+            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
+                         sound.EventName, @"_map(\d+)_", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                tags.Add($"map{match.Groups[1].Value}");
+            if (sound.EventName.Contains("_Env_", StringComparison.OrdinalIgnoreCase)) families.Add("env_");
+            if (sound.EventName.Contains("_Mus_", StringComparison.OrdinalIgnoreCase)) families.Add("mus_");
+            if (sound.EventName.Contains("_Misc_", StringComparison.OrdinalIgnoreCase)) families.Add("misc_");
+            if (sound.EventName.Contains("_Npc_", StringComparison.OrdinalIgnoreCase)) families.Add("npc_");
+        }
         var set = new Formats.Audio.AudioBankSet();
         int banks = 0, packs = 0;
         foreach (var e in AssetEntries)
         {
             if (!e.IsResolved) continue;
             var p = e.Path;
-            // only the map's own ambience/music banks (env_mapN_*, mus_mapN_* under sfx/shared) -
-            // NOT the hundreds of per-character banks in the same wad.
+            // Load only shared bank families referenced by this map. Map11 materials can carry
+            // historical Map1/Map10 VFX-audio events while current assets use Map11.
             if (!p.Contains("sounds/wwise", StringComparison.OrdinalIgnoreCase)
                 || !p.Contains("/sfx/shared/", StringComparison.OrdinalIgnoreCase)) continue;
             var file = Path.GetFileName(p);
-            if (!(file.StartsWith("env_", StringComparison.OrdinalIgnoreCase) || file.StartsWith("mus_", StringComparison.OrdinalIgnoreCase))
-                || !file.Contains(tag, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!families.Any(prefix => file.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) continue;
+            if (!file.Contains("_global_", StringComparison.OrdinalIgnoreCase)
+                && !tags.Any(tag => file.Contains(tag, StringComparison.OrdinalIgnoreCase))) continue;
             try
             {
                 if (p.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase))
@@ -230,7 +248,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!set.IsEmpty)
         {
             _mapAudioBanks = set;
-            _log.Info("Audio", $"{tag}: {banks} bank(s) + {packs} wem pack(s) — {set.EventCount} event(s), {set.WemCount} wem(s)." +
+            _log.Info("Audio", $"{string.Join('/', tags.Order())}: {banks} bank(s) + {packs} wem pack(s) — {set.EventCount} event(s), {set.WemCount} wem(s)." +
                                (Sound.IsAvailable ? "" : " vgmstream-cli NOT found — playback disabled."));
         }
     }
@@ -322,11 +340,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _lastCamPosForAudio = camPos;
         if (!AmbienceEnabled || _mapAudioBanks is null || !Sound.IsAvailable || CurrentModelSounds is not { } sounds) return;
 
-        const float radius = 4000f;   // audible range (world units)
         const int maxVoices = 6;
         var nearest = sounds
+            .Where(IsSoundVisible)
             .Select((s, i) => (Sound: s, Index: i, Dist: System.Numerics.Vector3.Distance(s.Position, camPos)))
-            .Where(x => x.Dist < radius)
+            .Where(x => x.Dist < x.Sound.Radius)
             .OrderBy(x => x.Dist)
             .Take(maxVoices)
             .ToList();
@@ -339,10 +357,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         foreach (var x in nearest)
         {
             string voiceTag = $"amb:{x.Index}";
-            float vol = Math.Clamp(1f - x.Dist / radius, 0f, 1f);
-            if (_activeAmbience.Contains(voiceTag) && Sound.IsTagPlaying(voiceTag))
+            float vol = Math.Clamp(1f - x.Dist / Math.Max(1f, x.Sound.Radius), 0f, 1f);
+            if (_activeAmbience.Contains(voiceTag))
             {
-                Sound.SetTagVolume(voiceTag, vol);
+                if (Sound.IsTagPlaying(voiceTag)) Sound.SetTagVolume(voiceTag, vol);
                 continue;
             }
             var wems = _mapAudioBanks.ResolveEvent(x.Sound.EventName);
@@ -350,7 +368,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (wem.Data is null) continue;
             var wav = Sound.DecodeToWav(wem.Id, wem.Data);
             if (wav is null) continue;
-            Sound.PlayWav(wav, vol, loop: true, tag: voiceTag);
+            Sound.PlayWav(wav, vol, loop: x.Sound.Loop, tag: voiceTag);
             _activeAmbience.Add(voiceTag);
         }
     }
@@ -507,7 +525,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         PropMarkers = (ShowPlaceables && MapContent.HasProps) ? MapContent.AllProps.Select(p => p.Position).ToList() : null;
         ProbeMarkers = (ShowPlaceables && MapContent.HasProbes) ? MapContent.Probes.Select(p => p.Position).ToList() : null;
-        SoundMarkers = (ShowPlaceables && MapContent.HasSounds) ? MapContent.Sounds.Select(s => s.Position).ToList() : null;   // M55
+        SoundMarkers = (ShowPlaceables && MapContent.HasSounds)
+            ? MapContent.Sounds.Where(s => IsSoundVisible(s.Sound)).Select(s => s.Position).ToList() : null;   // M55
     }
 
     partial void OnSelectedPropTreeItemChanged(object? value)
@@ -541,9 +560,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _playParticlePreview;
     [ObservableProperty] private bool _playAllParticles;
     [ObservableProperty] private VfxPlayback? _currentParticlePlayback;
-
-    /// <summary>Cap on simultaneously-played placements for "Play All" (keeps the sim/draw cost sane).</summary>
-    private const int MaxPlayAllInstances = 250;
 
     partial void OnPlayParticlePreviewChanged(bool value) { if (value) PlayAllParticles = false; RebuildParticlePlayback(); }
     partial void OnPlayAllParticlesChanged(bool value) { if (value) PlayParticlePreview = false; RebuildParticlePlayback(); }
@@ -668,15 +684,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var items = new List<VfxPlaybackItem>();
             foreach (var v in MapContent.AllParticles)
             {
-                if (!MapVisibility.VisibleForDragon(v.Placement.VisibilityFlags, CurrentDragonBit)) continue;
+                if (!IsParticleVisible(v.Placement)) continue;
                 if (!_vfxSystems.TryGetValue(v.Placement.SystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
                 items.Add(new VfxPlaybackItem(s, v.CurrentTransform, ResolveSystemTextures(s), ResolveSystemMeshes(s), ResolveSystemMultTextures(s)));
-                if (items.Count >= MaxPlayAllInstances) break;
             }
-            CurrentParticlePlayback = items.Count > 0 ? new VfxPlayback(items) : null;
-            _log.Info("Particles", items.Count >= MaxPlayAllInstances
-                ? $"Playing all — capped at {MaxPlayAllInstances} placements (of {MapContent.ParticleCount})."
-                : $"Playing all — {items.Count} placement(s).");
+            CurrentParticlePlayback = items.Count > 0 ? new VfxPlayback(items, CullByCamera: true) : null;
+            _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.");
             return;
         }
 
@@ -1662,9 +1675,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             vis[i] = resolver.IsVisible(g.VisibilityFlags, g.ControllerHash, dragonBit, baronBit);
         }
         CurrentModelSubmeshVisible = vis;
+        UpdateParticleMarkers();
+        UpdatePlaceableMarkers();
         RefreshMeshDetails();  // keep the inspector's mesh details + "why visible/hidden" in sync
         PruneSelectionToVisible(); // hidden (filtered-out) meshes must not stay selected/transformable
         if (PlayAllParticles) RebuildParticlePlayback();
+        if (AmbienceEnabled) UpdateAmbience(_lastCamPosForAudio, force: true);
     }
 
     /// <summary>Current dragon/baron bits from the selectors (0 = "All").</summary>
@@ -1901,13 +1917,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (d <= radius) { bestT = t; bestNode = node; }
         }
         if (ShowParticles && MapContent.HasParticles && !additive)
-            foreach (var p in MapContent.AllParticles) Test(p, p.CurrentPosition);
+            foreach (var p in MapContent.AllParticles.Where(v => IsParticleVisible(v.Placement))) Test(p, p.CurrentPosition);
         if (ShowPlaceables && MapContent.HasProps && !additive)
             foreach (var p in MapContent.AllProps) Test(p, p.Position);
         if (ShowPlaceables && MapContent.HasProbes && !additive)
             foreach (var p in MapContent.Probes) Test(p, p.Position);
         if (ShowPlaceables && MapContent.HasSounds && !additive)
-            foreach (var s in MapContent.Sounds) Test(s, s.Position);   // M55
+            foreach (var s in MapContent.Sounds.Where(v => IsSoundVisible(v.Sound))) Test(s, s.Position);   // M55/M60
 
         // nearest placeable beats a farther mesh face (icons draw on top, so this matches what you see)
         if (bestNode is not null && bestT < meshT)
@@ -2682,20 +2698,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             var binBytes = GetAssetBytes(binEntry);
-            var particles = MapParticleExtractor.Extract(binBytes, ResolveBinName);
-            CurrentModelParticles = particles.Count > 0 ? particles : null;
             _vfxSystems = VfxSystemResolver.ExtractAll(binBytes);
+            var particles = MapParticleExtractor.Extract(binBytes, hash =>
+                _vfxSystems.TryGetValue(hash, out var system) ? system.ParticlePath : ResolveBinName(hash));
+            CurrentModelParticles = particles.Count > 0 ? particles : null;
             if (particles.Count > 0) _log.Info("MapGeo", $"{particles.Count:n0} placed particle system(s) ({particles.Select(p => p.SystemPath).Distinct().Count()} unique, {_vfxSystems.Count} definitions).");
 
             // M38: cubemap reflection probes + animated props (placed characters) from the same bin.
             // M55: + MapAudio sound placements (Wwise events at world positions).
-            var (probes, props, sounds) = MapPlaceableExtractor.Extract(binBytes);
+            var (probes, props, directSounds) = MapPlaceableExtractor.Extract(binBytes);
+            var particleSounds = MapParticleAudioExtractor.Extract(particles, _vfxSystems);
+            var sounds = directSounds.Concat(particleSounds).ToList();
             CurrentModelProbes = probes.Count > 0 ? probes : null;
             CurrentModelProps = props.Count > 0 ? props : null;
             CurrentModelSounds = sounds.Count > 0 ? sounds : null;
             if (probes.Count > 0 || props.Count > 0 || sounds.Count > 0)
                 _log.Info("MapGeo", $"{probes.Count} cubemap probe(s), {props.Count} animated prop(s) ({props.Select(p => p.CharacterName).Distinct().Count()} characters), {sounds.Count} sound placement(s).");
-            LoadMapAudioBanks(binEntry.Path);   // M56: Wwise banks for event playback
+            LoadMapAudioBanks(binEntry.Path, sounds);   // M56/M60: direct MapAudio + VFX-carried map ambience
         }
         catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; CurrentModelSounds = null; }
 

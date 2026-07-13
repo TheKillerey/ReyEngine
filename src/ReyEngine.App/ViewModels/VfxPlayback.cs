@@ -33,4 +33,4 @@ public sealed record VfxPlaybackItem(
 /// selected particle, or many for "Play All". Built on the UI thread by the view-model; consumed on the
 /// GL thread by the viewport.
 /// </summary>
-public sealed record VfxPlayback(IReadOnlyList<VfxPlaybackItem> Items);
+public sealed record VfxPlayback(IReadOnlyList<VfxPlaybackItem> Items, bool CullByCamera = false);

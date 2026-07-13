@@ -19,6 +19,7 @@ public sealed class VfxParticleSimulator
         public Vector3 PlacementRight, PlacementUp, PlacementForward;
         public uint Texture;                    // GL handle for this emitter's sprite (0 = not uploaded/skip)
         public uint TextureMult;                // optional Riot multiplier/noise texture stage
+        public float SpriteAspect = 1f;         // legacy scalar quads preserve one atlas cell's width/height
         internal float SpawnAccum;
         internal float Age;                     // emitter age (seconds)
         internal bool BurstDone;                // for isSingleParticle
@@ -208,7 +209,9 @@ public sealed class VfxParticleSimulator
             BirthRotation = birthRotation * (MathF.PI / 180f),
             Rot = d.IsMeshPrimitive ? 0f : birthRotation.X * (MathF.PI / 180f),
             RotVel = rotVel.X * (MathF.PI / 180f),
-            StartFrame = d.RandomStartFrame && d.NumFrames > 1 ? _rng.Next(d.NumFrames) : 0,
+            StartFrame = d.RandomStartFrame && d.NumFrames > 1
+                ? _rng.Next(d.NumFrames)
+                : Math.Clamp(d.StartFrame, 0f, Math.Max(0, d.NumFrames - 1)),
             FrameRate = d.BirthFrameRate?.SampleBirth(_rng) ?? d.FrameRate ?? 0f,
         });
     }
@@ -235,7 +238,9 @@ public sealed class VfxParticleSimulator
                     : (p.StartFrame + t * d.NumFrames) % d.NumFrames);
 
             buf[k++] = p.Pos.X; buf[k++] = p.Pos.Y; buf[k++] = p.Pos.Z;
-            buf[k++] = p.BirthSize.X * scaleMul.X;
+            float sizeX = p.BirthSize.X * scaleMul.X;
+            if (d.UseTextureAspect) sizeX *= s.SpriteAspect;
+            buf[k++] = sizeX;
             buf[k++] = p.BirthSize.Y * scaleMul.Y;
             buf[k++] = col.X; buf[k++] = col.Y; buf[k++] = col.Z; buf[k++] = col.W;
             buf[k++] = p.Rot;

@@ -4,6 +4,7 @@ using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.Meta;
+using ReyEngine.Formats.Vfx;
 
 namespace ReyEngine.Formats.MapGeo;
 
@@ -20,7 +21,10 @@ public sealed record MapCubemapProbe(string Name, Vector3 Position, Matrix4x4 Tr
 /// <summary>M55: a placed ambient sound (MapAudio, class 0xa783cfd5) — a Wwise event at a world position.
 /// Map12-style maps place these directly (58 on Bloom); Map11 instead drives ambience via audio-emitter
 /// VFX MapParticles + a painted-region tag registry (so it may have none).</summary>
-public sealed record MapSoundPlacement(string Name, string EventName, Vector3 Position, Matrix4x4 Transform);
+public sealed record MapSoundPlacement(
+    string Name, string EventName, Vector3 Position, Matrix4x4 Transform,
+    float Radius = 4000f, int VisibilityFlags = 255, bool FromParticleSystem = false,
+    bool Loop = true);
 
 public sealed record MapAnimatedProp(string Name, Vector3 Position, Matrix4x4 Transform, string CharacterRecord, string Skin)
 {
@@ -125,4 +129,35 @@ public static class MapPlaceableExtractor
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> props, string name)
         => props.TryGetValue(HashAlgorithms.Fnv1a(name), out var p) ? p
          : props.TryGetValue(HashAlgorithms.Fnv1aRaw(name), out var q) ? q : null;
+}
+
+/// <summary>Map11 also authors positional audio as MapParticle placements whose VFX system carries
+/// soundPersistentDefault/soundOnCreateDefault. Convert those systems into the same sound-placement
+/// model as direct MapAudio objects so discovery, visibility, markers, and playback share one path.</summary>
+public static class MapParticleAudioExtractor
+{
+    public static IReadOnlyList<MapSoundPlacement> Extract(
+        IEnumerable<MapParticlePlacement> particles,
+        IReadOnlyDictionary<uint, VfxSystemDefinition> systems)
+    {
+        var sounds = new List<MapSoundPlacement>();
+        foreach (var particle in particles)
+        {
+            if (!systems.TryGetValue(particle.SystemHash, out var system)) continue;
+            var events = new[]
+            {
+                (Name: system.PersistentSoundEventName, Loop: true),
+                (Name: system.OnCreateSoundEventName, Loop: false),
+            };
+            foreach (var sound in events.Distinct())
+            {
+                if (string.IsNullOrWhiteSpace(sound.Name)) continue;
+                sounds.Add(new MapSoundPlacement(
+                    particle.Name, sound.Name, particle.Position, particle.Transform,
+                    system.VisibilityRadius > 0f ? system.VisibilityRadius : 4000f,
+                    particle.VisibilityFlags, true, sound.Loop));
+            }
+        }
+        return sounds;
+    }
 }

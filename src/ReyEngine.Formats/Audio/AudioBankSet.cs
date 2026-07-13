@@ -76,7 +76,9 @@ public sealed class AudioBankSet
     {
         foreach (var s in _sources)
         {
-            var d = s.Bnk?.GetWemData(wemId) ?? s.Wpk!.GetWemData(wemId);
+            // A BNK source that does not own this id is still a valid source entry; do not
+            // fall through to its null WPK half. Continue to the next BNK/WPK source instead.
+            var d = s.Bnk is { } b ? b.GetWemData(wemId) : s.Wpk?.GetWemData(wemId);
             if (d is not null) return d;
         }
         return null;

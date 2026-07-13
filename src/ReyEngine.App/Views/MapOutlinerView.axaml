@@ -36,7 +36,7 @@
       <ToggleButton Classes="vp" Content="✨ Particles" IsChecked="{Binding ShowParticles}" FontSize="9" Padding="6,1"
                     ToolTip.Tip="Show particle markers in the viewport" />
       <ToggleButton Classes="vp" Content="▶ Play All" IsChecked="{Binding PlayAllParticles}" FontSize="9" Padding="6,1"
-                    ToolTip.Tip="Simulate and play every placed particle system live (capped for performance)" />
+                    ToolTip.Tip="Simulate every placed particle system; only near, on-screen placements stay active" />
       <ToggleButton Classes="vp" Content="🎭 Props" IsChecked="{Binding ShowPropMeshes}" FontSize="9" Padding="6,1"
                     ToolTip.Tip="Render the actual prop meshes (Baron, dragons, camps…) at their placements" />
       <ToggleButton Classes="vp" Content="▶ Anim" IsChecked="{Binding PlayPropAnimations}" FontSize="9" Padding="6,1"
