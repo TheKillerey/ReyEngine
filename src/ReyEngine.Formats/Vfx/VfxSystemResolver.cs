@@ -70,6 +70,10 @@ public static class VfxSystemResolver
     private static readonly uint F_legacyBirthRotation = HashAlgorithms.Fnv1a("birthRotation");
     private static readonly uint F_legacyBirthRotVel = HashAlgorithms.Fnv1a("birthRotationalVelocity");
     private static readonly uint F_shape = HashAlgorithms.Fnv1a("shape");
+    private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
+    private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
+    private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
+    private static readonly uint F_normalMapTexture = HashAlgorithms.Fnv1a("normalMapTexture");
 
     // Value* / dynamics inner fields
     private static readonly uint F_constantValue = HashAlgorithms.Fnv1a("constantValue");
@@ -173,6 +177,16 @@ public static class VfxSystemResolver
             textureMultUvScroll = ReadValueVec2(Get(textureMult.Properties, F_birthUvScrollMult)) ?? Vector2.Zero;
         }
 
+        VfxDistortionDefinition? distortion = null;
+        if (Get(p, F_distortionDefinition) is BinTreeStruct distortionData)
+        {
+            var dp = distortionData.Properties;
+            distortion = new VfxDistortionDefinition(
+                GetF32(dp, F_distortion) ?? 0f,
+                GetU8(dp, F_distortionMode) ?? 0,
+                GetString(dp, F_normalMapTexture));
+        }
+
         return new VfxEmitterDefinition(
             Name: GetString(p, F_emitterName) ?? "(emitter)",
             Rate: ReadCurveF(p, F_rate) ?? VfxCurveF.Const(10f),
@@ -214,7 +228,8 @@ public static class VfxSystemResolver
             TextureMultTexDiv: textureMultTexDiv,
             TextureMultUvScrollRate: textureMultUvScroll,
             StartFrame: GetU16(p, F_startFrame) ?? 0,
-            UseTextureAspect: legacy is not null);
+            UseTextureAspect: legacy is not null,
+            Distortion: distortion);
     }
 
     private static VfxSpawnShape? ReadSpawnShape(IReadOnlyDictionary<uint, BinTreeProperty> emitterProps)

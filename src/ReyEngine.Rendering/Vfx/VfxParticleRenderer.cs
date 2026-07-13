@@ -15,11 +15,14 @@ public sealed class VfxParticleRenderer
     private uint _program, _vao, _quadVbo, _instVbo;
     private int _uViewProj, _uCamRight, _uCamUp, _uTexDiv, _uTex, _uUvScrollRate;
     private int _uTexMult, _uHasTexMult, _uTexDivMult, _uUvScrollRateMult;
+    private int _uIsDistortion, _uDistortionTex, _uSceneTex, _uViewportSize, _uDistortionStrength;
     private int _uDirectionOriented, _uArbitraryQuad;
     private int _uPlacementRight, _uPlacementUp, _uPlacementForward;
     private int _instCapFloats;
     private bool _ready;
     private readonly List<uint> _ownedTextures = new();
+    private uint _sceneTexture;
+    private int _sceneWidth, _sceneHeight;
 
     private const int Stride = 18;
 
@@ -41,6 +44,11 @@ public sealed class VfxParticleRenderer
         _uTexDivMult = gl.GetUniformLocation(_program, "uTexDivMult");
         _uUvScrollRateMult = gl.GetUniformLocation(_program, "uUvScrollRateMult");
         _uUvScrollRate = gl.GetUniformLocation(_program, "uUvScrollRate");
+        _uIsDistortion = gl.GetUniformLocation(_program, "uIsDistortion");
+        _uDistortionTex = gl.GetUniformLocation(_program, "uDistortionTex");
+        _uSceneTex = gl.GetUniformLocation(_program, "uSceneTex");
+        _uViewportSize = gl.GetUniformLocation(_program, "uViewportSize");
+        _uDistortionStrength = gl.GetUniformLocation(_program, "uDistortionStrength");
         _uDirectionOriented = gl.GetUniformLocation(_program, "uDirectionOriented");
         _uArbitraryQuad = gl.GetUniformLocation(_program, "uArbitraryQuad");
         _uPlacementRight = gl.GetUniformLocation(_program, "uPlacementRight");
@@ -99,6 +107,33 @@ public sealed class VfxParticleRenderer
         return tex;
     }
 
+    /// <summary>Copy the current framebuffer color before particles draw. Distortion emitters sample this
+    /// immutable scene copy, avoiding the framebuffer feedback loop forbidden by GLES.</summary>
+    public unsafe void CaptureScene(uint width, uint height)
+    {
+        if (!_ready || width == 0 || height == 0) return;
+        if (_sceneTexture == 0)
+        {
+            _sceneTexture = _gl.GenTexture();
+            _gl.BindTexture(TextureTarget.Texture2D, _sceneTexture);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        }
+        else _gl.BindTexture(TextureTarget.Texture2D, _sceneTexture);
+
+        if (_sceneWidth != (int)width || _sceneHeight != (int)height)
+        {
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, width, height, 0,
+                PixelFormat.Rgba, PixelType.UnsignedByte, null);
+            _sceneWidth = (int)width;
+            _sceneHeight = (int)height;
+        }
+        _gl.CopyTexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, 0, 0, width, height);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+    }
+
     /// <summary>Draw all emitters of the simulator. <paramref name="viewProj"/> and <paramref name="view"/>
     /// are the app's mirror-inclusive matrices (same ones passed to the mesh renderer).</summary>
     public unsafe void Render(VfxParticleSimulator sim, Matrix4x4 viewProj, Matrix4x4 view)
@@ -117,6 +152,9 @@ public sealed class VfxParticleRenderer
         _gl.Uniform3(_uCamUp, camUp.X, camUp.Y, camUp.Z);
         _gl.Uniform1(_uTex, 0);
         _gl.Uniform1(_uTexMult, 1);
+        _gl.Uniform1(_uSceneTex, 2);
+        _gl.Uniform1(_uDistortionTex, 3);
+        _gl.Uniform2(_uViewportSize, (float)_sceneWidth, (float)_sceneHeight);
 
         _gl.BindVertexArray(_vao);
         _gl.ActiveTexture(TextureUnit.Texture0);
@@ -134,6 +172,8 @@ public sealed class VfxParticleRenderer
             // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
             if (es.MeshVao != 0) { RenderMeshEmitter(es, viewProj); continue; }
             if (es.Texture == 0) continue;
+            bool isDistortion = es.Def.Distortion is not null;
+            if (isDistortion && (es.DistortionTexture == 0 || _sceneTexture == 0)) continue;
 
             int floats = es.InstanceCount * Stride;
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _instVbo);
@@ -150,8 +190,10 @@ public sealed class VfxParticleRenderer
                 }
             }
 
-            // blend mode: 1 = additive (glow) is the common case; treat 0/1/4/5 as additive, else alpha.
-            if (IsAdditive(es.Def.BlendMode)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
+            // Distortion replaces the covered scene sample through its normal-map mask; Riot's authored
+            // blendMode=1 must not make that refracted sample additive (which would turn heat haze white).
+            if (isDistortion) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            else if (IsAdditive(es.Def.BlendMode)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
             else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
             _gl.Uniform2(_uTexDiv, es.Def.TexDiv.X <= 0 ? 1f : es.Def.TexDiv.X, es.Def.TexDiv.Y <= 0 ? 1f : es.Def.TexDiv.Y);
@@ -162,6 +204,8 @@ public sealed class VfxParticleRenderer
             _gl.Uniform2(_uUvScrollRateMult, es.Def.TextureMultUvScrollRate.X, es.Def.TextureMultUvScrollRate.Y);
             _gl.Uniform1(_uDirectionOriented, es.Def.IsDirectionOriented ? 1 : 0);
             _gl.Uniform1(_uArbitraryQuad, es.Def.IsArbitraryQuad ? 1 : 0);
+            _gl.Uniform1(_uIsDistortion, isDistortion ? 1 : 0);
+            _gl.Uniform1(_uDistortionStrength, es.Def.Distortion?.Strength ?? 0f);
             _gl.Uniform3(_uPlacementRight, es.PlacementRight.X, es.PlacementRight.Y, es.PlacementRight.Z);
             _gl.Uniform3(_uPlacementUp, es.PlacementUp.X, es.PlacementUp.Y, es.PlacementUp.Z);
             _gl.Uniform3(_uPlacementForward, es.PlacementForward.X, es.PlacementForward.Y, es.PlacementForward.Z);
@@ -171,6 +215,14 @@ public sealed class VfxParticleRenderer
             {
                 _gl.ActiveTexture(TextureUnit.Texture1);
                 _gl.BindTexture(TextureTarget.Texture2D, es.TextureMult);
+                _gl.ActiveTexture(TextureUnit.Texture0);
+            }
+            if (isDistortion)
+            {
+                _gl.ActiveTexture(TextureUnit.Texture2);
+                _gl.BindTexture(TextureTarget.Texture2D, _sceneTexture);
+                _gl.ActiveTexture(TextureUnit.Texture3);
+                _gl.BindTexture(TextureTarget.Texture2D, es.DistortionTexture);
                 _gl.ActiveTexture(TextureUnit.Texture0);
             }
             _gl.DrawArraysInstanced(PrimitiveType.TriangleFan, 0, 4, (uint)es.InstanceCount);
@@ -183,6 +235,10 @@ public sealed class VfxParticleRenderer
         _gl.BindVertexArray(0);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _gl.ActiveTexture(TextureUnit.Texture1);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _gl.ActiveTexture(TextureUnit.Texture2);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _gl.ActiveTexture(TextureUnit.Texture3);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _gl.ActiveTexture(TextureUnit.Texture0);
     }
@@ -209,6 +265,9 @@ public sealed class VfxParticleRenderer
         _gl.DeleteBuffer(_instVbo);
         _gl.DeleteVertexArray(_vao);
         _gl.DeleteProgram(_program);
+        if (_sceneTexture != 0) _gl.DeleteTexture(_sceneTexture);
+        _sceneTexture = 0;
+        _sceneWidth = _sceneHeight = 0;
         _ready = false;
     }
 
@@ -458,10 +517,25 @@ in vec4 vColor;
 uniform sampler2D uTex;
 uniform sampler2D uTexMult;
 uniform int uHasTexMult;
+uniform int uIsDistortion;
+uniform sampler2D uDistortionTex;
+uniform sampler2D uSceneTex;
+uniform vec2 uViewportSize;
+uniform float uDistortionStrength;
 out vec4 fragColor;
 void main(){
     vec4 t = texture(uTex, vUv);
     if (uHasTexMult != 0) t *= texture(uTexMult, vUvMult);
+    if (uIsDistortion != 0) {
+        vec4 normalSample = texture(uDistortionTex, vUv);
+        float mask = normalSample.a * t.a * vColor.a;
+        vec2 normalOffset = normalSample.rg * 2.0 - vec2(1.0);
+        vec2 sceneUv = gl_FragCoord.xy / max(uViewportSize, vec2(1.0));
+        sceneUv = clamp(sceneUv + normalOffset * uDistortionStrength * mask, vec2(0.0), vec2(1.0));
+        vec4 refracted = texture(uSceneTex, sceneUv);
+        fragColor = vec4(refracted.rgb, mask);
+        return;
+    }
     fragColor = t * vColor;
 }";
 }

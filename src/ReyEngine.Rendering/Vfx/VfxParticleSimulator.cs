@@ -19,6 +19,7 @@ public sealed class VfxParticleSimulator
         public Vector3 PlacementRight, PlacementUp, PlacementForward;
         public uint Texture;                    // GL handle for this emitter's sprite (0 = not uploaded/skip)
         public uint TextureMult;                // optional Riot multiplier/noise texture stage
+        public uint DistortionTexture;          // normal map for screen-space heat haze/refraction
         public float SpriteAspect = 1f;         // legacy scalar quads preserve one atlas cell's width/height
         internal float SpawnAccum;
         internal float Age;                     // emitter age (seconds)

@@ -22,6 +22,7 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     // wired by MainWindowViewModel
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveMultTextures;
+    public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveDistortionTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>?>? ResolveMeshes; // M47
     public Func<string, Avalonia.Media.Imaging.Bitmap?>? LoadThumbnail;   // particle sprite preview on cards
     public Action<string>? Info;
@@ -93,8 +94,10 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         if (!_defs.TryGetValue(SelectedSystem.Entry.PathHash, out var def)) { Playback = null; return; }
         var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var multTexs = ResolveMultTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
+        var distortionTexs = ResolveDistortionTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var meshes = ResolveMeshes?.Invoke(def);
-        Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs, meshes, multTexs) });
+        Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs, meshes,
+            multTexs, distortionTexs) });
     }
 
     [RelayCommand] private void Restart() => RebuildPlayback();

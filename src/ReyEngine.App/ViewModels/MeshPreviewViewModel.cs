@@ -44,6 +44,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     // wired once by MainWindowViewModel
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveTextures;
+    public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveDistortionTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<StaticMeshData?>?>? ResolveMeshes;
 
     public MeshPreviewViewModel()
@@ -86,7 +87,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     {
         if (value is null || !_vfxDefs.TryGetValue(value.Hash, out var def)) { Playback = null; return; }
         var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
-        Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs, ResolveMeshes?.Invoke(def)) });
+        Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs,
+            ResolveMeshes?.Invoke(def), emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def)) });
     }
 
     [RelayCommand] private void StopVfx() => SelectedVfx = null;

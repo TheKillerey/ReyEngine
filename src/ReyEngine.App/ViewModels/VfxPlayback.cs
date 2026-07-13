@@ -16,14 +16,17 @@ public sealed record VfxPlaybackItem(
     Matrix4x4 Transform,
     IReadOnlyList<TextureImage?> EmitterTextures,
     IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>? EmitterMeshes = null,
-    IReadOnlyList<TextureImage?>? EmitterMultTextures = null)   // Riot TEXTUREMULT stage
+    IReadOnlyList<TextureImage?>? EmitterMultTextures = null,   // Riot TEXTUREMULT stage
+    IReadOnlyList<TextureImage?>? EmitterDistortionTextures = null)
 {
     /// <summary>Convenience for champion/editor previews authored at a translated root.</summary>
     public VfxPlaybackItem(VfxSystemDefinition system, Vector3 worldPos,
         IReadOnlyList<TextureImage?> emitterTextures,
         IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>? emitterMeshes = null,
-        IReadOnlyList<TextureImage?>? emitterMultTextures = null)
-        : this(system, Matrix4x4.CreateTranslation(worldPos), emitterTextures, emitterMeshes, emitterMultTextures) { }
+        IReadOnlyList<TextureImage?>? emitterMultTextures = null,
+        IReadOnlyList<TextureImage?>? emitterDistortionTextures = null)
+        : this(system, Matrix4x4.CreateTranslation(worldPos), emitterTextures, emitterMeshes, emitterMultTextures,
+            emitterDistortionTextures) { }
 
     public Vector3 WorldPos => Transform.Translation;
 }

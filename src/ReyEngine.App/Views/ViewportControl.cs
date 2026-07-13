@@ -539,6 +539,10 @@ public sealed class ViewportControl : OpenGlControlBase
         // Advance + draw live VFX particles on top of the scene, then keep requesting frames so they animate.
         if (_particleRenderer is { } prend && ParticlePlayback is not null)
         {
+            // M61: distortion particles (heat haze) refract a stable copy of the already-rendered scene.
+            // Avoid the framebuffer copy entirely for the common case where no active system uses distortion.
+            if (_particleSims.Any(static s => s.Emitters.Any(static e => e.Def.Distortion is not null)))
+                prend.CaptureScene(w, h);
             float dt = _particleClock.IsRunning ? (float)_particleClock.Elapsed.TotalSeconds : 1f / 60f;
             _particleClock.Restart();
             dt = ParticlePaused ? 0f : dt * (float)ParticleSpeed;   // M46: editor speed/pause controls
@@ -715,6 +719,16 @@ public sealed class ViewportControl : OpenGlControlBase
                         _particleTextureCache[multImg] = multTex;
                     }
                     es.TextureMult = multTex;
+                }
+                var distortionImg = item.EmitterDistortionTextures is { } dts && idx >= 0 && idx < dts.Count ? dts[idx] : null;
+                if (distortionImg is not null)
+                {
+                    if (!_particleTextureCache.TryGetValue(distortionImg, out var distortionTex))
+                    {
+                        distortionTex = _particleRenderer.UploadTexture(distortionImg.Rgba, distortionImg.Width, distortionImg.Height);
+                        _particleTextureCache[distortionImg] = distortionTex;
+                    }
+                    es.DistortionTexture = distortionTex;
                 }
                 // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
                 var mesh = item.EmitterMeshes is { } ms && idx >= 0 && idx < ms.Count ? ms[idx] : null;

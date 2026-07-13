@@ -58,12 +58,17 @@ public sealed record VfxEmitterDefinition(
     Vector2 TextureMultTexDiv = default,
     Vector2 TextureMultUvScrollRate = default,
     float StartFrame = 0f,
-    bool UseTextureAspect = false)
+    bool UseTextureAspect = false,
+    VfxDistortionDefinition? Distortion = null)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
-        !string.IsNullOrEmpty(TextureMultPath) || !string.IsNullOrEmpty(MeshPath));
+        !string.IsNullOrEmpty(TextureMultPath) || !string.IsNullOrEmpty(MeshPath) ||
+        Distortion is { NormalMapTexturePath.Length: > 0 });
 }
+
+/// <summary>Riot's screen-space particle distortion stage (heat haze/refraction).</summary>
+public sealed record VfxDistortionDefinition(float Strength, int Mode, string? NormalMapTexturePath);
 
 /// <summary>
 /// Authored particle spawn volume. <see cref="EmitOffset"/> is randomized by its ValueVector3
