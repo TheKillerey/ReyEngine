@@ -45,7 +45,23 @@ public sealed record MaterialProfile(
     Vector4 ColorOutside = default,
     float WaterAlpha = 1f,
     string? FlowMapPath = null,
-    string? FlowNormalPath = null)
+    string? FlowNormalPath = null,
+    // Terrain blend shader 0xe25b830f: Mask_Texture selects three detail layers over Bottom_Texture.
+    // Detail layers use world-space XZ coordinates with independent tiling; the mask keeps mesh UVs.
+    bool IsTerrainBlend = false,
+    string? TerrainMaskPath = null,
+    string? TerrainBottomPath = null,
+    string? TerrainMiddlePath = null,
+    string? TerrainTopPath = null,
+    string? TerrainExtrasPath = null,
+    Vector2 TerrainBottomTiling = default,
+    Vector2 TerrainMiddleTiling = default,
+    Vector2 TerrainTopTiling = default,
+    Vector2 TerrainExtrasTiling = default,
+    float TerrainWorldScale = 1f,
+    float TerrainRMaskMultiplier = 1f,
+    float TerrainGMaskMultiplier = 1f,
+    float TerrainBMaskMultiplier = 1f)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -79,7 +95,7 @@ public sealed record MaterialProfile(
     {
         get
         {
-            var parts = new List<string> { "diffuse" };
+            var parts = new List<string> { IsTerrainBlend ? "terrain blend" : "diffuse" };
             if (UsesRim) parts.Add("rim");
             if (UsesSpecular) parts.Add("specular");
             if (UsesEmissive) parts.Add("emissive");
@@ -118,7 +134,7 @@ public sealed record MaterialProfile(
                 },
                 CullEnabled ? "cull backfaces" : "two-sided",
             };
-            if (BlendEnabled) parts.Add("blend");
+            if (BlendEnabled) parts.Add(IsTerrainBlend ? "texture blend" : "blend");
             if (!DepthWrite) parts.Add("no depth-write");
             return string.Join(" · ", parts);
         }
@@ -145,6 +161,8 @@ public static class MaterialProfiles
 
     public static MaterialProfile Classify(MaterialBinding b, MaterialSourceKind sourceKind)
     {
+        var terrain = ClassifyTerrainBlend(b);
+
         // ---- UV transform from paramValues (first matching name wins) ----
         Vector2 scale = Vector2.One, offset = Vector2.Zero;
         float rotationDeg = 0f;
@@ -190,6 +208,9 @@ public static class MaterialProfiles
             if (Norm(p.Name) == "alphatestvalue" && p.TryGetVector4(out var av) && av.X > 0f) { alphaCutoff = av.X; break; }
 
         var (renderMode, doubleSided) = ClassifyRenderMode(b, sourceKind, alphaCutoff);
+        // This shader's pass has blendEnable set even though it blends terrain textures internally. The final
+        // ground surface is solid and must stay in the opaque depth-writing pass.
+        if (terrain.IsTerrainBlend) renderMode = MaterialRenderMode.Opaque;
 
         // TintColor: for sampler-less effect/indicator materials (no diffuse texture) the tint IS the colour
         // and its alpha the opacity (e.g. FaeLights <0,1,1,0.1>). The renderer only applies this on the
@@ -209,7 +230,49 @@ public static class MaterialProfiles
         return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
             renderMode, doubleSided, tint, b.BlendEnable, alphaCutoff, clampU, clampV,
             flow.IsFlowmap, flow.Speed, flow.Strength, flow.Tile, flow.Inside, flow.Outside, flow.Alpha,
-            flow.FlowMapPath, flow.FlowNormalPath);
+            flow.FlowMapPath, flow.FlowNormalPath,
+            terrain.IsTerrainBlend, terrain.MaskPath, terrain.BottomPath, terrain.MiddlePath, terrain.TopPath,
+            terrain.ExtrasPath, terrain.BottomTiling, terrain.MiddleTiling, terrain.TopTiling, terrain.ExtrasTiling,
+            terrain.WorldScale, terrain.RMultiplier, terrain.GMultiplier, terrain.BMultiplier);
+    }
+
+    /// <summary>Detect shader 0xe25b830f and read its authored terrain layer paths, tiling, and RGB mask weights.</summary>
+    private static (bool IsTerrainBlend, string? MaskPath, string? BottomPath, string? MiddlePath,
+        string? TopPath, string? ExtrasPath, Vector2 BottomTiling, Vector2 MiddleTiling,
+        Vector2 TopTiling, Vector2 ExtrasTiling, float WorldScale, float RMultiplier,
+        float GMultiplier, float BMultiplier) ClassifyTerrainBlend(MaterialBinding b)
+    {
+        TextureSlot? Slot(string name) => b.Slots.FirstOrDefault(s => s.SamplerName.Equals(name, OIC));
+        var mask = Slot("Mask_Texture");
+        var bottom = Slot("Bottom_Texture");
+        var middle = Slot("Middle_Texture");
+        var top = Slot("Top_Texture");
+        var extras = Slot("Extras_Texture");
+        bool exactShader = (b.RenderShader ?? "").Equals("0xe25b830f", OIC);
+        bool samplerSignature = mask is not null && bottom is not null && middle is not null && top is not null && extras is not null;
+        if (!(exactShader || samplerSignature) || !samplerSignature)
+            return (false, null, null, null, null, null, default, default, default, default, 1f, 1f, 1f, 1f);
+
+        Vector4 Param(string name, Vector4 fallback)
+        {
+            var parameter = b.Parameters.FirstOrDefault(p => Norm(p.Name) == Norm(name));
+            return parameter is not null && parameter.TryGetVector4(out var value) ? value : fallback;
+        }
+        static Vector2 Tiling(Vector4 value) => new(
+            value.X != 0f ? value.X : 1f,
+            value.Y != 0f ? value.Y : (value.X != 0f ? value.X : 1f));
+
+        var worldScale = Param("WS_Multiplier", new Vector4(1f, 0f, 0f, 0f)).X;
+        if (worldScale == 0f) worldScale = 1f;
+        return (true, mask!.Path, bottom!.Path, middle!.Path, top!.Path, extras!.Path,
+            Tiling(Param("Bottom_Tiling", Vector4.One)),
+            Tiling(Param("Mid_Tiling", Vector4.One)),
+            Tiling(Param("Top_Tiling", Vector4.One)),
+            Tiling(Param("Extra_Tiling", Vector4.One)),
+            worldScale,
+            Param("R_mask_multiplier", Vector4.One).X,
+            Param("G_mask_multiplier", Vector4.One).X,
+            Param("B_mask_multiplier", Vector4.One).X);
     }
 
     /// <summary>M44: detect + read a Flowmap_River water material (Bloom_FlowMapRiver_*). A flowmap material

@@ -26,6 +26,9 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mTwoSided, _mMirrored;                            // M34: two-sided lighting + mirrored-transform debug
     private int _mIsFlowmap, _mTime, _mFlowSpeed, _mFlowStrength;  // M44: flowmap river water
     private int _mFlowTile, _mColorInside, _mColorOutside, _mWaterAlpha;
+    private int _mIsTerrainBlend, _mTerrainWorldScale;             // terrain shader 0xe25b830f
+    private int _mTerrainBottomTiling, _mTerrainMiddleTiling, _mTerrainTopTiling, _mTerrainExtrasTiling;
+    private int _mTerrainMaskMultipliers;
     private int _mLightmapScale;                                  // M45: MapSunProperties.lightMapColorScale
     private int _lMvp, _lColor;
     private float _time;                                          // M44: animation clock (seconds), fed to uTime
@@ -102,6 +105,15 @@ public sealed class ViewportMeshRenderer : IDisposable
         public Vector4 ColorOutside;
         public float WaterAlpha;
 
+        // Terrain shader 0xe25b830f. Slots are reused as mask/middle/top/extras for this special branch.
+        public bool IsTerrainBlend;
+        public Vector2 TerrainBottomTiling;
+        public Vector2 TerrainMiddleTiling;
+        public Vector2 TerrainTopTiling;
+        public Vector2 TerrainExtrasTiling;
+        public float TerrainWorldScale;
+        public Vector3 TerrainMaskMultipliers;
+
         public static SubmeshDraw Create(int start, int count) =>
             new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One, AlphaCutoff = 0.35f };
     }
@@ -115,7 +127,11 @@ public sealed class ViewportMeshRenderer : IDisposable
         // M44 flowmap river water: a Flowmap_River material animates flowing water; Flow_Map on tex slot 1,
         // Flowing_Normal_Map on slot 2, diffuse on slot 0. FlowTile/Speed/Strength drive the animation.
         bool IsFlowmap = false, float FlowSpeed = 0f, float FlowStrength = 0f, Vector2 FlowTile = default,
-        Vector4 ColorInside = default, Vector4 ColorOutside = default, float WaterAlpha = 1f)
+        Vector4 ColorInside = default, Vector4 ColorOutside = default, float WaterAlpha = 1f,
+        // Terrain blend: slot 0 bottom, slot 1 mask, slot 2 middle, slot 3 top, slot 4 extras.
+        bool IsTerrainBlend = false, Vector2 TerrainBottomTiling = default, Vector2 TerrainMiddleTiling = default,
+        Vector2 TerrainTopTiling = default, Vector2 TerrainExtrasTiling = default, float TerrainWorldScale = 1f,
+        Vector3 TerrainMaskMultipliers = default)
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0, false, null, false, 0.35f, false, false);
     }
@@ -196,6 +212,14 @@ uniform vec2 uFlowTile;        // FlowNormal_Tile
 uniform vec4 uColorInside;     // Color_Inside (deep water)
 uniform vec4 uColorOutside;    // Color_Outside (edge water)
 uniform float uWaterAlpha;     // TranslucentControl
+// Terrain shader 0xe25b830f: RGB mask blends middle/top/extras over the bottom layer.
+uniform int uIsTerrainBlend;
+uniform float uTerrainWorldScale;
+uniform vec2 uTerrainBottomTiling;
+uniform vec2 uTerrainMiddleTiling;
+uniform vec2 uTerrainTopTiling;
+uniform vec2 uTerrainExtrasTiling;
+uniform vec3 uTerrainMaskMultipliers;
 
 // League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
 vec3 matcapColour(vec3 worldN) {
@@ -229,6 +253,22 @@ void main() {
     vec4 tex = (uHasTex == 1) ? texture(uTex, uv) : vec4(uBaseColor * uTint.rgb, uTint.a);
     vec3 base = tex.rgb;
     float alpha = tex.a;
+
+    // The mask uses the mesh UV atlas. Detail layers are planar world-space textures and are stacked in
+    // authored order: R selects Middle, G selects Top, B selects Extras. The pass blend flag describes this
+    // internal texture blend; the final terrain surface remains opaque.
+    if (uIsTerrainBlend == 1) {
+        vec2 worldUv = vWorld.xz * uTerrainWorldScale;
+        vec3 bottom = (uHasTex == 1) ? texture(uTex, worldUv * uTerrainBottomTiling).rgb : uBaseColor;
+        vec3 middle = (uHasGradient == 1) ? texture(uGradient, worldUv * uTerrainMiddleTiling).rgb : bottom;
+        vec3 top = (uHasEmissive == 1) ? texture(uEmissive, worldUv * uTerrainTopTiling).rgb : middle;
+        vec3 extras = (uHasMatCap == 1) ? texture(uMatCap, worldUv * uTerrainExtrasTiling).rgb : top;
+        vec3 weights = (uHasMask == 1) ? texture(uMask, uv).rgb * uTerrainMaskMultipliers : vec3(0.0);
+        base = mix(bottom, middle, clamp(weights.r, 0.0, 1.0));
+        base = mix(base, top, clamp(weights.g, 0.0, 1.0));
+        base = mix(base, extras, clamp(weights.b, 0.0, 1.0));
+        alpha = 1.0;
+    }
 
     if (uMode == 2) { FragColor = vec4(base, 1.0); return; }                 // debug: base/diffuse
     if (uMode == 3) { FragColor = vec4(vec3(alpha), 1.0); return; }          // debug: alpha
@@ -353,11 +393,11 @@ void main() {
             float gate = (uHasMask == 1) ? mix(0.5, 1.0, texture(uMask, uv).r) : 1.0;
             col += fres * 0.6 * rimCol * gate;
         }
-        if (uHasMatCap == 1) {
+        if (uHasMatCap == 1 && uIsTerrainBlend == 0) {
             float mcGate = (uHasMatCapMask == 1) ? texture(uMatCapMask, uv).r : 1.0;
             col += matcapColour(n) * 0.6 * mcGate;
         }
-        if (uHasEmissive == 1) {
+        if (uHasEmissive == 1 && uIsTerrainBlend == 0) {
             float em = texture(uEmissive, uv).r;
             col += base * em * 1.5;
         }
@@ -427,6 +467,13 @@ void main() { FragColor = uColor; }";
         _mColorInside = gl.GetUniformLocation(_meshProgram, "uColorInside");
         _mColorOutside = gl.GetUniformLocation(_meshProgram, "uColorOutside");
         _mWaterAlpha = gl.GetUniformLocation(_meshProgram, "uWaterAlpha");
+        _mIsTerrainBlend = gl.GetUniformLocation(_meshProgram, "uIsTerrainBlend");
+        _mTerrainWorldScale = gl.GetUniformLocation(_meshProgram, "uTerrainWorldScale");
+        _mTerrainBottomTiling = gl.GetUniformLocation(_meshProgram, "uTerrainBottomTiling");
+        _mTerrainMiddleTiling = gl.GetUniformLocation(_meshProgram, "uTerrainMiddleTiling");
+        _mTerrainTopTiling = gl.GetUniformLocation(_meshProgram, "uTerrainTopTiling");
+        _mTerrainExtrasTiling = gl.GetUniformLocation(_meshProgram, "uTerrainExtrasTiling");
+        _mTerrainMaskMultipliers = gl.GetUniformLocation(_meshProgram, "uTerrainMaskMultipliers");
         _mLightmapScale = gl.GetUniformLocation(_meshProgram, "uLightmapScale");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
@@ -916,6 +963,13 @@ void main(){
         _submeshes[index].ColorInside = mat.ColorInside;
         _submeshes[index].ColorOutside = mat.ColorOutside;
         _submeshes[index].WaterAlpha = mat.WaterAlpha;
+        _submeshes[index].IsTerrainBlend = mat.IsTerrainBlend;
+        _submeshes[index].TerrainBottomTiling = mat.TerrainBottomTiling;
+        _submeshes[index].TerrainMiddleTiling = mat.TerrainMiddleTiling;
+        _submeshes[index].TerrainTopTiling = mat.TerrainTopTiling;
+        _submeshes[index].TerrainExtrasTiling = mat.TerrainExtrasTiling;
+        _submeshes[index].TerrainWorldScale = mat.TerrainWorldScale;
+        _submeshes[index].TerrainMaskMultipliers = mat.TerrainMaskMultipliers;
     }
 
     /// <summary>Reset every submesh's preview material to identity UV + no rim/specular (M32).</summary>
@@ -934,6 +988,7 @@ void main(){
             _submeshes[i].Mirrored = false;
             _submeshes[i].ClampUv = Vector2.Zero;
             _submeshes[i].IsFlowmap = false;
+            _submeshes[i].IsTerrainBlend = false;
         }
     }
 
@@ -1196,6 +1251,17 @@ void main(){
                         _gl.Uniform4(_mColorInside, s.ColorInside.X, s.ColorInside.Y, s.ColorInside.Z, s.ColorInside.W);
                         _gl.Uniform4(_mColorOutside, s.ColorOutside.X, s.ColorOutside.Y, s.ColorOutside.Z, s.ColorOutside.W);
                         _gl.Uniform1(_mWaterAlpha, s.WaterAlpha);
+                    }
+                    _gl.Uniform1(_mIsTerrainBlend, s.IsTerrainBlend ? 1 : 0);
+                    if (s.IsTerrainBlend)
+                    {
+                        _gl.Uniform1(_mTerrainWorldScale, s.TerrainWorldScale);
+                        _gl.Uniform2(_mTerrainBottomTiling, s.TerrainBottomTiling.X, s.TerrainBottomTiling.Y);
+                        _gl.Uniform2(_mTerrainMiddleTiling, s.TerrainMiddleTiling.X, s.TerrainMiddleTiling.Y);
+                        _gl.Uniform2(_mTerrainTopTiling, s.TerrainTopTiling.X, s.TerrainTopTiling.Y);
+                        _gl.Uniform2(_mTerrainExtrasTiling, s.TerrainExtrasTiling.X, s.TerrainExtrasTiling.Y);
+                        _gl.Uniform3(_mTerrainMaskMultipliers, s.TerrainMaskMultipliers.X,
+                            s.TerrainMaskMultipliers.Y, s.TerrainMaskMultipliers.Z);
                     }
                     _gl.ActiveTexture(TextureUnit.Texture0);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);

@@ -46,6 +46,7 @@ public static class MapGeoMaterialResolver
         if (Field(material.Properties, "samplerValues") is not BinTreeContainer samplers) return null;
 
         string? first = null;
+        string? terrainBottom = null;
         foreach (var el in samplers.Elements)
         {
             if (el is not BinTreeStruct s) continue;
@@ -57,13 +58,16 @@ public static class MapGeoMaterialResolver
                        ?? (Field(s.Properties, "textureName") as BinTreeString)?.Value;
             if (!IsTexturePath(path)) continue;
             first ??= path;
+            if (name.Equals("Bottom_Texture", StringComparison.OrdinalIgnoreCase)) terrainBottom = path;
             if (name.Contains("Diffuse", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("Color", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("Albedo", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("Main", StringComparison.OrdinalIgnoreCase))
                 return path;
         }
-        return first;
+        // Terrain shader 0xe25b830f lists Mask_Texture first. Its actual base colour is Bottom_Texture;
+        // returning the mask as diffuse was the source of the bright patchwork fallback rendering.
+        return terrainBottom ?? first;
     }
 
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> props, string name)

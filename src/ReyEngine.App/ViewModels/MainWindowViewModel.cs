@@ -777,19 +777,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _shaderDbStatus = "Riot shaders not scanned.";
     private MapGeoAsset? _currentMap;
     private IReadOnlyDictionary<string, MaterialProfile>? _currentMapProfiles; // M34: material name → render-state profile
-    // M44: the current map's flowmap-water Flow_Map / Flowing_Normal textures (per group; null when the map has
-    // no water). Kept in fields so they survive the ClearSecondaryTextures() that follows a map load and can be
-    // re-published — the same reason baked lightmaps are handled outside ClearSecondaryTextures.
+    // Map-only secondary layers. Flow water uses mask/gradient; terrain shader 0xe25b830f additionally reuses
+    // emissive/matcap as top/extras. Keep them across ClearSecondaryTextures() just like baked lightmaps.
     private IReadOnlyList<TextureImage?>? _mapFlowMasks;
     private IReadOnlyList<TextureImage?>? _mapFlowGrads;
+    private IReadOnlyList<TextureImage?>? _mapTerrainTops;
+    private IReadOnlyList<TextureImage?>? _mapTerrainExtras;
 
-    /// <summary>M44: (re)publish the map's flow-water textures onto the mask/gradient channels (slots 1/2) the
-    /// water shader samples, and flag the viewport to animate. Safe to call after ClearSecondaryTextures().</summary>
-    private void PublishMapFlowWater()
+    /// <summary>Republish map-only special material layers after ClearSecondaryTextures().</summary>
+    private void PublishMapMaterialLayers()
     {
         CurrentModelMaskTextures = _mapFlowMasks;
         CurrentModelGradientTextures = _mapFlowGrads;
-        HasFlowmapWater = _mapFlowMasks is not null;
+        CurrentModelEmissiveTextures = _mapTerrainTops;
+        CurrentModelMatCapTextures = _mapTerrainExtras;
+        HasFlowmapWater = CurrentModelSubmeshMaterials?.Any(m => m.IsFlowmap) == true;
     }
     private MapVisibilityControllers? _mapControllers;
     private MapVisibilityResolver? _visibilityResolver;
@@ -920,6 +922,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials,
         IReadOnlyList<TextureImage?>? Lightmaps,
         IReadOnlyList<TextureImage?>? FlowMasks, IReadOnlyList<TextureImage?>? FlowGrads, // M44 flow-water
+        IReadOnlyList<TextureImage?>? TerrainTops, IReadOnlyList<TextureImage?>? TerrainExtras,
         double LightmapScale, Formats.MapGeo.MapSunProperties? SunProps, // M45 sun properties
         IReadOnlyList<MapParticlePlacement>? Particles,
         IReadOnlyDictionary<uint, VfxSystemDefinition> VfxSystems,
@@ -1073,7 +1076,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return null;
         return new MapScene(map, _currentMapBytes, entry, _mapControllers, mesh,
             CurrentModelTextures, CurrentModelSubmeshMaterials, CurrentModelLightmapTextures,
-            _mapFlowMasks, _mapFlowGrads,
+            _mapFlowMasks, _mapFlowGrads, _mapTerrainTops, _mapTerrainExtras,
             CurrentLightmapScale, _currentSunProps,
             CurrentModelParticles, _vfxSystems, CurrentModelProbes, CurrentModelProps,
             CurrentModelSounds,
@@ -1092,9 +1095,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelTextures = s.Textures;
         ClearSecondaryTextures();
         CurrentModelLightmapTextures = s.Lightmaps;
-        _mapFlowMasks = s.FlowMasks; _mapFlowGrads = s.FlowGrads; PublishMapFlowWater(); // M44
-        CurrentLightmapScale = s.LightmapScale; _currentSunProps = s.SunProps;           // M45
+        _mapFlowMasks = s.FlowMasks; _mapFlowGrads = s.FlowGrads;
+        _mapTerrainTops = s.TerrainTops; _mapTerrainExtras = s.TerrainExtras;
         CurrentModelSubmeshMaterials = s.Materials;
+        PublishMapMaterialLayers();
+        CurrentLightmapScale = s.LightmapScale; _currentSunProps = s.SunProps;           // M45
         CurrentModelParticles = s.Particles;
         _vfxSystems = s.VfxSystems;
         CurrentModelProbes = s.Probes;
@@ -1627,6 +1632,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasFlowmapWater = false;
         _mapFlowMasks = null;
         _mapFlowGrads = null;
+        _mapTerrainTops = null;
+        _mapTerrainExtras = null;
         CurrentLightmapScale = 1.0;
         _currentSunProps = null;
         CurrentModelParticles = null;
@@ -2673,7 +2680,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _selection.Clear();
                 CurrentModelTextures = textures;
                 ClearSecondaryTextures(); // maps don't use champion secondary samplers
-                PublishMapFlowWater();    // M44: re-apply flow-water textures wiped by ClearSecondaryTextures
+                PublishMapMaterialLayers(); // re-apply map special-material layers wiped above
                 MapGeoInspector.Show(map, entry.Path);
                 MapContent.SetBucketGrids(map.BucketGrids);   // M55: culling grid showcase
                 RebuildBucketGridLines();
@@ -2853,12 +2860,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var result = new TextureImage?[map.Groups.Count];
         var lightmaps = new TextureImage?[map.Groups.Count];
-        var flowMaps = new TextureImage?[map.Groups.Count];    // M44: Flow_Map -> mask slot (1)
-        var flowNormals = new TextureImage?[map.Groups.Count]; // M44: Flowing_Normal_Map -> gradient slot (2)
+        var flowMaps = new TextureImage?[map.Groups.Count];    // slot 1: flow map or terrain RGB blend mask
+        var flowNormals = new TextureImage?[map.Groups.Count]; // slot 2: flow normal or terrain middle layer
+        var terrainTops = new TextureImage?[map.Groups.Count];   // slot 3 (emissive reused by terrain branch)
+        var terrainExtras = new TextureImage?[map.Groups.Count]; // slot 4 (matcap reused by terrain branch)
         var submeshMats = new ViewportMeshRenderer.SubmeshMaterial[map.Groups.Count];
         // Per-mesh mirrored (negative-determinant) flag, for the two-sided/mirrored render state (M34).
         var mirroredByMesh = map.Meshes.ToDictionary(m => m.Index, m => m.IsMirrored);
-        int lmGroups = 0, flowGroups = 0;
+        int lmGroups = 0, flowGroups = 0, terrainGroups = 0;
         for (int i = 0; i < map.Groups.Count; i++)
         {
             var matName = map.Groups[i].Material;
@@ -2868,6 +2877,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 submeshMats[i] = ToSubmeshMaterial(prof);
                 LogUvTransform(prof, matName);
+
+                // Shader 0xe25b830f: load the opaque terrain splat layers. Renderer slots are deliberately
+                // reused because regular emissive/matcap effects are disabled inside the terrain branch.
+                if (prof.IsTerrainBlend)
+                {
+                    if (!string.IsNullOrEmpty(prof.TerrainBottomPath)) result[i] = Load(prof.TerrainBottomPath);
+                    if (!string.IsNullOrEmpty(prof.TerrainMaskPath)) flowMaps[i] = Load(prof.TerrainMaskPath);
+                    if (!string.IsNullOrEmpty(prof.TerrainMiddlePath)) flowNormals[i] = Load(prof.TerrainMiddlePath);
+                    if (!string.IsNullOrEmpty(prof.TerrainTopPath)) terrainTops[i] = Load(prof.TerrainTopPath);
+                    if (!string.IsNullOrEmpty(prof.TerrainExtrasPath)) terrainExtras[i] = Load(prof.TerrainExtrasPath);
+                    terrainGroups++;
+                }
 
                 // M44 flowmap river water: load the Flow_Map + Flowing_Normal textures into the mask/gradient
                 // slots the water shader samples (slots 1/2). Falls back to a flat animated look if missing.
@@ -2910,18 +2931,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         CurrentModelSubmeshMaterials = submeshMats;
         CurrentModelLightmapTextures = lmGroups > 0 ? lightmaps : null;
-        // M44: stash the flow textures (mask/gradient channels) and publish them. A later ClearSecondaryTextures()
-        // on the load path wipes the channels, so the load code re-calls PublishMapFlowWater() from these fields.
-        _mapFlowMasks = flowGroups > 0 ? flowMaps : null;
-        _mapFlowGrads = flowGroups > 0 ? flowNormals : null;
-        PublishMapFlowWater();
+        // Stash map-only secondary layers. A later ClearSecondaryTextures() on the load path wipes the channels,
+        // so the UI-thread load code republishes them from these fields.
+        _mapFlowMasks = flowGroups + terrainGroups > 0 ? flowMaps : null;
+        _mapFlowGrads = flowGroups + terrainGroups > 0 ? flowNormals : null;
+        _mapTerrainTops = terrainGroups > 0 ? terrainTops : null;
+        _mapTerrainExtras = terrainGroups > 0 ? terrainExtras : null;
+        PublishMapMaterialLayers();
 
         int unique = cache.Values.Count(v => v is not null);
         int spec = submeshMats.Count(m => m.UsesSpecular);
         _log.Success("MapGeo", $"Loaded {unique} unique textures ({materialToTexture.Count}/{materialCount} materials resolved)" +
                                (spec > 0 ? $", {spec} group(s) with specular." : ".") +
                                (lmGroups > 0 ? $" {lmGroups} group(s) with baked lightmaps." : "") +
-                               (flowGroups > 0 ? $" {flowGroups} flowmap-water group(s)." : ""));
+                               (flowGroups > 0 ? $" {flowGroups} flowmap-water group(s)." : "") +
+                               (terrainGroups > 0 ? $" {terrainGroups} terrain-blend group(s)." : ""));
         return result;
     }
 
@@ -2975,7 +2999,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             FlowTile: p.FlowTile,
             ColorInside: p.ColorInside,
             ColorOutside: p.ColorOutside,
-            WaterAlpha: p.WaterAlpha);
+            WaterAlpha: p.WaterAlpha,
+            IsTerrainBlend: p.IsTerrainBlend,
+            TerrainBottomTiling: p.TerrainBottomTiling,
+            TerrainMiddleTiling: p.TerrainMiddleTiling,
+            TerrainTopTiling: p.TerrainTopTiling,
+            TerrainExtrasTiling: p.TerrainExtrasTiling,
+            TerrainWorldScale: p.TerrainWorldScale,
+            TerrainMaskMultipliers: new System.Numerics.Vector3(
+                p.TerrainRMaskMultiplier, p.TerrainGMaskMultiplier, p.TerrainBMaskMultiplier));
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 
