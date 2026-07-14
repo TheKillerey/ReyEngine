@@ -19,8 +19,9 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mUvScaleOffset, _mUvRot, _mUsesRim, _mUsesSpec;   // M32: per-material UV + feature flags
     private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
-    private int _mAlphaMode;                                       // M34: 0 opaque · 1 cutout · 2 transparent
-    private int _mTint;                                            // M34: TintColor for untextured effect materials
+    private int _mAlphaMode;                                       // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
+    private int _mTint;                                            // M34: TintColor for untextured effects / authored decals
+    private int _mTintTextured;
     private int _mAlphaCutoff;                                     // M34: per-material alpha-test threshold (AlphaTestValue)
     private int _mClampUv;                                         // M34: per-axis UV clamp (decals; addressU/V == Clamp)
     private int _mTwoSided, _mMirrored;                            // M34: two-sided lighting + mirrored-transform debug
@@ -89,12 +90,13 @@ public sealed class ViewportMeshRenderer : IDisposable
         public float UvRotationRadians;
         public bool UsesRim;
         public bool UsesSpecular;
-        public int AlphaMode;           // M34: 0 opaque, 1 cutout (alpha-test), 2 transparent (alpha-blend)
+        public int AlphaMode;           // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
         public float AlphaCutoff;       // M34: alpha-test threshold for cutout (default 0.35)
         public bool DoubleSided;        // M34: two-sided material (cullEnable=false) — never culled
         public bool Mirrored;           // M34: source mesh has a negative-determinant (mirrored) transform
         public Vector2 ClampUv;         // M34: per-axis UV clamp (1 = clamp/decal, 0 = tile); default 0,0
-        public Vector4 Tint;            // M34: TintColor, applied to the UNTEXTURED fallback only; default 1,1,1,1
+        public Vector4 Tint;            // M34: TintColor; default 1,1,1,1
+        public bool TintTextured;        // multiply a diffuse texture too (authored soft decals)
 
         // M44 flowmap river water (Bloom_FlowMapRiver_*). Flow_Map -> Mask (slot 1), Flowing_Normal -> Gradient (slot 2).
         public bool IsFlowmap;
@@ -122,7 +124,8 @@ public sealed class ViewportMeshRenderer : IDisposable
     /// <paramref name="Mirrored"/> is a per-mesh geometric flag (negative-determinant transform), not a material one.</summary>
     public readonly record struct SubmeshMaterial(
         bool UsesRim, bool UsesSpecular, Vector2 UvScale, Vector2 UvOffset, float UvRotationDegrees,
-        int AlphaMode = 0, bool DoubleSided = false, Vector4? Tint = null, bool Mirrored = false, float AlphaCutoff = 0.35f,
+        int AlphaMode = 0, bool DoubleSided = false, Vector4? Tint = null, bool TintTextured = false,
+        bool Mirrored = false, float AlphaCutoff = 0.35f,
         bool ClampU = false, bool ClampV = false,
         // M44 flowmap river water: a Flowmap_River material animates flowing water; Flow_Map on tex slot 1,
         // Flowing_Normal_Map on slot 2, diffuse on slot 0. FlowTile/Speed/Strength drive the animation.
@@ -133,7 +136,7 @@ public sealed class ViewportMeshRenderer : IDisposable
         Vector2 TerrainTopTiling = default, Vector2 TerrainExtrasTiling = default, float TerrainWorldScale = 1f,
         Vector3 TerrainMaskMultipliers = default)
     {
-        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f, 0, false, null, false, 0.35f, false, false);
+        public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
 
     private const string MeshVert = @"
@@ -196,10 +199,11 @@ uniform int uUsesSpec;         // specular highlight only when the material prof
 uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map baked-term/mask data)
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
 uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
-uniform int uAlphaMode;        // M34: 0 opaque, 1 cutout (alpha-test discard), 2 transparent (alpha-blend)
+uniform int uAlphaMode;        // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
 uniform float uAlphaCutoff;    // M34: alpha-test threshold for cutout mode (from AlphaTestValue; default 0.35)
 uniform vec2 uClampUv;         // M34: per-axis UV clamp (1 = clamp to [0,1] for decals; 0 = tile)
-uniform vec4 uTint;            // M34: TintColor (rgba) for UNTEXTURED effect materials; 1,1,1,1 = none
+uniform vec4 uTint;            // M34: TintColor (rgba); 1,1,1,1 = none
+uniform int uTintTextured;     // 1 when TintColor also multiplies the diffuse texture (soft decals)
 uniform int uTwoSided;         // M34: 1 when this face renders two-sided (flip backface normals for lighting)
 uniform int uMirrored;         // M34: 1 when the source mesh transform is mirrored (negative determinant)
 // M44 flowmap river water: Flow_Map (rg = flow dir) reuses slot 1, Flowing_Normal_Map reuses slot 2.
@@ -248,9 +252,10 @@ void main() {
     // usually transparent -> cut out) instead of GL_REPEAT tiling it across the whole mesh.
     if (uClampUv.x > 0.5) uv.x = clamp(uv.x, 0.0, 1.0);
     if (uClampUv.y > 0.5) uv.y = clamp(uv.y, 0.0, 1.0);
-    // Textured materials sample the diffuse untouched (uTint never affects them). Untextured effect/indicator
-    // materials (FaeLights etc.) use their TintColor as the colour + alpha instead of the plain grey fallback.
+    // Untextured effect/indicator materials use TintColor as their colour. Soft decals additionally multiply
+    // their diffuse by the authored tint; ordinary textured materials remain unchanged.
     vec4 tex = (uHasTex == 1) ? texture(uTex, uv) : vec4(uBaseColor * uTint.rgb, uTint.a);
+    if (uHasTex == 1 && uTintTextured == 1) tex *= uTint;
     vec3 base = tex.rgb;
     float alpha = tex.a;
 
@@ -405,8 +410,8 @@ void main() {
     }
     // M34 compositing: cutout discards low-alpha texels (opaque depth); transparent keeps the texture alpha
     // for the alpha-blend pass; opaque forces alpha 1. Applies to Basic (0) and RiotApprox (1).
-    if (uAlphaMode == 1 && alpha < uAlphaCutoff) discard;
-    float outA = (uAlphaMode == 2) ? clamp(alpha, 0.0, 1.0) : 1.0;
+    if ((uAlphaMode == 1 || uAlphaMode == 3) && alpha < uAlphaCutoff) discard;
+    float outA = (uAlphaMode == 2 || uAlphaMode == 3) ? clamp(alpha, 0.0, 1.0) : 1.0;
     FragColor = vec4(col, outA);
 }";
 
@@ -455,6 +460,7 @@ void main() { FragColor = uColor; }";
         _mHasLightmap = gl.GetUniformLocation(_meshProgram, "uHasLightmap");
         _mAlphaMode = gl.GetUniformLocation(_meshProgram, "uAlphaMode");
         _mTint = gl.GetUniformLocation(_meshProgram, "uTint");
+        _mTintTextured = gl.GetUniformLocation(_meshProgram, "uTintTextured");
         _mAlphaCutoff = gl.GetUniformLocation(_meshProgram, "uAlphaCutoff");
         _mClampUv = gl.GetUniformLocation(_meshProgram, "uClampUv");
         _mTwoSided = gl.GetUniformLocation(_meshProgram, "uTwoSided");
@@ -954,6 +960,7 @@ void main(){
         _submeshes[index].AlphaCutoff = mat.AlphaCutoff;
         _submeshes[index].DoubleSided = mat.DoubleSided;
         _submeshes[index].Tint = mat.Tint ?? Vector4.One;
+        _submeshes[index].TintTextured = mat.TintTextured;
         _submeshes[index].Mirrored = mat.Mirrored;
         _submeshes[index].ClampUv = new Vector2(mat.ClampU ? 1f : 0f, mat.ClampV ? 1f : 0f);
         _submeshes[index].IsFlowmap = mat.IsFlowmap;
@@ -985,6 +992,7 @@ void main(){
             _submeshes[i].AlphaCutoff = 0.35f;
             _submeshes[i].DoubleSided = false;
             _submeshes[i].Tint = Vector4.One;
+            _submeshes[i].TintTextured = false;
             _submeshes[i].Mirrored = false;
             _submeshes[i].ClampUv = Vector2.Zero;
             _submeshes[i].IsFlowmap = false;
@@ -1241,6 +1249,7 @@ void main(){
                     _gl.Uniform1(_mAlphaCutoff, s.AlphaCutoff);
                     _gl.Uniform2(_mClampUv, s.ClampUv.X, s.ClampUv.Y);
                     _gl.Uniform4(_mTint, s.Tint.X, s.Tint.Y, s.Tint.Z, s.Tint.W);
+                    _gl.Uniform1(_mTintTextured, s.TintTextured ? 1 : 0);
                     // M44 flowmap river water: animated flowing water (Flow_Map on slot 1, normal on slot 2).
                     _gl.Uniform1(_mIsFlowmap, s.IsFlowmap ? 1 : 0);
                     if (s.IsFlowmap)
@@ -1289,20 +1298,20 @@ void main(){
 
                 // Pass 1: opaque + cutout (AlphaMode 0/1) with depth writes on.
                 foreach (var s in _submeshes)
-                    if (s.Visible && s.AlphaMode != 2) DrawSubmesh(s);
+                    if (s.Visible && s.AlphaMode < 2) DrawSubmesh(s);
 
-                // Pass 2: transparent (AlphaMode 2) after solids — alpha-blend, depth-test on but NO depth
+                // Pass 2: transparent modes (2/3) after solids — alpha-blend, depth-test on but NO depth
                 // write, so overlapping glass/water composites without occluding itself. (No back-to-front
                 // sort — acceptable for a preview.)
                 bool anyTransparent = false;
-                foreach (var s in _submeshes) if (s.Visible && s.AlphaMode == 2) { anyTransparent = true; break; }
+                foreach (var s in _submeshes) if (s.Visible && s.AlphaMode >= 2) { anyTransparent = true; break; }
                 if (anyTransparent)
                 {
                     _gl.Enable(EnableCap.Blend);
                     _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
                     _gl.DepthMask(false);
                     foreach (var s in _submeshes)
-                        if (s.Visible && s.AlphaMode == 2) DrawSubmesh(s);
+                        if (s.Visible && s.AlphaMode >= 2) DrawSubmesh(s);
                     _gl.DepthMask(true);
                 }
                 _gl.Disable(EnableCap.CullFace); // restore default so the line/gizmo overlays are unaffected
@@ -1348,7 +1357,7 @@ void main(){
             _gl.Uniform1(_mUsesRim, 0); _gl.Uniform1(_mUsesSpec, 0);
             _gl.Uniform1(_mAlphaMode, 1); _gl.Uniform1(_mAlphaCutoff, 0.35f);   // cutout so fur/wing alpha reads
             _gl.Uniform4(_mUvScaleOffset, 1f, 1f, 0f, 0f); _gl.Uniform1(_mUvRot, 0f);
-            _gl.Uniform2(_mClampUv, 0f, 0f); _gl.Uniform4(_mTint, 1f, 1f, 1f, 1f); _gl.Uniform1(_mMirrored, 0);
+            _gl.Uniform2(_mClampUv, 0f, 0f); _gl.Uniform4(_mTint, 1f, 1f, 1f, 1f); _gl.Uniform1(_mTintTextured, 0); _gl.Uniform1(_mMirrored, 0);
             _gl.Uniform1(_mIsFlowmap, 0);   // M44: props never flow
             for (int u = 1; u <= 6; u++) { _gl.ActiveTexture(TextureUnit.Texture0 + u); _gl.BindTexture(TextureTarget.Texture2D, _whiteTex); }
 

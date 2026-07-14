@@ -8,8 +8,8 @@ namespace ReyEngine.Core.Assets;
 public enum AssetSourceKind
 {
     ProjectOverride = 0, // editable workspace files (highest priority)
-    ProjectWad = 1,      // editable mod .wad.client
-    ProjectFolder = 2,   // editable unpacked-WAD folder
+    ProjectFolder = 1,   // editable unpacked-WAD folder (loose/decompressed files override its packed WAD)
+    ProjectWad = 2,      // editable mod .wad.client
     RiotReference = 3,   // read-only Riot source/reference WAD (lowest priority)
 }
 

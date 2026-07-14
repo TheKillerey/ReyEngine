@@ -2648,7 +2648,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             _log.Info("MapGeo", $"Decoding {entry.DisplayName} …");
             var rawMapBytes = ReadAsset(entry.PathHash);
-            var (map, mesh, textures) = await Task.Run(() =>
+            var (map, mesh, textures, sunProperties) = await Task.Run(() =>
             {
                 var m = MapGeoDecoder.Decode(rawMapBytes);
                 var meshAsset = new MeshAsset
@@ -2664,8 +2664,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     BoundsMin = m.BoundsMin,
                     BoundsMax = m.BoundsMax,
                 };
-                var tex = TryLoadMapTextures(entry, m);
-                return (m, meshAsset, tex);
+                var loaded = TryLoadMapTextures(entry, m);
+                return (m, meshAsset, loaded.Textures, loaded.SunProperties);
             });
 
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -2679,6 +2679,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _currentMapEntry = entry;
                 _selection.Clear();
                 CurrentModelTextures = textures;
+                ApplySunProperties(sunProperties);
                 ClearSecondaryTextures(); // maps don't use champion secondary samplers
                 PublishMapMaterialLayers(); // re-apply map special-material layers wiped above
                 MapGeoInspector.Show(map, entry.Path);
@@ -2704,14 +2705,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Resolve the map's materials .bin → per-group diffuse textures (shared instances for reuse).</summary>
-    private IReadOnlyList<TextureImage?>? TryLoadMapTextures(WadAssetEntry mapEntry, MapGeoAsset map)
+    private (IReadOnlyList<TextureImage?>? Textures, Formats.MapGeo.MapSunProperties? SunProperties)
+        TryLoadMapTextures(WadAssetEntry mapEntry, MapGeoAsset map)
     {
-        if (!ContentLoaded || !mapEntry.IsResolved) return null;
+        if (!ContentLoaded || !mapEntry.IsResolved) return (null, null);
 
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         {
             _log.Info("MapGeo", $"No materials .bin found for {mapEntry.DisplayName} — rendering flat.");
-            return null;
+            return (null, null);
         }
 
         // M35: placed particle systems live in the same materials.bin (MapPlaceableContainer.items).
@@ -2740,18 +2742,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; CurrentModelSounds = null; }
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
-        var (materialToTexture, profiles) = ResolveMapMaterials(binEntry, names);
+        var (materialToTexture, profiles, sunProperties) = ResolveMapMaterials(binEntry, names);
         if (materialToTexture.Count == 0)
         {
             _log.Info("MapGeo", "Materials .bin didn't resolve any textures — rendering flat.");
-            return null;
+            return (null, sunProperties);
         }
-        return BuildMapTextures(map, materialToTexture, profiles, names.Count);
+        return (BuildMapTextures(map, materialToTexture, profiles, names.Count), sunProperties);
     }
 
     /// <summary>Resolve map material→texture (+ M32 profiles), falling back to the original game
     /// .materials.bin when the project's copy is broken (malformed .bin) or resolves nothing.</summary>
-    private (Dictionary<string, string> textures, Dictionary<string, MaterialProfile> profiles) ResolveMapMaterials(WadAssetEntry binEntry, List<string> names)
+    private (Dictionary<string, string> textures, Dictionary<string, MaterialProfile> profiles,
+        Formats.MapGeo.MapSunProperties? sunProperties) ResolveMapMaterials(WadAssetEntry binEntry, List<string> names)
     {
         try
         {
@@ -2759,8 +2762,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var r = MapGeoMaterialResolver.Resolve(bytes, names);
             if (r.Count > 0)
             {
-                ApplySunProperties(bytes);   // M45: MapContainer -> MapSunProperties (lightMapColorScale etc.)
-                return (r, MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName));
+                return (r, MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName),
+                    Formats.MapGeo.MapSunProperties.Extract(bytes));
             }
         }
         catch (Exception ex) { _log.Warn("MapGeo", $"project materials.bin parse failed: {ex.Message}"); }
@@ -2774,20 +2777,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (r.Count > 0)
                 {
                     _log.Info("MapGeo", "Used the original game materials.bin (the project's copy was broken/empty).");
-                    ApplySunProperties(fb);
-                    return (r, MaterialProfiles.ForMapMaterials(fb, names, ResolveBinName));
+                    return (r, MaterialProfiles.ForMapMaterials(fb, names, ResolveBinName),
+                        Formats.MapGeo.MapSunProperties.Extract(fb));
                 }
             }
             catch (Exception ex) { _log.Warn("MapGeo", $"game materials.bin parse failed: {ex.Message}"); }
         }
-        return (new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), new Dictionary<string, MaterialProfile>(StringComparer.OrdinalIgnoreCase));
+        return (new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, MaterialProfile>(StringComparer.OrdinalIgnoreCase), null);
     }
 
     /// <summary>M45: read the MapContainer's MapSunProperties component and publish what the renderer uses
     /// (lightMapColorScale — the game's baked-light multiplier, e.g. 2.0 on Map12 Bloom).</summary>
-    private void ApplySunProperties(byte[] materialsBin)
+    private void ApplySunProperties(Formats.MapGeo.MapSunProperties? sun)
     {
-        var sun = Formats.MapGeo.MapSunProperties.Extract(materialsBin);
         _currentSunProps = sun;
         CurrentLightmapScale = sun?.LightMapColorScale ?? 1.0;
         if (sun is not null)
@@ -2986,10 +2989,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 MaterialRenderMode.Cutout => 1,
                 MaterialRenderMode.Transparent => 2,
+                MaterialRenderMode.TransparentCutout => 3,
                 _ => 0,
             },
             DoubleSided: p.DoubleSided,
             Tint: p.Tint,
+            TintTextured: p.TintTextured,
             AlphaCutoff: p.AlphaCutoff ?? 0.35f,
             ClampU: p.ClampU,
             ClampV: p.ClampV,

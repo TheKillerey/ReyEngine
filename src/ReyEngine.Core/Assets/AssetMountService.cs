@@ -2,7 +2,8 @@ namespace ReyEngine.Core.Assets;
 
 /// <summary>
 /// The virtual file system: aggregates project-override, project-WAD/-folder and Riot-reference
-/// mounts into one asset view. Mounts are consulted in priority order (override &gt; project &gt;
+/// mounts into one asset view. Mounts are consulted in priority order (override &gt; loose project folder
+/// &gt; project WAD &gt;
 /// Riot reference); the highest-priority mount that holds a path hash wins, and lower ones are
 /// recorded as shadowed sources (conflicts). Reading always goes to the winning mount.
 /// </summary>

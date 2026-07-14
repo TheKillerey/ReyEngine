@@ -7,8 +7,8 @@ public enum PreviewProfileKind { Unknown, ChampionSkin, MapStatic, MatCap, Specu
 
 /// <summary>How a material composites, derived from its technique/pass blend state + shader name (M34).
 /// Opaque writes depth solidly; Cutout alpha-tests (discard) but stays opaque; Transparent alpha-blends
-/// over the scene (drawn after opaque, no depth write).</summary>
-public enum MaterialRenderMode { Opaque, Cutout, Transparent }
+/// over the scene (drawn after opaque, no depth write). TransparentCutout does both for soft-edged decals.</summary>
+public enum MaterialRenderMode { Opaque, Cutout, Transparent, TransparentCutout }
 
 /// <summary>
 /// The preview feature set + UV transform derived from a material's real .bin data (switches +
@@ -29,7 +29,8 @@ public sealed record MaterialProfile(
     string? UvOffsetSource,
     MaterialRenderMode RenderMode = MaterialRenderMode.Opaque,
     bool DoubleSided = false,
-    Vector4? Tint = null,   // M34: TintColor param (rgba); ONLY applied when the material has no diffuse texture
+    Vector4? Tint = null,   // M34: TintColor param (rgba); also applied to textured soft decals when TintTextured
+    bool TintTextured = false,
     bool BlendEnabled = false,   // M34: pass.blendEnable (real .bin flag)
     float? AlphaCutoff = null,   // M34: AlphaTestValue param (real cutout threshold, e.g. 0.3); null = shader default 0.35
     bool ClampU = false,         // M34: diffuse addressU == Clamp (decals) — clamp UV instead of tiling
@@ -72,9 +73,9 @@ public sealed record MaterialProfile(
     /// <summary>Two-sided lighting is needed exactly when the material is not culled.</summary>
     public bool TwoSided => DoubleSided;
     /// <summary>Depth is written for opaque/cutout, not for transparent (alpha-blended) surfaces.</summary>
-    public bool DepthWrite => RenderMode != MaterialRenderMode.Transparent;
+    public bool DepthWrite => RenderMode is not (MaterialRenderMode.Transparent or MaterialRenderMode.TransparentCutout);
     /// <summary>Alpha-test/cutout (fixed shader threshold; no explicit cutoff value exists in the schema).</summary>
-    public bool AlphaCutout => RenderMode == MaterialRenderMode.Cutout;
+    public bool AlphaCutout => RenderMode is MaterialRenderMode.Cutout or MaterialRenderMode.TransparentCutout;
 
     /// <summary>True when the UV transform actually changes the mapping (identity 1,1/0,0 is not flagged,
     /// even if a UV param is present but set to identity).</summary>
@@ -113,6 +114,7 @@ public sealed record MaterialProfile(
             {
                 MaterialRenderMode.Cutout => "Cutout (alpha-test)",
                 MaterialRenderMode.Transparent => "Transparent (alpha-blend)",
+                MaterialRenderMode.TransparentCutout => "Transparent cutout (alpha-blend)",
                 _ => "Opaque",
             };
             return DoubleSided ? m + ", double-sided" : m;
@@ -130,6 +132,7 @@ public sealed record MaterialProfile(
                 {
                     MaterialRenderMode.Cutout => "cutout",
                     MaterialRenderMode.Transparent => "transparent",
+                    MaterialRenderMode.TransparentCutout => "transparent cutout",
                     _ => "opaque",
                 },
                 CullEnabled ? "cull backfaces" : "two-sided",
@@ -212,11 +215,11 @@ public static class MaterialProfiles
         // ground surface is solid and must stay in the opaque depth-writing pass.
         if (terrain.IsTerrainBlend) renderMode = MaterialRenderMode.Opaque;
 
-        // TintColor: for sampler-less effect/indicator materials (no diffuse texture) the tint IS the colour
-        // and its alpha the opacity (e.g. FaeLights <0,1,1,0.1>). The renderer only applies this on the
-        // untextured fallback path, so textured materials that also carry a TintColor are never recoloured.
+        // TintColor: for sampler-less effect/indicator materials the tint IS the colour and alpha. Authored
+        // soft decals also multiply their diffuse by TintColor (Map453's road decal uses 0.5 grey).
         Vector4? tint = null;
-        if (b.Slots.All(s => !s.SamplerName.Contains("Diffuse", OIC)))   // no diffuse sampler present
+        bool tintTextured = renderMode == MaterialRenderMode.TransparentCutout;
+        if (tintTextured || b.Slots.All(s => !s.SamplerName.Contains("Diffuse", OIC)))
             foreach (var p in b.Parameters)
                 if (Norm(p.Name) == "tintcolor" && p.TryGetVector4(out var tv)) { tint = tv; break; }
 
@@ -228,7 +231,7 @@ public static class MaterialProfiles
         var flow = ClassifyFlowmap(b);
 
         return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
-            renderMode, doubleSided, tint, b.BlendEnable, alphaCutoff, clampU, clampV,
+            renderMode, doubleSided, tint, tintTextured, b.BlendEnable, alphaCutoff, clampU, clampV,
             flow.IsFlowmap, flow.Speed, flow.Strength, flow.Tile, flow.Inside, flow.Outside, flow.Alpha,
             flow.FlowMapPath, flow.FlowNormalPath,
             terrain.IsTerrainBlend, terrain.MaskPath, terrain.BottomPath, terrain.MiddlePath, terrain.TopPath,
@@ -318,6 +321,12 @@ public static class MaterialProfiles
         bool doubleSided = b.CullEnable is bool cull
             ? !cull
             : shader.Contains("DoubleSided", OIC) || shader.Contains("TwoSided", OIC);
+
+        // A decal can intentionally combine a tiny alpha test with normal alpha blending. Keep the cutoff to
+        // reject fully transparent pixels, but preserve its authored soft edge in the transparent pass.
+        bool decal = b.Name.Contains("decal", OIC) || shader.Contains("decal", OIC);
+        if (b.BlendEnable && decal && alphaCutoff is not null)
+            return (MaterialRenderMode.TransparentCutout, doubleSided);
 
         // Alpha-tested cutout: either the shader name says so, OR the material carries an AlphaTestValue param.
         // The latter catches converted materials (NVR mods use SRX_Blend_Master + AlphaTestValue + blendEnable)
