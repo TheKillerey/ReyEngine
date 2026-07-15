@@ -279,6 +279,7 @@
                 PlayPropAnimations="{Binding PlayPropAnimations}"
                 AnimateWater="{Binding HasFlowmapWater}"
                 LightmapScale="{Binding CurrentLightmapScale}"
+                SunProperties="{Binding CurrentSunProperties}"
                 FocusPoint="{Binding ParticleFocusPoint}"
                 PreviewMode="{Binding PreviewMode}" />
 

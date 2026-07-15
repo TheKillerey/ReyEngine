@@ -763,7 +763,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public ParticleEditorViewModel ParticleEditor { get; } = new(); // M46 Particle Editor
     [ObservableProperty] private bool _isParticleEditorActive;      // M46: overlay visible for the active tab
     [ObservableProperty] private double _currentLightmapScale = 1.0; // M45: MapSunProperties.lightMapColorScale
-    private Formats.MapGeo.MapSunProperties? _currentSunProps; // M45: full sun/atmosphere component (future use)
+    [ObservableProperty] private MapSunProperties? _currentSunProperties;
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
     [ObservableProperty] private bool _showWireframe;
@@ -1077,7 +1077,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return new MapScene(map, _currentMapBytes, entry, _mapControllers, mesh,
             CurrentModelTextures, CurrentModelSubmeshMaterials, CurrentModelLightmapTextures,
             _mapFlowMasks, _mapFlowGrads, _mapTerrainTops, _mapTerrainExtras,
-            CurrentLightmapScale, _currentSunProps,
+            CurrentLightmapScale, CurrentSunProperties,
             CurrentModelParticles, _vfxSystems, CurrentModelProbes, CurrentModelProps,
             CurrentModelSounds,
             SelectedDragonIndex, SelectedBaronIndex, HasMapMoves,
@@ -1099,7 +1099,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapTerrainTops = s.TerrainTops; _mapTerrainExtras = s.TerrainExtras;
         CurrentModelSubmeshMaterials = s.Materials;
         PublishMapMaterialLayers();
-        CurrentLightmapScale = s.LightmapScale; _currentSunProps = s.SunProps;           // M45
+        CurrentLightmapScale = s.LightmapScale; CurrentSunProperties = s.SunProps;       // M45
         CurrentModelParticles = s.Particles;
         _vfxSystems = s.VfxSystems;
         CurrentModelProbes = s.Probes;
@@ -1635,7 +1635,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapTerrainTops = null;
         _mapTerrainExtras = null;
         CurrentLightmapScale = 1.0;
-        _currentSunProps = null;
+        CurrentSunProperties = null;
         CurrentModelParticles = null;
         SelectedParticleTreeItem = null;
         ParticleMarkers = null;
@@ -2791,7 +2791,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// (lightMapColorScale — the game's baked-light multiplier, e.g. 2.0 on Map12 Bloom).</summary>
     private void ApplySunProperties(Formats.MapGeo.MapSunProperties? sun)
     {
-        _currentSunProps = sun;
+        CurrentSunProperties = sun;
         CurrentLightmapScale = sun?.LightMapColorScale ?? 1.0;
         if (sun is not null)
             _log.Info("Map", $"MapSunProperties: lightMapColorScale={sun.LightMapColorScale:0.##}, " +

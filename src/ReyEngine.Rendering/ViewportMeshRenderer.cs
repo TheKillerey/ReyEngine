@@ -13,7 +13,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private bool _ready;
 
     private uint _meshProgram, _lineProgram;
-    private int _mMvp, _mModel, _mLight, _mTex, _mHasTex, _mBaseColor, _mMode, _mCamPos;
+    private int _mMvp, _mModel, _mLight, _mSunColor, _mSkyLight, _mTex, _mHasTex, _mBaseColor, _mMode, _mCamPos;
     private int _mMask, _mGradient, _mEmissive, _mHasMask, _mHasGradient, _mHasEmissive;
     private int _mMatCap, _mMatCapMask, _mHasMatCap, _mHasMatCapMask, _mView;
     private int _mUvScaleOffset, _mUvRot, _mUsesRim, _mUsesSpec;   // M32: per-material UV + feature flags
@@ -34,6 +34,9 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _lMvp, _lColor;
     private float _time;                                          // M44: animation clock (seconds), fed to uTime
     private float _lightmapScale = 1f;                            // M45: baked-light multiplier (1 = neutral)
+    private Vector3 _lightDirection = new(-0.4f, -0.85f, -0.45f);
+    private Vector3 _sunColor = new(0.75f);
+    private Vector3 _skyLight = new(0.35f);
 
     private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo;
     private bool _hasVertexColor, _hasLightmapUv;
@@ -176,6 +179,8 @@ in vec4 vColor;
 in vec2 vLmUv;
 out vec4 FragColor;
 uniform vec3 uLight;
+uniform vec3 uSunColor;
+uniform vec3 uSkyLight;
 uniform sampler2D uTex;
 uniform sampler2D uMask;
 uniform sampler2D uGradient;
@@ -241,10 +246,11 @@ vec2 xformUv(vec2 uv0) {
     }
     return uv * uUvScaleOffset.xy + uUvScaleOffset.zw;
 }
-// Map diffuse and baked-light textures are authored/display-encoded. The viewport's RGBA backbuffer is
-// not an sRGB framebuffer, so the linear scene result needs its explicit display transform before output.
-vec3 displayColour(vec3 linearColour) {
-    return pow(max(linearColour, vec3(0.0)), vec3(0.45454545));
+// Map diffuse textures are already display encoded, but BakedLight stores linear illumination. Encode
+// only that illumination before it modulates the diffuse. Encoding the final colour also re-encodes the
+// diffuse and noticeably over-brightens the map.
+vec3 bakedLightColour(vec3 light) {
+    return pow(max(light, vec3(0.0)), vec3(0.45454545));
 }
 void main() {
     vec3 n = length(vN) > 0.001 ? normalize(vN) : vec3(0.0, 1.0, 0.0);
@@ -366,22 +372,21 @@ void main() {
         // grid on big planes), and the animated highlight rides the R streaks in the Outside colour.
         vec3 colw = body * (0.9 + 0.1 * caustic) + uColorOutside.rgb * (fm.r * pulse * 0.7) + vec3(spark);
         // Sit the water in the baked scene lighting like every other lightmapped surface (night maps darken it).
-        if (uHasLightmap == 1) colw *= texture(uLightmap, vLmUv).rgb * uLightmapScale;
+        if (uHasLightmap == 1) colw *= bakedLightColour(texture(uLightmap, vLmUv).rgb * uLightmapScale);
         // The B mask cuts the water to its real stream shape (soft antialiased edges); TranslucentControl
         // sets how solid the visible water is. Sparkle reads a touch more solid.
         float a = clamp((uWaterAlpha * (0.75 + 0.25 * fres) + spark * 0.3) * waterMask, 0.0, 1.0);
-        FragColor = vec4(displayColour(colw), a);
+        FragColor = vec4(colw, a);
         return;
     }
 
     float d = max(dot(n, normalize(-uLight)), 0.0);
-    float light = 0.35 + 0.75 * d;
-    vec3 col = base * light;
+    vec3 col = base * (uSkyLight + uSunColor * d);
 
     // Baked lightmap: when the mesh carries a real BakedLight atlas, that IS the lighting for this
     // surface, so it replaces the fake directional term (finalColor = diffuse * lightmap * scale). The
     // scale is MapSunProperties.lightMapColorScale (2.0 on live Map12) - without it the map is too dark.
-    if (uHasLightmap == 1) col = base * texture(uLightmap, vLmUv).rgb * uLightmapScale;
+    if (uHasLightmap == 1) col = base * bakedLightColour(texture(uLightmap, vLmUv).rgb * uLightmapScale);
 
     // Specular highlight - computed only when the material's profile enables it (League materials are
     // diffuse/lambert by default). Blinn-Phong half-vector term.
@@ -417,7 +422,7 @@ void main() {
     // for the alpha-blend pass; opaque forces alpha 1. Applies to Basic (0) and RiotApprox (1).
     if ((uAlphaMode == 1 || uAlphaMode == 3) && alpha < uAlphaCutoff) discard;
     float outA = (uAlphaMode == 2 || uAlphaMode == 3) ? clamp(alpha, 0.0, 1.0) : 1.0;
-    FragColor = vec4(displayColour(col), outA);
+    FragColor = vec4(col, outA);
 }";
 
     private const string LineVert = @"
@@ -440,6 +445,8 @@ void main() { FragColor = uColor; }";
         _mMvp = gl.GetUniformLocation(_meshProgram, "uMvp");
         _mModel = gl.GetUniformLocation(_meshProgram, "uModel");
         _mLight = gl.GetUniformLocation(_meshProgram, "uLight");
+        _mSunColor = gl.GetUniformLocation(_meshProgram, "uSunColor");
+        _mSkyLight = gl.GetUniformLocation(_meshProgram, "uSkyLight");
         _mTex = gl.GetUniformLocation(_meshProgram, "uTex");
         _mHasTex = gl.GetUniformLocation(_meshProgram, "uHasTex");
         _mBaseColor = gl.GetUniformLocation(_meshProgram, "uBaseColor");
@@ -950,6 +957,24 @@ void main(){
     /// <summary>M45: baked-lightmap multiplier from MapSunProperties.lightMapColorScale (1 = neutral).</summary>
     public void SetLightmapScale(float scale) => _lightmapScale = Math.Clamp(scale, 0.05f, 8f);
 
+    /// <summary>Sets the authored map sun for surfaces that do not carry baked-light UVs.</summary>
+    public void SetSunLighting(Vector3 directionToSun, Vector4 sunColor, Vector4 skyLightColor, float skyLightScale)
+    {
+        if (directionToSun.LengthSquared() < 1e-6f)
+        {
+            _lightDirection = new Vector3(-0.4f, -0.85f, -0.45f);
+            _sunColor = new Vector3(0.75f);
+            _skyLight = new Vector3(0.35f);
+            return;
+        }
+
+        // The material shader's uLight is the ray direction, whereas MapSunProperties points toward the sun.
+        _lightDirection = -Vector3.Normalize(directionToSun);
+        _sunColor = Vector3.Clamp(new Vector3(sunColor.X, sunColor.Y, sunColor.Z), Vector3.Zero, new Vector3(8f));
+        _skyLight = Vector3.Clamp(new Vector3(skyLightColor.X, skyLightColor.Y, skyLightColor.Z) *
+            Math.Clamp(skyLightScale, 0f, 8f), Vector3.Zero, new Vector3(8f));
+    }
+
     // M50b: selected submeshes render an accent wireframe OUTLINE overlay (replaces the AABB boxes).
     private IReadOnlyList<int>? _highlightSubmeshes;
     public void SetSubmeshHighlight(IReadOnlyList<int>? groupIndices) => _highlightSubmeshes = groupIndices;
@@ -1218,7 +1243,9 @@ void main(){
                 _gl.UniformMatrix4(_mMvp, 1, false, in m.M11);
                 var model = Matrix4x4.Identity;
                 _gl.UniformMatrix4(_mModel, 1, false, in model.M11);
-                _gl.Uniform3(_mLight, -0.4f, -0.85f, -0.45f);
+                _gl.Uniform3(_mLight, _lightDirection.X, _lightDirection.Y, _lightDirection.Z);
+                _gl.Uniform3(_mSunColor, _sunColor.X, _sunColor.Y, _sunColor.Z);
+                _gl.Uniform3(_mSkyLight, _skyLight.X, _skyLight.Y, _skyLight.Z);
                 _gl.Uniform3(_mBaseColor, 0.62f, 0.66f, 0.74f);
                 _gl.Uniform1(_mMode, previewMode);
                 _gl.Uniform1(_mHasVertexColor, _hasVertexColor ? 1 : 0);

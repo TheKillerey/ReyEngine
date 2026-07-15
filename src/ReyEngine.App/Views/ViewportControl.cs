@@ -4,6 +4,7 @@ using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using ReyEngine.Core.Decoding;
 using ReyEngine.Formats.Animation;
+using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Skeletons;
 using ReyEngine.App.ViewModels;
@@ -53,6 +54,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(AnimateWater));
     public static readonly StyledProperty<double> LightmapScaleProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(LightmapScale), 1.0);
+    public static readonly StyledProperty<MapSunProperties?> SunPropertiesProperty =
+        AvaloniaProperty.Register<ViewportControl, MapSunProperties?>(nameof(SunProperties));
     public static readonly StyledProperty<IReadOnlyList<int>?> HighlightSubmeshesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<int>?>(nameof(HighlightSubmeshes));   // M50b outline
     public static readonly StyledProperty<bool> PlayPropAnimationsProperty =
@@ -147,6 +150,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public VfxPlayback? ParticlePlayback { get => GetValue(ParticlePlaybackProperty); set => SetValue(ParticlePlaybackProperty, value); }
     public bool AnimateWater { get => GetValue(AnimateWaterProperty); set => SetValue(AnimateWaterProperty, value); }
     public double LightmapScale { get => GetValue(LightmapScaleProperty); set => SetValue(LightmapScaleProperty, value); }
+    public MapSunProperties? SunProperties { get => GetValue(SunPropertiesProperty); set => SetValue(SunPropertiesProperty, value); }
     public IReadOnlyList<int>? HighlightSubmeshes { get => GetValue(HighlightSubmeshesProperty); set => SetValue(HighlightSubmeshesProperty, value); }
     public bool PlayPropAnimations { get => GetValue(PlayPropAnimationsProperty); set => SetValue(PlayPropAnimationsProperty, value); }
     public double ParticleSpeed { get => GetValue(ParticleSpeedProperty); set => SetValue(ParticleSpeedProperty, value); }
@@ -513,6 +517,10 @@ public sealed class ViewportControl : OpenGlControlBase
         if (AnimateWater) { if (!_waterClock.IsRunning) _waterClock.Start(); _meshRenderer.SetTime((float)_waterClock.Elapsed.TotalSeconds); }
         else if (_waterClock.IsRunning) _waterClock.Reset();
         _meshRenderer.SetLightmapScale((float)LightmapScale);   // M45: MapSunProperties.lightMapColorScale
+        if (SunProperties is { } sun)
+            _meshRenderer.SetSunLighting(sun.SunDirection, sun.SunColor, sun.SkyLightColor, sun.SkyLightScale);
+        else
+            _meshRenderer.SetSunLighting(Vector3.Zero, Vector4.One, Vector4.One, 1f);
         _meshRenderer.SetSubmeshHighlight(HighlightSubmeshes);  // M50b: selection outline overlay
         // M54: prop idle animations — CPU-skin each animated prop geometry at the shared looping clock
         // (all placements of a mesh share the pose) and keep frames pumping while playing.
@@ -842,7 +850,7 @@ public sealed class ViewportControl : OpenGlControlBase
         { _particlesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticlePlaybackProperty)
         { _particlePlaybackDirty = true; RequestNextFrameRendering(); }
-        else if (change.Property == AnimateWaterProperty || change.Property == LightmapScaleProperty
+        else if (change.Property == AnimateWaterProperty || change.Property == LightmapScaleProperty || change.Property == SunPropertiesProperty
                  || change.Property == HighlightSubmeshesProperty || change.Property == PlayPropAnimationsProperty)
         { RequestNextFrameRendering(); } // M44/M45/M50b/M54: water + lightmap scale + outline + prop idles
         else if (change.Property == PropMeshesProperty)
