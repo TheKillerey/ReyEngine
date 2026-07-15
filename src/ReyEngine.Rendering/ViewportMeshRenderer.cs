@@ -263,10 +263,15 @@ void main() {
     // usually transparent -> cut out) instead of GL_REPEAT tiling it across the whole mesh.
     if (uClampUv.x > 0.5) uv.x = clamp(uv.x, 0.0, 1.0);
     if (uClampUv.y > 0.5) uv.y = clamp(uv.y, 0.0, 1.0);
-    // Untextured effect/indicator materials use TintColor as their colour. Soft decals additionally multiply
-    // their diffuse by the authored tint; ordinary textured materials remain unchanged.
+    // Untextured effect/indicator materials use TintColor as their literal colour (full scale, 1.0 = full).
+    // Soft decals/ground overlays additionally tint their diffuse texture, but Riot's decal/hq shader applies
+    // TintColor as a 2X tint where 0.5 = neutral (identity), below 0.5 darkens, above 0.5 brightens - NOT a
+    // straight multiply. Jade ground decals author ~0.5 grey (turret_stoneBase = exactly 0.5,0.5,0.5) as no
+    // tint; multiplying diffuse by 0.5 halved their brightness (M66 decals-too-dark). Scale RGB by 2x so 0.5
+    // is neutral; alpha stays a straight multiply (TintColor.a is authored at full scale). Untextured path
+    // above is unaffected - only the textured-decal branch gets the 2X remap.
     vec4 tex = (uHasTex == 1) ? texture(uTex, uv) : vec4(uBaseColor * uTint.rgb, uTint.a);
-    if (uHasTex == 1 && uTintTextured == 1) tex *= uTint;
+    if (uHasTex == 1 && uTintTextured == 1) { tex.rgb *= uTint.rgb * 2.0; tex.a *= uTint.a; }
     vec3 base = tex.rgb;
     float alpha = tex.a;
 

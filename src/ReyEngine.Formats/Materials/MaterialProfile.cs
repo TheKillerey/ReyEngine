@@ -322,10 +322,16 @@ public static class MaterialProfiles
             ? !cull
             : shader.Contains("DoubleSided", OIC) || shader.Contains("TwoSided", OIC);
 
-        // A decal can intentionally combine a tiny alpha test with normal alpha blending. Keep the cutoff to
-        // reject fully transparent pixels, but preserve its authored soft edge in the transparent pass.
+        // A blend-enabled pass authored SrcAlpha/InvSrcAlpha alpha blending. A *small* AlphaTestValue alongside
+        // it is only a "reject fully-transparent texels" floor, NOT a hard-cutout instruction: the surface still
+        // wants its soft alpha gradient composited. That covers decals AND feathered ground/prop overlays like
+        // Jade's turret_stoneBase_hq_ (blend 6/7 + AlphaTestValue 0.005) — keep them TransparentCutout so the
+        // soft edge survives instead of snapping every texel above 0.005 to fully opaque (M66 "too harsh cut").
+        // A *large* cutoff is a genuine alpha test — foliage (SRX_Blend_Master + AlphaTestValue ~0.3-0.5 +
+        // blendEnable) must stay Cutout (opaque depth) or it ghosts and mis-sorts — so only small floors soften.
+        const float SoftAlphaFloorMax = 0.1f; // below this, blendEnable's soft blend wins over the alpha test
         bool decal = b.Name.Contains("decal", OIC) || shader.Contains("decal", OIC);
-        if (b.BlendEnable && decal && alphaCutoff is not null)
+        if (b.BlendEnable && alphaCutoff is { } floor && (decal || floor < SoftAlphaFloorMax))
             return (MaterialRenderMode.TransparentCutout, doubleSided);
 
         // Alpha-tested cutout: either the shader name says so, OR the material carries an AlphaTestValue param.
