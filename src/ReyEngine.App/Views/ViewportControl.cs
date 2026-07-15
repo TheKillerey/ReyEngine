@@ -34,6 +34,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowBounds));
     public static readonly StyledProperty<bool> CullBackfacesProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(CullBackfaces));
+    public static readonly StyledProperty<bool> LightmapsEnabledProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(LightmapsEnabled), true);   // M69
     public static readonly StyledProperty<IReadOnlyList<Vector3>?> ParticleMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ParticleMarkers));
     public static readonly StyledProperty<Vector3?> SelectedParticlePositionProperty =
@@ -133,6 +135,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
     public bool Wireframe { get => GetValue(WireframeProperty); set => SetValue(WireframeProperty, value); }
     public bool CullBackfaces { get => GetValue(CullBackfacesProperty); set => SetValue(CullBackfacesProperty, value); }
+    public bool LightmapsEnabled { get => GetValue(LightmapsEnabledProperty); set => SetValue(LightmapsEnabledProperty, value); }
     /// <summary>World positions of placed-particle markers to draw (M35); null/empty hides them.</summary>
     public IReadOnlyList<Vector3>? ParticleMarkers { get => GetValue(ParticleMarkersProperty); set => SetValue(ParticleMarkersProperty, value); }
     public Vector3? SelectedParticlePosition { get => GetValue(SelectedParticlePositionProperty); set => SetValue(SelectedParticlePositionProperty, value); }
@@ -517,6 +520,7 @@ public sealed class ViewportControl : OpenGlControlBase
         if (AnimateWater) { if (!_waterClock.IsRunning) _waterClock.Start(); _meshRenderer.SetTime((float)_waterClock.Elapsed.TotalSeconds); }
         else if (_waterClock.IsRunning) _waterClock.Reset();
         _meshRenderer.SetLightmapScale((float)LightmapScale);   // M45: MapSunProperties.lightMapColorScale
+        _meshRenderer.SetLightmapsEnabled(LightmapsEnabled);    // M69: baked-lightmap on/off toggle
         if (SunProperties is { } sun)
             _meshRenderer.SetSunLighting(sun.SunDirection, sun.SunColor, sun.SkyLightColor, sun.SkyLightScale);
         else
@@ -860,8 +864,9 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == ParticlePlaybackProperty)
         { _particlePlaybackDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimateWaterProperty || change.Property == LightmapScaleProperty || change.Property == SunPropertiesProperty
-                 || change.Property == HighlightSubmeshesProperty || change.Property == PlayPropAnimationsProperty)
-        { RequestNextFrameRendering(); } // M44/M45/M50b/M54: water + lightmap scale + outline + prop idles
+                 || change.Property == HighlightSubmeshesProperty || change.Property == PlayPropAnimationsProperty
+                 || change.Property == LightmapsEnabledProperty)
+        { RequestNextFrameRendering(); } // M44/M45/M50b/M54/M69: water + lightmap scale + outline + prop idles + lightmap toggle
         else if (change.Property == PropMeshesProperty)
         { _propMeshesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == FocusPointProperty && FocusPoint is { } fp)

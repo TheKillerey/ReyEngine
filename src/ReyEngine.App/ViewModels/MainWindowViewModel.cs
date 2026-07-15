@@ -785,6 +785,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;
     [ObservableProperty] private bool _cullBackfaces = true; // M34: respect per-material cullEnable by default (off = force all two-sided)
+    [ObservableProperty] private bool _showLightmaps = true; // M69: baked lightmaps on by default; off = sun/sky fallback lighting
     [ObservableProperty] private bool _hasMaterialData;
     [ObservableProperty] private bool _hasInspectorBody;
     [ObservableProperty] private int _inspectorTab;

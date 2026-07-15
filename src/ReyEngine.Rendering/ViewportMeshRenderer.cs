@@ -34,6 +34,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _lMvp, _lColor;
     private float _time;                                          // M44: animation clock (seconds), fed to uTime
     private float _lightmapScale = 1f;                            // M45: baked-light multiplier (1 = neutral)
+    private bool _lightmapsEnabled = true;                        // M69: toggle baked lightmaps off (fall back to sun/sky term)
     private Vector3 _lightDirection = new(-0.4f, -0.85f, -0.45f);
     private Vector3 _sunColor = new(0.75f);
     private Vector3 _skyLight = new(0.35f);
@@ -965,6 +966,10 @@ void main(){
 
     /// <summary>M45: baked-lightmap multiplier from MapSunProperties.lightMapColorScale (1 = neutral).</summary>
     public void SetLightmapScale(float scale) => _lightmapScale = Math.Clamp(scale, 0.05f, 8f);
+    /// <summary>M69: when false, baked lightmaps are ignored and every surface uses the sun/sky directional
+    /// fallback term instead — lets the user see the map without Riot's baked lighting (and preview dynamic
+    /// point lights on their own).</summary>
+    public void SetLightmapsEnabled(bool enabled) => _lightmapsEnabled = enabled;
 
     /// <summary>Sets the authored map sun for surfaces that do not carry baked-light UVs.</summary>
     public void SetSunLighting(Vector3 directionToSun, Vector4 sunColor, Vector4 skyLightColor, float skyLightScale)
@@ -1333,7 +1338,7 @@ void main(){
                     _gl.Uniform1(_mHasMatCapMask, s.MatCapMask != 0 ? 1 : 0);
                     _gl.ActiveTexture(TextureUnit.Texture6);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Lightmap != 0 ? s.Lightmap : _whiteTex);
-                    _gl.Uniform1(_mHasLightmap, (s.Lightmap != 0 && _hasLightmapUv) ? 1 : 0);
+                    _gl.Uniform1(_mHasLightmap, (_lightmapsEnabled && s.Lightmap != 0 && _hasLightmapUv) ? 1 : 0);
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
                 }
 

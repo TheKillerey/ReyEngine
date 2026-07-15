@@ -268,6 +268,7 @@
                 ShowBones="{Binding ShowBones}"
                 ShowBounds="{Binding ShowBounds}"
                 CullBackfaces="{Binding CullBackfaces}"
+                LightmapsEnabled="{Binding ShowLightmaps}"
                 ParticleMarkers="{Binding ParticleMarkers}"
                 SelectedParticlePosition="{Binding SelectedParticleMarker}"
                 PropMarkers="{Binding PropMarkers}"
@@ -323,6 +324,8 @@
                             ToolTip.Tip="Respect each material's cullEnable (single-sided materials cull backfaces; cullEnable=false renders two-sided with flipped-normal lighting). Off = force everything two-sided." />
               <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" ToolTip.Tip="Show skeleton bones" />
               <ToggleButton Classes="vp" Content="▣ Bounds" IsChecked="{Binding ShowBounds}" ToolTip.Tip="Show bounding boxes" />
+              <ToggleButton Classes="vp" Content="☀ Lightmap" IsChecked="{Binding ShowLightmaps}"
+                            ToolTip.Tip="Baked lightmaps on/off. Off = the map is lit by the sun/sky fallback term only (useful for seeing raw textures or previewing dynamic lights)." />
               <ToggleButton Classes="vp" Content="✧ Particles" IsChecked="{Binding ShowParticles}"
                             IsVisible="{Binding HasParticles}"
                             ToolTip.Tip="Show placed particle-system markers (MapParticle)" />
