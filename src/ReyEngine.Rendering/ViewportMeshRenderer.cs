@@ -241,6 +241,11 @@ vec2 xformUv(vec2 uv0) {
     }
     return uv * uUvScaleOffset.xy + uUvScaleOffset.zw;
 }
+// Map diffuse and baked-light textures are authored/display-encoded. The viewport's RGBA backbuffer is
+// not an sRGB framebuffer, so the linear scene result needs its explicit display transform before output.
+vec3 displayColour(vec3 linearColour) {
+    return pow(max(linearColour, vec3(0.0)), vec3(0.45454545));
+}
 void main() {
     vec3 n = length(vN) > 0.001 ? normalize(vN) : vec3(0.0, 1.0, 0.0);
     // M34 two-sided lighting: a back-facing fragment of a two-sided (cullEnable=false) material would shade
@@ -365,7 +370,7 @@ void main() {
         // The B mask cuts the water to its real stream shape (soft antialiased edges); TranslucentControl
         // sets how solid the visible water is. Sparkle reads a touch more solid.
         float a = clamp((uWaterAlpha * (0.75 + 0.25 * fres) + spark * 0.3) * waterMask, 0.0, 1.0);
-        FragColor = vec4(colw, a);
+        FragColor = vec4(displayColour(colw), a);
         return;
     }
 
@@ -412,7 +417,7 @@ void main() {
     // for the alpha-blend pass; opaque forces alpha 1. Applies to Basic (0) and RiotApprox (1).
     if ((uAlphaMode == 1 || uAlphaMode == 3) && alpha < uAlphaCutoff) discard;
     float outA = (uAlphaMode == 2 || uAlphaMode == 3) ? clamp(alpha, 0.0, 1.0) : 1.0;
-    FragColor = vec4(col, outA);
+    FragColor = vec4(displayColour(col), outA);
 }";
 
     private const string LineVert = @"
