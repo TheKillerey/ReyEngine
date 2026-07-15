@@ -4,6 +4,7 @@ using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using ReyEngine.Core.Decoding;
 using ReyEngine.Formats.Animation;
+using ReyEngine.Formats.Lighting;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Skeletons;
@@ -36,6 +37,12 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(CullBackfaces));
     public static readonly StyledProperty<bool> LightmapsEnabledProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(LightmapsEnabled), true);   // M69
+    public static readonly StyledProperty<IReadOnlyList<PointLight>?> DynamicLightsProperty =        // M70
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<PointLight>?>(nameof(DynamicLights));
+    public static readonly StyledProperty<bool> DynamicLightsEnabledProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(DynamicLightsEnabled));
+    public static readonly StyledProperty<double> DynamicLightIntensityProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightIntensity), 1.0);
     public static readonly StyledProperty<IReadOnlyList<Vector3>?> ParticleMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ParticleMarkers));
     public static readonly StyledProperty<Vector3?> SelectedParticlePositionProperty =
@@ -136,6 +143,9 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool Wireframe { get => GetValue(WireframeProperty); set => SetValue(WireframeProperty, value); }
     public bool CullBackfaces { get => GetValue(CullBackfacesProperty); set => SetValue(CullBackfacesProperty, value); }
     public bool LightmapsEnabled { get => GetValue(LightmapsEnabledProperty); set => SetValue(LightmapsEnabledProperty, value); }
+    public IReadOnlyList<PointLight>? DynamicLights { get => GetValue(DynamicLightsProperty); set => SetValue(DynamicLightsProperty, value); }
+    public bool DynamicLightsEnabled { get => GetValue(DynamicLightsEnabledProperty); set => SetValue(DynamicLightsEnabledProperty, value); }
+    public double DynamicLightIntensity { get => GetValue(DynamicLightIntensityProperty); set => SetValue(DynamicLightIntensityProperty, value); }
     /// <summary>World positions of placed-particle markers to draw (M35); null/empty hides them.</summary>
     public IReadOnlyList<Vector3>? ParticleMarkers { get => GetValue(ParticleMarkersProperty); set => SetValue(ParticleMarkersProperty, value); }
     public Vector3? SelectedParticlePosition { get => GetValue(SelectedParticlePositionProperty); set => SetValue(SelectedParticlePositionProperty, value); }
@@ -167,6 +177,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private ViewportMeshRenderer? _meshRenderer;
     private readonly OrbitCamera _camera = new();
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
+    private bool _dynamicLightsDirty;   // M70: re-upload the Light.dat table on the GL thread when it changes
     private bool _particlesDirty;
     private bool _propMeshesDirty;   // M41
     private float _markerSize = 40f; // world-size for placement markers, fixed once the mesh loads
@@ -521,6 +532,13 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (_waterClock.IsRunning) _waterClock.Reset();
         _meshRenderer.SetLightmapScale((float)LightmapScale);   // M45: MapSunProperties.lightMapColorScale
         _meshRenderer.SetLightmapsEnabled(LightmapsEnabled);    // M69: baked-lightmap on/off toggle
+        if (_dynamicLightsDirty)   // M70: (re)upload the Light.dat point-light table on the GL thread
+        {
+            _meshRenderer.SetPointLights(DynamicLights ?? (IReadOnlyList<PointLight>)Array.Empty<PointLight>());
+            _dynamicLightsDirty = false;
+        }
+        _meshRenderer.SetDynamicLightsEnabled(DynamicLightsEnabled);
+        _meshRenderer.SetLightIntensity((float)DynamicLightIntensity);
         if (SunProperties is { } sun)
             _meshRenderer.SetSunLighting(sun.SunDirection, sun.SunColor, sun.SkyLightColor, sun.SkyLightScale);
         else
@@ -865,8 +883,11 @@ public sealed class ViewportControl : OpenGlControlBase
         { _particlePlaybackDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimateWaterProperty || change.Property == LightmapScaleProperty || change.Property == SunPropertiesProperty
                  || change.Property == HighlightSubmeshesProperty || change.Property == PlayPropAnimationsProperty
-                 || change.Property == LightmapsEnabledProperty)
-        { RequestNextFrameRendering(); } // M44/M45/M50b/M54/M69: water + lightmap scale + outline + prop idles + lightmap toggle
+                 || change.Property == LightmapsEnabledProperty || change.Property == DynamicLightsEnabledProperty
+                 || change.Property == DynamicLightIntensityProperty)
+        { RequestNextFrameRendering(); } // M44/M45/M50b/M54/M69/M70: water + lightmap scale + outline + prop idles + lightmap toggle + dynamic lights
+        else if (change.Property == DynamicLightsProperty)   // M70: new Light.dat table -> re-upload on the GL thread
+        { _dynamicLightsDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == PropMeshesProperty)
         { _propMeshesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == FocusPointProperty && FocusPoint is { } fp)

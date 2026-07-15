@@ -1,5 +1,6 @@
 using System.Numerics;
 using Silk.NET.OpenGL;
+using ReyEngine.Formats.Lighting;
 
 namespace ReyEngine.Rendering;
 
@@ -35,6 +36,12 @@ public sealed class ViewportMeshRenderer : IDisposable
     private float _time;                                          // M44: animation clock (seconds), fed to uTime
     private float _lightmapScale = 1f;                            // M45: baked-light multiplier (1 = neutral)
     private bool _lightmapsEnabled = true;                        // M69: toggle baked lightmaps off (fall back to sun/sky term)
+    // M70: legacy Riot point lights (Light.dat) uploaded as an RGBA32F table sampled per fragment.
+    private uint _lightsTex;
+    private int _lightCount;
+    private float _lightIntensity = 1f;
+    private bool _dynamicLightsEnabled;
+    private int _mLightsTex, _mNumLights, _mLightIntensity;
     private Vector3 _lightDirection = new(-0.4f, -0.85f, -0.45f);
     private Vector3 _sunColor = new(0.75f);
     private Vector3 _skyLight = new(0.35f);
@@ -224,6 +231,12 @@ uniform vec4 uColorOutside;    // Color_Outside (edge water)
 uniform float uWaterAlpha;     // TranslucentControl
 // Terrain shader 0xe25b830f: RGB mask blends middle/top/extras over the bottom layer.
 uniform int uIsTerrainBlend;
+// M70: legacy Riot dynamic point lights (Light.dat). Table is an RGBA32F texture: texel (i,0) = position.xyz
+// + radius (w), texel (i,1) = colour.rgb. highp is required - positions reach ~14000 world units and would
+// quantize badly at lower precision.
+uniform highp sampler2D uLightsTex;
+uniform int uNumLights;
+uniform float uLightIntensity;
 uniform float uTerrainWorldScale;
 uniform vec2 uTerrainBottomTiling;
 uniform vec2 uTerrainMiddleTiling;
@@ -398,6 +411,28 @@ void main() {
     // scale is MapSunProperties.lightMapColorScale (2.0 on live Map12) - without it the map is too dark.
     if (uHasLightmap == 1) col = base * bakedLightColour(texture(uLightmap, vLmUv).rgb * uLightmapScale);
 
+    // M70: legacy Riot dynamic point lights (Light.dat) added on top of the baked/fallback lighting - this is
+    // how the old client lit torches and braziers. Each light is a radial term with a quadratic falloff to its
+    // radius, wrapped by a softened N.L so surfaces turned partly away still catch some glow. Off entirely when
+    // no Light.dat is loaded (uNumLights = 0); the const loop bound keeps the shader ANGLE/GLES friendly.
+    if (uNumLights > 0) {
+        vec3 dynamicLight = vec3(0.0);
+        for (int i = 0; i < 1024; i++) {
+            if (i >= uNumLights) break;
+            vec4 posRadius = texelFetch(uLightsTex, ivec2(i, 0), 0);
+            vec3 toLight = posRadius.xyz - vWorld;
+            float dist = length(toLight);
+            if (dist < posRadius.w) {
+                float atten = 1.0 - dist / posRadius.w;
+                atten *= atten;
+                vec3 lightColour = texelFetch(uLightsTex, ivec2(i, 1), 0).rgb;
+                float ndl = max(dot(n, toLight / max(dist, 0.0001)), 0.0);
+                dynamicLight += lightColour * atten * (0.35 + 0.65 * ndl);
+            }
+        }
+        col += base * dynamicLight * uLightIntensity;
+    }
+
     // Specular highlight - computed only when the material's profile enables it (League materials are
     // diffuse/lambert by default). Blinn-Phong half-vector term.
     float specTerm = 0.0;
@@ -503,6 +538,9 @@ void main() { FragColor = uColor; }";
         _mTerrainExtrasTiling = gl.GetUniformLocation(_meshProgram, "uTerrainExtrasTiling");
         _mTerrainMaskMultipliers = gl.GetUniformLocation(_meshProgram, "uTerrainMaskMultipliers");
         _mLightmapScale = gl.GetUniformLocation(_meshProgram, "uLightmapScale");
+        _mLightsTex = gl.GetUniformLocation(_meshProgram, "uLightsTex");         // M70
+        _mNumLights = gl.GetUniformLocation(_meshProgram, "uNumLights");
+        _mLightIntensity = gl.GetUniformLocation(_meshProgram, "uLightIntensity");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -971,6 +1009,42 @@ void main(){
     /// point lights on their own).</summary>
     public void SetLightmapsEnabled(bool enabled) => _lightmapsEnabled = enabled;
 
+    /// <summary>M70: upload a Riot Light.dat point-light table as an RGBA32F texture (width = light count,
+    /// height = 2: row 0 = position.xyz + radius, row 1 = colour.rgb). Capped at 1024 (the shader loop bound).
+    /// Must be called on the GL thread.</summary>
+    public unsafe void SetPointLights(IReadOnlyList<PointLight> lights)
+    {
+        _lightCount = System.Math.Min(lights?.Count ?? 0, 1024);
+        if (_lightCount == 0) return;
+        var data = new float[_lightCount * 2 * 4];
+        for (int i = 0; i < _lightCount; i++)
+        {
+            var l = lights![i];
+            int row0 = i * 4;                         // texel (i, 0): position + radius
+            data[row0 + 0] = l.Position.X; data[row0 + 1] = l.Position.Y; data[row0 + 2] = l.Position.Z; data[row0 + 3] = l.Radius;
+            int row1 = (_lightCount + i) * 4;         // texel (i, 1): colour
+            data[row1 + 0] = l.Color.X; data[row1 + 1] = l.Color.Y; data[row1 + 2] = l.Color.Z; data[row1 + 3] = 0f;
+        }
+        if (_lightsTex == 0) _lightsTex = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, _lightsTex);
+        fixed (float* p = data)
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba32f, (uint)_lightCount, 2, 0,
+                PixelFormat.Rgba, PixelType.Float, p);
+        // texelFetch does no filtering, but NEAREST + clamp keeps the sampler complete on every driver.
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+    }
+
+    /// <summary>M70: enable/disable the loaded dynamic point lights without re-uploading them.</summary>
+    public void SetDynamicLightsEnabled(bool enabled) => _dynamicLightsEnabled = enabled;
+    /// <summary>M70: global multiplier on the dynamic point-light contribution.</summary>
+    public void SetLightIntensity(float intensity) => _lightIntensity = System.Math.Clamp(intensity, 0f, 8f);
+    /// <summary>M70: number of point lights currently uploaded (for status display).</summary>
+    public int PointLightCount => _lightCount;
+
     /// <summary>Sets the authored map sun for surfaces that do not carry baked-light UVs.</summary>
     public void SetSunLighting(Vector3 directionToSun, Vector4 sunColor, Vector4 skyLightColor, float skyLightScale)
     {
@@ -1274,6 +1348,17 @@ void main(){
                 _gl.Uniform1(_mLightmap, 6);
                 _gl.Uniform1(_mTime, _time);   // M44: shared animation clock (flowmap water)
                 _gl.Uniform1(_mLightmapScale, _lightmapScale);   // M45: baked-light multiplier
+                // M70: dynamic point lights — table on unit 7, count gated by the toggle (0 = shader skips them).
+                _gl.Uniform1(_mLightsTex, 7);
+                int activeLights = (_dynamicLightsEnabled && _lightsTex != 0) ? _lightCount : 0;
+                _gl.Uniform1(_mNumLights, activeLights);
+                _gl.Uniform1(_mLightIntensity, _lightIntensity);
+                if (activeLights > 0)
+                {
+                    _gl.ActiveTexture(TextureUnit.Texture7);
+                    _gl.BindTexture(TextureTarget.Texture2D, _lightsTex);
+                    _gl.ActiveTexture(TextureUnit.Texture0);
+                }
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
 
                 void DrawSubmesh(SubmeshDraw s)
@@ -1625,6 +1710,7 @@ void main(){
         if (!_ready) return;
         DeleteMeshBuffers();
         _gl.DeleteTexture(_whiteTex);
+        if (_lightsTex != 0) { _gl.DeleteTexture(_lightsTex); _lightsTex = 0; }   // M70
         _gl.DeleteBuffer(_boundsVbo);
         _gl.DeleteBuffer(_boneVbo);
         _gl.DeleteBuffer(_particleVbo);

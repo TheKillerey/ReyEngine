@@ -18,6 +18,7 @@ using ReyEngine.Core.Selection;
 using ReyEngine.Core.Undo;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Animation;
+using ReyEngine.Formats.Lighting;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Vfx;
 using ReyEngine.Formats.Materials;
@@ -325,6 +326,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Success("Audio", $"Replaced wem {targetId} for '{snd.EventName}' in {Path.GetFileName(rb.Path)} → override.");
         }
         catch (Exception ex) { _log.Error("Audio", ex.Message); AudioStatus = ex.Message; }
+    }
+
+    /// <summary>M70: load a legacy Riot Light.dat point-light table and render it as dynamic point lights.
+    /// The lights are in the file's own map world space, so it lines up when the loaded map matches the
+    /// Light.dat (e.g. the old Map1 file on classic SR geometry).</summary>
+    [RelayCommand]
+    private async Task LoadLightDat()
+    {
+        var file = await Dialogs.OpenFileAsync("Load Riot Light.dat (point lights)",
+            new Avalonia.Platform.Storage.FilePickerFileType("Light.dat") { Patterns = new[] { "*.dat" } }, DialogService.All);
+        if (file is null) return;
+        try
+        {
+            var lights = LightDatFile.Parse(await File.ReadAllBytesAsync(file));
+            if (lights.Count == 0) { _log.Warn("Lights", $"No point lights parsed from {Path.GetFileName(file)}."); return; }
+            DynamicLights = lights;
+            HasDynamicLights = true;
+            ShowDynamicLights = true;
+            DynamicLightsStatus = $"{lights.Count} point light(s) — {Path.GetFileName(file)}";
+            _log.Success("Lights", $"Loaded {lights.Count} point light(s) from {Path.GetFileName(file)}. Toggle 'Lights' in the viewport toolbar.");
+        }
+        catch (Exception ex) { _log.Error("Lights", ex.Message); }
     }
 
     partial void OnAmbienceEnabledChanged(bool value)
@@ -786,6 +809,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showBounds;
     [ObservableProperty] private bool _cullBackfaces = true; // M34: respect per-material cullEnable by default (off = force all two-sided)
     [ObservableProperty] private bool _showLightmaps = true; // M69: baked lightmaps on by default; off = sun/sky fallback lighting
+    // M70: legacy Riot dynamic point lights (Light.dat)
+    [ObservableProperty] private bool _showDynamicLights;
+    [ObservableProperty] private double _dynamicLightIntensity = 1.0;
+    [ObservableProperty] private IReadOnlyList<PointLight>? _dynamicLights;
+    [ObservableProperty] private string? _dynamicLightsStatus;
+    [ObservableProperty] private bool _hasDynamicLights;
     [ObservableProperty] private bool _hasMaterialData;
     [ObservableProperty] private bool _hasInspectorBody;
     [ObservableProperty] private int _inspectorTab;

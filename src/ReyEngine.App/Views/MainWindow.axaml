@@ -269,6 +269,9 @@
                 ShowBounds="{Binding ShowBounds}"
                 CullBackfaces="{Binding CullBackfaces}"
                 LightmapsEnabled="{Binding ShowLightmaps}"
+                DynamicLights="{Binding DynamicLights}"
+                DynamicLightsEnabled="{Binding ShowDynamicLights}"
+                DynamicLightIntensity="{Binding DynamicLightIntensity}"
                 ParticleMarkers="{Binding ParticleMarkers}"
                 SelectedParticlePosition="{Binding SelectedParticleMarker}"
                 PropMarkers="{Binding PropMarkers}"
@@ -326,6 +329,11 @@
               <ToggleButton Classes="vp" Content="▣ Bounds" IsChecked="{Binding ShowBounds}" ToolTip.Tip="Show bounding boxes" />
               <ToggleButton Classes="vp" Content="☀ Lightmap" IsChecked="{Binding ShowLightmaps}"
                             ToolTip.Tip="Baked lightmaps on/off. Off = the map is lit by the sun/sky fallback term only (useful for seeing raw textures or previewing dynamic lights)." />
+              <ToggleButton Classes="vp" Content="💡 Lights" IsChecked="{Binding ShowDynamicLights}"
+                            IsVisible="{Binding HasDynamicLights}"
+                            ToolTip.Tip="Render the loaded Riot Light.dat point lights (additive, radial). Load a Light.dat first via the ⏻ button." />
+              <Button Classes="tool" Content="⏻ Light.dat" Command="{Binding LoadLightDatCommand}" FontSize="11" Padding="8,3" Margin="0"
+                      ToolTip.Tip="Load a legacy Riot LEVELS/MapN/Light.dat point-light table and preview it as dynamic lights (lines up when the loaded map matches the file)." />
               <ToggleButton Classes="vp" Content="✧ Particles" IsChecked="{Binding ShowParticles}"
                             IsVisible="{Binding HasParticles}"
                             ToolTip.Tip="Show placed particle-system markers (MapParticle)" />
