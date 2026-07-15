@@ -381,7 +381,11 @@ void main() {
     }
 
     float d = max(dot(n, normalize(-uLight)), 0.0);
-    vec3 col = base * (uSkyLight + uSunColor * d);
+    // Encode the fallback illumination the same way as BakedLight: it is a linear light term, so display
+    // encode it before it modulates the already display-encoded diffuse. Without this, geometry with no
+    // BakedLight UV (alpha decals, effects, props) is systematically darker than the encoded baked ground
+    // it sits on - the M64/M65 encode only covered the lightmap path, leaving decals too dark.
+    vec3 col = base * bakedLightColour(uSkyLight + uSunColor * d);
 
     // Baked lightmap: when the mesh carries a real BakedLight atlas, that IS the lighting for this
     // surface, so it replaces the fake directional term (finalColor = diffuse * lightmap * scale). The
