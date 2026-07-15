@@ -59,7 +59,13 @@ public sealed record VfxEmitterDefinition(
     Vector2 TextureMultUvScrollRate = default,
     float StartFrame = 0f,
     bool UseTextureAspect = false,
-    VfxDistortionDefinition? Distortion = null)
+    VfxDistortionDefinition? Distortion = null,
+    // M68: particleColorTexture is a 2-D colour-over-life gradient. Riot samples it per particle to derive
+    // the particle colour (these emitters leave birthColor/color unset, so without it they render white).
+    // colorLookUpTypeX/Y pick what drives the U/V lookup axes; null = the field was absent (Riot default 0).
+    string? ParticleColorTexturePath = null,
+    int? ColorLookUpTypeX = null,
+    int? ColorLookUpTypeY = null)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||

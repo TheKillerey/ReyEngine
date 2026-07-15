@@ -558,6 +558,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private readonly Dictionary<uint, IReadOnlyList<TextureImage?>> _vfxTextureCache = new();  // system hash -> sprites
     private readonly Dictionary<uint, IReadOnlyList<TextureImage?>> _vfxTextureMultCache = new();
     private readonly Dictionary<uint, IReadOnlyList<TextureImage?>> _vfxDistortionTextureCache = new();
+    private readonly Dictionary<uint, IReadOnlyList<TextureImage?>> _vfxColorTextureCache = new();  // M68: particleColorTexture gradients
     [ObservableProperty] private bool _playParticlePreview;
     [ObservableProperty] private bool _playAllParticles;
     [ObservableProperty] private VfxPlayback? _currentParticlePlayback;
@@ -593,6 +594,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         foreach (var e in sys.Emitters)
             texs.Add(e.Distortion?.NormalMapTexturePath is { } p ? LoadTextureByPath(p) : null);
         _vfxDistortionTextureCache[sys.PathHash] = texs;
+        return texs;
+    }
+
+    /// <summary>M68: resolve each emitter's particleColorTexture (the colour-over-life gradient the simulator
+    /// samples on the CPU). Null when the emitter has none — it then keeps its birthColor/color curve.</summary>
+    private IReadOnlyList<TextureImage?> ResolveSystemColorTextures(VfxSystemDefinition sys)
+    {
+        if (_vfxColorTextureCache.TryGetValue(sys.PathHash, out var cached)) return cached;
+        var texs = new List<TextureImage?>(sys.Emitters.Count);
+        foreach (var e in sys.Emitters)
+            texs.Add(e.ParticleColorTexturePath is { } p ? LoadTextureByPath(p) : null);
+        _vfxColorTextureCache[sys.PathHash] = texs;
         return texs;
     }
 
@@ -661,7 +674,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void SetChampionVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems)
     {
         _vfxSystems = systems;
-        _vfxTextureCache.Clear(); _vfxTextureMultCache.Clear(); _vfxDistortionTextureCache.Clear(); _vfxMeshCache.Clear();
+        _vfxTextureCache.Clear(); _vfxTextureMultCache.Clear(); _vfxDistortionTextureCache.Clear(); _vfxColorTextureCache.Clear(); _vfxMeshCache.Clear();
         ChampionVfxSystems.Clear();
         foreach (var s in systems.Values
                      .Where(s => s.Emitters.Any(e => e.IsVisual))
@@ -680,7 +693,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         // champion VFX are authored around the character root (origin); play one system there.
         CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, System.Numerics.Vector3.Zero,
-            ResolveSystemTextures(sys), ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys), ResolveSystemDistortionTextures(sys)) });
+            ResolveSystemTextures(sys), ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys), ResolveSystemDistortionTextures(sys),
+            ResolveSystemColorTextures(sys)) });
         _log.Info("VFX", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {ResolveSystemTextures(sys).Count(t => t is not null)} sprite(s) resolved.");
     }
 
@@ -698,7 +712,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (!IsParticleVisible(v.Placement)) continue;
                 if (!_vfxSystems.TryGetValue(v.Placement.SystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
                 items.Add(new VfxPlaybackItem(s, v.CurrentTransform, ResolveSystemTextures(s), ResolveSystemMeshes(s),
-                    ResolveSystemMultTextures(s), ResolveSystemDistortionTextures(s)));
+                    ResolveSystemMultTextures(s), ResolveSystemDistortionTextures(s), ResolveSystemColorTextures(s)));
             }
             CurrentParticlePlayback = items.Count > 0 ? new VfxPlayback(items, CullByCamera: true) : null;
             _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.");
@@ -713,7 +727,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         var texs = ResolveSystemTextures(sys);
         CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, node.CurrentTransform, texs,
-            ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys), ResolveSystemDistortionTextures(sys)) });
+            ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys), ResolveSystemDistortionTextures(sys),
+            ResolveSystemColorTextures(sys)) });
         _log.Info("Particles", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {texs.Count(t => t is not null)} sprite(s) resolved.");
     }
 
@@ -843,12 +858,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.ResolveTextures = ResolveSystemTextures;
         ParticleEditor.ResolveMultTextures = ResolveSystemMultTextures;
         ParticleEditor.ResolveDistortionTextures = ResolveSystemDistortionTextures;
+        ParticleEditor.ResolveColorTextures = ResolveSystemColorTextures;   // M68: particleColorTexture gradient
         ParticleEditor.ResolveMeshes = ResolveSystemMeshes;   // M47: .scb/.sco mesh primitives
 
         // M55: model-preview window — its own animation clock (AnimationInspectorViewModel) + VFX resolvers
         MeshPreview.Animation.ClipLoader = DecodeAnimation;
         MeshPreview.ResolveTextures = ResolveSystemTextures;
         MeshPreview.ResolveDistortionTextures = ResolveSystemDistortionTextures;
+        MeshPreview.ResolveColorTextures = ResolveSystemColorTextures;   // M68
         MeshPreview.ResolveMeshes = ResolveSystemMeshes;
         ParticleEditor.Info = m => _log.Info("Particle", m);
         ParticleEditor.Error = m => _log.Error("Particle", m);
@@ -1661,7 +1678,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ChampionVfxSystems.Clear();
         HasChampionVfx = false;
         _vfxSystems = EmptyVfx;
-        _vfxTextureCache.Clear(); _vfxTextureMultCache.Clear(); _vfxDistortionTextureCache.Clear(); _vfxMeshCache.Clear();
+        _vfxTextureCache.Clear(); _vfxTextureMultCache.Clear(); _vfxDistortionTextureCache.Clear(); _vfxColorTextureCache.Clear(); _vfxMeshCache.Clear();
         CurrentAnimation = null;
         AnimationTime = 0;
         Animation.Clear();

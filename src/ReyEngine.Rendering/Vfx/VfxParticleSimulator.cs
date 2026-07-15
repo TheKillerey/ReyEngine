@@ -20,6 +20,11 @@ public sealed class VfxParticleSimulator
         public uint Texture;                    // GL handle for this emitter's sprite (0 = not uploaded/skip)
         public uint TextureMult;                // optional Riot multiplier/noise texture stage
         public uint DistortionTexture;          // normal map for screen-space heat haze/refraction
+        // M68: CPU copy of particleColorTexture (RGBA8, top-left origin). When present, each particle's colour
+        // is looked up from this 2-D colour-over-life gradient (U = age, V = per-particle variant) instead of
+        // rendering white. Null = emitter has no colour texture (keeps its birthColor/color curve colour).
+        public byte[]? ColorGradient;
+        public int ColorGradientW, ColorGradientH;
         public float SpriteAspect = 1f;         // legacy scalar quads preserve one atlas cell's width/height
         internal float SpawnAccum;
         internal float Age;                     // emitter age (seconds)
@@ -49,6 +54,7 @@ public sealed class VfxParticleSimulator
         public Vector3 BirthRotation;
         public float Rot, RotVel;
         public float StartFrame, FrameRate;
+        public float ColorRandom;   // M68: stable per-particle 0..1 roll for the colour-gradient variant axis
     }
 
     public IReadOnlyList<EmitterState> Emitters => _emitters;
@@ -214,6 +220,7 @@ public sealed class VfxParticleSimulator
                 ? _rng.Next(d.NumFrames)
                 : Math.Clamp(d.StartFrame, 0f, Math.Max(0, d.NumFrames - 1)),
             FrameRate = d.BirthFrameRate?.SampleBirth(_rng) ?? d.FrameRate ?? 0f,
+            ColorRandom = (float)_rng.NextDouble(),
         });
     }
 
@@ -231,6 +238,19 @@ public sealed class VfxParticleSimulator
             var scaleMul = d.ScaleOverLife?.Sample(t) ?? Vector3.One;
             var colMul = d.ColorOverLife?.Sample(t) ?? Vector4.One;
             var col = p.BirthColor * colMul;
+
+            // M68: modulate by the particleColorTexture gradient. U is the colour-over-life axis (age); V is a
+            // per-particle variant selector. This is what colours emitters that leave birthColor/color unset
+            // (all the Jade fire/ember/glow systems) — without it they render white.
+            if (s.ColorGradient is { } grad && s.ColorGradientW > 0 && s.ColorGradientH > 0)
+            {
+                float speed = p.Vel.Length();
+                float u = LookupCoord(d.ColorLookUpTypeX ?? 0, t, speed, p.ColorRandom);
+                // V: an explicit lookup type drives the variant axis; an absent field samples a stable centre
+                // row (a complete valid gradient) rather than sweeping V diagonally with age.
+                float v = d.ColorLookUpTypeY is { } ty ? LookupCoord(ty, t, speed, p.ColorRandom) : 0.5f;
+                col *= SampleGradient(grad, s.ColorGradientW, s.ColorGradientH, u, v);
+            }
 
             float frame = 0f;
             if (d.NumFrames > 1)
@@ -251,5 +271,36 @@ public sealed class VfxParticleSimulator
             buf[k++] = p.Rot; buf[k++] = p.BirthRotation.Y; buf[k++] = p.BirthRotation.Z;
         }
         s.InstanceCount = n;
+    }
+
+    /// <summary>M68: map a Riot colorLookUpType to a 0..1 texture coordinate. 0 = particle life (age), the
+    /// colour-over-life axis; 2/3 = a per-particle random variant; 1 = normalised speed. Unknown types fall
+    /// back to age. Exact enum values 2/3 are approximate (both treated as a per-particle random variant),
+    /// which is enough to colour the particle correctly instead of leaving it white.</summary>
+    private static float LookupCoord(int type, float age, float speed, float random) => type switch
+    {
+        1 => Math.Clamp(speed / 400f, 0f, 1f),   // ByVelocity — 400 u/s reaches the ramp end (approx)
+        2 or 3 => random,                        // per-particle random variant
+        _ => age,                                // 0 (Life) and anything else: colour over life
+    };
+
+    /// <summary>Bilinear RGBA sample of a tightly-packed RGBA8 image (top-left origin), UV clamped to [0,1].</summary>
+    private static Vector4 SampleGradient(byte[] rgba, int w, int h, float u, float v)
+    {
+        u = Math.Clamp(u, 0f, 1f);
+        v = Math.Clamp(v, 0f, 1f);
+        float fx = u * (w - 1), fy = v * (h - 1);
+        int x0 = (int)fx, y0 = (int)fy;
+        int x1 = Math.Min(x0 + 1, w - 1), y1 = Math.Min(y0 + 1, h - 1);
+        float tx = fx - x0, tyf = fy - y0;
+        Vector4 c00 = Texel(rgba, w, x0, y0), c10 = Texel(rgba, w, x1, y0);
+        Vector4 c01 = Texel(rgba, w, x0, y1), c11 = Texel(rgba, w, x1, y1);
+        return Vector4.Lerp(Vector4.Lerp(c00, c10, tx), Vector4.Lerp(c01, c11, tx), tyf);
+    }
+
+    private static Vector4 Texel(byte[] rgba, int w, int x, int y)
+    {
+        int i = (y * w + x) * 4;
+        return new Vector4(rgba[i] / 255f, rgba[i + 1] / 255f, rgba[i + 2] / 255f, rgba[i + 3] / 255f);
     }
 }

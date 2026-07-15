@@ -17,16 +17,18 @@ public sealed record VfxPlaybackItem(
     IReadOnlyList<TextureImage?> EmitterTextures,
     IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>? EmitterMeshes = null,
     IReadOnlyList<TextureImage?>? EmitterMultTextures = null,   // Riot TEXTUREMULT stage
-    IReadOnlyList<TextureImage?>? EmitterDistortionTextures = null)
+    IReadOnlyList<TextureImage?>? EmitterDistortionTextures = null,
+    IReadOnlyList<TextureImage?>? EmitterColorTextures = null)  // M68: particleColorTexture colour-over-life gradient
 {
     /// <summary>Convenience for champion/editor previews authored at a translated root.</summary>
     public VfxPlaybackItem(VfxSystemDefinition system, Vector3 worldPos,
         IReadOnlyList<TextureImage?> emitterTextures,
         IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>? emitterMeshes = null,
         IReadOnlyList<TextureImage?>? emitterMultTextures = null,
-        IReadOnlyList<TextureImage?>? emitterDistortionTextures = null)
+        IReadOnlyList<TextureImage?>? emitterDistortionTextures = null,
+        IReadOnlyList<TextureImage?>? emitterColorTextures = null)
         : this(system, Matrix4x4.CreateTranslation(worldPos), emitterTextures, emitterMeshes, emitterMultTextures,
-            emitterDistortionTextures) { }
+            emitterDistortionTextures, emitterColorTextures) { }
 
     public Vector3 WorldPos => Transform.Translation;
 }

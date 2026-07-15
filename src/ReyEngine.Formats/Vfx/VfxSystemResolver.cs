@@ -38,6 +38,9 @@ public static class VfxSystemResolver
     private static readonly uint F_scale0        = HashAlgorithms.Fnv1a("scale0");
     private static readonly uint F_birthColor    = HashAlgorithms.Fnv1a("birthColor");
     private static readonly uint F_color         = HashAlgorithms.Fnv1a("color");
+    private static readonly uint F_particleColorTex = HashAlgorithms.Fnv1a("particleColorTexture");
+    private static readonly uint F_colorLookUpX  = HashAlgorithms.Fnv1a("colorLookUpTypeX");
+    private static readonly uint F_colorLookUpY  = HashAlgorithms.Fnv1a("colorLookUpTypeY");
     private static readonly uint F_birthVelocity = HashAlgorithms.Fnv1a("birthVelocity");
     private static readonly uint F_birthAccel    = HashAlgorithms.Fnv1a("birthAcceleration");
     private static readonly uint F_accel         = HashAlgorithms.Fnv1a("acceleration");
@@ -229,7 +232,10 @@ public static class VfxSystemResolver
             TextureMultUvScrollRate: textureMultUvScroll,
             StartFrame: GetU16(p, F_startFrame) ?? 0,
             UseTextureAspect: legacy is not null,
-            Distortion: distortion);
+            Distortion: distortion,
+            ParticleColorTexturePath: GetString(p, F_particleColorTex),
+            ColorLookUpTypeX: GetU8(p, F_colorLookUpX),
+            ColorLookUpTypeY: GetU8(p, F_colorLookUpY));
     }
 
     private static VfxSpawnShape? ReadSpawnShape(IReadOnlyDictionary<uint, BinTreeProperty> emitterProps)

@@ -738,6 +738,15 @@ public sealed class ViewportControl : OpenGlControlBase
                     }
                     es.DistortionTexture = distortionTex;
                 }
+                // M68: particleColorTexture is sampled on the CPU (in the simulator), so hand the emitter the
+                // decoded RGBA gradient directly rather than uploading it to GL.
+                var colorImg = item.EmitterColorTextures is { } cts && idx >= 0 && idx < cts.Count ? cts[idx] : null;
+                if (colorImg is not null)
+                {
+                    es.ColorGradient = colorImg.Rgba;
+                    es.ColorGradientW = colorImg.Width;
+                    es.ColorGradientH = colorImg.Height;
+                }
                 // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
                 var mesh = item.EmitterMeshes is { } ms && idx >= 0 && idx < ms.Count ? ms[idx] : null;
                 if (mesh is not null && img is not null)
