@@ -812,9 +812,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // M70: legacy Riot dynamic point lights (Light.dat)
     [ObservableProperty] private bool _showDynamicLights;
     [ObservableProperty] private double _dynamicLightIntensity = 1.0;
+    [ObservableProperty] private double _dynamicLightRadiusScale = 1.0;   // M71: global light-radius multiplier
+    [ObservableProperty] private double _dynamicLightPositionScale = 1.0; // M71: master light-position spread (XZ)
+    [ObservableProperty] private double _dynamicLightScaleX = 1.0;        // M71: per-axis fine scale
+    [ObservableProperty] private double _dynamicLightScaleZ = 1.0;
+    [ObservableProperty] private double _dynamicLightOffsetX = 0.0;       // M71: world-space translate
+    [ObservableProperty] private double _dynamicLightOffsetZ = 0.0;
     [ObservableProperty] private IReadOnlyList<PointLight>? _dynamicLights;
     [ObservableProperty] private string? _dynamicLightsStatus;
     [ObservableProperty] private bool _hasDynamicLights;
+    [ObservableProperty] private bool _showLightMarkers = true;   // M71: show a glow icon at each light position
+    // M71: manual lighting controls. Sun + sky feed the fallback lighting term (visible with lightmaps off or
+    // on geometry without baked light); lightmap brightness scales the baked atlas. All initialise from the
+    // map's MapSunProperties on load, then the user tweaks — darken the sky/lightmap so dynamic lights pop.
+    [ObservableProperty] private double _sunIntensity = 1.0;
+    [ObservableProperty] private double _sunColorR = 0.75;
+    [ObservableProperty] private double _sunColorG = 0.75;
+    [ObservableProperty] private double _sunColorB = 0.75;
+    [ObservableProperty] private double _skyIntensity = 1.0;
+    [ObservableProperty] private double _skyColorR = 0.35;
+    [ObservableProperty] private double _skyColorG = 0.35;
+    [ObservableProperty] private double _skyColorB = 0.35;
     [ObservableProperty] private bool _hasMaterialData;
     [ObservableProperty] private bool _hasInspectorBody;
     [ObservableProperty] private int _inspectorTab;
@@ -2838,13 +2856,77 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// (lightMapColorScale — the game's baked-light multiplier, e.g. 2.0 on Map12 Bloom).</summary>
     private void ApplySunProperties(Formats.MapGeo.MapSunProperties? sun)
     {
-        CurrentSunProperties = sun;
+        _baseSunAuthored = sun;   // M71: remembered so "Reset lighting" can restore the map's authored values
+        // M71: keep the authored sun (direction + any HDR fields) as the base; the manual sliders replace only
+        // colour/scale on top of it. When the map has no sun component, fall back to the renderer's own
+        // defaults (dir/0.75 sun/0.35 sky) so nothing changes visually until the user touches a slider.
+        _baseSun = sun ?? new MapSunProperties
+        {
+            SunDirection = new System.Numerics.Vector3(0.4f, 0.85f, 0.45f),
+            SunColor = new System.Numerics.Vector4(0.75f, 0.75f, 0.75f, 1f),
+            SkyLightColor = new System.Numerics.Vector4(0.35f, 0.35f, 0.35f, 1f),
+            SkyLightScale = 1f,
+        };
+        _suppressSunRebuild = true;
+        SunColorR = Clamp01(_baseSun.SunColor.X); SunColorG = Clamp01(_baseSun.SunColor.Y); SunColorB = Clamp01(_baseSun.SunColor.Z);
+        SunIntensity = 1.0;
+        SkyColorR = Clamp01(_baseSun.SkyLightColor.X); SkyColorG = Clamp01(_baseSun.SkyLightColor.Y); SkyColorB = Clamp01(_baseSun.SkyLightColor.Z);
+        SkyIntensity = System.Math.Clamp(_baseSun.SkyLightScale, 0f, 8f);
+        _suppressSunRebuild = false;
+        RebuildSun();
         CurrentLightmapScale = sun?.LightMapColorScale ?? 1.0;
         if (sun is not null)
             _log.Info("Map", $"MapSunProperties: lightMapColorScale={sun.LightMapColorScale:0.##}, " +
                              $"skyLightScale={sun.SkyLightScale:0.##}, sunColor=({sun.SunColor.X:0.##}, {sun.SunColor.Y:0.##}, {sun.SunColor.Z:0.##}), " +
                              $"fog {sun.FogStartAndEnd.X:0}..{sun.FogStartAndEnd.Y:0}");
     }
+
+    // M71: base sun (map-authored or default); the sliders replace colour/scale on top of it.
+    private MapSunProperties _baseSun = new()
+    {
+        SunDirection = new System.Numerics.Vector3(0.4f, 0.85f, 0.45f),
+        SunColor = new System.Numerics.Vector4(0.75f, 0.75f, 0.75f, 1f),
+        SkyLightColor = new System.Numerics.Vector4(0.35f, 0.35f, 0.35f, 1f),
+        SkyLightScale = 1f,
+    };
+    private bool _suppressSunRebuild;
+    private static double Clamp01(double v) => System.Math.Clamp(v, 0.0, 1.0);
+
+    /// <summary>M71: fold the manual sun/sky sliders into CurrentSunProperties (bound to the viewport). Sun
+    /// colour is scaled by its intensity; sky scale carries the sky intensity — exactly the two knobs the
+    /// renderer's fallback term uses (col = base * encode(sky + sun * NdotL)).</summary>
+    private void RebuildSun()
+    {
+        if (_suppressSunRebuild) return;
+        CurrentSunProperties = _baseSun with
+        {
+            SunColor = new System.Numerics.Vector4((float)(SunColorR * SunIntensity), (float)(SunColorG * SunIntensity), (float)(SunColorB * SunIntensity), 1f),
+            SkyLightColor = new System.Numerics.Vector4((float)SkyColorR, (float)SkyColorG, (float)SkyColorB, 1f),
+            SkyLightScale = (float)SkyIntensity,
+        };
+        OnPropertyChanged(nameof(SunSwatch));
+        OnPropertyChanged(nameof(SkySwatch));
+    }
+
+    public Avalonia.Media.IBrush SunSwatch => Swatch(SunColorR * SunIntensity, SunColorG * SunIntensity, SunColorB * SunIntensity);
+    public Avalonia.Media.IBrush SkySwatch => Swatch(SkyColorR * SkyIntensity, SkyColorG * SkyIntensity, SkyColorB * SkyIntensity);
+    private static Avalonia.Media.IBrush Swatch(double r, double g, double b) =>
+        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(B(r), B(g), B(b)));
+    private static byte B(double v) => (byte)System.Math.Clamp(v * 255.0, 0, 255);
+
+    partial void OnSunIntensityChanged(double value) => RebuildSun();
+    partial void OnSunColorRChanged(double value) => RebuildSun();
+    partial void OnSunColorGChanged(double value) => RebuildSun();
+    partial void OnSunColorBChanged(double value) => RebuildSun();
+    partial void OnSkyIntensityChanged(double value) => RebuildSun();
+    partial void OnSkyColorRChanged(double value) => RebuildSun();
+    partial void OnSkyColorGChanged(double value) => RebuildSun();
+    partial void OnSkyColorBChanged(double value) => RebuildSun();
+
+    /// <summary>M71: restore sun/sky/lightmap to the loaded map's authored values.</summary>
+    [RelayCommand]
+    private void ResetLighting() => ApplySunProperties(_baseSunAuthored);
+    private Formats.MapGeo.MapSunProperties? _baseSunAuthored;
 
     /// <summary>
     /// Resolve a mapgeo's companion .materials.bin, tolerating renamed copies (a mod folder often holds

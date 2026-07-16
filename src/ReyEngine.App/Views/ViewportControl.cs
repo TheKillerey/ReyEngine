@@ -43,6 +43,20 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(DynamicLightsEnabled));
     public static readonly StyledProperty<double> DynamicLightIntensityProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightIntensity), 1.0);
+    public static readonly StyledProperty<double> DynamicLightRadiusScaleProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightRadiusScale), 1.0);   // M71
+    public static readonly StyledProperty<double> DynamicLightPositionScaleProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightPositionScale), 1.0);   // M71
+    public static readonly StyledProperty<double> DynamicLightScaleXProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightScaleX), 1.0);   // M71
+    public static readonly StyledProperty<double> DynamicLightScaleZProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightScaleZ), 1.0);
+    public static readonly StyledProperty<double> DynamicLightOffsetXProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightOffsetX), 0.0);
+    public static readonly StyledProperty<double> DynamicLightOffsetZProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightOffsetZ), 0.0);
+    public static readonly StyledProperty<bool> ShowLightMarkersProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowLightMarkers), true);   // M71: light position icons
     public static readonly StyledProperty<IReadOnlyList<Vector3>?> ParticleMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ParticleMarkers));
     public static readonly StyledProperty<Vector3?> SelectedParticlePositionProperty =
@@ -146,6 +160,13 @@ public sealed class ViewportControl : OpenGlControlBase
     public IReadOnlyList<PointLight>? DynamicLights { get => GetValue(DynamicLightsProperty); set => SetValue(DynamicLightsProperty, value); }
     public bool DynamicLightsEnabled { get => GetValue(DynamicLightsEnabledProperty); set => SetValue(DynamicLightsEnabledProperty, value); }
     public double DynamicLightIntensity { get => GetValue(DynamicLightIntensityProperty); set => SetValue(DynamicLightIntensityProperty, value); }
+    public double DynamicLightRadiusScale { get => GetValue(DynamicLightRadiusScaleProperty); set => SetValue(DynamicLightRadiusScaleProperty, value); }
+    public double DynamicLightPositionScale { get => GetValue(DynamicLightPositionScaleProperty); set => SetValue(DynamicLightPositionScaleProperty, value); }
+    public double DynamicLightScaleX { get => GetValue(DynamicLightScaleXProperty); set => SetValue(DynamicLightScaleXProperty, value); }
+    public double DynamicLightScaleZ { get => GetValue(DynamicLightScaleZProperty); set => SetValue(DynamicLightScaleZProperty, value); }
+    public double DynamicLightOffsetX { get => GetValue(DynamicLightOffsetXProperty); set => SetValue(DynamicLightOffsetXProperty, value); }
+    public double DynamicLightOffsetZ { get => GetValue(DynamicLightOffsetZProperty); set => SetValue(DynamicLightOffsetZProperty, value); }
+    public bool ShowLightMarkers { get => GetValue(ShowLightMarkersProperty); set => SetValue(ShowLightMarkersProperty, value); }
     /// <summary>World positions of placed-particle markers to draw (M35); null/empty hides them.</summary>
     public IReadOnlyList<Vector3>? ParticleMarkers { get => GetValue(ParticleMarkersProperty); set => SetValue(ParticleMarkersProperty, value); }
     public Vector3? SelectedParticlePosition { get => GetValue(SelectedParticlePositionProperty); set => SetValue(SelectedParticlePositionProperty, value); }
@@ -178,6 +199,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly OrbitCamera _camera = new();
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
     private bool _dynamicLightsDirty;   // M70: re-upload the Light.dat table on the GL thread when it changes
+    private bool _lightMarkersDirty;    // M71: recompute the transformed light-position icons
     private bool _particlesDirty;
     private bool _propMeshesDirty;   // M41
     private float _markerSize = 40f; // world-size for placement markers, fixed once the mesh loads
@@ -421,6 +443,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 _skinDirty = true;
                 _visibilityDirty = true;
                 _materialsDirty = true;
+                _lightMarkersDirty = true;   // M71: re-place light icons with the new mesh's marker size
             }
             else _meshRenderer.ClearMesh();
             _meshDirty = false;
@@ -478,6 +501,25 @@ public sealed class ViewportControl : OpenGlControlBase
             _meshRenderer.SetSoundMarkers(SoundMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.2f);
             _meshRenderer.SetBucketGridLines(BucketGridLines);
             _particlesDirty = false;
+        }
+        if (_lightMarkersDirty)
+        {
+            // M71: place an icon at each light's TRANSFORMED position (same scale/offset the shader applies),
+            // so the markers track the layout as the user drags the position sliders.
+            if (ShowLightMarkers && DynamicLights is { Count: > 0 } lights)
+            {
+                double ps = DynamicLightPositionScale, sx = DynamicLightScaleX, sz = DynamicLightScaleZ;
+                double ox = DynamicLightOffsetX, oz = DynamicLightOffsetZ;
+                var pts = new Vector3[lights.Count];
+                for (int i = 0; i < lights.Count; i++)
+                {
+                    var p = lights[i].Position;
+                    pts[i] = new Vector3((float)(p.X * ps * sx + ox), p.Y, (float)(p.Z * ps * sz + oz));
+                }
+                _meshRenderer.SetLightMarkers(pts, _markerSize * 1.2f);
+            }
+            else _meshRenderer.SetLightMarkers(Array.Empty<Vector3>(), _markerSize);
+            _lightMarkersDirty = false;
         }
         if (_particlePlaybackDirty) { RebuildParticleSim(); _particlePlaybackDirty = false; }
         if (_propMeshesDirty) { RebuildPropMeshes(); _propMeshesDirty = false; }
@@ -539,6 +581,10 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         _meshRenderer.SetDynamicLightsEnabled(DynamicLightsEnabled);
         _meshRenderer.SetLightIntensity((float)DynamicLightIntensity);
+        _meshRenderer.SetLightRadiusScale((float)DynamicLightRadiusScale);
+        _meshRenderer.SetLightPositionScale((float)DynamicLightPositionScale);
+        _meshRenderer.SetLightPositionScaleXZ((float)DynamicLightScaleX, (float)DynamicLightScaleZ);
+        _meshRenderer.SetLightPositionOffset((float)DynamicLightOffsetX, (float)DynamicLightOffsetZ);
         if (SunProperties is { } sun)
             _meshRenderer.SetSunLighting(sun.SunDirection, sun.SunColor, sun.SkyLightColor, sun.SkyLightScale);
         else
@@ -884,10 +930,14 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == AnimateWaterProperty || change.Property == LightmapScaleProperty || change.Property == SunPropertiesProperty
                  || change.Property == HighlightSubmeshesProperty || change.Property == PlayPropAnimationsProperty
                  || change.Property == LightmapsEnabledProperty || change.Property == DynamicLightsEnabledProperty
-                 || change.Property == DynamicLightIntensityProperty)
+                 || change.Property == DynamicLightIntensityProperty || change.Property == DynamicLightRadiusScaleProperty)
         { RequestNextFrameRendering(); } // M44/M45/M50b/M54/M69/M70: water + lightmap scale + outline + prop idles + lightmap toggle + dynamic lights
-        else if (change.Property == DynamicLightsProperty)   // M70: new Light.dat table -> re-upload on the GL thread
-        { _dynamicLightsDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == DynamicLightsProperty)   // M70: new Light.dat table -> re-upload + re-mark on the GL thread
+        { _dynamicLightsDirty = true; _lightMarkersDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == DynamicLightPositionScaleProperty || change.Property == DynamicLightScaleXProperty
+                 || change.Property == DynamicLightScaleZProperty || change.Property == DynamicLightOffsetXProperty
+                 || change.Property == DynamicLightOffsetZProperty || change.Property == ShowLightMarkersProperty)
+        { _lightMarkersDirty = true; RequestNextFrameRendering(); }   // M71: light transform moves the icons too
         else if (change.Property == PropMeshesProperty)
         { _propMeshesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == FocusPointProperty && FocusPoint is { } fp)

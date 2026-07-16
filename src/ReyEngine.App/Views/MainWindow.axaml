@@ -272,6 +272,13 @@
                 DynamicLights="{Binding DynamicLights}"
                 DynamicLightsEnabled="{Binding ShowDynamicLights}"
                 DynamicLightIntensity="{Binding DynamicLightIntensity}"
+                DynamicLightRadiusScale="{Binding DynamicLightRadiusScale}"
+                DynamicLightPositionScale="{Binding DynamicLightPositionScale}"
+                DynamicLightScaleX="{Binding DynamicLightScaleX}"
+                DynamicLightScaleZ="{Binding DynamicLightScaleZ}"
+                DynamicLightOffsetX="{Binding DynamicLightOffsetX}"
+                DynamicLightOffsetZ="{Binding DynamicLightOffsetZ}"
+                ShowLightMarkers="{Binding ShowLightMarkers}"
                 ParticleMarkers="{Binding ParticleMarkers}"
                 SelectedParticlePosition="{Binding SelectedParticleMarker}"
                 PropMarkers="{Binding PropMarkers}"
@@ -334,6 +341,57 @@
                             ToolTip.Tip="Render the loaded Riot Light.dat point lights (additive, radial). Load a Light.dat first via the ⏻ button." />
               <Button Classes="tool" Content="⏻ Light.dat" Command="{Binding LoadLightDatCommand}" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Load a legacy Riot LEVELS/MapN/Light.dat point-light table and preview it as dynamic lights (lines up when the loaded map matches the file)." />
+              <Button Classes="tool" Content="☼ Lighting" FontSize="11" Padding="8,3" Margin="0"
+                      ToolTip.Tip="Adjust lightmap / sun / sky / dynamic-light brightness and colour. Turn the sky and lightmap down to make dynamic lights stand out.">
+                <Button.Flyout>
+                  <Flyout Placement="Bottom">
+                    <StackPanel Width="240" Spacing="4">
+                      <TextBlock Text="LIGHTMAP" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <TextBlock Text="{Binding CurrentLightmapScale, StringFormat='Baked brightness: {0:0.00}'}" FontSize="10" />
+                      <Slider Minimum="0" Maximum="4" Value="{Binding CurrentLightmapScale}" />
+
+                      <TextBlock Text="SUN" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,6,0,0" />
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="{Binding SunIntensity, StringFormat='Intensity: {0:0.00}'}" FontSize="10" />
+                        <Border Grid.Column="1" Width="22" Height="12" CornerRadius="2" Background="{Binding SunSwatch}" BorderBrush="#555" BorderThickness="1" />
+                      </Grid>
+                      <Slider Minimum="0" Maximum="3" Value="{Binding SunIntensity}" />
+                      <TextBlock Text="R" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SunColorR}" />
+                      <TextBlock Text="G" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SunColorG}" />
+                      <TextBlock Text="B" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SunColorB}" />
+
+                      <TextBlock Text="SKY / AMBIENT" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,6,0,0" />
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="{Binding SkyIntensity, StringFormat='Intensity: {0:0.00}'}" FontSize="10" />
+                        <Border Grid.Column="1" Width="22" Height="12" CornerRadius="2" Background="{Binding SkySwatch}" BorderBrush="#555" BorderThickness="1" />
+                      </Grid>
+                      <Slider Minimum="0" Maximum="3" Value="{Binding SkyIntensity}" />
+                      <TextBlock Text="R" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SkyColorR}" />
+                      <TextBlock Text="G" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SkyColorG}" />
+                      <TextBlock Text="B" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SkyColorB}" />
+
+                      <TextBlock Text="DYNAMIC LIGHTS (Light.dat)" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,6,0,0" />
+                      <TextBlock Text="{Binding DynamicLightIntensity, StringFormat='Strength: {0:0.00}'}" FontSize="10" />
+                      <Slider Minimum="0" Maximum="5" Value="{Binding DynamicLightIntensity}" />
+                      <TextBlock Text="{Binding DynamicLightRadiusScale, StringFormat='Radius scale: {0:0.00}x'}" FontSize="10" />
+                      <Slider Minimum="0.05" Maximum="5" Value="{Binding DynamicLightRadiusScale}" />
+                      <TextBlock Text="{Binding DynamicLightPositionScale, StringFormat='Position scale (spread): {0:0.00}x'}" FontSize="10" />
+                      <Slider Minimum="0.1" Maximum="6" Value="{Binding DynamicLightPositionScale}" />
+                      <TextBlock Text="{Binding DynamicLightScaleX, StringFormat='Scale X: {0:0.00}x'}" FontSize="10" />
+                      <Slider Minimum="0.1" Maximum="6" Value="{Binding DynamicLightScaleX}" />
+                      <TextBlock Text="{Binding DynamicLightScaleZ, StringFormat='Scale Z: {0:0.00}x'}" FontSize="10" />
+                      <Slider Minimum="0.1" Maximum="6" Value="{Binding DynamicLightScaleZ}" />
+                      <TextBlock Text="{Binding DynamicLightOffsetX, StringFormat='Offset X: {0:0}'}" FontSize="10" />
+                      <Slider Minimum="-20000" Maximum="20000" Value="{Binding DynamicLightOffsetX}" />
+                      <TextBlock Text="{Binding DynamicLightOffsetZ, StringFormat='Offset Z: {0:0}'}" FontSize="10" />
+                      <Slider Minimum="-20000" Maximum="20000" Value="{Binding DynamicLightOffsetZ}" />
+                      <CheckBox Content="Show light position icons" IsChecked="{Binding ShowLightMarkers}" FontSize="10" Margin="0,4,0,0" />
+
+                      <Button Content="Reset to map" Command="{Binding ResetLightingCommand}" HorizontalAlignment="Stretch" Margin="0,8,0,0" FontSize="10" />
+                    </StackPanel>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
               <ToggleButton Classes="vp" Content="✧ Particles" IsChecked="{Binding ShowParticles}"
                             IsVisible="{Binding HasParticles}"
                             ToolTip.Tip="Show placed particle-system markers (MapParticle)" />

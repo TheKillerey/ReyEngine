@@ -40,8 +40,12 @@ public sealed class ViewportMeshRenderer : IDisposable
     private uint _lightsTex;
     private int _lightCount;
     private float _lightIntensity = 1f;
+    private float _lightRadiusScale = 1f;
+    private float _lightPosScale = 1f;
+    private Vector2 _lightPosScaleXZ = Vector2.One;
+    private Vector2 _lightPosOffset = Vector2.Zero;
     private bool _dynamicLightsEnabled;
-    private int _mLightsTex, _mNumLights, _mLightIntensity;
+    private int _mLightsTex, _mNumLights, _mLightIntensity, _mLightRadiusScale, _mLightPosScale, _mLightPosScaleXZ, _mLightPosOffset;
     private Vector3 _lightDirection = new(-0.4f, -0.85f, -0.45f);
     private Vector3 _sunColor = new(0.75f);
     private Vector3 _skyLight = new(0.35f);
@@ -237,6 +241,10 @@ uniform int uIsTerrainBlend;
 uniform highp sampler2D uLightsTex;
 uniform int uNumLights;
 uniform float uLightIntensity;
+uniform float uLightRadiusScale;   // M71: global multiplier on every light's radius (fit lights to the map)
+uniform float uLightPosScale;      // M71: master multiplier on every light's XZ position (spread the layout)
+uniform vec2 uLightPosScaleXZ;     // M71: per-axis fine scale (x, z), on top of the master spread
+uniform vec2 uLightPosOffset;      // M71: world-space translate (x, z) applied after scaling
 uniform float uTerrainWorldScale;
 uniform vec2 uTerrainBottomTiling;
 uniform vec2 uTerrainMiddleTiling;
@@ -420,10 +428,17 @@ void main() {
         for (int i = 0; i < 1024; i++) {
             if (i >= uNumLights) break;
             vec4 posRadius = texelFetch(uLightsTex, ivec2(i, 0), 0);
-            vec3 toLight = posRadius.xyz - vWorld;
+            float radius = posRadius.w * uLightRadiusScale;
+            // M71: place the light. Spread the layout horizontally (master * per-axis scale, about world
+            // origin) then translate by the world-space offset; height (y) is left alone so torch lights stay
+            // at torch height. Lets a table authored for one map's footprint be fitted onto another.
+            vec3 lightPos = posRadius.xyz;
+            lightPos.x = lightPos.x * uLightPosScale * uLightPosScaleXZ.x + uLightPosOffset.x;
+            lightPos.z = lightPos.z * uLightPosScale * uLightPosScaleXZ.y + uLightPosOffset.y;
+            vec3 toLight = lightPos - vWorld;
             float dist = length(toLight);
-            if (dist < posRadius.w) {
-                float atten = 1.0 - dist / posRadius.w;
+            if (dist < radius) {
+                float atten = 1.0 - dist / radius;
                 atten *= atten;
                 vec3 lightColour = texelFetch(uLightsTex, ivec2(i, 1), 0).rgb;
                 float ndl = max(dot(n, toLight / max(dist, 0.0001)), 0.0);
@@ -541,6 +556,10 @@ void main() { FragColor = uColor; }";
         _mLightsTex = gl.GetUniformLocation(_meshProgram, "uLightsTex");         // M70
         _mNumLights = gl.GetUniformLocation(_meshProgram, "uNumLights");
         _mLightIntensity = gl.GetUniformLocation(_meshProgram, "uLightIntensity");
+        _mLightRadiusScale = gl.GetUniformLocation(_meshProgram, "uLightRadiusScale");
+        _mLightPosScale = gl.GetUniformLocation(_meshProgram, "uLightPosScale");
+        _mLightPosScaleXZ = gl.GetUniformLocation(_meshProgram, "uLightPosScaleXZ");
+        _mLightPosOffset = gl.GetUniformLocation(_meshProgram, "uLightPosOffset");
 
         _lineProgram = ShaderUtil.CreateProgram(gl, gles, LineVert, LineFrag);
         _lMvp = gl.GetUniformLocation(_lineProgram, "uMvp");
@@ -568,6 +587,8 @@ void main() { FragColor = uColor; }";
         _probeVbo = gl.GenBuffer();
         _soundVao = gl.GenVertexArray();   // M55: sound placements
         _soundVbo = gl.GenBuffer();
+        _lightMkVao = gl.GenVertexArray(); // M71: dynamic-light positions
+        _lightMkVbo = gl.GenBuffer();
         _bucketVao = gl.GenVertexArray();  // M55: bucket-grid overlay lines
         _bucketVbo = gl.GenBuffer();
 
@@ -590,20 +611,23 @@ void main() { FragColor = uColor; }";
         ConfigureMarkerVao(_propVao, _propVbo);
         ConfigureMarkerVao(_probeVao, _probeVbo);
         ConfigureMarkerVao(_soundVao, _soundVbo);
+        ConfigureMarkerVao(_lightMkVao, _lightMkVbo);
         _icoSparkle = UploadIcon(IconSparkle(48));
         _icoPerson = UploadIcon(IconPerson(48));
         _icoRing = UploadIcon(IconRing(48));
         _icoSpeaker = UploadIcon(IconSpeaker(48));
+        _icoLight = UploadIcon(IconLight(48));
 
         _ready = true;
     }
 
     // ---- M53 placement icons ----
-    private uint _markerProgram, _markerQuadVbo, _icoSparkle, _icoPerson, _icoRing, _icoSpeaker;
+    private uint _markerProgram, _markerQuadVbo, _icoSparkle, _icoPerson, _icoRing, _icoSpeaker, _icoLight;
     private uint _soundVao, _soundVbo, _bucketVao, _bucketVbo;   // M55: sounds + bucket-grid overlay
-    private int _soundVerts, _bucketVerts;
+    private uint _lightMkVao, _lightMkVbo;                       // M71: dynamic-light position icons
+    private int _soundVerts, _bucketVerts, _lightMkVerts;
     private int _mkViewProj, _mkCamRight, _mkCamUp, _mkSize, _mkColor, _mkTex;
-    private float _particleMarkerSize = 20f, _propMarkerSize = 20f, _probeMarkerSize = 20f, _particleSelSize = 20f, _soundMarkerSize = 20f;
+    private float _particleMarkerSize = 20f, _propMarkerSize = 20f, _probeMarkerSize = 20f, _particleSelSize = 20f, _soundMarkerSize = 20f, _lightMkSize = 20f;
 
     private unsafe void ConfigureMarkerVao(uint vao, uint instVbo)
     {
@@ -647,6 +671,27 @@ void main() { FragColor = uColor; }";
             float rayV = MathF.Max(0f, 1f - MathF.Abs(u) * 7f) * MathF.Max(0f, 1f - MathF.Abs(v));
             float core = MathF.Max(0f, 1f - r * 3.2f);
             float a = MathF.Min(1f, rayH + rayV + core * core);
+            int o = (y * n + x) * 4;
+            px[o] = px[o + 1] = px[o + 2] = 255;
+            px[o + 3] = (byte)(a * 255f);
+        }
+        return (px, n);
+    }
+
+    /// <summary>M71: light bulb glow (dynamic lights): a bright solid core with a soft radial halo — reads as
+    /// a point light, distinct from the particle sparkle's rays.</summary>
+    private static (byte[], int) IconLight(int n)
+    {
+        var px = new byte[n * n * 4];
+        float c = (n - 1) / 2f;
+        for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;
+            float r = MathF.Sqrt(u * u + v * v);
+            float core = MathF.Max(0f, 1f - r * 2.4f);      // bright solid centre
+            float halo = MathF.Max(0f, 1f - r) * 0.45f;     // soft glow out to the edge
+            float a = MathF.Min(1f, core * core + halo);
             int o = (y * n + x) * 4;
             px[o] = px[o + 1] = px[o + 2] = 255;
             px[o + 3] = (byte)(a * 255f);
@@ -1042,6 +1087,17 @@ void main(){
     public void SetDynamicLightsEnabled(bool enabled) => _dynamicLightsEnabled = enabled;
     /// <summary>M70: global multiplier on the dynamic point-light contribution.</summary>
     public void SetLightIntensity(float intensity) => _lightIntensity = System.Math.Clamp(intensity, 0f, 8f);
+    /// <summary>M71: global multiplier on every point light's radius, so a Light.dat authored for one map's
+    /// scale can be fit to the geometry currently loaded.</summary>
+    public void SetLightRadiusScale(float scale) => _lightRadiusScale = System.Math.Clamp(scale, 0.01f, 40f);
+    /// <summary>M71: global multiplier on every point light's XZ position (about world origin), to spread a
+    /// light layout authored for one map's footprint across a bigger/smaller one. Height is unaffected.</summary>
+    public void SetLightPositionScale(float scale) => _lightPosScale = System.Math.Clamp(scale, 0.05f, 20f);
+    /// <summary>M71: per-axis fine scale (x, z) applied on top of the master position scale.</summary>
+    public void SetLightPositionScaleXZ(float x, float z) =>
+        _lightPosScaleXZ = new Vector2(System.Math.Clamp(x, 0.05f, 20f), System.Math.Clamp(z, 0.05f, 20f));
+    /// <summary>M71: world-space (x, z) translation applied to every light after scaling.</summary>
+    public void SetLightPositionOffset(float x, float z) => _lightPosOffset = new Vector2(x, z);
     /// <summary>M70: number of point lights currently uploaded (for status display).</summary>
     public int PointLightCount => _lightCount;
 
@@ -1250,6 +1306,11 @@ void main(){
     public void SetSoundMarkers(IReadOnlyList<Vector3> positions, float size)
     { _soundMarkerSize = size * 1.6f; SetIconMarkers(_soundVbo, positions, out _soundVerts); }
 
+    /// <summary>M71: dynamic-light positions — a warm glow icon at each Light.dat light (already transformed
+    /// by the scale/offset the shader uses, so the icon sits where the light actually is).</summary>
+    public void SetLightMarkers(IReadOnlyList<Vector3> positions, float size)
+    { _lightMkSize = size * 1.4f; SetIconMarkers(_lightMkVbo, positions, out _lightMkVerts); }
+
     /// <summary>M55: bucket-grid overlay — world-space line list (pairs of xyz endpoints); null/empty clears.</summary>
     public void SetBucketGridLines(float[]? lineVerts)
     {
@@ -1353,6 +1414,10 @@ void main(){
                 int activeLights = (_dynamicLightsEnabled && _lightsTex != 0) ? _lightCount : 0;
                 _gl.Uniform1(_mNumLights, activeLights);
                 _gl.Uniform1(_mLightIntensity, _lightIntensity);
+                _gl.Uniform1(_mLightRadiusScale, _lightRadiusScale);
+                _gl.Uniform1(_mLightPosScale, _lightPosScale);
+                _gl.Uniform2(_mLightPosScaleXZ, _lightPosScaleXZ.X, _lightPosScaleXZ.Y);
+                _gl.Uniform2(_mLightPosOffset, _lightPosOffset.X, _lightPosOffset.Y);
                 if (activeLights > 0)
                 {
                     _gl.ActiveTexture(TextureUnit.Texture7);
@@ -1608,7 +1673,7 @@ void main(){
         // M53: placement ICONS (Unity-style camera-facing sprites), always on top: particles = cyan
         // sparkle, mobs/props = orange person, probes = green ring, sounds = violet speaker;
         // selected = larger bright yellow.
-        if (_particleVerts > 0 || _particleSelVerts > 0 || _propVerts > 0 || _probeVerts > 0 || _soundVerts > 0)
+        if (_particleVerts > 0 || _particleSelVerts > 0 || _propVerts > 0 || _probeVerts > 0 || _soundVerts > 0 || _lightMkVerts > 0)
         {
             Matrix4x4.Invert(view, out var invView);
             var camRight = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitX, invView));
@@ -1628,6 +1693,7 @@ void main(){
             DrawIconSet(_propVao, _propVerts, _icoPerson, _propMarkerSize, 1.00f, 0.58f, 0.18f, 0.9f);
             DrawIconSet(_probeVao, _probeVerts, _icoRing, _probeMarkerSize, 0.32f, 0.93f, 0.47f, 0.9f);
             DrawIconSet(_soundVao, _soundVerts, _icoSpeaker, _soundMarkerSize, 0.78f, 0.55f, 1.0f, 0.9f);
+            DrawIconSet(_lightMkVao, _lightMkVerts, _icoLight, _lightMkSize, 1.0f, 0.83f, 0.35f, 0.95f);   // M71: warm light glow
             DrawIconSet(_particleSelVao, _particleSelVerts, _icoSparkle, _particleSelSize, 1.0f, 0.92f, 0.25f, 1f);
 
             _gl.Disable(EnableCap.Blend);
