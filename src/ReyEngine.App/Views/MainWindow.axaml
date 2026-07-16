@@ -477,12 +477,21 @@
                        FontSize="11" Margin="4,4,8,4" Padding="6,2" />
             </Grid>
             <Grid ColumnDefinitions="200,4,*">
-              <TreeView Grid.Column="0" ItemsSource="{Binding ContentBrowser.FolderRoots}"
+              <TreeView Grid.Column="0" x:Name="BrowserFolderTree" ItemsSource="{Binding ContentBrowser.FolderRoots}"
                         SelectedItem="{Binding ContentBrowser.SelectedFolder, Mode=TwoWay}"
-                        Background="Transparent" BorderThickness="0">
+                        Background="Transparent" BorderThickness="0" DragDrop.AllowDrop="True">
                 <TreeView.ItemTemplate>
                   <TreeDataTemplate ItemsSource="{Binding Folders}">
-                    <StackPanel Orientation="Horizontal" Spacing="5">
+                    <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent">
+                      <StackPanel.ContextMenu>
+                        <ContextMenu>
+                          <MenuItem Header="Rename Folder…" Command="{Binding $parent[Window].DataContext.RenameAssetCommand}" CommandParameter="{Binding}" />
+                          <MenuItem Header="Delete Folder" Command="{Binding $parent[Window].DataContext.DeleteAssetCommand}" CommandParameter="{Binding}" />
+                          <Separator />
+                          <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
+                          <MenuItem Header="Refresh" Command="{Binding $parent[Window].DataContext.RefreshBrowserCommand}" />
+                        </ContextMenu>
+                      </StackPanel.ContextMenu>
                       <TextBlock Text="{Binding Icon}" FontSize="12" VerticalAlignment="Center" />
                       <TextBlock Text="{Binding Name}" FontSize="12" Foreground="{DynamicResource ReyTextBrush}" VerticalAlignment="Center" />
                     </StackPanel>
@@ -493,9 +502,9 @@
               <DockPanel Grid.Column="2">
                 <!-- M50: the materials quick-list was removed from the Content Browser — selecting a
                      .materials.bin/skin .bin now opens the INSPECTOR's Materials tab (right panel). -->
-                <Grid>
+                <Grid x:Name="BrowserItemsPanel" DragDrop.AllowDrop="True" Background="Transparent">
                 <ScrollViewer Padding="6,4" IsVisible="{Binding !ContentBrowser.ListView}">
-                <ItemsControl ItemsSource="{Binding ContentBrowser.Items}">
+                <ItemsControl x:Name="BrowserGrid" ItemsSource="{Binding ContentBrowser.Items}">
                   <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
                   </ItemsControl.ItemsPanel>
@@ -510,9 +519,16 @@
                             <MenuItem Header="Replace Selected Asset…" Command="{Binding $parent[Window].DataContext.ReplaceSelectedCommand}" />
                             <MenuItem Header="Revert Asset" Command="{Binding $parent[Window].DataContext.RevertSelectedCommand}" />
                             <Separator />
+                            <MenuItem Header="Rename…" Command="{Binding $parent[Window].DataContext.RenameAssetCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Delete" Command="{Binding $parent[Window].DataContext.DeleteAssetCommand}" CommandParameter="{Binding}" />
+                            <Separator />
+                            <MenuItem Header="Open in Text Editor" Command="{Binding $parent[Window].DataContext.OpenInTextEditorCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
+                            <Separator />
                             <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />
                             <MenuItem Header="Copy Resolved Path" Command="{Binding $parent[Window].DataContext.CopyResolvedPathCommand}" />
                             <MenuItem Header="Copy Hash" Command="{Binding $parent[Window].DataContext.CopyHashCommand}" />
+                            <MenuItem Header="Refresh" Command="{Binding $parent[Window].DataContext.RefreshBrowserCommand}" />
                           </ContextMenu>
                         </Button.ContextMenu>
                         <!-- M39: Unreal-style asset tile — thumb card + type badge + status icons -->
@@ -548,7 +564,7 @@
 
                 <!-- M43: compact list view (alternative to the tile grid) -->
                 <ScrollViewer Padding="4,2" IsVisible="{Binding ContentBrowser.ListView}">
-                  <ItemsControl ItemsSource="{Binding ContentBrowser.Items}">
+                  <ItemsControl x:Name="BrowserList" ItemsSource="{Binding ContentBrowser.Items}">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate>
                         <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Background="Transparent"
@@ -561,9 +577,16 @@
                               <MenuItem Header="Replace Selected Asset…" Command="{Binding $parent[Window].DataContext.ReplaceSelectedCommand}" />
                               <MenuItem Header="Revert Asset" Command="{Binding $parent[Window].DataContext.RevertSelectedCommand}" />
                               <Separator />
+                              <MenuItem Header="Rename…" Command="{Binding $parent[Window].DataContext.RenameAssetCommand}" CommandParameter="{Binding}" />
+                              <MenuItem Header="Delete" Command="{Binding $parent[Window].DataContext.DeleteAssetCommand}" CommandParameter="{Binding}" />
+                              <Separator />
+                              <MenuItem Header="Open in Text Editor" Command="{Binding $parent[Window].DataContext.OpenInTextEditorCommand}" CommandParameter="{Binding}" />
+                              <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
+                              <Separator />
                               <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />
                               <MenuItem Header="Copy Resolved Path" Command="{Binding $parent[Window].DataContext.CopyResolvedPathCommand}" />
                               <MenuItem Header="Copy Hash" Command="{Binding $parent[Window].DataContext.CopyHashCommand}" />
+                              <MenuItem Header="Refresh" Command="{Binding $parent[Window].DataContext.RefreshBrowserCommand}" />
                             </ContextMenu>
                           </Button.ContextMenu>
                           <Grid ColumnDefinitions="Auto,32,*,Auto,Auto">

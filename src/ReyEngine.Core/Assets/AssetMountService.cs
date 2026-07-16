@@ -104,5 +104,19 @@ public sealed class AssetMountService : IDisposable
     public IReadOnlyList<IAssetMount> SourcesOf(ulong pathHash) =>
         _index.TryGetValue(pathHash, out var a) ? a.AllSources : Array.Empty<IAssetMount>();
 
+    /// <summary>M74: the real on-disk file behind an asset's WINNING source, when that source is
+    /// file-backed (folder/override mount). False for archive-backed or fallback-only assets —
+    /// Explorer-style file operations (rename/delete/move) need a standalone file.</summary>
+    public bool TryGetFilePath(ulong pathHash, out string filePath, out IAssetMount mount)
+    {
+        if (_index.TryGetValue(pathHash, out var a) && a.Source.TryGetFilePath(pathHash, out filePath!))
+        {
+            mount = a.Source;
+            return true;
+        }
+        filePath = ""; mount = null!;
+        return false;
+    }
+
     public void Dispose() => Clear();
 }

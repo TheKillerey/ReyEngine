@@ -3802,6 +3802,215 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return true;
     }
 
+    // ---- M74: Explorer-style file operations (project folder mounts are real files on disk) ----
+
+    /// <summary>The window that owns modal prompts (rename/confirm). Set by MainWindow.</summary>
+    public Avalonia.Controls.Window? PromptOwner { get; set; }
+
+    /// <summary>Re-scan the project's disk state (mounts are indexed once, so file ops re-run the scan).</summary>
+    [RelayCommand]
+    public void RefreshBrowser()
+    {
+        if (ProjectMode) { BuildMounts(); BuildProjectTree(); }
+        else RebuildTree();
+    }
+
+    /// <summary>The real on-disk file behind a node (editable folder/override mounts only).</summary>
+    private bool TryGetNodeFile(AssetNodeViewModel? node, out string filePath)
+    {
+        filePath = "";
+        return node?.Entry is { ReadOnly: false } entry
+            && _mounts is not null
+            && _mounts.TryGetFilePath(entry.PathHash, out filePath, out _);
+    }
+
+    /// <summary>Map a Content Browser FOLDER node to its disk directory (editable FolderMounts only):
+    /// climb to the mount subtree root under the "Project" group, then append the folder's path.</summary>
+    private bool TryResolveFolderDiskDir(AssetNodeViewModel? folder, out string dir)
+    {
+        dir = "";
+        if (folder is not { IsFolder: true, Model: not null } || _mounts is null) return false;
+        var node = folder;
+        while (node.Parent is { Parent: not null } p) node = p;      // node = mount subtree root
+        if (node.Parent is null || !string.Equals(node.Parent.Name, "Project", StringComparison.Ordinal)) return false;
+        if (_mounts.Mounts.FirstOrDefault(m => m is FolderMount && m.Name == node.Name) is not FolderMount mount) return false;
+        dir = Path.Combine(mount.Location, folder.Model.FullPath.Replace('/', Path.DirectorySeparatorChar));
+        return Directory.Exists(dir);
+    }
+
+    [RelayCommand]
+    private async Task RenameAsset(AssetNodeViewModel? node)
+    {
+        if (node is null || PromptOwner is null) return;
+        try
+        {
+            if (TryGetNodeFile(node, out var file))
+            {
+                var newName = await Views.PromptWindow.InputAsync(PromptOwner, "Rename",
+                    $"Rename '{Path.GetFileName(file)}' — the asset's WAD path (and hash) changes with it.",
+                    Path.GetFileName(file), "Rename");
+                if (string.IsNullOrWhiteSpace(newName) || newName == Path.GetFileName(file)) return;
+                var target = Path.Combine(Path.GetDirectoryName(file)!, newName.Trim());
+                if (File.Exists(target)) { _log.Warn("Files", $"'{newName}' already exists here."); return; }
+                File.Move(file, target);
+                _log.Success("Files", $"Renamed {Path.GetFileName(file)} → {newName}.");
+                RefreshBrowser();
+            }
+            else if (TryResolveFolderDiskDir(node, out var dir))
+            {
+                var newName = await Views.PromptWindow.InputAsync(PromptOwner, "Rename Folder",
+                    $"Rename folder '{node.Name}' — every asset inside changes its WAD path (and hash).",
+                    node.Name, "Rename");
+                if (string.IsNullOrWhiteSpace(newName) || newName == node.Name) return;
+                var target = Path.Combine(Path.GetDirectoryName(dir)!, newName.Trim());
+                if (Directory.Exists(target)) { _log.Warn("Files", $"Folder '{newName}' already exists here."); return; }
+                Directory.Move(dir, target);
+                _log.Success("Files", $"Renamed folder {node.Name} → {newName}.");
+                RefreshBrowser();
+            }
+            else _log.Warn("Files", "Only editable project files/folders can be renamed. Copy the asset to the project first.");
+        }
+        catch (Exception ex) { _log.Error("Files", ex.Message); }
+    }
+
+    [RelayCommand]
+    private async Task DeleteAsset(AssetNodeViewModel? node)
+    {
+        if (node is null || PromptOwner is null) return;
+        try
+        {
+            if (node.Entry is { SourceKind: AssetSourceKind.ProjectOverride } ov)
+            {
+                if (!await Views.PromptWindow.ConfirmAsync(PromptOwner, "Delete Override",
+                    $"Delete the project override for '{ov.DisplayName}'? The asset reverts to its original source.", "Delete"))
+                    return;
+                RevertSelectedFor(node);
+                return;
+            }
+            if (TryGetNodeFile(node, out var file))
+            {
+                if (!await Views.PromptWindow.ConfirmAsync(PromptOwner, "Delete File",
+                    $"Permanently delete '{Path.GetFileName(file)}' from the project folder?\n\n{file}", "Delete"))
+                    return;
+                File.Delete(file);
+                _log.Success("Files", $"Deleted {Path.GetFileName(file)}.");
+                RefreshBrowser();
+            }
+            else if (TryResolveFolderDiskDir(node, out var dir))
+            {
+                int n = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Count();
+                if (!await Views.PromptWindow.ConfirmAsync(PromptOwner, "Delete Folder",
+                    $"Permanently delete folder '{node.Name}' and the {n:n0} file(s) inside?\n\n{dir}", "Delete"))
+                    return;
+                Directory.Delete(dir, recursive: true);
+                _log.Success("Files", $"Deleted folder {node.Name} ({n:n0} file(s)).");
+                RefreshBrowser();
+            }
+            else _log.Warn("Files", "Only editable project files/folders can be deleted. Riot references are read-only.");
+        }
+        catch (Exception ex) { _log.Error("Files", ex.Message); }
+    }
+
+    /// <summary>Revert a specific node's override (Delete on an override = revert to original).</summary>
+    private void RevertSelectedFor(AssetNodeViewModel node)
+    {
+        var keep = SelectedNode;
+        SelectedNode = node;
+        if (RevertSelectedCommand.CanExecute(null)) RevertSelectedCommand.Execute(null);
+        if (keep is not null && !ReferenceEquals(keep, node)) SelectedNode = keep;
+    }
+
+    /// <summary>M74: open any asset's raw bytes in the system text editor. Editable files open in place
+    /// (external saves show up after a browser refresh); read-only assets open as a temp copy.</summary>
+    [RelayCommand]
+    private void OpenInTextEditor(AssetNodeViewModel? node)
+    {
+        if (node?.Entry is not { } entry) return;
+        try
+        {
+            string file;
+            if (TryGetNodeFile(node, out var real)) file = real;
+            else
+            {
+                var bytes = GetAssetBytes(entry);
+                if (bytes is null) { _log.Warn("Files", "Asset bytes not available."); return; }
+                var dir = Path.Combine(Path.GetTempPath(), "ReyEngine", "TextView");
+                Directory.CreateDirectory(dir);
+                file = Path.Combine(dir, entry.DisplayName);
+                File.WriteAllBytes(file, bytes);
+                _log.Info("Files", $"'{entry.DisplayName}' is read-only — opened a temporary copy.");
+            }
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("notepad.exe", $"\"{file}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex) { _log.Error("Files", ex.Message); }
+    }
+
+    /// <summary>M74: show the asset's real file in Windows Explorer (editable file-backed assets).</summary>
+    [RelayCommand]
+    private void ShowInExplorer(AssetNodeViewModel? node)
+    {
+        try
+        {
+            if (TryGetNodeFile(node, out var file))
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{file}\"") { UseShellExecute = true });
+            else if (TryResolveFolderDiskDir(node, out var dir))
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = true });
+            else _log.Warn("Files", "This asset has no standalone file on disk (it lives inside a WAD archive).");
+        }
+        catch (Exception ex) { _log.Error("Files", ex.Message); }
+    }
+
+    /// <summary>M74: move an editable file node into a Content Browser folder (internal drag & drop).</summary>
+    public void MoveAssetToFolder(AssetNodeViewModel item, AssetNodeViewModel targetFolder)
+    {
+        try
+        {
+            if (!TryGetNodeFile(item, out var file))
+            { _log.Warn("Files", "Only editable project files can be moved. Copy the asset to the project first."); return; }
+            if (!TryResolveFolderDiskDir(targetFolder, out var dir))
+            { _log.Warn("Files", "Drop target must be a folder inside an editable project folder."); return; }
+            var target = Path.Combine(dir, Path.GetFileName(file));
+            if (string.Equals(target, file, StringComparison.OrdinalIgnoreCase)) return;
+            if (File.Exists(target)) { _log.Warn("Files", $"'{Path.GetFileName(file)}' already exists in that folder."); return; }
+            File.Move(file, target);
+            _log.Success("Files", $"Moved {Path.GetFileName(file)} → {targetFolder.Name}/ (its WAD path changed with it).");
+            RefreshBrowser();
+        }
+        catch (Exception ex) { _log.Error("Files", ex.Message); }
+    }
+
+    /// <summary>M74: import external files (Explorer drag-drop) into a Content Browser folder.</summary>
+    public void ImportExternalFiles(IReadOnlyList<string> files, AssetNodeViewModel? targetFolder)
+    {
+        if (!TryResolveFolderDiskDir(targetFolder, out var dir))
+        { _log.Warn("Files", "Drop files onto a folder inside an editable project folder (e.g. one of your extracted WAD folders)."); return; }
+        int copied = 0;
+        foreach (var f in files)
+        {
+            try
+            {
+                if (File.Exists(f)) { File.Copy(f, Path.Combine(dir, Path.GetFileName(f)), overwrite: true); copied++; }
+                else if (Directory.Exists(f))
+                {
+                    foreach (var sub in Directory.EnumerateFiles(f, "*", SearchOption.AllDirectories))
+                    {
+                        var rel = Path.GetRelativePath(f, sub);
+                        var target = Path.Combine(dir, Path.GetFileName(f), rel);
+                        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                        File.Copy(sub, target, overwrite: true);
+                        copied++;
+                    }
+                }
+            }
+            catch (Exception ex) { _log.Warn("Files", $"{Path.GetFileName(f)}: {ex.Message}"); }
+        }
+        if (copied > 0)
+        {
+            _log.Success("Files", $"Imported {copied} file(s) into {targetFolder!.Name}/.");
+            RefreshBrowser();
+        }
+    }
+
     [RelayCommand]
     private async Task BuildProject()
     {

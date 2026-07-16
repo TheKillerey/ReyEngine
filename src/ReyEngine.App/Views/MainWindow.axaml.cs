@@ -5,6 +5,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using ReyEngine.App.ViewModels;
 
@@ -78,6 +79,7 @@ public partial class MainWindow : Window
         if (DataContext is MainWindowViewModel vm)
         {
             vm.Dialogs.Owner = this;
+            vm.PromptOwner = this;   // M74: rename/delete prompts
             vm.RequestProjectSettings += () => ShowProjectSettings(vm);
             vm.RequestSettings += () => ShowSettings(vm);
             vm.RequestNewProject += () => ShowNewProject(vm);   // M73: template wizard
@@ -85,7 +87,90 @@ public partial class MainWindow : Window
             vm.ShowMeshPreviewWindow = () => ShowMeshPreview(vm);         // M50
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
+            WireBrowserDragDrop();   // M74: Explorer-style drag & drop
         }
+    }
+
+    // ---- M74: Content Browser drag & drop --------------------------------
+    private AssetNodeViewModel? _dragCandidate;
+    private Point _dragStartPos;
+
+    private void WireBrowserDragDrop()
+    {
+        // Internal drag sources: tunnel handlers on the tile grid + list (buttons swallow bubbled events).
+        foreach (var name in new[] { "BrowserGrid", "BrowserList" })
+            if (this.FindControl<ItemsControl>(name) is { } items)
+            {
+                items.AddHandler(PointerPressedEvent, OnBrowserItemPointerPressed, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+                items.AddHandler(PointerMovedEvent, OnBrowserItemPointerMoved, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+                items.AddHandler(PointerReleasedEvent, (_, _) => _dragCandidate = null, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+            }
+        // Drop targets: the folder tree (move/import into a specific folder) + the items panel (current folder).
+        foreach (var name in new[] { "BrowserFolderTree", "BrowserItemsPanel" })
+            if (this.FindControl<Control>(name) is { } target)
+            {
+                target.AddHandler(DragDrop.DragOverEvent, OnBrowserDragOver);
+                target.AddHandler(DragDrop.DropEvent, OnBrowserDrop);
+            }
+    }
+
+    private void OnBrowserItemPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) { _dragCandidate = null; return; }
+        _dragCandidate = FindNodeFromEvent(e.Source);
+        _dragStartPos = e.GetPosition(this);
+    }
+
+    private async void OnBrowserItemPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_dragCandidate is not { IsFolder: false, Entry: not null } node) return;
+        var p = e.GetPosition(this);
+        if (Math.Abs(p.X - _dragStartPos.X) + Math.Abs(p.Y - _dragStartPos.Y) < 6) return;   // click slop
+        _dragCandidate = null;
+        var data = new DataObject();
+        data.Set("rey/asset", node);
+        await DragDrop.DoDragDrop(e, data, DragDropEffects.Move);
+    }
+
+    private void OnBrowserDragOver(object? sender, DragEventArgs e)
+    {
+        bool internalAsset = e.Data.Contains("rey/asset");
+        bool externalFiles = e.Data.Contains(DataFormats.Files);
+        e.DragEffects = internalAsset ? DragDropEffects.Move
+            : externalFiles ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OnBrowserDrop(object? sender, DragEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm) return;
+        // Target folder: the folder node under the cursor (tree item or a folder tile), else the current folder.
+        var target = FindNodeFromEvent(e.Source) is { IsFolder: true } folder ? folder : vm.ContentBrowser.CurrentFolder;
+        if (target is null) return;
+
+        if (e.Data.Get("rey/asset") is AssetNodeViewModel item)
+        {
+            vm.MoveAssetToFolder(item, target);
+            e.Handled = true;
+        }
+        else if (e.Data.GetFiles() is { } storageItems)
+        {
+            var paths = new List<string>();
+            foreach (var si in storageItems)
+                if (si.TryGetLocalPath() is { } lp) paths.Add(lp);
+            if (paths.Count > 0) { vm.ImportExternalFiles(paths, target); e.Handled = true; }
+        }
+    }
+
+    /// <summary>Resolve the AssetNodeViewModel behind whatever visual the pointer event hit.</summary>
+    private static AssetNodeViewModel? FindNodeFromEvent(object? source)
+    {
+        if (source is not Avalonia.Visual v) return null;
+        if (v is StyledElement { DataContext: AssetNodeViewModel direct }) return direct;
+        foreach (var a in Avalonia.VisualTree.VisualExtensions.GetVisualAncestors(v))
+            if (a is StyledElement { DataContext: AssetNodeViewModel node }) return node;
+        return null;
     }
 
     // M50: the model preview lives in its own (non-modal) window; reuse one instance while open.

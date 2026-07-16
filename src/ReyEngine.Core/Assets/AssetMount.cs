@@ -25,6 +25,9 @@ public interface IAssetMount : IDisposable
     /// <summary>The single asset for a hash if this mount holds it (for fallback resolution).</summary>
     MountedAsset? Get(ulong pathHash);
     byte[] Read(ulong pathHash);
+    /// <summary>M74: the real on-disk file behind a hash, when this mount is file-backed (folder/override
+    /// mounts). False for archive-backed mounts — their chunks have no standalone file to operate on.</summary>
+    bool TryGetFilePath(ulong pathHash, out string filePath);
 }
 
 /// <summary>One asset resolved across all mounts: the winning source plus any shadowed sources.</summary>
@@ -95,6 +98,7 @@ public sealed class WadMount : IAssetMount
         : null;
 
     public byte[] Read(ulong pathHash) => _archive.Extract(pathHash);
+    public bool TryGetFilePath(ulong pathHash, out string filePath) { filePath = ""; return false; }
     public void Dispose() => _archive.Dispose();
 }
 
@@ -168,6 +172,7 @@ public sealed class FolderMount : IAssetMount
     public bool Contains(ulong pathHash) => _files.ContainsKey(pathHash);
     public MountedAsset? Get(ulong pathHash) => _files.TryGetValue(pathHash, out var f) ? BuildAsset(pathHash, f) : null;
     public byte[] Read(ulong pathHash) => File.ReadAllBytes(_files[pathHash]);
+    public bool TryGetFilePath(ulong pathHash, out string filePath) => _files.TryGetValue(pathHash, out filePath!);
     public void Dispose() { }
 }
 
@@ -220,5 +225,6 @@ public sealed class OverrideMount : IAssetMount
     public bool Contains(ulong pathHash) => _files.ContainsKey(pathHash);
     public MountedAsset? Get(ulong pathHash) => _files.TryGetValue(pathHash, out var f) ? BuildAsset(pathHash, f) : null;
     public byte[] Read(ulong pathHash) => File.ReadAllBytes(_files[pathHash]);
+    public bool TryGetFilePath(ulong pathHash, out string filePath) => _files.TryGetValue(pathHash, out filePath!);
     public void Dispose() { }
 }
