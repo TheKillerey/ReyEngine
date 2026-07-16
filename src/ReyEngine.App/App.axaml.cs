@@ -12,6 +12,9 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // M72: apply the user's saved theme before any window is created (App.axaml ships the default).
+        ReyEngine.App.Services.ThemeService.Apply(ReyEngine.Core.Settings.EditorSettings.Load().Theme);
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new MainWindow { DataContext = new MainWindowViewModel() };

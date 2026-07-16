@@ -40,8 +40,29 @@
     <Setter Property="Background" Value="{DynamicResource ReyCardBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderSoftBrush}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="CornerRadius" Value="8" />
     <Setter Property="Padding" Value="10" />
+  </Style>
+
+  <!-- M72: settings-dialog section card (bigger radius + breathing room, like the reference) -->
+  <Style Selector="Border.settingsCard">
+    <Setter Property="Background" Value="{DynamicResource ReyCardBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderSoftBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="10" />
+    <Setter Property="Padding" Value="20,16" />
+  </Style>
+  <Style Selector="TextBlock.settingsTitle">
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrightBrush}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="Bold" />
+    <Setter Property="LetterSpacing" Value="1.2" />
+  </Style>
+  <Style Selector="TextBlock.settingsDesc">
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextDimBrush}" />
+    <Setter Property="FontSize" Value="11.5" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+    <Setter Property="LineHeight" Value="17" />
   </Style>
 
   <!-- Translucent HUD overlay (viewport hints) -->
@@ -136,6 +157,97 @@
   </Style>
   <Style Selector="Button.primary:disabled">
     <Setter Property="Opacity" Value="0.45" />
+  </Style>
+
+  <!-- M72: success/confirm action (Save Settings) — dark-green fill, bright green edge, like the reference -->
+  <Style Selector="Button.success">
+    <Setter Property="Background" Value="#1F3DD68C" />
+    <Setter Property="Foreground" Value="{DynamicResource ReySuccessBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReySuccessBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="16,7" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.success:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#333DD68C" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReySuccessBrush}" />
+  </Style>
+  <Style Selector="Button.success:disabled">
+    <Setter Property="Opacity" Value="0.45" />
+  </Style>
+
+  <!-- M72: settings sidebar navigation (icon + label rows, accent-tinted selection like the reference) -->
+  <Style Selector="ListBox.settingsNav">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+  <Style Selector="ListBox.settingsNav ListBoxItem">
+    <Setter Property="Padding" Value="12,9" />
+    <Setter Property="MinHeight" Value="36" />
+    <Setter Property="CornerRadius" Value="7" />
+    <Setter Property="Margin" Value="0,2" />
+    <Setter Property="FontSize" Value="12.5" />
+  </Style>
+  <Style Selector="ListBox.settingsNav ListBoxItem:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyHoverBrush}" />
+  </Style>
+  <Style Selector="ListBox.settingsNav ListBoxItem:selected /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReySelectionBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccentBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="7" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyTextBrightBrush}" />
+  </Style>
+
+  <!-- M73: wizard step indicator (New Project sidebar) -->
+  <Style Selector="Border.stepItem">
+    <Setter Property="Padding" Value="12,9" />
+    <Setter Property="CornerRadius" Value="7" />
+    <Setter Property="Margin" Value="0,2" />
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="Border.stepItem.active">
+    <Setter Property="Background" Value="{DynamicResource ReySelectionBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccentBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="Border.stepItem TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextDimBrush}" />
+    <Setter Property="FontSize" Value="12.5" />
+  </Style>
+  <Style Selector="Border.stepItem.active TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrightBrush}" />
+  </Style>
+  <Style Selector="TextBlock.stepNum">
+    <Setter Property="FontWeight" Value="Bold" />
+    <Setter Property="Width" Value="16" />
+    <Setter Property="TextAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Border.stepItem.active TextBlock.stepNum">
+    <Setter Property="Foreground" Value="{DynamicResource ReyAccentBrush}" />
+  </Style>
+
+  <!-- M72: theme picker card (settings ▸ theme) — swatch tile, accent ring when selected -->
+  <Style Selector="Button.themeCard">
+    <Setter Property="Background" Value="{DynamicResource ReyCardBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="10" />
+    <Setter Property="Padding" Value="14,12" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+  </Style>
+  <Style Selector="Button.themeCard:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyPanelAltBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderAccentBrush}" />
+  </Style>
+  <Style Selector="Button.themeCard.selected">
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccentBrush}" />
+    <Setter Property="BorderThickness" Value="2" />
+    <Setter Property="Background" Value="{DynamicResource ReyPanelAltBrush}" />
   </Style>
 
   <!-- Small icon-only button (tab close, ✓/↺ micro actions) -->

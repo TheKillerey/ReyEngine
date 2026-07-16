@@ -2,45 +2,46 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <!-- ============================================================================
-       ReyEngine · PROJECT KALISTA palette (M39)
-       Deep navy/charcoal surfaces, cyan/teal primary accent, violet secondary.
-       All views consume these via DynamicResource — change here, restyle everywhere.
+       ReyEngine · CRIMSON palette (M72 — default)
+       Near-black surfaces, crimson-red primary accent, green success actions.
+       Modeled on the modern dark reference (settings dialog with red accent).
+       Every palette file defines the SAME keys — ThemeService swaps them live.
        ============================================================================ -->
 
   <!-- surfaces -->
-  <Color x:Key="ReyBg">#0A0D13</Color>            <!-- window / viewport backdrop -->
-  <Color x:Key="ReyPanel">#10151F</Color>          <!-- side panels -->
-  <Color x:Key="ReyPanelAlt">#141C29</Color>       <!-- nested cards / inputs -->
-  <Color x:Key="ReyHeader">#0C111A</Color>         <!-- header / toolbar / status -->
-  <Color x:Key="ReyCard">#111826</Color>           <!-- inspector cards -->
-  <Color x:Key="ReyGlass">#CC0D1320</Color>        <!-- translucent HUD overlays -->
+  <Color x:Key="ReyBg">#0A0A0B</Color>            <!-- window / viewport backdrop -->
+  <Color x:Key="ReyPanel">#111113</Color>          <!-- side panels -->
+  <Color x:Key="ReyPanelAlt">#17171B</Color>       <!-- nested cards / inputs -->
+  <Color x:Key="ReyHeader">#0D0D0F</Color>         <!-- header / toolbar / status -->
+  <Color x:Key="ReyCard">#141417</Color>           <!-- inspector cards -->
+  <Color x:Key="ReyGlass">#CC101013</Color>        <!-- translucent HUD overlays -->
 
   <!-- lines -->
-  <Color x:Key="ReyBorder">#1E2A3A</Color>
-  <Color x:Key="ReyBorderSoft">#16202E</Color>
-  <Color x:Key="ReyBorderAccent">#2E4A55</Color>   <!-- cyan-tinted panel edge -->
+  <Color x:Key="ReyBorder">#26262B</Color>
+  <Color x:Key="ReyBorderSoft">#1D1D22</Color>
+  <Color x:Key="ReyBorderAccent">#55282B</Color>   <!-- red-tinted panel edge -->
 
   <!-- accents -->
-  <Color x:Key="ReyAccent">#36E2C2</Color>
-  <Color x:Key="ReyAccentHover">#5FF0D6</Color>
-  <Color x:Key="ReyAccentDeep">#0E5F52</Color>
-  <Color x:Key="ReyOnAccent">#06201B</Color>       <!-- text on cyan fills -->
-  <Color x:Key="ReyAccent2">#6C5CE7</Color>
-  <Color x:Key="ReyAccent2Hover">#8B7CF7</Color>
+  <Color x:Key="ReyAccent">#E5484D</Color>
+  <Color x:Key="ReyAccentHover">#F2686C</Color>
+  <Color x:Key="ReyAccentDeep">#571C1F</Color>
+  <Color x:Key="ReyOnAccent">#FFF5F5</Color>       <!-- text on red fills -->
+  <Color x:Key="ReyAccent2">#8B7CF7</Color>
+  <Color x:Key="ReyAccent2Hover">#A79BFA</Color>
 
   <!-- signals -->
   <Color x:Key="ReyWarning">#FFB454</Color>
   <Color x:Key="ReyError">#FF6B6B</Color>
-  <Color x:Key="ReySuccess">#4CE27A</Color>
+  <Color x:Key="ReySuccess">#3DD68C</Color>
 
   <!-- text -->
-  <Color x:Key="ReyTextBright">#E9EFF8</Color>
-  <Color x:Key="ReyText">#C7D0DD</Color>
-  <Color x:Key="ReyTextDim">#6A7686</Color>
+  <Color x:Key="ReyTextBright">#F2F2F5</Color>
+  <Color x:Key="ReyText">#C9C9D1</Color>
+  <Color x:Key="ReyTextDim">#75757F</Color>
 
-  <!-- selection / hover fills (translucent cyan) -->
-  <Color x:Key="ReySelection">#3336E2C2</Color>
-  <Color x:Key="ReyHover">#1A36E2C2</Color>
+  <!-- selection / hover fills (translucent red) -->
+  <Color x:Key="ReySelection">#33E5484D</Color>
+  <Color x:Key="ReyHover">#14E5484D</Color>
 
   <!-- brushes -->
   <SolidColorBrush x:Key="ReyBgBrush" Color="{StaticResource ReyBg}" />
@@ -67,17 +68,14 @@
   <SolidColorBrush x:Key="ReySelectionBrush" Color="{StaticResource ReySelection}" />
   <SolidColorBrush x:Key="ReyHoverBrush" Color="{StaticResource ReyHover}" />
 
-  <!-- ============================================================================
-       Fluent theme tint: steer Avalonia's built-in controls (selection highlights,
-       sliders, checkboxes, menus, inputs, combo dropdowns) onto the Kalista palette.
-       ============================================================================ -->
-  <Color x:Key="SystemAccentColor">#36E2C2</Color>
-  <Color x:Key="SystemAccentColorDark1">#26C4A8</Color>
-  <Color x:Key="SystemAccentColorDark2">#1AA78F</Color>
-  <Color x:Key="SystemAccentColorDark3">#0E8A75</Color>
-  <Color x:Key="SystemAccentColorLight1">#5FF0D6</Color>
-  <Color x:Key="SystemAccentColorLight2">#8AF6E3</Color>
-  <Color x:Key="SystemAccentColorLight3">#B5FBEF</Color>
+  <!-- Fluent theme tint: steer Avalonia's built-in controls onto the Crimson palette. -->
+  <Color x:Key="SystemAccentColor">#E5484D</Color>
+  <Color x:Key="SystemAccentColorDark1">#C93A3F</Color>
+  <Color x:Key="SystemAccentColorDark2">#A82E33</Color>
+  <Color x:Key="SystemAccentColorDark3">#872327</Color>
+  <Color x:Key="SystemAccentColorLight1">#F2686C</Color>
+  <Color x:Key="SystemAccentColorLight2">#F8898C</Color>
+  <Color x:Key="SystemAccentColorLight3">#FCACAE</Color>
 
   <SolidColorBrush x:Key="TextControlBackground" Color="{StaticResource ReyPanelAlt}" />
   <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="{StaticResource ReyPanelAlt}" />

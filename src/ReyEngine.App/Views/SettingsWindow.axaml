@@ -2,51 +2,131 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         x:Class="ReyEngine.App.Views.SettingsWindow"
-        Title="ReyEngine — Preferences"
-        Width="560" Height="640"
+        Title="ReyEngine — Settings"
+        Width="880" Height="640"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource ReyBgBrush}"
         Foreground="{DynamicResource ReyTextBrush}"
         FontFamily="Inter, Segoe UI, sans-serif">
+
+  <!-- M72: modern settings dialog — left sidebar navigation + card sections + footer actions -->
   <DockPanel>
 
     <!-- header -->
-    <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
-            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="16,10">
-      <StackPanel Orientation="Horizontal" Spacing="8">
-        <TextBlock Text="⚙" FontSize="16" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
-        <TextBlock Text="PREFERENCES" FontSize="13" FontWeight="Bold" LetterSpacing="1.5"
-                   Foreground="{DynamicResource ReyTextBrightBrush}" VerticalAlignment="Center" />
-        <TextBlock Text="PROJECT KALISTA" FontSize="9" FontWeight="SemiBold" LetterSpacing="2"
-                   Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" Margin="6,0,0,0" />
-      </StackPanel>
+    <Border DockPanel.Dock="Top" Padding="24,18,24,12">
+      <TextBlock Text="Settings" FontSize="19" FontWeight="Bold"
+                 Foreground="{DynamicResource ReyTextBrightBrush}" />
     </Border>
 
-    <!-- footer buttons -->
-    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
-            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="16,10">
+    <!-- footer -->
+    <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource ReyBorderSoftBrush}"
+            BorderThickness="0,1,0,0" Padding="24,12">
       <Grid ColumnDefinitions="Auto,*,Auto,Auto">
         <Button Grid.Column="0" Classes="tool" Content="↺ Reset to Defaults" Command="{Binding ResetDefaultsCommand}" />
-        <Button Grid.Column="2" Classes="tool" Content="Cancel" Command="{Binding CancelCommand}" Padding="16,5" />
-        <Button Grid.Column="3" Classes="primary" Content="Save" Command="{Binding SaveCommand}" Padding="22,5" Margin="8,0,0,0" />
+        <Button Grid.Column="2" Classes="tool" Content="Cancel" Command="{Binding CancelCommand}" Padding="18,7" />
+        <Button Grid.Column="3" Classes="success" Content="✓ Save Settings" Command="{Binding SaveCommand}" Margin="10,0,0,0" />
       </Grid>
     </Border>
 
-    <TabControl Margin="10,6" Padding="0">
+    <Grid ColumnDefinitions="212,*" Margin="14,0,0,0">
 
-      <!-- ===== CONTROLS ===== -->
-      <TabItem>
-        <TabItem.Header><TextBlock Text="Controls" FontSize="12" /></TabItem.Header>
-        <ScrollViewer>
-          <StackPanel Margin="8,10" Spacing="8">
-            <TextBlock Classes="cardTitle" Text="VIEWPORT KEYBINDS" />
-            <TextBlock FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
-                       Text="Hold the left mouse button to fly with these keys. Click a binding, then press the key to reassign it." />
-            <Border Classes="card">
-              <ItemsControl ItemsSource="{Binding Keybinds}">
+      <!-- ── sidebar navigation ─────────────────────────────────────────── -->
+      <ListBox Grid.Column="0" Classes="settingsNav" Margin="4,4,10,10"
+               SelectedIndex="{Binding SelectedSection}">
+        <ListBoxItem>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="⚙" FontSize="13" Width="18" TextAlignment="Center" />
+            <TextBlock Text="General" VerticalAlignment="Center" />
+          </StackPanel>
+        </ListBoxItem>
+        <ListBoxItem>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="🎥" FontSize="13" Width="18" TextAlignment="Center" />
+            <TextBlock Text="Camera" VerticalAlignment="Center" />
+          </StackPanel>
+        </ListBoxItem>
+        <ListBoxItem>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="⌨" FontSize="13" Width="18" TextAlignment="Center" />
+            <TextBlock Text="Controls" VerticalAlignment="Center" />
+          </StackPanel>
+        </ListBoxItem>
+        <ListBoxItem>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="🎨" FontSize="13" Width="18" TextAlignment="Center" />
+            <TextBlock Text="Theme" VerticalAlignment="Center" />
+          </StackPanel>
+        </ListBoxItem>
+      </ListBox>
+
+      <!-- ── content ────────────────────────────────────────────────────── -->
+      <ScrollViewer Grid.Column="1" Padding="4,4,24,10">
+       <Panel>
+
+        <!-- GENERAL -->
+        <StackPanel Spacing="14" IsVisible="{Binding ShowGeneral}">
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="settingsTitle" Text="VIEWPORT DEFAULTS" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Applied whenever content loads. Per-session toggles in the viewport toolbar override these until the next load." />
+              <CheckBox Content="Cull backfaces by default" IsChecked="{Binding CullBackfacesDefault}"
+                        FontSize="12" Margin="0,4,0,0" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Respects each material's cullEnable flag on load. Turn off to force two-sided rendering everywhere." />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- CAMERA -->
+        <StackPanel Spacing="14" IsVisible="{Binding ShowCamera}">
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="12">
+              <TextBlock Classes="settingsTitle" Text="SENSITIVITY" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Multipliers on the viewport camera feel — 1.00× is the built-in default." />
+              <StackPanel Spacing="2">
+                <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Mouse Look" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="{Binding MouseLookSensitivity, StringFormat='{}{0:0.00}×'}"/></Grid>
+                <Slider Minimum="0.2" Maximum="3.0" Value="{Binding MouseLookSensitivity}" />
+              </StackPanel>
+              <StackPanel Spacing="2">
+                <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Orbit" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="{Binding OrbitSensitivity, StringFormat='{}{0:0.00}×'}"/></Grid>
+                <Slider Minimum="0.2" Maximum="3.0" Value="{Binding OrbitSensitivity}" />
+              </StackPanel>
+              <StackPanel Spacing="2">
+                <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Pan" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="{Binding PanSensitivity, StringFormat='{}{0:0.00}×'}"/></Grid>
+                <Slider Minimum="0.2" Maximum="3.0" Value="{Binding PanSensitivity}" />
+              </StackPanel>
+              <StackPanel Spacing="2">
+                <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Zoom" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="{Binding ZoomSensitivity, StringFormat='{}{0:0.00}×'}"/></Grid>
+                <Slider Minimum="0.2" Maximum="3.0" Value="{Binding ZoomSensitivity}" />
+              </StackPanel>
+              <CheckBox Content="Invert look Y axis" IsChecked="{Binding InvertLookY}" FontSize="12" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="settingsTitle" Text="MOVEMENT" />
+              <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Base fly speed" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="{Binding FlySpeed, StringFormat='{}{0:0} u/s'}"/></Grid>
+              <Slider Minimum="100" Maximum="5000" Value="{Binding FlySpeed}" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Starting WASD speed; the mouse wheel still scales it live while flying." />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- CONTROLS -->
+        <StackPanel Spacing="14" IsVisible="{Binding ShowControls}">
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="settingsTitle" Text="VIEWPORT KEYBINDS" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Hold the left mouse button to fly with these keys. Click a binding, then press the key to reassign it." />
+              <ItemsControl ItemsSource="{Binding Keybinds}" Margin="0,4,0,0">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate>
-                    <Grid ColumnDefinitions="*,160" Margin="0,3">
+                    <Grid ColumnDefinitions="*,180" Margin="0,3">
                       <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12"
                                  Foreground="{DynamicResource ReyTextBrush}" VerticalAlignment="Center" />
                       <ToggleButton Grid.Column="1" Classes="vp" IsChecked="{Binding IsCapturing, Mode=OneWay}"
@@ -57,81 +137,68 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
-            </Border>
+            </StackPanel>
+          </Border>
 
-            <TextBlock Classes="cardTitle" Text="FIXED SHORTCUTS" Margin="0,8,0,0" />
-            <Border Classes="card">
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="settingsTitle" Text="FIXED SHORTCUTS" />
               <StackPanel Spacing="4">
                 <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Undo / Redo" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="Ctrl+Z / Ctrl+Y"/></Grid>
                 <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Orbit around pivot" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="Alt + LMB"/></Grid>
                 <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Pan" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="Middle Mouse"/></Grid>
                 <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Zoom / Fly speed" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="Wheel / LMB+Wheel"/></Grid>
+                <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Open Settings" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="Ctrl+,"/></Grid>
               </StackPanel>
-            </Border>
-          </StackPanel>
-        </ScrollViewer>
-      </TabItem>
+            </StackPanel>
+          </Border>
+        </StackPanel>
 
-      <!-- ===== CAMERA ===== -->
-      <TabItem>
-        <TabItem.Header><TextBlock Text="Camera" FontSize="12" /></TabItem.Header>
-        <ScrollViewer>
-          <StackPanel Margin="8,10" Spacing="10">
-            <TextBlock Classes="cardTitle" Text="SENSITIVITY" />
-            <Border Classes="card">
-              <StackPanel Spacing="10">
-                <StackPanel Spacing="2">
-                  <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Mouse Look" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="{Binding MouseLookSensitivity, StringFormat='{}{0:0.00}×'}"/></Grid>
-                  <Slider Minimum="0.2" Maximum="3.0" Value="{Binding MouseLookSensitivity}" />
-                </StackPanel>
-                <StackPanel Spacing="2">
-                  <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Orbit" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="{Binding OrbitSensitivity, StringFormat='{}{0:0.00}×'}"/></Grid>
-                  <Slider Minimum="0.2" Maximum="3.0" Value="{Binding OrbitSensitivity}" />
-                </StackPanel>
-                <StackPanel Spacing="2">
-                  <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Pan" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="{Binding PanSensitivity, StringFormat='{}{0:0.00}×'}"/></Grid>
-                  <Slider Minimum="0.2" Maximum="3.0" Value="{Binding PanSensitivity}" />
-                </StackPanel>
-                <StackPanel Spacing="2">
-                  <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Zoom" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="{Binding ZoomSensitivity, StringFormat='{}{0:0.00}×'}"/></Grid>
-                  <Slider Minimum="0.2" Maximum="3.0" Value="{Binding ZoomSensitivity}" />
-                </StackPanel>
-                <CheckBox Content="Invert look Y axis" IsChecked="{Binding InvertLookY}" FontSize="12" />
-              </StackPanel>
-            </Border>
+        <!-- THEME -->
+        <StackPanel Spacing="14" IsVisible="{Binding ShowTheme}">
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="10">
+              <TextBlock Classes="settingsTitle" Text="EDITOR THEME" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Click a theme to preview it live across the whole editor. Save keeps it; Cancel reverts." />
+              <ItemsControl ItemsSource="{Binding Themes}" Margin="0,6,0,0">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <WrapPanel />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ThemeItemViewModel">
+                    <Button Classes="themeCard" Classes.selected="{Binding IsSelected}" Width="188" Margin="0,0,12,12"
+                            Command="{Binding $parent[ItemsControl].DataContext.SelectThemeCommand}"
+                            CommandParameter="{Binding}">
+                      <StackPanel Spacing="8">
+                        <!-- swatch preview: surface tile with an accent bar -->
+                        <Border Height="52" CornerRadius="6" Background="{Binding Surface}"
+                                BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
+                          <StackPanel Margin="8" Spacing="4" VerticalAlignment="Center">
+                            <Border Height="8" Width="64" CornerRadius="4" Background="{Binding Accent}" HorizontalAlignment="Left" />
+                            <Border Height="5" Width="104" CornerRadius="2.5" Background="#33FFFFFF" HorizontalAlignment="Left" />
+                            <Border Height="5" Width="84" CornerRadius="2.5" Background="#22FFFFFF" HorizontalAlignment="Left" />
+                          </StackPanel>
+                        </Border>
+                        <StackPanel Spacing="1">
+                          <TextBlock Text="{Binding Name}" FontSize="12.5" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyTextBrightBrush}" />
+                          <TextBlock Text="{Binding Tagline}" FontSize="10.5"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                        </StackPanel>
+                      </StackPanel>
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+        </StackPanel>
 
-            <TextBlock Classes="cardTitle" Text="MOVEMENT" />
-            <Border Classes="card">
-              <StackPanel Spacing="2">
-                <Grid ColumnDefinitions="*,Auto"><TextBlock Grid.Column="0" Text="Base fly speed" FontSize="12"/><TextBlock Grid.Column="1" Classes="mono" Text="{Binding FlySpeed, StringFormat='{}{0:0} u/s'}"/></Grid>
-                <Slider Minimum="100" Maximum="5000" Value="{Binding FlySpeed}" />
-                <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
-                           Text="Starting WASD speed; the mouse wheel still scales it live while flying." />
-              </StackPanel>
-            </Border>
-          </StackPanel>
-        </ScrollViewer>
-      </TabItem>
-
-      <!-- ===== VIEWPORT ===== -->
-      <TabItem>
-        <TabItem.Header><TextBlock Text="Viewport" FontSize="12" /></TabItem.Header>
-        <ScrollViewer>
-          <StackPanel Margin="8,10" Spacing="10">
-            <TextBlock Classes="cardTitle" Text="DEFAULTS" />
-            <Border Classes="card">
-              <StackPanel Spacing="6">
-                <CheckBox Content="Cull backfaces by default" IsChecked="{Binding CullBackfacesDefault}" FontSize="12" />
-                <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
-                           Text="Applies each material's cullEnable on load. Turn off to force two-sided rendering everywhere." />
-              </StackPanel>
-            </Border>
-            <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
-                       Text="More preferences (theme accents, grid, autosave) will land here as the editor grows." />
-          </StackPanel>
-        </ScrollViewer>
-      </TabItem>
-
-    </TabControl>
+       </Panel>
+      </ScrollViewer>
+    </Grid>
   </DockPanel>
 </Window>

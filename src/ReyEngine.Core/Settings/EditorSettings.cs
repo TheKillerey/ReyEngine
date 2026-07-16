@@ -32,6 +32,10 @@ public sealed class EditorSettings
     // ---- viewport defaults ----
     public bool CullBackfacesDefault { get; set; } = true;
 
+    // ---- appearance (M72) ----
+    /// <summary>UI theme palette name (Themes/Palettes/*.axaml). Unknown names fall back to the default.</summary>
+    public string Theme { get; set; } = "Crimson";
+
     [JsonIgnore]
     public static string StorePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ReyEngine", "settings.json");
@@ -70,5 +74,6 @@ public sealed class EditorSettings
         MouseLookSensitivity = s.MouseLookSensitivity; OrbitSensitivity = s.OrbitSensitivity;
         PanSensitivity = s.PanSensitivity; ZoomSensitivity = s.ZoomSensitivity;
         InvertLookY = s.InvertLookY; FlySpeed = s.FlySpeed; CullBackfacesDefault = s.CullBackfacesDefault;
+        Theme = s.Theme;
     }
 }

@@ -32,7 +32,7 @@
         <TextBlock Text="REYENGINE" FontSize="13" FontWeight="Bold" LetterSpacing="1.5"
                    Foreground="{DynamicResource ReyTextBrightBrush}" VerticalAlignment="Center" />
         <Border Width="1" Height="12" Background="{DynamicResource ReyBorderAccentBrush}" VerticalAlignment="Center" />
-        <TextBlock Text="PROJECT KALISTA" FontSize="9" FontWeight="SemiBold" LetterSpacing="2"
+        <TextBlock Text="MAP &amp; ASSET EDITOR" FontSize="9" FontWeight="SemiBold" LetterSpacing="2"
                    Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
       </StackPanel>
       <!-- right margin clears the native caption buttons overlaid on the extended client area -->
@@ -171,7 +171,7 @@
           <TextBlock Text="{Binding SelectionStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" VerticalAlignment="Center"
                      IsVisible="{Binding SelectionStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
           <Border Width="1" Height="11" Background="{DynamicResource ReyBorderBrush}" VerticalAlignment="Center" />
-          <TextBlock Text="REYENGINE · PROJECT KALISTA" FontSize="9" LetterSpacing="1.2" FontWeight="SemiBold"
+          <TextBlock Text="REYENGINE" FontSize="9" LetterSpacing="1.2" FontWeight="SemiBold"
                      Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
         </StackPanel>
         <TextBlock Text="{Binding Status}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center"

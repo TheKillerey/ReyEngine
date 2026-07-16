@@ -3,12 +3,13 @@
              x:Class="ReyEngine.App.App"
              RequestedThemeVariant="Dark">
 
-  <!-- M39: theme system — palette/brushes in Themes/ReyColors.axaml, control styles in
-       Themes/ReyTheme.axaml. Views consume tokens via DynamicResource only. -->
+  <!-- M39/M72: theme system — swappable palettes in Themes/Palettes (same keys each), control styles in
+       Themes/ReyTheme.axaml. Views consume tokens via DynamicResource only; ThemeService swaps
+       MergedDictionaries[0] live at runtime. The include below is only the pre-settings default. -->
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
-        <ResourceInclude Source="avares://ReyEngine.App/Themes/ReyColors.axaml" />
+        <ResourceInclude Source="avares://ReyEngine.App/Themes/Palettes/Crimson.axaml" />
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </Application.Resources>
