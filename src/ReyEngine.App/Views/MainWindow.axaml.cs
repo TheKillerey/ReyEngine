@@ -80,6 +80,7 @@ public partial class MainWindow : Window
             vm.Dialogs.Owner = this;
             vm.RequestProjectSettings += () => ShowProjectSettings(vm);
             vm.RequestSettings += () => ShowSettings(vm);
+            vm.RequestNewProject += () => ShowNewProject(vm);   // M73: template wizard
             vm.ShowParticleEditorWindow = () => ShowParticleEditor(vm);   // M46
             vm.ShowMeshPreviewWindow = () => ShowMeshPreview(vm);         // M50
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
@@ -122,6 +123,17 @@ public partial class MainWindow : Window
         if (settings.Saved) vm.ApplyProjectSettings(settings);
     }
 
+    /// <summary>M73: template-based New Project wizard; on success the created project opens directly.</summary>
+    private async void ShowNewProject(MainWindowViewModel vm)
+    {
+        var wizard = new NewProjectViewModel(vm.PathResolver);
+        var win = new NewProjectWindow { DataContext = wizard };
+        wizard.CloseRequested += () => win.Close();
+        await win.ShowDialog(this);
+        if (wizard.Created && wizard.CreatedRoot is { } root)
+            vm.OpenRecentProjectCommand.Execute(root);
+    }
+
     private async void ShowSettings(MainWindowViewModel vm)
     {
         var settings = new SettingsViewModel(vm.Settings.Clone());
@@ -132,6 +144,11 @@ public partial class MainWindow : Window
         {
             vm.ApplyEditorSettings(settings);
             ApplyEditorSettings(vm.Settings);
+        }
+        else
+        {
+            // M72: window closed without saving (Cancel or the OS close button) — undo any live theme preview.
+            ReyEngine.App.Services.ThemeService.Apply(vm.Settings.Theme);
         }
     }
 

@@ -1,0 +1,212 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.NewProjectWindow"
+        Title="ReyEngine — New Project"
+        Width="960" Height="680"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource ReyBgBrush}"
+        Foreground="{DynamicResource ReyTextBrush}"
+        FontFamily="Inter, Segoe UI, sans-serif">
+
+  <!-- M73: Unreal-style New Project wizard — template → platform → WADs → content → create -->
+  <DockPanel>
+
+    <!-- header -->
+    <Border DockPanel.Dock="Top" Padding="24,18,24,10">
+      <StackPanel Spacing="2">
+        <TextBlock Text="Create New Project" FontSize="19" FontWeight="Bold"
+                   Foreground="{DynamicResource ReyTextBrightBrush}" />
+        <TextBlock Text="Pick a template, choose your game client and content, and get a ready-to-edit mod project."
+                   FontSize="11.5" Foreground="{DynamicResource ReyTextDimBrush}" />
+      </StackPanel>
+    </Border>
+
+    <!-- footer -->
+    <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource ReyBorderSoftBrush}"
+            BorderThickness="0,1,0,0" Padding="24,12">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+        <Button Grid.Column="0" Classes="tool" Content="Cancel" Command="{Binding CancelCommand}" Padding="16,7" />
+        <TextBlock Grid.Column="1" Text="{Binding BusyText}" FontSize="11" Margin="14,0"
+                   Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        <Button Grid.Column="2" Classes="tool" Content="← Back" Command="{Binding BackCommand}"
+                IsEnabled="{Binding CanGoBack}" Padding="16,7" />
+        <Button Grid.Column="3" Classes="primary" Content="Next →" Command="{Binding NextCommand}"
+                IsEnabled="{Binding CanGoNext}" IsVisible="{Binding !IsCreateStep}" Margin="10,0,0,0" Padding="18,7" />
+        <Button Grid.Column="4" Classes="success" Content="✓ Create Project" Command="{Binding CreateCommand}"
+                IsEnabled="{Binding CanCreate}" IsVisible="{Binding IsCreateStep}" Margin="10,0,0,0" />
+      </Grid>
+    </Border>
+
+    <Grid ColumnDefinitions="212,*" Margin="14,4,0,0">
+
+      <!-- ── step indicator ─────────────────────────────────────────────── -->
+      <StackPanel Grid.Column="0" Margin="4,6,10,10" Spacing="4">
+        <Border Classes="stepItem" Classes.active="{Binding ShowTemplate}">
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="1" Classes="stepNum" /><TextBlock Text="Template" VerticalAlignment="Center" />
+          </StackPanel>
+        </Border>
+        <Border Classes="stepItem" Classes.active="{Binding ShowPlatform}">
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="2" Classes="stepNum" /><TextBlock Text="Platform" VerticalAlignment="Center" />
+          </StackPanel>
+        </Border>
+        <Border Classes="stepItem" Classes.active="{Binding ShowWads}">
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="3" Classes="stepNum" /><TextBlock Text="WAD Files" VerticalAlignment="Center" />
+          </StackPanel>
+        </Border>
+        <Border Classes="stepItem" Classes.active="{Binding ShowContent}">
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="4" Classes="stepNum" /><TextBlock Text="Content" VerticalAlignment="Center" />
+          </StackPanel>
+        </Border>
+        <Border Classes="stepItem" Classes.active="{Binding ShowCreate}">
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="5" Classes="stepNum" /><TextBlock Text="Create" VerticalAlignment="Center" />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+
+      <!-- ── step content ───────────────────────────────────────────────── -->
+      <Panel Grid.Column="1" Margin="4,6,24,10">
+
+        <!-- STEP 1 · TEMPLATE -->
+        <ScrollViewer IsVisible="{Binding ShowTemplate}">
+          <ItemsControl ItemsSource="{Binding Templates}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Button Classes="themeCard" Classes.selected="{Binding IsSelected}" Width="222" Height="140" Margin="0,0,12,12"
+                        Command="{Binding $parent[ItemsControl].DataContext.SelectTemplateCommand}"
+                        CommandParameter="{Binding}">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="{Binding Icon}" FontSize="26" />
+                    <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{DynamicResource ReyTextBrightBrush}" />
+                    <TextBlock Text="{Binding Description}" FontSize="10.5" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                  </StackPanel>
+                </Button>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+
+        <!-- STEP 2 · PLATFORM -->
+        <StackPanel IsVisible="{Binding ShowPlatform}" Spacing="14">
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="10">
+              <TextBlock Classes="settingsTitle" Text="GAME CLIENT" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Choose which installation the project reads from. LIVE is your normal client; PBE has upcoming content. The install becomes the project's read-only asset source — nothing in it is ever modified." />
+              <ItemsControl ItemsSource="{Binding Installs}" Margin="0,4,0,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Button Classes="themeCard" Classes.selected="{Binding IsSelected}" Margin="0,0,0,8"
+                            HorizontalAlignment="Stretch"
+                            Command="{Binding $parent[ItemsControl].DataContext.SelectInstallCommand}"
+                            CommandParameter="{Binding}">
+                      <StackPanel Orientation="Horizontal" Spacing="12">
+                        <TextBlock Text="{Binding Icon}" FontSize="18" VerticalAlignment="Center" />
+                        <StackPanel Spacing="1">
+                          <TextBlock Text="{Binding Platform}" FontSize="13" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyTextBrightBrush}" />
+                          <TextBlock Text="{Binding Path}" FontSize="10.5" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        </StackPanel>
+                      </StackPanel>
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <Button Classes="tool" Content="📂 Browse for a Game folder…" Click="OnBrowseInstall" HorizontalAlignment="Left" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- STEP 3 · WAD FILES -->
+        <DockPanel IsVisible="{Binding ShowWads}">
+          <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,10">
+            <TextBlock Classes="settingsTitle" Text="SELECT WAD FILES" />
+            <TextBlock Classes="settingsDesc"
+                       Text="Tick the archives your mod works with. Your template's group is listed first — use search to find anything else. Selected WADs are always mounted as read-only references; the next step decides what gets copied out as editable files." />
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Grid.Column="0" Text="{Binding SearchText}" Watermark="Search (e.g. Aatrox, Map11, UI)…" />
+              <TextBlock Grid.Column="1" Text="{Binding CheckedWadCount, StringFormat='{}{0} selected'}"
+                         FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" Margin="12,0,0,0" />
+            </Grid>
+          </StackPanel>
+          <Border Classes="settingsCard" Padding="8">
+            <ScrollViewer>
+              <ItemsControl ItemsSource="{Binding FilteredWads}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="6,2">
+                      <CheckBox Grid.Column="0" IsChecked="{Binding IsChecked}" />
+                      <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" VerticalAlignment="Center" Margin="4,0,0,0" />
+                      <Border Grid.Column="2" Classes="badge" Margin="0,0,10,0">
+                        <TextBlock Text="{Binding Group}" />
+                      </Border>
+                      <TextBlock Grid.Column="3" Classes="mono" Text="{Binding Size}" VerticalAlignment="Center" Width="70" TextAlignment="Right" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Border>
+        </DockPanel>
+
+        <!-- STEP 4 · CONTENT -->
+        <StackPanel IsVisible="{Binding ShowContent}" Spacing="14">
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="10">
+              <TextBlock Classes="settingsTitle" Text="WHAT TO EXTRACT" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Checked categories are copied out of the selected WADs into your project as real, editable files (cslol-style ASSETS/DATA folders) — these ship in your mod. Everything unchecked stays available read-only through the references. Sizes are uncompressed." />
+              <ItemsControl ItemsSource="{Binding Categories}" Margin="0,4,0,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,4">
+                      <CheckBox Grid.Column="0" IsChecked="{Binding IsChecked}" />
+                      <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12.5" VerticalAlignment="Center" Margin="4,0,0,0" />
+                      <TextBlock Grid.Column="2" Classes="mono" Text="{Binding Stats}" VerticalAlignment="Center" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- STEP 5 · CREATE -->
+        <StackPanel IsVisible="{Binding ShowCreate}" Spacing="14">
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="10">
+              <TextBlock Classes="settingsTitle" Text="PROJECT" />
+              <TextBlock Text="Name" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBox Text="{Binding ProjectName}" Watermark="MyAwesomeMod" />
+              <TextBlock Text="Location (the project is created in a subfolder with the project's name)" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox Grid.Column="0" Text="{Binding Location}" />
+                <Button Grid.Column="1" Classes="tool" Content="Browse…" Click="OnBrowseLocation" Margin="8,0,0,0" />
+              </Grid>
+              <TextBlock Text="Author" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBox Text="{Binding Author}" Width="280" HorizontalAlignment="Left" />
+            </StackPanel>
+          </Border>
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="settingsTitle" Text="SUMMARY" />
+              <TextBlock Text="{Binding Summary}" FontSize="11.5" TextWrapping="Wrap" LineHeight="18"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+      </Panel>
+    </Grid>
+  </DockPanel>
+</Window>

@@ -3240,21 +3240,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // ---- Project ---------------------------------------------------------
 
-    [RelayCommand]
-    private async Task NewProject()
-    {
-        var wad = _archive?.FilePath ?? await Dialogs.OpenFileAsync("Select source WAD for the project", DialogService.Wad, DialogService.All);
-        if (wad is null) { _log.Warn("Project", "Open a .wad.client first."); return; }
+    /// <summary>M73: the hash resolver, exposed so the New Project wizard can classify + extract WAD content.</summary>
+    public WadPathResolver PathResolver => _resolver;
 
-        var proj = ReyProjectService.NewFromWad(wad);
-        proj.GameDirectory = Project.GameDirectory;
-        Project = proj;
-        _overrides.Clear();
-        if (_archive is null || !string.Equals(_archive.FilePath, wad, StringComparison.OrdinalIgnoreCase)) LoadWad(wad);
-        else RebuildTree();
-        _log.Success("Project", $"New project '{proj.Name}' from {Path.GetFileName(wad)}.");
-        UpdateTitle();
-    }
+    /// <summary>M73: raised to open the template-based New Project wizard (handled by the window).</summary>
+    public event Action? RequestNewProject;
+
+    [RelayCommand]
+    private void NewProject() => RequestNewProject?.Invoke();
 
     [RelayCommand]
     private async Task OpenProject()
@@ -3304,7 +3297,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (Project.SourceWadPath is null)
         {
             if (_archive is null) { _log.Warn("Project", "Open a WAD and create a project first."); return false; }
-            await NewProject();
+            // Legacy quick-project: inspecting a bare WAD and making the first edit — wrap the open WAD in a
+            // project inline (the M73 wizard is for deliberate new projects, not this save-on-first-edit path).
+            var proj = ReyProjectService.NewFromWad(_archive.FilePath);
+            proj.GameDirectory = Project.GameDirectory;
+            Project = proj;
+            _overrides.Clear();
+            RebuildTree();
+            _log.Info("Project", $"Created quick project '{proj.Name}' from {Path.GetFileName(_archive.FilePath)} to hold your edits.");
+            UpdateTitle();
         }
         if (Project.ProjectFilePath is null) await SaveProjectAs();
         return Project.ProjectFilePath is not null;
