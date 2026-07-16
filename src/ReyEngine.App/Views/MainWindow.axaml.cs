@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     private Vector3 _gizmoDragOrigin;   // pivot at drag start — the axis line must NOT re-anchor mid-drag
     private Vector3 _gizmoStartRotation; // M42: rotate/scale drag-start state
     private Vector3 _gizmoStartScale;
+    private bool _gizmoTargetIsPlacement; // M75: this drag targets a particle/sound placement, not a mesh
 
     // Click-to-select: a press+release with almost no movement is a pick, not a camera drag.
     private Point _pressPos;
@@ -284,19 +285,35 @@ public partial class MainWindow : Window
         if (_lmb && !_alt)
         {
             var axis = Viewport.HitTestGizmoAxis(pt.Position);
-            if (axis is { } a && DataContext is MainWindowViewModel { SelectedMapMesh: { } mesh } vm
+            if (axis is { } a && DataContext is MainWindowViewModel vm
                 && Viewport.GizmoPivot is { } pivot
                 && Viewport.TryGetAxisParameter(a, pt.Position, pivot, out var t0))
             {
-                _gizmoDragAxis = a;
-                _gizmoDragOrigin = pivot;   // frozen for the whole drag
-                _gizmoDragStartT = t0;
-                _gizmoDragStartOffset = mesh.Offset;
-                var (rot, scale) = vm.SelectedMeshRotScale;
-                _gizmoStartRotation = rot;
-                _gizmoStartScale = scale;
-                vm.BeginMeshDrag();         // capture the before-state → the whole drag = ONE undo step
-                return; // gizmo drag takes over this stroke — don't also start camera fly
+                if (vm.SelectedMapMesh is { } mesh)
+                {
+                    _gizmoDragAxis = a;
+                    _gizmoDragOrigin = pivot;   // frozen for the whole drag
+                    _gizmoDragStartT = t0;
+                    _gizmoDragStartOffset = mesh.Offset;
+                    _gizmoTargetIsPlacement = false;
+                    var (rot, scale) = vm.SelectedMeshRotScale;
+                    _gizmoStartRotation = rot;
+                    _gizmoStartScale = scale;
+                    vm.BeginMeshDrag();         // capture the before-state → the whole drag = ONE undo step
+                    return; // gizmo drag takes over this stroke — don't also start camera fly
+                }
+                if (vm.HasPlacementGizmoTarget)   // M75: particles (move/rotate/scale) + sounds (move)
+                {
+                    _gizmoDragAxis = a;
+                    _gizmoDragOrigin = pivot;
+                    _gizmoDragStartT = t0;
+                    _gizmoTargetIsPlacement = true;
+                    var (off, rot, scale) = vm.PlacementDragStart;
+                    _gizmoDragStartOffset = off;
+                    _gizmoStartRotation = rot;
+                    _gizmoStartScale = scale;
+                    return;
+                }
             }
             StartFly();
         }
@@ -317,7 +334,9 @@ public partial class MainWindow : Window
                 case 1: // ROTATE — horizontal drag → degrees about this axis
                 {
                     float deg = gvm.ApplyRotateSnap((float)(p.X - _pressPos.X) * 0.5f);
-                    gvm.RotateSelectedMeshTo(WithComponent(_gizmoStartRotation, comp, ComponentOf(_gizmoStartRotation, comp) + deg));
+                    var rot = WithComponent(_gizmoStartRotation, comp, ComponentOf(_gizmoStartRotation, comp) + deg);
+                    if (_gizmoTargetIsPlacement) gvm.RotateSelectedPlacementTo(rot);   // M75
+                    else gvm.RotateSelectedMeshTo(rot);
                     break;
                 }
                 case 2: // SCALE — drag along the axis arm; ratio to the grab distance scales that axis
@@ -327,7 +346,9 @@ public partial class MainWindow : Window
                         float f = MathF.Abs(_gizmoDragStartT) > 1e-3f ? t / _gizmoDragStartT : 1f;
                         f = Math.Clamp(f, 0.05f, 50f);
                         float target = gvm.ApplyScaleSnap(Math.Clamp(ComponentOf(_gizmoStartScale, comp) * f, 0.05f, 50f));
-                        gvm.ScaleSelectedMeshTo(WithComponent(_gizmoStartScale, comp, target));
+                        var scale = WithComponent(_gizmoStartScale, comp, target);
+                        if (_gizmoTargetIsPlacement) gvm.ScaleSelectedPlacementTo(scale);   // M75
+                        else gvm.ScaleSelectedMeshTo(scale);
                     }
                     break;
                 }
@@ -336,7 +357,9 @@ public partial class MainWindow : Window
                     if (Viewport.TryGetAxisParameter(axis, p, _gizmoDragOrigin, out var t))
                     {
                         float dist = gvm.ApplyMoveSnap(t - _gizmoDragStartT);
-                        gvm.DragSelectedMeshTo(_gizmoDragStartOffset + axisDir * dist);
+                        var target = _gizmoDragStartOffset + axisDir * dist;
+                        if (_gizmoTargetIsPlacement) gvm.DragSelectedPlacementTo(target);   // M75
+                        else gvm.DragSelectedMeshTo(target);
                     }
                     break;
                 }
@@ -362,7 +385,9 @@ public partial class MainWindow : Window
         if (wasGizmoDrag)
         {
             _gizmoDragAxis = null;
-            (DataContext as MainWindowViewModel)?.EndMeshDrag();
+            if (_gizmoTargetIsPlacement) (DataContext as MainWindowViewModel)?.EndPlacementDrag();   // M75
+            else (DataContext as MainWindowViewModel)?.EndMeshDrag();
+            _gizmoTargetIsPlacement = false;
         }
 
         bool wasLmb = _lmb;

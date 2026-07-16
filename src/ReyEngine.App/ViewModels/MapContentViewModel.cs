@@ -16,17 +16,28 @@ public sealed partial class ParticlePlacementViewModel : ObservableObject
     [ObservableProperty] private bool _isSelected;
 
     public Vector3 Offset;                                   // accumulated move (world space), default zero
+    public Vector3 RotationDegrees;                          // M75: extra local rotation on top of the authored transform
+    public Vector3 Scale = Vector3.One;                      // M75: extra local scale multiplier
     public Vector3 CurrentPosition => Placement.Position + Offset;
     public Matrix4x4 CurrentTransform
     {
         get
         {
+            // Extra scale+rotation compose in the placement's local space BEFORE the authored transform
+            // (row-vector convention: v * Delta * Original), then the translation is overridden.
             var transform = Placement.Transform;
+            if (RotationDegrees != Vector3.Zero || Scale != Vector3.One)
+            {
+                const float d2r = MathF.PI / 180f;
+                var delta = Matrix4x4.CreateScale(Scale) *
+                            Matrix4x4.CreateFromYawPitchRoll(RotationDegrees.Y * d2r, RotationDegrees.X * d2r, RotationDegrees.Z * d2r);
+                transform = delta * transform;
+            }
             transform.Translation = CurrentPosition;
             return transform;
         }
     }
-    public bool IsMoved => Offset != Vector3.Zero;
+    public bool IsMoved => Offset != Vector3.Zero || RotationDegrees != Vector3.Zero || Scale != Vector3.One;
 }
 
 /// <summary>A particle-system group folder (all placements that reference the same VFX system).</summary>
@@ -115,13 +126,16 @@ public sealed partial class RecentProjectViewModel : ObservableObject
 /// observable collections, so the folders never need rebuilding.</summary>
 public sealed record OutlinerFolderViewModel(string Icon, string Name, System.Collections.IEnumerable Items);
 
-/// <summary>M55: one placed ambient sound (MapAudio) — name + Wwise event + world position.</summary>
+/// <summary>M55: one placed ambient sound (MapAudio) — name + Wwise event + world position.
+/// M75: carries a live move <see cref="Offset"/> so sounds reposition like particles do.</summary>
 public sealed class MapSoundViewModel
 {
     public required MapSoundPlacement Sound { get; init; }
     public string Name => Sound.Name;
     public string EventName => Sound.EventName;
-    public System.Numerics.Vector3 Position => Sound.Position;
+    public Vector3 Offset;                                    // M75: accumulated world-space move
+    public Vector3 Position => Sound.Position + Offset;
+    public bool IsMoved => Offset != Vector3.Zero;
 }
 
 /// <summary>M55: one scene bucket grid (culling grid) of the loaded mapgeo.</summary>

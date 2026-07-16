@@ -145,7 +145,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _selection.Clear();
             if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
             if (SelectedProbe is not null) SelectedProbe = null;
+            GizmoPivot = p.CurrentPosition;   // M75: the gizmo now works on placements too
         }
+        else if (_selection.IsEmpty && SelectedSound is null) GizmoPivot = null;
         RebuildParticlePlayback();   // M36: play the newly-selected system (or stop if none)
     }
 
@@ -790,11 +792,70 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (SelectedParticleNode is not { } node) return;
         node.Offset = System.Numerics.Vector3.Zero;
+        node.RotationDegrees = System.Numerics.Vector3.Zero;   // M75
+        node.Scale = System.Numerics.Vector3.One;
         RefreshParticleMoveFields(node);
         SelectedParticleMarker = node.CurrentPosition;
+        GizmoPivot = node.CurrentPosition;
         UpdateParticleMarkers();
         HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved);
         RebuildParticlePlayback();
+    }
+
+    // ---- M75: placement gizmo — the viewport gizmo drives particles (move/rotate/scale) and sounds (move).
+    // Mirrors the mesh drag API; per-frame updates are silent, EndPlacementDrag logs + refreshes playback. ----
+
+    /// <summary>True when the gizmo should operate on a placement (no mesh selected, placement is).</summary>
+    public bool HasPlacementGizmoTarget => SelectedParticleNode is not null || SelectedSound is not null;
+
+    /// <summary>Drag-start state for the active placement (sounds report identity rotation/scale).</summary>
+    public (System.Numerics.Vector3 Offset, System.Numerics.Vector3 Rotation, System.Numerics.Vector3 Scale) PlacementDragStart =>
+        SelectedParticleNode is { } p ? (p.Offset, p.RotationDegrees, p.Scale)
+        : (SelectedSound?.Offset ?? System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One);
+
+    public void DragSelectedPlacementTo(System.Numerics.Vector3 absoluteOffset)
+    {
+        if (SelectedParticleNode is { } p)
+        {
+            p.Offset = absoluteOffset;
+            SelectedParticleMarker = p.CurrentPosition;
+            GizmoPivot = p.CurrentPosition;
+            RefreshParticleMoveFields(p);
+            UpdateParticleMarkers();
+        }
+        else if (SelectedSound is { } s)
+        {
+            s.Offset = absoluteOffset;
+            SelectedParticleMarker = s.Position;
+            GizmoPivot = s.Position;
+            UpdatePlaceableMarkers();
+        }
+    }
+
+    /// <summary>Extra local rotation for the selected particle (sounds are point emitters — no-op).</summary>
+    public void RotateSelectedPlacementTo(System.Numerics.Vector3 rotationDegrees)
+    {
+        if (SelectedParticleNode is { } p) p.RotationDegrees = rotationDegrees;
+    }
+
+    /// <summary>Extra local scale for the selected particle (sounds are point emitters — no-op).</summary>
+    public void ScaleSelectedPlacementTo(System.Numerics.Vector3 scale)
+    {
+        if (SelectedParticleNode is { } p) p.Scale = scale;
+    }
+
+    public void EndPlacementDrag()
+    {
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved) || MapContent.Sounds.Any(s => s.IsMoved);
+        if (SelectedParticleNode is { } p)
+        {
+            RebuildParticlePlayback();   // live-preview the placement's new transform once, not per frame
+            _log.Info("Particles", $"'{p.Name}' → pos ({p.CurrentPosition.X:0.#}, {p.CurrentPosition.Y:0.#}, {p.CurrentPosition.Z:0.#})" +
+                (p.RotationDegrees != System.Numerics.Vector3.Zero ? $" · rot ({p.RotationDegrees.X:0.#}, {p.RotationDegrees.Y:0.#}, {p.RotationDegrees.Z:0.#})°" : "") +
+                (p.Scale != System.Numerics.Vector3.One ? $" · scale ({p.Scale.X:0.##}, {p.Scale.Y:0.##}, {p.Scale.Z:0.##})" : ""));
+        }
+        else if (SelectedSound is { } s)
+            _log.Info("Sounds", $"'{s.Name}' → ({s.Position.X:0.#}, {s.Position.Y:0.#}, {s.Position.Z:0.#}). Save Placement Edits writes it to the mod.");
     }
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
     [ObservableProperty] private bool _hasFlowmapWater; // M44: current map has flowmap-river water → viewport animates it
@@ -1950,6 +2011,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 SelectedParticleMarker = snd.Position;   // M55b: highlight only — camera stays
                 SelectedSound = snd;                      // M56: enables the SOUND card (Play button)
                 SelectedPlaceableInfo = "";
+                GizmoPivot = snd.Position;                // M75: sounds are gizmo-movable
                 break;
             case BucketGridViewModel bg:  // M55
                 SelectedPlaceableInfo = $"{bg.Name}\n{bg.Info}";
@@ -2496,14 +2558,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (_currentMapEntry is not { } mapEntry) return;
         var moved = MapContent.AllParticles.Where(v => v.IsMoved).ToList();
-        if (moved.Count == 0) { _log.Info("Particles", "No particle moves to save."); return; }
+        // M75: sounds derived FROM a particle system share the particle's transform bytes — patching them
+        // independently would collide with the particle edit. Only standalone MapAudio placements save.
+        var movedSounds = MapContent.Sounds.Where(s => s.IsMoved && !s.Sound.FromParticleSystem).ToList();
+        int skippedSounds = MapContent.Sounds.Count(s => s.IsMoved && s.Sound.FromParticleSystem);
+        if (skippedSounds > 0)
+            _log.Warn("Sounds", $"{skippedSounds} moved sound(s) come from particle systems — move the particle instead; they were skipped.");
+        if (moved.Count == 0 && movedSounds.Count == 0) { _log.Info("Particles", "No placement edits to save."); return; }
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) { _log.Error("Particles", "No materials .bin to save into."); return; }
         if (!GuardEditable(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
-        var moves = moved.Select(v => (v.Placement.Transform, v.CurrentPosition)).ToList();
-        var bytes = MapParticleWriter.WriteMoves(GetAssetBytes(binEntry), moves, out var err);
-        if (bytes is null) { _log.Error("Particles", $"Could not save particle moves: {err}"); return; }
+        // M75: full replacement transforms — position + rotation + scale for particles; position for sounds.
+        var edits = moved.Select(v => (v.Placement.Transform, v.CurrentTransform)).ToList();
+        edits.AddRange(movedSounds.Select(s =>
+        {
+            var t = s.Sound.Transform;
+            t.Translation = s.Position;
+            return (s.Sound.Transform, t);
+        }));
+        var bytes = MapParticleWriter.WriteTransforms(GetAssetBytes(binEntry), edits, out var err);
+        if (bytes is null) { _log.Error("Particles", $"Could not save placement edits: {err}"); return; }
         if (err is not null) _log.Warn("Particles", err);
         try
         {
@@ -2519,7 +2594,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project.IsDirty = true;
             UpdateTitle();
             HasParticleMoves = false;
-            _log.Success("Particles", $"Saved {moved.Count} particle move(s) to the materials.bin override. Build Package will include it.");
+            _log.Success("Particles", $"Saved {moved.Count} particle edit(s) + {movedSounds.Count} sound move(s) to the materials.bin override. Build Package will include it.");
         }
         catch (Exception ex) { _log.Error("Particles", ex.Message); }
     }
