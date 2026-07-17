@@ -312,6 +312,7 @@ public partial class MainWindow : Window
                     _gizmoDragStartOffset = off;
                     _gizmoStartRotation = rot;
                     _gizmoStartScale = scale;
+                    vm.BeginPlacementDrag();   // M76: capture before-state → whole drag = ONE undo step
                     return;
                 }
             }
@@ -405,7 +406,12 @@ public partial class MainWindow : Window
             && Viewport.TryGetPickRay(e.GetPosition(ViewportInput), out var origin, out var dir))
         {
             bool additive = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-            vm.SelectAnyFromViewport(origin, dir, additive);   // M55: meshes AND placeable icons
+            // M76: UE-style screen-space icon picking — pass a projector + the click pixel so placeable
+            // icons are clickable at any zoom (18px tolerance), not just via a ray-vs-world-sphere hit.
+            var clickPos = e.GetPosition(ViewportInput);
+            vm.SelectAnyFromViewport(origin, dir, additive,
+                world => Viewport.TryProjectToScreen(world, out var s) ? s : null,
+                new System.Numerics.Vector2((float)clickPos.X, (float)clickPos.Y));
         }
     }
 

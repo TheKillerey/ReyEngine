@@ -377,6 +377,11 @@ public sealed class ViewportControl : OpenGlControlBase
         => ViewportPicking.TryGetRay(new Vector2((float)screenPos.X, (float)screenPos.Y),
             _lastViewProj, _lastViewportW, _lastViewportH, out rayOrigin, out rayDir);
 
+    /// <summary>M76: world point → screen pixel with the same mirror-inclusive matrices as rendering —
+    /// lets the host pick placeable icons in SCREEN space (UE-style), so they're clickable at any zoom.</summary>
+    public bool TryProjectToScreen(Vector3 world, out Vector2 screen)
+        => ViewportPicking.ProjectToScreen(world, _lastViewProj, _lastViewportW, _lastViewportH, out screen);
+
     private float GizmoArmLength(Vector3 pivot) => Math.Clamp(Vector3.Distance(_lastCamPos, pivot) * 0.15f, 10f, 5000f);
 
     private static float DistancePointToSegment(Vector2 p, Vector2 a, Vector2 b)

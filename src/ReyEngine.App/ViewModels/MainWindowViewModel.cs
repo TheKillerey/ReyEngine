@@ -562,6 +562,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedProbe = null;
         _selection.Clear();                       // M50b: exclusive selection
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
+        if (SelectedParticleNode is not null) SelectedParticleNode = null;   // M76: viewport picks bypass the tree item
         if (SelectedSound is not null) SelectedSound = null;   // M56
         SelectedParticleMarker = p.Position;   // M55b: highlight only — camera stays (use Focus)
         SelectedPlaceableInfo = $"{p.Name}\n{p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
@@ -572,6 +573,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedPropNode = null;
         _selection.Clear();                       // M50b: exclusive selection
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
+        if (SelectedParticleNode is not null) SelectedParticleNode = null;   // M76: viewport picks bypass the tree item
         if (SelectedSound is not null) SelectedSound = null;   // M56
         SelectedParticleMarker = p.Position;   // M55b: highlight only — camera stays (use Focus)
         SelectedPlaceableInfo = $"{p.Name}\ncubemap: {p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
@@ -813,6 +815,36 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedParticleNode is { } p ? (p.Offset, p.RotationDegrees, p.Scale)
         : (SelectedSound?.Offset ?? System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One);
 
+    // M76: undo support — the whole drag is ONE step, captured at press, pushed at release.
+    private object? _placementDragTarget;
+    private PlacementTransformCommand.State _placementDragBefore;
+
+    /// <summary>Called at gizmo-press on a placement: capture the before-state for the undo step.</summary>
+    public void BeginPlacementDrag()
+    {
+        _placementDragTarget = (object?)SelectedParticleNode ?? SelectedSound;
+        if (_placementDragTarget is { } t) _placementDragBefore = PlacementTransformCommand.State.Capture(t);
+    }
+
+    /// <summary>M76: re-sync everything a placement transform touches (used by undo/redo too).</summary>
+    private void RefreshPlacementVisuals(object target)
+    {
+        switch (target)
+        {
+            case ParticlePlacementViewModel p:
+                SelectedParticleMarker = p.CurrentPosition;
+                if (ReferenceEquals(p, SelectedParticleNode)) { GizmoPivot = p.CurrentPosition; RefreshParticleMoveFields(p); }
+                UpdateParticleMarkers();
+                RebuildParticlePlayback();
+                break;
+            case MapSoundViewModel s:
+                if (ReferenceEquals(s, SelectedSound)) { SelectedParticleMarker = s.Position; GizmoPivot = s.Position; }
+                UpdatePlaceableMarkers();
+                break;
+        }
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved) || MapContent.Sounds.Any(v => v.IsMoved);
+    }
+
     public void DragSelectedPlacementTo(System.Numerics.Vector3 absoluteOffset)
     {
         if (SelectedParticleNode is { } p)
@@ -847,6 +879,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public void EndPlacementDrag()
     {
         HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved) || MapContent.Sounds.Any(s => s.IsMoved);
+        // M76: push the whole drag as ONE undo step (no-op when nothing actually changed).
+        if (_placementDragTarget is { } target)
+        {
+            var after = PlacementTransformCommand.State.Capture(target);
+            if (after != _placementDragBefore)
+                UndoService.PushApplied(new PlacementTransformCommand(target, _placementDragBefore, after, _currentMap, RefreshPlacementVisuals));
+            _placementDragTarget = null;
+        }
         if (SelectedParticleNode is { } p)
         {
             RebuildParticlePlayback();   // live-preview the placement's new transform once, not per frame
@@ -2006,6 +2046,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             case MapSoundViewModel snd:   // M55
                 _selection.Clear();
                 if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
+                if (SelectedParticleNode is not null) SelectedParticleNode = null;   // M76: viewport picks bypass the tree item
                 if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
                 if (SelectedProbe is not null) SelectedProbe = null;
                 SelectedParticleMarker = snd.Position;   // M55b: highlight only — camera stays
@@ -2039,8 +2080,35 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     /// <summary>M55: click-select ANY scene object — meshes (triangles) or placeable icon markers
     /// (particles/props/probes, ray-vs-sphere at the marker's world size); nearest hit wins.</summary>
-    public void SelectAnyFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir, bool additive = false)
+    public void SelectAnyFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir, bool additive = false,
+        Func<System.Numerics.Vector3, System.Numerics.Vector2?>? projectToScreen = null,
+        System.Numerics.Vector2? clickScreenPx = null)
     {
+        // M76 UE-style picking: placeable icons hit in SCREEN space first (within a pixel radius of the
+        // drawn icon), so they're easy to click at ANY zoom — a distant marker no longer needs a
+        // pixel-perfect ray. Nearest icon on screen wins; icons draw on top, so they beat mesh faces.
+        if (!additive && projectToScreen is not null && clickScreenPx is { } px)
+        {
+            const float PickPixels = 18f;
+            object? bestPx = null;
+            float bestPxD = float.MaxValue;
+            void TestPx(object node, System.Numerics.Vector3 pos)
+            {
+                if (projectToScreen(pos) is not { } s) return;
+                float d = System.Numerics.Vector2.Distance(s, px);
+                if (d <= PickPixels && d < bestPxD) { bestPxD = d; bestPx = node; }
+            }
+            if (ShowParticles && MapContent.HasParticles)
+                foreach (var p in MapContent.AllParticles.Where(v => IsParticleVisible(v.Placement))) TestPx(p, p.CurrentPosition);
+            if (ShowPlaceables && MapContent.HasProps)
+                foreach (var p in MapContent.AllProps) TestPx(p, p.Position);
+            if (ShowPlaceables && MapContent.HasProbes)
+                foreach (var p in MapContent.Probes) TestPx(p, p.Position);
+            if (ShowPlaceables && MapContent.HasSounds)
+                foreach (var s in MapContent.Sounds.Where(v => IsSoundVisible(v.Sound))) TestPx(s, s.Position);
+            if (bestPx is not null) { SelectedOutlinerItem = bestPx; return; }
+        }
+
         rayDir = System.Numerics.Vector3.Normalize(rayDir);   // same t units for mesh + marker tests
         // mesh hit distance (float.MaxValue when none)
         float meshT = float.MaxValue;
@@ -2090,7 +2158,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             CurrentModelSubmeshVisible, rayOrigin, rayDir, out _);
         if (hit < 0)
         {
-            if (!additive) _selection.Clear(); // empty click clears; Ctrl+empty keeps the set (UE/Blender)
+            if (!additive)
+            {
+                _selection.Clear(); // empty click clears; Ctrl+empty keeps the set (UE/Blender)
+                ClearPlaceableSelection(); // M76: an empty click also deselects particles/sounds/props/probes
+            }
             return;
         }
         int meshIndex = map.Groups[hit].MeshIndex;
@@ -2125,6 +2197,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         RefreshMeshDetails();
     }
 
+    /// <summary>M76: deselect every placeable (particle/sound/prop/probe) — used when the user clicks
+    /// empty space, so no stale placement keeps its gizmo/inspector alive (UE-style).</summary>
+    private void ClearPlaceableSelection()
+    {
+        if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
+        if (SelectedParticleNode is not null) SelectedParticleNode = null;
+        if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
+        if (SelectedProbe is not null) SelectedProbe = null;
+        if (SelectedSound is not null) SelectedSound = null;
+        SelectedParticleMarker = null;
+        SelectedPlaceableInfo = "";
+        if (_selection.IsEmpty) GizmoPivot = null;
+        _syncingTreeSelection = true;
+        SelectedOutlinerItem = null;   // drop the outliner row highlight too
+        _syncingTreeSelection = false;
+    }
+
     /// <summary>Mirror the SelectionSet onto the tree: mark selected rows' <c>IsSelected</c>, and keep the
     /// TreeView's single SelectedItem pointed at the primary (guarded so it doesn't feed back).</summary>
     private void SyncTreeHighlight()
@@ -2156,6 +2245,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         // M50b: a mesh selection is EXCLUSIVE — deselect placeables so the inspector doesn't keep
         // showing the previously-selected particle/prop/probe next to the mesh sections (Unity-style).
+        // M76: also clear the DIRECTLY-set particle node (viewport icon picks bypass the tree item, so
+        // clearing only SelectedParticleTreeItem left the particle selected under a new mesh selection).
+        if (SelectedParticleNode is not null) SelectedParticleNode = null;
+        SelectedParticleMarker = null;
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
         if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
         if (SelectedProbe is not null) SelectedProbe = null;

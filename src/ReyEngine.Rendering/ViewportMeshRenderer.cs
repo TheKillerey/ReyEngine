@@ -612,11 +612,11 @@ void main() { FragColor = uColor; }";
         ConfigureMarkerVao(_probeVao, _probeVbo);
         ConfigureMarkerVao(_soundVao, _soundVbo);
         ConfigureMarkerVao(_lightMkVao, _lightMkVbo);
-        _icoSparkle = UploadIcon(IconSparkle(48));
+        _icoSparkle = UploadIcon(IconSparkle(96));   // M76: hi-res crisp star (was a 48px soft-ray blur)
         _icoPerson = UploadIcon(IconPerson(48));
         _icoRing = UploadIcon(IconRing(48));
         _icoSpeaker = UploadIcon(IconSpeaker(48));
-        _icoLight = UploadIcon(IconLight(48));
+        _icoLight = UploadIcon(IconLight(96));       // M76: match the star's resolution
 
         _ready = true;
     }
@@ -657,20 +657,25 @@ void main() { FragColor = uColor; }";
         return tex;
     }
 
-    /// <summary>4-point sparkle (particles): thin horizontal+vertical rays + a bright core.</summary>
+    /// <summary>4-point star (particles), M76: a crisp UE-style astroid star (|u|^⅔+|v|^⅔ ≤ 1 — concave,
+    /// pointy along the axes) with ~1.5px anti-aliased edges + a solid core dot. Replaces the old soft-ray
+    /// sparkle whose wide linear alpha ramps read as blur at any zoom.</summary>
     private static (byte[], int) IconSparkle(int n)
     {
         var px = new byte[n * n * 4];
         float c = (n - 1) / 2f;
+        float aa = 3.0f / n;                        // edge anti-alias width in shape space (~1.5px)
         for (int y = 0; y < n; y++)
         for (int x = 0; x < n; x++)
         {
             float u = (x - c) / c, v = (y - c) / c;
+            // astroid star: f = |u|^(2/3) + |v|^(2/3); inside when f <= 1 (sharp 4-point star)
+            float f = MathF.Pow(MathF.Abs(u), 2f / 3f) + MathF.Pow(MathF.Abs(v), 2f / 3f);
+            float star = Math.Clamp((1f - f) / aa, 0f, 1f);
+            // solid core dot for punch (hard edge, thin AA ring)
             float r = MathF.Sqrt(u * u + v * v);
-            float rayH = MathF.Max(0f, 1f - MathF.Abs(v) * 7f) * MathF.Max(0f, 1f - MathF.Abs(u));
-            float rayV = MathF.Max(0f, 1f - MathF.Abs(u) * 7f) * MathF.Max(0f, 1f - MathF.Abs(v));
-            float core = MathF.Max(0f, 1f - r * 3.2f);
-            float a = MathF.Min(1f, rayH + rayV + core * core);
+            float core = Math.Clamp((0.16f - r) / aa, 0f, 1f);
+            float a = MathF.Max(star, core);
             int o = (y * n + x) * 4;
             px[o] = px[o + 1] = px[o + 2] = 255;
             px[o + 3] = (byte)(a * 255f);
