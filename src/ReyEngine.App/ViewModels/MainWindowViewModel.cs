@@ -399,7 +399,60 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
     private readonly HashSet<string> _activeAmbience = new();
 
+    // M77b: the toolbar toggle is the ONLY control of the overlay — selection never shows or hides it.
     partial void OnShowBucketGridChanged(bool value) => RebuildBucketGridLines();
+
+    /// <summary>M77: the loaded map has culling grids (drives the toolbar toggle/rebuild visibility).</summary>
+    [ObservableProperty] private bool _hasBucketGrids;
+
+    /// <summary>M77: regenerate every bucket grid from the map's CURRENT world-space triangles (uses the
+    /// M58 builder — same rules the game data follows). Preview updates immediately; saving the map writes
+    /// the regenerated grids into the mapgeo (the save path re-runs the builder over the final geometry).</summary>
+    [RelayCommand]
+    private async Task RebuildBucketGrids()
+    {
+        if (_currentMap is not { } map) { _log.Warn("BucketGrid", "Load a map first."); return; }
+        Status = "Rebuilding bucket grids…";
+        try
+        {
+            var grids = await Task.Run(() => MapBucketGridBuilder.Rebuild(map));
+            var infos = grids.Select(g =>
+            {
+                var mp = new float[g.Vertices.Count * 3];
+                for (int i = 0; i < g.Vertices.Count; i++)
+                { mp[i * 3] = g.Vertices[i].X; mp[i * 3 + 1] = g.Vertices[i].Y; mp[i * 3 + 2] = g.Vertices[i].Z; }
+                // Bucket-grid indices are PER-BUCKET LOCAL (BaseVertex + u16) — resolve to global for preview.
+                var resolved = new List<int>(g.Indices.Count);
+                foreach (var cell in g.Buckets)
+                {
+                    int faces = cell.InsideFaceCount + cell.StickingOutFaceCount;
+                    for (int f = 0; f < faces; f++)
+                    {
+                        int i0 = (int)cell.StartIndex + f * 3;
+                        if (i0 + 2 >= g.Indices.Count) break;
+                        int a = (int)cell.BaseVertex + g.Indices[i0];
+                        int b = (int)cell.BaseVertex + g.Indices[i0 + 1];
+                        int c = (int)cell.BaseVertex + g.Indices[i0 + 2];
+                        if (a >= g.Vertices.Count || b >= g.Vertices.Count || c >= g.Vertices.Count) continue;
+                        resolved.Add(a); resolved.Add(b); resolved.Add(c);
+                    }
+                }
+                return new MapBucketGridInfo(g.Key.ControllerHash, g.MinX, g.MinZ, g.MaxX, g.MaxZ,
+                    g.BucketSizeX, g.BucketSizeZ, g.BucketsPerSide, g.BucketsPerSide,
+                    false, g.Vertices.Count, g.Indices.Count, g.Key.RegionHash, mp, resolved.ToArray());
+            }).ToList();
+            map.BucketGrids = infos;
+            MapContent.SetBucketGrids(infos);
+            HasBucketGrids = infos.Count > 0;
+            ShowBucketGrid = true;
+            RebuildBucketGridLines();
+            _log.Success("BucketGrid", $"Rebuilt {infos.Count} grid(s) from the current geometry — " +
+                $"{infos.Sum(i => i.VertexCount):n0} baked vert(s) / {infos.Sum(i => i.IndexCount) / 3:n0} tri(s). " +
+                "Saving the map writes them into the mapgeo.");
+            Status = "Bucket grids rebuilt";
+        }
+        catch (Exception ex) { _log.Error("BucketGrid", ex.Message); Status = "Bucket grid rebuild failed"; }
+    }
 
     /// <summary>M55b: explicitly frame the camera on the selected placeable (selection itself no longer
     /// moves the camera — Unity-style: select is passive, Focus is an action).</summary>
@@ -409,30 +462,45 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedParticleMarker is { } pos) ParticleFocusPoint = pos;
     }
 
-    /// <summary>M55: grid overlay lines — world XZ lines per bucket grid, at just above the map's floor.
-    /// World cell anchor is MinX/MinZ (LeagueToolkit's GetBucketBox is grid-local — verified).</summary>
-    private void RebuildBucketGridLines()
+    /// <summary>M55/M77b: bucket-grid overlay — the grid's COMPLETE baked scene mesh as 3D wireframe
+    /// (every unique triangle edge; a bucket grid is a simplified bake of the map). No flat cell lines,
+    /// no sampling. PERF: the array builds OFF the UI thread (a master grid holds 600k+ triangles) and
+    /// uploads once; stale builds are dropped when the map/toggle changes mid-build.</summary>
+    private int _bucketLinesBuildId;
+    private async void RebuildBucketGridLines()
     {
         if (!ShowBucketGrid || _currentMap is not { } map || map.BucketGrids.Count == 0)
         { BucketGridLines = null; return; }
-        float y = map.BoundsMin.Y + 25f;
-        var verts = new List<float>();
-        foreach (var g in map.BucketGrids)
+        int buildId = ++_bucketLinesBuildId;
+        var grids = map.BucketGrids;
+        var lines = await Task.Run(() => BuildBucketGridLineArray(grids));
+        if (buildId != _bucketLinesBuildId || !ShowBucketGrid) return;   // superseded while building
+        BucketGridLines = lines;
+    }
+
+    /// <summary>M77b: pos3+bary3 triangle soup (6 floats/vertex) — the viewport draws it with the
+    /// barycentric wireframe shader, giving the full-mesh wireframe look at triangle-raster cost.</summary>
+    private static float[] BuildBucketGridLineArray(IReadOnlyList<MapBucketGridInfo> grids)
+    {
+        long totalTris = 0;
+        foreach (var g in grids)
+            if (g.MeshIndices is { } gi) totalTris += gi.Length / 3;
+        var verts = new float[totalTris * 3 * 6];
+        int k = 0;
+        foreach (var g in grids)
         {
-            for (int x = 0; x <= g.CellsX; x++)
+            if (g is not { MeshPositions: { } pos, MeshIndices: { } idx }) continue;
+            for (int t = 0; t + 2 < idx.Length; t += 3)
+            for (int c = 0; c < 3; c++)
             {
-                float wx = g.MinX + x * g.BucketSizeX;
-                verts.Add(wx); verts.Add(y); verts.Add(g.MinZ);
-                verts.Add(wx); verts.Add(y); verts.Add(g.MaxZ);
-            }
-            for (int z = 0; z <= g.CellsZ; z++)
-            {
-                float wz = g.MinZ + z * g.BucketSizeZ;
-                verts.Add(g.MinX); verts.Add(y); verts.Add(wz);
-                verts.Add(g.MaxX); verts.Add(y); verts.Add(wz);
+                int v = idx[t + c];
+                verts[k++] = pos[v * 3]; verts[k++] = pos[v * 3 + 1]; verts[k++] = pos[v * 3 + 2];
+                verts[k++] = c == 0 ? 1f : 0f;
+                verts[k++] = c == 1 ? 1f : 0f;
+                verts[k++] = c == 2 ? 1f : 0f;
             }
         }
-        BucketGridLines = verts.ToArray();
+        return verts;
     }
     [ObservableProperty] private object? _selectedPropTreeItem;
     [ObservableProperty] private AnimatedPropViewModel? _selectedPropNode;
@@ -1272,6 +1340,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelProps = s.Props;
         CurrentModelSounds = s.Sounds;                 // M55
         MapContent.SetBucketGrids(s.Map.BucketGrids);  // M55
+        HasBucketGrids = s.Map.BucketGrids.Count > 0;  // M77
         RebuildBucketGridLines();
         SelectedParticleTreeItem = null;
         MapGeoInspector.Show(s.Map, s.Entry.Path);
@@ -1812,6 +1881,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedSound = null; AmbienceEnabled = false;
         BucketGridLines = null;
         MapContent.SetBucketGrids(Array.Empty<MapBucketGridInfo>());
+        HasBucketGrids = false;   // M77
         CurrentPropMeshes = null;
         ShowPropMeshes = false;
         PropMarkers = null;
@@ -2054,9 +2124,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 SelectedPlaceableInfo = "";
                 GizmoPivot = snd.Position;                // M75: sounds are gizmo-movable
                 break;
-            case BucketGridViewModel bg:  // M55
+            case BucketGridViewModel bg:  // M55/M77b: info only — the toolbar toggle controls visibility
                 SelectedPlaceableInfo = $"{bg.Name}\n{bg.Info}";
-                ShowBucketGrid = true;    // selecting the grid shows the overlay
                 break;
         }
     }
@@ -2917,6 +2986,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 PublishMapMaterialLayers(); // re-apply map special-material layers wiped above
                 MapGeoInspector.Show(map, entry.Path);
                 MapContent.SetBucketGrids(map.BucketGrids);   // M55: culling grid showcase
+                HasBucketGrids = map.BucketGrids.Count > 0;   // M77
                 RebuildBucketGridLines();
                 MapContent.ShowMap(entry.DisplayName, map.Groups
                     .Select((g, i) => new MapPieceViewModel { Name = string.IsNullOrEmpty(g.Material) ? $"Mesh {i}" : g.Material, Info = $"{g.IndexCount / 3:n0} tris" })

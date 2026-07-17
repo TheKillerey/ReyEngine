@@ -490,6 +490,32 @@ layout(location = 0) in vec3 aPos;
 uniform mat4 uMvp;
 void main() { gl_Position = uMvp * vec4(aPos, 1.0); }";
 
+    // M77b: bucket-grid baked mesh drawn as TRIANGLES with barycentric edge shading - same wireframe look
+    // as 1M+ GL lines at a fraction of the raster cost (native triangles, edge pixels only survive).
+    private const string BucketWireVert = @"
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aBary;
+uniform mat4 uMvp;
+out vec3 vBary;
+void main() {
+    vBary = aBary;
+    gl_Position = uMvp * vec4(aPos, 1.0);
+    // small clip-space depth bias so the bake wireframe wins against the coincident real geometry
+    gl_Position.z -= 0.0006 * gl_Position.w;
+}";
+
+    private const string BucketWireFrag = @"
+in vec3 vBary;
+uniform vec4 uColor;
+out vec4 FragColor;
+void main() {
+    float e = min(vBary.x, min(vBary.y, vBary.z));
+    float w = max(fwidth(e), 0.000001) * 1.2;
+    float line = 1.0 - smoothstep(0.0, w, e);
+    if (line < 0.02) discard;
+    FragColor = vec4(uColor.rgb, uColor.a * line);
+}";
+
     private const string LineFrag = @"
 out vec4 FragColor;
 uniform vec4 uColor;
@@ -591,6 +617,11 @@ void main() { FragColor = uColor; }";
         _lightMkVbo = gl.GenBuffer();
         _bucketVao = gl.GenVertexArray();  // M55: bucket-grid overlay lines
         _bucketVbo = gl.GenBuffer();
+        _bucketMeshVao = gl.GenVertexArray();  // M77b: bucket-grid baked-mesh wireframe (triangles + barycentrics)
+        _bucketMeshVbo = gl.GenBuffer();
+        _bucketMeshProgram = ShaderUtil.CreateProgram(gl, gles, BucketWireVert, BucketWireFrag);
+        _bwMvp = gl.GetUniformLocation(_bucketMeshProgram, "uMvp");
+        _bwColor = gl.GetUniformLocation(_bucketMeshProgram, "uColor");
 
         // M53: Unity-style placement ICONS — instanced camera-facing billboards (sparkle/person/ring
         // sprites, tinted per type) instead of "+" line crosses.
@@ -624,6 +655,8 @@ void main() { FragColor = uColor; }";
     // ---- M53 placement icons ----
     private uint _markerProgram, _markerQuadVbo, _icoSparkle, _icoPerson, _icoRing, _icoSpeaker, _icoLight;
     private uint _soundVao, _soundVbo, _bucketVao, _bucketVbo;   // M55: sounds + bucket-grid overlay
+    private uint _bucketMeshVao, _bucketMeshVbo, _bucketMeshProgram;   // M77b: baked-mesh wireframe
+    private int _bucketMeshVerts, _bwMvp, _bwColor;
     private uint _lightMkVao, _lightMkVbo;                       // M71: dynamic-light position icons
     private int _soundVerts, _bucketVerts, _lightMkVerts;
     private int _mkViewProj, _mkCamRight, _mkCamUp, _mkSize, _mkColor, _mkTex;
@@ -1324,6 +1357,26 @@ void main(){
         UploadLines(_bucketVao, _bucketVbo, lineVerts, out _bucketVerts);
     }
 
+    /// <summary>M77b: upload the bucket grid's baked mesh as pos3+bary3 triangle soup (6 floats/vertex).
+    /// Drawn with the barycentric wireframe program — full-model wireframe at triangle-raster cost.</summary>
+    public unsafe void SetBucketGridMesh(float[]? interleavedPosBary)
+    {
+        if (!_ready) return;
+        if (interleavedPosBary is null || interleavedPosBary.Length < 18) { _bucketMeshVerts = 0; return; }
+        _gl.BindVertexArray(_bucketMeshVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _bucketMeshVbo);
+        fixed (float* p = interleavedPosBary)
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(interleavedPosBary.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+        uint stride = 6 * sizeof(float);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
+        _gl.EnableVertexAttribArray(1);
+        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
+        _gl.BindVertexArray(0);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        _bucketMeshVerts = interleavedPosBary.Length / 6;
+    }
+
     /// <summary>Upload marker instance centers (xyz per marker) for the icon billboards (M53).</summary>
     private unsafe void SetIconMarkers(uint instVbo, IReadOnlyList<Vector3> positions, out int count)
     {
@@ -1355,6 +1408,7 @@ void main(){
         _probeVerts = 0;
         _soundVerts = 0;
         _bucketVerts = 0;
+        _bucketMeshVerts = 0;   // M77b
         _hasGizmo = false;
     }
 
@@ -1675,6 +1729,24 @@ void main(){
             _gl.BindVertexArray(0);
         }
 
+        // M77b: bucket-grid baked mesh — triangle-rasterized wireframe (barycentric edges), depth-tested,
+        // no depth write, slight depth bias in the shader so it reads over the coincident real geometry.
+        if (_bucketMeshVerts > 0)
+        {
+            _gl.UseProgram(_bucketMeshProgram);
+            _gl.UniformMatrix4(_bwMvp, 1, false, in m.M11);
+            _gl.Uniform4(_bwColor, 0.62f, 0.45f, 0.95f, 0.85f);
+            _gl.Enable(EnableCap.Blend);
+            _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            _gl.DepthMask(false);
+            _gl.Disable(EnableCap.CullFace);
+            _gl.BindVertexArray(_bucketMeshVao);
+            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_bucketMeshVerts);
+            _gl.BindVertexArray(0);
+            _gl.DepthMask(true);
+            _gl.Disable(EnableCap.Blend);
+        }
+
         // M53: placement ICONS (Unity-style camera-facing sprites), always on top: particles = cyan
         // sparkle, mobs/props = orange person, probes = green ring, sounds = violet speaker;
         // selected = larger bright yellow.
@@ -1782,6 +1854,8 @@ void main(){
         DeleteMeshBuffers();
         _gl.DeleteTexture(_whiteTex);
         if (_lightsTex != 0) { _gl.DeleteTexture(_lightsTex); _lightsTex = 0; }   // M70
+        _gl.DeleteVertexArray(_bucketMeshVao); _gl.DeleteBuffer(_bucketMeshVbo);   // M77b
+        _gl.DeleteProgram(_bucketMeshProgram);
         _gl.DeleteBuffer(_boundsVbo);
         _gl.DeleteBuffer(_boneVbo);
         _gl.DeleteBuffer(_particleVbo);

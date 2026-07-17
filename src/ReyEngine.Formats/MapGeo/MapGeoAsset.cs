@@ -141,7 +141,7 @@ public sealed class MapGeoAsset
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 
     /// <summary>M55: the mapgeo's scene bucket grid(s) — League's culling grid, one per visibility controller.</summary>
-    public IReadOnlyList<MapBucketGridInfo> BucketGrids { get; init; } = Array.Empty<MapBucketGridInfo>();
+    public IReadOnlyList<MapBucketGridInfo> BucketGrids { get; set; } = Array.Empty<MapBucketGridInfo>();   // M77: settable so Rebuild Bucket Grids can refresh it live
 }
 
 /// <summary>M55: summary of one scene bucket grid. World cell box anchors at MinX/MinZ:
@@ -152,7 +152,11 @@ public sealed record MapBucketGridInfo(
     float BucketSizeX, float BucketSizeZ,
     int CellsX, int CellsZ,
     bool IsDisabled, int VertexCount, int IndexCount,
-    uint RegionHash = 0);
+    uint RegionHash = 0,
+    // M77: the grid's BAKED scene mesh (simplified copy of the map used for culling) — xyz triplets +
+    // triangle indices. Null when the decoder skipped it; used to draw the grid as real 3D wireframe.
+    float[]? MeshPositions = null,
+    int[]? MeshIndices = null);
 
 /// <summary>
 /// An index range in the combined buffer for one mesh-submesh: its material plus the source mesh's

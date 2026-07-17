@@ -200,6 +200,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
     private bool _dynamicLightsDirty;   // M70: re-upload the Light.dat table on the GL thread when it changes
     private bool _lightMarkersDirty;    // M71: recompute the transformed light-position icons
+    private float[]? _lastBucketGridLines;   // M77: skip redundant multi-MB line uploads
     private bool _particlesDirty;
     private bool _propMeshesDirty;   // M41
     private float _markerSize = 40f; // world-size for placement markers, fixed once the mesh loads
@@ -504,7 +505,14 @@ public sealed class ViewportControl : OpenGlControlBase
             _meshRenderer.SetPropMarkers(PropMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize);
             _meshRenderer.SetProbeMarkers(ProbeMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.4f);
             _meshRenderer.SetSoundMarkers(SoundMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.2f);
-            _meshRenderer.SetBucketGridLines(BucketGridLines);
+            // M77 perf: the bucket-grid overlay can be megabytes of data — re-upload ONLY when the array
+            // instance actually changed, not on every marker refresh (gizmo drags dirty markers per frame).
+            // M77b: the array is pos3+bary3 triangle soup for the barycentric wireframe path.
+            if (!ReferenceEquals(_lastBucketGridLines, BucketGridLines))
+            {
+                _meshRenderer.SetBucketGridMesh(BucketGridLines);
+                _lastBucketGridLines = BucketGridLines;
+            }
             _particlesDirty = false;
         }
         if (_lightMarkersDirty)

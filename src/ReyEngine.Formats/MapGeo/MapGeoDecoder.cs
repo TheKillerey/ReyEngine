@@ -168,13 +168,46 @@ public static class MapGeoDecoder
             var sg = env.SceneGraphs[sceneGraphIndex];
             try
             {
+                // M77: capture the baked scene mesh so the viewport can draw the grid as REAL 3D wireframe
+                // (a bucket grid is a simplified bake of the map — flat cell lines misrepresent it).
+                // CRITICAL: the grid's index buffer is PER-BUCKET LOCAL — every index is relative to its
+                // bucket's BaseVertex. Resolve through the bucket table to global vertex indices; reading
+                // the flat list globally draws garbage fan lines across the whole map.
+                var meshPositions = new float[sg.Vertices.Count * 3];
+                for (int vi = 0; vi < sg.Vertices.Count; vi++)
+                {
+                    meshPositions[vi * 3 + 0] = sg.Vertices[vi].X;
+                    meshPositions[vi * 3 + 1] = sg.Vertices[vi].Y;
+                    meshPositions[vi * 3 + 2] = sg.Vertices[vi].Z;
+                }
+                var resolved = new List<int>(sg.Indices.Count);
+                var bucketSpan = sg.Buckets.Span;
+                for (int by = 0; by < bucketSpan.Height; by++)
+                for (int bx = 0; bx < bucketSpan.Width; bx++)
+                {
+                    var bucket = bucketSpan[by, bx];
+                    int faceCount = bucket.InsideFaceCount + bucket.StickingOutFaceCount;
+                    for (int f = 0; f < faceCount; f++)
+                    {
+                        int i0 = (int)bucket.StartIndex + f * 3;
+                        if (i0 + 2 >= sg.Indices.Count) break;
+                        int a = (int)bucket.BaseVertex + sg.Indices[i0];
+                        int b = (int)bucket.BaseVertex + sg.Indices[i0 + 1];
+                        int c2 = (int)bucket.BaseVertex + sg.Indices[i0 + 2];
+                        if (a >= sg.Vertices.Count || b >= sg.Vertices.Count || c2 >= sg.Vertices.Count) continue;
+                        resolved.Add(a); resolved.Add(b); resolved.Add(c2);
+                    }
+                }
+                var meshIndices = resolved.ToArray();
+
                 bucketGrids.Add(new MapBucketGridInfo(
                     rawSceneGraphs?.Grids[sceneGraphIndex].ControllerHash ?? sg.VisibilityControllerPathHash,
                     sg.MinX, sg.MinZ, sg.MaxX, sg.MaxZ,
                     sg.BucketSizeX, sg.BucketSizeZ,
                     sg.Buckets.Width, sg.Buckets.Height,
                     sg.IsDisabled, sg.Vertices.Count, sg.Indices.Count,
-                    rawSceneGraphs?.Grids[sceneGraphIndex].RegionHash ?? 0));
+                    rawSceneGraphs?.Grids[sceneGraphIndex].RegionHash ?? 0,
+                    meshPositions, meshIndices));
             }
             catch { /* malformed grid: skip */ }
         }
