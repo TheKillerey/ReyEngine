@@ -279,6 +279,8 @@
                 DynamicLightOffsetX="{Binding DynamicLightOffsetX}"
                 DynamicLightOffsetZ="{Binding DynamicLightOffsetZ}"
                 ShowLightMarkers="{Binding ShowLightMarkers}"
+                GrassTintTexture="{Binding CurrentGrassTint}"
+                GrassTintRect="{Binding CurrentGrassTintRect}"
                 ParticleMarkers="{Binding ParticleMarkers}"
                 SelectedParticlePosition="{Binding SelectedParticleMarker}"
                 PropMarkers="{Binding PropMarkers}"

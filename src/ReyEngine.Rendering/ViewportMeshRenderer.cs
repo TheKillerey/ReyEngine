@@ -36,6 +36,10 @@ public sealed class ViewportMeshRenderer : IDisposable
     private float _time;                                          // M44: animation clock (seconds), fed to uTime
     private float _lightmapScale = 1f;                            // M45: baked-light multiplier (1 = neutral)
     private bool _lightmapsEnabled = true;                        // M69: toggle baked lightmaps off (fall back to sun/sky term)
+    // M78: the map's grass-tint texture (world-space planar, VertexDeform materials multiply it in)
+    private uint _grassTintTex;
+    private Vector4 _grassTintRect = new(0f, 0f, 1f, 1f);
+    private int _mGrassTint, _mHasGrassTint, _mGrassTintRect;
     // M70: legacy Riot point lights (Light.dat) uploaded as an RGBA32F table sampled per fragment.
     private uint _lightsTex;
     private int _lightCount;
@@ -107,6 +111,7 @@ public sealed class ViewportMeshRenderer : IDisposable
         public bool UsesSpecular;
         public int AlphaMode;           // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
         public float AlphaCutoff;       // M34: alpha-test threshold for cutout (default 0.35)
+        public bool UsesGrassTint;      // M78: multiply the map's world-space grass tint into the diffuse
         public bool DoubleSided;        // M34: two-sided material (cullEnable=false) — never culled
         public bool Mirrored;           // M34: source mesh has a negative-determinant (mirrored) transform
         public Vector2 ClampUv;         // M34: per-axis UV clamp (1 = clamp/decal, 0 = tile); default 0,0
@@ -149,7 +154,8 @@ public sealed class ViewportMeshRenderer : IDisposable
         // Terrain blend: slot 0 bottom, slot 1 mask, slot 2 middle, slot 3 top, slot 4 extras.
         bool IsTerrainBlend = false, Vector2 TerrainBottomTiling = default, Vector2 TerrainMiddleTiling = default,
         Vector2 TerrainTopTiling = default, Vector2 TerrainExtrasTiling = default, float TerrainWorldScale = 1f,
-        Vector3 TerrainMaskMultipliers = default)
+        Vector3 TerrainMaskMultipliers = default,
+        bool UsesGrassTint = false)   // M78: multiply the map's world-space grass tint into the diffuse
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
@@ -235,6 +241,11 @@ uniform vec4 uColorOutside;    // Color_Outside (edge water)
 uniform float uWaterAlpha;     // TranslucentControl
 // Terrain shader 0xe25b830f: RGB mask blends middle/top/extras over the bottom layer.
 uniform int uIsTerrainBlend;
+// M78: VertexDeform grass tint - the map's mGrassTintTexture sampled with world-space XZ planar UVs
+// over the map bounds (rect = minX, minZ, 1/spanX, 1/spanZ), multiplied into the diffuse.
+uniform sampler2D uGrassTint;
+uniform int uHasGrassTint;
+uniform vec4 uGrassTintRect;
 // M70: legacy Riot dynamic point lights (Light.dat). Table is an RGBA32F texture: texel (i,0) = position.xyz
 // + radius (w), texel (i,1) = colour.rgb. highp is required - positions reach ~14000 world units and would
 // quantize badly at lower precision.
@@ -294,6 +305,11 @@ void main() {
     // above is unaffected - only the textured-decal branch gets the 2X remap.
     vec4 tex = (uHasTex == 1) ? texture(uTex, uv) : vec4(uBaseColor * uTint.rgb, uTint.a);
     if (uHasTex == 1 && uTintTextured == 1) { tex.rgb *= uTint.rgb * 2.0; tex.a *= uTint.a; }
+    // M78: grass tint - world-space planar multiply (VertexDeform + USE_GRASS_TINT_MAP materials only).
+    if (uHasGrassTint == 1) {
+        vec2 gtUv = clamp((vWorld.xz - uGrassTintRect.xy) * uGrassTintRect.zw, 0.0, 1.0);
+        tex.rgb *= texture(uGrassTint, gtUv).rgb;
+    }
     vec3 base = tex.rgb;
     float alpha = tex.a;
 
@@ -579,6 +595,9 @@ void main() { FragColor = uColor; }";
         _mTerrainExtrasTiling = gl.GetUniformLocation(_meshProgram, "uTerrainExtrasTiling");
         _mTerrainMaskMultipliers = gl.GetUniformLocation(_meshProgram, "uTerrainMaskMultipliers");
         _mLightmapScale = gl.GetUniformLocation(_meshProgram, "uLightmapScale");
+        _mGrassTint = gl.GetUniformLocation(_meshProgram, "uGrassTint");         // M78
+        _mHasGrassTint = gl.GetUniformLocation(_meshProgram, "uHasGrassTint");
+        _mGrassTintRect = gl.GetUniformLocation(_meshProgram, "uGrassTintRect");
         _mLightsTex = gl.GetUniformLocation(_meshProgram, "uLightsTex");         // M70
         _mNumLights = gl.GetUniformLocation(_meshProgram, "uNumLights");
         _mLightIntensity = gl.GetUniformLocation(_meshProgram, "uLightIntensity");
@@ -1092,6 +1111,29 @@ void main(){
     /// point lights on their own).</summary>
     public void SetLightmapsEnabled(bool enabled) => _lightmapsEnabled = enabled;
 
+    /// <summary>M78: upload (or clear, rgba=null) the map's grass-tint texture. The rect maps world XZ
+    /// into the texture: (minX, minZ, 1/spanX, 1/spanZ). Must run on the GL thread.</summary>
+    public unsafe void SetGrassTintTexture(byte[]? rgba, int width, int height, Vector4 rect)
+    {
+        if (!_ready) return;
+        if (rgba is null || width <= 0 || height <= 0)
+        {
+            if (_grassTintTex != 0) { _gl.DeleteTexture(_grassTintTex); _grassTintTex = 0; }
+            return;
+        }
+        if (_grassTintTex == 0) _grassTintTex = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, _grassTintTex);
+        fixed (byte* p = rgba)
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)width, (uint)height, 0,
+                PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _grassTintRect = rect;
+    }
+
     /// <summary>M70: upload a Riot Light.dat point-light table as an RGBA32F texture (width = light count,
     /// height = 2: row 0 = position.xyz + radius, row 1 = colour.rgb). Capped at 1024 (the shader loop bound).
     /// Must be called on the GL thread.</summary>
@@ -1170,6 +1212,7 @@ void main(){
         _submeshes[index].UsesSpecular = mat.UsesSpecular;
         _submeshes[index].AlphaMode = mat.AlphaMode;
         _submeshes[index].AlphaCutoff = mat.AlphaCutoff;
+        _submeshes[index].UsesGrassTint = mat.UsesGrassTint;   // M78
         _submeshes[index].DoubleSided = mat.DoubleSided;
         _submeshes[index].Tint = mat.Tint ?? Vector4.One;
         _submeshes[index].TintTextured = mat.TintTextured;
@@ -1202,6 +1245,7 @@ void main(){
             _submeshes[i].UsesSpecular = false;
             _submeshes[i].AlphaMode = 0;
             _submeshes[i].AlphaCutoff = 0.35f;
+            _submeshes[i].UsesGrassTint = false;   // M78
             _submeshes[i].DoubleSided = false;
             _submeshes[i].Tint = Vector4.One;
             _submeshes[i].TintTextured = false;
@@ -1468,6 +1512,15 @@ void main(){
                 _gl.Uniform1(_mLightmap, 6);
                 _gl.Uniform1(_mTime, _time);   // M44: shared animation clock (flowmap water)
                 _gl.Uniform1(_mLightmapScale, _lightmapScale);   // M45: baked-light multiplier
+                // M78: grass tint — texture on unit 8, world-bounds rect; per-submesh flag gates it.
+                _gl.Uniform1(_mGrassTint, 8);
+                _gl.Uniform4(_mGrassTintRect, _grassTintRect.X, _grassTintRect.Y, _grassTintRect.Z, _grassTintRect.W);
+                if (_grassTintTex != 0)
+                {
+                    _gl.ActiveTexture(TextureUnit.Texture8);
+                    _gl.BindTexture(TextureTarget.Texture2D, _grassTintTex);
+                    _gl.ActiveTexture(TextureUnit.Texture0);
+                }
                 // M70: dynamic point lights — table on unit 7, count gated by the toggle (0 = shader skips them).
                 _gl.Uniform1(_mLightsTex, 7);
                 int activeLights = (_dynamicLightsEnabled && _lightsTex != 0) ? _lightCount : 0;
@@ -1502,6 +1555,7 @@ void main(){
                     _gl.Uniform1(_mUsesSpec, s.UsesSpecular ? 1 : 0);
                     _gl.Uniform1(_mAlphaMode, s.AlphaMode);   // M34: 0 opaque · 1 cutout · 2 transparent
                     _gl.Uniform1(_mAlphaCutoff, s.AlphaCutoff);
+                    _gl.Uniform1(_mHasGrassTint, (s.UsesGrassTint && _grassTintTex != 0) ? 1 : 0);   // M78
                     _gl.Uniform2(_mClampUv, s.ClampUv.X, s.ClampUv.Y);
                     _gl.Uniform4(_mTint, s.Tint.X, s.Tint.Y, s.Tint.Z, s.Tint.W);
                     _gl.Uniform1(_mTintTextured, s.TintTextured ? 1 : 0);
@@ -1609,6 +1663,7 @@ void main(){
             _gl.Uniform1(_mEmissive, 3); _gl.Uniform1(_mMatCap, 4); _gl.Uniform1(_mMatCapMask, 5); _gl.Uniform1(_mLightmap, 6);
             _gl.Uniform1(_mHasMask, 0); _gl.Uniform1(_mHasGradient, 0); _gl.Uniform1(_mHasEmissive, 0);
             _gl.Uniform1(_mHasMatCap, 0); _gl.Uniform1(_mHasMatCapMask, 0); _gl.Uniform1(_mHasLightmap, 0);
+            _gl.Uniform1(_mHasGrassTint, 0);   // M78: props never grass-tint
             _gl.Uniform1(_mUsesRim, 0); _gl.Uniform1(_mUsesSpec, 0);
             _gl.Uniform1(_mAlphaMode, 1); _gl.Uniform1(_mAlphaCutoff, 0.35f);   // cutout so fur/wing alpha reads
             _gl.Uniform4(_mUvScaleOffset, 1f, 1f, 0f, 0f); _gl.Uniform1(_mUvRot, 0f);
@@ -1854,6 +1909,7 @@ void main(){
         DeleteMeshBuffers();
         _gl.DeleteTexture(_whiteTex);
         if (_lightsTex != 0) { _gl.DeleteTexture(_lightsTex); _lightsTex = 0; }   // M70
+        if (_grassTintTex != 0) { _gl.DeleteTexture(_grassTintTex); _grassTintTex = 0; }   // M78
         _gl.DeleteVertexArray(_bucketMeshVao); _gl.DeleteBuffer(_bucketMeshVbo);   // M77b
         _gl.DeleteProgram(_bucketMeshProgram);
         _gl.DeleteBuffer(_boundsVbo);

@@ -966,6 +966,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Info("Sounds", $"'{s.Name}' → ({s.Position.X:0.#}, {s.Position.Y:0.#}, {s.Position.Z:0.#}). Save Placement Edits writes it to the mod.");
     }
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
+    [ObservableProperty] private TextureImage? _currentGrassTint;                    // M78: map grass-tint texture
+    [ObservableProperty] private System.Numerics.Vector4 _currentGrassTintRect;      // M78: minX, minZ, 1/spanX, 1/spanZ
     [ObservableProperty] private bool _hasFlowmapWater; // M44: current map has flowmap-river water → viewport animates it
     public ParticleEditorViewModel ParticleEditor { get; } = new(); // M46 Particle Editor
     [ObservableProperty] private bool _isParticleEditorActive;      // M46: overlay visible for the active tab
@@ -3301,6 +3303,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         CurrentModelSubmeshMaterials = submeshMats;
         CurrentModelLightmapTextures = lmGroups > 0 ? lightmaps : null;
+
+        // M78: any VertexDeform+USE_GRASS_TINT_MAP group → publish the map's world-space grass tint.
+        int gtGroups = submeshMats.Count(m => m.UsesGrassTint);
+        if (gtGroups > 0)
+        {
+            var gtPath = FindGrassTintTexturePath();
+            CurrentGrassTint = gtPath is not null ? Load(gtPath) : null;
+            CurrentGrassTintRect = new System.Numerics.Vector4(
+                map.BoundsMin.X, map.BoundsMin.Z,
+                1f / MathF.Max(1f, map.BoundsMax.X - map.BoundsMin.X),
+                1f / MathF.Max(1f, map.BoundsMax.Z - map.BoundsMin.Z));
+            _log.Info("GrassTint", gtPath is not null
+                ? $"{gtGroups} grass-tint group(s) — {gtPath}"
+                : $"{gtGroups} grass-tint group(s), but no grasstint texture found in the mounts.");
+        }
+        else CurrentGrassTint = null;
         // Stash map-only secondary layers. A later ClearSecondaryTextures() on the load path wipes the channels,
         // so the UI-thread load code republishes them from these fields.
         _mapFlowMasks = flowGroups + terrainGroups > 0 ? flowMaps : null;
@@ -3350,6 +3368,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Map a Formats <see cref="MaterialProfile"/> to the renderer's per-submesh material (M32).</summary>
+    /// <summary>M78: locate the map's grass-tint texture (mGrassTintTexture — usually
+    /// ASSETS/Maps/Info/&lt;map&gt;/GrassTint_*.tex). Mount glob, preferring the current map's folder and
+    /// the base (shortest-named, no dragon suffix) texture — mirrors the MapgeoAddon fallback chain.</summary>
+    private string? FindGrassTintTexturePath()
+    {
+        if (_mounts is null) return null;
+        var candidates = _mounts.Assets
+            .Where(a => a.IsResolved && a.VirtualPath.Contains("grasstint", StringComparison.OrdinalIgnoreCase))
+            .Select(a => a.VirtualPath)
+            .ToList();
+        if (candidates.Count == 0) return null;
+        string token = "";
+        if (_currentMapEntry?.Path is { } mp)
+            token = Path.GetFileName(Path.GetDirectoryName(mp.Replace('\\', '/')) ?? "") ?? "";
+        return candidates
+            .OrderByDescending(c => token.Length > 0 && c.Contains(token, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(c => c.Length)
+            .First();
+    }
+
     private static ViewportMeshRenderer.SubmeshMaterial ToSubmeshMaterial(MaterialProfile p) =>
         new(p.UsesRim, p.UsesSpecular, p.UvScale, p.UvOffset, p.UvRotationDegrees,
             AlphaMode: p.RenderMode switch
@@ -3379,7 +3417,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             TerrainExtrasTiling: p.TerrainExtrasTiling,
             TerrainWorldScale: p.TerrainWorldScale,
             TerrainMaskMultipliers: new System.Numerics.Vector3(
-                p.TerrainRMaskMultiplier, p.TerrainGMaskMultiplier, p.TerrainBMaskMultiplier));
+                p.TerrainRMaskMultiplier, p.TerrainGMaskMultiplier, p.TerrainBMaskMultiplier),
+            UsesGrassTint: p.UsesGrassTint);   // M78
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 

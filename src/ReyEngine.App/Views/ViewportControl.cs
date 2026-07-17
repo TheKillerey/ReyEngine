@@ -57,6 +57,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightOffsetZ), 0.0);
     public static readonly StyledProperty<bool> ShowLightMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowLightMarkers), true);   // M71: light position icons
+    public static readonly StyledProperty<TextureImage?> GrassTintTextureProperty =
+        AvaloniaProperty.Register<ViewportControl, TextureImage?>(nameof(GrassTintTexture));   // M78
+    public static readonly StyledProperty<Vector4> GrassTintRectProperty =
+        AvaloniaProperty.Register<ViewportControl, Vector4>(nameof(GrassTintRect), new Vector4(0, 0, 1, 1));
     public static readonly StyledProperty<IReadOnlyList<Vector3>?> ParticleMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ParticleMarkers));
     public static readonly StyledProperty<Vector3?> SelectedParticlePositionProperty =
@@ -167,6 +171,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public double DynamicLightOffsetX { get => GetValue(DynamicLightOffsetXProperty); set => SetValue(DynamicLightOffsetXProperty, value); }
     public double DynamicLightOffsetZ { get => GetValue(DynamicLightOffsetZProperty); set => SetValue(DynamicLightOffsetZProperty, value); }
     public bool ShowLightMarkers { get => GetValue(ShowLightMarkersProperty); set => SetValue(ShowLightMarkersProperty, value); }
+    public TextureImage? GrassTintTexture { get => GetValue(GrassTintTextureProperty); set => SetValue(GrassTintTextureProperty, value); }
+    public Vector4 GrassTintRect { get => GetValue(GrassTintRectProperty); set => SetValue(GrassTintRectProperty, value); }
     /// <summary>World positions of placed-particle markers to draw (M35); null/empty hides them.</summary>
     public IReadOnlyList<Vector3>? ParticleMarkers { get => GetValue(ParticleMarkersProperty); set => SetValue(ParticleMarkersProperty, value); }
     public Vector3? SelectedParticlePosition { get => GetValue(SelectedParticlePositionProperty); set => SetValue(SelectedParticlePositionProperty, value); }
@@ -201,6 +207,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private bool _dynamicLightsDirty;   // M70: re-upload the Light.dat table on the GL thread when it changes
     private bool _lightMarkersDirty;    // M71: recompute the transformed light-position icons
     private float[]? _lastBucketGridLines;   // M77: skip redundant multi-MB line uploads
+    private bool _grassTintDirty;            // M78: upload the grass-tint texture on the GL thread
     private bool _particlesDirty;
     private bool _propMeshesDirty;   // M41
     private float _markerSize = 40f; // world-size for placement markers, fixed once the mesh loads
@@ -587,6 +594,12 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (_waterClock.IsRunning) _waterClock.Reset();
         _meshRenderer.SetLightmapScale((float)LightmapScale);   // M45: MapSunProperties.lightMapColorScale
         _meshRenderer.SetLightmapsEnabled(LightmapsEnabled);    // M69: baked-lightmap on/off toggle
+        if (_grassTintDirty)   // M78: (re)upload the map's grass-tint texture on the GL thread
+        {
+            var gti = GrassTintTexture;
+            _meshRenderer.SetGrassTintTexture(gti?.Rgba, gti?.Width ?? 0, gti?.Height ?? 0, GrassTintRect);
+            _grassTintDirty = false;
+        }
         if (_dynamicLightsDirty)   // M70: (re)upload the Light.dat point-light table on the GL thread
         {
             _meshRenderer.SetPointLights(DynamicLights ?? (IReadOnlyList<PointLight>)Array.Empty<PointLight>());
@@ -947,6 +960,8 @@ public sealed class ViewportControl : OpenGlControlBase
         { RequestNextFrameRendering(); } // M44/M45/M50b/M54/M69/M70: water + lightmap scale + outline + prop idles + lightmap toggle + dynamic lights
         else if (change.Property == DynamicLightsProperty)   // M70: new Light.dat table -> re-upload + re-mark on the GL thread
         { _dynamicLightsDirty = true; _lightMarkersDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == GrassTintTextureProperty || change.Property == GrassTintRectProperty)   // M78
+        { _grassTintDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == DynamicLightPositionScaleProperty || change.Property == DynamicLightScaleXProperty
                  || change.Property == DynamicLightScaleZProperty || change.Property == DynamicLightOffsetXProperty
                  || change.Property == DynamicLightOffsetZProperty || change.Property == ShowLightMarkersProperty)

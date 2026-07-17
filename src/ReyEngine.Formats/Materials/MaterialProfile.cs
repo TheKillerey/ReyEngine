@@ -62,7 +62,10 @@ public sealed record MaterialProfile(
     float TerrainWorldScale = 1f,
     float TerrainRMaskMultiplier = 1f,
     float TerrainGMaskMultiplier = 1f,
-    float TerrainBMaskMultiplier = 1f)
+    float TerrainBMaskMultiplier = 1f,
+    // M78: VertexDeform grass/foliage materials with USE_GRASS_TINT_MAP multiply the map's world-space
+    // grass-tint texture (mGrassTintTexture) into their diffuse — matches the MapgeoAddon semantics.
+    bool UsesGrassTint = false)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -230,13 +233,19 @@ public static class MaterialProfiles
 
         var flow = ClassifyFlowmap(b);
 
+        // M78: VertexDeform + USE_GRASS_TINT_MAP → world-space grass tint multiplies the diffuse.
+        string shaderName = b.RenderShader ?? b.ShaderName ?? "";
+        bool grassTint = shaderName.Contains("VertexDeform", OIC)
+            && b.Switches.TryGetValue("USE_GRASS_TINT_MAP", out var gtOn) && gtOn;
+
         return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
             renderMode, doubleSided, tint, tintTextured, b.BlendEnable, alphaCutoff, clampU, clampV,
             flow.IsFlowmap, flow.Speed, flow.Strength, flow.Tile, flow.Inside, flow.Outside, flow.Alpha,
             flow.FlowMapPath, flow.FlowNormalPath,
             terrain.IsTerrainBlend, terrain.MaskPath, terrain.BottomPath, terrain.MiddlePath, terrain.TopPath,
             terrain.ExtrasPath, terrain.BottomTiling, terrain.MiddleTiling, terrain.TopTiling, terrain.ExtrasTiling,
-            terrain.WorldScale, terrain.RMultiplier, terrain.GMultiplier, terrain.BMultiplier);
+            terrain.WorldScale, terrain.RMultiplier, terrain.GMultiplier, terrain.BMultiplier,
+            grassTint);
     }
 
     /// <summary>Detect shader 0xe25b830f and read its authored terrain layer paths, tiling, and RGB mask weights.</summary>
