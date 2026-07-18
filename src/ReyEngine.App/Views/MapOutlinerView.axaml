@@ -125,6 +125,14 @@
           </StackPanel>
         </DataTemplate>
 
+        <DataTemplate DataType="vm:AddedMapMeshViewModel">
+          <StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding Info}">
+            <TextBlock Text="➕" FontSize="9" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          </StackPanel>
+        </DataTemplate>
+
         <DataTemplate DataType="vm:BucketGridViewModel">
           <StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding Info}">
             <TextBlock Text="⌗" FontSize="9" Foreground="#9E73F2" VerticalAlignment="Center" />

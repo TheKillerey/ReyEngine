@@ -46,10 +46,12 @@
     <Menu Grid.Column="2" Background="Transparent">
       <MenuItem Header="_File">
         <MenuItem Header="Open Project Folder…" Command="{Binding OpenProjectFolderCommand}" />
+        <!-- M80 fix: BasedOn is REQUIRED — a bare ControlTheme replaces the default MenuItem theme
+             (no template at all), which rendered every recent-project entry as an invisible item. -->
         <MenuItem Header="Open Recent" ItemsSource="{Binding RecentProjectList}"
                   IsEnabled="{Binding HasRecentProjects}">
           <MenuItem.ItemContainerTheme>
-            <ControlTheme TargetType="MenuItem">
+            <ControlTheme TargetType="MenuItem" BasedOn="{StaticResource {x:Type MenuItem}}">
               <Setter Property="Header" Value="{Binding Name}" />
               <Setter Property="Command" Value="{Binding OpenCommand}" />
               <Setter Property="ToolTip.Tip" Value="{Binding Path}" />
@@ -403,6 +405,9 @@
               <Button Classes="tool" Content="⟳ Rebuild Grids" Command="{Binding RebuildBucketGridsCommand}"
                       IsVisible="{Binding HasBucketGrids}" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Regenerate every bucket grid from the map's CURRENT geometry (after moving/scaling meshes). Preview updates immediately; saving the map writes the new grids into the mapgeo." />
+              <Button Classes="tool" Content="➕ Add Mesh" Command="{Binding AddMeshToMapCommand}"
+                      IsVisible="{Binding HasMapGeo}" FontSize="11" Padding="8,3" Margin="0"
+                      ToolTip.Tip="Import a mesh (.obj / .scb / .sco) and append it to this map. Place it with the gizmo, pick its material in the inspector, then Save to Mod." />
               <Button Classes="tool" Content="⛶ Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Frame the camera on the loaded content" />
             </StackPanel>

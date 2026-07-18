@@ -520,11 +520,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private async System.Threading.Tasks.Task RefreshPropMeshesAsync()
     {
-        if (!ShowPropMeshes || CurrentModelProps is not { Count: > 0 } props) { CurrentPropMeshes = null; return; }
+        if (!ShowPropMeshes || CurrentModelProps is not { Count: > 0 } props)
+        {
+            _propInstances = System.Array.Empty<PropInstanceData>();   // M79
+            PublishAddedMeshPreview();   // keep any added meshes visible even with props off
+            return;
+        }
         var snapshot = props.ToList();
         var (set, resolved, failed) = await System.Threading.Tasks.Task.Run(() => BuildPropRenderSet(snapshot));
         if (!ShowPropMeshes) return;   // toggled off while decoding
-        CurrentPropMeshes = set;
+        _propInstances = set?.Instances ?? (IReadOnlyList<PropInstanceData>)System.Array.Empty<PropInstanceData>();   // M79
+        PublishAddedMeshPreview();      // props + added meshes combined
         _log.Info("Props", $"Rendering {resolved} prop mesh(es); {failed} couldn't be resolved (shown as markers).");
     }
 
@@ -875,12 +881,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // ---- M75: placement gizmo — the viewport gizmo drives particles (move/rotate/scale) and sounds (move).
     // Mirrors the mesh drag API; per-frame updates are silent, EndPlacementDrag logs + refreshes playback. ----
 
+    [ObservableProperty] private AddedMapMeshViewModel? _selectedAddedMesh;   // M79
+
     /// <summary>True when the gizmo should operate on a placement (no mesh selected, placement is).</summary>
-    public bool HasPlacementGizmoTarget => SelectedParticleNode is not null || SelectedSound is not null;
+    public bool HasPlacementGizmoTarget => SelectedParticleNode is not null || SelectedSound is not null || SelectedAddedMesh is not null;
 
     /// <summary>Drag-start state for the active placement (sounds report identity rotation/scale).</summary>
     public (System.Numerics.Vector3 Offset, System.Numerics.Vector3 Rotation, System.Numerics.Vector3 Scale) PlacementDragStart =>
         SelectedParticleNode is { } p ? (p.Offset, p.RotationDegrees, p.Scale)
+        : SelectedAddedMesh is { } a ? (a.Offset, a.RotationDegrees, a.Scale)
         : (SelectedSound?.Offset ?? System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One);
 
     // M76: undo support — the whole drag is ONE step, captured at press, pushed at release.
@@ -890,7 +899,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Called at gizmo-press on a placement: capture the before-state for the undo step.</summary>
     public void BeginPlacementDrag()
     {
-        _placementDragTarget = (object?)SelectedParticleNode ?? SelectedSound;
+        _placementDragTarget = (object?)SelectedParticleNode ?? (object?)SelectedSound ?? SelectedAddedMesh;
         if (_placementDragTarget is { } t) _placementDragBefore = PlacementTransformCommand.State.Capture(t);
     }
 
@@ -909,6 +918,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (ReferenceEquals(s, SelectedSound)) { SelectedParticleMarker = s.Position; GizmoPivot = s.Position; }
                 UpdatePlaceableMarkers();
                 break;
+            case AddedMapMeshViewModel a:   // M79
+                if (ReferenceEquals(a, SelectedAddedMesh)) GizmoPivot = a.PivotWorld;
+                PublishAddedMeshPreview();
+                break;
         }
         HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved) || MapContent.Sounds.Any(v => v.IsMoved);
     }
@@ -923,6 +936,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             RefreshParticleMoveFields(p);
             UpdateParticleMarkers();
         }
+        else if (SelectedAddedMesh is { } a)   // M79
+        {
+            a.Offset = absoluteOffset;
+            GizmoPivot = a.PivotWorld;
+            PublishAddedMeshPreview();
+        }
         else if (SelectedSound is { } s)
         {
             s.Offset = absoluteOffset;
@@ -932,16 +951,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Extra local rotation for the selected particle (sounds are point emitters — no-op).</summary>
+    /// <summary>Extra local rotation for the selected particle/added-mesh (sounds are point emitters — no-op).</summary>
     public void RotateSelectedPlacementTo(System.Numerics.Vector3 rotationDegrees)
     {
         if (SelectedParticleNode is { } p) p.RotationDegrees = rotationDegrees;
+        else if (SelectedAddedMesh is { } a) { a.RotationDegrees = rotationDegrees; GizmoPivot = a.PivotWorld; PublishAddedMeshPreview(); }
     }
 
-    /// <summary>Extra local scale for the selected particle (sounds are point emitters — no-op).</summary>
+    /// <summary>Extra local scale for the selected particle/added-mesh (sounds are point emitters — no-op).</summary>
     public void ScaleSelectedPlacementTo(System.Numerics.Vector3 scale)
     {
         if (SelectedParticleNode is { } p) p.Scale = scale;
+        else if (SelectedAddedMesh is { } a) { a.Scale = scale; GizmoPivot = a.PivotWorld; PublishAddedMeshPreview(); }
     }
 
     public void EndPlacementDrag()
@@ -964,7 +985,119 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         else if (SelectedSound is { } s)
             _log.Info("Sounds", $"'{s.Name}' → ({s.Position.X:0.#}, {s.Position.Y:0.#}, {s.Position.Z:0.#}). Save Placement Edits writes it to the mod.");
+        else if (SelectedAddedMesh is { } a)   // M79
+            _log.Info("AddMesh", $"'{a.Name}' → ({a.Offset.X:0.#}, {a.Offset.Y:0.#}, {a.Offset.Z:0.#}). Save Map Edits appends it to the mapgeo.");
     }
+
+    // ---- M79: add imported meshes to the map ----------------------------------------------------
+
+    public bool HasAddedMeshes => MapContent.AddedMeshes.Count > 0;
+
+    /// <summary>Import a mesh (.obj/.scb/.sco) and queue it to be appended to the loaded map. Placed at the
+    /// current gizmo/camera focus, previewed as an overlay, and movable with the transform gizmo.</summary>
+    [RelayCommand]
+    private async Task AddMeshToMap()
+    {
+        if (_currentMap is not { } map) { _log.Warn("AddMesh", "Open a map (.mapgeo) first."); return; }
+        var file = await Dialogs.OpenFileAsync("Add mesh to map (.obj / .scb / .sco)",
+            new Avalonia.Platform.Storage.FilePickerFileType("Mesh") { Patterns = new[] { "*.obj", "*.scb", "*.sco" } },
+            DialogService.All);
+        if (file is null) return;
+        try
+        {
+            var (pos, nrm, uvs, idx) = ImportMeshFile(file);
+            if (pos is null || idx is null || pos.Length < 9 || idx.Length < 3)
+            { _log.Error("AddMesh", "Could not import the mesh (empty or unsupported format)."); return; }
+            if (pos.Length / 3 > 65535)
+            { _log.Error("AddMesh", $"Mesh has {pos.Length / 3:n0} vertices — mapgeo caps a mesh at 65,535 (u16 indices). Split it."); return; }
+
+            // local bbox center (gizmo pivot anchor) + placement at the camera/gizmo focus
+            var (cmin, cmax) = BoundsOf(pos);
+            var center = (cmin + cmax) * 0.5f;
+            var place = GizmoPivot ?? map.Center;
+
+            var vm = new AddedMapMeshViewModel
+            {
+                Name = Path.GetFileNameWithoutExtension(file),
+                Positions = pos, Normals = nrm ?? new float[pos.Length], Uvs = uvs ?? new float[pos.Length / 3 * 2],
+                Indices = idx, LocalCenter = center,
+                Material = DefaultMapMaterial(),
+                Offset = place - center,   // so the mesh's CENTER lands at the focus point
+            };
+            MapContent.AddedMeshes.Add(vm);
+            OnPropertyChanged(nameof(HasAddedMeshes));
+            SelectedOutlinerItem = vm;   // routes to selection → gizmo
+            PublishAddedMeshPreview();
+            _log.Success("AddMesh", $"Imported '{vm.Name}' ({pos.Length / 3:n0} verts) → material '{vm.Material}'. " +
+                "Move it with the gizmo, change its material in the inspector, then Save Map Edits.");
+        }
+        catch (Exception ex) { _log.Error("AddMesh", ex.Message); }
+    }
+
+    [RelayCommand]
+    private void RemoveAddedMesh(AddedMapMeshViewModel? vm)
+    {
+        if (vm is null) return;
+        MapContent.AddedMeshes.Remove(vm);
+        if (ReferenceEquals(SelectedAddedMesh, vm)) { SelectedAddedMesh = null; GizmoPivot = null; }
+        OnPropertyChanged(nameof(HasAddedMeshes));
+        PublishAddedMeshPreview();
+        _log.Info("AddMesh", $"Removed '{vm.Name}' from the add queue.");
+    }
+
+    private (float[]? Pos, float[]? Nrm, float[]? Uv, int[]? Idx) ImportMeshFile(string file)
+    {
+        if (file.EndsWith(".obj", StringComparison.OrdinalIgnoreCase))
+        {
+            var m = Formats.Meshes.ObjMeshImporter.Import(File.ReadAllText(file), Path.GetFileName(file));
+            return m is null ? default : (m.Positions, m.Normals, m.Uvs, m.Indices);
+        }
+        // .scb / .sco → triangle soup (no normals; the appender synthesises none, so pass null → flat up)
+        var sm = Formats.Meshes.StaticObjectDecoder.Decode(File.ReadAllBytes(file), file);
+        if (sm is null) return default;
+        return (sm.Positions, null, sm.Uvs, System.Array.ConvertAll(sm.Indices, i => (int)i));
+    }
+
+    private static (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max) BoundsOf(float[] pos)
+    {
+        var min = new System.Numerics.Vector3(float.MaxValue);
+        var max = new System.Numerics.Vector3(float.MinValue);
+        for (int i = 0; i + 2 < pos.Length; i += 3)
+        {
+            min = System.Numerics.Vector3.Min(min, new(pos[i], pos[i + 1], pos[i + 2]));
+            max = System.Numerics.Vector3.Max(max, new(pos[i], pos[i + 1], pos[i + 2]));
+        }
+        return (min, max);
+    }
+
+    /// <summary>Pick a sensible default material for a new mesh: the first opaque map material, else the first.</summary>
+    private string DefaultMapMaterial()
+    {
+        if (_currentMap is not { } map || map.Groups.Count == 0) return "";
+        var opaque = map.Groups.FirstOrDefault(g => g.Material.Length > 0
+            && _currentMapProfiles?.GetValueOrDefault(g.Material) is { RenderMode: MaterialRenderMode.Opaque });
+        return (opaque ?? map.Groups.First(g => g.Material.Length > 0)).Material;
+    }
+
+    /// <summary>All map material names — for the inspector's material picker on an added mesh.</summary>
+    public IReadOnlyList<string> MapMaterialNames =>
+        _currentMap?.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().OrderBy(m => m).ToList()
+        ?? (IReadOnlyList<string>)System.Array.Empty<string>();
+
+    /// <summary>Publish the added meshes as a preview overlay (combined with the prop overlay).</summary>
+    private void PublishAddedMeshPreview()
+    {
+        var instances = new List<PropInstanceData>(_propInstances);
+        foreach (var a in MapContent.AddedMeshes)
+        {
+            var mesh = new PropMesh(a.Name + "|" + a.Indices.Length,
+                a.Positions, a.Normals, a.Uvs, System.Array.ConvertAll(a.Indices, i => (uint)i),
+                new[] { new PropSubmesh(0, a.Indices.Length, null) });
+            instances.Add(new PropInstanceData(mesh, a.Transform));
+        }
+        CurrentPropMeshes = instances.Count > 0 ? new PropRenderSet(instances) : null;
+    }
+    private IReadOnlyList<PropInstanceData> _propInstances = System.Array.Empty<PropInstanceData>();
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
     [ObservableProperty] private TextureImage? _currentGrassTint;                    // M78: map grass-tint texture
     [ObservableProperty] private System.Numerics.Vector4 _currentGrassTintRect;      // M78: minX, minZ, 1/spanX, 1/spanZ
@@ -1325,6 +1458,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         CurrentSkeleton = null; ShowBones = false;
         _currentMap = s.Map; _currentMapBytes = s.MapBytes; _currentMapEntry = s.Entry;
+        HasMapGeo = true;   // M79
         _mapControllers = s.Controllers;
         _visibilityResolver = new MapVisibilityResolver(s.Controllers);
         CurrentMesh = s.Mesh;
@@ -1886,6 +2020,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasBucketGrids = false;   // M77
         CurrentPropMeshes = null;
         ShowPropMeshes = false;
+        MapContent.AddedMeshes.Clear();                                    // M79
+        SelectedAddedMesh = null;
+        HasMapGeo = false;
+        _propInstances = System.Array.Empty<PropInstanceData>();
+        OnPropertyChanged(nameof(HasAddedMeshes));
         PropMarkers = null;
         ProbeMarkers = null;
         SelectedPropTreeItem = null;
@@ -2070,6 +2209,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _meshScaleZ = "1";
     [ObservableProperty] private int _meshVerticesRevision;
     [ObservableProperty] private bool _hasMapMoves;
+    [ObservableProperty] private bool _hasMapGeo;   // M79: a .mapgeo is loaded (enables Add Mesh to Map)
 
     // ---- Multi-selection + batch transform (M30) -----------------------
     private readonly SelectionSet<MapGeoMesh> _selection = new();
@@ -2125,6 +2265,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 SelectedSound = snd;                      // M56: enables the SOUND card (Play button)
                 SelectedPlaceableInfo = "";
                 GizmoPivot = snd.Position;                // M75: sounds are gizmo-movable
+                break;
+            case AddedMapMeshViewModel am:   // M79: imported mesh queued for append — gizmo-movable
+                _selection.Clear();
+                if (SelectedParticleNode is not null) SelectedParticleNode = null;
+                if (SelectedSound is not null) SelectedSound = null;
+                SelectedAddedMesh = am;
+                GizmoPivot = am.PivotWorld;
+                SelectedPlaceableInfo = $"{am.Name}\n{am.Info}";
+                OnPropertyChanged(nameof(MapMaterialNames));
                 break;
             case BucketGridViewModel bg:  // M55/M77b: info only — the toolbar toggle controls visibility
                 SelectedPlaceableInfo = $"{bg.Name}\n{bg.Info}";
@@ -2277,6 +2426,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
         if (SelectedProbe is not null) SelectedProbe = null;
         if (SelectedSound is not null) SelectedSound = null;
+        if (SelectedAddedMesh is not null) SelectedAddedMesh = null;   // M79
         SelectedParticleMarker = null;
         SelectedPlaceableInfo = "";
         if (_selection.IsEmpty) GizmoPivot = null;
@@ -2319,6 +2469,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M76: also clear the DIRECTLY-set particle node (viewport icon picks bypass the tree item, so
         // clearing only SelectedParticleTreeItem left the particle selected under a new mesh selection).
         if (SelectedParticleNode is not null) SelectedParticleNode = null;
+        if (SelectedAddedMesh is not null) SelectedAddedMesh = null;   // M79
         SelectedParticleMarker = null;
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
         if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
@@ -2689,15 +2840,45 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task SaveMeshMoves()
     {
-        if (_currentMap is not { } map || _currentMapBytes is null || _currentMapEntry is not { } entry) return;
-        if (!MapGeoWriter.HasMoves(map.Meshes)) { _log.Info("MapGeo", "No mesh moves to save."); return; }
+        // M80: never fail silently — say exactly which precondition is missing.
+        if (_currentMap is not { } map || _currentMapBytes is null || _currentMapEntry is not { } entry)
+        {
+            _log.Warn("MapGeo", $"Cannot save: map={( _currentMap is null ? "none" : "ok")}, " +
+                $"bytes={(_currentMapBytes is null ? "none" : "ok")}, entry={(_currentMapEntry is null ? "none" : "ok")}. Reload the map and try again.");
+            return;
+        }
+        bool hasMoves = MapGeoWriter.HasMoves(map.Meshes);
+        var added = MapContent.AddedMeshes.ToList();
+        if (!hasMoves && added.Count == 0) { _log.Info("MapGeo", "No map edits to save."); return; }
         if (!GuardEditable(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
-        var bytes = MapGeoWriter.TryWriteWithMoves(_currentMapBytes, map.Meshes, out var err);
-        if (bytes is null) { _log.Error("MapGeo", $"Could not save mesh moves: {err}"); return; }
         try
         {
+            byte[] bytes = _currentMapBytes;
+
+            // 1) mesh moves (rebuilds bucket grids for the moved geometry)
+            if (hasMoves)
+            {
+                var moved = MapGeoWriter.TryWriteWithMoves(bytes, map.Meshes, out var mErr);
+                if (moved is null) { _log.Error("MapGeo", $"Could not save mesh moves: {mErr}"); return; }
+                bytes = moved;
+            }
+
+            // 2) append the imported meshes (surgical splice), then regenerate bucket grids over ALL
+            //    triangles (new geometry included) so the game culls the added meshes correctly.
+            if (added.Count > 0)
+            {
+                var newMeshes = added.Select(a => new NewMapMesh(
+                    a.Material, a.Positions, a.Normals, a.Uvs,
+                    System.Array.ConvertAll(a.Indices, i => (ushort)i), a.Transform)).ToList();
+                var appended = MapGeoMeshAppender.Append(bytes, newMeshes, out var aErr);
+                if (appended is null) { _log.Error("MapGeo", $"Could not append meshes: {aErr}"); return; }
+
+                var reMap = await Task.Run(() => MapGeoDecoder.Decode(appended));
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(appended, reMap);
+            }
+
             var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
             _overrides.Set(new ProjectAssetOverride
             {
@@ -2709,9 +2890,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             SetNodeStatus(entry.PathHash, AssetStatus.Modified);
             Project.IsDirty = true;
             UpdateTitle();
-            int moved = map.Meshes.Count(x => x.IsMoved);
             UndoService.MarkSaved();
-            _log.Success("MapGeo", $"Saved {moved} mesh move(s) to override ({bytes.Length:n0} bytes). Build Package will include it.");
+            int moves = map.Meshes.Count(x => x.IsMoved);
+            _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {added.Count} added mesh(es) to override ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the added meshes as native geometry.");
         }
         catch (Exception ex) { _log.Error("MapGeo", ex.Message); }
     }
@@ -2981,6 +3162,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _currentMap = map;
                 _currentMapBytes = rawMapBytes;
                 _currentMapEntry = entry;
+                HasMapGeo = true;   // M79
                 _selection.Clear();
                 CurrentModelTextures = textures;
                 ApplySunProperties(sunProperties);
@@ -3571,6 +3753,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private async Task<bool> EnsureProjectSavedAsync()
     {
+        // A folder project (opened via Open Project Folder / the M73 wizard) is ALREADY a real saved project
+        // with a workspace on disk — overrides land under its .reyengine folder. No WAD/quick-project needed.
+        if (Project.IsFolderProject && Project.ProjectFilePath is not null) return true;
+
         if (Project.SourceWadPath is null)
         {
             if (_archive is null) { _log.Warn("Project", "Open a WAD and create a project first."); return false; }
@@ -3710,13 +3896,39 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Project", ex.Message); }
     }
 
+    /// <summary>The canonical projects folder (Documents\ReyEngine Projects — follows OneDrive redirection,
+    /// same default the New Project wizard uses). Created on demand.</summary>
+    public static string ProjectsFolder =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ReyEngine Projects");
+
     private void LoadRecentProjects(IEnumerable<string> folders)
     {
         RecentProjectList.Clear();
+        // M80: only list REAL project folders (a .reyengine/project.json inside) — the store accumulated
+        // junk over time (unpacked-wad subfolders, the .reyengine dir itself, deleted paths).
         foreach (var f in folders)
-            RecentProjectList.Add(new RecentProjectViewModel(f, OpenRecentProject));
+            if (IsProjectFolder(f))
+                RecentProjectList.Add(new RecentProjectViewModel(f, OpenRecentProject));
+
+        // M80: also list everything in the canonical projects folder (wizard-created projects show up
+        // even if they were never opened on this machine / the recents store was cleared).
+        try
+        {
+            Directory.CreateDirectory(ProjectsFolder);
+            foreach (var dir in Directory.EnumerateDirectories(ProjectsFolder).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+                if (IsProjectFolder(dir)
+                    && !RecentProjectList.Any(r => string.Equals(r.Path, dir, StringComparison.OrdinalIgnoreCase)))
+                    RecentProjectList.Add(new RecentProjectViewModel(dir, OpenRecentProject));
+        }
+        catch { /* projects folder unreadable — recents alone */ }
+
         OnPropertyChanged(nameof(HasRecentProjects));
     }
+
+    private static bool IsProjectFolder(string dir) =>
+        Directory.Exists(dir)
+        && File.Exists(Path.Combine(dir, ReyProjectService.FolderMetaDir, ReyProjectService.FolderMetaFile))
+        && !dir.TrimEnd('/', '\\').EndsWith(ReyProjectService.FolderMetaDir, StringComparison.OrdinalIgnoreCase);
 
     private void BuildMounts()
     {

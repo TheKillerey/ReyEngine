@@ -211,6 +211,31 @@
       </StackPanel>
     </Border>
 
+    <!-- M79: ADDED MESH (imported, queued for append) — material picker + gizmo hint + save/remove -->
+    <Border Classes="card" IsVisible="{Binding SelectedAddedMesh, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <StackPanel Spacing="4">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Classes="cardTitle" Grid.Column="0" Text="ADDED MESH" VerticalAlignment="Center" />
+          <Button Classes="tool" Grid.Column="1" Content="🎯 Focus" Command="{Binding FocusSelectedPlaceableCommand}"
+                  FontSize="10" Padding="6,1" ToolTip.Tip="Frame the camera on this mesh" />
+        </Grid>
+        <TextBlock Text="{Binding SelectedAddedMesh.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
+        <TextBlock Text="{Binding SelectedAddedMesh.Info}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+        <TextBlock Text="Material" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+        <ComboBox ItemsSource="{Binding MapMaterialNames}" SelectedItem="{Binding SelectedAddedMesh.Material}"
+                  HorizontalAlignment="Stretch" FontSize="10"
+                  ToolTip.Tip="Which of the map's existing materials this mesh uses. It must exist in the materials.bin." />
+        <TextBlock Text="Move / rotate / scale it with the viewport gizmo (Move·Rotate·Scale tools)." FontSize="9"
+                   Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+          <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
+                  ToolTip.Tip="Append every queued mesh to the mapgeo, regenerate bucket grids, and write the project override" />
+          <Button Classes="tool" Content="🗑 Remove" Command="{Binding RemoveAddedMeshCommand}" CommandParameter="{Binding SelectedAddedMesh}"
+                  FontSize="11" Padding="8,2" />
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
     <!-- PLACEABLE INFO (props / probes) -->
     <Border Classes="card"
             IsVisible="{Binding SelectedPlaceableInfo, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">

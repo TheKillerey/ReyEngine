@@ -18,6 +18,7 @@ public sealed class PlacementTransformCommand : IEditorCommand
         {
             ParticlePlacementViewModel p => new State(p.Offset, p.RotationDegrees, p.Scale),
             MapSoundViewModel s => new State(s.Offset, Vector3.Zero, Vector3.One),
+            AddedMapMeshViewModel a => new State(a.Offset, a.RotationDegrees, a.Scale),   // M79
             _ => default,
         };
 
@@ -30,6 +31,9 @@ public sealed class PlacementTransformCommand : IEditorCommand
                     break;
                 case MapSoundViewModel s:
                     s.Offset = Offset;
+                    break;
+                case AddedMapMeshViewModel a:   // M79
+                    a.Offset = Offset; a.RotationDegrees = Rotation; a.Scale = Scale;
                     break;
             }
         }
@@ -54,6 +58,7 @@ public sealed class PlacementTransformCommand : IEditorCommand
         {
             ParticlePlacementViewModel p => $"Transform Particle '{p.Name}'",
             MapSoundViewModel s => $"Move Sound '{s.Name}'",
+            AddedMapMeshViewModel a => $"Transform Added Mesh '{a.Name}'",   // M79
             _ => "Transform Placement",
         };
     }

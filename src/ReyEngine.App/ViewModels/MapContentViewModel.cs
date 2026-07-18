@@ -126,6 +126,39 @@ public sealed partial class RecentProjectViewModel : ObservableObject
 /// observable collections, so the folders never need rebuilding.</summary>
 public sealed record OutlinerFolderViewModel(string Icon, string Name, System.Collections.IEnumerable Items);
 
+/// <summary>M79: a mesh queued to be added to the map — imported geometry + chosen material + a live
+/// placement transform (gizmo-movable). Saved by appending to the mapgeo; also drawn as a preview overlay.</summary>
+public sealed partial class AddedMapMeshViewModel : ObservableObject
+{
+    public required string Name { get; init; }
+    public required float[] Positions { get; init; }   // local xyz triplets
+    public required float[] Normals { get; init; }
+    public required float[] Uvs { get; init; }
+    public required int[] Indices { get; init; }
+    public required Vector3 LocalCenter { get; init; }  // local bbox center — the gizmo pivot anchor
+    [ObservableProperty] private string _material = "";
+    [ObservableProperty] private bool _isSelected;
+
+    public Vector3 Offset;                              // world translation of the mesh's local origin
+    public Vector3 RotationDegrees;
+    public Vector3 Scale = Vector3.One;
+
+    public Matrix4x4 Transform
+    {
+        get
+        {
+            const float d2r = MathF.PI / 180f;
+            return Matrix4x4.CreateScale(Scale)
+                 * Matrix4x4.CreateFromYawPitchRoll(RotationDegrees.Y * d2r, RotationDegrees.X * d2r, RotationDegrees.Z * d2r)
+                 * Matrix4x4.CreateTranslation(Offset);
+        }
+    }
+
+    /// <summary>World-space gizmo pivot = the mesh's local center under the current transform.</summary>
+    public Vector3 PivotWorld => Vector3.Transform(LocalCenter, Transform);
+    public string Info => $"{Positions.Length / 3:n0} verts · {Indices.Length / 3:n0} tris\nmaterial: {Material}";
+}
+
 /// <summary>M55: one placed ambient sound (MapAudio) — name + Wwise event + world position.
 /// M75: carries a live move <see cref="Offset"/> so sounds reposition like particles do.</summary>
 public sealed class MapSoundViewModel
@@ -162,8 +195,12 @@ public sealed partial class MapContentViewModel : ViewModelBase
         OutlinerRoots.Add(new("🎭", "Mobs / Props", PropGroups));
         OutlinerRoots.Add(new("🪞", "Reflection Probes", Probes));
         OutlinerRoots.Add(new("🔊", "Sounds", Sounds));           // M55: MapAudio placements
+        OutlinerRoots.Add(new("➕", "Added Meshes", AddedMeshes)); // M79: meshes queued for append
         OutlinerRoots.Add(new("⌗", "Bucket Grid", BucketGrids)); // M55: scene culling grid(s)
     }
+
+    /// <summary>M79: meshes the user imported and queued to append to the map on save.</summary>
+    public ObservableCollection<AddedMapMeshViewModel> AddedMeshes { get; } = new();
 
     // ---- M55: sound placements (MapAudio) + bucket grids ----
     public ObservableCollection<MapSoundViewModel> Sounds { get; } = new();
