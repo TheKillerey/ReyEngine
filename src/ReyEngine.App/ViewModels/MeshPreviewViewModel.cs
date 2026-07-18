@@ -60,10 +60,19 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveColorTextures;   // M68
     public Func<VfxSystemDefinition, IReadOnlyList<StaticMeshData?>?>? ResolveMeshes;
 
+    private double _lastAnimTime;
+
     public MeshPreviewViewModel()
     {
-        Animation.ClipChanged = clip => { CurrentAnimation = clip; ApplyAutoVisibility(); ApplyClipParticles(); };   // M85/M86
-        Animation.TimeChanged = t => AnimationTime = t;
+        Animation.ClipChanged = clip => { CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility(); ApplyClipParticles(); };   // M85/M86
+        Animation.TimeChanged = t =>
+        {
+            // M86: clip event VFX are one-shot — respawn them each time the looping clip wraps around
+            // (manual VFX picks are left alone). Backward jump in time = the loop restarted.
+            if (t + 0.05 < _lastAnimTime && SelectedVfx is null) ApplyClipParticles();
+            _lastAnimTime = t;
+            AnimationTime = t;
+        };
     }
 
     public void Show(string title, MeshAsset mesh, SkeletonAsset? skeleton, IReadOnlyList<TextureImage?>? textures)
