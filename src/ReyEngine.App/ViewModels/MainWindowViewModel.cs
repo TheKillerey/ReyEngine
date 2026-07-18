@@ -1562,6 +1562,46 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Anim", $"{entry.DisplayName}: {ex.Message}"); return null; }
     }
 
+    /// <summary>M85: gather the champion's submesh-visibility rules — initialSubmeshToHide from every
+    /// skins/*.bin and per-clip show/hide lists from every animations/*.bin under the champ folder
+    /// (keyed by .anm file name to match the preview's animation entries).</summary>
+    private (IReadOnlyList<string> InitialHide, IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? Clips)
+        LoadSubmeshRules(WadAssetEntry skn)
+    {
+        try
+        {
+            if (!skn.IsResolved) return (Array.Empty<string>(), null);
+            var parts = skn.Path.Split('/');
+            int ci = Array.FindIndex(parts, p => p.Equals("characters", StringComparison.OrdinalIgnoreCase));
+            if (ci < 0 || ci + 1 >= parts.Length) return (Array.Empty<string>(), null);
+            string champ = parts[ci + 1];
+            const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+            string animDir = $"characters/{champ}/animations/";
+            string skinDir = $"characters/{champ}/skins/";
+
+            var hide = new List<string>();
+            var clips = new Dictionary<string, Formats.Skeletons.AnimClipInfo>(StringComparer.OrdinalIgnoreCase);
+            foreach (var e in AssetEntries)
+            {
+                if (!e.IsResolved || !e.Path.EndsWith(".bin", OIC)) continue;
+                if (e.Path.Contains(animDir, OIC))
+                {
+                    foreach (var c in Formats.Skeletons.ChampionAnimationData.ParseClips(GetAssetBytes(e), ResolveBinName))
+                    {
+                        var file = Path.GetFileName(c.AnmPath.Replace('\\', '/'));
+                        if (file.Length > 0 && !clips.ContainsKey(file)) clips[file] = c;
+                    }
+                }
+                else if (e.Path.Contains(skinDir, OIC) && hide.Count == 0)
+                    hide.AddRange(Formats.Skeletons.ChampionAnimationData.ParseInitialHide(GetAssetBytes(e)));
+            }
+            if (clips.Count > 0)
+                _log.Info("Preview", $"{champ}: {clips.Count} named clip(s) with visibility data, initial-hide: {(hide.Count > 0 ? string.Join(' ', hide) : "(none)")}.");
+            return (hide, clips.Count > 0 ? clips : null);
+        }
+        catch { return (Array.Empty<string>(), null); }
+    }
+
     private IEnumerable<AnimationEntryViewModel> FindAnimations(WadAssetEntry skn)
     {
         if (!ContentLoaded || !skn.IsResolved) return Enumerable.Empty<AnimationEntryViewModel>();
@@ -3050,9 +3090,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var v = TryLoadChampionVfx(entry);   // M55: skin VFX library, local to the window
                 return (m, s, t, v);
             });
+            // M85: game-accurate submesh visibility — skin bin initial-hide + animation-graph clip lists.
+            var (initialHide, clipsByAnm) = LoadSubmeshRules(entry);
+
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 MeshPreview.Show(entry.DisplayName, mesh, skeleton, textures);
+                MeshPreview.SetSubmeshRules(initialHide, clipsByAnm);
                 MeshPreview.SetAnimations(mesh.CanSkin && skeleton is not null
                     ? FindAnimations(entry)
                     : Enumerable.Empty<AnimationEntryViewModel>());

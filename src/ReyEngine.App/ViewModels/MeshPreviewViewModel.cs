@@ -60,7 +60,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     public MeshPreviewViewModel()
     {
-        Animation.ClipChanged = clip => CurrentAnimation = clip;
+        Animation.ClipChanged = clip => { CurrentAnimation = clip; ApplyAutoVisibility(); };   // M85
         Animation.TimeChanged = t => AnimationTime = t;
     }
 
@@ -101,6 +101,40 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     [RelayCommand] private void ShowAllSubmeshes() { foreach (var s in Submeshes) s.IsVisible = true; }
     [RelayCommand] private void HideAllSubmeshes() { foreach (var s in Submeshes) s.IsVisible = false; }
+
+    // ---- M85: game-accurate submesh visibility — skin bin initial-hide + per-clip show/hide events.
+    // AUTO (default): selecting an animation applies the game's lists; MANUAL: checkboxes are yours. ----
+    [ObservableProperty] private bool _autoSubmeshVisibility = true;
+    private IReadOnlyList<string> _initialHide = Array.Empty<string>();
+    private IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? _clipsByAnm;
+
+    /// <summary>Provide the skin's initial-hide list + animation-graph clips (keyed by .anm file name).</summary>
+    public void SetSubmeshRules(IReadOnlyList<string> initialHide,
+        IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? clipsByAnm)
+    {
+        _initialHide = initialHide;
+        _clipsByAnm = clipsByAnm;
+        ApplyAutoVisibility();
+    }
+
+    partial void OnAutoSubmeshVisibilityChanged(bool value) { if (value) ApplyAutoVisibility(); }
+
+    private void ApplyAutoVisibility()
+    {
+        if (!AutoSubmeshVisibility || Submeshes.Count == 0) return;
+        var clip = Animation.SelectedAnimation?.Name is { } anm && _clipsByAnm is not null
+            ? _clipsByAnm.GetValueOrDefault(anm) : null;
+        foreach (var s in Submeshes)
+        {
+            bool visible = !_initialHide.Any(h => string.Equals(h, s.Name, StringComparison.OrdinalIgnoreCase));
+            if (clip is not null)
+            {
+                if (Formats.Skeletons.ChampionAnimationData.Matches(s.Name, clip.HideNames, clip.HideHashes)) visible = false;
+                if (Formats.Skeletons.ChampionAnimationData.Matches(s.Name, clip.ShowNames, clip.ShowHashes)) visible = true;
+            }
+            s.IsVisible = visible;
+        }
+    }
 
     /// <summary>Populate the animation list (same entries the main window's FindAnimations produces).</summary>
     public void SetAnimations(IEnumerable<AnimationEntryViewModel> animations) => Animation.SetAnimations(animations);

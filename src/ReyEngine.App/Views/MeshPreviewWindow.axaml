@@ -65,10 +65,13 @@
           <!-- M84: per-submesh visibility (user request) — toggle any of the model's submeshes -->
           <Border Classes="card" IsVisible="{Binding HasSubmeshes}">
             <StackPanel Spacing="4">
-              <Grid ColumnDefinitions="*,Auto,Auto">
+              <Grid ColumnDefinitions="*,Auto,Auto,Auto">
                 <TextBlock Classes="cardTitle" Grid.Column="0" Text="SUBMESHES" VerticalAlignment="Center" />
-                <Button Classes="icon" Grid.Column="1" Content="All" FontSize="10" Command="{Binding ShowAllSubmeshesCommand}" />
-                <Button Classes="icon" Grid.Column="2" Content="None" FontSize="10" Command="{Binding HideAllSubmeshesCommand}" />
+                <ToggleButton Classes="vp" Grid.Column="1" Content="Auto" FontSize="10" Padding="6,1" Margin="0,0,4,0"
+                              IsChecked="{Binding AutoSubmeshVisibility}"
+                              ToolTip.Tip="AUTO: apply the game's visibility (skin bin initial-hide + the playing clip's show/hide lists). Off = manual control." />
+                <Button Classes="icon" Grid.Column="2" Content="All" FontSize="10" Command="{Binding ShowAllSubmeshesCommand}" />
+                <Button Classes="icon" Grid.Column="3" Content="None" FontSize="10" Command="{Binding HideAllSubmeshesCommand}" />
               </Grid>
               <ItemsControl ItemsSource="{Binding Submeshes}">
                 <ItemsControl.ItemTemplate>
