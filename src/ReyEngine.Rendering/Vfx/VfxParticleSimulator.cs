@@ -98,6 +98,22 @@ public sealed class VfxParticleSimulator
     private static Vector3 SafeNormal(Vector3 value, Vector3 fallback)
         => value.LengthSquared() > 1e-8f ? Vector3.Normalize(value) : fallback;
 
+    /// <summary>M86: move the whole system WITHOUT resetting live particles — used to follow an animated
+    /// bone per frame (spawn origins and placement axes update; existing particles keep flying).</summary>
+    public void SetWorldTransform(Matrix4x4 worldTransform)
+    {
+        _worldTransform = worldTransform;
+        if (!Matrix4x4.Invert(worldTransform, out _inverseWorldTransform))
+            _inverseWorldTransform = Matrix4x4.Identity;
+        foreach (var s in _emitters)
+        {
+            s.BasePos = Vector3.Transform(s.Def.EmitterPosition, worldTransform);
+            s.PlacementRight = SafeNormal(Vector3.TransformNormal(Vector3.UnitX, worldTransform), Vector3.UnitX);
+            s.PlacementUp = SafeNormal(Vector3.TransformNormal(Vector3.UnitY, worldTransform), Vector3.UnitY);
+            s.PlacementForward = SafeNormal(Vector3.TransformNormal(Vector3.UnitZ, worldTransform), Vector3.UnitZ);
+        }
+    }
+
     public void Reset()
     {
         foreach (var s in _emitters) { s.Particles.Clear(); s.SpawnAccum = 0; s.Age = 0; s.BurstDone = false; s.InstanceCount = 0; }

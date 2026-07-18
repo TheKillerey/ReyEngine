@@ -31,6 +31,10 @@ public sealed record VfxPlaybackItem(
             emitterDistortionTextures, emitterColorTextures) { }
 
     public Vector3 WorldPos => Transform.Translation;
+
+    /// <summary>M86: when set, the viewport re-anchors this system to the named skeleton bone every
+    /// skinned frame — clip particle events ride their bone like in-game.</summary>
+    public string? AttachBone { get; init; }
 }
 
 /// <summary>

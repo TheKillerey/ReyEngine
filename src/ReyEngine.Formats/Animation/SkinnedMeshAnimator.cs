@@ -10,6 +10,8 @@ public sealed class SkinnedFrame
     public required float[] Positions { get; init; }
     public required float[] Normals { get; init; }
     public required float[] BoneSegments { get; init; } // animated bone overlay (line pairs)
+    /// <summary>M86: animated GLOBAL transform per joint name — lets VFX attach to (and follow) bones.</summary>
+    public Dictionary<string, Matrix4x4>? BoneGlobals { get; init; }
 }
 
 /// <summary>
@@ -93,7 +95,11 @@ public static class SkinnedMeshAnimator
             seg.Add(b.X); seg.Add(b.Y); seg.Add(b.Z);
         }
 
-        return new SkinnedFrame { Positions = pos, Normals = nrm, BoneSegments = seg.ToArray() };
+        // M86: expose the animated global per joint NAME so clip particle events can ride their bone.
+        var boneGlobals = new Dictionary<string, Matrix4x4>(joints.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var j in joints) boneGlobals[j.Name] = Global(j.Id);
+
+        return new SkinnedFrame { Positions = pos, Normals = nrm, BoneSegments = seg.ToArray(), BoneGlobals = boneGlobals };
     }
 
     private static Matrix4x4 Compose(Vector3 t, Quaternion r, Vector3 s) =>

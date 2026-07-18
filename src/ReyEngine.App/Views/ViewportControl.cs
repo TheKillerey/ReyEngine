@@ -983,6 +983,13 @@ public sealed class ViewportControl : OpenGlControlBase
                 var frame = SkinnedMeshAnimator.Skin(m, skeleton, clip, (float)AnimationTime);
                 _meshRenderer.UpdateVertices(frame.Positions, frame.Normals);
                 if (ShowBones) _meshRenderer.SetBoneSegments(frame.BoneSegments);
+
+                // M86: clip particle events ride their bone — re-anchor attached VFX systems to the
+                // animated bone transform every skinned frame (live particles keep flying).
+                if (frame.BoneGlobals is { } bones)
+                    foreach (var (item, sim) in _particleSimCache)
+                        if (item.AttachBone is { Length: > 0 } bone && bones.TryGetValue(bone, out var bm))
+                            sim.SetWorldTransform(bm);
                 _wasAnimating = true;
             }
             catch { /* keep last frame */ }

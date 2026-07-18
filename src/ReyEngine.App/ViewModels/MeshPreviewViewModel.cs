@@ -60,7 +60,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     public MeshPreviewViewModel()
     {
-        Animation.ClipChanged = clip => { CurrentAnimation = clip; ApplyAutoVisibility(); };   // M85
+        Animation.ClipChanged = clip => { CurrentAnimation = clip; ApplyAutoVisibility(); ApplyClipParticles(); };   // M85/M86
         Animation.TimeChanged = t => AnimationTime = t;
     }
 
@@ -118,6 +118,45 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     }
 
     partial void OnAutoSubmeshVisibilityChanged(bool value) { if (value) ApplyAutoVisibility(); }
+
+    /// <summary>M86: the playing clip's ParticleEventData → play those VFX bone-attached, like in-game.
+    /// (StartFrame timing is not simulated yet — every event effect plays for the whole clip.)</summary>
+    private void ApplyClipParticles()
+    {
+        if (_clipsByAnm is null || Animation.SelectedAnimation?.Name is not { } anm) return;
+        if (_clipsByAnm.GetValueOrDefault(anm) is not { ParticleEvents.Count: > 0 } clip)
+        { if (SelectedVfx is null) Playback = null; return; }   // no events: stop auto VFX, keep manual picks
+
+        var items = new List<VfxPlaybackItem>();
+        foreach (var ev in clip.ParticleEvents!)
+        {
+            var def = _vfxDefs.Values.FirstOrDefault(d =>
+                (ev.EffectName.Length > 0 && string.Equals(d.Name, ev.EffectName, StringComparison.OrdinalIgnoreCase))
+                || (ev.EffectHash != 0 && (d.PathHash == ev.EffectHash
+                    || ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(d.Name) == ev.EffectHash)));
+            if (def is null || !def.Emitters.Any(e => e.IsVisual)) continue;
+            var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
+            items.Add(new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs,
+                ResolveMeshes?.Invoke(def),
+                emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
+                emitterColorTextures: ResolveColorTextures?.Invoke(def))
+            { AttachBone = ResolveBoneName(ev) });
+        }
+        if (items.Count > 0) Playback = new VfxPlayback(items);
+    }
+
+    /// <summary>Bins store the bone as an unresolvable hash — match it against the skeleton's joints
+    /// (FNV1a of the lowercased name, or the joint's Elf AnimHash) to get a real bone name.</summary>
+    private string? ResolveBoneName(Formats.Skeletons.AnimParticleEvent ev)
+    {
+        if (ev.BoneName.Length > 0) return ev.BoneName;
+        if (ev.BoneHash == 0 || Skeleton is null) return null;
+        foreach (var j in Skeleton.Joints)
+            if (j.AnimHash == ev.BoneHash
+                || ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(j.Name) == ev.BoneHash)
+                return j.Name;
+        return null;
+    }
 
     private void ApplyAutoVisibility()
     {

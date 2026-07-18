@@ -9,7 +9,13 @@ namespace ReyEngine.Formats.Skeletons;
 /// submeshes it shows/hides while playing (SubmeshVisibilityEventData — hashes or literal names).</summary>
 public sealed record AnimClipInfo(string Name, string AnmPath,
     IReadOnlyList<string> ShowNames, IReadOnlyList<string> HideNames,
-    IReadOnlyList<uint> ShowHashes, IReadOnlyList<uint> HideHashes);
+    IReadOnlyList<uint> ShowHashes, IReadOnlyList<uint> HideHashes,
+    IReadOnlyList<AnimParticleEvent>? ParticleEvents = null);
+
+/// <summary>M86: one ParticleEventData in a clip — the VFX it spawns and the bone it rides.
+/// BoneName is empty when the bin only stores a hash the hashtable can't resolve; BoneHash then
+/// carries it, matched against skeleton joints by FNV1a or Elf of the joint name.</summary>
+public sealed record AnimParticleEvent(string EffectName, uint EffectHash, string BoneName, float StartFrame, uint BoneHash = 0);
 
 /// <summary>
 /// M85: parses champion animation bins (data/characters/X/animations/skinN.bin) for named clips +
@@ -25,6 +31,12 @@ public static class ChampionAnimationData
     private static readonly uint ClassSubmeshVis = HashAlgorithms.Fnv1a("SubmeshVisibilityEventData");
     private static readonly uint FShow = HashAlgorithms.Fnv1a("mShowSubmeshList");
     private static readonly uint FHide = HashAlgorithms.Fnv1a("mHideSubmeshList");
+    private static readonly uint ClassParticleEvent = HashAlgorithms.Fnv1a("ParticleEventData");
+    private static readonly uint FEffectKey = HashAlgorithms.Fnv1a("mEffectKey");
+    private static readonly uint FParticleName = HashAlgorithms.Fnv1a("mParticleName");
+    private static readonly uint FBoneName = HashAlgorithms.Fnv1a("mBoneName");
+    private static readonly uint FPairList = HashAlgorithms.Fnv1a("mParticleEventDataPairList");
+    private static readonly uint FStartFrame = HashAlgorithms.Fnv1a("mStartFrame");
     private static readonly uint FInitialHide = HashAlgorithms.Fnv1a("initialSubmeshToHide");
 
     /// <summary>All named clips in an animation bin. Clip names resolve via the bin-name resolver
@@ -57,20 +69,58 @@ public static class ChampionAnimationData
 
                     var showN = new List<string>(); var hideN = new List<string>();
                     var showH = new List<uint>(); var hideH = new List<uint>();
+                    var particles = new List<AnimParticleEvent>();
                     if (s.Properties.TryGetValue(FEventMap, out var em) && em is System.Collections.IEnumerable events)
                         foreach (var ekv in events)
-                            if (ekv.GetType().GetProperty("Value")?.GetValue(ekv) is BinTreeStruct es
-                                && es.ClassHash == ClassSubmeshVis)
+                        {
+                            if (ekv.GetType().GetProperty("Value")?.GetValue(ekv) is not BinTreeStruct es) continue;
+                            if (es.ClassHash == ClassSubmeshVis)
                             {
                                 Collect(es, FShow, showN, showH);
                                 Collect(es, FHide, hideN, hideH);
                             }
-                    clips.Add(new AnimClipInfo(name, anm, showN, hideN, showH, hideH));
+                            else if (es.ClassHash == ClassParticleEvent)
+                            {
+                                // M86: effect + bone can each be a string or a hash — capture both forms.
+                                var (fxName, fxHash) = StringOrHash(es, FEffectKey, resolve);
+                                if (fxName.Length == 0 && fxHash == 0) (fxName, fxHash) = StringOrHash(es, FParticleName, resolve);
+                                var (bone, boneHash) = StringOrHash(es, FBoneName, resolve);
+                                // real data nests the bone inside mParticleEventDataPairList entries,
+                                // usually as an unresolvable hash — keep the hash even without a name.
+                                if (bone.Length == 0 && boneHash == 0
+                                    && es.Properties.TryGetValue(FPairList, out var pl)
+                                    && pl is BinTreeContainer pairs)
+                                    foreach (var pe in pairs.Elements)
+                                        if (pe is BinTreeStruct ps2)
+                                        {
+                                            (bone, boneHash) = StringOrHash(ps2, FBoneName, resolve);
+                                            if (bone.Length > 0 || boneHash != 0) break;
+                                        }
+                                float start = es.Properties.TryGetValue(FStartFrame, out var sf) && sf is BinTreeF32 f ? f.Value : 0f;
+                                if (fxName.Length > 0 || fxHash != 0)
+                                    particles.Add(new AnimParticleEvent(fxName, fxHash, bone, start, boneHash));
+                            }
+                        }
+                    clips.Add(new AnimClipInfo(name, anm, showN, hideN, showH, hideH,
+                        particles.Count > 0 ? particles : null));
                 }
             }
         }
         catch { /* malformed bin — return what we have */ }
         return clips;
+    }
+
+    /// <summary>Read a field that may be a literal string or a hash; resolve hashes to names when possible.</summary>
+    private static (string Name, uint Hash) StringOrHash(BinTreeStruct s, uint field, Func<uint, string?> resolve)
+    {
+        if (!s.Properties.TryGetValue(field, out var p)) return ("", 0);
+        return p switch
+        {
+            BinTreeString str => (str.Value, 0u),
+            BinTreeHash h => (resolve(h.Value) ?? "", h.Value),
+            BinTreeU32 u => (resolve(u.Value) ?? "", u.Value),
+            _ => ("", 0u),
+        };
     }
 
     private static void Collect(BinTreeStruct s, uint field, List<string> names, List<uint> hashes)
