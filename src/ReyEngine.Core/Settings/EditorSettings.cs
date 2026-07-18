@@ -36,6 +36,13 @@ public sealed class EditorSettings
     /// <summary>UI theme palette name (Themes/Palettes/*.axaml). Unknown names fall back to the default.</summary>
     public string Theme { get; set; } = "Crimson";
 
+    // ---- character-preview backdrop (M88) ----
+    /// <summary>Path to a legacy League LEVELS/&lt;Map&gt; folder (containing Scene/room.nvr) used as the
+    /// 3D backdrop behind previewed characters. Empty disables the feature.</summary>
+    public string PreviewBackgroundMapFolder { get; set; } = "";
+    /// <summary>Whether to render the NVR map backdrop in the model preview window.</summary>
+    public bool PreviewBackgroundEnabled { get; set; } = false;
+
     [JsonIgnore]
     public static string StorePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ReyEngine", "settings.json");
@@ -75,5 +82,6 @@ public sealed class EditorSettings
         PanSensitivity = s.PanSensitivity; ZoomSensitivity = s.ZoomSensitivity;
         InvertLookY = s.InvertLookY; FlySpeed = s.FlySpeed; CullBackfacesDefault = s.CullBackfacesDefault;
         Theme = s.Theme;
+        PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder; PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
     }
 }

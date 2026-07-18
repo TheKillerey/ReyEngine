@@ -15,6 +15,9 @@
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="8,5">
       <DockPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+          <ToggleButton Classes="vp" Content="🗺 Map" IsChecked="{Binding BackgroundVisible}"
+                        IsVisible="{Binding HasBackground}" ToolTip.Tip="{Binding BackgroundMapName, StringFormat='Backdrop: {0}'}" />
+          <ToggleButton Classes="vp" Content="▦ Grid" IsChecked="{Binding ShowGrid}" ToolTip.Tip="Show the reference grid" />
           <ToggleButton Classes="vp" Content="⌗ Wire" IsChecked="{Binding Wireframe}" />
           <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" />
           <ToggleButton Classes="vp" Content="✂ Cull" IsChecked="{Binding CullBackfaces}" />
@@ -58,6 +61,55 @@
                 <TextBlock Text="Speed" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" />
                 <Slider Minimum="0.1" Maximum="2" Value="{Binding Animation.Speed, Mode=TwoWay}" Width="110" />
                 <TextBlock Text="{Binding Animation.Speed, StringFormat='{}{0:0.0}x'}" FontSize="11" VerticalAlignment="Center" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <!-- M89: NVR map backdrop tuning — move the map, boost its lights, tune baked ground shading -->
+          <Border Classes="card" IsVisible="{Binding HasBackground}">
+            <StackPanel Spacing="6">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Classes="cardTitle" Grid.Column="0" Text="MAP BACKDROP" VerticalAlignment="Center" />
+                <ToggleButton Grid.Column="1" Classes="vp" Content="Show" FontSize="10" Padding="6,1"
+                              IsChecked="{Binding BackgroundVisible}" />
+              </Grid>
+              <TextBlock Text="{Binding BackgroundMapName, StringFormat='Map: {0}'}"
+                         Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
+
+              <TextBlock Text="Move map (world units)" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" Margin="0,2,0,0" />
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Width="12" />
+                <NumericUpDown Width="182" Value="{Binding BackgroundOffsetX}" Increment="50" FormatString="0" FontSize="11" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Width="12" />
+                <NumericUpDown Width="182" Value="{Binding BackgroundOffsetY}" Increment="20" FormatString="0" FontSize="11" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Width="12" />
+                <NumericUpDown Width="182" Value="{Binding BackgroundOffsetZ}" Increment="50" FormatString="0" FontSize="11" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+                <TextBlock Text="Rotate" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                <Slider Minimum="0" Maximum="360" Value="{Binding BackgroundRotation, Mode=TwoWay}" Width="120" />
+                <TextBlock Text="{Binding BackgroundRotation, StringFormat='{}{0:0}°'}" FontSize="11" VerticalAlignment="Center" />
+              </StackPanel>
+              <Button Classes="tool" Content="Reset position" Command="{Binding ResetBackgroundOffsetCommand}" HorizontalAlignment="Stretch" />
+
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+                <TextBlock Text="Light" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                <Slider Minimum="0" Maximum="8" Value="{Binding BackgroundLightIntensity, Mode=TwoWay}" Width="120" />
+                <TextBlock Text="{Binding BackgroundLightIntensity, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="Bright" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                <Slider Minimum="0" Maximum="2" Value="{Binding BackgroundBrightness, Mode=TwoWay}" Width="120" />
+                <TextBlock Text="{Binding BackgroundBrightness, StringFormat='{}{0:0.00}'}" FontSize="11" VerticalAlignment="Center" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="Ground" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                <Slider Minimum="0" Maximum="8" Value="{Binding BackgroundVertexLight, Mode=TwoWay}" Width="120" />
+                <TextBlock Text="{Binding BackgroundVertexLight, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
               </StackPanel>
             </StackPanel>
           </Border>
@@ -111,7 +163,23 @@
                              ShowBones="{Binding ShowBones}"
                              Wireframe="{Binding Wireframe}"
                              CullBackfaces="{Binding CullBackfaces}"
-                             ModelSubmeshVisible="{Binding SubmeshVisible}" />
+                             ModelSubmeshVisible="{Binding SubmeshVisible}"
+                             BackgroundMesh="{Binding BackgroundMesh}"
+                             BackgroundTextures="{Binding BackgroundTextures}"
+                             BackgroundBlendTextures="{Binding BackgroundBlendTextures}"
+                             BackgroundColor1Textures="{Binding BackgroundColor1Textures}"
+                             BackgroundColor2Textures="{Binding BackgroundColor2Textures}"
+                             BackgroundColor3Textures="{Binding BackgroundColor3Textures}"
+                             BackgroundVisible="{Binding BackgroundVisible}"
+                             BackgroundOffset="{Binding BackgroundOffset}"
+                             BackgroundRotation="{Binding BackgroundRotation}"
+                             BackgroundVertexLight="{Binding BackgroundVertexLight}"
+                             BackgroundBrightness="{Binding BackgroundBrightness}"
+                             ShowGrid="{Binding ShowGrid}"
+                             DynamicLights="{Binding BackgroundLights}"
+                             DynamicLightsEnabled="{Binding BackgroundLightsEnabled}"
+                             DynamicLightIntensity="{Binding BackgroundLightIntensity}"
+                             ShowLightMarkers="False" />
       <Border x:Name="PreviewInput" Background="Transparent" />
       <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
                  Margin="8,6" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />

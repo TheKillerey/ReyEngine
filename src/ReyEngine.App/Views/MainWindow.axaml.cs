@@ -103,7 +103,10 @@ public partial class MainWindow : Window
             var path = Path.Combine(AppContext.BaseDirectory, "Assets", "reyengine_logo.png");
             if (!File.Exists(path)) return;
             var bmp = new Bitmap(path);
-            Icon = new WindowIcon(bmp);
+            // M87: prefer the multi-resolution .ico for the window/taskbar icon (crisper at 16–32 px);
+            // fall back to the PNG bitmap. The wordmark image always uses the PNG.
+            var icoPath = Path.Combine(AppContext.BaseDirectory, "Assets", "reyengine.ico");
+            Icon = File.Exists(icoPath) ? new WindowIcon(icoPath) : new WindowIcon(bmp);
             if (this.FindControl<Image>("LogoImage") is { } img) img.Source = bmp;
         }
         catch { /* branding is cosmetic — never block startup */ }

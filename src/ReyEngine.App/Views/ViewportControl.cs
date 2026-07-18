@@ -109,6 +109,31 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(ModelLightmapTextures));
     public static readonly StyledProperty<IReadOnlyList<bool>?> ModelSubmeshVisibleProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<bool>?>(nameof(ModelSubmeshVisible));
+    // M88: static NVR map backdrop, drawn behind the previewed character (own renderer instance).
+    public static readonly StyledProperty<MeshAsset?> BackgroundMeshProperty =
+        AvaloniaProperty.Register<ViewportControl, MeshAsset?>(nameof(BackgroundMesh));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> BackgroundTexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(BackgroundTextures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> BackgroundBlendTexturesProperty =   // M89 four-blend
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(BackgroundBlendTextures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> BackgroundColor1TexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(BackgroundColor1Textures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> BackgroundColor2TexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(BackgroundColor2Textures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> BackgroundColor3TexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(BackgroundColor3Textures));
+    public static readonly StyledProperty<bool> BackgroundVisibleProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(BackgroundVisible), true);
+    public static readonly StyledProperty<Vector3> BackgroundOffsetProperty =        // M89: move the map
+        AvaloniaProperty.Register<ViewportControl, Vector3>(nameof(BackgroundOffset));
+    public static readonly StyledProperty<double> BackgroundRotationProperty =        // M89: rotate the map (degrees, Y)
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(BackgroundRotation));
+    public static readonly StyledProperty<double> BackgroundVertexLightProperty =    // M89: NVR baked-light scale
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(BackgroundVertexLight), 3.0);
+    public static readonly StyledProperty<double> BackgroundBrightnessProperty =     // M89: base sun/sky on the backdrop
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(BackgroundBrightness), 0.55);
+    public static readonly StyledProperty<bool> ShowGridProperty =                   // M89: reference grid toggle
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowGrid), true);
     public static readonly StyledProperty<IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?> ModelSubmeshMaterialsProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?>(nameof(ModelSubmeshMaterials));
     public static readonly StyledProperty<int> MeshVerticesRevisionProperty =
@@ -154,6 +179,21 @@ public sealed class ViewportControl : OpenGlControlBase
     public IReadOnlyList<TextureImage?>? ModelMatCapMaskTextures { get => GetValue(ModelMatCapMaskTexturesProperty); set => SetValue(ModelMatCapMaskTexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? ModelLightmapTextures { get => GetValue(ModelLightmapTexturesProperty); set => SetValue(ModelLightmapTexturesProperty, value); }
     public IReadOnlyList<bool>? ModelSubmeshVisible { get => GetValue(ModelSubmeshVisibleProperty); set => SetValue(ModelSubmeshVisibleProperty, value); }
+    public MeshAsset? BackgroundMesh { get => GetValue(BackgroundMeshProperty); set => SetValue(BackgroundMeshProperty, value); }
+    public IReadOnlyList<TextureImage?>? BackgroundTextures { get => GetValue(BackgroundTexturesProperty); set => SetValue(BackgroundTexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? BackgroundBlendTextures { get => GetValue(BackgroundBlendTexturesProperty); set => SetValue(BackgroundBlendTexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? BackgroundColor1Textures { get => GetValue(BackgroundColor1TexturesProperty); set => SetValue(BackgroundColor1TexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? BackgroundColor2Textures { get => GetValue(BackgroundColor2TexturesProperty); set => SetValue(BackgroundColor2TexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? BackgroundColor3Textures { get => GetValue(BackgroundColor3TexturesProperty); set => SetValue(BackgroundColor3TexturesProperty, value); }
+    public bool BackgroundVisible { get => GetValue(BackgroundVisibleProperty); set => SetValue(BackgroundVisibleProperty, value); }
+    public Vector3 BackgroundOffset { get => GetValue(BackgroundOffsetProperty); set => SetValue(BackgroundOffsetProperty, value); }
+    public double BackgroundRotation { get => GetValue(BackgroundRotationProperty); set => SetValue(BackgroundRotationProperty, value); }
+    // M89: world transform for the backdrop — rotate the map about the character (origin), then place it.
+    private Matrix4x4 BackgroundModel() =>
+        Matrix4x4.CreateTranslation(BackgroundOffset) * Matrix4x4.CreateRotationY((float)(BackgroundRotation * Math.PI / 180.0));
+    public double BackgroundVertexLight { get => GetValue(BackgroundVertexLightProperty); set => SetValue(BackgroundVertexLightProperty, value); }
+    public double BackgroundBrightness { get => GetValue(BackgroundBrightnessProperty); set => SetValue(BackgroundBrightnessProperty, value); }
+    public bool ShowGrid { get => GetValue(ShowGridProperty); set => SetValue(ShowGridProperty, value); }
     public IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? ModelSubmeshMaterials { get => GetValue(ModelSubmeshMaterialsProperty); set => SetValue(ModelSubmeshMaterialsProperty, value); }
     public int MeshVerticesRevision { get => GetValue(MeshVerticesRevisionProperty); set => SetValue(MeshVerticesRevisionProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
@@ -202,6 +242,8 @@ public sealed class ViewportControl : OpenGlControlBase
     private bool _gles;
     private GridRenderer? _grid;
     private ViewportMeshRenderer? _meshRenderer;
+    private ViewportMeshRenderer? _bgRenderer;      // M88: NVR map backdrop
+    private bool _bgMeshDirty, _bgTexDirty;
     private readonly OrbitCamera _camera = new();
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
     private bool _dynamicLightsDirty;   // M70: re-upload the Light.dat table on the GL thread when it changes
@@ -417,6 +459,8 @@ public sealed class ViewportControl : OpenGlControlBase
         _grid.Initialize(_gl, _gles);
         _meshRenderer = new ViewportMeshRenderer();
         _meshRenderer.Initialize(_gl, _gles);
+        _bgRenderer = new ViewportMeshRenderer();   // M88: NVR map backdrop
+        _bgRenderer.Initialize(_gl, _gles);
 
         _particleRenderer = new VfxParticleRenderer();
         _particleRenderer.Initialize(_gl);
@@ -431,10 +475,12 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         _grid?.Dispose();
         _meshRenderer?.Dispose();
+        _bgRenderer?.Dispose();
         _particleRenderer?.Dispose();
         DeleteFbo();
         _grid = null;
         _meshRenderer = null;
+        _bgRenderer = null;
         _particleRenderer = null;
         _particleSims.Clear();
         _gl = null;
@@ -480,6 +526,29 @@ public sealed class ViewportControl : OpenGlControlBase
             for (int i = 0; i < _meshRenderer.SubmeshCount; i++)
                 _meshRenderer.SetSubmeshVisible(i, vis is null || i >= vis.Count || vis[i]);
             _visibilityDirty = false;
+        }
+        if (_bgMeshDirty && _bgRenderer is not null)   // M88: (re)build the NVR backdrop geometry
+        {
+            if (BackgroundMesh is { } bgm)
+            {
+                var subs = bgm.SubMeshes.Select(s => (s.StartIndex, s.IndexCount)).ToList();
+                // M89: pass vertex colours (baked ground shading) + the 2nd UV set (four-blend mask UV).
+                _bgRenderer.SetMesh(bgm.Positions, bgm.Normals, bgm.Uvs, bgm.Indices, bgm.VertexCount,
+                    bgm.BoundsMin, bgm.BoundsMax, subs, bgm.Colors, bgm.LightmapUvs);
+            }
+            else _bgRenderer.ClearMesh();
+            _bgMeshDirty = false;
+            _bgTexDirty = true;
+        }
+        if (_bgTexDirty && _bgRenderer is { HasMesh: true })   // M88/M89: upload backdrop textures (5 layers)
+        {
+            var uploaded = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
+            UploadBgLayer(BackgroundTextures, 0, uploaded);        // COLOR_MAP_0 (base diffuse)
+            UploadBgLayer(BackgroundBlendTextures, 1, uploaded);   // BLEND_MAP (mask slot — gates four-blend)
+            UploadBgLayer(BackgroundColor1Textures, 2, uploaded);  // COLOR_MAP_1 (gradient slot)
+            UploadBgLayer(BackgroundColor2Textures, 3, uploaded);  // COLOR_MAP_2 (emissive slot)
+            UploadBgLayer(BackgroundColor3Textures, 4, uploaded);  // COLOR_MAP_3 (matcap slot)
+            _bgTexDirty = false;
         }
         if (_materialsDirty && _meshRenderer.HasMesh)
         {
@@ -587,7 +656,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _meshRenderer.SetGizmo(GizmoPivot, GizmoPivot is { } piv ? GizmoArmLength(piv) : 0f, GizmoMode,
             gax is { Count: 3 } ? gax[0] : null, gax is { Count: 3 } ? gax[1] : null, gax is { Count: 3 } ? gax[2] : null);
 
-        _grid.Render(viewProj);
+        if (ShowGrid) _grid.Render(viewProj);   // M89: reference grid is now toggleable
         var view = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.View; // same X-mirror as viewProj, for the matcap lookup
         // M44: advance the flowmap-water clock so the river flows; only ticks while water is on screen.
         if (AnimateWater) { if (!_waterClock.IsRunning) _waterClock.Start(); _meshRenderer.SetTime((float)_waterClock.Elapsed.TotalSeconds); }
@@ -602,7 +671,14 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         if (_dynamicLightsDirty)   // M70: (re)upload the Light.dat point-light table on the GL thread
         {
-            _meshRenderer.SetPointLights(DynamicLights ?? (IReadOnlyList<PointLight>)Array.Empty<PointLight>());
+            var lights = DynamicLights ?? (IReadOnlyList<PointLight>)Array.Empty<PointLight>();
+            // M89: when the backdrop is moved/rotated, transform its lights the same way so terrain stays lit
+            // consistently and the character moves through the light field.
+            var bgModel = BackgroundModel();
+            if (!bgModel.IsIdentity)
+                lights = lights.Select(l => l with { Position = Vector3.Transform(l.Position, bgModel) }).ToList();
+            _meshRenderer.SetPointLights(lights);
+            _bgRenderer?.SetPointLights(lights);   // M88: light the backdrop identically
             _dynamicLightsDirty = false;
         }
         _meshRenderer.SetDynamicLightsEnabled(DynamicLightsEnabled);
@@ -631,6 +707,26 @@ public sealed class ViewportControl : OpenGlControlBase
             RequestNextFrameRendering();
         }
         else if (_propAnimClock.IsRunning) _propAnimClock.Reset();
+        // M88: draw the NVR map backdrop first (static, lit by the same point lights + sun, never culled
+        // so terrain never shows holes). Depth-tested so the character composites in front correctly.
+        if (BackgroundVisible && _bgRenderer is { HasMesh: true } bg)
+        {
+            bg.SetDynamicLightsEnabled(DynamicLightsEnabled);
+            bg.SetLightIntensity((float)DynamicLightIntensity);
+            bg.SetLightRadiusScale((float)DynamicLightRadiusScale);
+            bg.SetVertexBakedLight(true, (float)BackgroundVertexLight);   // M89: NVR ground baked shading
+            bg.SetNvrFourBlend(true);                                     // M89: CREATE_GROUND_MOSAIC_FOUR_BLEND
+            bg.SetWorldTransform(BackgroundModel());                      // M89: move + rotate the map
+            // M89: base sun/sky kept DARK by default — old maps are meant to be lit by their Light.dat
+            // point lights, and a bright base washes the ground flat (in-game look = dark + warm pools).
+            float bright = (float)BackgroundBrightness;
+            var bgLight = new Vector4(bright, bright, bright, 1f);
+            if (SunProperties is { } bsun)
+                bg.SetSunLighting(bsun.SunDirection, bsun.SunColor * bright, bsun.SkyLightColor * bright, bsun.SkyLightScale);
+            else
+                bg.SetSunLighting(Vector3.Zero, bgLight, bgLight, 1f);
+            bg.Render(viewProj, view, _camera.Position, 0, Wireframe, false, false, cullBackfaces: false);
+        }
         _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones, CullBackfaces);
         if (AnimateWater) RequestNextFrameRendering(); // keep frames coming so the water animates
 
@@ -708,6 +804,23 @@ public sealed class ViewportControl : OpenGlControlBase
     }
 
     /// <summary>Upload a per-submesh texture list into a renderer layer (0 diffuse · 1 mask · 2 gradient · 3 emissive).</summary>
+    // M89: upload one texture layer to the background renderer (shared image → shared GL id).
+    private void UploadBgLayer(IReadOnlyList<TextureImage?>? texs, int slot, Dictionary<TextureImage, uint> uploaded)
+    {
+        if (_bgRenderer is null) return;
+        int count = texs?.Count ?? 0;
+        for (int i = 0; i < _bgRenderer.SubmeshCount; i++)
+        {
+            uint id = 0;
+            if (i < count && texs![i] is { } img && !uploaded.TryGetValue(img, out id))
+            {
+                id = _bgRenderer.UploadTexture(img.Rgba, img.Width, img.Height);
+                uploaded[img] = id;
+            }
+            _bgRenderer.SetSubmeshLayer(i, slot, id);
+        }
+    }
+
     private void UploadLayer(IReadOnlyList<TextureImage?>? texs, int slot, Dictionary<TextureImage, uint> uploaded)
     {
         if (_meshRenderer is null) return;
@@ -929,6 +1042,14 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == ModelLightmapTexturesProperty)
         { _texturesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelSubmeshVisibleProperty) { _visibilityDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == BackgroundMeshProperty) { _bgMeshDirty = true; _bgTexDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == BackgroundTexturesProperty || change.Property == BackgroundBlendTexturesProperty
+                 || change.Property == BackgroundColor1TexturesProperty || change.Property == BackgroundColor2TexturesProperty
+                 || change.Property == BackgroundColor3TexturesProperty) { _bgTexDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == BackgroundVisibleProperty || change.Property == BackgroundVertexLightProperty
+                 || change.Property == BackgroundBrightnessProperty || change.Property == ShowGridProperty) { RequestNextFrameRendering(); }
+        else if (change.Property == BackgroundOffsetProperty || change.Property == BackgroundRotationProperty)
+        { _dynamicLightsDirty = true; RequestNextFrameRendering(); }   // M89: move/rotate lights with the map
         else if (change.Property == ModelSubmeshMaterialsProperty) { _materialsDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == MeshVerticesRevisionProperty)
         {

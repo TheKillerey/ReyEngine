@@ -1,0 +1,1 @@
+submeshCount=3017 blendNonNull=647 color1NonNull=647 blendListLen=3017 hasLmUv=no

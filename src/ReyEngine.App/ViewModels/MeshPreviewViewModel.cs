@@ -102,6 +102,57 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         RebuildSubmeshVisibility();
     }
 
+    // ---- M88: NVR map backdrop (character stands in-map, lit by the map's Light.dat) ----
+    [ObservableProperty] private MeshAsset? _backgroundMesh;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _backgroundTextures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _backgroundBlendTextures;   // M89 four-blend
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _backgroundColor1Textures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _backgroundColor2Textures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _backgroundColor3Textures;
+    [ObservableProperty] private bool _backgroundVisible = true;
+    [ObservableProperty] private IReadOnlyList<ReyEngine.Formats.Lighting.PointLight>? _backgroundLights;
+    [ObservableProperty] private bool _backgroundLightsEnabled;
+    [ObservableProperty] private string? _backgroundMapName;
+    [ObservableProperty] private bool _hasBackground;
+
+    // M89: backdrop tuning — move/rotate the whole map, boost the (Light.dat) lights, tune baked shading.
+    // Defaults are the user-tuned Crystal Scar (Map8) hero shot.
+    [ObservableProperty] private double _backgroundOffsetX = -6400;
+    [ObservableProperty] private double _backgroundOffsetY = -60;
+    [ObservableProperty] private double _backgroundOffsetZ = 2000;
+    [ObservableProperty] private double _backgroundRotation = 180;   // degrees about Y
+    [ObservableProperty] private System.Numerics.Vector3 _backgroundOffset = new(-6400, -60, 2000);
+    [ObservableProperty] private double _backgroundLightIntensity = 8.0;
+    [ObservableProperty] private double _backgroundVertexLight;      // 0 = baked vertex shading off by default
+    [ObservableProperty] private double _backgroundBrightness = 0.55;   // base sun/sky on the map — dark, so Light.dat pops
+    [ObservableProperty] private bool _showGrid = true;
+
+    partial void OnBackgroundOffsetXChanged(double value) => UpdateBackgroundOffset();
+    partial void OnBackgroundOffsetYChanged(double value) => UpdateBackgroundOffset();
+    partial void OnBackgroundOffsetZChanged(double value) => UpdateBackgroundOffset();
+    private void UpdateBackgroundOffset() =>
+        BackgroundOffset = new System.Numerics.Vector3((float)BackgroundOffsetX, (float)BackgroundOffsetY, (float)BackgroundOffsetZ);
+
+    [RelayCommand] private void ResetBackgroundOffset()
+    { BackgroundOffsetX = -6400; BackgroundOffsetY = -60; BackgroundOffsetZ = 2000; BackgroundRotation = 180; }
+
+    /// <summary>Attach (or clear) the loaded NVR backdrop. Lights are enabled only when present.</summary>
+    public void SetBackground(Services.MapPreviewBackground? bg)
+    {
+        BackgroundMesh = bg?.Mesh;
+        BackgroundTextures = bg?.SubmeshTextures;
+        BackgroundBlendTextures = bg?.SubmeshBlend;
+        BackgroundColor1Textures = bg?.SubmeshColor1;
+        BackgroundColor2Textures = bg?.SubmeshColor2;
+        BackgroundColor3Textures = bg?.SubmeshColor3;
+        BackgroundLights = bg?.Lights;
+        BackgroundLightsEnabled = bg?.Lights is { Count: > 0 };
+        BackgroundMapName = bg?.MapName;
+        HasBackground = bg?.Mesh is not null;
+    }
+
+    [RelayCommand] private void ToggleBackground() => BackgroundVisible = !BackgroundVisible;
+
     // ---- M84: per-submesh visibility ----
     public ObservableCollection<SubmeshToggleViewModel> Submeshes { get; } = new();
     [ObservableProperty] private bool _hasSubmeshes;

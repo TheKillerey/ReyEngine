@@ -4,6 +4,9 @@
     <OutputType>WinExe</OutputType>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- M87: embeds the icon in the PE header (Explorer/taskbar .exe icon). This uses the Win32
+         resource path, NOT Avalonia.Build.Tasks, so it's safe alongside the loose-PNG workaround below. -->
+    <ApplicationIcon>Assets\reyengine.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
 
@@ -24,6 +27,9 @@
     <!-- Copied next to the exe and loaded at runtime; embedding the logo as an AvaloniaResource
          corrupted the assembly IL via Avalonia.Build.Tasks, so we avoid the resource compiler. -->
     <Content Include="Assets\reyengine_logo.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\reyengine.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

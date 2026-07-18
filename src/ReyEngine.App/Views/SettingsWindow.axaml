@@ -60,6 +60,12 @@
             <TextBlock Text="Theme" VerticalAlignment="Center" />
           </StackPanel>
         </ListBoxItem>
+        <ListBoxItem>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="🗺" FontSize="13" Width="18" TextAlignment="Center" />
+            <TextBlock Text="Preview" VerticalAlignment="Center" />
+          </StackPanel>
+        </ListBoxItem>
       </ListBox>
 
       <!-- ── content ────────────────────────────────────────────────────── -->
@@ -196,6 +202,25 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- PREVIEW (M88) -->
+        <StackPanel Spacing="14" IsVisible="{Binding ShowPreview}">
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="10">
+              <TextBlock Classes="settingsTitle" Text="MODEL PREVIEW BACKDROP" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Render a classic (NVR) League map behind previewed characters, lit by the map's own lights — so a skin looks like it does in-game. Point this at a LEVELS\Map folder containing Scene\room.nvr." />
+              <CheckBox Content="Show map backdrop in the model preview"
+                        IsChecked="{Binding PreviewBackgroundEnabled}" Margin="0,4,0,0" />
+              <TextBlock Classes="settingsDesc" Text="Map folder" Margin="0,4,0,0" />
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox Grid.Column="0" Text="{Binding PreviewBackgroundMapFolder}"
+                         Watermark="e.g. K:\LeagueSandbox\League_Sandbox_Client\LEVELS\Map8" />
+                <Button Grid.Column="1" Content="Browse…" Margin="8,0,0,0" Click="OnBrowsePreviewMap" />
+              </Grid>
             </StackPanel>
           </Border>
         </StackPanel>

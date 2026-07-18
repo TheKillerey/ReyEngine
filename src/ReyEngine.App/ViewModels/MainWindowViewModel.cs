@@ -3119,8 +3119,42 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 ShowMeshPreviewWindow?.Invoke();
                 _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris — model preview window.");
             });
+            _ = ApplyPreviewBackgroundAsync();   // M88: stream in the NVR map backdrop (non-blocking)
         }
         catch (Exception ex) { _log.Error("Mesh", ex.Message); }
+    }
+
+    // M88: cache the last-loaded backdrop so re-previewing skins doesn't re-read the ~60 MB room.nvr.
+    private Services.MapPreviewBackground? _previewBackground;
+    private string? _previewBackgroundFolder;
+
+    /// <summary>Load (or reuse) the configured NVR map backdrop and attach it to the preview window.
+    /// Silent no-op when the feature is off or the folder isn't a legacy map.</summary>
+    private async Task ApplyPreviewBackgroundAsync()
+    {
+        try
+        {
+            string folder = Settings.PreviewBackgroundMapFolder;
+            if (!Settings.PreviewBackgroundEnabled || !Services.MapPreviewLoader.IsNvrMapFolder(folder))
+            {
+                await Dispatcher.UIThread.InvokeAsync(() => MeshPreview.SetBackground(null));
+                return;
+            }
+
+            if (_previewBackground is null || !string.Equals(_previewBackgroundFolder, folder, StringComparison.OrdinalIgnoreCase))
+            {
+                _log.Info("Preview", $"Loading map backdrop from {Path.GetFileName(folder)}…");
+                var bg = await Task.Run(() => Services.MapPreviewLoader.Load(folder));
+                _previewBackground = bg;
+                _previewBackgroundFolder = folder;
+                _log.Success("Preview", $"Backdrop '{bg.MapName}': {bg.MeshCount:n0} meshes, {bg.Mesh.TriangleCount:n0} tris, {bg.Lights.Count} lights" +
+                                        (bg.MissingTextures > 0 ? $" ({bg.MissingTextures} submesh(es) untextured)" : ""));
+            }
+
+            var loaded = _previewBackground;
+            await Dispatcher.UIThread.InvokeAsync(() => MeshPreview.SetBackground(loaded));
+        }
+        catch (Exception ex) { _log.Error("Preview", $"Map backdrop: {ex.Message}"); }
     }
 
     /// <summary>Per-submesh diffuse textures for the model-preview window — NO side effects on the main
@@ -4245,6 +4279,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Settings.Save();
         CullBackfaces = Settings.CullBackfacesDefault;
         _log.Success("Settings", "Preferences saved.");
+        // M88: apply the preview backdrop change immediately if a model preview is already open.
+        if (MeshPreview.Mesh is not null) _ = ApplyPreviewBackgroundAsync();
     }
 
     /// <summary>Called by the view after the settings dialog is saved.</summary>

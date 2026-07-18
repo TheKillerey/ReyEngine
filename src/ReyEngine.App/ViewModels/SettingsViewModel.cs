@@ -49,18 +49,24 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private double _flySpeed;
     [ObservableProperty] private bool _cullBackfacesDefault;
 
-    // M72: sidebar section switching (0 General · 1 Camera · 2 Controls · 3 Theme)
+    // M88: character-preview NVR map backdrop
+    [ObservableProperty] private string _previewBackgroundMapFolder = "";
+    [ObservableProperty] private bool _previewBackgroundEnabled;
+
+    // M72: sidebar section switching (0 General · 1 Camera · 2 Controls · 3 Theme · 4 Preview)
     [ObservableProperty] private int _selectedSection;
     public bool ShowGeneral => SelectedSection == 0;
     public bool ShowCamera => SelectedSection == 1;
     public bool ShowControls => SelectedSection == 2;
     public bool ShowTheme => SelectedSection == 3;
+    public bool ShowPreview => SelectedSection == 4;
     partial void OnSelectedSectionChanged(int value)
     {
         OnPropertyChanged(nameof(ShowGeneral));
         OnPropertyChanged(nameof(ShowCamera));
         OnPropertyChanged(nameof(ShowControls));
         OnPropertyChanged(nameof(ShowTheme));
+        OnPropertyChanged(nameof(ShowPreview));
     }
 
     // M72: theme choice — applied LIVE while browsing so the user sees it; Cancel reverts.
@@ -102,6 +108,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         InvertLookY = s.InvertLookY;
         FlySpeed = s.FlySpeed;
         CullBackfacesDefault = s.CullBackfacesDefault;
+        PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder;
+        PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
 
         // theme: reflect + live-apply (LoadFrom also runs on Reset to Defaults)
         _theme = s.Theme;
@@ -121,6 +129,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             PanSensitivity = PanSensitivity, ZoomSensitivity = ZoomSensitivity,
             InvertLookY = InvertLookY, FlySpeed = FlySpeed, CullBackfacesDefault = CullBackfacesDefault,
             Theme = _theme,
+            PreviewBackgroundMapFolder = PreviewBackgroundMapFolder, PreviewBackgroundEnabled = PreviewBackgroundEnabled,
         };
     }
 

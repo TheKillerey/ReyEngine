@@ -19,6 +19,8 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mMatCap, _mMatCapMask, _mHasMatCap, _mHasMatCapMask, _mView;
     private int _mUvScaleOffset, _mUvRot, _mUsesRim, _mUsesSpec;   // M32: per-material UV + feature flags
     private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
+    private int _mVertexBakedLight, _mVertexBakedScale;            // M89: NVR vertex-colour baked light
+    private int _mNvrFourBlend;                                    // M89: NVR ground four-blend flag
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
     private int _mAlphaMode;                                       // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
     private int _mTint;                                            // M34: TintColor for untextured effects / authored decals
@@ -49,6 +51,10 @@ public sealed class ViewportMeshRenderer : IDisposable
     private Vector2 _lightPosScaleXZ = Vector2.One;
     private Vector2 _lightPosOffset = Vector2.Zero;
     private bool _dynamicLightsEnabled;
+    private bool _vertexBakedLight;              // M89: apply PrimaryColor as a baked light (NVR ground)
+    private float _vertexBakedScale = 3f;
+    private bool _nvrFourBlend;                  // M89: NVR ground four-blend (gated per submesh by uHasMask)
+    private Matrix4x4 _worldModel = Matrix4x4.Identity;   // M89: world transform for the whole mesh (move/rotate map)
     private int _mLightsTex, _mNumLights, _mLightIntensity, _mLightRadiusScale, _mLightPosScale, _mLightPosScaleXZ, _mLightPosOffset;
     private Vector3 _lightDirection = new(-0.4f, -0.85f, -0.45f);
     private Vector3 _sunColor = new(0.75f);
@@ -220,6 +226,9 @@ uniform float uUvRot;          // radians, rotate about (0.5, 0.5); 0 = none
 uniform int uUsesRim;          // fresnel rim highlight only when the material profile asks for it
 uniform int uUsesSpec;         // specular highlight only when the material profile asks for it
 uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map baked-term/mask data)
+uniform int uVertexBakedLight; // M89: 1 = add PrimaryColor as a baked light term (NVR ground shading)
+uniform float uVertexBakedScale;
+uniform int uNvrFourBlend;     // M89: 1 = CREATE_GROUND_MOSAIC_FOUR_BLEND (blend 4 colour maps by a mask)
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
 uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
 uniform int uAlphaMode;        // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
@@ -312,6 +321,20 @@ void main() {
     }
     vec3 base = tex.rgb;
     float alpha = tex.a;
+
+    // M89: NVR CREATE_GROUND_MOSAIC_FOUR_BLEND - blend 4 colour maps by an RGB blend map. COLOR_MAP_0 is the
+    // base (already in uTex), COLOR_MAP_1/2/3 on TexCoord0 (uGradient/uEmissive/uMatCap), BLEND_MAP on the
+    // 2nd UV set (vLmUv). Layer i blends over the running colour by blend channel r/g/b. Only ground
+    // submeshes carry a blend map (uHasMask); simple NVR surfaces fall through to their base texture.
+    if (uNvrFourBlend == 1 && uHasMask == 1) {
+        vec3 blend = texture(uMask, vLmUv).rgb;
+        vec3 g = base;
+        g = mix(g, texture(uGradient, uv).rgb, blend.r);
+        g = mix(g, texture(uEmissive, uv).rgb, blend.g);
+        g = mix(g, texture(uMatCap,   uv).rgb, blend.b);
+        base = g;
+        alpha = 1.0;
+    }
 
     // The mask uses the mesh UV atlas. Detail layers are planar world-space textures and are stacked in
     // authored order: R selects Middle, G selects Top, B selects Extras. The pass blend flag describes this
@@ -434,6 +457,11 @@ void main() {
     // surface, so it replaces the fake directional term (finalColor = diffuse * lightmap * scale). The
     // scale is MapSunProperties.lightMapColorScale (2.0 on live Map12) - without it the map is too dark.
     if (uHasLightmap == 1) col = base * bakedLightColour(texture(uLightmap, vLmUv).rgb * uLightmapScale);
+
+    // M89: NVR ground bakes its shading/AO into vertex colour (a dark mask the raw diffuse lacks). Add it
+    // as a baked light term so terrain reads its painted variation instead of a flat repeated texture. NVR
+    // authors these dark on purpose - the map is meant to be lit mostly by Light.dat, so scale is tunable.
+    if (uVertexBakedLight == 1) col += base * vColor.rgb * uVertexBakedScale;
 
     // M70: legacy Riot dynamic point lights (Light.dat) added on top of the baked/fallback lighting - this is
     // how the old client lit torches and braziers. Each light is a radial term with a quadratic falloff to its
@@ -570,6 +598,9 @@ void main() { FragColor = uColor; }";
         _mUsesRim = gl.GetUniformLocation(_meshProgram, "uUsesRim");
         _mUsesSpec = gl.GetUniformLocation(_meshProgram, "uUsesSpec");
         _mHasVertexColor = gl.GetUniformLocation(_meshProgram, "uHasVertexColor");
+        _mVertexBakedLight = gl.GetUniformLocation(_meshProgram, "uVertexBakedLight");
+        _mVertexBakedScale = gl.GetUniformLocation(_meshProgram, "uVertexBakedScale");
+        _mNvrFourBlend = gl.GetUniformLocation(_meshProgram, "uNvrFourBlend");
         _mLightmap = gl.GetUniformLocation(_meshProgram, "uLightmap");
         _mHasLightmap = gl.GetUniformLocation(_meshProgram, "uHasLightmap");
         _mAlphaMode = gl.GetUniformLocation(_meshProgram, "uAlphaMode");
@@ -1178,6 +1209,22 @@ void main(){
         _lightPosScaleXZ = new Vector2(System.Math.Clamp(x, 0.05f, 20f), System.Math.Clamp(z, 0.05f, 20f));
     /// <summary>M71: world-space (x, z) translation applied to every light after scaling.</summary>
     public void SetLightPositionOffset(float x, float z) => _lightPosOffset = new Vector2(x, z);
+
+    /// <summary>M89: apply this mesh's PrimaryColor as a baked light term (NVR ground shading). Scale tunes
+    /// how strongly the (dark) vertex colours read; 0 disables it.</summary>
+    public void SetVertexBakedLight(bool enabled, float scale)
+    {
+        _vertexBakedLight = enabled;
+        _vertexBakedScale = System.Math.Clamp(scale, 0f, 16f);
+    }
+
+    /// <summary>M89: world transform (translation + rotation) applied to the whole mesh — used to slide and
+    /// spin the NVR map backdrop under the previewed character.</summary>
+    public void SetWorldTransform(Matrix4x4 model) => _worldModel = model;
+
+    /// <summary>M89: enable the NVR four-blend ground path (CREATE_GROUND_MOSAIC_FOUR_BLEND). Applied per
+    /// submesh — only submeshes carrying a blend map (slot 1 / uHasMask) actually blend.</summary>
+    public void SetNvrFourBlend(bool enabled) => _nvrFourBlend = enabled;
     /// <summary>M70: number of point lights currently uploaded (for status display).</summary>
     public int PointLightCount => _lightCount;
 
@@ -1492,9 +1539,15 @@ void main(){
             else
             {
                 _gl.UseProgram(_meshProgram);
-                _gl.UniformMatrix4(_mMvp, 1, false, in m.M11);
-                var model = Matrix4x4.Identity;
+                // M89: optional world transform (move/rotate the NVR map backdrop). Identity for everything
+                // else, so gl_Position = (model*viewProj)*pos and vWorld = model*pos.
+                var model = _worldModel;
+                var mvp = model.IsIdentity ? m : model * m;
+                _gl.UniformMatrix4(_mMvp, 1, false, in mvp.M11);
                 _gl.UniformMatrix4(_mModel, 1, false, in model.M11);
+                _gl.Uniform1(_mVertexBakedLight, _vertexBakedLight ? 1 : 0);
+                _gl.Uniform1(_mVertexBakedScale, _vertexBakedScale);
+                _gl.Uniform1(_mNvrFourBlend, _nvrFourBlend ? 1 : 0);
                 _gl.Uniform3(_mLight, _lightDirection.X, _lightDirection.Y, _lightDirection.Z);
                 _gl.Uniform3(_mSunColor, _sunColor.X, _sunColor.Y, _sunColor.Z);
                 _gl.Uniform3(_mSkyLight, _skyLight.X, _skyLight.Y, _skyLight.Z);
@@ -1657,6 +1710,8 @@ void main(){
             _gl.Uniform3(_mBaseColor, 0.62f, 0.66f, 0.74f);
             _gl.Uniform1(_mMode, previewMode);
             _gl.Uniform1(_mHasVertexColor, 0);
+            _gl.Uniform1(_mVertexBakedLight, 0);   // M89: props never use the NVR baked-light term
+            _gl.Uniform1(_mNvrFourBlend, 0);
             _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);
             _gl.UniformMatrix4(_mView, 1, false, in view.M11);
             _gl.Uniform1(_mTex, 0); _gl.Uniform1(_mMask, 1); _gl.Uniform1(_mGradient, 2);
