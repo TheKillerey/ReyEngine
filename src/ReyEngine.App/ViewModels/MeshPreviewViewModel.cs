@@ -55,6 +55,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     private IReadOnlyDictionary<uint, uint> _vfxResourceMap = new Dictionary<uint, uint>();
 
     // wired once by MainWindowViewModel
+    public Action<string>? PlaySoundEvent;   // M90: clip SFX via the champion's Wwise banks
+    public Action? StopSounds;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveDistortionTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveColorTextures;   // M68
@@ -64,12 +66,16 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     public MeshPreviewViewModel()
     {
-        Animation.ClipChanged = clip => { CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility(); ApplyClipParticles(); };   // M85/M86
+        Animation.ClipChanged = clip => { CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility(); ApplyClipParticles(); ApplyClipSounds(); };   // M85/M86/M90
         Animation.TimeChanged = t =>
         {
             // M86: clip event VFX are one-shot — respawn them each time the looping clip wraps around
             // (manual VFX picks are left alone). Backward jump in time = the loop restarted.
-            if (t + 0.05 < _lastAnimTime && SelectedVfx is null) ApplyClipParticles();
+            if (t + 0.05 < _lastAnimTime)
+            {
+                if (SelectedVfx is null) ApplyClipParticles();
+                ApplyClipSounds();   // M90: retrigger the clip's SFX on loop, like in-game
+            }
             _lastAnimTime = t;
             AnimationTime = t;
         };
@@ -89,6 +95,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Animation.SetSkeleton(skeleton?.BoneCount ?? 0);
         Playback = null;
         SelectedVfx = null;
+        StopSounds?.Invoke();   // M90: previous champion's SFX must not bleed into the new preview
 
         // M84: per-submesh visibility toggles (all visible on load)
         Submeshes.Clear();
@@ -212,6 +219,26 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         }
         if (items.Count > 0) Playback = new VfxPlayback(items);
     }
+
+    // ---- M90: preview model scale (compare champion size against the map backdrop) ----
+    [ObservableProperty] private double _modelScale = 1.0;
+    [RelayCommand] private void ResetModelScale() => ModelScale = 1.0;
+
+    // ---- M90: clip sound events — played through the champion's Wwise banks, like in-game ----
+    [ObservableProperty] private bool _sfxEnabled = true;
+
+    /// <summary>Play the current clip's SoundEventData (all of them; frame timing not simulated yet).</summary>
+    private void ApplyClipSounds()
+    {
+        StopSounds?.Invoke();
+        if (!SfxEnabled || PlaySoundEvent is null || _clipsByAnm is null
+            || Animation.SelectedAnimation?.Name is not { } anm
+            || _clipsByAnm.GetValueOrDefault(anm) is not { SoundEvents.Count: > 0 } clip) return;
+        foreach (var ev in clip.SoundEvents!)
+            PlaySoundEvent(ev.SoundName);
+    }
+
+    partial void OnSfxEnabledChanged(bool value) { if (value) ApplyClipSounds(); else StopSounds?.Invoke(); }
 
     /// <summary>Bins store the bone as an unresolvable hash — match it against the skeleton's joints
     /// (FNV1a of the lowercased name, or the joint's Elf AnimHash) to get a real bone name.</summary>

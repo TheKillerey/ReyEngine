@@ -18,6 +18,7 @@
           <ToggleButton Classes="vp" Content="🗺 Map" IsChecked="{Binding BackgroundVisible}"
                         IsVisible="{Binding HasBackground}" ToolTip.Tip="{Binding BackgroundMapName, StringFormat='Backdrop: {0}'}" />
           <ToggleButton Classes="vp" Content="▦ Grid" IsChecked="{Binding ShowGrid}" ToolTip.Tip="Show the reference grid" />
+          <ToggleButton Classes="vp" Content="🔊 SFX" IsChecked="{Binding SfxEnabled}" ToolTip.Tip="Play the clip's sound events (like in-game)" />
           <ToggleButton Classes="vp" Content="⌗ Wire" IsChecked="{Binding Wireframe}" />
           <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" />
           <ToggleButton Classes="vp" Content="✂ Cull" IsChecked="{Binding CullBackfaces}" />
@@ -34,6 +35,22 @@
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1,0,0,0">
       <ScrollViewer>
         <StackPanel Margin="10" Spacing="8">
+          <!-- M90: model scale — size the champion against the map backdrop -->
+          <Border Classes="card">
+            <StackPanel Spacing="4">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Classes="cardTitle" Grid.Column="0" Text="MODEL" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="tool" Content="1×" FontSize="10" Padding="6,1"
+                        Command="{Binding ResetModelScaleCommand}" ToolTip.Tip="Reset scale" />
+              </Grid>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="Scale" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                <Slider Minimum="0.1" Maximum="5" Value="{Binding ModelScale, Mode=TwoWay}" Width="120" />
+                <TextBlock Text="{Binding ModelScale, StringFormat='{}{0:0.00}×'}" FontSize="11" VerticalAlignment="Center" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
           <Border Classes="card">
             <StackPanel Spacing="6">
               <TextBlock Classes="cardTitle" Text="ANIMATION" />
@@ -164,6 +181,7 @@
                              Wireframe="{Binding Wireframe}"
                              CullBackfaces="{Binding CullBackfaces}"
                              ModelSubmeshVisible="{Binding SubmeshVisible}"
+                             ModelScale="{Binding ModelScale}"
                              BackgroundMesh="{Binding BackgroundMesh}"
                              BackgroundTextures="{Binding BackgroundTextures}"
                              BackgroundBlendTextures="{Binding BackgroundBlendTextures}"

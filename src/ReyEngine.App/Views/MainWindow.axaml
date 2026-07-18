@@ -185,7 +185,15 @@
     </Border>
 
     <!-- ============ MAIN AREA ============ -->
-    <Grid ColumnDefinitions="290,4,*,4,360">
+    <!-- M90: MinWidths stop the splitters from collapsing panels into broken layouts -->
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="290" MinWidth="180" />
+        <ColumnDefinition Width="4" />
+        <ColumnDefinition Width="*" MinWidth="360" />
+        <ColumnDefinition Width="4" />
+        <ColumnDefinition Width="360" MinWidth="280" />
+      </Grid.ColumnDefinitions>
 
       <!-- LEFT: MAP CONTENT (scene outliner — visibility, layer tree, transform, mesh details;
            the redundant .mapgeo list was retired, maps open from the Content Browser + tabs) -->
@@ -694,10 +702,14 @@
                 </StackPanel>
               </Border>
 
-              <!-- texture preview -->
+              <!-- texture preview (M90: closable — there was no way back out of it) -->
               <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8"
                       IsVisible="{Binding Inspector.HasPreview}">
-                <Image Source="{Binding Inspector.PreviewImage}" Stretch="Uniform" MaxHeight="340" />
+                <StackPanel Spacing="6">
+                  <Button Classes="tool" Content="✕ Close preview" HorizontalAlignment="Right" FontSize="10" Padding="6,2"
+                          Command="{Binding Inspector.ClearPreviewCommand}" />
+                  <Image Source="{Binding Inspector.PreviewImage}" Stretch="Uniform" MaxHeight="340" />
+                </StackPanel>
               </Border>
 
               <TextBlock Text="{Binding Inspector.Details}" Foreground="{DynamicResource ReyTextDimBrush}"
@@ -805,10 +817,11 @@
                   </StackPanel>
                 </TabItem>
 
-                <!-- MATERIALS TAB -->
+                <!-- MATERIALS TAB (M90: no fixed height cap — flows with the window; the whole
+                     inspector scrolls, so a hard 680px cap just left dead space on tall windows) -->
                 <TabItem FontSize="12" IsVisible="{Binding HasMaterialData}">
                   <TabItem.Header><TextBlock Text="Materials" FontSize="12" /></TabItem.Header>
-                  <ScrollViewer MaxHeight="680">
+                  <ScrollViewer>
                     <StackPanel Spacing="8" Margin="0,8,4,0">
                       <TextBlock Text="{Binding MaterialEditor.Summary}" Foreground="{DynamicResource ReyTextBrush}" FontSize="12" FontWeight="SemiBold" />
                       <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6,4">

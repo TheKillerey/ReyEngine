@@ -1,6 +1,7 @@
 using System.Text;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Core.Assets;
 
 namespace ReyEngine.App.ViewModels;
@@ -53,6 +54,9 @@ public sealed partial class InspectorViewModel : ViewModelBase
         PreviewImage = bmp;
         HasPreview = bmp is not null;
     }
+
+    /// <summary>M90: close the texture preview (there was no way back out of it).</summary>
+    [RelayCommand] private void ClearPreview() => SetPreview(null);
 
     public void Clear()
     {

@@ -10,7 +10,11 @@ namespace ReyEngine.Formats.Skeletons;
 public sealed record AnimClipInfo(string Name, string AnmPath,
     IReadOnlyList<string> ShowNames, IReadOnlyList<string> HideNames,
     IReadOnlyList<uint> ShowHashes, IReadOnlyList<uint> HideHashes,
-    IReadOnlyList<AnimParticleEvent>? ParticleEvents = null);
+    IReadOnlyList<AnimParticleEvent>? ParticleEvents = null,
+    IReadOnlyList<AnimSoundEvent>? SoundEvents = null);
+
+/// <summary>M90: one SoundEventData in a clip — a Wwise event name like Play_sfx_Aatrox_Death3D_cast.</summary>
+public sealed record AnimSoundEvent(string SoundName, float StartFrame, bool IsLoop);
 
 /// <summary>M86: one ParticleEventData in a clip — the VFX it spawns and the bone it rides.
 /// BoneName is empty when the bin only stores a hash the hashtable can't resolve; BoneHash then
@@ -32,6 +36,9 @@ public static class ChampionAnimationData
     private static readonly uint FShow = HashAlgorithms.Fnv1a("mShowSubmeshList");
     private static readonly uint FHide = HashAlgorithms.Fnv1a("mHideSubmeshList");
     private static readonly uint ClassParticleEvent = HashAlgorithms.Fnv1a("ParticleEventData");
+    private static readonly uint ClassSoundEvent = HashAlgorithms.Fnv1a("SoundEventData");
+    private static readonly uint FSoundName = HashAlgorithms.Fnv1a("mSoundName");
+    private static readonly uint FIsLoop = HashAlgorithms.Fnv1a("mIsLoop");
     private static readonly uint FEffectKey = HashAlgorithms.Fnv1a("mEffectKey");
     private static readonly uint FParticleName = HashAlgorithms.Fnv1a("mParticleName");
     private static readonly uint FBoneName = HashAlgorithms.Fnv1a("mBoneName");
@@ -70,6 +77,7 @@ public static class ChampionAnimationData
                     var showN = new List<string>(); var hideN = new List<string>();
                     var showH = new List<uint>(); var hideH = new List<uint>();
                     var particles = new List<AnimParticleEvent>();
+                    var sounds = new List<AnimSoundEvent>();
                     if (s.Properties.TryGetValue(FEventMap, out var em) && em is System.Collections.IEnumerable events)
                         foreach (var ekv in events)
                         {
@@ -100,9 +108,18 @@ public static class ChampionAnimationData
                                 if (fxName.Length > 0 || fxHash != 0)
                                     particles.Add(new AnimParticleEvent(fxName, fxHash, bone, start, boneHash));
                             }
+                            else if (es.ClassHash == ClassSoundEvent)
+                            {
+                                // M90: Wwise event name (literal string) + optional frame/loop flags.
+                                string snd = es.Properties.TryGetValue(FSoundName, out var sn) && sn is BinTreeString ss ? ss.Value : "";
+                                float sStart = es.Properties.TryGetValue(FStartFrame, out var ssf) && ssf is BinTreeF32 sf2 ? sf2.Value : 0f;
+                                bool sLoop = es.Properties.TryGetValue(FIsLoop, out var sl) && sl is BinTreeBool sb && sb.Value;
+                                if (snd.Length > 0) sounds.Add(new AnimSoundEvent(snd, sStart, sLoop));
+                            }
                         }
                     clips.Add(new AnimClipInfo(name, anm, showN, hideN, showH, hideH,
-                        particles.Count > 0 ? particles : null));
+                        particles.Count > 0 ? particles : null,
+                        sounds.Count > 0 ? sounds : null));
                 }
             }
         }

@@ -134,6 +134,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, double>(nameof(BackgroundBrightness), 0.55);
     public static readonly StyledProperty<bool> ShowGridProperty =                   // M89: reference grid toggle
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowGrid), true);
+    public static readonly StyledProperty<double> ModelScaleProperty =               // M90: preview model scale
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(ModelScale), 1.0);
     public static readonly StyledProperty<IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?> ModelSubmeshMaterialsProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?>(nameof(ModelSubmeshMaterials));
     public static readonly StyledProperty<int> MeshVerticesRevisionProperty =
@@ -194,6 +196,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public double BackgroundVertexLight { get => GetValue(BackgroundVertexLightProperty); set => SetValue(BackgroundVertexLightProperty, value); }
     public double BackgroundBrightness { get => GetValue(BackgroundBrightnessProperty); set => SetValue(BackgroundBrightnessProperty, value); }
     public bool ShowGrid { get => GetValue(ShowGridProperty); set => SetValue(ShowGridProperty, value); }
+    public double ModelScale { get => GetValue(ModelScaleProperty); set => SetValue(ModelScaleProperty, value); }
     public IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? ModelSubmeshMaterials { get => GetValue(ModelSubmeshMaterialsProperty); set => SetValue(ModelSubmeshMaterialsProperty, value); }
     public int MeshVerticesRevision { get => GetValue(MeshVerticesRevisionProperty); set => SetValue(MeshVerticesRevisionProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
@@ -727,6 +730,8 @@ public sealed class ViewportControl : OpenGlControlBase
                 bg.SetSunLighting(Vector3.Zero, bgLight, bgLight, 1f);
             bg.Render(viewProj, view, _camera.Position, 0, Wireframe, false, false, cullBackfaces: false);
         }
+        // M90: uniform preview-model scale (identity at 1.0 — the main map viewport never changes it).
+        _meshRenderer.SetWorldTransform(Matrix4x4.CreateScale((float)ModelScale));
         _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones, CullBackfaces);
         if (AnimateWater) RequestNextFrameRendering(); // keep frames coming so the water animates
 
@@ -1048,6 +1053,7 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == BackgroundColor3TexturesProperty) { _bgTexDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == BackgroundVisibleProperty || change.Property == BackgroundVertexLightProperty
                  || change.Property == BackgroundBrightnessProperty || change.Property == ShowGridProperty) { RequestNextFrameRendering(); }
+        else if (change.Property == ModelScaleProperty) { _skinDirty = true; RequestNextFrameRendering(); }   // M90: rescale attached VFX too
         else if (change.Property == BackgroundOffsetProperty || change.Property == BackgroundRotationProperty)
         { _dynamicLightsDirty = true; RequestNextFrameRendering(); }   // M89: move/rotate lights with the map
         else if (change.Property == ModelSubmeshMaterialsProperty) { _materialsDirty = true; RequestNextFrameRendering(); }
@@ -1107,10 +1113,14 @@ public sealed class ViewportControl : OpenGlControlBase
 
                 // M86: clip particle events ride their bone — re-anchor attached VFX systems to the
                 // animated bone transform every skinned frame (live particles keep flying).
+                // M90: bone globals are pre-scale, so apply the preview model scale on top.
                 if (frame.BoneGlobals is { } bones)
+                {
+                    var scaleM = ModelScale is 1.0 ? Matrix4x4.Identity : Matrix4x4.CreateScale((float)ModelScale);
                     foreach (var (item, sim) in _particleSimCache)
                         if (item.AttachBone is { Length: > 0 } bone && bones.TryGetValue(bone, out var bm))
-                            sim.SetWorldTransform(bm);
+                            sim.SetWorldTransform(scaleM.IsIdentity ? bm : bm * scaleM);
+                }
                 _wasAnimating = true;
             }
             catch { /* keep last frame */ }

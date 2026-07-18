@@ -1219,6 +1219,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.ResolveDistortionTextures = ResolveSystemDistortionTextures;
         MeshPreview.ResolveColorTextures = ResolveSystemColorTextures;   // M68
         MeshPreview.ResolveMeshes = ResolveSystemMeshes;
+        MeshPreview.PlaySoundEvent = PlayPreviewSoundEvent;              // M90: clip SFX
+        MeshPreview.StopSounds = () => Sound.StopTag("previewsfx");
         ParticleEditor.Info = m => _log.Info("Particle", m);
         ParticleEditor.Error = m => _log.Error("Particle", m);
         ParticleEditor.MarkDocumentDirty = () => { }; // window has its own dirty state via Document.IsDirty
@@ -3106,6 +3108,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             });
             // M85: game-accurate submesh visibility — skin bin initial-hide + animation-graph clip lists.
             var (initialHide, clipsByAnm) = LoadSubmeshRules(entry);
+            await Task.Run(() => LoadChampionAudio(entry));   // M90: clip SFX banks
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -3634,6 +3637,70 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Parse the champion skin's VFX library from its .bin (M37). Empty when there's no skin bin.</summary>
     private IReadOnlyDictionary<uint, VfxSystemDefinition> TryLoadChampionVfx(WadAssetEntry skn)
         => TryLoadChampionVfxWithResources(skn).systems;
+
+    // ---- M90: champion SFX for the model preview (clip SoundEventData -> Wwise banks) ----
+    private Formats.Audio.AudioBankSet? _previewAudioBanks;
+
+    /// <summary>Load the champion's SFX banks (base + the previewed skin's own folder when it has one):
+    /// sounds/wwise2016/sfx/characters/&lt;champ&gt;/skins/&lt;base|skinNN&gt;/*.bnk|.wpk.</summary>
+    private void LoadChampionAudio(WadAssetEntry skn)
+    {
+        _previewAudioBanks = null;
+        try
+        {
+            if (!skn.IsResolved) return;
+            var parts = skn.Path.Split('/');
+            int ci = Array.FindIndex(parts, p => p.Equals("characters", StringComparison.OrdinalIgnoreCase));
+            if (ci < 0 || ci + 1 >= parts.Length) return;
+            string champ = parts[ci + 1];
+            // the skn's skin folder (skin03) — its banks override/extend base for newer skins
+            string skinFolder = parts.FirstOrDefault(p => p.StartsWith("skin", StringComparison.OrdinalIgnoreCase)) ?? "";
+            string marker = $"/sfx/characters/{champ}/skins/";
+            const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+
+            var set = new Formats.Audio.AudioBankSet();
+            int banks = 0, packs = 0;
+            foreach (var e in AssetEntries)
+            {
+                if (!e.IsResolved) continue;
+                var p = e.Path;
+                int mi = p.IndexOf(marker, OIC);
+                if (mi < 0) continue;
+                string folder = p[(mi + marker.Length)..].Split('/')[0];
+                if (!folder.Equals("base", OIC) && !folder.Equals(skinFolder, OIC)) continue;
+                try
+                {
+                    if (p.EndsWith(".bnk", OIC))
+                    { if (Formats.Audio.BnkFile.Parse(ReadAsset(e.PathHash)) is { } b) { set.AddBank(b, e.PathHash, p); banks++; } }
+                    else if (p.EndsWith(".wpk", OIC))
+                    { if (Formats.Audio.WpkFile.Parse(ReadAsset(e.PathHash)) is { } w) { set.AddPack(w, e.PathHash, p); packs++; } }
+                }
+                catch { /* skip broken banks */ }
+            }
+            if (!set.IsEmpty)
+            {
+                _previewAudioBanks = set;
+                _log.Info("Audio", $"{champ} SFX: {banks} bank(s) + {packs} pack(s) — {set.EventCount} event(s), {set.WemCount} wem(s).");
+            }
+        }
+        catch { /* audio is optional */ }
+    }
+
+    /// <summary>M90: play one clip sound event (e.g. Play_sfx_Aatrox_Death3D_cast) through the champion banks.</summary>
+    private void PlayPreviewSoundEvent(string eventName)
+    {
+        try
+        {
+            if (_previewAudioBanks is null || !Sound.IsAvailable) return;
+            var wems = _previewAudioBanks.ResolveEvent(eventName);
+            if (wems.Count == 0) return;
+            var wem = wems.Select(id => (Id: id, Data: _previewAudioBanks.GetWemData(id))).FirstOrDefault(x => x.Data is not null);
+            if (wem.Data is null) return;
+            if (Sound.DecodeToWav(wem.Id, wem.Data) is { } wav)
+                Sound.PlayWav(wav, 1f, loop: false, tag: "previewsfx");
+        }
+        catch { /* never let SFX break the preview */ }
+    }
 
     /// <summary>M86: the skin's VFX library + its ResourceResolver map (effect key → object hash), which
     /// is how animation clip particle events reference their effects. The skin bin itself holds almost no
