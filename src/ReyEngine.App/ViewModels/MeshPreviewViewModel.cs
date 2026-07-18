@@ -66,7 +66,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     public MeshPreviewViewModel()
     {
-        Animation.ClipChanged = clip => { CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility(); ApplyClipParticles(); ApplyClipSounds(); };   // M85/M86/M90
+        Animation.ClipChanged = clip => { CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility(); ApplyClipParticles(); ResetSoundSchedule(stopCurrent: true); };   // M85/M86/M90
         Animation.TimeChanged = t =>
         {
             // M86: clip event VFX are one-shot — respawn them each time the looping clip wraps around
@@ -74,10 +74,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             if (t + 0.05 < _lastAnimTime)
             {
                 if (SelectedVfx is null) ApplyClipParticles();
-                ApplyClipSounds();   // M90: retrigger the clip's SFX on loop, like in-game
+                ResetSoundSchedule(stopCurrent: false);   // M91: refire from the top; one-shots finish across the seam
             }
             _lastAnimTime = t;
             AnimationTime = t;
+            TickSoundSchedule(t);   // M91: frame-accurate SFX
         };
     }
 
@@ -188,8 +189,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     partial void OnAutoSubmeshVisibilityChanged(bool value) { if (value) ApplyAutoVisibility(); }
 
-    /// <summary>M86: the playing clip's ParticleEventData → play those VFX bone-attached, like in-game.
-    /// (StartFrame timing is not simulated yet — every event effect plays for the whole clip.)</summary>
+    /// <summary>M86/M91: the playing clip's ParticleEventData → play those VFX bone-attached, like in-game.
+    /// Each item carries its StartFrame as a sim delay, so effects fire at their authored moment.</summary>
     private void ApplyClipParticles()
     {
         if (_clipsByAnm is null || Animation.SelectedAnimation?.Name is not { } anm) return;
@@ -215,7 +216,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 ResolveMeshes?.Invoke(def),
                 emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
                 emitterColorTextures: ResolveColorTextures?.Invoke(def))
-            { AttachBone = ResolveBoneName(ev) });
+            {
+                AttachBone = ResolveBoneName(ev),
+                StartDelay = MathF.Max(0f, ev.StartFrame) / ClipFps(),   // M91: fire at the authored frame
+            });
         }
         if (items.Count > 0) Playback = new VfxPlayback(items);
     }
@@ -224,21 +228,40 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     [ObservableProperty] private double _modelScale = 1.0;
     [RelayCommand] private void ResetModelScale() => ModelScale = 1.0;
 
-    // ---- M90: clip sound events — played through the champion's Wwise banks, like in-game ----
+    // ---- M90/M91: clip sound events — frame-accurate, driven by the animation clock ----
     [ObservableProperty] private bool _sfxEnabled = true;
+    private readonly List<(float Time, string Name)> _soundSchedule = new();
+    private int _soundsFired;
 
-    /// <summary>Play the current clip's SoundEventData (all of them; frame timing not simulated yet).</summary>
-    private void ApplyClipSounds()
+    /// <summary>Rebuild the clip's SFX schedule (event frame → seconds via the clip's fps). Called on clip
+    /// change (stopping the old clip's sounds) and on loop wrap (one-shots finish across the seam).</summary>
+    private void ResetSoundSchedule(bool stopCurrent)
     {
-        StopSounds?.Invoke();
-        if (!SfxEnabled || PlaySoundEvent is null || _clipsByAnm is null
-            || Animation.SelectedAnimation?.Name is not { } anm
+        if (stopCurrent) StopSounds?.Invoke();
+        _soundSchedule.Clear();
+        _soundsFired = 0;
+        if (_clipsByAnm is null || Animation.SelectedAnimation?.Name is not { } anm
             || _clipsByAnm.GetValueOrDefault(anm) is not { SoundEvents.Count: > 0 } clip) return;
-        foreach (var ev in clip.SoundEvents!)
-            PlaySoundEvent(ev.SoundName);
+        float fps = ClipFps();
+        foreach (var ev in clip.SoundEvents!.OrderBy(e => e.StartFrame))
+            _soundSchedule.Add((MathF.Max(0f, ev.StartFrame) / fps, ev.SoundName));
     }
 
-    partial void OnSfxEnabledChanged(bool value) { if (value) ApplyClipSounds(); else StopSounds?.Invoke(); }
+    /// <summary>Fire every scheduled sound whose time has come. Events skipped over by a big scrub jump
+    /// are marked fired but stay silent — jumping to the end must not detonate the whole clip at once.</summary>
+    private void TickSoundSchedule(double t)
+    {
+        while (_soundsFired < _soundSchedule.Count && _soundSchedule[_soundsFired].Time <= t + 0.001)
+        {
+            var (time, name) = _soundSchedule[_soundsFired++];
+            if (SfxEnabled && t - time < 0.5) PlaySoundEvent?.Invoke(name);
+        }
+    }
+
+    /// <summary>The clip's authored frame rate (event StartFrames are in these frames); 30 fps fallback.</summary>
+    private float ClipFps() => CurrentAnimation?.Fps is > 1f and < 240f ? CurrentAnimation!.Fps : 30f;
+
+    partial void OnSfxEnabledChanged(bool value) { if (!value) StopSounds?.Invoke(); }
 
     /// <summary>Bins store the bone as an unresolvable hash — match it against the skeleton's joints
     /// (FNV1a of the lowercased name, or the joint's Elf AnimHash) to get a real bone name.</summary>

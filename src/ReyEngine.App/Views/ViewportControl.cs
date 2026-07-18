@@ -907,6 +907,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 BitConverter.SingleToInt32Bits(item.Transform.M43));
             var sim = new VfxParticleSimulator(seed);
             sim.SetSystem(item.System, item.Transform);
+            if (item.StartDelay > 0f) sim.SetStartDelay(item.StartDelay);   // M91: frame-accurate clip events
             foreach (var es in sim.Emitters)
             {
                 // match the state back to its emitter index (by reference — SetSystem keeps the instances)

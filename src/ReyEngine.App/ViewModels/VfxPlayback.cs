@@ -35,6 +35,10 @@ public sealed record VfxPlaybackItem(
     /// <summary>M86: when set, the viewport re-anchors this system to the named skeleton bone every
     /// skinned frame — clip particle events ride their bone like in-game.</summary>
     public string? AttachBone { get; init; }
+
+    /// <summary>M91: seconds after playback start before this system begins simulating — clip events
+    /// fire at their authored StartFrame instead of all at clip start.</summary>
+    public float StartDelay { get; init; }
 }
 
 /// <summary>

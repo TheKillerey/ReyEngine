@@ -121,9 +121,22 @@ public sealed class VfxParticleSimulator
     }
 
     /// <summary>Advance the whole system by <paramref name="dt"/> seconds and rebuild render instances.</summary>
+    // M91: frame-accurate clip events — the sim exists from clip start but stays dormant until its
+    // event's StartFrame time. Keeps playback rebuilds atomic (no mid-clip sim resets).
+    private float _startDelay;
+    public void SetStartDelay(float seconds) => _startDelay = MathF.Max(0f, seconds);
+
     public void Update(float dt)
     {
         if (dt <= 0f) return;
+        if (_startDelay > 0f)
+        {
+            _startDelay -= dt;
+            if (_startDelay > 0f) return;
+            dt = MathF.Min(dt, -_startDelay);   // only the portion past the trigger point
+            _startDelay = 0f;
+            if (dt <= 0f) return;
+        }
         dt = MathF.Min(dt, 0.1f);   // clamp big frame gaps so bursts don't teleport
         int live = 0;
         foreach (var s in _emitters)
