@@ -21,15 +21,18 @@ public static class UpdateService
             http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
             // NOT /releases/latest — that endpoint excludes prereleases, and every beta release is one.
-            // The list is newest-first; take the first non-draft entry.
+            // The list is newest-first; take the first non-draft entry whose tag is an actual version
+            // (asset releases like 'maps' must never read as an update).
             var json = await http.GetStringAsync(
-                $"https://api.github.com/repos/{AppInfo.RepoOwner}/{AppInfo.RepoName}/releases?per_page=5");
+                $"https://api.github.com/repos/{AppInfo.RepoOwner}/{AppInfo.RepoName}/releases?per_page=10");
             using var doc = JsonDocument.Parse(json);
             string tag = ""; string url = AppInfo.RepoUrl;
             foreach (var rel in doc.RootElement.EnumerateArray())
             {
                 if (rel.TryGetProperty("draft", out var d) && d.GetBoolean()) continue;
-                tag = rel.GetProperty("tag_name").GetString() ?? "";
+                string t = rel.GetProperty("tag_name").GetString() ?? "";
+                if (ParseVersion(t) is null) continue;
+                tag = t;
                 url = rel.TryGetProperty("html_url", out var u) ? u.GetString() ?? AppInfo.RepoUrl : AppInfo.RepoUrl;
                 break;
             }

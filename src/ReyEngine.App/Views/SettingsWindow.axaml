@@ -218,9 +218,24 @@
               <TextBlock Classes="settingsDesc" Text="Map folder" Margin="0,4,0,0" />
               <Grid ColumnDefinitions="*,Auto">
                 <TextBox Grid.Column="0" Text="{Binding PreviewBackgroundMapFolder}"
-                         Watermark="e.g. K:\LeagueSandbox\League_Sandbox_Client\LEVELS\Map8" />
+                         Watermark="e.g. Documents\ReyEngine Projects\Maps\Map8" />
                 <Button Grid.Column="1" Content="Browse…" Margin="8,0,0,0" Click="OnBrowsePreviewMap" />
               </Grid>
+            </StackPanel>
+          </Border>
+
+          <!-- M92: Dominion asset pack — separate download so the tool zip stays small -->
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="10">
+              <TextBlock Classes="settingsTitle" Text="DOWNLOAD MAP PACK" />
+              <TextBlock Classes="settingsDesc"
+                         Text="The Dominion / Crystal Scar map (~66 MB) is a separate download so the tool stays small. One click downloads it from GitHub, extracts it to Documents\ReyEngine Projects\Maps\Map8, and enables the backdrop." />
+              <StackPanel Orientation="Horizontal" Spacing="10">
+                <Button Content="⬇ Download Dominion map (Map8)" Command="{Binding DownloadMap8Command}"
+                        IsEnabled="{Binding !MapDownloadBusy}" />
+                <TextBlock Text="{Binding MapDownloadStatus}" VerticalAlignment="Center" FontSize="11"
+                           Foreground="{DynamicResource ReyAccent2Brush}" TextWrapping="Wrap" MaxWidth="330" />
+              </StackPanel>
             </StackPanel>
           </Border>
         </StackPanel>

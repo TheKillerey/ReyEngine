@@ -53,6 +53,66 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _previewBackgroundMapFolder = "";
     [ObservableProperty] private bool _previewBackgroundEnabled;
 
+    // M92: one-click Dominion (Map8) asset-pack download — separate from the tool zip to keep it small.
+    private const string Map8DownloadUrl =
+        $"https://github.com/{AppInfo.RepoOwner}/{AppInfo.RepoName}/releases/download/maps/ReyEngine-Map8-Dominion.zip";
+    [ObservableProperty] private string _mapDownloadStatus = "";
+    [ObservableProperty] private bool _mapDownloadBusy;
+
+    private static string Map8InstallDir => System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ReyEngine Projects", "Maps", "Map8");
+
+    [RelayCommand]
+    private async System.Threading.Tasks.Task DownloadMap8()
+    {
+        if (MapDownloadBusy) return;
+        try
+        {
+            string dest = Map8InstallDir;
+            if (System.IO.File.Exists(System.IO.Path.Combine(dest, "Scene", "room.nvr")))
+            {
+                PreviewBackgroundMapFolder = dest;
+                PreviewBackgroundEnabled = true;
+                MapDownloadStatus = "Already installed — backdrop enabled.";
+                return;
+            }
+
+            MapDownloadBusy = true;
+            MapDownloadStatus = "Downloading… 0%";
+            string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ReyEngine-Map8-Dominion.zip");
+
+            using (var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(10) })
+            using (var resp = await http.GetAsync(Map8DownloadUrl, System.Net.Http.HttpCompletionOption.ResponseHeadersRead))
+            {
+                resp.EnsureSuccessStatusCode();
+                long total = resp.Content.Headers.ContentLength ?? 0;
+                await using var src = await resp.Content.ReadAsStreamAsync();
+                await using var dst = System.IO.File.Create(tmp);
+                var buffer = new byte[81920];
+                long read = 0; int n; int lastPct = -1;
+                while ((n = await src.ReadAsync(buffer)) > 0)
+                {
+                    await dst.WriteAsync(buffer.AsMemory(0, n));
+                    read += n;
+                    int pct = total > 0 ? (int)(read * 100 / total) : -1;
+                    if (pct != lastPct) { lastPct = pct; MapDownloadStatus = pct >= 0 ? $"Downloading… {pct}%" : $"Downloading… {read / 1048576} MB"; }
+                }
+            }
+
+            MapDownloadStatus = "Extracting…";
+            System.IO.Directory.CreateDirectory(dest);
+            await System.Threading.Tasks.Task.Run(() =>
+                System.IO.Compression.ZipFile.ExtractToDirectory(tmp, dest, overwriteFiles: true));
+            try { System.IO.File.Delete(tmp); } catch { }
+
+            PreviewBackgroundMapFolder = dest;
+            PreviewBackgroundEnabled = true;
+            MapDownloadStatus = $"Installed to {dest} — backdrop enabled. Save to apply.";
+        }
+        catch (Exception ex) { MapDownloadStatus = $"Download failed: {ex.Message}"; }
+        finally { MapDownloadBusy = false; }
+    }
+
     // M72: sidebar section switching (0 General · 1 Camera · 2 Controls · 3 Theme · 4 Preview)
     [ObservableProperty] private int _selectedSection;
     public bool ShowGeneral => SelectedSection == 0;
