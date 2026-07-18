@@ -1,0 +1,57 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ReyEngine.App.Views.AboutWindow"
+        Title="About ReyEngine"
+        Width="560" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="{DynamicResource ReyBgBrush}"
+        Foreground="{DynamicResource ReyTextBrush}"
+        FontFamily="Inter, Segoe UI, sans-serif">
+
+  <!-- M81: About dialog — identity, credits, legal -->
+  <StackPanel Margin="26,22" Spacing="14">
+
+    <StackPanel Orientation="Horizontal" Spacing="14">
+      <Image x:Name="LogoImage" Width="52" Height="52" VerticalAlignment="Center" />
+      <StackPanel VerticalAlignment="Center" Spacing="2">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="ReyEngine" FontSize="22" FontWeight="Bold" Foreground="{DynamicResource ReyTextBrightBrush}" />
+          <Border Classes="badge accent" VerticalAlignment="Center">
+            <TextBlock x:Name="VersionText" FontSize="10" />
+          </Border>
+        </StackPanel>
+        <TextBlock Text="League of Legends map &amp; asset editor" FontSize="11.5" Foreground="{DynamicResource ReyTextDimBrush}" />
+        <TextBlock x:Name="AuthorText" FontSize="11.5" Foreground="{DynamicResource ReyAccentBrush}" />
+      </StackPanel>
+    </StackPanel>
+
+    <Border Classes="settingsCard">
+      <StackPanel Spacing="6">
+        <TextBlock Classes="settingsTitle" Text="BUILT WITH" />
+        <TextBlock Classes="settingsDesc" TextWrapping="Wrap" Text="LeagueToolkit — League file formats (wad, mapgeo, bin, skn/anm, tex)&#x0a;Avalonia UI — cross-platform .NET UI framework&#x0a;Silk.NET — OpenGL bindings (ANGLE / GLES viewport)&#x0a;CommunityToolkit (Mvvm + HighPerformance) — app architecture&#x0a;NAudio — audio playback&#x0a;BCnEncoder.NET — texture block decompression&#x0a;SharpGLTF — glTF plumbing (via LeagueToolkit)&#x0a;Inter — UI typeface (SIL OFL)&#x0a;&#x0a;See each project's repository for its license." />
+      </StackPanel>
+    </Border>
+
+    <Border Classes="settingsCard">
+      <StackPanel Spacing="6">
+        <TextBlock Classes="settingsTitle" Text="THANKS &amp; COMMUNITY" />
+        <TextBlock Classes="settingsDesc" TextWrapping="Wrap" Text="CommunityDragon — hash lists that make WAD paths readable&#x0a;vgmstream — Wwise audio decoding (external tool)&#x0a;MapgeoAddon (TheKillerey) — the Blender addon whose research powers the mapgeo writer, GrassTint and shader semantics&#x0a;The League modding community — cslol-manager ecosystem, format research and testing" />
+      </StackPanel>
+    </Border>
+
+    <Border Classes="settingsCard">
+      <StackPanel Spacing="6">
+        <TextBlock Classes="settingsTitle" Text="LEGAL" />
+        <TextBlock Classes="settingsDesc" TextWrapping="Wrap" Text="ReyEngine was created under Riot Games' 'Legal Jibber Jabber' policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project. League of Legends and Riot Games are trademarks or registered trademarks of Riot Games, Inc." />
+      </StackPanel>
+    </Border>
+
+    <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+      <Button Grid.Column="0" Classes="tool" Content="🌐 GitHub" Click="OnOpenRepo" />
+      <Button Grid.Column="2" Classes="tool" Content="⟳ Check for Updates" Click="OnCheckUpdates" />
+      <Button Grid.Column="3" Classes="primary" Content="Close" Click="OnClose" Margin="8,0,0,0" Padding="18,6" />
+    </Grid>
+    <TextBlock x:Name="UpdateStatus" FontSize="10.5" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" IsVisible="False" />
+  </StackPanel>
+</Window>

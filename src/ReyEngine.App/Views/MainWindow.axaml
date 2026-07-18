@@ -34,6 +34,8 @@
         <Border Width="1" Height="12" Background="{DynamicResource ReyBorderAccentBrush}" VerticalAlignment="Center" />
         <TextBlock Text="MAP &amp; ASSET EDITOR" FontSize="9" FontWeight="SemiBold" LetterSpacing="2"
                    Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+        <TextBlock x:Name="TitleVersionText" FontSize="9" FontWeight="SemiBold"
+                   Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
       </StackPanel>
       <!-- right margin clears the native caption buttons overlaid on the extended client area -->
       <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" Margin="10,0,150,0" VerticalAlignment="Center">
@@ -108,7 +110,8 @@
       <MenuItem Header="_Help">
         <MenuItem Header="Preferences…" Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+," />
         <Separator />
-        <MenuItem Header="About ReyEngine" IsEnabled="False" />
+        <MenuItem Header="Check for Updates…" Click="OnCheckUpdates" />
+        <MenuItem Header="About ReyEngine…" Click="OnShowAbout" />
       </MenuItem>
     </Menu>
     </Grid>

@@ -36,6 +36,41 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         LoadBranding();
+        TitleVersionText.Text = AppInfo.DisplayVersion;   // M81
+        _ = AutoCheckUpdatesAsync();                      // M81: silent startup check
+    }
+
+    // ---- M81: About + updates ----
+    private void OnShowAbout(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => new AboutWindow().ShowDialog(this);
+
+    private async void OnCheckUpdates(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var r = await ReyEngine.App.Services.UpdateService.CheckAsync();
+        if (DataContext is not MainWindowViewModel vm) return;
+        if (!r.Success)
+            await PromptWindow.ConfirmAsync(this, "Check for Updates",
+                $"Could not check for updates.\n\n{r.Error}\n\n(If no GitHub release is published yet, this is expected.)", "OK");
+        else if (r.UpdateAvailable)
+        {
+            if (await PromptWindow.ConfirmAsync(this, "Update Available",
+                $"A newer version is available: {r.LatestVersion}\nYou have {AppInfo.DisplayVersion}.\n\nOpen the download page?", "Open"))
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(r.ReleaseUrl!) { UseShellExecute = true }); } catch { }
+        }
+        else
+            await PromptWindow.ConfirmAsync(this, "Check for Updates",
+                $"You're up to date ({AppInfo.DisplayVersion}).", "OK");
+    }
+
+    /// <summary>Silent startup update check: only speaks up when a newer release exists.</summary>
+    private async System.Threading.Tasks.Task AutoCheckUpdatesAsync()
+    {
+        await System.Threading.Tasks.Task.Delay(3000);   // let the app settle first
+        var r = await ReyEngine.App.Services.UpdateService.CheckAsync();
+        if (r is { Success: true, UpdateAvailable: true }
+            && await PromptWindow.ConfirmAsync(this, "Update Available",
+                $"ReyEngine {r.LatestVersion} is available (you have {AppInfo.DisplayVersion}).\n\nOpen the download page?", "Open"))
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(r.ReleaseUrl!) { UseShellExecute = true }); } catch { }
     }
 
     /// <summary>M39 custom title bar: drag to move, double-click to maximize/restore — but ONLY from
