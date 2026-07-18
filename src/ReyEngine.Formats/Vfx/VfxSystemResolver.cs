@@ -98,6 +98,47 @@ public static class VfxSystemResolver
     private static readonly uint PrimMesh = HashAlgorithms.Fnv1a("VfxPrimitiveMesh");
     private static readonly uint PrimArbitraryQuad = HashAlgorithms.Fnv1a("VfxPrimitiveArbitraryQuad");
 
+    // M86: skin bins carry a top-level ResourceResolver object whose resourceMap links effect KEYS
+    // (what animation ParticleEventData.mEffectKey hashes) to VfxSystemDefinitionData object hashes.
+    private static readonly uint ResolverClass = HashAlgorithms.Fnv1a("ResourceResolver");
+    private static readonly uint F_resourceMap = HashAlgorithms.Fnv1a("resourceMap");
+    private static readonly uint F_mResourceMap = HashAlgorithms.Fnv1a("mResourceMap");
+
+    /// <summary>M86: effect-key hash → VfxSystemDefinitionData object hash, from every ResourceResolver
+    /// in the bin. Empty when the bin has none. Never throws.</summary>
+    public static IReadOnlyDictionary<uint, uint> ExtractResourceMap(byte[] bin)
+    {
+        var map = new Dictionary<uint, uint>();
+        BinTree tree;
+        try { tree = SafeBinTree.Parse(bin); }
+        catch { return map; }
+        foreach (var o in tree.Objects.Values)
+        {
+            if (o.ClassHash != ResolverClass) continue;
+            if (!o.Properties.TryGetValue(F_resourceMap, out var prop)
+                && !o.Properties.TryGetValue(F_mResourceMap, out prop)) continue;
+            if (prop is not System.Collections.IEnumerable entries || prop is BinTreeString) continue;
+            foreach (var kv in entries)
+            {
+                var kvType = kv.GetType();
+                var key = kvType.GetProperty("Key")?.GetValue(kv);
+                var val = kvType.GetProperty("Value")?.GetValue(kv);
+                uint kh = key switch { BinTreeHash h => h.Value, BinTreeU32 u => u.Value, _ => 0u };
+                uint vh = val switch { BinTreeObjectLink ol => ol.Value, BinTreeHash h => h.Value, BinTreeU32 u => u.Value, _ => 0u };
+                if (kh != 0 && vh != 0) map[kh] = vh;
+            }
+        }
+        return map;
+    }
+
+    /// <summary>M86: the bin's linked-bin list (PROP dependency paths, e.g. the multi-skin "longname"
+    /// bins that actually hold a skin's VfxSystemDefinitionData objects). Never throws.</summary>
+    public static IReadOnlyList<string> ExtractDependencies(byte[] bin)
+    {
+        try { return SafeBinTree.Parse(bin).Dependencies; }
+        catch { return Array.Empty<string>(); }
+    }
+
     /// <summary>Parse every VfxSystemDefinitionData in the bin, keyed by object path-hash.</summary>
     public static IReadOnlyDictionary<uint, VfxSystemDefinition> ExtractAll(byte[] materialsBin)
     {

@@ -51,6 +51,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     private IReadOnlyDictionary<uint, VfxSystemDefinition> _vfxDefs =
         new Dictionary<uint, VfxSystemDefinition>();
+    // M86: skin bin ResourceResolver — effect-key hash → VFX object hash (how clips reference effects)
+    private IReadOnlyDictionary<uint, uint> _vfxResourceMap = new Dictionary<uint, uint>();
 
     // wired once by MainWindowViewModel
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveTextures;
@@ -130,7 +132,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         var items = new List<VfxPlaybackItem>();
         foreach (var ev in clip.ParticleEvents!)
         {
-            var def = _vfxDefs.Values.FirstOrDefault(d =>
+            // primary: the skin bin's ResourceResolver map (effect key → system object), like the game
+            uint keyHash = ev.EffectHash != 0 ? ev.EffectHash
+                : ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(ev.EffectName);
+            VfxSystemDefinition? def = null;
+            if (_vfxResourceMap.TryGetValue(keyHash, out var objHash))
+                _vfxDefs.TryGetValue(objHash, out def);
+            def ??= _vfxDefs.Values.FirstOrDefault(d =>
                 (ev.EffectName.Length > 0 && string.Equals(d.Name, ev.EffectName, StringComparison.OrdinalIgnoreCase))
                 || (ev.EffectHash != 0 && (d.PathHash == ev.EffectHash
                     || ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(d.Name) == ev.EffectHash)));
@@ -178,10 +186,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// <summary>Populate the animation list (same entries the main window's FindAnimations produces).</summary>
     public void SetAnimations(IEnumerable<AnimationEntryViewModel> animations) => Animation.SetAnimations(animations);
 
-    /// <summary>Populate the champion VFX library for this skin (visual systems only).</summary>
-    public void SetVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems)
+    /// <summary>Populate the champion VFX library for this skin (visual systems only). The resource map
+    /// (M86) translates clip effect keys → system object hashes, the way the game resolves them.</summary>
+    public void SetVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems,
+        IReadOnlyDictionary<uint, uint>? resourceMap = null)
     {
         _vfxDefs = systems;
+        _vfxResourceMap = resourceMap ?? new Dictionary<uint, uint>();
         VfxSystems.Clear();
         foreach (var s in System.Linq.Enumerable.OrderBy(systems.Values, x => x.Name, StringComparer.OrdinalIgnoreCase))
             if (System.Linq.Enumerable.Any(s.Emitters, e => e.IsVisual))

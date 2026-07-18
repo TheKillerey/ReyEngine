@@ -1581,6 +1581,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             var hide = new List<string>();
             var clips = new Dictionary<string, Formats.Skeletons.AnimClipInfo>(StringComparer.OrdinalIgnoreCase);
+
+            // M86: this skin's OWN animation graph first (named in the skin bin's dependency list) —
+            // clips merge first-wins, and other skins' graphs carry other skins' effect keys.
+            var skinBinPath = SkinPaths.BinPathForSkn(skn.Path);
+            if (skinBinPath is not null && TryResolveEntry(HashAlgorithms.WadPath(skinBinPath), out var skinBinEntry)
+                && VfxSystemResolver.ExtractDependencies(GetAssetBytes(skinBinEntry))
+                    .FirstOrDefault(d => d.Contains("/animations/", OIC)) is { } graphPath
+                && TryResolveEntry(HashAlgorithms.WadPath(graphPath), out var graphEntry))
+                foreach (var c in Formats.Skeletons.ChampionAnimationData.ParseClips(GetAssetBytes(graphEntry), ResolveBinName))
+                {
+                    var file = Path.GetFileName(c.AnmPath.Replace('\\', '/'));
+                    if (file.Length > 0 && !clips.ContainsKey(file)) clips[file] = c;
+                }
+
             foreach (var e in AssetEntries)
             {
                 if (!e.IsResolved || !e.Path.EndsWith(".bin", OIC)) continue;
@@ -3087,7 +3101,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var m = SkinnedMeshDecoder.Decode(ReadAsset(entry.PathHash));
                 var s = TryPairSkeleton(entry);
                 var t = TryLoadPreviewDiffuse(entry, m);
-                var v = TryLoadChampionVfx(entry);   // M55: skin VFX library, local to the window
+                var v = TryLoadChampionVfxWithResources(entry);   // M55/M86: skin VFX library + resource map
                 return (m, s, t, v);
             });
             // M85: game-accurate submesh visibility — skin bin initial-hide + animation-graph clip lists.
@@ -3100,7 +3114,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MeshPreview.SetAnimations(mesh.CanSkin && skeleton is not null
                     ? FindAnimations(entry)
                     : Enumerable.Empty<AnimationEntryViewModel>());
-                MeshPreview.SetVfx(vfx);
+                MeshPreview.SetVfx(vfx.systems, vfx.resourceMap);
                 MeshInspector.ShowMesh(mesh, skeleton);
                 ShowMeshPreviewWindow?.Invoke();
                 _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris — model preview window.");
@@ -3585,12 +3599,41 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Parse the champion skin's VFX library from its .bin (M37). Empty when there's no skin bin.</summary>
     private IReadOnlyDictionary<uint, VfxSystemDefinition> TryLoadChampionVfx(WadAssetEntry skn)
+        => TryLoadChampionVfxWithResources(skn).systems;
+
+    /// <summary>M86: the skin's VFX library + its ResourceResolver map (effect key → object hash), which
+    /// is how animation clip particle events reference their effects. The skin bin itself holds almost no
+    /// VFX — the systems live in its linked dependency bins (the multi-skin "longname" bins), so the
+    /// whole link chain is followed and merged.</summary>
+    private (IReadOnlyDictionary<uint, VfxSystemDefinition> systems, IReadOnlyDictionary<uint, uint>? resourceMap)
+        TryLoadChampionVfxWithResources(WadAssetEntry skn)
     {
-        if (!ContentLoaded || !skn.IsResolved) return EmptyVfx;
+        if (!ContentLoaded || !skn.IsResolved) return (EmptyVfx, null);
         var binPath = SkinPaths.BinPathForSkn(skn.Path);
-        if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return EmptyVfx;
-        try { return VfxSystemResolver.ExtractAll(GetAssetBytes(binEntry)); }
-        catch { return EmptyVfx; }
+        if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return (EmptyVfx, null);
+        try
+        {
+            var systems = new Dictionary<uint, VfxSystemDefinition>();
+            var resMap = new Dictionary<uint, uint>();
+            var visited = new HashSet<ulong> { binEntry.PathHash };
+            var queue = new Queue<WadAssetEntry>();
+            queue.Enqueue(binEntry);
+            int guard = 0;
+            while (queue.Count > 0 && guard++ < 64)
+            {
+                byte[] bytes;
+                try { bytes = GetAssetBytes(queue.Dequeue()); } catch { continue; }
+                foreach (var (k, v) in VfxSystemResolver.ExtractAll(bytes)) systems.TryAdd(k, v);
+                foreach (var (k, v) in VfxSystemResolver.ExtractResourceMap(bytes)) resMap.TryAdd(k, v);
+                foreach (var dep in VfxSystemResolver.ExtractDependencies(bytes))
+                {
+                    var h = HashAlgorithms.WadPath(dep);
+                    if (visited.Add(h) && TryResolveEntry(h, out var depEntry)) queue.Enqueue(depEntry);
+                }
+            }
+            return (systems, resMap.Count > 0 ? resMap : null);
+        }
+        catch { return (EmptyVfx, null); }
     }
 
     /// <summary>Map a Formats <see cref="MaterialProfile"/> to the renderer's per-submesh material (M32).</summary>
