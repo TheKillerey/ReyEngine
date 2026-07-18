@@ -44,6 +44,28 @@
 
 Thanks to [CommunityDragon](https://communitydragon.org) (hashes), [vgmstream](https://github.com/vgmstream/vgmstream) (Wwise decoding), the [MapgeoAddon](https://github.com/TheKillerey/MapgeoAddon) research, and the League modding community.
 
+## License
+
+ReyEngine is released under the [MIT License](LICENSE). © 2026 TheKillerey.
+
+## Code signing policy
+
+Free code signing for Windows binaries is provided by [SignPath.io](https://signpath.io), with a certificate issued by the [SignPath Foundation](https://signpath.org).
+
+Every signed release is built automatically by GitHub Actions from this public repository; SignPath verifies that the signed binary originates from the tagged source before signing it. No binary is signed from a local machine.
+
+- **Committers & reviewers:** [TheKillerey](https://github.com/TheKillerey)
+- **Approvers:** [TheKillerey](https://github.com/TheKillerey)
+
+## Privacy policy
+
+ReyEngine does not transfer any personal data to networked systems. It makes two outbound network requests, both initiated by the user or clearly disclosed:
+
+- **Update check** — on startup (and via *Help ▸ About*), it queries the public GitHub Releases API for this repository to see whether a newer version exists. Only the request itself is sent; no personal or usage data is transmitted.
+- **Hash sync** — when you choose to sync hash tables, it downloads public hash lists from [CommunityDragon](https://communitydragon.org).
+
+ReyEngine only reads your local League of Legends installation and writes to the project/output folders you select. Uninstall by deleting the extracted program folder.
+
 ## Legal
 
 ReyEngine was created under Riot Games' ["Legal Jibber Jabber"](https://www.riotgames.com/en/legal) policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.

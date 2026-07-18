@@ -1,0 +1,96 @@
+name: Release
+
+# Builds the self-contained Windows build on a version tag and publishes it as a GitHub Release.
+# SignPath (https://signpath.org) code-signs the binaries — but ONLY once the repository has the
+# SignPath credentials configured. Until then, releases are built + published unsigned, so this
+# workflow is useful immediately and turns on signing automatically the moment credentials exist.
+#
+# To enable signing after SignPath Foundation approves the project, add in repo settings:
+#   Variables (Settings > Secrets and variables > Actions > Variables):
+#     SIGNPATH_ORGANIZATION_ID   = <your SignPath organization id>
+#     SIGNPATH_PROJECT_SLUG      = ReyEngine           (your SignPath project slug)
+#     SIGNPATH_POLICY_SLUG       = release-signing     (your signing policy slug)
+#   Secrets (Settings > Secrets and variables > Actions > Secrets):
+#     SIGNPATH_API_TOKEN         = <your SignPath API token>
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to build (e.g. v0.1.2)'
+        required: true
+
+permissions:
+  contents: write   # create releases + upload assets
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish (self-contained win-x64)
+        shell: pwsh
+        run: |
+          dotnet publish src/ReyEngine.App/ReyEngine.App.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -o publish/win-x64 --nologo
+
+      - name: Package zip
+        id: package
+        shell: pwsh
+        run: |
+          $name = "ReyEngine-$env:TAG-win-x64.zip"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path publish/win-x64/* -DestinationPath "dist/$name" -CompressionLevel Optimal
+          "name=$name" >> $env:GITHUB_OUTPUT
+
+      - name: Upload build artifact (for SignPath)
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: reyengine-win-x64
+          path: dist/${{ steps.package.outputs.name }}
+          if-no-files-found: error
+
+      # --- signing (runs only when SignPath credentials are configured) ---
+      - name: Submit signing request to SignPath
+        id: sign
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist-signed
+          skip-decompress: true
+
+      - name: Choose release asset (signed if available)
+        id: asset
+        shell: pwsh
+        run: |
+          $name = "${{ steps.package.outputs.name }}"
+          if (Test-Path "dist-signed/$name") { "path=dist-signed/$name" >> $env:GITHUB_OUTPUT }
+          else { "path=dist/$name" >> $env:GITHUB_OUTPUT }
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ReyEngine ${{ env.TAG }}
+          prerelease: true
+          files: ${{ steps.asset.outputs.path }}
+          fail_on_unmatched_files: true
