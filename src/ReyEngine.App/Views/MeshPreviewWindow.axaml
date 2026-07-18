@@ -43,11 +43,12 @@
                   <DataTemplate><TextBlock Text="{Binding Name}" FontSize="11" /></DataTemplate>
                 </ComboBox.ItemTemplate>
               </ComboBox>
+              <!-- M84 fix: the Loop checkbox overflowed the 250px panel and was cut off — compact ⟳ toggle -->
               <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Animation.HasClip}">
                 <Button Classes="tool" Content="◀|" Command="{Binding Animation.StepBackCommand}" />
                 <Button Classes="tool" Content="Play / Pause" Command="{Binding Animation.TogglePlayCommand}" />
                 <Button Classes="tool" Content="|▶" Command="{Binding Animation.StepForwardCommand}" />
-                <CheckBox Content="Loop" IsChecked="{Binding Animation.Loop}" VerticalAlignment="Center" FontSize="11" />
+                <ToggleButton Classes="vp" Content="⟳" IsChecked="{Binding Animation.Loop}" ToolTip.Tip="Loop playback" />
               </StackPanel>
               <Slider Minimum="0" Maximum="{Binding Animation.Duration}" Value="{Binding Animation.Time, Mode=TwoWay}"
                       IsVisible="{Binding Animation.HasClip}" />
@@ -58,6 +59,24 @@
                 <Slider Minimum="0.1" Maximum="2" Value="{Binding Animation.Speed, Mode=TwoWay}" Width="110" />
                 <TextBlock Text="{Binding Animation.Speed, StringFormat='{}{0:0.0}x'}" FontSize="11" VerticalAlignment="Center" />
               </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <!-- M84: per-submesh visibility (user request) — toggle any of the model's submeshes -->
+          <Border Classes="card" IsVisible="{Binding HasSubmeshes}">
+            <StackPanel Spacing="4">
+              <Grid ColumnDefinitions="*,Auto,Auto">
+                <TextBlock Classes="cardTitle" Grid.Column="0" Text="SUBMESHES" VerticalAlignment="Center" />
+                <Button Classes="icon" Grid.Column="1" Content="All" FontSize="10" Command="{Binding ShowAllSubmeshesCommand}" />
+                <Button Classes="icon" Grid.Column="2" Content="None" FontSize="10" Command="{Binding HideAllSubmeshesCommand}" />
+              </Grid>
+              <ItemsControl ItemsSource="{Binding Submeshes}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsVisible}" FontSize="11" Margin="0,1" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
             </StackPanel>
           </Border>
 
@@ -88,7 +107,8 @@
                              ParticlePlayback="{Binding Playback}"
                              ShowBones="{Binding ShowBones}"
                              Wireframe="{Binding Wireframe}"
-                             CullBackfaces="{Binding CullBackfaces}" />
+                             CullBackfaces="{Binding CullBackfaces}"
+                             ModelSubmeshVisible="{Binding SubmeshVisible}" />
       <Border x:Name="PreviewInput" Background="Transparent" />
       <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
                  Margin="8,6" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />

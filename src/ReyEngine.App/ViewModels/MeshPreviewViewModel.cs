@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Core.Decoding;
@@ -17,6 +18,15 @@ namespace ReyEngine.App.ViewModels;
 /// map viewport. M55 adds animation playback (own AnimationInspectorViewModel: list + play/loop/speed)
 /// and the champion's VFX library (played at the model origin in the preview viewport).
 /// </summary>
+/// <summary>M84: one submesh visibility toggle in the Model Preview.</summary>
+public sealed partial class SubmeshToggleViewModel : ObservableObject
+{
+    public required string Name { get; init; }
+    [ObservableProperty] private bool _isVisible = true;
+    public Action? Changed;
+    partial void OnIsVisibleChanged(bool value) => Changed?.Invoke();
+}
+
 public sealed partial class MeshPreviewViewModel : ObservableObject
 {
     [ObservableProperty] private string _title = "";
@@ -68,7 +78,29 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Animation.SetSkeleton(skeleton?.BoneCount ?? 0);
         Playback = null;
         SelectedVfx = null;
+
+        // M84: per-submesh visibility toggles (all visible on load)
+        Submeshes.Clear();
+        foreach (var s in mesh.SubMeshes)
+        {
+            var t = new SubmeshToggleViewModel { Name = string.IsNullOrEmpty(s.Material) ? $"submesh {Submeshes.Count}" : s.Material };
+            t.Changed = RebuildSubmeshVisibility;
+            Submeshes.Add(t);
+        }
+        HasSubmeshes = Submeshes.Count > 1;
+        RebuildSubmeshVisibility();
     }
+
+    // ---- M84: per-submesh visibility ----
+    public ObservableCollection<SubmeshToggleViewModel> Submeshes { get; } = new();
+    [ObservableProperty] private bool _hasSubmeshes;
+    [ObservableProperty] private IReadOnlyList<bool>? _submeshVisible;
+
+    private void RebuildSubmeshVisibility() =>
+        SubmeshVisible = Submeshes.Select(s => s.IsVisible).ToList();
+
+    [RelayCommand] private void ShowAllSubmeshes() { foreach (var s in Submeshes) s.IsVisible = true; }
+    [RelayCommand] private void HideAllSubmeshes() { foreach (var s in Submeshes) s.IsVisible = false; }
 
     /// <summary>Populate the animation list (same entries the main window's FindAnimations produces).</summary>
     public void SetAnimations(IEnumerable<AnimationEntryViewModel> animations) => Animation.SetAnimations(animations);
