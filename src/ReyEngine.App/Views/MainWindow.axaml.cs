@@ -124,6 +124,19 @@ public partial class MainWindow : Window
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop
+
+            // M83: breadcrumb behaves like Explorer's path bar — on navigation, scroll to the END so the
+            // current folder is visible (the bar is hidden; it used to overlay and cover the whole path).
+            vm.ContentBrowser.Breadcrumbs.CollectionChanged += (_, _) =>
+                Dispatcher.UIThread.Post(() =>
+                    BreadcrumbScroll.Offset = new Avalonia.Vector(double.MaxValue, 0),
+                    DispatcherPriority.Loaded);
+            BreadcrumbScroll.PointerWheelChanged += (_, e) =>
+            {
+                BreadcrumbScroll.Offset = new Avalonia.Vector(
+                    Math.Max(0, BreadcrumbScroll.Offset.X - e.Delta.Y * 40), 0);
+                e.Handled = true;
+            };
         }
     }
 
