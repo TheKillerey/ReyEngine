@@ -4,7 +4,7 @@ namespace ReyEngine.App;
 /// the update checker compares it against the newest GitHub release tag.</summary>
 public static class AppInfo
 {
-    public const string Version = "0.1.0";
+    public const string Version = "0.1.1";
     public const string Channel = "beta";
     public const string Author = "TheKillerey";
     public const string RepoOwner = "TheKillerey";
