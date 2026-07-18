@@ -1,0 +1,19 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ReyEngine.App.Views.ReyTitleBar"
+             Height="34">
+  <!-- M82: shared custom title bar for secondary windows — same chrome as the main window.
+       Host window must set ExtendClientAreaToDecorationsHint="True". Drag to move; the right
+       margin clears the native caption buttons overlaid on the extended client area. -->
+  <Border Background="{DynamicResource ReyHeaderBrush}" BorderBrush="{DynamicResource ReyBorderBrush}"
+          BorderThickness="0,0,0,1" PointerPressed="OnDrag">
+    <StackPanel Orientation="Horizontal" Spacing="8" Margin="12,0,150,0" VerticalAlignment="Center">
+      <Image x:Name="Logo" Height="16" VerticalAlignment="Center" />
+      <TextBlock Text="REYENGINE" FontSize="10" FontWeight="Bold" LetterSpacing="1.5"
+                 Foreground="{DynamicResource ReyTextBrightBrush}" VerticalAlignment="Center" />
+      <Border Width="1" Height="10" Background="{DynamicResource ReyBorderAccentBrush}" VerticalAlignment="Center" />
+      <TextBlock x:Name="TitleText" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                 VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+    </StackPanel>
+  </Border>
+</UserControl>

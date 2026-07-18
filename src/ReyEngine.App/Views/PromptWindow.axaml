@@ -1,14 +1,18 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ReyEngine.App.Views"
         x:Class="ReyEngine.App.Views.PromptWindow"
         Width="440" SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
+        ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}"
         Foreground="{DynamicResource ReyTextBrush}"
         FontFamily="Inter, Segoe UI, sans-serif">
 
   <!-- M74: minimal modal prompt — confirm (message + OK/Cancel) or text input (rename etc.) -->
+  <DockPanel>
+  <local:ReyTitleBar DockPanel.Dock="Top" />
   <StackPanel Margin="22,18" Spacing="12">
     <TextBlock x:Name="MessageText" FontSize="12.5" TextWrapping="Wrap" LineHeight="18" />
     <TextBox x:Name="InputBox" FontSize="12.5" IsVisible="False" />
@@ -17,4 +21,5 @@
       <Button x:Name="OkButton" Classes="primary" Content="OK" Click="OnOk" Padding="20,6" />
     </StackPanel>
   </StackPanel>
+  </DockPanel>
 </Window>

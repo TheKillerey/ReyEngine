@@ -1,15 +1,19 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ReyEngine.App.Views"
         x:Class="ReyEngine.App.Views.AboutWindow"
         Title="About ReyEngine"
         Width="560" SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
+        ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}"
         Foreground="{DynamicResource ReyTextBrush}"
         FontFamily="Inter, Segoe UI, sans-serif">
 
   <!-- M81: About dialog — identity, credits, legal -->
+  <DockPanel>
+  <local:ReyTitleBar DockPanel.Dock="Top" />
   <StackPanel Margin="26,22" Spacing="14">
 
     <StackPanel Orientation="Horizontal" Spacing="14">
@@ -54,4 +58,5 @@
     </Grid>
     <TextBlock x:Name="UpdateStatus" FontSize="10.5" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" IsVisible="False" />
   </StackPanel>
+  </DockPanel>
 </Window>

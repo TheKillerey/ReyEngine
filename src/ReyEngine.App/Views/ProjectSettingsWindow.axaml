@@ -1,12 +1,16 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ReyEngine.App.Views"
         x:Class="ReyEngine.App.Views.ProjectSettingsWindow"
         Title="Project Settings"
         Width="540" Height="640"
         WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}"
         Foreground="{DynamicResource ReyTextBrush}"
         FontFamily="Inter, Segoe UI, sans-serif">
+  <DockPanel>
+  <local:ReyTitleBar DockPanel.Dock="Top" />
   <ScrollViewer>
     <StackPanel Margin="18" Spacing="8">
       <TextBlock Text="MOD METADATA (.fantome)" FontSize="11" FontWeight="SemiBold"
@@ -58,4 +62,5 @@
       </StackPanel>
     </StackPanel>
   </ScrollViewer>
+  </DockPanel>
 </Window>

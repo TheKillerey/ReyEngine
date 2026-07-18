@@ -6,9 +6,11 @@
         x:DataType="vm:MeshPreviewViewModel"
         Title="ReyEngine — Model Preview" Width="980" Height="760"
         WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}">
   <!-- M50: character/mesh preview in its own window; the main viewport stays on the map -->
   <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
     <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="8,5">
       <DockPanel>

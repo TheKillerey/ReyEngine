@@ -6,7 +6,11 @@
         x:DataType="vm:ParticleEditorViewModel"
         Title="ReyEngine — Particle Editor" Width="1360" Height="860"
         WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}">
   <!-- M46: the Particle Editor lives in its own window (the main layout has no room for it) -->
-  <views:ParticleEditorView />
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+    <views:ParticleEditorView />
+  </DockPanel>
 </Window>
