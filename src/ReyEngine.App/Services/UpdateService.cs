@@ -20,11 +20,19 @@ public static class UpdateService
             http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ReyEngine", AppInfo.Version));
             http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
+            // NOT /releases/latest — that endpoint excludes prereleases, and every beta release is one.
+            // The list is newest-first; take the first non-draft entry.
             var json = await http.GetStringAsync(
-                $"https://api.github.com/repos/{AppInfo.RepoOwner}/{AppInfo.RepoName}/releases/latest");
+                $"https://api.github.com/repos/{AppInfo.RepoOwner}/{AppInfo.RepoName}/releases?per_page=5");
             using var doc = JsonDocument.Parse(json);
-            string tag = doc.RootElement.GetProperty("tag_name").GetString() ?? "";
-            string url = doc.RootElement.TryGetProperty("html_url", out var u) ? u.GetString() ?? AppInfo.RepoUrl : AppInfo.RepoUrl;
+            string tag = ""; string url = AppInfo.RepoUrl;
+            foreach (var rel in doc.RootElement.EnumerateArray())
+            {
+                if (rel.TryGetProperty("draft", out var d) && d.GetBoolean()) continue;
+                tag = rel.GetProperty("tag_name").GetString() ?? "";
+                url = rel.TryGetProperty("html_url", out var u) ? u.GetString() ?? AppInfo.RepoUrl : AppInfo.RepoUrl;
+                break;
+            }
 
             var latest = ParseVersion(tag);
             var current = ParseVersion(AppInfo.Version);
