@@ -34,6 +34,7 @@ public sealed class SoundPlaybackService : IDisposable
     {
         string[] candidates =
         {
+            SetupService.VgmstreamExe,   // M93: installed by the first-run wizard (%APPDATA%\ReyEngine\tools)
             @"D:\LeagueTools\LtMAO\res\tools\vgmstream\vgmstream-cli.exe",
             Path.Combine(AppContext.BaseDirectory, "tools", "vgmstream", "vgmstream-cli.exe"),
         };

@@ -53,14 +53,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _previewBackgroundMapFolder = "";
     [ObservableProperty] private bool _previewBackgroundEnabled;
 
-    // M92: one-click Dominion (Map8) asset-pack download — separate from the tool zip to keep it small.
-    private const string Map8DownloadUrl =
-        $"https://github.com/{AppInfo.RepoOwner}/{AppInfo.RepoName}/releases/download/maps/ReyEngine-Map8-Dominion.zip";
+    // M92/M93: one-click Dominion (Map8) asset-pack download — shared logic in SetupService.
     [ObservableProperty] private string _mapDownloadStatus = "";
     [ObservableProperty] private bool _mapDownloadBusy;
-
-    private static string Map8InstallDir => System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ReyEngine Projects", "Maps", "Map8");
 
     [RelayCommand]
     private async System.Threading.Tasks.Task DownloadMap8()
@@ -68,8 +63,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         if (MapDownloadBusy) return;
         try
         {
-            string dest = Map8InstallDir;
-            if (System.IO.File.Exists(System.IO.Path.Combine(dest, "Scene", "room.nvr")))
+            string dest = SetupService.Map8InstallDir;
+            if (SetupService.Map8Installed)
             {
                 PreviewBackgroundMapFolder = dest;
                 PreviewBackgroundEnabled = true;
@@ -78,33 +73,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             }
 
             MapDownloadBusy = true;
-            MapDownloadStatus = "Downloading… 0%";
-            string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ReyEngine-Map8-Dominion.zip");
-
-            using (var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(10) })
-            using (var resp = await http.GetAsync(Map8DownloadUrl, System.Net.Http.HttpCompletionOption.ResponseHeadersRead))
-            {
-                resp.EnsureSuccessStatusCode();
-                long total = resp.Content.Headers.ContentLength ?? 0;
-                await using var src = await resp.Content.ReadAsStreamAsync();
-                await using var dst = System.IO.File.Create(tmp);
-                var buffer = new byte[81920];
-                long read = 0; int n; int lastPct = -1;
-                while ((n = await src.ReadAsync(buffer)) > 0)
-                {
-                    await dst.WriteAsync(buffer.AsMemory(0, n));
-                    read += n;
-                    int pct = total > 0 ? (int)(read * 100 / total) : -1;
-                    if (pct != lastPct) { lastPct = pct; MapDownloadStatus = pct >= 0 ? $"Downloading… {pct}%" : $"Downloading… {read / 1048576} MB"; }
-                }
-            }
-
-            MapDownloadStatus = "Extracting…";
-            System.IO.Directory.CreateDirectory(dest);
-            await System.Threading.Tasks.Task.Run(() =>
-                System.IO.Compression.ZipFile.ExtractToDirectory(tmp, dest, overwriteFiles: true));
-            try { System.IO.File.Delete(tmp); } catch { }
-
+            var progress = new Progress<string>(s => MapDownloadStatus = s);
+            await SetupService.DownloadAndExtractAsync(SetupService.Map8Url, dest, progress);
             PreviewBackgroundMapFolder = dest;
             PreviewBackgroundEnabled = true;
             MapDownloadStatus = $"Installed to {dest} — backdrop enabled. Save to apply.";

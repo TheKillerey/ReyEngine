@@ -140,7 +140,25 @@ public partial class MainWindow : Window
                     Math.Max(0, BreadcrumbScroll.Offset.X - e.Delta.Y * 40), 0);
                 e.Handled = true;
             };
+
+            // M93: first launch — walk the user through hashes / audio decoder / preview map.
+            if (!vm.Settings.FirstRunCompleted)
+                Dispatcher.UIThread.Post(() => ShowSetupWizard(vm), DispatcherPriority.Background);
         }
+    }
+
+    // ---- M93: first-run setup wizard ----
+    private void OnShowSetupWizard(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel vm) ShowSetupWizard(vm);
+    }
+
+    private async void ShowSetupWizard(MainWindowViewModel vm)
+    {
+        var win = new FirstRunWindow { DataContext = new FirstRunViewModel(vm) };
+        await win.ShowDialog(this);
+        // closing the window any way counts as done — the wizard must not nag on every launch
+        if (!vm.Settings.FirstRunCompleted) { vm.Settings.FirstRunCompleted = true; vm.Settings.Save(); }
     }
 
     // ---- M74: Content Browser drag & drop --------------------------------

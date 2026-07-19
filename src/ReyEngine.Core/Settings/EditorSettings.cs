@@ -43,6 +43,10 @@ public sealed class EditorSettings
     /// <summary>Whether to render the NVR map backdrop in the model preview window.</summary>
     public bool PreviewBackgroundEnabled { get; set; } = false;
 
+    // ---- first-run setup (M93) ----
+    /// <summary>True once the first-run setup wizard has been completed (or skipped).</summary>
+    public bool FirstRunCompleted { get; set; } = false;
+
     [JsonIgnore]
     public static string StorePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ReyEngine", "settings.json");
@@ -83,5 +87,6 @@ public sealed class EditorSettings
         InvertLookY = s.InvertLookY; FlySpeed = s.FlySpeed; CullBackfacesDefault = s.CullBackfacesDefault;
         Theme = s.Theme;
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder; PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
+        FirstRunCompleted = s.FirstRunCompleted;
     }
 }
