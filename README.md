@@ -15,7 +15,30 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/TheKillerey/ReyEngine?color=c22a44" alt="License" /></a>
 </p>
 
-![ReyEngine](docs/screenshots/editor-main.png)
+![ReyEngine — map editing](docs/screenshots/editor-main.webp)
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/model-preview-dominion.webp" alt="Model Preview — champion on the Dominion backdrop" /><br/>
+      <sub><b>Model Preview</b> — champions on the classic Dominion map, with in-game-accurate animations, VFX &amp; SFX</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/particle-editor.png" alt="Particle Editor" /><br/>
+      <sub><b>Particle Editor</b> — live-edit VFX systems with in-viewport playback</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/new-project-wizard.png" alt="New Project wizard" /><br/>
+      <sub><b>New Project wizard</b> — templates for skins, maps, VFX, audio and UI mods</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/setup-wizard.png" alt="First-run setup wizard" /><br/>
+      <sub><b>Setup wizard</b> — hashes, audio decoder and preview map in a few clicks</sub>
+    </td>
+  </tr>
+</table>
 
 > **Status: beta.** Windows only. Expect rough edges — please report issues!
 
