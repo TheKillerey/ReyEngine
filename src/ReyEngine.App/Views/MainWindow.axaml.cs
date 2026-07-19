@@ -123,6 +123,7 @@ public partial class MainWindow : Window
             vm.RequestSettings += () => ShowSettings(vm);
             vm.RequestNewProject += () => ShowNewProject(vm);   // M73: template wizard
             vm.ShowParticleEditorWindow = () => ShowParticleEditor(vm);   // M46
+            vm.ShowMapBinEditorWindow = () => ShowMapBinEditor(vm);       // M98
             vm.ShowMeshPreviewWindow = () => ShowMeshPreview(vm);         // M50
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
@@ -267,6 +268,19 @@ public partial class MainWindow : Window
             _particleEditorWindow.Show(this);
         }
         else _particleEditorWindow.Activate();
+    }
+
+    // M98: Map Bin Editor window (right-click a .bin ▸ Open in Map Bin Editor)
+    private MapBinEditorWindow? _mapBinEditorWindow;
+    private void ShowMapBinEditor(MainWindowViewModel vm)
+    {
+        if (_mapBinEditorWindow is null)
+        {
+            _mapBinEditorWindow = new MapBinEditorWindow { DataContext = vm.MapBinEditor };
+            _mapBinEditorWindow.Closed += (_, _) => _mapBinEditorWindow = null;
+            _mapBinEditorWindow.Show(this);
+        }
+        else _mapBinEditorWindow.Activate();
     }
 
     private async void ShowProjectSettings(MainWindowViewModel vm)

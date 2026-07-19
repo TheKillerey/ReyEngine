@@ -555,6 +555,7 @@
                             <MenuItem Header="Delete" Command="{Binding $parent[Window].DataContext.DeleteAssetCommand}" CommandParameter="{Binding}" />
                             <Separator />
                             <MenuItem Header="Open in Text Editor" Command="{Binding $parent[Window].DataContext.OpenInTextEditorCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Open in Map Bin Editor" Command="{Binding $parent[Window].DataContext.OpenInMapBinEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
                             <Separator />
                             <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />
@@ -613,6 +614,7 @@
                               <MenuItem Header="Delete" Command="{Binding $parent[Window].DataContext.DeleteAssetCommand}" CommandParameter="{Binding}" />
                               <Separator />
                               <MenuItem Header="Open in Text Editor" Command="{Binding $parent[Window].DataContext.OpenInTextEditorCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Open in Map Bin Editor" Command="{Binding $parent[Window].DataContext.OpenInMapBinEditorCommand}" CommandParameter="{Binding}" />
                               <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
                               <Separator />
                               <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />

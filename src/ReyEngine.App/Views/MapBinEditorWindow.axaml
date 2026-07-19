@@ -1,0 +1,115 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.MapBinEditorWindow"
+        Title="ReyEngine — Map Bin Editor"
+        Width="1150" Height="760"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}"
+        Foreground="{DynamicResource ReyTextBrush}"
+        FontFamily="Inter, Segoe UI, sans-serif">
+
+  <!-- M98: dedicated map .bin editor — class-grouped objects, form-style typed editing,
+       one-click patch update (3-way merge) + save to project -->
+  <DockPanel>
+    <local:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- header -->
+    <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="10,6">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <Button Classes="tool" Content="⟳ Update from old patch…" Command="{Binding UpdateFromOldPatchCommand}"
+                  IsEnabled="{Binding HasDocument}"
+                  ToolTip.Tip="Three-way merge: your edits re-applied onto the CURRENT Riot original. Pick the OLD original .bin your mod was based on." />
+          <Button Classes="success" Content="💾 Save To Project" Command="{Binding SaveCommand}"
+                  IsEnabled="{Binding IsDirty}" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <TextBlock Text="🗺 MAP BIN" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding Title}" FontSize="11" VerticalAlignment="Center" />
+          <Border Classes="badge violet" IsVisible="{Binding IsDirty}">
+            <TextBlock Text="EDITED" />
+          </Border>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- status -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="10,4">
+      <TextBlock Text="{Binding Status}" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+    </Border>
+
+    <Grid ColumnDefinitions="330,4,*">
+
+      <!-- left: objects grouped by class -->
+      <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}">
+        <DockPanel>
+          <TextBox DockPanel.Dock="Top" Margin="8,8,8,4" Watermark="Search objects / classes…"
+                   Text="{Binding Search, Mode=TwoWay}" FontSize="11" />
+          <TreeView ItemsSource="{Binding Groups}" SelectionChanged="OnObjectSelection" Margin="4,0,0,4">
+            <TreeView.DataTemplates>
+              <TreeDataTemplate DataType="vm:MapBinClassGroupViewModel" ItemsSource="{Binding Objects}">
+                <TextBlock Text="{Binding Display}" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{DynamicResource ReyAccentBrush}" />
+              </TreeDataTemplate>
+              <DataTemplate DataType="vm:MapBinObjectViewModel">
+                <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis"
+                           ToolTip.Tip="{Binding Name}" />
+              </DataTemplate>
+            </TreeView.DataTemplates>
+          </TreeView>
+        </DockPanel>
+      </Border>
+
+      <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
+
+      <!-- right: the selected object's properties, edited in place -->
+      <Border Grid.Column="2" Background="{DynamicResource ReyBgBrush}">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Padding="10,6" IsVisible="{Binding SelectedObject, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="{Binding SelectedObject.ClassName}" FontSize="12" FontWeight="SemiBold"
+                         Foreground="{DynamicResource ReyAccent2Brush}" />
+              <TextBlock Text="{Binding SelectedObject.Name}" FontSize="11"
+                         Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+            </StackPanel>
+          </Border>
+          <TreeView ItemsSource="{Binding Rows}" Margin="4,0,4,4">
+            <TreeView.DataTemplates>
+              <TreeDataTemplate DataType="vm:MapBinRowViewModel" ItemsSource="{Binding Children}">
+                <Grid ColumnDefinitions="240,120,*" Margin="0,1">
+                  <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="5">
+                    <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}"
+                             VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                    <TextBlock Text="{Binding Name}" FontSize="11" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                  </StackPanel>
+                  <TextBlock Grid.Column="1" Text="{Binding TypeName}" FontSize="9"
+                             Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis" />
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                    <CheckBox IsChecked="{Binding BoolValue, Mode=TwoWay}" IsVisible="{Binding IsBool}"
+                              Padding="0" MinHeight="0" VerticalAlignment="Center" />
+                    <TextBox Text="{Binding Text, Mode=TwoWay}" IsVisible="{Binding IsEditableText}"
+                             MinWidth="180" MaxWidth="420" FontSize="10" Padding="4,1"
+                             FontFamily="Cascadia Mono, Consolas, monospace" VerticalAlignment="Center" />
+                    <Border Width="26" Height="14" CornerRadius="3" BorderThickness="1"
+                            BorderBrush="{DynamicResource ReyBorderBrush}" Background="{Binding Swatch}"
+                            IsVisible="{Binding IsColor}" VerticalAlignment="Center"
+                            ToolTip.Tip="Live colour preview (values are R, G, B[, A] in 0–1)" />
+                    <TextBlock Text="⚠ invalid" FontSize="10" Foreground="#FFB454" VerticalAlignment="Center"
+                               IsVisible="{Binding HasError}" />
+                  </StackPanel>
+                </Grid>
+              </TreeDataTemplate>
+            </TreeView.DataTemplates>
+          </TreeView>
+        </DockPanel>
+      </Border>
+    </Grid>
+  </DockPanel>
+</Window>

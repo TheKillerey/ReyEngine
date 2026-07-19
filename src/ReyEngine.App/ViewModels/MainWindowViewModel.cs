@@ -1221,6 +1221,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.ResolveMeshes = ResolveSystemMeshes;
         MeshPreview.PlaySoundEvent = PlayPreviewSoundEvent;              // M90: clip SFX
         MeshPreview.StopSounds = () => Sound.StopTag("previewsfx");
+
+        // M98: Map Bin Editor window
+        MapBinEditor.Resolve = ResolveBinName;
+        MapBinEditor.Info = m => _log.Info("MapBin", m);
+        MapBinEditor.Warn = m => _log.Warn("MapBin", m);
+        MapBinEditor.PickOldOriginal = () => Dialogs.OpenFileAsync(
+            "Pick the OLD original .bin (from the patch your mod was made for)",
+            new Avalonia.Platform.Storage.FilePickerFileType("League .bin") { Patterns = new[] { "*.bin" } },
+            DialogService.All);
+        MapBinEditor.ReadRiotOriginal = ReadRiotOriginalBytes;
+        MapBinEditor.SaveBytes = SaveMapBinBytesAsync;
         ParticleEditor.Info = m => _log.Info("Particle", m);
         ParticleEditor.Error = m => _log.Error("Particle", m);
         ParticleEditor.MarkDocumentDirty = () => { }; // window has its own dirty state via Document.IsDirty
@@ -4145,6 +4156,72 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var folder = await Dialogs.OpenFolderAsync("Open project folder");
         if (folder is not null) OpenProjectAt(folder);
+    }
+
+    // ---- M98: Map Bin Editor window ----
+    public MapBinEditorViewModel MapBinEditor { get; } = new();
+    public Action? ShowMapBinEditorWindow;
+
+    /// <summary>M98: right-click ▸ Open in Map Bin Editor — the fast structured editor for map*.bin.</summary>
+    [RelayCommand]
+    private void OpenInMapBinEditor(AssetNodeViewModel? node)
+    {
+        if (node?.Entry is not { } entry) { _log.Warn("MapBin", "Select a .bin asset first."); return; }
+        if (!entry.DisplayName.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
+        { _log.Warn("MapBin", $"{entry.DisplayName} is not a .bin file."); return; }
+        try
+        {
+            var bytes = GetAssetBytes(entry);
+            MapBinEditor.Load(entry, bytes);
+            ShowMapBinEditorWindow?.Invoke();
+        }
+        catch (Exception ex) { _log.Error("MapBin", $"{entry.DisplayName}: {ex.Message}"); }
+    }
+
+    /// <summary>M98: the UNTOUCHED Riot bytes for an entry — read from the project's reference WADs
+    /// directly (never through the mounts, which would return the project's own override).</summary>
+    private byte[]? ReadRiotOriginalBytes(WadAssetEntry entry)
+    {
+        foreach (var wadPath in Project.ReferenceWads)
+        {
+            try
+            {
+                if (!File.Exists(wadPath)) continue;
+                using var w = ReyEngine.Core.Wad.WadArchive.Open(wadPath, _resolver.Database);
+                if (w.TryGetEntry(entry.PathHash, out var e)) return w.Extract(e);
+            }
+            catch { /* try the next reference */ }
+        }
+        // single-WAD mode: the open archive IS the Riot file
+        try { if (_archive is not null && _archive.TryGetEntry(entry.PathHash, out var ae)) return _archive.Extract(ae); }
+        catch { }
+        return null;
+    }
+
+    /// <summary>M98: save Map Bin Editor output through the same guarded override path as the raw editor
+    /// (re-parse check, override store, status + dirty bookkeeping).</summary>
+    private async Task<bool> SaveMapBinBytesAsync(WadAssetEntry entry, byte[] bytes)
+    {
+        try { _ = Formats.Meta.SafeBinTree.Parse(bytes); }
+        catch (Exception ex) { _log.Error("MapBin", $"Edited .bin failed to re-parse — NOT saved: {ex.Message}"); return false; }
+        if (!await EnsureProjectSavedAsync()) return false;
+        try
+        {
+            var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".bin");
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = entry.PathHash,
+                ResolvedPath = entry.IsResolved ? entry.Path : null,
+                OverrideFile = dest,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            UpdateTitle();
+            _log.Success("MapBin", $"Saved {entry.DisplayName} to project override ({bytes.Length:n0} bytes, re-parse OK).");
+            return true;
+        }
+        catch (Exception ex) { _log.Error("MapBin", ex.Message); return false; }
     }
 
     /// <summary>M97: emulated-injection check — validate every project .bin against the merged view
