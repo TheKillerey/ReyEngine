@@ -4742,6 +4742,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 { _log.Error("Project", "Original Riot bytes not found (no reference WAD has this asset)."); return; }
                 try
                 {
+                    // M98d: a legacy hash-named override in a folder project MIGRATES to its real path
+                    // on replace — the hash file and its record are removed.
+                    bool isLegacyOverride = _overrides.TryGet(entry.PathHash, out var ovRec)
+                        && string.Equals(ovRec.OverrideFile, projectCopy, StringComparison.OrdinalIgnoreCase);
+                    if (isLegacyOverride && TryPlaceInProjectFolder(entry, riot, out var migrated))
+                    {
+                        _overrides.Remove(entry.PathHash);
+                        try { File.Delete(projectCopy); } catch { }
+                        FinishProjectCopy(entry, $"Migrated {entry.DisplayName} from the hash-named override to {migrated} (fresh Riot original, {riot.Length:n0} bytes).");
+                        return;
+                    }
                     File.WriteAllBytes(projectCopy, riot);
                     Project.IsDirty = true;
                     RefreshOverrideMount();
@@ -4769,37 +4780,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M98c: folder projects get the copy at its REAL path inside the per-WAD folder (cslol
             // layout — human-findable, editable, picked up by Build Package like any project file).
             // The hashed overrides dir remains only for single-WAD projects and unresolved chunks.
-            if (Project.IsFolderProject && entry.IsResolved && Project.RootPath is not null)
+            if (TryPlaceInProjectFolder(entry, bytes, out var placed))
             {
-                string folderName = "Overrides";
-                if (_mounts.TryGet(entry.PathHash, out var mounted))
-                {
-                    var riotSrc = mounted.Source.Kind == AssetSourceKind.RiotReference ? mounted.Source
-                        : mounted.AllSources.FirstOrDefault(s => s.Kind == AssetSourceKind.RiotReference);
-                    if (riotSrc is not null)
-                    {
-                        var wadName = Path.GetFileName(riotSrc.Location);
-                        if (wadName.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase))
-                            wadName = wadName[..^".wad.client".Length];
-                        foreach (var c in Path.GetInvalidFileNameChars()) wadName = wadName.Replace(c, '_');
-                        if (wadName.Length > 0) folderName = wadName;
-                    }
-                }
-
-                string destFile = Path.Combine(Project.RootPath, folderName,
-                    entry.Path.Replace('/', Path.DirectorySeparatorChar));
-                Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
-                File.WriteAllBytes(destFile, bytes);
-
-                if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase))
-                    Project.ProjectFolders.Add(folderName);
-                Project.IsDirty = true;
-                if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
-                BuildMounts();
-                BuildProjectTree();
-                if (_nodesByHash.TryGetValue(entry.PathHash, out var fnode)) SelectedNode = fnode;
-                UpdateTitle();
-                _log.Success("Project", $"Copied {entry.DisplayName} into the project at {folderName}/{entry.Path} ({bytes.Length:n0} bytes). It is now editable.");
+                FinishProjectCopy(entry, $"Copied {entry.DisplayName} into the project at {placed} ({bytes.Length:n0} bytes). It is now editable.");
                 return;
             }
 
@@ -4820,6 +4803,50 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Success("Project", $"Copied {entry.DisplayName} into the project ({bytes.Length:n0} bytes). It is now editable.");
         }
         catch (Exception ex) { _log.Error("Project", ex.Message); }
+    }
+
+    /// <summary>M98c/d: write bytes to the asset's REAL path inside the per-WAD project folder
+    /// (Map11.wad.client → Map11/data/…). False when this isn't a folder project or the path is
+    /// unresolved — the caller falls back to the hashed override store.</summary>
+    private bool TryPlaceInProjectFolder(WadAssetEntry entry, byte[] bytes, out string placedRelative)
+    {
+        placedRelative = "";
+        if (!Project.IsFolderProject || !entry.IsResolved || Project.RootPath is null || _mounts is null) return false;
+
+        string folderName = "Overrides";
+        if (_mounts.TryGet(entry.PathHash, out var mounted))
+        {
+            var riotSrc = mounted.Source.Kind == AssetSourceKind.RiotReference ? mounted.Source
+                : mounted.AllSources.FirstOrDefault(s => s.Kind == AssetSourceKind.RiotReference);
+            if (riotSrc is not null)
+            {
+                var wadName = Path.GetFileName(riotSrc.Location);
+                if (wadName.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase))
+                    wadName = wadName[..^".wad.client".Length];
+                foreach (var c in Path.GetInvalidFileNameChars()) wadName = wadName.Replace(c, '_');
+                if (wadName.Length > 0) folderName = wadName;
+            }
+        }
+
+        string destFile = Path.Combine(Project.RootPath, folderName, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
+        File.WriteAllBytes(destFile, bytes);
+        if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase))
+            Project.ProjectFolders.Add(folderName);
+        placedRelative = $"{folderName}/{entry.Path}";
+        return true;
+    }
+
+    /// <summary>M98c/d: shared bookkeeping after a folder-placement copy: persist, remount, reselect.</summary>
+    private void FinishProjectCopy(WadAssetEntry entry, string successMessage)
+    {
+        Project.IsDirty = true;
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        BuildMounts();
+        BuildProjectTree();
+        if (_nodesByHash.TryGetValue(entry.PathHash, out var node)) SelectedNode = node;
+        UpdateTitle();
+        _log.Success("Project", successMessage);
     }
 
     /// <summary>M98c: when the asset's editable source is a real project-folder file, write edits to THAT
