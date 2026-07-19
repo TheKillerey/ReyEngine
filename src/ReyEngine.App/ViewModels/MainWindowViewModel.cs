@@ -4696,17 +4696,56 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private void CopyAssetToProject()
+    private async Task CopyAssetToProject()
     {
-        var entry = SelectedNode?.Entry;
+        var srcNode = SelectedNode;
+        var entry = srcNode?.Entry;
         if (entry is null) { _log.Warn("Project", "Select an asset to copy."); return; }
         if (!ProjectMode || _mounts is null) { _log.Warn("Project", "Copy to Project needs an open project."); return; }
+
+        // M98b: don't trust the node's SourceKind — deleting the project copy from the browser leaves the
+        // mount index stale. Check whether the project copy actually EXISTS on disk; if it does, offer to
+        // replace it with a fresh copy of the Riot original instead of refusing.
         if (entry.SourceKind != AssetSourceKind.RiotReference)
-        { _log.Info("Project", "Asset is already editable in the project."); return; }
+        {
+            string? projectCopy = null;
+            if (TryGetNodeFile(srcNode, out var nodeFile) && File.Exists(nodeFile)) projectCopy = nodeFile;
+            else if (_overrides.TryGet(entry.PathHash, out var ov) && File.Exists(ov.OverrideFile)) projectCopy = ov.OverrideFile;
+
+            if (projectCopy is not null)
+            {
+                if (PromptOwner is null) { _log.Info("Project", "Asset is already editable in the project."); return; }
+                if (!await Views.PromptWindow.ConfirmAsync(PromptOwner, "Replace Project Copy",
+                    $"'{entry.DisplayName}' is already editable in the project.\n\nReplace it with a fresh copy of the ORIGINAL Riot file? Your edits in this file will be lost.\n\n{projectCopy}", "Replace"))
+                    return;
+                var riot = ReadRiotOriginalBytes(entry);
+                if (riot is null)
+                { _log.Error("Project", "Original Riot bytes not found (no reference WAD has this asset)."); return; }
+                try
+                {
+                    File.WriteAllBytes(projectCopy, riot);
+                    Project.IsDirty = true;
+                    RefreshOverrideMount();
+                    BuildProjectTree();
+                    UpdateTitle();
+                    _log.Success("Project", $"Replaced project copy of {entry.DisplayName} with the Riot original ({riot.Length:n0} bytes).");
+                }
+                catch (Exception ex) { _log.Error("Project", ex.Message); }
+                return;
+            }
+
+            // stale: the project copy is gone from disk — clean the dead override record and re-copy below
+            if (_overrides.Has(entry.PathHash))
+            {
+                _overrides.Remove(entry.PathHash);
+                _log.Info("Project", $"Stale override record for {entry.DisplayName} removed (file was deleted) — copying fresh.");
+            }
+        }
 
         try
         {
-            var bytes = ReadAsset(entry.PathHash);
+            // prefer the untouched Riot original as the copy source (the mounts may still serve stale bytes)
+            var bytes = ReadRiotOriginalBytes(entry) ?? ReadAsset(entry.PathHash);
             var ext = Path.GetExtension(entry.IsResolved ? entry.Path : ".bin");
             var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, string.IsNullOrEmpty(ext) ? ".bin" : ext);
             _overrides.Set(new ProjectAssetOverride
