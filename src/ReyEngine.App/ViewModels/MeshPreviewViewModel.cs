@@ -66,7 +66,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     public MeshPreviewViewModel()
     {
-        Animation.ClipChanged = clip => { CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility(); ApplyClipParticles(); ResetSoundSchedule(stopCurrent: true); };   // M85/M86/M90
+        Animation.ClipChanged = clip => { CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility(); ApplyClipParticles(); ResetSoundSchedule(stopCurrent: true); TryAutoVoice(); };   // M85/M86/M90/M95c
         Animation.TimeChanged = t =>
         {
             // M86: clip event VFX are one-shot — respawn them each time the looping clip wraps around
@@ -262,6 +262,40 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     private float ClipFps() => CurrentAnimation?.Fps is > 1f and < 240f ? CurrentAnimation!.Fps : 30f;
 
     partial void OnSfxEnabledChanged(bool value) { if (!value) StopSounds?.Invoke(); }
+
+    // ---- M95c: voice lines — the skin bin's authored Play_vo_ events (clips never carry them) ----
+    public ObservableCollection<string> VoiceEvents { get; } = new();
+    [ObservableProperty] private string? _selectedVoiceEvent;
+    [ObservableProperty] private bool _hasVoiceEvents;
+
+    public void SetVoiceEvents(IReadOnlyList<string> events)
+    {
+        VoiceEvents.Clear();
+        foreach (var e in events) VoiceEvents.Add(e);
+        HasVoiceEvents = VoiceEvents.Count > 0;
+        SelectedVoiceEvent = null;
+    }
+
+    partial void OnSelectedVoiceEventChanged(string? value)
+    { if (value is { Length: > 0 }) PlaySoundEvent?.Invoke(value); }
+
+    [RelayCommand] private void ReplayVoiceEvent()
+    { if (SelectedVoiceEvent is { Length: > 0 } ev) PlaySoundEvent?.Invoke(ev); }
+
+    /// <summary>Emote clips (joke/taunt/laugh/dance/death) have no VO in their event data — the game
+    /// fires the matching bank event from logic. Mirror that: fire the first VO line matching the
+    /// clip's keyword so emotes speak like in-game.</summary>
+    private void TryAutoVoice()
+    {
+        if (!SfxEnabled || VoiceEvents.Count == 0 || Animation.SelectedAnimation?.Name is not { } anm) return;
+        foreach (var word in new[] { "joke", "taunt", "laugh", "dance", "death" })
+        {
+            if (!anm.Contains(word, StringComparison.OrdinalIgnoreCase)) continue;
+            if (VoiceEvents.FirstOrDefault(v => v.Contains(word, StringComparison.OrdinalIgnoreCase)) is { } ev)
+                PlaySoundEvent?.Invoke(ev);
+            return;
+        }
+    }
 
     /// <summary>Bins store the bone as an unresolvable hash — match it against the skeleton's joints
     /// (FNV1a of the lowercased name, or the joint's Elf AnimHash) to get a real bone name.</summary>

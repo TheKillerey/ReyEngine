@@ -3118,6 +3118,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     ? FindAnimations(entry)
                     : Enumerable.Empty<AnimationEntryViewModel>());
                 MeshPreview.SetVfx(vfx.systems, vfx.resourceMap);
+                MeshPreview.SetVoiceEvents(TryLoadVoiceEvents(entry));   // M95c: authored VO lines
                 MeshInspector.ShowMesh(mesh, skeleton);
                 ShowMeshPreviewWindow?.Invoke();
                 _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris — model preview window.");
@@ -3701,6 +3702,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
         }
         catch { /* audio is optional */ }
+    }
+
+    /// <summary>M95c: the skin bin's authored VO event names (skinAudioProperties.bankUnits) — voice
+    /// lines are triggered by game logic through these, never by animation clip events.</summary>
+    private IReadOnlyList<string> TryLoadVoiceEvents(WadAssetEntry skn)
+    {
+        try
+        {
+            if (!skn.IsResolved) return Array.Empty<string>();
+            var binPath = SkinPaths.BinPathForSkn(skn.Path);
+            if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var be)) return Array.Empty<string>();
+            return Formats.Skeletons.ChampionAnimationData.ParseBankEvents(GetAssetBytes(be))
+                .Where(e => e.StartsWith("Play_vo_", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(e => e, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch { return Array.Empty<string>(); }
     }
 
     /// <summary>M95: locate a champion WAD in the game install. locale null → the main WAD;

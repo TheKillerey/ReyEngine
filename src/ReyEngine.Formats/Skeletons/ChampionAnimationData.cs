@@ -45,6 +45,9 @@ public static class ChampionAnimationData
     private static readonly uint FPairList = HashAlgorithms.Fnv1a("mParticleEventDataPairList");
     private static readonly uint FStartFrame = HashAlgorithms.Fnv1a("mStartFrame");
     private static readonly uint FInitialHide = HashAlgorithms.Fnv1a("initialSubmeshToHide");
+    private static readonly uint FSkinAudio = HashAlgorithms.Fnv1a("skinAudioProperties");
+    private static readonly uint FBankUnits = HashAlgorithms.Fnv1a("bankUnits");
+    private static readonly uint FBankEvents = HashAlgorithms.Fnv1a("events");
 
     /// <summary>All named clips in an animation bin. Clip names resolve via the bin-name resolver
     /// (mClipDataMap keys are FNV1a hashes of names like Idle1/Attack1).</summary>
@@ -172,6 +175,33 @@ public static class ChampionAnimationData
         foreach (var v in props.Values)   // initialSubmeshToHide nests inside skinMeshProperties
             if (v is BinTreeStruct st && FindString(st.Properties, field) is { } inner) return inner;
         return null;
+    }
+
+    /// <summary>M95c: every authored Wwise event name from the skin bin's skinAudioProperties.bankUnits —
+    /// the real trigger names the game uses (Play_vo_/Play_sfx_…). Animation clips don't carry VO events;
+    /// voice lines only exist here. Empty on failure.</summary>
+    public static IReadOnlyList<string> ParseBankEvents(byte[] skinBin)
+    {
+        var result = new List<string>();
+        try
+        {
+            var bin = SafeBinTree.Parse(skinBin);
+            foreach (var o in bin.Objects.Values) FindBankEvents(o.Properties, result);
+        }
+        catch { }
+        return result;
+    }
+
+    private static void FindBankEvents(IReadOnlyDictionary<uint, BinTreeProperty> props, List<string> events)
+    {
+        if (props.TryGetValue(FSkinAudio, out var sa) && sa is BinTreeStruct sas
+            && sas.Properties.TryGetValue(FBankUnits, out var bu) && bu is BinTreeContainer units)
+            foreach (var u in units.Elements)
+                if (u is BinTreeStruct us && us.Properties.TryGetValue(FBankEvents, out var ev) && ev is BinTreeContainer evc)
+                    foreach (var el in evc.Elements)
+                        if (el is BinTreeString s && s.Value.Length > 0) events.Add(s.Value);
+        foreach (var v in props.Values)   // skinAudioProperties nests inside SkinCharacterDataProperties
+            if (v is BinTreeStruct st) FindBankEvents(st.Properties, events);
     }
 
     /// <summary>Does a show/hide entry refer to this submesh? Names match case-insensitively; hashes

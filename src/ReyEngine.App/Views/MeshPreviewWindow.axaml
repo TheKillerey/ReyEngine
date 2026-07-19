@@ -82,6 +82,19 @@
             </StackPanel>
           </Border>
 
+          <!-- M95c: voice lines — the skin's authored Play_vo_ events; picking one plays it -->
+          <Border Classes="card" IsVisible="{Binding HasVoiceEvents}">
+            <StackPanel Spacing="6">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Classes="cardTitle" Grid.Column="0" Text="VOICE LINES" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="tool" Content="▶" FontSize="10" Padding="8,1"
+                        Command="{Binding ReplayVoiceEventCommand}" ToolTip.Tip="Replay the selected line" />
+              </Grid>
+              <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Pick a voice line…" FontSize="11"
+                        ItemsSource="{Binding VoiceEvents}" SelectedItem="{Binding SelectedVoiceEvent, Mode=TwoWay}" />
+            </StackPanel>
+          </Border>
+
           <!-- M89: NVR map backdrop tuning — move the map, boost its lights, tune baked ground shading -->
           <Border Classes="card" IsVisible="{Binding HasBackground}">
             <StackPanel Spacing="6">
