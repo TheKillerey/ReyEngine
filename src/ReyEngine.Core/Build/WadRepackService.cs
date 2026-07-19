@@ -67,7 +67,7 @@ public static class WadRepackService
             bw.Write((byte)0);                       // None, 0 subchunks
             bw.Write(false);                         // isDuplicated
             bw.Write((ushort)0);                     // startSubChunk
-            bw.Write(XxHash64.HashToUInt64(data));   // checksum       u64
+            bw.Write(XxHash3.HashToUInt64(data));    // checksum: XXH3-64 of stored data (NOT XxHash64 - the game validates this)
             replaced++;
             progress?.Report((float)(++done) / Math.Max(1, overrides.Count));
         }

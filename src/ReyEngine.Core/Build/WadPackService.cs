@@ -92,7 +92,7 @@ public static class WadPackService
                 bw.Write(e.compression);                   // compression, 0 subchunks
                 bw.Write(false);                           // isDuplicated
                 bw.Write((ushort)0);                       // startSubChunk
-                bw.Write(XxHash64.HashToUInt64(e.data));   // checksum       u64
+                bw.Write(XxHash3.HashToUInt64(e.data));    // checksum: XXH3-64 of stored data (NOT XxHash64 - the game validates this)
                 off += e.data.Length;
             }
             foreach (var e in entries) bw.Write(e.data);
