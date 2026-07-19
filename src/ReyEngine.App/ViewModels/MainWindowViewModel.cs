@@ -4051,6 +4051,34 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (folder is not null) OpenProjectAt(folder);
     }
 
+    /// <summary>M94: convert a .fantome mod package into an editable folder project under
+    /// Documents\ReyEngine Projects, then open it — lets users mod existing mods.</summary>
+    [RelayCommand]
+    private async Task ImportFantome()
+    {
+        var file = await Dialogs.OpenFileAsync("Import .fantome mod package",
+            new Avalonia.Platform.Storage.FilePickerFileType("Fantome mod package") { Patterns = new[] { "*.fantome", "*.zip" } },
+            DialogService.All);
+        if (file is null) return;
+        try
+        {
+            Status = "Importing .fantome…";
+            Directory.CreateDirectory(ProjectsFolder);
+            string? gameDir = !string.IsNullOrEmpty(Project.GameDirectory) && Directory.Exists(Project.GameDirectory)
+                ? Project.GameDirectory
+                : ReyEngine.Core.Projects.GameInstallLocator.Discover().FirstOrDefault()?.GameDirectory;
+            var progress = new Progress<string>(m => Status = m);
+            var result = await Task.Run(() => ReyEngine.Core.Projects.FantomeImporter.Import(
+                file, ProjectsFolder, gameDir, _resolver, progress));
+            _log.Success("Import", $"{result.ProjectName}: {result.Wads} WAD(s), {result.ExtractedFiles:n0} file(s) unpacked" +
+                (result.RawFiles > 0 ? $" + {result.RawFiles} RAW file(s)" : "") +
+                (result.FailedChunks > 0 ? $" ({result.FailedChunks} chunk(s) failed — usually subchunked textures)" : "") +
+                $" → {result.RootPath}");
+            OpenProjectAt(result.RootPath);   // also records it in Open Recent
+        }
+        catch (Exception ex) { _log.Error("Import", $"Fantome import failed: {ex.Message}"); }
+    }
+
     [RelayCommand]
     private void OpenRecentProject(string? folder)
     {

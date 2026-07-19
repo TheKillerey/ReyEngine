@@ -61,6 +61,8 @@
           </MenuItem.ItemContainerTheme>
         </MenuItem>
         <MenuItem Header="New Project…" Command="{Binding NewProjectCommand}" />
+        <MenuItem Header="Import .fantome…" Command="{Binding ImportFantomeCommand}"
+                  ToolTip.Tip="Convert a .fantome mod package into an editable project" />
         <MenuItem Header="Open Project…" Command="{Binding OpenProjectCommand}" />
         <MenuItem Header="Save Project" Command="{Binding SaveProjectCommand}" />
         <MenuItem Header="Save Project As…" Command="{Binding SaveProjectAsCommand}" />
