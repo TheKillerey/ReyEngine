@@ -9,10 +9,11 @@
   Built by <a href="https://github.com/TheKillerey">TheKillerey</a>.
 </p>
 
+<!-- badgen.net (shields.io kept timing out through GitHub's image proxy); a total-downloads badge
+     needs shields' /github/downloads/…/total — re-add when shields is reliable again -->
 <p align="center">
-  <a href="https://github.com/TheKillerey/ReyEngine/releases"><img src="https://img.shields.io/github/v/release/TheKillerey/ReyEngine?include_prereleases&label=release&color=c22a44" alt="Latest release" /></a>
-  <a href="https://github.com/TheKillerey/ReyEngine/releases"><img src="https://img.shields.io/github/downloads/TheKillerey/ReyEngine/total?color=c22a44" alt="Downloads" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/TheKillerey/ReyEngine?color=c22a44" alt="License" /></a>
+  <a href="https://github.com/TheKillerey/ReyEngine/releases"><img src="https://badgen.net/github/release/TheKillerey/ReyEngine?color=c22a44&label=release" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://badgen.net/github/license/TheKillerey/ReyEngine?color=c22a44" alt="License" /></a>
 </p>
 
 ![ReyEngine — map editing](docs/screenshots/editor-main.webp)
