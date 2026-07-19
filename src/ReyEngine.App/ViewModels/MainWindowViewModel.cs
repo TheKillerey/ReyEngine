@@ -3677,10 +3677,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 }
                 catch { /* skip broken banks */ }
             }
+            // M95b: projects usually don't mount the champion's WAD at all (map projects, folder
+            // projects), so the mount scan above finds nothing — fall back to the ORIGINAL
+            // Champions/<Champ>.wad.client in the game install, like the mesh/texture fallback does.
+            if (banks + packs == 0 && FindChampionWad(champ, locale: null) is { } mainWad)
+            {
+                int n = LoadBanksFromWadFile(set, mainWad, champ, skinFolder);
+                if (n > 0) { banks += n; _log.Info("Audio", $"{champ}: SFX banks read from the original game WAD (not in project mounts)."); }
+            }
+
             // M95: voice-over lives in the champion's LOCALE WAD (Aatrox.en_US.wad.client), which is
             // never mounted — open it directly from the game install and merge its VO banks so
             // Play_vo_ clip events (jokes, taunts, laughs) speak like in-game.
-            int voBanks = LoadLocaleVoBanks(set, champ, skinFolder);
+            int voBanks = FindChampionWad(champ, locale: "*") is { } voWad
+                ? LoadBanksFromWadFile(set, voWad, champ, skinFolder) : 0;
 
             if (!set.IsEmpty)
             {
@@ -3693,32 +3703,44 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch { /* audio is optional */ }
     }
 
-    /// <summary>M95: find the champion's locale WAD next to its main WAD and merge the base + previewed
-    /// skin's VO banks into <paramref name="set"/>. Prefers en_US when several locales are installed.
-    /// Returns the number of banks/packs added; 0 when no locale WAD or no game install.</summary>
-    private int LoadLocaleVoBanks(Formats.Audio.AudioBankSet set, string champ, string skinFolder)
+    /// <summary>M95: locate a champion WAD in the game install. locale null → the main WAD;
+    /// locale "*" → any locale companion (Aatrox.en_US.wad.client…), preferring en_US.</summary>
+    private string? FindChampionWad(string champ, string? locale)
     {
         try
         {
             string? gameDir = !string.IsNullOrEmpty(Project.GameDirectory) && Directory.Exists(Project.GameDirectory)
                 ? Project.GameDirectory
                 : ReyEngine.Core.Projects.GameInstallLocator.Discover().FirstOrDefault()?.GameDirectory;
-            if (gameDir is null) return 0;
+            if (gameDir is null) return null;
             string champsDir = Path.Combine(gameDir, "DATA", "FINAL", "Champions");
-            if (!Directory.Exists(champsDir)) return 0;
+            if (!Directory.Exists(champsDir)) return null;
 
-            var localeWads = Directory.EnumerateFiles(champsDir, $"{champ}.*.wad.client")
+            if (locale is null)
+            {
+                string main = Path.Combine(champsDir, champ + ".wad.client");
+                return File.Exists(main) ? main : null;
+            }
+            return Directory.EnumerateFiles(champsDir, $"{champ}.*.wad.client")
                 .Where(f => System.Text.RegularExpressions.Regex.IsMatch(
                     Path.GetFileName(f), $@"^{System.Text.RegularExpressions.Regex.Escape(champ)}\.[a-z]{{2}}_[A-Z]{{2}}\.wad\.client$",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 .OrderByDescending(f => f.Contains(".en_US.", StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (localeWads.Count == 0) return 0;
+                .FirstOrDefault();
+        }
+        catch { return null; }
+    }
 
+    /// <summary>M95: merge the base + previewed skin's audio banks from a WAD file on disk into
+    /// <paramref name="set"/>. Returns the number of banks/packs added.</summary>
+    private int LoadBanksFromWadFile(Formats.Audio.AudioBankSet set, string wadPath, string champ, string skinFolder)
+    {
+        try
+        {
             const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
             string marker = $"/characters/{champ}/skins/";
             int added = 0;
-            using var wad = ReyEngine.Core.Wad.WadArchive.Open(localeWads[0], _resolver.Database);
+            using var wad = ReyEngine.Core.Wad.WadArchive.Open(wadPath, _resolver.Database);
             foreach (var e in wad.Entries)
             {
                 if (!e.IsResolved) continue;
