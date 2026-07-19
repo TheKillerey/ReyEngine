@@ -4147,6 +4147,61 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (folder is not null) OpenProjectAt(folder);
     }
 
+    /// <summary>M97: emulated-injection check — validate every project .bin against the merged view
+    /// (project overrides + Riot originals, exactly what the game would mount) and report broken object
+    /// links and missing asset references. The classic "mod crashes after patch" causes, found offline.</summary>
+    [RelayCommand]
+    private async Task ValidateProjectBins()
+    {
+        if (!ContentLoaded) { _log.Warn("Validate", "Open a project (or WAD) first."); return; }
+        if (Project.RootPath is null || Project.ProjectFolders.Count == 0)
+        { _log.Warn("Validate", "No project folders to validate — open a folder project."); return; }
+
+        _log.Info("Validate", "Checking project .bins against the injected view (project overrides + Riot originals)…");
+        var results = await Task.Run(() =>
+        {
+            var list = new List<Formats.Meta.BinValidationReport>();
+            foreach (var folder in Project.ProjectFolders)
+            {
+                string root = Path.Combine(Project.RootPath!, folder);
+                if (!Directory.Exists(root)) continue;
+                foreach (var file in Directory.EnumerateFiles(root, "*.bin", SearchOption.AllDirectories))
+                {
+                    string rel = Path.GetRelativePath(root, file).Replace('\\', '/');
+                    if (!rel.Contains('/')) continue;   // loose unresolved-chunk dumps, not real bins
+                    byte[] bytes;
+                    try { bytes = File.ReadAllBytes(file); } catch { continue; }
+
+                    // resolve this bin's dependency bins through the SAME merged view the game would see
+                    var deps = new List<byte[]>();
+                    foreach (var dep in Formats.Vfx.VfxSystemResolver.ExtractDependencies(bytes))
+                        if (TryResolveEntry(HashAlgorithms.WadPath(dep), out var de))
+                        { try { deps.Add(GetAssetBytes(de)); } catch { /* counted as missing-dependency */ } }
+
+                    list.Add(Formats.Meta.BinValidator.Validate(rel, bytes, deps,
+                        p => TryResolveEntry(HashAlgorithms.WadPath(p), out _),
+                        ResolveBinName,
+                        h => ResolveBinName(h)?.StartsWith("Shaders/", StringComparison.OrdinalIgnoreCase) == true));
+                }
+            }
+            return list;
+        });
+
+        int bad = 0, issueCount = 0;
+        foreach (var r in results)
+        {
+            if (r.IsClean) continue;
+            bad++; issueCount += r.Issues.Count;
+            _log.Warn("Validate", $"{r.BinName}: {r.Issues.Count} issue(s)");
+            foreach (var i in r.Issues.Take(8))
+                _log.Warn("Validate", $"   [{i.Category}] {i.ObjectName} → {i.Detail}");
+            if (r.Issues.Count > 8) _log.Warn("Validate", $"   … {r.Issues.Count - 8} more");
+        }
+        if (results.Count == 0) _log.Warn("Validate", "No .bin files found in the project folders.");
+        else if (bad == 0) _log.Success("Validate", $"All {results.Count} project .bin(s) clean — every link and asset reference resolves in the injected view.");
+        else _log.Error("Validate", $"{bad}/{results.Count} bin(s) have {issueCount} issue(s) — these would break in-game (details above).");
+    }
+
     /// <summary>M94: convert a .fantome mod package into an editable folder project under
     /// Documents\ReyEngine Projects, then open it — lets users mod existing mods.</summary>
     [RelayCommand]
