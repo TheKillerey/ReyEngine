@@ -3677,13 +3677,68 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 }
                 catch { /* skip broken banks */ }
             }
+            // M95: voice-over lives in the champion's LOCALE WAD (Aatrox.en_US.wad.client), which is
+            // never mounted — open it directly from the game install and merge its VO banks so
+            // Play_vo_ clip events (jokes, taunts, laughs) speak like in-game.
+            int voBanks = LoadLocaleVoBanks(set, champ, skinFolder);
+
             if (!set.IsEmpty)
             {
                 _previewAudioBanks = set;
-                _log.Info("Audio", $"{champ} SFX: {banks} bank(s) + {packs} pack(s) — {set.EventCount} event(s), {set.WemCount} wem(s).");
+                _log.Info("Audio", $"{champ} SFX: {banks} bank(s) + {packs} pack(s)" +
+                    (voBanks > 0 ? $", VO: {voBanks} bank(s)" : "") +
+                    $" — {set.EventCount} event(s), {set.WemCount} wem(s).");
             }
         }
         catch { /* audio is optional */ }
+    }
+
+    /// <summary>M95: find the champion's locale WAD next to its main WAD and merge the base + previewed
+    /// skin's VO banks into <paramref name="set"/>. Prefers en_US when several locales are installed.
+    /// Returns the number of banks/packs added; 0 when no locale WAD or no game install.</summary>
+    private int LoadLocaleVoBanks(Formats.Audio.AudioBankSet set, string champ, string skinFolder)
+    {
+        try
+        {
+            string? gameDir = !string.IsNullOrEmpty(Project.GameDirectory) && Directory.Exists(Project.GameDirectory)
+                ? Project.GameDirectory
+                : ReyEngine.Core.Projects.GameInstallLocator.Discover().FirstOrDefault()?.GameDirectory;
+            if (gameDir is null) return 0;
+            string champsDir = Path.Combine(gameDir, "DATA", "FINAL", "Champions");
+            if (!Directory.Exists(champsDir)) return 0;
+
+            var localeWads = Directory.EnumerateFiles(champsDir, $"{champ}.*.wad.client")
+                .Where(f => System.Text.RegularExpressions.Regex.IsMatch(
+                    Path.GetFileName(f), $@"^{System.Text.RegularExpressions.Regex.Escape(champ)}\.[a-z]{{2}}_[A-Z]{{2}}\.wad\.client$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                .OrderByDescending(f => f.Contains(".en_US.", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (localeWads.Count == 0) return 0;
+
+            const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+            string marker = $"/characters/{champ}/skins/";
+            int added = 0;
+            using var wad = ReyEngine.Core.Wad.WadArchive.Open(localeWads[0], _resolver.Database);
+            foreach (var e in wad.Entries)
+            {
+                if (!e.IsResolved) continue;
+                var p = e.Path;
+                int mi = p.IndexOf(marker, OIC);
+                if (mi < 0) continue;
+                string folder = p[(mi + marker.Length)..].Split('/')[0];
+                if (!folder.Equals("base", OIC) && !folder.Equals(skinFolder, OIC)) continue;
+                try
+                {
+                    if (p.EndsWith(".bnk", OIC))
+                    { if (Formats.Audio.BnkFile.Parse(wad.Extract(e)) is { } b) { set.AddBank(b, e.PathHash, p); added++; } }
+                    else if (p.EndsWith(".wpk", OIC))
+                    { if (Formats.Audio.WpkFile.Parse(wad.Extract(e)) is { } w) { set.AddPack(w, e.PathHash, p); added++; } }
+                }
+                catch { /* skip broken banks */ }
+            }
+            return added;
+        }
+        catch { return 0; }
     }
 
     /// <summary>M90: play one clip sound event (e.g. Play_sfx_Aatrox_Death3D_cast) through the champion banks.</summary>
