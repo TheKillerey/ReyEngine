@@ -112,6 +112,11 @@ public sealed class EditableBinField
 
     public bool IsEditable => !IsBranch && Kind != BinValueKind.ReadOnly && Property is not null;
 
+    /// <summary>M98e: the property's CURRENT value — <see cref="OriginalText"/> is a parse-time snapshot
+    /// and goes stale the moment an edit is applied; row UIs must display this instead.</summary>
+    public string CurrentText(Func<uint, string?> resolve) =>
+        Property is null ? OriginalText : BinValueEditor.Format(Property, resolve);
+
     /// <summary>Apply text to the underlying property (throws on invalid input).</summary>
     public void Apply(string text)
     {

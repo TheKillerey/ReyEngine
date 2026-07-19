@@ -40,8 +40,12 @@ public sealed partial class MapBinRowViewModel : ObservableObject
     {
         _f = f;
         _owner = owner;
-        _text = f.OriginalText;
-        _boolValue = f.OriginalText == "true";
+        // M98e: display the property's CURRENT value — OriginalText is a parse-time snapshot and shows
+        // stale data after an edit once the rows are rebuilt (reselecting the object, saving, …).
+        string current = f.CurrentText(h => owner.Resolve?.Invoke(h));
+        _text = current;
+        _boolValue = current == "true";
+        _isDirty = f.IsEditable && current != f.OriginalText;
         UpdateSwatch();
         foreach (var c in f.Children) Children.Add(new MapBinRowViewModel(c, owner));
         _initializing = false;
@@ -188,6 +192,12 @@ public sealed partial class MapBinEditorViewModel : ObservableObject
         catch (Exception ex) { Status = $"Serialize failed: {ex.Message}"; return; }
         if (await SaveBytes(Entry, bytes))
         {
+            // M98e: re-baseline from the saved bytes so every row shows the saved value as its new
+            // original (dirty dots clear); keep the user's place in the object list.
+            uint keep = SelectedObject?.Root.NameHash ?? 0;
+            Load(Entry, bytes);
+            if (keep != 0 && _allObjects.FirstOrDefault(o => o.Root.NameHash == keep) is { } again)
+                SelectedObject = again;
             IsDirty = false;
             Status = $"Saved to project ({bytes.Length:n0} bytes).";
         }
