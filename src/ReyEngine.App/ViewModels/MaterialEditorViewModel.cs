@@ -83,7 +83,8 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private void Preview() => Thumbnail = _owner.LoadThumbnail?.Invoke(EditedPath);
+    // M96: toggle — clicking Preview again hides the thumbnail (it could only be shown before)
+    private void Preview() => Thumbnail = Thumbnail is not null ? null : _owner.LoadThumbnail?.Invoke(EditedPath);
 
     [RelayCommand] private void Open() => _owner.OpenTexture?.Invoke(EditedPath);
     [RelayCommand] private async Task CopyPath() => await _owner.Copy(EditedPath);

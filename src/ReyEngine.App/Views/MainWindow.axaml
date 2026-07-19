@@ -904,13 +904,13 @@
                                      target shader uses (learned from this document's materials) are auto-added -->
                                 <StackPanel Spacing="2" Margin="0,4,0,0" IsVisible="{Binding CanChangeShader}">
                                   <TextBlock Text="Shader" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
-                                  <StackPanel Orientation="Horizontal" Spacing="3">
-                                    <AutoCompleteBox Text="{Binding EditedShader}" MinWidth="250" FontSize="10"
+                                  <Grid ColumnDefinitions="*,Auto">
+                                    <AutoCompleteBox Grid.Column="0" Text="{Binding EditedShader}" FontSize="10"
                                                      ItemsSource="{Binding Owner.KnownShaders}" FilterMode="Contains"
                                                      Watermark="Shaders/StaticMesh/…" />
-                                    <Button Content="Set" Command="{Binding ApplyShaderCommand}" FontSize="10" Padding="7,1"
+                                    <Button Grid.Column="1" Content="Set" Command="{Binding ApplyShaderCommand}" FontSize="10" Padding="7,1" Margin="3,0,0,0"
                                             ToolTip.Tip="Switch to this shader and auto-add the sampler slots materials of that shader use" />
-                                  </StackPanel>
+                                  </Grid>
                                   <TextBlock Text="{Binding ShaderChangeStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}"
                                              TextWrapping="Wrap" IsVisible="{Binding ShaderChangeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                 </StackPanel>
@@ -925,20 +925,23 @@
                                           <TextBlock Text="⚠" Foreground="#FFB454" FontSize="11" VerticalAlignment="Center" IsVisible="{Binding Unresolved}" ToolTip.Tip="Path not found in this WAD" />
                                           <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
                                         </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Spacing="3">
-                                          <TextBox Text="{Binding EditedPath}" MinWidth="250" FontSize="10" Padding="4,1" FontFamily="Cascadia Mono, Consolas, monospace">
+                                        <!-- M96: star-sized so long paths shrink the textbox instead of pushing ✓/↺ off the panel -->
+                                        <Grid ColumnDefinitions="*,Auto,Auto">
+                                          <TextBox Grid.Column="0" Text="{Binding EditedPath}" FontSize="10" Padding="4,1" FontFamily="Cascadia Mono, Consolas, monospace">
                                             <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" /></TextBox.KeyBindings>
                                           </TextBox>
-                                          <Button Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" ToolTip.Tip="Apply path" />
-                                          <Button Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" ToolTip.Tip="Revert" />
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Spacing="4">
-                                          <Button Classes="tool" Content="Preview" Command="{Binding PreviewCommand}" />
-                                          <Button Classes="tool" Content="Open" Command="{Binding OpenCommand}" />
-                                          <Button Classes="tool" Content="Copy" Command="{Binding CopyPathCommand}" />
-                                          <Button Classes="tool" Content="Replace Texture…" Command="{Binding ReplaceCommand}" />
-                                          <Button Classes="tool" Content="✕" Command="{Binding RemoveCommand}" IsVisible="{Binding CanRemove}" ToolTip.Tip="Remove this sampler" />
-                                        </StackPanel>
+                                          <Button Grid.Column="1" Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" Margin="3,0,0,0" ToolTip.Tip="Apply path" />
+                                          <Button Grid.Column="2" Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" Margin="3,0,0,0" ToolTip.Tip="Revert" />
+                                        </Grid>
+                                        <!-- M96: wraps instead of clipping when the inspector is narrow -->
+                                        <WrapPanel>
+                                          <Button Classes="tool" Content="Preview" Command="{Binding PreviewCommand}" Margin="0,0,4,2"
+                                                  ToolTip.Tip="Show / hide the inline thumbnail" />
+                                          <Button Classes="tool" Content="Open" Command="{Binding OpenCommand}" Margin="0,0,4,2" />
+                                          <Button Classes="tool" Content="Copy" Command="{Binding CopyPathCommand}" Margin="0,0,4,2" />
+                                          <Button Classes="tool" Content="Replace Texture…" Command="{Binding ReplaceCommand}" Margin="0,0,4,2" />
+                                          <Button Classes="tool" Content="✕" Command="{Binding RemoveCommand}" IsVisible="{Binding CanRemove}" Margin="0,0,4,2" ToolTip.Tip="Remove this sampler" />
+                                        </WrapPanel>
                                         <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="3" Padding="3" HorizontalAlignment="Left" IsVisible="{Binding HasThumbnail}">
                                           <Image Source="{Binding Thumbnail}" Stretch="Uniform" MaxHeight="96" MaxWidth="96" />
                                         </Border>
@@ -950,14 +953,14 @@
                                 <Expander Header="Parameters" IsVisible="{Binding HasParameters}" FontSize="11" Margin="0,4,0,0">
                                   <StackPanel>
                                   <!-- M55: add a parameter (clones an existing one's schema; edit the value after) -->
-                                  <StackPanel Orientation="Horizontal" Spacing="3" Margin="0,0,0,4" IsVisible="{Binding CanEditParameters}">
-                                    <TextBox Text="{Binding NewParamName}" Watermark="new param name (e.g. AlphaTestValue)"
-                                             MinWidth="180" FontSize="10" Padding="4,1">
+                                  <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,4" IsVisible="{Binding CanEditParameters}">
+                                    <TextBox Grid.Column="0" Text="{Binding NewParamName}" Watermark="new param name (e.g. AlphaTestValue)"
+                                             FontSize="10" Padding="4,1">
                                       <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding AddParameterCommand}" /></TextBox.KeyBindings>
                                     </TextBox>
-                                    <Button Content="+ Add" Command="{Binding AddParameterCommand}" FontSize="10" Padding="6,1"
+                                    <Button Grid.Column="1" Content="+ Add" Command="{Binding AddParameterCommand}" FontSize="10" Padding="6,1" Margin="3,0,0,0"
                                             ToolTip.Tip="Add a parameter (value type is cloned from this material's first param — edit it after)" />
-                                  </StackPanel>
+                                  </Grid>
                                   <ItemsControl ItemsSource="{Binding Parameters}">
                                     <ItemsControl.ItemTemplate>
                                       <DataTemplate>
