@@ -3051,6 +3051,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         try
         {
+            // M98c: folder-project files are edited in place — no shadow override
+            if (TryWriteToProjectFile(entry, bytes, out var projectFile))
+            {
+                SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+                Project.IsDirty = true;
+                UpdateTitle();
+                UndoService.MarkSaved();
+                _log.Success("Bin", $"Saved edited {entry.DisplayName} to {projectFile} ({bytes.Length:n0} bytes, re-parse OK).");
+                return;
+            }
             var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".bin");
             _overrides.Set(new ProjectAssetOverride
             {
@@ -4207,6 +4217,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!await EnsureProjectSavedAsync()) return false;
         try
         {
+            // M98c: folder-project files are edited in place — no shadow override
+            if (TryWriteToProjectFile(entry, bytes, out var projectFile))
+            {
+                SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+                Project.IsDirty = true;
+                UpdateTitle();
+                _log.Success("MapBin", $"Saved {entry.DisplayName} to {projectFile} ({bytes.Length:n0} bytes, re-parse OK).");
+                return true;
+            }
             var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".bin");
             _overrides.Set(new ProjectAssetOverride
             {
@@ -4746,6 +4765,44 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             // prefer the untouched Riot original as the copy source (the mounts may still serve stale bytes)
             var bytes = ReadRiotOriginalBytes(entry) ?? ReadAsset(entry.PathHash);
+
+            // M98c: folder projects get the copy at its REAL path inside the per-WAD folder (cslol
+            // layout — human-findable, editable, picked up by Build Package like any project file).
+            // The hashed overrides dir remains only for single-WAD projects and unresolved chunks.
+            if (Project.IsFolderProject && entry.IsResolved && Project.RootPath is not null)
+            {
+                string folderName = "Overrides";
+                if (_mounts.TryGet(entry.PathHash, out var mounted))
+                {
+                    var riotSrc = mounted.Source.Kind == AssetSourceKind.RiotReference ? mounted.Source
+                        : mounted.AllSources.FirstOrDefault(s => s.Kind == AssetSourceKind.RiotReference);
+                    if (riotSrc is not null)
+                    {
+                        var wadName = Path.GetFileName(riotSrc.Location);
+                        if (wadName.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase))
+                            wadName = wadName[..^".wad.client".Length];
+                        foreach (var c in Path.GetInvalidFileNameChars()) wadName = wadName.Replace(c, '_');
+                        if (wadName.Length > 0) folderName = wadName;
+                    }
+                }
+
+                string destFile = Path.Combine(Project.RootPath, folderName,
+                    entry.Path.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
+                File.WriteAllBytes(destFile, bytes);
+
+                if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase))
+                    Project.ProjectFolders.Add(folderName);
+                Project.IsDirty = true;
+                if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+                BuildMounts();
+                BuildProjectTree();
+                if (_nodesByHash.TryGetValue(entry.PathHash, out var fnode)) SelectedNode = fnode;
+                UpdateTitle();
+                _log.Success("Project", $"Copied {entry.DisplayName} into the project at {folderName}/{entry.Path} ({bytes.Length:n0} bytes). It is now editable.");
+                return;
+            }
+
             var ext = Path.GetExtension(entry.IsResolved ? entry.Path : ".bin");
             var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, string.IsNullOrEmpty(ext) ? ".bin" : ext);
             _overrides.Set(new ProjectAssetOverride
@@ -4763,6 +4820,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Success("Project", $"Copied {entry.DisplayName} into the project ({bytes.Length:n0} bytes). It is now editable.");
         }
         catch (Exception ex) { _log.Error("Project", ex.Message); }
+    }
+
+    /// <summary>M98c: when the asset's editable source is a real project-folder file, write edits to THAT
+    /// file — creating a hashed override would shadow the folder copy and confuse everyone. False →
+    /// caller falls back to the override store (single-WAD projects, unresolved chunks).</summary>
+    private bool TryWriteToProjectFile(WadAssetEntry entry, byte[] bytes, out string file)
+    {
+        file = "";
+        if (_mounts is null || !_mounts.TryGet(entry.PathHash, out var a)) return false;
+        foreach (var src in new[] { a.Source }.Concat(a.AllSources))
+        {
+            if (src?.Kind is not (AssetSourceKind.ProjectFolder or AssetSourceKind.ProjectOverride)) continue;
+            if (!src.TryGetFilePath(entry.PathHash, out file) || !File.Exists(file)) continue;
+            File.WriteAllBytes(file, bytes);
+            return true;
+        }
+        return false;
     }
 
     /// <summary>Block editing read-only Riot assets; suggest Copy to Project.</summary>
