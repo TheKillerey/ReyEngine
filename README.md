@@ -1,16 +1,31 @@
-# ReyEngine
+<p align="center">
+  <img src="docs/reyengine_logo.png" width="160" alt="ReyEngine logo" />
+</p>
 
-**A modern map & asset editor for League of Legends mods** — think Unreal/Unity for LoL assets. Built by [TheKillerey](https://github.com/TheKillerey).
+<h1 align="center">ReyEngine</h1>
+
+<p align="center">
+  <b>A modern map &amp; asset editor for League of Legends mods</b> — think Unreal/Unity for LoL assets.<br/>
+  Built by <a href="https://github.com/TheKillerey">TheKillerey</a>.
+</p>
+
+<p align="center">
+  <a href="https://github.com/TheKillerey/ReyEngine/releases"><img src="https://img.shields.io/github/v/release/TheKillerey/ReyEngine?include_prereleases&label=release&color=c22a44" alt="Latest release" /></a>
+  <a href="https://github.com/TheKillerey/ReyEngine/releases"><img src="https://img.shields.io/github/downloads/TheKillerey/ReyEngine/total?color=c22a44" alt="Downloads" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/TheKillerey/ReyEngine?color=c22a44" alt="License" /></a>
+</p>
 
 ![ReyEngine](docs/screenshots/editor-main.png)
 
-> **Status: v0.1.0-beta.** Windows only. Expect rough edges — please report issues!
+> **Status: beta.** Windows only. Expect rough edges — please report issues!
 
 ## What it does
 
 **Projects**
 - Unreal-style **New Project wizard**: pick a template (Champion Skin / Map / VFX / Audio / UI / Empty), choose your **LIVE or PBE** client (auto-detected), tick the WADs you want, pick which content categories to extract — get a ready-to-edit mod project (cslol-style folders + read-only Riot references).
+- **Import .fantome**: convert any existing mod package into an editable project — mod name/author/thumbnail carry over, WADs unpack with resolved file names, and matching Riot WADs attach as references. Full round trip: *import → edit → Build Package → new .fantome*.
 - Non-destructive by design: Riot files are never modified; edits become **project overrides** that build into a distributable `.wad.client` / `.fantome` package.
+- **First-run setup wizard** gets a fresh install working in a few clicks: hashes, audio decoder, optional preview map (re-run any time via *Help ▸ Setup Wizard*).
 
 **Maps**
 - Load `.mapgeo` maps with baked lightmaps, terrain-blend & flowmap-water shaders, GrassTint (VertexDeform), display-correct decals.
@@ -18,6 +33,12 @@
 - **Add new meshes to a map**: import `.obj` / `.scb` / `.sco`, place with the gizmo, assign a map material, save — appended straight into the mapgeo.
 - **Bucket grids**: view the real 3D culling bake, and regenerate grids after editing geometry.
 - **Dynamic lights**: load classic Riot `Light.dat` point lights, fit them to any map (scale/offset), full lighting panel (sun, sky, lightmap brightness).
+- **Classic NVR maps**: the old-format Dominion / Crystal Scar loads with faithful four-blend ground shading — used as the Model Preview backdrop (separate ~66 MB [map asset pack](https://github.com/TheKillerey/ReyEngine/releases/tag/maps)).
+
+**Model Preview**
+- Champion viewer with animations, per-submesh visibility (game-accurate: skin-bin initial hide + per-clip show/hide events, with manual override), and model scale.
+- **Plays like in-game**: animation clips trigger their VFX bone-attached and their SFX through the champion's real Wwise banks — frame-accurate, retriggered on loop.
+- Preview champions **standing on the Dominion map**, lit by its original point lights — movable, rotatable, tunable.
 
 **Assets**
 - Content Browser with Explorer-grade file ops: rename, delete, move, drag & drop (in and out), open-with-text-editor, thumbnails, type filters, search.
@@ -36,7 +57,8 @@
    dotnet build src/ReyEngine.App/ReyEngine.App.csproj -c Release
    ```
    Requires the .NET 10 SDK, Windows.
-3. Launch → **File ▸ New Project…** → follow the wizard.
+3. Launch — the **setup wizard** walks you through hashes, the audio decoder, and the optional preview map.
+4. **File ▸ New Project…** (or **Import .fantome…**) and start modding.
 
 ## Built with
 
@@ -59,10 +81,11 @@ Every signed release is built automatically by GitHub Actions from this public r
 
 ## Privacy policy
 
-ReyEngine does not transfer any personal data to networked systems. It makes two outbound network requests, both initiated by the user or clearly disclosed:
+ReyEngine does not transfer any personal data to networked systems. It makes a few outbound network requests, all initiated by the user or clearly disclosed:
 
 - **Update check** — on startup (and via *Help ▸ About*), it queries the public GitHub Releases API for this repository to see whether a newer version exists. Only the request itself is sent; no personal or usage data is transmitted.
 - **Hash sync** — when you choose to sync hash tables, it downloads public hash lists from [CommunityDragon](https://communitydragon.org).
+- **Setup downloads** — the setup wizard downloads [vgmstream](https://github.com/vgmstream/vgmstream) and the optional [map asset pack](https://github.com/TheKillerey/ReyEngine/releases/tag/maps) from GitHub when you click their buttons.
 
 ReyEngine only reads your local League of Legends installation and writes to the project/output folders you select. Uninstall by deleting the extracted program folder.
 
