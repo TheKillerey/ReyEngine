@@ -1205,6 +1205,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.ReplaceTextureAsset = ReplaceTextureForSlot;
         MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
         MaterialEditor.SaveOverride = SaveMaterialOverride;
+        MaterialEditor.RequestCatalog = LoadShaderCatalogAsync;   // M103
+        InitShaderEnvironments();
 
         // M46 Particle Editor wiring
         ParticleEditor.ResolveTextures = ResolveSystemTextures;
@@ -4594,6 +4596,66 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Status = ShaderDbStatus;
         }
         catch (Exception ex) { _log.Error("Shader", ex.Message); }
+    }
+
+    // ---- M103: League shader catalogue (Live / PBE) ---------------------
+
+    private readonly Dictionary<string, string> _shaderEnvironmentDirs = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>List the installs whose shader list can be browsed: every discovered client, plus the
+    /// project's own game directory when it isn't one of them.</summary>
+    private void InitShaderEnvironments()
+    {
+        _shaderEnvironmentDirs.Clear();
+        MaterialEditor.ShaderEnvironments.Clear();
+        foreach (var install in GameInstallLocator.Discover())
+            if (_shaderEnvironmentDirs.TryAdd(install.Platform, install.GameDirectory))
+                MaterialEditor.ShaderEnvironments.Add(install.Platform);
+
+        if (Project.GameDirectory is { Length: > 0 } gd
+            && !_shaderEnvironmentDirs.Values.Any(d => string.Equals(d, gd, StringComparison.OrdinalIgnoreCase))
+            && _shaderEnvironmentDirs.TryAdd("Project", gd))
+            MaterialEditor.ShaderEnvironments.Add("Project");
+
+        // Prefer the install the project actually targets, else the first one found.
+        var preferred = _shaderEnvironmentDirs.FirstOrDefault(kv =>
+            string.Equals(kv.Value, Project.GameDirectory, StringComparison.OrdinalIgnoreCase)).Key
+            ?? MaterialEditor.ShaderEnvironments.FirstOrDefault();
+        if (preferred is not null) MaterialEditor.SelectedShaderEnvironment = preferred;
+    }
+
+    private static string ShaderCatalogCachePath(string environment) =>
+        Path.Combine(ReyEngine.Core.ReyPaths.DataRoot, "shader_catalogs", $"{environment}.json");
+
+    /// <summary>Scan (or load from cache) one install's shader definitions for the Material Editor.</summary>
+    private async Task LoadShaderCatalogAsync(string environment)
+    {
+        if (!_shaderEnvironmentDirs.TryGetValue(environment, out var gameDir))
+        {
+            MaterialEditor.SetCatalog(null);
+            return;
+        }
+        var cachePath = ShaderCatalogCachePath(environment);
+        var cached = await Task.Run(() => ShaderCatalogCache.Load(cachePath, gameDir));
+        if (cached is not null) { MaterialEditor.SetCatalog(cached); return; }
+
+        var wad = GameReferenceLibrary.FindGlobalWad(gameDir);
+        if (wad is null)
+        {
+            MaterialEditor.SetCatalog(null);
+            _log.Warn("Shader", $"{environment}: Global.wad.client not found under {gameDir} — no shader list.");
+            return;
+        }
+        _log.Info("Shader", $"Reading {environment} shader definitions…");
+        var catalog = await Task.Run(() =>
+            ShaderCatalogLoader.Load(wad, gameDir, environment, _resolver, h => ResolveBinName(h)));
+        if (catalog is not null)
+        {
+            await Task.Run(() => ShaderCatalogCache.Save(catalog, cachePath));
+            _log.Success("Shader", $"{environment}: {catalog.Shaders.Count:n0} shader definitions loaded.");
+        }
+        else _log.Warn("Shader", $"{environment}: {ShaderCatalogLoader.ShaderBinPath} not readable.");
+        MaterialEditor.SetCatalog(catalog);
     }
 
     [RelayCommand]

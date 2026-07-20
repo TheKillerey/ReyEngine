@@ -881,6 +881,17 @@
                       <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6,4">
                         <StackPanel Spacing="2">
                           <TextBlock Text="SHADER BINDING" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <!-- M103: which client's shader list the dropdowns offer (Live / PBE differ) -->
+                          <Grid ColumnDefinitions="Auto,*" Margin="0,2">
+                            <TextBlock Grid.Column="0" Text="Environment" FontSize="10" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding MaterialEditor.ShaderEnvironments}"
+                                      SelectedItem="{Binding MaterialEditor.SelectedShaderEnvironment}"
+                                      FontSize="10" HorizontalAlignment="Stretch"
+                                      ToolTip.Tip="Which League install the shader list is read from" />
+                          </Grid>
+                          <TextBlock Text="{Binding MaterialEditor.CatalogStatus}" FontSize="10" TextWrapping="Wrap"
+                                     Foreground="{DynamicResource ReyAccentBrush}" />
                           <TextBlock Text="{Binding ShaderDbStatus}" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
                           <TextBlock Text="The sampler slots below are the material's bound textures (required samplers). Switch the viewport to 'Riot Approx' to preview." FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
                         </StackPanel>
@@ -964,6 +975,62 @@
                                   </Grid>
                                   <TextBlock Text="{Binding ShaderChangeStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}"
                                              TextWrapping="Wrap" IsVisible="{Binding ShaderChangeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                                  <!-- M103: what the SELECTED shader declares. These are the samplers /
+                                       parameters the shader supports that this material doesn't bind yet —
+                                       one click adds them with the shader's own default values. -->
+                                  <TextBlock Text="{Binding ShaderDefSummary}" FontSize="9" TextWrapping="Wrap"
+                                             Foreground="{DynamicResource ReyTextDimBrush}"
+                                             IsVisible="{Binding ShaderDefSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasMissingSamplers}">
+                                    <TextBlock Text="SAMPLERS THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding MissingSamplers}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding Name, StringFormat='+ {0}'}"
+                                                  ToolTip.Tip="{Binding DefaultTexturePath}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderSamplerCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+
+                                  <StackPanel Spacing="2" IsVisible="{Binding HasMissingParameters}">
+                                    <TextBlock Text="PARAMETERS THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding MissingParameters}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding Name, StringFormat='+ {0}'}"
+                                                  ToolTip.Tip="{Binding DefaultText, StringFormat='default {0}'}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderParameterCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+
+                                  <StackPanel Spacing="2" IsVisible="{Binding HasShaderSwitches}">
+                                    <TextBlock Text="FEATURE SWITCHES THIS SHADER DECLARES" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding ShaderSwitches}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="3" Padding="4,1" Margin="0,0,3,3">
+                                            <TextBlock Text="{Binding}" FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" />
+                                          </Border>
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
                                 </StackPanel>
 
                                 <ItemsControl ItemsSource="{Binding Slots}">
@@ -974,6 +1041,8 @@
                                           <TextBlock Text="{Binding SamplerName}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" MinWidth="110" VerticalAlignment="Center" />
                                           <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" IsVisible="{Binding IsDiffuse}" ToolTip.Tip="Diffuse" />
                                           <TextBlock Text="⚠" Foreground="#FFB454" FontSize="11" VerticalAlignment="Center" IsVisible="{Binding Unresolved}" ToolTip.Tip="Path not found in this WAD" />
+                                          <TextBlock Text="?" Foreground="#FFB454" FontSize="11" VerticalAlignment="Center" IsVisible="{Binding NotInShader}"
+                                                     ToolTip.Tip="The selected shader declares no sampler by this name — it will be ignored" />
                                           <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
                                         </StackPanel>
                                         <!-- M96: star-sized so long paths shrink the textbox instead of pushing ✓/↺ off the panel -->

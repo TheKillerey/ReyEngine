@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Core.Assets;
 using ReyEngine.Core.Undo;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Shaders;
 
 namespace ReyEngine.App.ViewModels;
 
@@ -31,6 +32,10 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
 
     public string SamplerName => Model.SamplerName;
     public bool IsDiffuse => Model.IsDiffuse;
+
+    /// <summary>M103: the selected shader declares no sampler by this name, so the shader will ignore
+    /// whatever is bound here. False when the shader isn't in the catalogue (nothing to check against).</summary>
+    [ObservableProperty] private bool _notInShader;
     public bool IsDirty => Model.IsDirty;
     public bool CanRemove => Model.IsRemovable;
     public bool HasThumbnail => Thumbnail is not null;
@@ -185,6 +190,91 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
 
     [RelayCommand]
     private void ApplyShader() => Owner?.ChangeShader(this, EditedShader);
+
+    // ---- M103: what the SELECTED shader actually declares (from the game install's shader bin) ----
+
+    /// <summary>The catalogue entry for this material's current shader; null when the shader isn't in
+    /// the catalogue (an older/removed shader, or no install scanned yet).</summary>
+    public LeagueShaderDef? ShaderDef { get; private set; }
+
+    /// <summary>Samplers/parameters the shader declares but this material doesn't bind — the "what else
+    /// can I set on this shader" list, each addable with one click.</summary>
+    public ObservableCollection<ShaderTextureDef> MissingSamplers { get; } = new();
+    public ObservableCollection<ShaderParamDef> MissingParameters { get; } = new();
+    public ObservableCollection<string> ShaderSwitches { get; } = new();
+
+    [ObservableProperty] private bool _hasShaderDef;
+    [ObservableProperty] private string _shaderDefSummary = "";
+    public bool HasMissingSamplers => MissingSamplers.Count > 0;
+    public bool HasMissingParameters => MissingParameters.Count > 0;
+    public bool HasShaderSwitches => ShaderSwitches.Count > 0;
+
+    /// <summary>Recompute the shader-driven panel: which of the shader's samplers/params this material
+    /// is missing, and which of its bindings the shader doesn't know about.</summary>
+    public void RefreshShaderDef(ShaderCatalog? catalog)
+    {
+        ShaderDef = catalog?.Find(Model.RenderShader ?? Model.ShaderName);
+        HasShaderDef = ShaderDef is not null;
+
+        MissingSamplers.Clear();
+        MissingParameters.Clear();
+        ShaderSwitches.Clear();
+
+        if (ShaderDef is null)
+        {
+            ShaderDefSummary = catalog is null
+                ? ""
+                : "This shader isn't in the selected environment's catalogue — it may be from another patch.";
+            foreach (var s in Slots) s.NotInShader = false;   // nothing to validate against
+        }
+        else
+        {
+            ShaderDefSummary = ShaderDef.Summary;
+            var bound = Slots.Select(s => s.SamplerName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in ShaderDef.Textures)
+                if (!bound.Contains(t.Name)) MissingSamplers.Add(t);
+
+            var set = Parameters.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var pd in ShaderDef.Parameters)
+                if (!set.Contains(pd.Name)) MissingParameters.Add(pd);
+
+            foreach (var w in ShaderDef.StaticSwitches) ShaderSwitches.Add(w);
+
+            var declared = ShaderDef.Textures.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var s in Slots) s.NotInShader = !declared.Contains(s.SamplerName);
+        }
+        OnPropertyChanged(nameof(HasMissingSamplers));
+        OnPropertyChanged(nameof(HasMissingParameters));
+        OnPropertyChanged(nameof(HasShaderSwitches));
+    }
+
+    /// <summary>Bind a sampler the shader declares, pre-filled with the shader's own default texture.</summary>
+    [RelayCommand]
+    private void AddShaderSampler(ShaderTextureDef? def)
+    {
+        if (def is null) return;
+        var slot = Model.AddSampler(def.Name, def.DefaultTexturePath);
+        if (slot is null) return;
+        Slots.Add(new TextureSlotViewModel(slot, Owner!) { Binding = this });
+        RaiseDirty();
+        Owner!.NotifyChanged();
+        Owner!.RefreshShaderDefs();
+    }
+
+    /// <summary>Add a parameter the shader declares, pre-filled with the shader's default value.</summary>
+    [RelayCommand]
+    private void AddShaderParameter(ShaderParamDef? def)
+    {
+        if (def is null) return;
+        var p = Model.AddParameter(def.Name);
+        if (p is null) return;
+        try { p.Apply(def.DefaultText); } catch { /* keep the cloned prototype value */ }
+        Parameters.Add(new MaterialParameterViewModel(p, Owner!));
+        OnPropertyChanged(nameof(HasParameters));
+        RaiseDirty();
+        Owner!.NotifyChanged();
+        Owner!.RefreshShaderDefs();
+    }
 
     /// <summary>Refresh shader-related display after ChangeShader swapped the pass link.</summary>
     public void RaiseShaderChanged()
@@ -372,22 +462,62 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     public ObservableCollection<string> KnownShaders { get; } = new();
     private readonly Dictionary<string, HashSet<string>> _shaderSamplers = new(StringComparer.OrdinalIgnoreCase);
 
+    // ---- M103: the full League shader list, read from the selected game install ----
+
+    /// <summary>Every shader the selected environment's client ships (null until one is scanned).</summary>
+    public ShaderCatalog? Catalog { get; private set; }
+
+    /// <summary>Installs the shader list can be read from — "Live", "PBE", … (filled by the host).</summary>
+    public ObservableCollection<string> ShaderEnvironments { get; } = new();
+    [ObservableProperty] private string? _selectedShaderEnvironment;
+    [ObservableProperty] private string _catalogStatus = "No shader catalogue — pick a game environment.";
+    public bool HasCatalog => Catalog is not null;
+
+    /// <summary>Host hook: scan (or load the cache for) that environment and call <see cref="SetCatalog"/>.</summary>
+    public Func<string, Task>? RequestCatalog { get; set; }
+
+    partial void OnSelectedShaderEnvironmentChanged(string? value)
+    {
+        if (!string.IsNullOrEmpty(value) && RequestCatalog is { } req) _ = req(value);
+    }
+
+    public void SetCatalog(ShaderCatalog? catalog)
+    {
+        Catalog = catalog;
+        OnPropertyChanged(nameof(HasCatalog));
+        CatalogStatus = catalog is null
+            ? "Shader catalogue unavailable for this install (Global.wad not found)."
+            : $"{catalog.Environment}: {catalog.Shaders.Count:n0} shaders · {string.Join(", ", catalog.Categories)}";
+        BuildShaderIndex();
+        RefreshShaderDefs();
+    }
+
+    /// <summary>Re-evaluate every material against the catalogue (after a load or an environment switch).</summary>
+    public void RefreshShaderDefs()
+    {
+        foreach (var m in Materials) m.RefreshShaderDef(Catalog);
+    }
+
     /// <summary>Learn shader -> sampler-set from every material in the document (data-driven "required
-    /// samplers": what materials using that shader actually bind).</summary>
+    /// samplers": what materials using that shader actually bind), then union in the whole catalogue so
+    /// the dropdown offers every shader the client has, not just the ones this file happens to use.</summary>
     private void BuildShaderIndex()
     {
         KnownShaders.Clear();
         _shaderSamplers.Clear();
-        if (_doc is null) return;
-        foreach (var b in _doc.Materials)
-        {
-            if (string.IsNullOrEmpty(b.RenderShader) || b.RenderShader.StartsWith("0x")) continue;
-            if (!_shaderSamplers.TryGetValue(b.RenderShader, out var set))
-                _shaderSamplers[b.RenderShader] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var s in b.Slots) set.Add(s.SamplerName);
-        }
-        foreach (var name in _shaderSamplers.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
-            KnownShaders.Add(name);
+        if (_doc is not null)
+            foreach (var b in _doc.Materials)
+            {
+                if (string.IsNullOrEmpty(b.RenderShader) || b.RenderShader.StartsWith("0x")) continue;
+                if (!_shaderSamplers.TryGetValue(b.RenderShader, out var set))
+                    _shaderSamplers[b.RenderShader] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var s in b.Slots) set.Add(s.SamplerName);
+            }
+
+        var names = new SortedSet<string>(_shaderSamplers.Keys, StringComparer.OrdinalIgnoreCase);
+        if (Catalog is not null)
+            foreach (var sh in Catalog.Shaders) names.Add(sh.Name);
+        foreach (var n in names) KnownShaders.Add(n);
     }
 
     /// <summary>Switch a material to another shader and add any sampler slots that the target shader's
@@ -400,19 +530,38 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
             vm.ShaderChangeStatus = "This material has no technique pass — shader can't be changed.";
             return;
         }
+        // The catalogue is authoritative (it lists what the shader actually declares, with the shader's
+        // own default texture); the document-learned sampler set is the fallback when it isn't loaded.
         int added = 0;
-        if (_shaderSamplers.TryGetValue(shader.Trim(), out var required))
+        var def = Catalog?.Find(shader.Trim());
+        if (def is not null)
+        {
+            foreach (var t in def.Textures)
+                if (!vm.Model.Slots.Any(x => string.Equals(x.SamplerName, t.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var slot = vm.Model.AddSampler(t.Name, t.DefaultTexturePath);
+                    if (slot is not null) { vm.Slots.Add(new TextureSlotViewModel(slot, this) { Binding = vm }); added++; }
+                }
+        }
+        else if (_shaderSamplers.TryGetValue(shader.Trim(), out var required))
+        {
             foreach (var samplerName in required.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                 if (!vm.Model.Slots.Any(x => string.Equals(x.SamplerName, samplerName, StringComparison.OrdinalIgnoreCase)))
                 {
                     var slot = vm.Model.AddSampler(samplerName, "");
                     if (slot is not null) { vm.Slots.Add(new TextureSlotViewModel(slot, this) { Binding = vm }); added++; }
                 }
+        }
         vm.RaiseShaderChanged();
+        vm.RefreshShaderDef(Catalog);
         IsDirty = _doc?.IsDirty ?? true;
-        vm.ShaderChangeStatus = added > 0
-            ? $"Shader set. Added {added} sampler slot(s) used by this shader — fill in their texture paths."
-            : "Shader set. All of this shader's usual samplers are already present.";
+        vm.ShaderChangeStatus = def is not null
+            ? added > 0
+                ? $"Shader set. Added {added} sampler slot(s) this shader declares, pre-filled with its default textures."
+                : "Shader set. Every sampler this shader declares is already bound."
+            : added > 0
+                ? $"Shader set. Added {added} sampler slot(s) used by this shader — fill in their texture paths."
+                : "Shader set. This shader isn't in the catalogue, so its sampler list couldn't be checked.";
     }
 
     /// <summary>M50c: auto-load the diffuse thumbnail of one material — used when the user opens a
@@ -453,6 +602,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         IsDirty = false;
         Search = ""; OnlyUnresolved = false;
         BuildShaderIndex();   // M52: shader -> sampler-set map for the shader selector
+        RefreshShaderDefs();  // M103: match each material against the catalogue
         UpdateUnresolved();
         Summary = $"{(Kind == MaterialSourceKind.ChampionSkin ? "Champion" : "Map")} — {Materials.Count} material(s)";
     }
