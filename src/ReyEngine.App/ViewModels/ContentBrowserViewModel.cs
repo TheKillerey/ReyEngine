@@ -92,6 +92,7 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
     {
         FolderRoots.Clear();
         Items.Clear();
+        ClearSelection();
         Breadcrumbs.Clear();
         Materials.Clear();
         HasMaterials = false;
@@ -114,6 +115,7 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
         bool searching = !string.IsNullOrWhiteSpace(Filter) || kinds is not null;
 
         Items.Clear();
+        ClearSelection();   // M100: the old selection points at items that are no longer listed
         SearchTruncated = false;
         if (searching)
         {
@@ -156,6 +158,97 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
             else yield return n;
         }
     }
+
+    // ---- M100: multi-selection ------------------------------------------
+    // Single click selects (Ctrl toggles, Shift extends), double click opens. The bulk file
+    // operations — import / copy / move / delete — all act on SelectedItems.
+
+    /// <summary>Everything currently selected in the item view. Order follows <see cref="Items"/>.</summary>
+    public ObservableCollection<AssetNodeViewModel> SelectedItems { get; } = new();
+    [ObservableProperty] private bool _hasSelection;
+    [ObservableProperty] private bool _hasMultiSelection;
+    /// <summary>Header text for the current selection ("" when nothing is selected).</summary>
+    [ObservableProperty] private string _selectionText = "";
+
+    /// <summary>Anchor for Shift-extend — the last item picked without Shift.</summary>
+    private AssetNodeViewModel? _anchor;
+
+    private void SelectionChanged()
+    {
+        HasSelection = SelectedItems.Count > 0;
+        HasMultiSelection = SelectedItems.Count > 1;
+        SelectionText = SelectedItems.Count switch
+        {
+            0 => "",
+            1 => SelectedItems[0].Name,
+            _ => $"{SelectedItems.Count} selected",
+        };
+        // The focused item drives the existing single-asset commands.
+        SelectedItem = SelectedItems.Count > 0 ? SelectedItems[^1] : SelectedItem;
+    }
+
+    public void ClearSelection()
+    {
+        foreach (var n in SelectedItems) n.IsSelected = false;
+        SelectedItems.Clear();
+        _anchor = null;
+        SelectionChanged();
+    }
+
+    /// <summary>Plain click: this item becomes the whole selection.</summary>
+    public void SelectOnly(AssetNodeViewModel node)
+    {
+        foreach (var n in SelectedItems) n.IsSelected = false;
+        SelectedItems.Clear();
+        node.IsSelected = true;
+        SelectedItems.Add(node);
+        _anchor = node;
+        SelectionChanged();
+    }
+
+    /// <summary>Ctrl-click: add/remove one item without disturbing the rest.</summary>
+    public void ToggleSelection(AssetNodeViewModel node)
+    {
+        if (node.IsSelected) { node.IsSelected = false; SelectedItems.Remove(node); }
+        else { node.IsSelected = true; SelectedItems.Add(node); _anchor = node; }
+        SelectionChanged();
+    }
+
+    /// <summary>Shift-click: select everything between the anchor and this item.</summary>
+    public void SelectRange(AssetNodeViewModel node)
+    {
+        int to = Items.IndexOf(node);
+        int from = _anchor is null ? to : Items.IndexOf(_anchor);
+        if (to < 0) return;
+        if (from < 0) from = to;
+        foreach (var n in SelectedItems) n.IsSelected = false;
+        SelectedItems.Clear();
+        for (int i = Math.Min(from, to); i <= Math.Max(from, to); i++)
+        {
+            Items[i].IsSelected = true;
+            SelectedItems.Add(Items[i]);
+        }
+        SelectionChanged();   // anchor deliberately kept, so repeated Shift-clicks re-extend from it
+    }
+
+    [RelayCommand]
+    private void SelectAll()
+    {
+        foreach (var n in SelectedItems) n.IsSelected = false;
+        SelectedItems.Clear();
+        foreach (var i in Items) { i.IsSelected = true; SelectedItems.Add(i); }
+        SelectionChanged();
+    }
+
+    /// <summary>Right-click: keep an existing multi-selection if the item is part of it, otherwise
+    /// make it the selection — so the context menu always acts on what's highlighted.</summary>
+    public void SelectForContextMenu(AssetNodeViewModel node)
+    {
+        if (!node.IsSelected) SelectOnly(node);
+    }
+
+    /// <summary>Double click / Enter — open the item (navigate into folders, load files).</summary>
+    public void Activate(AssetNodeViewModel? node) => Open(node);
 
     [RelayCommand]
     private void Open(AssetNodeViewModel? node)

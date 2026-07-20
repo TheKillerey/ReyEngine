@@ -24,6 +24,11 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(IsModified))]
     private AssetStatus _status = AssetStatus.Original;
 
+    /// <summary>M100: part of the Content Browser's multi-selection (drives the highlight + bulk ops).
+    /// Owned by <see cref="ContentBrowserViewModel"/> — set it through the selection methods there so
+    /// the flag and the SelectedItems list can't drift apart.</summary>
+    [ObservableProperty] private bool _isSelected;
+
     /// <summary>Lazily-loaded Content Browser thumbnail (texture files + material diffuse). Null until decoded.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasThumbnail))]

@@ -30,6 +30,19 @@ public sealed class DialogService
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
     }
 
+    /// <summary>M100: multi-file picker for the Content Browser's Import command.</summary>
+    public async Task<IReadOnlyList<string>> OpenFilesAsync(string title, params FilePickerFileType[] filters)
+    {
+        if (Owner is null) return Array.Empty<string>();
+        var files = await Owner.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = title,
+            AllowMultiple = true,
+            FileTypeFilter = filters.Length > 0 ? filters : null,
+        });
+        return files.Select(f => f.TryGetLocalPath()).Where(p => p is not null).ToList()!;
+    }
+
     public async Task<string?> OpenFolderAsync(string title)
     {
         if (Owner is null) return null;

@@ -1749,7 +1749,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task ExportSelected()
     {
-        var entry = SelectedNode?.Entry;
+        var entry = ContextNode?.Entry;
         if (entry is null || !ContentLoaded) { _log.Warn("Export", "Select a file first."); return; }
         var outPath = await Dialogs.SaveFileAsync("Export asset", entry.DisplayName);
         if (outPath is null) return;
@@ -4106,7 +4106,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task ReplaceSelected()
     {
-        var entry = SelectedNode?.Entry;
+        var entry = ContextNode?.Entry;
         if (entry is null) { _log.Warn("Project", "Select an asset to replace."); return; }
         if (!GuardEditable(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
@@ -4135,7 +4135,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void RevertSelected()
     {
-        var entry = SelectedNode?.Entry;
+        var entry = ContextNode?.Entry;
         if (entry is null || !_overrides.Has(entry.PathHash)) { _log.Warn("Project", "Selected asset is not modified."); return; }
         _overrides.Remove(entry.PathHash);
         SetNodeStatus(entry.PathHash, AssetStatus.Original);
@@ -4152,7 +4152,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task ExportModified()
     {
-        var entry = SelectedNode?.Entry;
+        var entry = ContextNode?.Entry;
         if (entry is null || !_overrides.TryGet(entry.PathHash, out var ov)) { _log.Warn("Export", "Selected asset has no override."); return; }
         var outPath = await Dialogs.SaveFileAsync("Export modified asset", Path.GetFileName(ov.OverrideFile));
         if (outPath is null) return;
@@ -4163,7 +4163,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task CopyResolvedPath()
     {
-        var entry = SelectedNode?.Entry;
+        var entry = ContextNode?.Entry;
         if (entry is null) return;
         await Dialogs.CopyAsync(entry.Path);
         _log.Info("Clipboard", entry.Path);
@@ -4172,7 +4172,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task CopyHash()
     {
-        var entry = SelectedNode?.Entry;
+        var entry = ContextNode?.Entry;
         if (entry is null) return;
         var h = $"0x{entry.PathHash:x16}";
         await Dialogs.CopyAsync(h);
@@ -4740,7 +4740,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task CopyAssetToProject()
     {
-        var srcNode = SelectedNode;
+        var srcNode = ContextNode;
         var entry = srcNode?.Entry;
         if (entry is null) { _log.Warn("Project", "Select an asset to copy."); return; }
         if (!ProjectMode || _mounts is null) { _log.Warn("Project", "Copy to Project needs an open project."); return; }
@@ -5056,10 +5056,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Revert a specific node's override (Delete on an override = revert to original).</summary>
     private void RevertSelectedFor(AssetNodeViewModel node)
     {
-        var keep = SelectedNode;
-        SelectedNode = node;
-        if (RevertSelectedCommand.CanExecute(null)) RevertSelectedCommand.Execute(null);
-        if (keep is not null && !ReferenceEquals(keep, node)) SelectedNode = keep;
+        // M100: point the command at this node without re-selecting it (SelectedNode reloads the preview).
+        _contextOverride = node;
+        try { if (RevertSelectedCommand.CanExecute(null)) RevertSelectedCommand.Execute(null); }
+        finally { _contextOverride = null; }
     }
 
     /// <summary>M74: open any asset's raw bytes in the system text editor. Editable files open in place
@@ -5151,6 +5151,115 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Success("Files", $"Imported {copied} file(s) into {targetFolder!.Name}/.");
             RefreshBrowser();
         }
+    }
+
+    // ---- M100: bulk operations on the Content Browser selection ---------
+    // Single click selects, double click opens — so the context menu and the toolbar act on the
+    // browser's SelectedItems rather than on "whatever happens to be open in the editor".
+
+    /// <summary>Forces <see cref="ContextNode"/> for the duration of one internal call (see
+    /// <see cref="RevertSelectedFor"/>, which drives a command against a specific node).</summary>
+    private AssetNodeViewModel? _contextOverride;
+
+    /// <summary>The node the single-asset commands act on: the Content Browser selection when there
+    /// is one (right-clicking a tile selects it), otherwise whatever is open in the editor.</summary>
+    private AssetNodeViewModel? ContextNode =>
+        _contextOverride ?? (ContentBrowser.SelectedItems.Count > 0 ? ContentBrowser.SelectedItems[0] : SelectedNode);
+
+    /// <summary>Every node a bulk operation should touch.</summary>
+    private List<AssetNodeViewModel> ContextNodes =>
+        ContentBrowser.SelectedItems.Count > 0
+            ? ContentBrowser.SelectedItems.ToList()
+            : SelectedNode is { } n ? new List<AssetNodeViewModel> { n } : new List<AssetNodeViewModel>();
+
+    /// <summary>Import external files into the folder the browser is showing.</summary>
+    [RelayCommand]
+    private async Task ImportFiles()
+    {
+        if (!TryResolveFolderDiskDir(ContentBrowser.CurrentFolder, out _))
+        { _log.Warn("Files", "Navigate into an editable project folder first — Riot references are read-only."); return; }
+        var files = await Dialogs.OpenFilesAsync("Import files into the project", DialogService.All);
+        if (files.Count > 0) ImportExternalFiles(files, ContentBrowser.CurrentFolder);
+    }
+
+    /// <summary>Copy the selected assets out to a folder on disk. Works for read-only Riot references
+    /// too (the bytes are read through the mounts), so it doubles as a bulk export.</summary>
+    [RelayCommand]
+    private async Task CopySelectionTo()
+    {
+        var nodes = ContextNodes.Where(n => !n.IsFolder && n.Entry is not null).ToList();
+        if (nodes.Count == 0) { _log.Warn("Files", "Select one or more files first."); return; }
+        var dir = await Dialogs.OpenFolderAsync($"Copy {nodes.Count} asset(s) to…");
+        if (dir is null) return;
+        int done = 0;
+        foreach (var n in nodes)
+        {
+            try
+            {
+                File.WriteAllBytes(Path.Combine(dir, n.Entry!.DisplayName), GetAssetBytes(n.Entry));
+                done++;
+            }
+            catch (Exception ex) { _log.Warn("Files", $"{n.Name}: {ex.Message}"); }
+        }
+        _log.Success("Files", $"Copied {done}/{nodes.Count} asset(s) → {dir}");
+    }
+
+    /// <summary>Move the selected project files to another folder. Read-only references can't move —
+    /// copy them into the project first.</summary>
+    [RelayCommand]
+    private async Task MoveSelectionTo()
+    {
+        var nodes = ContextNodes.Where(n => !n.IsFolder).ToList();
+        if (nodes.Count == 0) { _log.Warn("Files", "Select one or more files first."); return; }
+        var dir = await Dialogs.OpenFolderAsync($"Move {nodes.Count} file(s) to…");
+        if (dir is null) return;
+        int done = 0, skipped = 0;
+        foreach (var n in nodes)
+        {
+            if (!TryGetNodeFile(n, out var file)) { skipped++; continue; }
+            try
+            {
+                var target = Path.Combine(dir, Path.GetFileName(file));
+                if (string.Equals(target, file, StringComparison.OrdinalIgnoreCase)) continue;
+                if (File.Exists(target)) { _log.Warn("Files", $"'{Path.GetFileName(file)}' already exists there — skipped."); skipped++; continue; }
+                File.Move(file, target);
+                done++;
+            }
+            catch (Exception ex) { _log.Warn("Files", $"{n.Name}: {ex.Message}"); skipped++; }
+        }
+        if (skipped > 0) _log.Warn("Files", $"{skipped} item(s) skipped — only editable project files can be moved.");
+        if (done > 0) { _log.Success("Files", $"Moved {done} file(s) → {dir} (their WAD paths changed with them)."); RefreshBrowser(); }
+    }
+
+    /// <summary>Delete every selected asset — one confirmation for the whole batch. Overrides revert
+    /// to their original instead of being removed from disk.</summary>
+    [RelayCommand]
+    private async Task DeleteSelection()
+    {
+        var nodes = ContextNodes;
+        if (nodes.Count == 0 || PromptOwner is null) { _log.Warn("Files", "Select something to delete first."); return; }
+        if (nodes.Count == 1) { await DeleteAsset(nodes[0]); return; }   // single item keeps the detailed prompt
+
+        if (!await Views.PromptWindow.ConfirmAsync(PromptOwner, "Delete Selection",
+            $"Delete {nodes.Count} selected item(s)?\n\nProject files are removed from disk; overrides revert to their original.",
+            "Delete"))
+            return;
+
+        int deleted = 0, reverted = 0, skipped = 0;
+        foreach (var node in nodes)
+        {
+            try
+            {
+                if (node.Entry is { SourceKind: AssetSourceKind.ProjectOverride }) { RevertSelectedFor(node); reverted++; }
+                else if (TryGetNodeFile(node, out var file)) { File.Delete(file); deleted++; }
+                else if (TryResolveFolderDiskDir(node, out var dir)) { Directory.Delete(dir, recursive: true); deleted++; }
+                else skipped++;
+            }
+            catch (Exception ex) { _log.Warn("Files", $"{node.Name}: {ex.Message}"); skipped++; }
+        }
+        if (skipped > 0) _log.Warn("Files", $"{skipped} item(s) skipped — Riot references are read-only.");
+        _log.Success("Files", $"Deleted {deleted} item(s){(reverted > 0 ? $", reverted {reverted} override(s)" : "")}.");
+        RefreshBrowser();
     }
 
     [RelayCommand]

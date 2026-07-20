@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Numerics;
 using Avalonia;
 using Avalonia.Controls;
@@ -174,7 +175,10 @@ public partial class MainWindow : Window
             {
                 items.AddHandler(PointerPressedEvent, OnBrowserItemPointerPressed, Avalonia.Interactivity.RoutingStrategies.Tunnel);
                 items.AddHandler(PointerMovedEvent, OnBrowserItemPointerMoved, Avalonia.Interactivity.RoutingStrategies.Tunnel);
-                items.AddHandler(PointerReleasedEvent, (_, _) => _dragCandidate = null, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+                items.AddHandler(PointerReleasedEvent, OnBrowserItemPointerReleased, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+                // M100: opening is a DOUBLE click now — single click only selects.
+                items.AddHandler(DoubleTappedEvent, OnBrowserItemDoubleTapped,
+                    Avalonia.Interactivity.RoutingStrategies.Tunnel | Avalonia.Interactivity.RoutingStrategies.Bubble);
             }
         // Drop targets: the folder tree (move/import into a specific folder) + the items panel (current folder).
         foreach (var name in new[] { "BrowserFolderTree", "BrowserItemsPanel" })
@@ -185,11 +189,57 @@ public partial class MainWindow : Window
             }
     }
 
+    /// <summary>M100: Explorer-style selection. Plain click selects, Ctrl toggles, Shift extends from
+    /// the anchor; clicking empty space clears. A click on an already-selected item keeps the whole
+    /// selection so it can be dragged (it collapses to that one item on release, see below).</summary>
     private void OnBrowserItemPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) { _dragCandidate = null; return; }
-        _dragCandidate = FindNodeFromEvent(e.Source);
+        if (DataContext is not MainWindowViewModel vm) return;
+        var props = e.GetCurrentPoint(this).Properties;
+        var node = FindNodeFromEvent(e.Source);
+        _collapseOnRelease = null;
+
+        if (props.IsRightButtonPressed)
+        {
+            // Right-click keeps an existing multi-selection when the item is part of it, so the
+            // context menu acts on everything highlighted.
+            if (node is not null) vm.ContentBrowser.SelectForContextMenu(node);
+            _dragCandidate = null;
+            return;
+        }
+        if (!props.IsLeftButtonPressed) { _dragCandidate = null; return; }
+        if (node is null) { vm.ContentBrowser.ClearSelection(); _dragCandidate = null; return; }
+
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control)) vm.ContentBrowser.ToggleSelection(node);
+        else if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) vm.ContentBrowser.SelectRange(node);
+        else if (!node.IsSelected) vm.ContentBrowser.SelectOnly(node);
+        else _collapseOnRelease = node;
+
+        _dragCandidate = node;
         _dragStartPos = e.GetPosition(this);
+    }
+
+    /// <summary>Item that was already selected when pressed — a plain click that didn't turn into a
+    /// drag narrows the selection down to it (Explorer behaviour).</summary>
+    private AssetNodeViewModel? _collapseOnRelease;
+
+    private void OnBrowserItemPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (_collapseOnRelease is { } node && DataContext is MainWindowViewModel vm
+            && !e.KeyModifiers.HasFlag(KeyModifiers.Control) && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+            vm.ContentBrowser.SelectOnly(node);
+        _collapseOnRelease = null;
+        _dragCandidate = null;
+    }
+
+    private void OnBrowserItemDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm) return;
+        if (FindNodeFromEvent(e.Source) is { } node)
+        {
+            vm.ContentBrowser.Activate(node);
+            e.Handled = true;
+        }
     }
 
     private async void OnBrowserItemPointerMoved(object? sender, PointerEventArgs e)
@@ -198,6 +248,7 @@ public partial class MainWindow : Window
         var p = e.GetPosition(this);
         if (Math.Abs(p.X - _dragStartPos.X) + Math.Abs(p.Y - _dragStartPos.Y) < 6) return;   // click slop
         _dragCandidate = null;
+        _collapseOnRelease = null;
         var data = new DataObject();
         data.Set("rey/asset", node);
         await DragDrop.DoDragDrop(e, data, DragDropEffects.Move);
@@ -222,7 +273,11 @@ public partial class MainWindow : Window
 
         if (e.Data.Get("rey/asset") is AssetNodeViewModel item)
         {
-            vm.MoveAssetToFolder(item, target);
+            // M100: dragging one item of a multi-selection moves the whole selection.
+            var batch = vm.ContentBrowser.SelectedItems.Contains(item)
+                ? vm.ContentBrowser.SelectedItems.ToList()
+                : new List<AssetNodeViewModel> { item };
+            foreach (var n in batch) vm.MoveAssetToFolder(n, target);
             e.Handled = true;
         }
         else if (e.Data.GetFiles() is { } storageItems)

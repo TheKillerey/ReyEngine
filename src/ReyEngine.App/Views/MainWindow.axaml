@@ -510,6 +510,12 @@
                            VerticalAlignment="Center" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" />
                 <TextBlock Text="(capped)" VerticalAlignment="Center" FontSize="10" Foreground="{DynamicResource ReyWarningBrush}"
                            IsVisible="{Binding ContentBrowser.SearchTruncated}" ToolTip.Tip="Too many matches — showing the first 4000. Narrow the search or filter." />
+                <!-- M100: what the bulk operations will act on -->
+                <TextBlock Text="{Binding ContentBrowser.SelectionText}" VerticalAlignment="Center" FontSize="10"
+                           Foreground="{DynamicResource ReyAccentBrush}" MaxWidth="130" TextTrimming="CharacterEllipsis"
+                           IsVisible="{Binding ContentBrowser.HasSelection}" Margin="4,0,0,0" />
+                <Button Classes="tool" Content="⬇ Import" FontSize="10" Padding="6,2"
+                        Command="{Binding ImportFilesCommand}" ToolTip.Tip="Import files into this folder" />
               </StackPanel>
               <ComboBox Grid.Column="4" ItemsSource="{Binding ContentBrowser.TypeFilters}" SelectedItem="{Binding ContentBrowser.TypeFilter}"
                         FontSize="11" MinWidth="98" Margin="2,4" ToolTip.Tip="Filter by asset type" />
@@ -553,17 +559,25 @@
                   </ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
+                      <!-- M100: single click selects (Ctrl/Shift extend), double click opens — wired in
+                           code-behind, so the tile carries no Click command of its own. -->
                       <Button Width="94" Height="86" Margin="4" Padding="2" Background="Transparent" CornerRadius="5"
-                              Command="{Binding $parent[ItemsControl].DataContext.ContentBrowser.OpenCommand}"
-                              CommandParameter="{Binding}" ToolTip.Tip="{Binding Name}">
+                              ToolTip.Tip="{Binding Name}">
                         <Button.ContextMenu>
                           <ContextMenu>
+                            <MenuItem Header="Open" Command="{Binding $parent[Window].DataContext.ContentBrowser.OpenCommand}" CommandParameter="{Binding}" />
+                            <Separator />
                             <MenuItem Header="Copy Asset To Project" Command="{Binding $parent[Window].DataContext.CopyAssetToProjectCommand}" />
                             <MenuItem Header="Replace Selected Asset…" Command="{Binding $parent[Window].DataContext.ReplaceSelectedCommand}" />
                             <MenuItem Header="Revert Asset" Command="{Binding $parent[Window].DataContext.RevertSelectedCommand}" />
                             <Separator />
+                            <!-- M100: these act on the whole browser selection -->
+                            <MenuItem Header="Import Files…" Command="{Binding $parent[Window].DataContext.ImportFilesCommand}" />
+                            <MenuItem Header="Copy To…" Command="{Binding $parent[Window].DataContext.CopySelectionToCommand}" />
+                            <MenuItem Header="Move To…" Command="{Binding $parent[Window].DataContext.MoveSelectionToCommand}" />
+                            <MenuItem Header="Delete" Command="{Binding $parent[Window].DataContext.DeleteSelectionCommand}" />
                             <MenuItem Header="Rename…" Command="{Binding $parent[Window].DataContext.RenameAssetCommand}" CommandParameter="{Binding}" />
-                            <MenuItem Header="Delete" Command="{Binding $parent[Window].DataContext.DeleteAssetCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Select All" Command="{Binding $parent[Window].DataContext.ContentBrowser.SelectAllCommand}" />
                             <Separator />
                             <MenuItem Header="Open in Text Editor" Command="{Binding $parent[Window].DataContext.OpenInTextEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in Map Bin Editor" Command="{Binding $parent[Window].DataContext.OpenInMapBinEditorCommand}" CommandParameter="{Binding}" />
@@ -576,6 +590,10 @@
                           </ContextMenu>
                         </Button.ContextMenu>
                         <!-- M39: Unreal-style asset tile — thumb card + type badge + status icons -->
+                        <Grid>
+                        <!-- M100: multi-selection highlight -->
+                        <Border Background="{DynamicResource ReyAccentBrush}" Opacity="0.30" CornerRadius="4"
+                                Margin="-2" IsVisible="{Binding IsSelected}" />
                         <StackPanel>
                           <Border Background="{DynamicResource ReyPanelAltBrush}" BorderBrush="{DynamicResource ReyBorderSoftBrush}"
                                   BorderThickness="1" CornerRadius="5" Width="66" Height="46" HorizontalAlignment="Center" ClipToBounds="True">
@@ -600,6 +618,7 @@
                                        TextTrimming="CharacterEllipsis" MaxWidth="78" VerticalAlignment="Center" />
                           </StackPanel>
                         </StackPanel>
+                        </Grid>
                       </Button>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
@@ -613,19 +632,25 @@
                       <DataTemplate>
                         <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Background="Transparent"
                                 BorderThickness="0" CornerRadius="3" Padding="6,3"
-                                Command="{Binding $parent[ItemsControl].DataContext.ContentBrowser.OpenCommand}"
-                                CommandParameter="{Binding}" ToolTip.Tip="{Binding Name}">
+                                ToolTip.Tip="{Binding Name}">
                           <Button.ContextMenu>
                             <ContextMenu>
+                              <MenuItem Header="Open" Command="{Binding $parent[Window].DataContext.ContentBrowser.OpenCommand}" CommandParameter="{Binding}" />
+                              <Separator />
                               <MenuItem Header="Copy Asset To Project" Command="{Binding $parent[Window].DataContext.CopyAssetToProjectCommand}" />
                               <MenuItem Header="Replace Selected Asset…" Command="{Binding $parent[Window].DataContext.ReplaceSelectedCommand}" />
                               <MenuItem Header="Revert Asset" Command="{Binding $parent[Window].DataContext.RevertSelectedCommand}" />
                               <Separator />
+                              <!-- M100: these act on the whole browser selection -->
+                              <MenuItem Header="Import Files…" Command="{Binding $parent[Window].DataContext.ImportFilesCommand}" />
+                              <MenuItem Header="Copy To…" Command="{Binding $parent[Window].DataContext.CopySelectionToCommand}" />
+                              <MenuItem Header="Move To…" Command="{Binding $parent[Window].DataContext.MoveSelectionToCommand}" />
+                              <MenuItem Header="Delete" Command="{Binding $parent[Window].DataContext.DeleteSelectionCommand}" />
                               <MenuItem Header="Rename…" Command="{Binding $parent[Window].DataContext.RenameAssetCommand}" CommandParameter="{Binding}" />
-                              <MenuItem Header="Delete" Command="{Binding $parent[Window].DataContext.DeleteAssetCommand}" CommandParameter="{Binding}" />
+                              <MenuItem Header="Select All" Command="{Binding $parent[Window].DataContext.ContentBrowser.SelectAllCommand}" />
                               <Separator />
                               <MenuItem Header="Open in Text Editor" Command="{Binding $parent[Window].DataContext.OpenInTextEditorCommand}" CommandParameter="{Binding}" />
-                            <MenuItem Header="Open in Map Bin Editor" Command="{Binding $parent[Window].DataContext.OpenInMapBinEditorCommand}" CommandParameter="{Binding}" />
+                              <MenuItem Header="Open in Map Bin Editor" Command="{Binding $parent[Window].DataContext.OpenInMapBinEditorCommand}" CommandParameter="{Binding}" />
                               <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
                               <Separator />
                               <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />
@@ -634,6 +659,10 @@
                               <MenuItem Header="Refresh" Command="{Binding $parent[Window].DataContext.RefreshBrowserCommand}" />
                             </ContextMenu>
                           </Button.ContextMenu>
+                          <Grid>
+                          <!-- M100: multi-selection highlight -->
+                          <Border Background="{DynamicResource ReyAccentBrush}" Opacity="0.30" CornerRadius="3"
+                                  Margin="-6,-3" IsVisible="{Binding IsSelected}" />
                           <Grid ColumnDefinitions="Auto,32,*,Auto,Auto">
                             <TextBlock Grid.Column="0" Text="{Binding Icon}" FontSize="14" VerticalAlignment="Center" Margin="0,0,6,0" />
                             <Border Grid.Column="1" Classes="badge accent" VerticalAlignment="Center" Padding="3,0"
@@ -646,6 +675,7 @@
                                        IsVisible="{Binding IsReadOnly}" ToolTip.Tip="Read-only Riot reference" />
                             <Ellipse Grid.Column="4" Width="6" Height="6" VerticalAlignment="Center" Margin="4,0" Fill="{DynamicResource ReyAccent2Brush}"
                                      IsVisible="{Binding IsModified}" ToolTip.Tip="Modified in this project" />
+                          </Grid>
                           </Grid>
                         </Button>
                       </DataTemplate>
