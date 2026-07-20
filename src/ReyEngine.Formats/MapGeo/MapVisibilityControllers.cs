@@ -48,6 +48,38 @@ public sealed class MapVisibilityControllers
     public int Count => _controllers.Count;
     public int BaronControllerCount => _controllers.Values.Count(o => o.ClassHash == BaronController);
 
+    /// <summary>M105: one known controller, resolved for display in the layer-assignment dropdown.</summary>
+    public readonly record struct ControllerInfo(uint Hash, string Kind, int DragonBits, int BaronBits, bool NotVisible)
+    {
+        public string Label
+        {
+            get
+            {
+                int dragonBits = DragonBits, baronBits = BaronBits;   // structs can't capture 'this' in lambdas
+                var dragons = MapVisibility.Dragons.Where(d => (dragonBits & d.Bit) != 0).Select(d => d.Name).ToList();
+                var barons = MapVisibility.Barons.Where(b => (baronBits & b.Bit) != 0).Select(b => b.Name).ToList();
+                var parts = new List<string> { $"{Kind} 0x{Hash:x8}" };
+                if (dragons.Count > 0) parts.Add("dragon " + string.Join("/", dragons));
+                if (barons.Count > 0) parts.Add("baron " + string.Join("/", barons));
+                if (NotVisible) parts.Add("inverted");
+                return string.Join(" · ", parts);
+            }
+        }
+    }
+
+    /// <summary>Every controller found in the map's bins, baron controllers first (M105).</summary>
+    public IReadOnlyList<ControllerInfo> List() =>
+        _controllers.Values
+            .Select(o => 
+            {
+                var r = Resolve(o.PathHash);
+                string kind = o.ClassHash == BaronController ? "Baron" : o.ClassHash == DragonController ? "Dragon" : "Child";
+                return new ControllerInfo(o.PathHash, kind, r.DragonBits, r.BaronBits, r.NotVisible);
+            })
+            .OrderBy(ci => ci.Kind == "Baron" ? 0 : ci.Kind == "Dragon" ? 1 : 2)
+            .ThenBy(ci => ci.Hash)
+            .ToList();
+
     /// <summary>Index every controller object found across the given bin blobs (tolerant parse).</summary>
     public static MapVisibilityControllers Build(IEnumerable<byte[]> bins)
     {

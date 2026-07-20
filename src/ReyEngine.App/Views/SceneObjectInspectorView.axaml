@@ -135,11 +135,50 @@
       </StackPanel>
     </Border>
 
-    <!-- MESH DETAILS — full mapgeo metadata, collapsed by default (advanced) -->
+    <!-- M105: MAP LAYERS — assign the selected meshes to dragon layers / a baron visibility
+         controller. Edits preview live and save with "Save to Mod". -->
+    <Border Classes="card" IsVisible="{Binding HasLayerSelection}">
+      <StackPanel Spacing="4">
+        <TextBlock Classes="cardTitle" Text="MAP LAYERS" />
+        <TextBlock Text="{Binding LayerSummary}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" />
+
+        <TextBlock Text="Dragon layers (mesh shows when its layer is active)" FontSize="9"
+                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+        <ItemsControl ItemsSource="{Binding DragonLayerBits}">
+          <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <CheckBox Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="10" Margin="0,0,8,2" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <TextBlock Text="Visibility controller (baron pit states, timed events)" FontSize="9"
+                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+        <ComboBox ItemsSource="{Binding LayerControllerChoices}" SelectedIndex="{Binding SelectedLayerControllerIndex}"
+                  FontSize="10" HorizontalAlignment="Stretch"
+                  ToolTip.Tip="Controllers come from this map's .bin files. 'None' keeps the mesh purely on the dragon-layer mask." />
+
+        <CheckBox Content="Disable backface culling (two-sided)" IsChecked="{Binding MeshBackfaceDisabled}" FontSize="10"
+                  Margin="0,2,0,0" ToolTip.Tip="The mapgeo's own per-mesh backface flag (M102)" />
+
+        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+          <Button Content="All Layers" Command="{Binding SetLayersAllCommand}" FontSize="10" Padding="8,2"
+                  ToolTip.Tip="Mask 255 — visible on every dragon configuration" />
+          <Button Content="Reset Edits" Command="{Binding ResetLayerEditsCommand}" FontSize="10" Padding="8,2"
+                  ToolTip.Tip="Discard pending layer edits on the selected meshes (back to the file's values)" />
+          <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="10" Padding="8,2"
+                  IsEnabled="{Binding HasMapMoves}" />
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <!-- MESH DETAILS — read-only mapgeo diagnostics, collapsed by default. Everything editable lives
+         above (Transform card, Map Layers card, Materials); these rows have no writable .bin field. -->
     <Expander IsExpanded="False" IsVisible="{Binding MeshDetails.HasMesh}" FontSize="11">
       <Expander.Header>
         <StackPanel Orientation="Horizontal" Spacing="6">
-          <TextBlock Text="MESH DETAILS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+          <TextBlock Text="MESH DETAILS (read-only)" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
           <TextBlock Text="{Binding MeshDetails.Title}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}"
                      TextTrimming="CharacterEllipsis" MaxWidth="160" VerticalAlignment="Center" />
         </StackPanel>

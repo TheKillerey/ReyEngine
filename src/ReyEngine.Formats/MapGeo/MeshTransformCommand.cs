@@ -97,3 +97,43 @@ public sealed class BatchTransformCommand : IEditorCommand
     public bool CanMergeWith(IEditorCommand next) => false;
     public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
 }
+
+/// <summary>
+/// M105: reversible layer-system edit — captures each selected mesh's pending
+/// (VisibilityEdit, ControllerEdit, BackfaceEdit) before/after one UI action.
+/// </summary>
+public sealed class MeshLayerCommand : IEditorCommand
+{
+    public readonly record struct State(int? Visibility, uint? Controller, bool? Backface)
+    {
+        public static State Capture(MapGeoMesh m) => new(m.VisibilityEdit, m.ControllerEdit, m.BackfaceEdit);
+        public void ApplyTo(MapGeoMesh m)
+        {
+            m.VisibilityEdit = Visibility;
+            m.ControllerEdit = Controller;
+            m.BackfaceEdit = Backface;
+        }
+    }
+
+    private readonly MapGeoAsset _map;
+    private readonly IReadOnlyList<(MapGeoMesh Mesh, State Before, State After)> _entries;
+    private readonly Action? _onApplied;
+
+    public MeshLayerCommand(string name, MapGeoAsset map,
+        IReadOnlyList<(MapGeoMesh Mesh, State Before, State After)> entries, Action? onApplied)
+    {
+        Name = name;
+        _map = map;
+        _entries = entries;
+        _onApplied = onApplied;
+    }
+
+    public string Name { get; }
+    public object? Context => _map;
+
+    public void Execute() { foreach (var e in _entries) e.After.ApplyTo(e.Mesh); _onApplied?.Invoke(); }
+    public void Undo() { foreach (var e in _entries) e.Before.ApplyTo(e.Mesh); _onApplied?.Invoke(); }
+
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}

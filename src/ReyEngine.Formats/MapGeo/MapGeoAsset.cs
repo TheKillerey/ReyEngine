@@ -201,6 +201,22 @@ public sealed class MapGeoMesh
     /// <summary>Whether the source mesh carries a vertex Normal attribute (else normals are synthesized).</summary>
     public bool HasNormals => System.Array.IndexOf(Attributes, "Normal") >= 0;
 
+    // ---- M105: pending layer-system edits (null = unchanged; applied by MapGeoLayerWriter on save) ----
+    /// <summary>Edited dragon-layer bitmask (EnvironmentVisibility). Null = keep the file's value.</summary>
+    public int? VisibilityEdit;
+    /// <summary>Edited visibility-controller hash (0 = no controller). Null = keep the file's value.</summary>
+    public uint? ControllerEdit;
+    /// <summary>M102: edited backface-culling flag. Null = keep the file's value.</summary>
+    public bool? BackfaceEdit;
+
+    public int EffectiveVisibility => VisibilityEdit ?? VisibilityFlags;
+    public uint EffectiveController => ControllerEdit ?? ControllerHash;
+    public bool EffectiveDisableBackface => BackfaceEdit ?? DisableBackfaceCulling;
+    public bool HasLayerEdit =>
+        (VisibilityEdit is { } v && v != VisibilityFlags)
+        || (ControllerEdit is { } ce && ce != ControllerHash)
+        || (BackfaceEdit is { } b && b != DisableBackfaceCulling);
+
     public Vector3 Offset;                                // accumulated single-select move (world space), default zero
     public Vector3 RotationDegrees;                        // accumulated single-select rotation (XYZ euler, degrees)
     public Vector3 Scale = Vector3.One;                     // accumulated single-select scale, default one

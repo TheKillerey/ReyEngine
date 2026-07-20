@@ -158,7 +158,7 @@ public static class MapGeoWriter
         }
     }
 
-    private static byte[] BuildSignature(EnvironmentAssetMesh m)
+    internal static byte[] BuildSignature(EnvironmentAssetMesh m)
     {
         var b = new byte[88];
         var box = m.BoundingBox;
@@ -276,7 +276,7 @@ public static class MapGeoWriter
             BinaryPrimitives.WriteSingleLittleEndian(b.AsSpan(offset + i * 4, 4), f[i]);
     }
 
-    private static List<int> FindAll(byte[] hay, byte[] needle)
+    internal static List<int> FindAll(byte[] hay, byte[] needle)
     {
         var hits = new List<int>();
         int i = 0;

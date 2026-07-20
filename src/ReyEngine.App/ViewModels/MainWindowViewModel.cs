@@ -2144,12 +2144,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         int baronBit = SelectedBaronIndex <= 0 ? 0 : MapVisibility.Barons[SelectedBaronIndex - 1].Bit;
         var resolver = _visibilityResolver ??= new MapVisibilityResolver(_mapControllers);
         var regionOf = map.Meshes.ToDictionary(m => m.Index, m => m.RegionHash);
+        // M105: pending layer edits preview live — the group snapshot keeps the FILE's values, so the
+        // check reads the mesh's effective (edited) mask/controller when there is one.
+        var meshByIdx = map.Meshes.ToDictionary(m => m.Index);
         HasRenderRegions = regionOf.Values.Any(r => r != 0);
         var vis = new bool[map.Groups.Count];
         for (int i = 0; i < vis.Length; i++)
         {
             var g = map.Groups[i];
-            vis[i] = resolver.IsVisible(g.VisibilityFlags, g.ControllerHash, dragonBit, baronBit);
+            int flags = g.VisibilityFlags;
+            uint ctrl = g.ControllerHash;
+            if (g.MeshIndex >= 0 && meshByIdx.TryGetValue(g.MeshIndex, out var src))
+            { flags = src.EffectiveVisibility; ctrl = src.EffectiveController; }
+            vis[i] = resolver.IsVisible(flags, ctrl, dragonBit, baronBit);
             if (vis[i] && !RenderRegionsEnabled && g.MeshIndex >= 0
                 && regionOf.TryGetValue(g.MeshIndex, out var region) && region != 0)
                 vis[i] = false;
@@ -2186,9 +2193,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void RefreshMeshDetails()
     {
         RefreshMaterialMeshFilter();
+        RefreshLayerEditor();   // M105
         if (_selection.Primary is not { } m || _visibilityResolver is null)
         { MeshVisibilityReason = ""; MeshDetails.Clear(); return; }
-        var d = _visibilityResolver.Resolve(m.VisibilityFlags, m.ControllerHash, CurrentDragonBit, CurrentBaronBit);
+        // M105: diagnose the EFFECTIVE (edited) values so the details row matches what the viewport shows
+        var d = _visibilityResolver.Resolve(m.EffectiveVisibility, m.EffectiveController, CurrentDragonBit, CurrentBaronBit);
         MeshVisibilityReason = d.Reason;
         if (_selection.Count == 1)
         {
@@ -2198,6 +2207,139 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             MeshDetails.Load(m, material, source, d, profile);
         }
         else MeshDetails.Clear(); // multi-select uses the batch panel, not per-mesh details
+    }
+
+    // ---- M102/M105: editable layer system for the selected meshes ----
+
+    public sealed partial class LayerBitViewModel : ObservableObject
+    {
+        private readonly MainWindowViewModel _owner;
+        public string Name { get; }
+        public int Bit { get; }
+        [ObservableProperty] private bool _isOn;
+        internal bool Loading;
+
+        public LayerBitViewModel(MainWindowViewModel owner, string name, int bit)
+        { _owner = owner; Name = name; Bit = bit; }
+
+        partial void OnIsOnChanged(bool value)
+        {
+            if (!Loading) _owner.SetLayerBitOnSelection(Bit, value);
+        }
+    }
+
+    /// <summary>The 8 dragon-layer checkboxes (state mirrors the primary selected mesh).</summary>
+    public ObservableCollection<LayerBitViewModel> DragonLayerBits { get; } = new();
+
+    /// <summary>Controller choices for the selected mesh — "None" + every controller in the map's bins.</summary>
+    public ObservableCollection<string> LayerControllerChoices { get; } = new();
+    private readonly List<uint> _layerControllerHashes = new();
+    [ObservableProperty] private int _selectedLayerControllerIndex = -1;
+    [ObservableProperty] private bool _meshBackfaceDisabled;
+    [ObservableProperty] private bool _hasLayerSelection;
+    [ObservableProperty] private string _layerSummary = "";
+    private bool _layerUiLoading;
+
+    /// <summary>Refill the layer card from the primary selection (called from RefreshMeshDetails).</summary>
+    private void RefreshLayerEditor()
+    {
+        _layerUiLoading = true;
+        try
+        {
+            if (DragonLayerBits.Count == 0)
+                foreach (var d in MapVisibility.Dragons)
+                    DragonLayerBits.Add(new LayerBitViewModel(this, d.Name, d.Bit));
+
+            if (_selection.Primary is not { } m || _currentMap is null)
+            { HasLayerSelection = false; LayerSummary = ""; return; }
+
+            HasLayerSelection = true;
+            int flags = m.EffectiveVisibility;
+            foreach (var b in DragonLayerBits)
+            {
+                b.Loading = true;
+                b.IsOn = (flags & b.Bit) != 0;
+                b.Loading = false;
+            }
+            MeshBackfaceDisabled = m.EffectiveDisableBackface;
+
+            // controller list (rebuilt when the map's controllers change)
+            if (LayerControllerChoices.Count == 0 && _mapControllers is { } mc)
+            {
+                LayerControllerChoices.Add("None (always in layer system)");
+                _layerControllerHashes.Clear();
+                _layerControllerHashes.Add(0);
+                foreach (var ci in mc.List())
+                {
+                    LayerControllerChoices.Add(ci.Label);
+                    _layerControllerHashes.Add(ci.Hash);
+                }
+            }
+            int idx = _layerControllerHashes.IndexOf(m.EffectiveController);
+            SelectedLayerControllerIndex = idx;   // -1 = a controller the bins don't list; combo shows empty
+
+            int selCount = _selection.Count;
+            int edited = _currentMap.Meshes.Count(x => x.HasLayerEdit);
+            LayerSummary = $"{MapVisibility.DragonLabel(flags)} · mask 0b{Convert.ToString(flags & 0xFF, 2).PadLeft(8, '0')}"
+                           + (selCount > 1 ? $" · applies to {selCount} selected meshes" : "")
+                           + (edited > 0 ? $" · {edited} unsaved layer edit(s)" : "");
+        }
+        finally { _layerUiLoading = false; }
+    }
+
+    /// <summary>Set/clear one dragon bit on every selected mesh (one undo step).</summary>
+    internal void SetLayerBitOnSelection(int bit, bool on)
+    {
+        if (_layerUiLoading) return;
+        ApplyLayerEdit($"{(on ? "Add to" : "Remove from")} {MapVisibility.Dragons.First(d => d.Bit == bit).Name} Layer", m =>
+        {
+            int flags = m.EffectiveVisibility;
+            m.VisibilityEdit = on ? flags | bit : flags & ~bit;
+        });
+    }
+
+    partial void OnSelectedLayerControllerIndexChanged(int value)
+    {
+        if (_layerUiLoading || value < 0 || value >= _layerControllerHashes.Count) return;
+        uint hash = _layerControllerHashes[value];
+        ApplyLayerEdit(hash == 0 ? "Clear Visibility Controller" : "Assign Visibility Controller",
+            m => m.ControllerEdit = hash);
+    }
+
+    partial void OnMeshBackfaceDisabledChanged(bool value)
+    {
+        if (_layerUiLoading) return;
+        ApplyLayerEdit(value ? "Disable Backface Culling" : "Enable Backface Culling",
+            m => m.BackfaceEdit = value);
+    }
+
+    [RelayCommand]
+    private void SetLayersAll() => ApplyLayerEdit("Show On All Layers", m => m.VisibilityEdit = 255);
+
+    [RelayCommand]
+    private void ResetLayerEdits() => ApplyLayerEdit("Reset Layer Edits", m =>
+    { m.VisibilityEdit = null; m.ControllerEdit = null; m.BackfaceEdit = null; });
+
+    /// <summary>Run one mutation over the selection as a single undoable command, then refresh.</summary>
+    private void ApplyLayerEdit(string name, Action<MapGeoMesh> mutate)
+    {
+        if (_currentMap is not { } map || _selection.Count == 0) return;
+        var entries = new List<(MapGeoMesh, MeshLayerCommand.State, MeshLayerCommand.State)>();
+        foreach (var m in _selection.Items)
+        {
+            var before = MeshLayerCommand.State.Capture(m);
+            mutate(m);
+            entries.Add((m, before, MeshLayerCommand.State.Capture(m)));
+        }
+        UndoService.PushApplied(new MeshLayerCommand(name, map, entries, OnLayerEditApplied));
+        OnLayerEditApplied();
+    }
+
+    private void OnLayerEditApplied()
+    {
+        if (_currentMap is { } map)
+            HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes);
+        ApplyMapVisibility();   // re-evaluates effective flags and refreshes the layer card via RefreshMeshDetails
     }
 
     /// <summary>Drop any selected meshes that the current visibility filter hides (a mesh is visible if
@@ -2745,7 +2887,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             PushTransformCommand($"{verb} Mesh", map, primary, _dragBefore[0].before, MeshTransformCommand.State.Capture(primary));
             _log.Info("MapGeo", $"{verb}d '{primary.Name}' via gizmo.");
         }
-        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes);
     }
 
     private void RefreshMeshTransformFields(MapGeoMesh m)
@@ -2783,7 +2925,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             RefreshMeshTransformFields(mesh);
             RefreshSelectionVisuals();
         }
-        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes);
     };
 
     /// <summary>UI sync run after a BATCH transform command executes OR undoes: re-upload vertices, refresh
@@ -2793,7 +2935,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshVerticesRevision++;
         if (SelectedMapMesh is { } primary) RefreshMeshTransformFields(primary);
         RefreshSelectionVisuals();
-        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes);
     };
 
     /// <summary>Run a batch operation on the whole selection as ONE undo step: capture every mesh's
@@ -2809,7 +2951,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshVerticesRevision++;
         if (SelectedMapMesh is { } primary) RefreshMeshTransformFields(primary);
         RefreshSelectionVisuals();
-        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes);
     }
 
     /// <summary>Push an already-applied transform edit as one undo step (no-op if nothing changed).</summary>
@@ -2840,7 +2982,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         PushTransformCommand("Transform Mesh", map, m, before, MeshTransformCommand.State.Capture(m));
         MeshVerticesRevision++;           // re-upload the edited vertices to the viewport
         RefreshSelectionVisuals();
-        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes);
         _log.Info("MapGeo", $"Transformed '{m.Name}': pos ({target.X:0.#}, {target.Y:0.#}, {target.Z:0.#}), " +
                             $"rot ({rotation.X:0.#}°, {rotation.Y:0.#}°, {rotation.Z:0.#}°), scale ({scale.X:0.##}, {scale.Y:0.##}, {scale.Z:0.##}).");
     }
@@ -2855,7 +2997,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         RefreshMeshTransformFields(m);
         RefreshSelectionVisuals();
         MeshVerticesRevision++;
-        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes);
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes);
         _log.Info("MapGeo", $"Reset '{m.Name}' to its original transform.");
     }
 
@@ -2941,14 +3083,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return;
         }
         bool hasMoves = MapGeoWriter.HasMoves(map.Meshes);
+        bool hasLayers = MapGeoLayerWriter.HasEdits(map.Meshes);
         var added = MapContent.AddedMeshes.ToList();
-        if (!hasMoves && added.Count == 0) { _log.Info("MapGeo", "No map edits to save."); return; }
+        if (!hasMoves && !hasLayers && added.Count == 0) { _log.Info("MapGeo", "No map edits to save."); return; }
         if (!GuardEditable(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
         {
             byte[] bytes = _currentMapBytes;
+
+            // 0) M105: layer/controller/backface edits FIRST — they don't touch the [bbox][transform]
+            //    signatures, so the move patching that follows still locates every mesh.
+            if (hasLayers)
+            {
+                var layered = MapGeoLayerWriter.TryWriteLayerEdits(bytes, map.Meshes, out var lErr);
+                if (layered is null) { _log.Error("MapGeo", $"Could not save layer edits: {lErr}"); return; }
+                bytes = layered;
+            }
 
             // 1) mesh moves (rebuilds bucket grids for the moved geometry)
             if (hasMoves)
@@ -2972,6 +3124,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(appended, reMap);
             }
 
+            // 2b) M105: bucket grids bake per-face visibility masks from the mesh flags, so layer-only
+            //     saves must regenerate them too (moves/appends above already did).
+            if (hasLayers && !hasMoves && added.Count == 0)
+            {
+                var reMap2 = await Task.Run(() => MapGeoDecoder.Decode(bytes));
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2);
+            }
+
             var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
             _overrides.Set(new ProjectAssetOverride
             {
@@ -2985,7 +3145,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             UpdateTitle();
             UndoService.MarkSaved();
             int moves = map.Meshes.Count(x => x.IsMoved);
-            _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {added.Count} added mesh(es) to override ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the added meshes as native geometry.");
+            int layers = map.Meshes.Count(x => x.HasLayerEdit);
+            _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {layers} layer edit(s) + {added.Count} added mesh(es) to override ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the added meshes as native geometry.");
         }
         catch (Exception ex) { _log.Error("MapGeo", ex.Message); }
     }
