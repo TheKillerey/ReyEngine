@@ -44,6 +44,16 @@ public static class GameReferenceLibrary
         return File.Exists(p) ? p : null;
     }
 
+    /// <summary>M103: the WAD holding <c>data/shaders/shaders.bin</c> — every CustomShaderDef the
+    /// client knows about, so the shader catalogue differs correctly between Live and PBE.</summary>
+    public static string? FindGlobalWad(string? gameDirectory)
+    {
+        var final = FindFinalDir(gameDirectory);
+        if (final is null) return null;
+        var p = Path.Combine(final, "Global.wad.client");
+        return File.Exists(p) ? p : null;
+    }
+
     /// <summary>Resolve the DATA/FINAL directory from a configured game path (Game, Game/DATA/FINAL, …).</summary>
     private static string? FindFinalDir(string? gameDirectory)
     {
