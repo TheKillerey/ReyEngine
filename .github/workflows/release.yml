@@ -90,7 +90,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          name: ReyEngine ${{ env.TAG }}
+          # -beta matches AppInfo.Channel and the in-app DisplayVersion; it pairs with the hardcoded
+          # prerelease flag below. Change both together when the project leaves beta.
+          name: ReyEngine ${{ env.TAG }}-beta
           prerelease: true
           files: ${{ steps.asset.outputs.path }}
           fail_on_unmatched_files: true
