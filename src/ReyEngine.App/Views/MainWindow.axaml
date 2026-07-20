@@ -1017,16 +1017,38 @@
                                     </ItemsControl>
                                   </StackPanel>
 
+                                  <!-- M103: the material's own feature switches, editable. An entry with no
+                                       explicit 'on' field counts as enabled, so unticking one writes the
+                                       field rather than removing the entry. -->
+                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasSwitches}">
+                                    <TextBlock Text="FEATURE SWITCHES" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding Switches}">
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
+                                            <CheckBox Grid.Column="0" Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="9" />
+                                            <Ellipse Grid.Column="1" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
+                                                     Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsDirty}" />
+                                            <Button Grid.Column="2" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
+                                                    Command="{Binding RemoveCommand}" ToolTip.Tip="Remove this switch" />
+                                          </Grid>
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+
                                   <StackPanel Spacing="2" IsVisible="{Binding HasShaderSwitches}">
-                                    <TextBlock Text="FEATURE SWITCHES THIS SHADER DECLARES" FontSize="8" FontWeight="SemiBold"
+                                    <TextBlock Text="FEATURE SWITCHES THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
                                                Foreground="{DynamicResource ReyTextDimBrush}" />
                                     <ItemsControl ItemsSource="{Binding ShaderSwitches}">
                                       <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                                       <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                          <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="3" Padding="4,1" Margin="0,0,3,3">
-                                            <TextBlock Text="{Binding}" FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" />
-                                          </Border>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding StringFormat='+ {0}'}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderSwitchCommand}"
+                                                  CommandParameter="{Binding}" />
                                         </DataTemplate>
                                       </ItemsControl.ItemTemplate>
                                     </ItemsControl>

@@ -191,8 +191,13 @@ public sealed class MaterialDocument
             }
 
             // Shader feature switches (StaticMaterialSwitchDef: 'name' + optional 'on'; absent 'on' = true).
+            // M103: the structs are kept live so the switches can be toggled/added/removed, not just read.
             var switches = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            var switchList = new List<MaterialSwitch>();
+            BinTreeContainer? switchContainer = null;
             if (Field(o.Properties, "switches") is BinTreeContainer sw)
+            {
+                switchContainer = sw;
                 foreach (var el in sw.Elements)
                     if (el is BinTreeStruct ss && Field(ss.Properties, "name") is BinTreeString sn)
                     {
@@ -203,7 +208,9 @@ public sealed class MaterialDocument
                             _ => true, // an entry with no explicit 'on' is enabled
                         };
                         switches[sn.Value] = on;
+                        switchList.Add(new MaterialSwitch(sn.Value, on, ss));
                     }
+            }
 
             // Technique/pass render state (M34): the FIRST technique's FIRST pass carries the real shader
             // link + blend state (the class-hash "shader" above is just "StaticMaterialDef").
@@ -251,6 +258,8 @@ public sealed class MaterialDocument
                 NameFieldHash = nameFieldHash,
                 PathFieldHash = pathFieldHash,
                 Switches = switches,
+                SwitchContainer = switchContainer,
+                SwitchEntries = switchList,
                 RenderShader = renderShader,
                 ShaderLink = shaderLink,
                 ParamContainer = paramContainer,
@@ -314,9 +323,54 @@ public sealed class MaterialBinding
     // M55: the live paramValues container — enables add/remove of parameters.
     internal BinTreeContainer? ParamContainer { get; init; }
 
-    /// <summary>Shader feature switches (name → on). Only populated for StaticMaterialDef bindings (M32).</summary>
+    /// <summary>Shader feature switches (name → on). Only populated for StaticMaterialDef bindings (M32).
+    /// This is the parse-time snapshot that feeds the preview profile — for editing use
+    /// <see cref="SwitchEntries"/>, which stays in sync with the live bin.</summary>
     public IReadOnlyDictionary<string, bool> Switches { get; init; } = EmptySwitches;
     private static readonly IReadOnlyDictionary<string, bool> EmptySwitches = new Dictionary<string, bool>();
+
+    // ---- M103: editable feature switches ----
+    /// <summary>The material's switches as live, toggleable entries.</summary>
+    public IReadOnlyList<MaterialSwitch> SwitchEntries { get; init; } = Array.Empty<MaterialSwitch>();
+    internal BinTreeContainer? SwitchContainer { get; init; }
+
+    /// <summary>Switches can only be added by cloning an existing entry's schema, so a material with no
+    /// switches at all has nothing to clone from.</summary>
+    public bool CanEditSwitches => SwitchContainer is not null
+                                   && SwitchContainer.Elements.OfType<BinTreeStruct>().Any();
+
+    /// <summary>Enable a shader feature switch this material doesn't carry yet.</summary>
+    public MaterialSwitch? AddSwitch(string name)
+    {
+        if (SwitchContainer is null) return null;
+        if (SwitchContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault() is not { } proto) return null;
+
+        var clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
+        uint nameHash = 0;
+        foreach (var h in new[] { HashAlgorithms.Fnv1aRaw("name"), HashAlgorithms.Fnv1a("name") })
+            if (clone.Properties.ContainsKey(h)) { nameHash = h; break; }
+        if (nameHash == 0 || clone.Properties[nameHash] is not BinTreeString ns) return null;
+        ns.Value = name;
+
+        SwitchContainer.Add(clone);
+        var sw = new MaterialSwitch(name, true, clone);
+        sw.SetOn(true);
+        _switchEdits.Add(sw);
+        _structurallyEdited = true;
+        return sw;
+    }
+
+    public bool RemoveSwitch(MaterialSwitch sw)
+    {
+        if (SwitchContainer is null || !SwitchContainer.Remove(sw.Element)) return false;
+        _switchEdits.Remove(sw);
+        _structurallyEdited = true;
+        return true;
+    }
+
+    /// <summary>Switches added after parse (SwitchEntries is the parse-time list).</summary>
+    private readonly List<MaterialSwitch> _switchEdits = new();
+    public IEnumerable<MaterialSwitch> AllSwitches => SwitchEntries.Concat(_switchEdits);
 
     /// <summary>The material's real technique-pass shader (e.g. Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest),
     /// resolved from the first technique's first pass; null when the material has no techniques (M34).</summary>
@@ -378,7 +432,8 @@ public sealed class MaterialBinding
     public TextureSlot? MatCap => _slots.FirstOrDefault(s => s.IsMatCap);
     public TextureSlot? MatCapMask => _slots.FirstOrDefault(s => s.IsMatCapMask);
 
-    public bool IsDirty => _structurallyEdited || _slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty);
+    public bool IsDirty => _structurallyEdited || _slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty)
+                           || SwitchEntries.Any(s => s.IsDirty);
     private bool _structurallyEdited;
 
     /// <summary>True when this material exposes editable sampler slots that can be added/removed.</summary>
@@ -429,7 +484,12 @@ public sealed class MaterialBinding
         return true;
     }
 
-    public void Revert() { foreach (var s in _slots) s.Revert(); foreach (var p in Parameters) p.Revert(); }
+    public void Revert()
+    {
+        foreach (var s in _slots) s.Revert();
+        foreach (var p in Parameters) p.Revert();
+        foreach (var w in SwitchEntries) w.Revert();
+    }
 
     // ---- M55: parameter add/remove (same clone-the-schema approach as samplers) ----
 
@@ -472,6 +532,51 @@ public sealed class MaterialBinding
         _structurallyEdited = true;
         return true;
     }
+}
+
+/// <summary>
+/// M103: one shader feature switch (<c>StaticMaterialSwitchDef</c>) as a live, toggleable entry.
+/// Riot treats a switch entry with no explicit <c>on</c> field as enabled, so turning one OFF means
+/// adding the field rather than changing it.
+/// </summary>
+public sealed class MaterialSwitch
+{
+    private readonly bool _originalOn;
+    internal BinTreeStruct Element { get; }
+
+    public string Name { get; }
+    public bool On { get; private set; }
+    public bool IsDirty => On != _originalOn;
+
+    internal MaterialSwitch(string name, bool on, BinTreeStruct element)
+    {
+        Name = name;
+        On = on;
+        _originalOn = on;
+        Element = element;
+    }
+
+    public void SetOn(bool on)
+    {
+        On = on;
+        uint hash = 0;
+        foreach (var h in new[] { HashAlgorithms.Fnv1aRaw("on"), HashAlgorithms.Fnv1a("on") })
+            if (Element.Properties.ContainsKey(h)) { hash = h; break; }
+
+        if (hash != 0)
+        {
+            switch (Element.Properties[hash])
+            {
+                case BinTreeBool b: b.Value = on; return;
+                case BinTreeBitBool bb: bb.Value = on; return;
+            }
+        }
+        // No 'on' field yet — write one explicitly so the value survives a round-trip either way.
+        hash = HashAlgorithms.Fnv1aRaw("on");
+        Element.Properties[hash] = new BinTreeBool(hash, on);
+    }
+
+    public void Revert() => SetOn(_originalOn);
 }
 
 /// <summary>One texture sampler slot whose path is an editable live BinTree string.</summary>

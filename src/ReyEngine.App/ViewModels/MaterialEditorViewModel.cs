@@ -161,11 +161,47 @@ public sealed partial class MaterialParameterViewModel : ViewModelBase
     private void Revert() { Model.Revert(); ResetFromModel(); _owner.NotifyChanged(); }
 }
 
+/// <summary>M103: one editable shader feature switch (checkbox row).</summary>
+public sealed partial class MaterialSwitchViewModel : ViewModelBase
+{
+    private readonly MaterialBindingViewModel _binding;
+    private bool _initializing = true;
+    public MaterialSwitch Model { get; }
+
+    [ObservableProperty] private bool _isOn;
+
+    public MaterialSwitchViewModel(MaterialSwitch model, MaterialBindingViewModel binding)
+    {
+        Model = model;
+        _binding = binding;
+        _isOn = model.On;
+        _initializing = false;
+    }
+
+    public string Name => Model.Name;
+    public bool IsDirty => Model.IsDirty;
+    public void RaiseDirty() => OnPropertyChanged(nameof(IsDirty));
+
+    partial void OnIsOnChanged(bool value)
+    {
+        if (_initializing) return;
+        Model.SetOn(value);
+        RaiseDirty();
+        _binding.RaiseDirty();
+        _binding.Owner?.NotifyChanged();
+    }
+
+    [RelayCommand]
+    private void Remove() => _binding.RemoveSwitch(this);
+}
+
 public sealed partial class MaterialBindingViewModel : ViewModelBase
 {
     public MaterialBinding Model { get; }
     public ObservableCollection<TextureSlotViewModel> Slots { get; } = new();
     public ObservableCollection<MaterialParameterViewModel> Parameters { get; } = new();
+    /// <summary>M103: the material's shader feature switches, editable.</summary>
+    public ObservableCollection<MaterialSwitchViewModel> Switches { get; } = new();
 
     [ObservableProperty] private bool _isVisible = true;
 
@@ -176,6 +212,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         _editedShader = model.RenderShader ?? "";
         foreach (var s in model.Slots) Slots.Add(new TextureSlotViewModel(s, owner) { Binding = this });
         foreach (var p in model.Parameters) Parameters.Add(new MaterialParameterViewModel(p, owner));
+        foreach (var w in model.AllSwitches) Switches.Add(new MaterialSwitchViewModel(w, this));   // M103
     }
 
     public string Name => Model.Name;
@@ -197,11 +234,38 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     /// the catalogue (an older/removed shader, or no install scanned yet).</summary>
     public LeagueShaderDef? ShaderDef { get; private set; }
 
-    /// <summary>Samplers/parameters the shader declares but this material doesn't bind — the "what else
-    /// can I set on this shader" list, each addable with one click.</summary>
+    /// <summary>Samplers/parameters/switches the shader declares but this material doesn't carry — the
+    /// "what else can I set on this shader" list, each addable with one click.</summary>
     public ObservableCollection<ShaderTextureDef> MissingSamplers { get; } = new();
     public ObservableCollection<ShaderParamDef> MissingParameters { get; } = new();
     public ObservableCollection<string> ShaderSwitches { get; } = new();
+
+    public bool HasSwitches => Switches.Count > 0;
+    public bool CanEditSwitches => Model.CanEditSwitches;
+
+    /// <summary>Turn on a feature switch the shader declares but this material doesn't list.</summary>
+    [RelayCommand]
+    private void AddShaderSwitch(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return;
+        var sw = Model.AddSwitch(name.Trim());
+        if (sw is null) return;
+        Switches.Add(new MaterialSwitchViewModel(sw, this));
+        OnPropertyChanged(nameof(HasSwitches));
+        RaiseDirty();
+        Owner!.NotifyChanged();
+        Owner!.RefreshShaderDefs();
+    }
+
+    public void RemoveSwitch(MaterialSwitchViewModel vm)
+    {
+        if (!Model.RemoveSwitch(vm.Model)) return;
+        Switches.Remove(vm);
+        OnPropertyChanged(nameof(HasSwitches));
+        RaiseDirty();
+        Owner!.NotifyChanged();
+        Owner!.RefreshShaderDefs();
+    }
 
     [ObservableProperty] private bool _hasShaderDef;
     [ObservableProperty] private string _shaderDefSummary = "";
@@ -238,7 +302,9 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
             foreach (var pd in ShaderDef.Parameters)
                 if (!set.Contains(pd.Name)) MissingParameters.Add(pd);
 
-            foreach (var w in ShaderDef.StaticSwitches) ShaderSwitches.Add(w);
+            var have = Switches.Select(w => w.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var w in ShaderDef.StaticSwitches)
+                if (!have.Contains(w)) ShaderSwitches.Add(w);
 
             var declared = ShaderDef.Textures.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var s in Slots) s.NotInShader = !declared.Contains(s.SamplerName);
@@ -374,6 +440,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsDirty));
         foreach (var s in Slots) s.RaiseDirty();
         foreach (var p in Parameters) p.RaiseDirty();
+        foreach (var w in Switches) w.RaiseDirty();
     }
 
     // ---- M55: parameter add/remove ----
