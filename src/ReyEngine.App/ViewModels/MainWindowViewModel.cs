@@ -5146,6 +5146,52 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Files", ex.Message); }
     }
 
+    // ---- M112: deleting like Explorer does ----
+    // RemoveDirectory fails with ACCESS_DENIED when the directory — or anything inside it — carries the
+    // ReadOnly attribute, which OneDrive-backed folders routinely do. Explorer strips it silently; .NET
+    // does not, which is why "delete" failed here while Explorer succeeded on the same folder.
+
+    private static void ClearReadOnly(string path)
+    {
+        try
+        {
+            var attrs = File.GetAttributes(path);
+            if ((attrs & FileAttributes.ReadOnly) != 0) File.SetAttributes(path, attrs & ~FileAttributes.ReadOnly);
+        }
+        catch { /* best effort — the delete below reports the real problem */ }
+    }
+
+    private static async Task ForceDeleteDirectoryAsync(string dir)
+    {
+        foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)) ClearReadOnly(f);
+        foreach (var d in Directory.EnumerateDirectories(dir, "*", SearchOption.AllDirectories)) ClearReadOnly(d);
+        ClearReadOnly(dir);
+        try { Directory.Delete(dir, recursive: true); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException)
+        {
+            // Cloud sync and virus scanners hold brief handles right after a write; one retry clears it.
+            await Task.Delay(200);
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    private static async Task ForceDeleteFileAsync(string file)
+    {
+        ClearReadOnly(file);
+        try { File.Delete(file); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException)
+        {
+            await Task.Delay(200);
+            File.Delete(file);
+        }
+    }
+
+    /// <summary>Explain a delete failure in terms the user can act on.</summary>
+    private string DeleteFailureHint(string path, Exception ex) =>
+        ex is UnauthorizedAccessException or IOException
+            ? $"{Path.GetFileName(path)}: {ex.Message} — it may be open in another program, or OneDrive/antivirus is holding it. Close it and try again."
+            : $"{Path.GetFileName(path)}: {ex.Message}";
+
     [RelayCommand(CanExecute = nameof(CanDeleteAsset))]
     private async Task DeleteAsset(AssetNodeViewModel? node)
     {
@@ -5165,7 +5211,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (!await Views.PromptWindow.ConfirmAsync(PromptOwner, "Delete File",
                     $"Permanently delete '{Path.GetFileName(file)}' from the project folder?\n\n{file}", "Delete"))
                     return;
-                File.Delete(file);
+                await ForceDeleteFileAsync(file);
                 _log.Success("Files", $"Deleted {Path.GetFileName(file)}.");
                 RefreshBrowser();
             }
@@ -5175,13 +5221,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (!await Views.PromptWindow.ConfirmAsync(PromptOwner, "Delete Folder",
                     $"Permanently delete folder '{node.Name}' and the {n:n0} file(s) inside?\n\n{dir}", "Delete"))
                     return;
-                Directory.Delete(dir, recursive: true);
+                await ForceDeleteDirectoryAsync(dir);
                 _log.Success("Files", $"Deleted folder {node.Name} ({n:n0} file(s)).");
                 RefreshBrowser();
             }
             else _log.Warn("Files", "Only editable project files/folders can be deleted. Riot references are read-only.");
         }
-        catch (Exception ex) { _log.Error("Files", ex.Message); }
+        catch (Exception ex) { _log.Error("Files", DeleteFailureHint(node.Name, ex)); }
     }
 
     /// <summary>Revert a specific node's override (Delete on an override = revert to original).</summary>
@@ -5501,11 +5547,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             try
             {
                 if (node.Entry is { SourceKind: AssetSourceKind.ProjectOverride }) { RevertSelectedFor(node); reverted++; }
-                else if (TryGetNodeFile(node, out var file)) { File.Delete(file); deleted++; }
-                else if (TryResolveFolderDiskDir(node, out var dir)) { Directory.Delete(dir, recursive: true); deleted++; }
+                else if (TryGetNodeFile(node, out var file)) { await ForceDeleteFileAsync(file); deleted++; }
+                else if (TryResolveFolderDiskDir(node, out var dir)) { await ForceDeleteDirectoryAsync(dir); deleted++; }
                 else skipped++;
             }
-            catch (Exception ex) { _log.Warn("Files", $"{node.Name}: {ex.Message}"); skipped++; }
+            catch (Exception ex) { _log.Warn("Files", DeleteFailureHint(node.Name, ex)); skipped++; }
         }
         if (skipped > 0) _log.Warn("Files", $"{skipped} item(s) skipped — Riot references are read-only.");
         _log.Success("Files", $"Deleted {deleted} item(s){(reverted > 0 ? $", reverted {reverted} override(s)" : "")}.");
