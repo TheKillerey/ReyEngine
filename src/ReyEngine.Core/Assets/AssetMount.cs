@@ -109,7 +109,13 @@ public sealed class WadMount : IAssetMount
 public sealed class FolderMount : IAssetMount
 {
     private readonly Dictionary<ulong, string> _files = new();
+    private readonly List<string> _dirs = new();
     private readonly IHashResolver? _resolver;
+
+    /// <summary>M110: every directory under the mount, relative and '/'-separated — INCLUDING empty ones.
+    /// The file index alone can't represent a folder you just created, so without this a new (or emptied)
+    /// folder is invisible in the browser even though it exists on disk.</summary>
+    public IReadOnlyList<string> Directories => _dirs;
 
     public string Name { get; }
     public string Location { get; }
@@ -126,6 +132,13 @@ public sealed class FolderMount : IAssetMount
 
     private void Index()
     {
+        foreach (var dir in Directory.EnumerateDirectories(Location, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(Location, dir).Replace('\\', '/');
+            if (rel.StartsWith(".reyengine", StringComparison.OrdinalIgnoreCase)) continue;
+            _dirs.Add(rel);
+        }
+
         foreach (var file in Directory.EnumerateFiles(Location, "*", SearchOption.AllDirectories))
         {
             var rel = Path.GetRelativePath(Location, file).Replace('\\', '/');

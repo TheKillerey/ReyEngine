@@ -93,9 +93,31 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
 
     public void SetRoots(IEnumerable<AssetNodeViewModel> roots)
     {
+        // M110: remember where the user is. SetRoots runs on every refresh — including the automatic one
+        // that fires when a file changes on disk — and jumping to the tree root each time is maddening.
+        var path = CurrentFolder is null ? null : Breadcrumbs.Select(b => b.Name).ToList();
+
         FolderRoots.Clear();
         foreach (var r in roots) FolderRoots.Add(r);
-        NavigateTo(null); // top level shows the roots
+
+        var restored = path is null ? null : FindFolderByPath(path);
+        NavigateTo(restored);                        // null = top level shows the roots
+        if (restored is not null) SelectedFolder = restored;   // keep the tree's highlight in sync
+    }
+
+    /// <summary>Re-find a folder by its breadcrumb names in the freshly rebuilt tree; null when that
+    /// folder no longer exists (deleted or renamed), which lands the user back at the root.</summary>
+    private AssetNodeViewModel? FindFolderByPath(List<string> path)
+    {
+        AssetNodeViewModel? node = null;
+        IEnumerable<AssetNodeViewModel> level = FolderRoots;
+        foreach (var name in path)
+        {
+            node = level.FirstOrDefault(n => n.IsFolder && string.Equals(n.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (node is null) return null;
+            level = node.Children;
+        }
+        return node;
     }
 
     public void Clear()

@@ -4471,8 +4471,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         foreach (var mount in _mounts.Mounts.Where(m => m.Kind != AssetSourceKind.RiotReference))
         {
             var entries = mount.Enumerate().Select(a => a.ToEntry()).ToList();
-            if (entries.Count == 0) continue;
-            projectGroup.Children.Add(AssetTree.Build(entries, mount.Name));
+            // M110: a folder mount stays listed even with no files — it may hold only empty folders.
+            var dirs = mount is FolderMount fm ? fm.Directories : (IReadOnlyList<string>)Array.Empty<string>();
+            if (entries.Count == 0 && dirs.Count == 0) continue;
+            var subtree = AssetTree.Build(entries, mount.Name);
+            if (dirs.Count > 0) AssetTree.EnsureFolders(subtree, dirs);
+            projectGroup.Children.Add(subtree);
         }
 
         var riotGroup = new AssetTreeNode { Name = "Riot References", IsFolder = true };

@@ -39,6 +39,43 @@ public sealed class AssetTreeNode
 /// <summary>Builds a folder hierarchy out of a flat list of WAD entries.</summary>
 public static class AssetTree
 {
+    /// <summary>M110: make sure a folder node exists for each of these relative paths, so directories
+    /// with no files in them (a folder the user just created) still show up in the browser.</summary>
+    public static void EnsureFolders(AssetTreeNode root, IEnumerable<string> relativeDirs)
+    {
+        var folders = new Dictionary<string, AssetTreeNode>(StringComparer.OrdinalIgnoreCase) { [""] = root };
+        Collect(root, folders);
+
+        foreach (var rel in relativeDirs)
+        {
+            var parts = rel.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var parent = root;
+            var acc = "";
+            foreach (var part in parts)
+            {
+                acc = acc.Length == 0 ? part : acc + "/" + part;
+                if (!folders.TryGetValue(acc, out var folder))
+                {
+                    folder = new AssetTreeNode { Name = part, IsFolder = true, FullPath = acc };
+                    parent.Children.Add(folder);
+                    folders[acc] = folder;
+                }
+                parent = folder;
+            }
+        }
+        Sort(root);
+    }
+
+    private static void Collect(AssetTreeNode node, Dictionary<string, AssetTreeNode> into)
+    {
+        foreach (var c in node.Children)
+            if (c.IsFolder)
+            {
+                into[c.FullPath] = c;
+                Collect(c, into);
+            }
+    }
+
     public static AssetTreeNode Build(IEnumerable<WadAssetEntry> entries, string rootName)
     {
         var root = new AssetTreeNode { Name = rootName, IsFolder = true, FullPath = "" };
