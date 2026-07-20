@@ -330,8 +330,10 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     // Set by the owner after construction so the commands can reach it.
     public MaterialEditorViewModel? Owner { get; set; }
 
-    public bool Matches(string search, bool onlyUnresolved)
+    public bool Matches(string search, bool onlyUnresolved, IReadOnlySet<string>? meshMaterials = null)
     {
+        // M101: when a mesh is selected, only its own materials are listed (null = show all)
+        if (meshMaterials is not null && !meshMaterials.Contains(Name)) return false;
         if (onlyUnresolved && !Slots.Any(s => s.Unresolved)) return false;
         if (string.IsNullOrWhiteSpace(search)) return true;
         return Name.Contains(search, StringComparison.OrdinalIgnoreCase)
@@ -498,8 +500,24 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     partial void OnSearchChanged(string value) => ApplyFilter();
     partial void OnOnlyUnresolvedChanged(bool value) => ApplyFilter();
 
+    // ---- M101: scope the list to the selected mesh's materials ----
+    private HashSet<string>? _meshFilter;
+
+    /// <summary>Show only these materials (the selected mesh's). Null/empty restores the full list.</summary>
+    public void SetMeshFilter(IEnumerable<string>? materials)
+    {
+        var set = materials?.Where(m => !string.IsNullOrEmpty(m)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _meshFilter = set is { Count: > 0 } ? set : null;
+        MeshFilterLabel = _meshFilter is null ? "" : $"Filtered to the selected mesh ({_meshFilter.Count} material(s)) — clear the selection to see all.";
+        HasMeshFilter = _meshFilter is not null;
+        ApplyFilter();
+    }
+
+    [ObservableProperty] private string _meshFilterLabel = "";
+    [ObservableProperty] private bool _hasMeshFilter;
+
     private void ApplyFilter()
     {
-        foreach (var m in Materials) m.IsVisible = m.Matches(Search, OnlyUnresolved);
+        foreach (var m in Materials) m.IsVisible = m.Matches(Search, OnlyUnresolved, _meshFilter);
     }
 }

@@ -2127,17 +2127,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnSelectedBaronIndexChanged(int value) => ApplyMapVisibility();
 
     /// <summary>Compute per-group visibility from the selected dragon + baron layers and push it to the viewport.</summary>
+    // M104: render regions (mapgeo v18 renderRegionHash). Off hides every region-assigned mesh, leaving
+    // the region-independent base geometry — the fastest way to see what a region is contributing.
+    [ObservableProperty] private bool _renderRegionsEnabled = true;
+    [ObservableProperty] private bool _hasRenderRegions;
+    partial void OnRenderRegionsEnabledChanged(bool value) => ApplyMapVisibility();
+
     private void ApplyMapVisibility()
     {
         if (_currentMap is not { } map) { CurrentModelSubmeshVisible = null; return; }
         int dragonBit = SelectedDragonIndex <= 0 ? 0 : MapVisibility.Dragons[SelectedDragonIndex - 1].Bit;
         int baronBit = SelectedBaronIndex <= 0 ? 0 : MapVisibility.Barons[SelectedBaronIndex - 1].Bit;
         var resolver = _visibilityResolver ??= new MapVisibilityResolver(_mapControllers);
+        var regionOf = map.Meshes.ToDictionary(m => m.Index, m => m.RegionHash);
+        HasRenderRegions = regionOf.Values.Any(r => r != 0);
         var vis = new bool[map.Groups.Count];
         for (int i = 0; i < vis.Length; i++)
         {
             var g = map.Groups[i];
             vis[i] = resolver.IsVisible(g.VisibilityFlags, g.ControllerHash, dragonBit, baronBit);
+            if (vis[i] && !RenderRegionsEnabled && g.MeshIndex >= 0
+                && regionOf.TryGetValue(g.MeshIndex, out var region) && region != 0)
+                vis[i] = false;
         }
         CurrentModelSubmeshVisible = vis;
         UpdateParticleMarkers();
@@ -2158,8 +2169,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>The full mesh-details inspector for the selected mapgeo mesh (M33).</summary>
     public MeshDetailsViewModel MeshDetails { get; } = new();
 
+    /// <summary>M101: scope the Materials tab to the selected mesh/meshes; empty selection = show all.</summary>
+    private void RefreshMaterialMeshFilter()
+    {
+        if (_currentMap is not { } map || _selection.Count == 0) { MaterialEditor.SetMeshFilter(null); return; }
+        var indices = _selection.Items.Select(m => m.Index).ToHashSet();
+        MaterialEditor.SetMeshFilter(map.Groups
+            .Where(g => indices.Contains(g.MeshIndex) && !string.IsNullOrEmpty(g.Material))
+            .Select(g => g.Material));
+    }
+
     private void RefreshMeshDetails()
     {
+        RefreshMaterialMeshFilter();
         if (_selection.Primary is not { } m || _visibilityResolver is null)
         { MeshVisibilityReason = ""; MeshDetails.Clear(); return; }
         var d = _visibilityResolver.Resolve(m.VisibilityFlags, m.ControllerHash, CurrentDragonBit, CurrentBaronBit);
@@ -4353,6 +4375,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             UpdateTitle();
             Status = $"Project '{project.Name}' — {_mounts!.Count:n0} assets across {_mounts.Mounts.Count} mount(s)";
             _log.Success("Project", $"Opened '{project.Name}': {project.ProjectFolders.Count} folder(s), {project.ProjectWads.Count} WAD(s), {project.ReferenceWads.Count} Riot reference(s); {_mounts.Count:n0} assets mounted.");
+            StartProjectWatchers();   // M100: auto-refresh the browser on external file changes
             if (project.ReferenceWads.Count == 0)
                 _log.Info("Project", "No Riot references yet — add one via Project ▸ Manage Riot References to preview/copy source assets.");
         }
@@ -4888,6 +4911,50 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (ProjectMode) { BuildMounts(); BuildProjectTree(); }
         else RebuildTree();
+    }
+
+    // ---- M100: auto-refresh — watch the project folder so external edits/adds/deletes show up ----
+    private readonly List<FileSystemWatcher> _projectWatchers = new();
+    private System.Threading.Timer? _watchDebounce;
+
+    /// <summary>Watch the project root for file changes and refresh the browser automatically. Events are
+    /// debounced (bulk copies fire hundreds) and marshalled to the UI thread.</summary>
+    private void StartProjectWatchers()
+    {
+        StopProjectWatchers();
+        if (!ProjectMode || Project.RootPath is null || !Directory.Exists(Project.RootPath)) return;
+        try
+        {
+            var w = new FileSystemWatcher(Project.RootPath)
+            {
+                IncludeSubdirectories = true,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
+            };
+            FileSystemEventHandler onChange = (_, _) => ScheduleBrowserRefresh();
+            w.Created += onChange; w.Deleted += onChange; w.Changed += onChange;
+            w.Renamed += (_, _) => ScheduleBrowserRefresh();
+            w.EnableRaisingEvents = true;
+            _projectWatchers.Add(w);
+        }
+        catch { /* watching is a convenience — never block the project */ }
+    }
+
+    private void StopProjectWatchers()
+    {
+        foreach (var w in _projectWatchers) { try { w.EnableRaisingEvents = false; w.Dispose(); } catch { } }
+        _projectWatchers.Clear();
+    }
+
+    private void ScheduleBrowserRefresh()
+    {
+        // .reyengine/ churn (project.json saves, reports) must not loop back into a refresh storm
+        _watchDebounce?.Dispose();
+        _watchDebounce = new System.Threading.Timer(_ =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                try { RefreshBrowser(); _log.Info("Files", "Project folder changed — browser refreshed."); }
+                catch { }
+            }), null, 600, System.Threading.Timeout.Infinite);
     }
 
     /// <summary>The real on-disk file behind a node (editable folder/override mounts only).</summary>

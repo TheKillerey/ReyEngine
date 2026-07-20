@@ -324,9 +324,10 @@
                     KeyDown="OnViewportKeyDown"
                     KeyUp="OnViewportKeyUp" />
 
-            <!-- view toggles (above the input surface so they stay clickable) -->
-            <StackPanel Orientation="Horizontal" Spacing="4" Margin="10"
-                        HorizontalAlignment="Right" VerticalAlignment="Top">
+            <!-- M104: view toggles in TWO rows (one row overflowed the viewport width).
+                 Row 1 = history + shading/display · Row 2 = map lighting + tools. -->
+            <StackPanel Spacing="4" Margin="10" HorizontalAlignment="Right" VerticalAlignment="Top">
+            <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
               <Button Classes="tool" Content="↶" FontSize="13" Padding="7,2" Command="{Binding UndoCommand}"
                       IsEnabled="{Binding CanUndo}" ToolTip.Tip="{Binding UndoLabel}" />
               <Button Classes="tool" Content="↷" FontSize="13" Padding="7,2" Command="{Binding RedoCommand}"
@@ -354,6 +355,13 @@
                             ToolTip.Tip="Respect each material's cullEnable (single-sided materials cull backfaces; cullEnable=false renders two-sided with flipped-normal lighting). Off = force everything two-sided." />
               <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" ToolTip.Tip="Show skeleton bones" />
               <ToggleButton Classes="vp" Content="▣ Bounds" IsChecked="{Binding ShowBounds}" ToolTip.Tip="Show bounding boxes" />
+              <ToggleButton Classes="vp" Content="⬓ Regions" IsChecked="{Binding RenderRegionsEnabled}"
+                            IsVisible="{Binding HasRenderRegions}"
+                            ToolTip.Tip="Render meshes that belong to a render region (mapgeo v18 renderRegionHash). Off = hide every region-assigned mesh, leaving only the region-independent base geometry." />
+            </StackPanel>
+
+            <!-- row 2: map lighting + tools -->
+            <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
               <ToggleButton Classes="vp" Content="☀ Lightmap" IsChecked="{Binding ShowLightmaps}"
                             ToolTip.Tip="Baked lightmaps on/off. Off = the map is lit by the sun/sky fallback term only (useful for seeing raw textures or previewing dynamic lights)." />
               <ToggleButton Classes="vp" Content="💡 Lights" IsChecked="{Binding ShowDynamicLights}"
@@ -426,6 +434,7 @@
                       ToolTip.Tip="Import a mesh (.obj / .scb / .sco) and append it to this map. Place it with the gizmo, pick its material in the inspector, then Save to Mod." />
               <Button Classes="tool" Content="⛶ Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Frame the camera on the loaded content" />
+            </StackPanel>
             </StackPanel>
 
             <Border Classes="glass" Padding="9,4"
@@ -831,6 +840,12 @@
                   <ScrollViewer>
                     <StackPanel Spacing="8" Margin="0,8,4,0">
                       <TextBlock Text="{Binding MaterialEditor.Summary}" Foreground="{DynamicResource ReyTextBrush}" FontSize="12" FontWeight="SemiBold" />
+                      <!-- M101: the list is scoped to the selected mesh's materials -->
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6,3"
+                              IsVisible="{Binding MaterialEditor.HasMeshFilter}">
+                        <TextBlock Text="{Binding MaterialEditor.MeshFilterLabel}" FontSize="10"
+                                   Foreground="{DynamicResource ReyAccent2Brush}" TextWrapping="Wrap" />
+                      </Border>
                       <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6,4">
                         <StackPanel Spacing="2">
                           <TextBlock Text="SHADER BINDING" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
