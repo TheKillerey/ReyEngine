@@ -1241,7 +1241,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.SaveOverrideAsync = SaveParticleOverride;
 
         ContentBrowser.FileSelected = OpenAssetDocument;
-        ContentBrowser.CanImportInto = f => TryResolveFolderDiskDir(f, out _);   // M107
+        ContentBrowser.CanImportInto = f => TryComputeFolderDiskDir(f, out _);   // M107/M113: virtual folders materialize on write
         ContentBrowser.SelectionStateChanged = RaiseAssetCommandsCanExecute;          // M108
         ContentBrowser.ExtractMaterials = ExtractMaterialsForNode;
         ContentBrowser.MaterialSelected = OpenMaterialAsset;
@@ -5099,16 +5099,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Map a Content Browser FOLDER node to its disk directory (editable FolderMounts only):
     /// climb to the mount subtree root under the "Project" group, then append the folder's path.</summary>
-    private bool TryResolveFolderDiskDir(AssetNodeViewModel? folder, out string dir)
+    private bool TryResolveFolderDiskDir(AssetNodeViewModel? folder, out string dir) =>
+        TryComputeFolderDiskDir(folder, out dir) && Directory.Exists(dir);
+
+    /// <summary>M113: map a folder node to its disk path under a project folder mount, whether or not it
+    /// exists there yet. Walks ancestry NAMES instead of Model.FullPath, because the virtual material
+    /// folders (ASSETS/… grafted from .materials.bin) have no Model — with the old check, creating a
+    /// folder while standing in one silently fell back to the mount root.</summary>
+    private bool TryComputeFolderDiskDir(AssetNodeViewModel? folder, out string dir)
     {
         dir = "";
-        if (folder is not { IsFolder: true, Model: not null } || _mounts is null) return false;
+        if (folder is not { IsFolder: true } || _mounts is null) return false;
+        var parts = new List<string>();
         var node = folder;
-        while (node.Parent is { Parent: not null } p) node = p;      // node = mount subtree root
+        while (node.Parent is { } p && p.Parent is not null) { parts.Add(node.Name); node = p; }   // node = mount subtree root
         if (node.Parent is null || !string.Equals(node.Parent.Name, "Project", StringComparison.Ordinal)) return false;
         if (_mounts.Mounts.FirstOrDefault(m => m is FolderMount && m.Name == node.Name) is not FolderMount mount) return false;
-        dir = Path.Combine(mount.Location, folder.Model.FullPath.Replace('/', Path.DirectorySeparatorChar));
-        return Directory.Exists(dir);
+        parts.Reverse();
+        dir = parts.Count == 0 ? mount.Location : Path.Combine(mount.Location, Path.Combine(parts.ToArray()));
+        return true;
     }
 
     [RelayCommand(CanExecute = nameof(CanRenameAsset))]
@@ -5390,7 +5399,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool CanCopyEntryText() => ContextNode?.Entry is not null;
     /// <summary>M109: enabled anywhere in the project — the command resolves a writable target itself.</summary>
     private bool CanImportFiles(AssetNodeViewModel? target) =>
-        ProjectMode && (TryResolveFolderDiskDir(target, out _) || ContentBrowser.CanImportHere || ProjectFolderMounts.Count > 0);
+        ProjectMode && (TryComputeFolderDiskDir(target, out _) || ContentBrowser.CanImportHere || ProjectFolderMounts.Count > 0);
 
     private bool CanRenameAsset(AssetNodeViewModel? node) => IsEditableFile(node) || IsEditableFolder(node);
     private bool CanDeleteAsset(AssetNodeViewModel? node) => IsEditableFile(node) || IsEditableFolder(node) || IsOverride(node);
@@ -5413,8 +5422,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// folder and silently created things in the mount root instead.</param>
     private async Task<string?> ResolveWriteTargetAsync(string action, AssetNodeViewModel? target = null)
     {
-        if (TryResolveFolderDiskDir(target, out var picked)) return picked;
-        if (TryResolveFolderDiskDir(ContentBrowser.CurrentFolder, out var here)) return here;
+        // M113: materialize the directory when it only exists virtually so far (ASSETS/… from a
+        // .materials.bin) — Explorer semantics: creating inside a path makes that path real.
+        if (TryComputeFolderDiskDir(target, out var picked))
+        { try { Directory.CreateDirectory(picked); return picked; } catch (Exception ex) { _log.Error("Files", ex.Message); return null; } }
+        if (TryComputeFolderDiskDir(ContentBrowser.CurrentFolder, out var here))
+        { try { Directory.CreateDirectory(here); return here; } catch (Exception ex) { _log.Error("Files", ex.Message); return null; } }
 
         var folders = ProjectFolderMounts;
         if (folders.Count == 0)
