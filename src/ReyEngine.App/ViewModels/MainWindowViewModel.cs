@@ -1241,6 +1241,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.SaveOverrideAsync = SaveParticleOverride;
 
         ContentBrowser.FileSelected = OpenAssetDocument;
+        ContentBrowser.CanImportInto = f => TryResolveFolderDiskDir(f, out _);   // M107
         ContentBrowser.ExtractMaterials = ExtractMaterialsForNode;
         ContentBrowser.MaterialSelected = OpenMaterialAsset;
         _thumbnails = new ThumbnailService(p =>
@@ -4802,10 +4803,63 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task CopyAssetToProject()
     {
-        var srcNode = ContextNode;
-        var entry = srcNode?.Entry;
-        if (entry is null) { _log.Warn("Project", "Select an asset to copy."); return; }
+        var nodes = ContextNodes.Where(n => !n.IsFolder && n.Entry is not null).ToList();
+        if (nodes.Count == 0) { _log.Warn("Project", "Select an asset to copy."); return; }
         if (!ProjectMode || _mounts is null) { _log.Warn("Project", "Copy to Project needs an open project."); return; }
+
+        // M107: one asset keeps the detailed per-file prompt.
+        if (nodes.Count == 1) { await CopyOneAssetToProject(nodes[0], replaceExisting: null); return; }
+
+        // A batch asks ONCE — a prompt per file is unusable on a large selection.
+        int already = nodes.Count(HasProjectCopy);
+        bool replaceExisting = false;
+        if (already > 0)
+        {
+            if (PromptOwner is null) { _log.Info("Project", $"{already} of the selected asset(s) are already editable — skipping those."); }
+            else
+                replaceExisting = await Views.PromptWindow.ConfirmAsync(PromptOwner, "Replace Project Copies",
+                    $"{already} of the {nodes.Count} selected asset(s) are already editable in the project.\n\n" +
+                    $"Replace them with fresh copies of the ORIGINAL Riot files? Your edits in those files will be lost.\n\n" +
+                    $"Cancel copies only the {nodes.Count - already} new one(s).", "Replace");
+        }
+
+        // The mount/tree rebuild is expensive, so it runs once for the whole batch, not per file.
+        int copied = 0, skipped = 0;
+        _copyBatch = true;
+        try
+        {
+            foreach (var n in nodes)
+                if (await CopyOneAssetToProject(n, replaceExisting)) copied++;
+                else skipped++;
+        }
+        finally { _copyBatch = false; }
+
+        Project.IsDirty = true;
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        BuildMounts();
+        BuildProjectTree();
+        UpdateTitle();
+        _log.Success("Project", $"Copied {copied} of {nodes.Count} asset(s) into the project"
+                                + (skipped > 0 ? $" — {skipped} skipped (already editable, or no original found)." : "."));
+    }
+
+    /// <summary>True when this asset already has an editable copy on disk in the project.</summary>
+    private bool HasProjectCopy(AssetNodeViewModel node)
+    {
+        if (node.Entry is not { } e || e.SourceKind == AssetSourceKind.RiotReference) return false;
+        if (TryGetNodeFile(node, out var f) && File.Exists(f)) return true;
+        return _overrides.TryGet(e.PathHash, out var ov) && File.Exists(ov.OverrideFile);
+    }
+
+    /// <summary>M107: set while a multi-asset copy runs — <see cref="FinishProjectCopy"/> then skips the
+    /// per-file mount/tree rebuild, which the batch does once at the end instead.</summary>
+    private bool _copyBatch;
+
+    /// <param name="replaceExisting">null = ask (single-asset path); true/false = the batch already decided.</param>
+    private async Task<bool> CopyOneAssetToProject(AssetNodeViewModel? srcNode, bool? replaceExisting)
+    {
+        var entry = srcNode?.Entry;
+        if (entry is null) return false;
 
         // M98b: don't trust the node's SourceKind — deleting the project copy from the browser leaves the
         // mount index stale. Check whether the project copy actually EXISTS on disk; if it does, offer to
@@ -4818,13 +4872,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             if (projectCopy is not null)
             {
-                if (PromptOwner is null) { _log.Info("Project", "Asset is already editable in the project."); return; }
-                if (!await Views.PromptWindow.ConfirmAsync(PromptOwner, "Replace Project Copy",
-                    $"'{entry.DisplayName}' is already editable in the project.\n\nReplace it with a fresh copy of the ORIGINAL Riot file? Your edits in this file will be lost.\n\n{projectCopy}", "Replace"))
-                    return;
+                if (replaceExisting == false) return false;   // batch chose to skip existing copies
+                if (replaceExisting is null)
+                {
+                    if (PromptOwner is null) { _log.Info("Project", "Asset is already editable in the project."); return false; }
+                    if (!await Views.PromptWindow.ConfirmAsync(PromptOwner, "Replace Project Copy",
+                        $"'{entry.DisplayName}' is already editable in the project.\n\nReplace it with a fresh copy of the ORIGINAL Riot file? Your edits in this file will be lost.\n\n{projectCopy}", "Replace"))
+                        return false;
+                }
                 var riot = ReadRiotOriginalBytes(entry);
                 if (riot is null)
-                { _log.Error("Project", "Original Riot bytes not found (no reference WAD has this asset)."); return; }
+                { _log.Error("Project", $"{entry.DisplayName}: original Riot bytes not found (no reference WAD has this asset)."); return false; }
                 try
                 {
                     // M98d: a legacy hash-named override in a folder project MIGRATES to its real path
@@ -4836,7 +4894,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                         _overrides.Remove(entry.PathHash);
                         try { File.Delete(projectCopy); } catch { }
                         FinishProjectCopy(entry, $"Migrated {entry.DisplayName} from the hash-named override to {migrated} (fresh Riot original, {riot.Length:n0} bytes).");
-                        return;
+                        return true;
                     }
                     File.WriteAllBytes(projectCopy, riot);
                     Project.IsDirty = true;
@@ -4845,8 +4903,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     UpdateTitle();
                     _log.Success("Project", $"Replaced project copy of {entry.DisplayName} with the Riot original ({riot.Length:n0} bytes).");
                 }
-                catch (Exception ex) { _log.Error("Project", ex.Message); }
-                return;
+                catch (Exception ex) { _log.Error("Project", $"{entry.DisplayName}: {ex.Message}"); return false; }
+                return true;
             }
 
             // stale: the project copy is gone from disk — clean the dead override record and re-copy below
@@ -4868,7 +4926,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (TryPlaceInProjectFolder(entry, bytes, out var placed))
             {
                 FinishProjectCopy(entry, $"Copied {entry.DisplayName} into the project at {placed} ({bytes.Length:n0} bytes). It is now editable.");
-                return;
+                return true;
             }
 
             var ext = Path.GetExtension(entry.IsResolved ? entry.Path : ".bin");
@@ -4881,13 +4939,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 AddedUtc = DateTime.UtcNow.ToString("o"),
             });
             Project.IsDirty = true;
-            RefreshOverrideMount();
-            BuildProjectTree();
-            if (_nodesByHash.TryGetValue(entry.PathHash, out var node)) SelectedNode = node;
-            UpdateTitle();
+            if (!_copyBatch)
+            {
+                RefreshOverrideMount();
+                BuildProjectTree();
+                if (_nodesByHash.TryGetValue(entry.PathHash, out var node)) SelectedNode = node;
+                UpdateTitle();
+            }
             _log.Success("Project", $"Copied {entry.DisplayName} into the project ({bytes.Length:n0} bytes). It is now editable.");
+            return true;
         }
-        catch (Exception ex) { _log.Error("Project", ex.Message); }
+        catch (Exception ex) { _log.Error("Project", $"{entry.DisplayName}: {ex.Message}"); return false; }
     }
 
     /// <summary>M98c/d: write bytes to the asset's REAL path inside the per-WAD project folder
@@ -4926,6 +4988,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void FinishProjectCopy(WadAssetEntry entry, string successMessage)
     {
         Project.IsDirty = true;
+        // M107: during a multi-asset copy the caller rebuilds once at the end.
+        if (_copyBatch) { _log.Success("Project", successMessage); return; }
         if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
         BuildMounts();
         BuildProjectTree();
@@ -5238,8 +5302,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task ImportFiles()
     {
-        if (!TryResolveFolderDiskDir(ContentBrowser.CurrentFolder, out _))
-        { _log.Warn("Files", "Navigate into an editable project folder first — Riot references are read-only."); return; }
+        if (!TryResolveFolderDiskDir(ContentBrowser.CurrentFolder, out var into))
+        {
+            _log.Warn("Files", "Import needs a folder inside your project (open Project ▸ … in the tree). "
+                             + "The tree root and everything under Riot References are read-only.");
+            return;
+        }
+        _log.Info("Files", $"Importing into {into}");
         var files = await Dialogs.OpenFilesAsync("Import files into the project", DialogService.All);
         if (files.Count > 0) ImportExternalFiles(files, ContentBrowser.CurrentFolder);
     }

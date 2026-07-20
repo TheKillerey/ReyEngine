@@ -64,6 +64,13 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
     /// <summary>Host hook: lazily load thumbnails for the items now shown (textures + material diffuse).</summary>
     public Action<IReadOnlyList<AssetNodeViewModel>>? RequestThumbnails { get; set; }
 
+    /// <summary>Host hook: does this folder map to a writable directory on disk? (M107)</summary>
+    public Func<AssetNodeViewModel?, bool>? CanImportInto { get; set; }
+
+    /// <summary>True when Import can actually put files in the folder being shown — false at the tree
+    /// root and anywhere under Riot References, which are read-only.</summary>
+    [ObservableProperty] private bool _canImportHere;
+
     [RelayCommand]
     private void OpenMaterial(MaterialAssetViewModel? material)
     {
@@ -140,6 +147,8 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
         for (var n = folder; n is not null; n = n.Parent) Breadcrumbs.Insert(0, n);
         LocationText = folder is null ? "/" : "/" + string.Join(" / ", Breadcrumbs.Select(b => b.Name));
         CanGoUp = folder is not null;
+
+        CanImportHere = CanImportInto?.Invoke(folder) ?? false;
 
         // Lazily load thumbnails only for what's now on screen.
         if (RequestThumbnails is { } req)

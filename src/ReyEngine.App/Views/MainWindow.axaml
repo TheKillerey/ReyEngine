@@ -515,7 +515,9 @@
                            Foreground="{DynamicResource ReyAccentBrush}" MaxWidth="130" TextTrimming="CharacterEllipsis"
                            IsVisible="{Binding ContentBrowser.HasSelection}" Margin="4,0,0,0" />
                 <Button Classes="tool" Content="⬇ Import" FontSize="10" Padding="6,2"
-                        Command="{Binding ImportFilesCommand}" ToolTip.Tip="Import files into this folder" />
+                        Command="{Binding ImportFilesCommand}"
+                        IsEnabled="{Binding ContentBrowser.CanImportHere}"
+                        ToolTip.Tip="Copy files from your PC into the project folder you're viewing. Disabled at the tree root and under Riot References (read-only) — open a folder inside Project first." />
               </StackPanel>
               <ComboBox Grid.Column="4" ItemsSource="{Binding ContentBrowser.TypeFilters}" SelectedItem="{Binding ContentBrowser.TypeFilter}"
                         FontSize="11" MinWidth="98" Margin="2,4" ToolTip.Tip="Filter by asset type" />
