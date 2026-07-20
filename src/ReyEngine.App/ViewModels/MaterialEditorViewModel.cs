@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Core.Assets;
@@ -213,6 +214,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         foreach (var s in model.Slots) Slots.Add(new TextureSlotViewModel(s, owner) { Binding = this });
         foreach (var p in model.Parameters) Parameters.Add(new MaterialParameterViewModel(p, owner));
         foreach (var w in model.AllSwitches) Switches.Add(new MaterialSwitchViewModel(w, this));   // M103
+        LoadRenderState();   // M106
     }
 
     public string Name => Model.Name;
@@ -362,12 +364,96 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     /// <summary>M34: compositing mode from the material's technique blend state (Opaque/Cutout/Transparent).</summary>
     public string RenderModeLabel => Model.Profile.RenderModeLabel;
 
-    // ---- M34 render state (read-only; from the material's technique/pass) ----
-    public string CullEnabledText => Model.Profile.CullEnabled ? "Yes (cull backfaces)" : "No (two-sided)";
-    public string BlendEnabledText => Model.Profile.BlendEnabled ? "Yes" : "No";
+    // ---- M106 render state ----
+    // Only blendEnable / cullEnable / the blend factors exist in the .bin. Depth-write, alpha-cutout
+    // and the blend MODE are derived by MaterialProfile from those plus the shader name and the
+    // AlphaTestValue parameter — there is no field to write for them, so they stay read-outs.
+    public bool CanEditRenderState => Model.CanEditRenderState;
+
+    /// <summary>pass.cullEnable — true culls back faces (single-sided). Absent in the bin means enabled.</summary>
+    [ObservableProperty] private bool _cullEnable;
+    /// <summary>pass.blendEnable — the material's own alpha-blending flag. Absent means off.</summary>
+    [ObservableProperty] private bool _blendEnable;
+
+    private bool _renderStateLoading;
+
+    private void LoadRenderState()
+    {
+        _renderStateLoading = true;
+        CullEnable = Model.GetPassBool("cullEnable", whenAbsent: true);
+        BlendEnable = Model.GetPassBool("blendEnable", whenAbsent: false);
+        SrcColorBlendFactor = Model.GetPassU32("srcColorBlendFactor");
+        DstColorBlendFactor = Model.GetPassU32("dstColorBlendFactor");
+        _renderStateLoading = false;
+    }
+
+    partial void OnCullEnableChanged(bool value)
+    {
+        if (_renderStateLoading) return;
+        Model.SetPassBool("cullEnable", value);
+        AfterRenderStateEdit();
+    }
+
+    partial void OnBlendEnableChanged(bool value)
+    {
+        if (_renderStateLoading) return;
+        Model.SetPassBool("blendEnable", value);
+        AfterRenderStateEdit();
+    }
+
+    /// <summary>Riot's blend-factor enum. Only 6 (SrcAlpha) and 7 (OneMinusSrcAlpha) actually occur in
+    /// Riot's shipped map materials — the other names are inferred from that ordering, so treat them as
+    /// a best guess. -1 means the field isn't present on this pass.</summary>
+    public static IReadOnlyList<string> BlendFactorNames { get; } = new[]
+    {
+        "0 Zero", "1 One", "2 SrcColor", "3 OneMinusSrcColor", "4 DstColor", "5 OneMinusDstColor",
+        "6 SrcAlpha", "7 OneMinusSrcAlpha", "8 DstAlpha", "9 OneMinusDstAlpha",
+    };
+
+    [ObservableProperty] private int _srcColorBlendFactor = -1;
+    [ObservableProperty] private int _dstColorBlendFactor = -1;
+
+    partial void OnSrcColorBlendFactorChanged(int value)
+    {
+        if (_renderStateLoading || value < 0) return;
+        Model.SetPassU32("srcColorBlendFactor", (uint)value);
+        Model.SetPassU32("srcAlphaBlendFactor", (uint)value);
+        AfterRenderStateEdit();
+    }
+
+    partial void OnDstColorBlendFactorChanged(int value)
+    {
+        if (_renderStateLoading || value < 0) return;
+        Model.SetPassU32("dstColorBlendFactor", (uint)value);
+        Model.SetPassU32("dstAlphaBlendFactor", (uint)value);
+        AfterRenderStateEdit();
+    }
+
+    private void AfterRenderStateEdit()
+    {
+        Owner?.Reclassify(this);   // the derived read-outs follow the fields we just wrote
+        RaiseDirty();
+        RaiseRenderStateText();
+        OnPropertyChanged(nameof(RenderModeLabel));
+        OnPropertyChanged(nameof(FeatureSummary));
+        Owner?.NotifyChanged();
+    }
+
+    /// <summary>The derived read-outs move when the real fields do, so re-announce them after an edit.</summary>
+    public void RaiseRenderStateText()
+    {
+        OnPropertyChanged(nameof(CullEnabledText));
+        OnPropertyChanged(nameof(BlendEnabledText));
+        OnPropertyChanged(nameof(DepthWriteText));
+        OnPropertyChanged(nameof(AlphaCutoutText));
+        OnPropertyChanged(nameof(TwoSidedText));
+    }
+
+    public string CullEnabledText => CullEnable ? "culling back faces (single-sided)" : "two-sided";
+    public string BlendEnabledText => BlendEnable ? "alpha blending on" : "opaque";
     public string DepthWriteText => Model.Profile.DepthWrite ? "Yes" : "No (transparent)";
     public string AlphaCutoutText => Model.Profile.AlphaCutout ? $"Yes (cutoff {(Model.Profile.AlphaCutoff ?? 0.35f):0.##})" : "No";
-    public string TwoSidedText => Model.Profile.TwoSided ? "Active" : "Off";
+    public string TwoSidedText => CullEnable ? "Off" : "Active";
 
     /// <summary>Per-material UV transform display (scale/offset, and the source param name when known).</summary>
     public string UvTransformText
@@ -481,6 +567,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         Model.Revert();
         foreach (var s in Slots) s.ResetFromModel();
         foreach (var p in Parameters) p.ResetFromModel();
+        LoadRenderState();
+        RaiseRenderStateText();
         Owner!.NotifyChanged();
     }
 
@@ -564,6 +652,9 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     {
         foreach (var m in Materials) m.RefreshShaderDef(Catalog);
     }
+
+    /// <summary>M106: re-derive one material's preview profile after a render-state edit.</summary>
+    public void Reclassify(MaterialBindingViewModel vm) => _doc?.Reclassify(vm.Model);
 
     /// <summary>Learn shader -> sampler-set from every material in the document (data-driven "required
     /// samplers": what materials using that shader actually bind), then union in the whole catalogue so
@@ -684,11 +775,36 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
     public byte[]? Serialize() => _doc?.Serialize();
 
+    // ---- M106: live preview — edits reach the viewport without pressing Apply ----
+
+    /// <summary>Re-apply the material to the viewport as it's edited. Debounced, because applying
+    /// re-resolves textures and would otherwise run on every keystroke.</summary>
+    [ObservableProperty] private bool _livePreview = true;
+
+    private DispatcherTimer? _liveTimer;
+
+    private void ScheduleLiveApply()
+    {
+        if (!LivePreview || ApplyToViewport is null) return;
+        _liveTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _liveTimer.Tick -= OnLiveTick;
+        _liveTimer.Tick += OnLiveTick;
+        _liveTimer.Stop();     // restart the window on every edit so a burst applies once
+        _liveTimer.Start();
+    }
+
+    private void OnLiveTick(object? sender, EventArgs e)
+    {
+        _liveTimer?.Stop();
+        ApplyToViewport?.Invoke();
+    }
+
     public void NotifyChanged()
     {
         IsDirty = _doc?.IsDirty ?? false;
         foreach (var m in Materials) m.RaiseDirty();
         UpdateUnresolved();
+        ScheduleLiveApply();
     }
 
     private void UpdateUnresolved()

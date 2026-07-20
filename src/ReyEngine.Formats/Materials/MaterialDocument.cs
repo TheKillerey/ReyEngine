@@ -33,6 +33,10 @@ public sealed class MaterialDocument
         Materials = materials;
     }
 
+    /// <summary>M106: re-derive one material's preview profile after its render state changed, so the
+    /// derived read-outs (blend mode, depth-write, alpha-cutout) follow the fields the user just edited.</summary>
+    public void Reclassify(MaterialBinding b) => b.Profile = MaterialProfiles.Classify(b, Kind);
+
     public byte[] Serialize()
     {
         using var ms = new MemoryStream();
@@ -219,11 +223,13 @@ public sealed class MaterialDocument
             bool? cullEnable = null;
             int srcBlend = -1, dstBlend = -1;
             BinTreeObjectLink? shaderLink = null;   // M52: kept live so the shader can be CHANGED
+            BinTreeStruct? passStruct = null;       // M106: kept live so the render state can be EDITED
             if (Field(o.Properties, "techniques") is BinTreeContainer techs
                 && techs.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } tech0
                 && Field(tech0.Properties, "passes") is BinTreeContainer passes
                 && passes.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } pass0)
             {
+                passStruct = pass0;
                 if (Field(pass0.Properties, "shader") is BinTreeObjectLink shLink)
                 {
                     shaderLink = shLink;
@@ -260,6 +266,7 @@ public sealed class MaterialDocument
                 Switches = switches,
                 SwitchContainer = switchContainer,
                 SwitchEntries = switchList,
+                PassStruct = passStruct,
                 RenderShader = renderShader,
                 ShaderLink = shaderLink,
                 ParamContainer = paramContainer,
@@ -274,6 +281,8 @@ public sealed class MaterialDocument
 
         var kind = champion ? MaterialSourceKind.ChampionSkin : MaterialSourceKind.MapMaterials;
         foreach (var b in materials) b.Profile = MaterialProfiles.Classify(b, kind);
+
+        // (see Reclassify below — the profile is re-derived when the render state is edited)
         return new MaterialDocument(tree, kind, materials);
     }
 
@@ -390,15 +399,115 @@ public sealed class MaterialBinding
         _structurallyEdited = true;
         return true;
     }
-    /// <summary>First pass's blendEnable — the .bin's own transparency flag (M34).</summary>
-    public bool BlendEnable { get; init; }
+    // ---- M106: editable render state (the pass's own fields) ----
+    /// <summary>The live first-pass struct. Only <c>blendEnable</c>, <c>cullEnable</c> and the four blend
+    /// factors are real fields here — depth-write, alpha-cutout and the blend MODE are derived (see
+    /// <see cref="MaterialProfile"/>), so there is nothing in the bin to edit for those.</summary>
+    internal BinTreeStruct? PassStruct { get; init; }
+    public bool CanEditRenderState => PassStruct is not null;
+
+    /// <summary>Current value of a pass bool, honouring "field absent = <paramref name="whenAbsent"/>".</summary>
+    public bool GetPassBool(string field, bool whenAbsent) =>
+        PassStruct is null ? whenAbsent
+        : FindProp(PassStruct, field) switch
+        {
+            BinTreeBool b => b.Value,
+            BinTreeBitBool bb => bb.Value,
+            _ => whenAbsent,
+        };
+
+    /// <summary>Set a pass bool, writing the field explicitly when it isn't there yet (the game's
+    /// schema default only applies while the field is absent, so we must not rely on it once edited).</summary>
+    public bool SetPassBool(string field, bool value)
+    {
+        if (PassStruct is null) return false;
+        switch (FindProp(PassStruct, field))
+        {
+            case BinTreeBool b: b.Value = value; break;
+            case BinTreeBitBool bb: bb.Value = value; break;
+            default:
+                uint h = HashAlgorithms.Fnv1aRaw(field);
+                PassStruct.Properties[h] = new BinTreeBool(h, value);
+                break;
+        }
+        _structurallyEdited = true;
+        return true;
+    }
+
+    /// <summary>Current value of a pass U32 (blend factors); -1 when the field is absent.</summary>
+    public int GetPassU32(string field) =>
+        PassStruct is null ? -1
+        : FindProp(PassStruct, field) switch
+        {
+            BinTreeU32 u => (int)u.Value,
+            BinTreeU8 b => b.Value,
+            _ => -1,
+        };
+
+    public bool SetPassU32(string field, uint value)
+    {
+        if (PassStruct is null) return false;
+        switch (FindProp(PassStruct, field))
+        {
+            case BinTreeU32 u: u.Value = value; break;
+            case BinTreeU8 b when value <= byte.MaxValue: b.Value = (byte)value; break;
+            default:
+                uint h = HashAlgorithms.Fnv1aRaw(field);
+                PassStruct.Properties[h] = new BinTreeU32(h, value);
+                break;
+        }
+        _structurallyEdited = true;
+        return true;
+    }
+
+    private static BinTreeProperty? FindProp(BinTreeStruct st, string field)
+    {
+        foreach (var h in new[] { HashAlgorithms.Fnv1aRaw(field), HashAlgorithms.Fnv1a(field) })
+            if (st.Properties.TryGetValue(h, out var p)) return p;
+        return null;
+    }
+
+    /// <summary>First pass's blendEnable — the .bin's own transparency flag (M34). Reads the live pass so
+    /// an edit flows through to the preview profile (M106); the init value is the parse-time fallback for
+    /// bindings that have no pass struct.</summary>
+    private readonly bool _blendEnableInit;
+    public bool BlendEnable
+    {
+        get => PassStruct is null ? _blendEnableInit : GetPassBool("blendEnable", _blendEnableInit);
+        init => _blendEnableInit = value;
+    }
+
     /// <summary>First pass's cullEnable — Riot's backface-culling flag: true = single-sided (cull back),
     /// false = double-sided. Null when the field is absent (M34).</summary>
-    public bool? CullEnable { get; init; }
+    private readonly bool? _cullEnableInit;
+    public bool? CullEnable
+    {
+        get
+        {
+            if (PassStruct is null) return _cullEnableInit;
+            return FindProp(PassStruct, "cullEnable") switch
+            {
+                BinTreeBool b => b.Value,
+                BinTreeBitBool bb => bb.Value,
+                _ => _cullEnableInit,
+            };
+        }
+        init => _cullEnableInit = value;
+    }
     /// <summary>Raw src/dst colour blend factors from the first pass (Riot enum; -1 when absent). Observed
     /// SR/HA values: 6 (SrcAlpha) / 7 (OneMinusSrcAlpha) for alpha blending.</summary>
-    public int SrcBlendFactor { get; init; } = -1;
-    public int DstBlendFactor { get; init; } = -1;
+    private readonly int _srcBlendInit = -1;
+    private readonly int _dstBlendInit = -1;
+    public int SrcBlendFactor
+    {
+        get { int v = GetPassU32("srcColorBlendFactor"); return v >= 0 ? v : _srcBlendInit; }
+        init => _srcBlendInit = value;
+    }
+    public int DstBlendFactor
+    {
+        get { int v = GetPassU32("dstColorBlendFactor"); return v >= 0 ? v : _dstBlendInit; }
+        init => _dstBlendInit = value;
+    }
     /// <summary>Diffuse sampler's addressU/V wrap mode (Riot enum: 1 = Clamp — used by decals; else Wrap). M34.</summary>
     public int DiffuseAddressU { get; init; }
     public int DiffuseAddressV { get; init; }

@@ -906,6 +906,8 @@
                       </StackPanel>
                       <StackPanel Orientation="Horizontal" Spacing="4">
                         <Button Classes="tool" Content="Apply (preview)" Command="{Binding MaterialEditor.ApplyCommand}" />
+                        <CheckBox Content="Live" IsChecked="{Binding MaterialEditor.LivePreview}" FontSize="11" VerticalAlignment="Center"
+                                  ToolTip.Tip="Push every edit to the viewport automatically (debounced)" />
                         <Button Classes="tool" Content="Save To Override" Command="{Binding MaterialEditor.SaveCommand}" />
                         <Button Classes="tool" Content="Revert All" Command="{Binding MaterialEditor.RevertAllCommand}" />
                       </StackPanel>
@@ -937,21 +939,51 @@
                                       </Border>
                                       <TextBlock Text="⚠ profile unresolved" Foreground="#FFB454" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding ProfileUnresolved}" />
                                     </StackPanel>
-                                    <TextBlock Text="{Binding UvTransformText}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
+                                    <TextBlock Text="{Binding UvTransformText}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10"
+                                               ToolTip.Tip="Read from this material's UV parameters — edit them in the parameter list below" />
                                     <TextBlock Text="{Binding UvSourceText}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="9" IsVisible="{Binding HasUvSource}" />
-                                    <TextBlock Text="{Binding RenderModeLabel, StringFormat='Blend: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
-                                    <!-- M34 render state (read-only, from technique/pass) -->
-                                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" Margin="0,3,0,0">
-                                      <TextBlock Grid.Row="0" Grid.Column="0" Text="Cull Enabled" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                    <TextBlock Text="{Binding RenderModeLabel, StringFormat='Blend mode: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
+
+                                    <!-- M106: the pass's REAL fields — these write straight into the .bin. -->
+                                    <StackPanel Spacing="2" Margin="0,4,0,0" IsVisible="{Binding CanEditRenderState}">
+                                      <TextBlock Text="RENDER STATE" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                                      <CheckBox Content="Cull back faces (off = two-sided)" IsChecked="{Binding CullEnable}" FontSize="9"
+                                                ToolTip.Tip="pass.cullEnable — also what drives Two-Sided Lighting below" />
+                                      <CheckBox Content="Alpha blending (blendEnable)" IsChecked="{Binding BlendEnable}" FontSize="9"
+                                                ToolTip.Tip="pass.blendEnable — the material's own transparency flag" />
+                                      <Grid ColumnDefinitions="Auto,*" Margin="0,2,0,0">
+                                        <TextBlock Grid.Column="0" Text="Src blend" FontSize="9" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
+                                        <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
+                                                  ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding SrcColorBlendFactor}"
+                                                  ToolTip.Tip="Only 6 (SrcAlpha) and 7 (OneMinusSrcAlpha) occur in Riot's own map materials — the other names are inferred from that ordering" />
+                                      </Grid>
+                                      <Grid ColumnDefinitions="Auto,*">
+                                        <TextBlock Grid.Column="0" Text="Dst blend" FontSize="9" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
+                                        <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
+                                                  ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding DstColorBlendFactor}"
+                                                  ToolTip.Tip="Sets both the colour and alpha destination factor" />
+                                      </Grid>
+                                    </StackPanel>
+
+                                    <!-- Derived read-outs: nothing in the .bin stores these, so they can't be
+                                         edited directly — they follow the fields above plus the shader name and
+                                         the AlphaTestValue / UV parameters. -->
+                                    <TextBlock Text="DERIVED (no .bin field — change the inputs named below)" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,5,0,0" />
+                                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                                      <TextBlock Grid.Row="0" Grid.Column="0" Text="Culling" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
                                       <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CullEnabledText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
-                                      <TextBlock Grid.Row="1" Grid.Column="0" Text="Blend Enabled" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
-                                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding BlendEnabledText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
-                                      <TextBlock Grid.Row="2" Grid.Column="0" Text="Depth Write" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
-                                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DepthWriteText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
-                                      <TextBlock Grid.Row="3" Grid.Column="0" Text="Alpha Cutout" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
-                                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AlphaCutoutText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
-                                      <TextBlock Grid.Row="4" Grid.Column="0" Text="Two-Sided Lighting" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
-                                      <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding TwoSidedText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
+                                      <TextBlock Grid.Row="1" Grid.Column="0" Text="Depth Write" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DepthWriteText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
+                                                 ToolTip.Tip="Follows the blend mode: transparent and transparent-cutout materials don't write depth" />
+                                      <TextBlock Grid.Row="2" Grid.Column="0" Text="Alpha Cutout" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding AlphaCutoutText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
+                                                 ToolTip.Tip="Threshold comes from the AlphaTestValue parameter — edit it in the parameter list below" />
+                                      <TextBlock Grid.Row="3" Grid.Column="0" Text="Two-Sided Lighting" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding TwoSidedText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
+                                                 ToolTip.Tip="Active when back-face culling is off — untick 'Cull back faces' above" />
                                     </Grid>
                                   </StackPanel>
                                 </Border>
