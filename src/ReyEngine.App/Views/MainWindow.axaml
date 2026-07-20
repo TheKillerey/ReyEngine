@@ -539,8 +539,8 @@
                     <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent">
                       <StackPanel.ContextMenu>
                         <ContextMenu>
-                          <MenuItem Header="New Folder…" Command="{Binding $parent[Window].DataContext.NewFolderCommand}" />
-                          <MenuItem Header="Import Files…" Command="{Binding $parent[Window].DataContext.ImportFilesCommand}" />
+                          <MenuItem Header="New Folder…" Command="{Binding $parent[Window].DataContext.NewFolderCommand}" CommandParameter="{Binding}" />
+                          <MenuItem Header="Import Files…" Command="{Binding $parent[Window].DataContext.ImportFilesCommand}" CommandParameter="{Binding}" />
                           <Separator />
                           <MenuItem Header="Rename Folder…" Command="{Binding $parent[Window].DataContext.RenameAssetCommand}" CommandParameter="{Binding}" />
                           <MenuItem Header="Delete Folder" Command="{Binding $parent[Window].DataContext.DeleteAssetCommand}" CommandParameter="{Binding}" />

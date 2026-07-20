@@ -5343,7 +5343,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool CanExportSelected() => ContentLoaded && ContextNode?.Entry is not null;
     private bool CanCopyEntryText() => ContextNode?.Entry is not null;
     /// <summary>M109: enabled anywhere in the project — the command resolves a writable target itself.</summary>
-    private bool CanImportFiles() => ProjectMode && (ContentBrowser.CanImportHere || ProjectFolderMounts.Count > 0);
+    private bool CanImportFiles(AssetNodeViewModel? target) =>
+        ProjectMode && (TryResolveFolderDiskDir(target, out _) || ContentBrowser.CanImportHere || ProjectFolderMounts.Count > 0);
 
     private bool CanRenameAsset(AssetNodeViewModel? node) => IsEditableFile(node) || IsEditableFolder(node);
     private bool CanDeleteAsset(AssetNodeViewModel? node) => IsEditableFile(node) || IsEditableFolder(node) || IsOverride(node);
@@ -5361,8 +5362,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// project folder mount — so both work from anywhere in the project, including the tree root and
     /// while browsing read-only Riot References, instead of only deep inside a mount.
     /// </summary>
-    private async Task<string?> ResolveWriteTargetAsync(string action)
+    /// <param name="target">The folder the user pointed at (a right-clicked tree node). Right-clicking
+    /// in the TreeView doesn't select, so without this the command only ever saw the browser's current
+    /// folder and silently created things in the mount root instead.</param>
+    private async Task<string?> ResolveWriteTargetAsync(string action, AssetNodeViewModel? target = null)
     {
+        if (TryResolveFolderDiskDir(target, out var picked)) return picked;
         if (TryResolveFolderDiskDir(ContentBrowser.CurrentFolder, out var here)) return here;
 
         var folders = ProjectFolderMounts;
@@ -5393,10 +5398,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M108: create a subfolder in the project folder the browser is showing.</summary>
     [RelayCommand(CanExecute = nameof(CanImportFiles))]
-    private async Task NewFolder()
+    private async Task NewFolder(AssetNodeViewModel? target)
     {
         if (PromptOwner is null) return;
-        if (await ResolveWriteTargetAsync("New Folder") is not { } parent) return;
+        if (await ResolveWriteTargetAsync("New Folder", target) is not { } parent) return;
         var name = await Views.PromptWindow.InputAsync(PromptOwner, "New Folder",
             $"Create a folder inside:\n{parent}\n\nIt becomes part of the asset's WAD path, so name it the way the game expects.",
             "NewFolder", "Create");
@@ -5407,12 +5412,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
         { _log.Warn("Files", $"'{name}' contains characters a folder name can't have."); return; }
 
-        var target = Path.Combine(parent, name);
-        if (Directory.Exists(target)) { _log.Warn("Files", $"'{name}' already exists here."); return; }
+        var created = Path.Combine(parent, name);
+        if (Directory.Exists(created)) { _log.Warn("Files", $"'{name}' already exists here."); return; }
         try
         {
-            Directory.CreateDirectory(target);
-            _log.Success("Files", $"Created {target}");
+            Directory.CreateDirectory(created);
+            _log.Success("Files", $"Created {created}");
             RefreshBrowser();
         }
         catch (Exception ex) { _log.Error("Files", ex.Message); }
@@ -5420,9 +5425,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Import external files into the folder the browser is showing.</summary>
     [RelayCommand(CanExecute = nameof(CanImportFiles))]
-    private async Task ImportFiles()
+    private async Task ImportFiles(AssetNodeViewModel? target)
     {
-        if (await ResolveWriteTargetAsync("Import") is not { } into) return;
+        if (await ResolveWriteTargetAsync("Import", target) is not { } into) return;
         var files = await Dialogs.OpenFilesAsync("Import files into the project", DialogService.All);
         if (files.Count > 0) ImportExternalFilesTo(files, into);
     }
