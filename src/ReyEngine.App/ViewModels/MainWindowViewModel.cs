@@ -5253,6 +5253,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (!TryResolveFolderDiskDir(targetFolder, out var dir))
         { _log.Warn("Files", "Drop files onto a folder inside an editable project folder (e.g. one of your extracted WAD folders)."); return; }
+        ImportExternalFilesTo(files, dir);
+    }
+
+    /// <summary>M109: import into a resolved directory (the Import command already picked the target).</summary>
+    public void ImportExternalFilesTo(IReadOnlyList<string> files, string dir)
+    {
         int copied = 0;
         foreach (var f in files)
         {
@@ -5275,7 +5281,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         if (copied > 0)
         {
-            _log.Success("Files", $"Imported {copied} file(s) into {targetFolder!.Name}/.");
+            _log.Success("Files", $"Imported {copied} file(s) into {dir}");
             RefreshBrowser();
         }
     }
@@ -5332,7 +5338,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool CanDeleteSelection() => ContextNodes.Any(n => IsEditableFile(n) || IsEditableFolder(n) || IsOverride(n));
     private bool CanExportSelected() => ContentLoaded && ContextNode?.Entry is not null;
     private bool CanCopyEntryText() => ContextNode?.Entry is not null;
-    private bool CanImportFiles() => ContentBrowser.CanImportHere;
+    /// <summary>M109: enabled anywhere in the project — the command resolves a writable target itself.</summary>
+    private bool CanImportFiles() => ProjectMode && (ContentBrowser.CanImportHere || ProjectFolderMounts.Count > 0);
 
     private bool CanRenameAsset(AssetNodeViewModel? node) => IsEditableFile(node) || IsEditableFolder(node);
     private bool CanDeleteAsset(AssetNodeViewModel? node) => IsEditableFile(node) || IsEditableFolder(node) || IsOverride(node);
@@ -5341,16 +5348,51 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool CanOpenInMapBinEditor(AssetNodeViewModel? node) =>
         node?.Entry is { } e && e.DisplayName.EndsWith(".bin", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Editable folder mounts in the open project (the places we're allowed to write).</summary>
+    private List<FolderMount> ProjectFolderMounts =>
+        _mounts?.Mounts.OfType<FolderMount>().ToList() ?? new List<FolderMount>();
+
+    /// <summary>
+    /// M109: where Import / New Folder should write. The folder in view when it's writable, otherwise a
+    /// project folder mount — so both work from anywhere in the project, including the tree root and
+    /// while browsing read-only Riot References, instead of only deep inside a mount.
+    /// </summary>
+    private async Task<string?> ResolveWriteTargetAsync(string action)
+    {
+        if (TryResolveFolderDiskDir(ContentBrowser.CurrentFolder, out var here)) return here;
+
+        var folders = ProjectFolderMounts;
+        if (folders.Count == 0)
+        {
+            _log.Warn("Files", $"{action} needs an editable project folder — this project has none. "
+                             + "Create a folder project, or use Copy Asset To Project to make one editable first.");
+            return null;
+        }
+        if (folders.Count == 1)
+        {
+            _log.Info("Files", $"Not inside a writable folder — using {folders[0].Name}/.");
+            return folders[0].Location;
+        }
+        if (PromptOwner is null) return folders[0].Location;
+
+        // Several folder mounts and no obvious one: let the user say which rather than guessing, since
+        // the folder becomes part of the asset's WAD path.
+        var names = string.Join(", ", folders.Select(f => f.Name));
+        var pick = await Views.PromptWindow.InputAsync(PromptOwner, $"{action} — choose a folder",
+            $"You're not inside a writable project folder, so pick which one to use.\n\nAvailable: {names}",
+            folders[0].Name, "Use");
+        if (string.IsNullOrWhiteSpace(pick)) return null;
+        var m = folders.FirstOrDefault(f => string.Equals(f.Name, pick.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (m is null) { _log.Warn("Files", $"'{pick.Trim()}' isn't one of: {names}"); return null; }
+        return m.Location;
+    }
+
     /// <summary>M108: create a subfolder in the project folder the browser is showing.</summary>
     [RelayCommand(CanExecute = nameof(CanImportFiles))]
     private async Task NewFolder()
     {
         if (PromptOwner is null) return;
-        if (!TryResolveFolderDiskDir(ContentBrowser.CurrentFolder, out var parent))
-        {
-            _log.Warn("Files", "New Folder needs a folder inside your project — the tree root and Riot References are read-only.");
-            return;
-        }
+        if (await ResolveWriteTargetAsync("New Folder") is not { } parent) return;
         var name = await Views.PromptWindow.InputAsync(PromptOwner, "New Folder",
             $"Create a folder inside:\n{parent}\n\nIt becomes part of the asset's WAD path, so name it the way the game expects.",
             "NewFolder", "Create");
@@ -5376,15 +5418,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanImportFiles))]
     private async Task ImportFiles()
     {
-        if (!TryResolveFolderDiskDir(ContentBrowser.CurrentFolder, out var into))
-        {
-            _log.Warn("Files", "Import needs a folder inside your project (open Project ▸ … in the tree). "
-                             + "The tree root and everything under Riot References are read-only.");
-            return;
-        }
-        _log.Info("Files", $"Importing into {into}");
+        if (await ResolveWriteTargetAsync("Import") is not { } into) return;
         var files = await Dialogs.OpenFilesAsync("Import files into the project", DialogService.All);
-        if (files.Count > 0) ImportExternalFiles(files, ContentBrowser.CurrentFolder);
+        if (files.Count > 0) ImportExternalFilesTo(files, into);
     }
 
     /// <summary>Copy the selected assets out to a folder on disk. Works for read-only Riot references

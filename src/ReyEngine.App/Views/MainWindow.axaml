@@ -516,11 +516,11 @@
                            IsVisible="{Binding ContentBrowser.HasSelection}" Margin="4,0,0,0" />
                 <Button Classes="tool" Content="📁+ New Folder" FontSize="10" Padding="6,2"
                         Command="{Binding NewFolderCommand}"
-                        ToolTip.Tip="Create a subfolder in the project folder you're viewing. The folder name becomes part of the asset's WAD path." />
+                        ToolTip.Tip="Create a subfolder in the project. Uses the folder you're viewing when it's writable, otherwise your project folder. The name becomes part of the asset's WAD path." />
                 <Button Classes="tool" Content="⬇ Import" FontSize="10" Padding="6,2"
                         Command="{Binding ImportFilesCommand}"
                         IsEnabled="{Binding ContentBrowser.CanImportHere}"
-                        ToolTip.Tip="Copy files from your PC into the project folder you're viewing. Disabled at the tree root and under Riot References (read-only) — open a folder inside Project first." />
+                        ToolTip.Tip="Copy files from your PC into the project. Uses the folder you're viewing when it's writable, otherwise your project folder." />
               </StackPanel>
               <ComboBox Grid.Column="4" ItemsSource="{Binding ContentBrowser.TypeFilters}" SelectedItem="{Binding ContentBrowser.TypeFilter}"
                         FontSize="11" MinWidth="98" Margin="2,4" ToolTip.Tip="Filter by asset type" />
