@@ -514,6 +514,9 @@
                 <TextBlock Text="{Binding ContentBrowser.SelectionText}" VerticalAlignment="Center" FontSize="10"
                            Foreground="{DynamicResource ReyAccentBrush}" MaxWidth="130" TextTrimming="CharacterEllipsis"
                            IsVisible="{Binding ContentBrowser.HasSelection}" Margin="4,0,0,0" />
+                <Button Classes="tool" Content="📁+ New Folder" FontSize="10" Padding="6,2"
+                        Command="{Binding NewFolderCommand}"
+                        ToolTip.Tip="Create a subfolder in the project folder you're viewing. The folder name becomes part of the asset's WAD path." />
                 <Button Classes="tool" Content="⬇ Import" FontSize="10" Padding="6,2"
                         Command="{Binding ImportFilesCommand}"
                         IsEnabled="{Binding ContentBrowser.CanImportHere}"
@@ -536,6 +539,9 @@
                     <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent">
                       <StackPanel.ContextMenu>
                         <ContextMenu>
+                          <MenuItem Header="New Folder…" Command="{Binding $parent[Window].DataContext.NewFolderCommand}" />
+                          <MenuItem Header="Import Files…" Command="{Binding $parent[Window].DataContext.ImportFilesCommand}" />
+                          <Separator />
                           <MenuItem Header="Rename Folder…" Command="{Binding $parent[Window].DataContext.RenameAssetCommand}" CommandParameter="{Binding}" />
                           <MenuItem Header="Delete Folder" Command="{Binding $parent[Window].DataContext.DeleteAssetCommand}" CommandParameter="{Binding}" />
                           <Separator />
@@ -574,7 +580,8 @@
                             <MenuItem Header="Revert Asset" Command="{Binding $parent[Window].DataContext.RevertSelectedCommand}" />
                             <Separator />
                             <!-- M100: these act on the whole browser selection -->
-                            <MenuItem Header="Import Files…" Command="{Binding $parent[Window].DataContext.ImportFilesCommand}" />
+                            <MenuItem Header="New Folder…" Command="{Binding $parent[Window].DataContext.NewFolderCommand}" />
+  <MenuItem Header="Import Files…" Command="{Binding $parent[Window].DataContext.ImportFilesCommand}" />
                             <MenuItem Header="Copy To…" Command="{Binding $parent[Window].DataContext.CopySelectionToCommand}" />
                             <MenuItem Header="Move To…" Command="{Binding $parent[Window].DataContext.MoveSelectionToCommand}" />
                             <MenuItem Header="Delete" Command="{Binding $parent[Window].DataContext.DeleteSelectionCommand}" />
@@ -644,7 +651,8 @@
                               <MenuItem Header="Revert Asset" Command="{Binding $parent[Window].DataContext.RevertSelectedCommand}" />
                               <Separator />
                               <!-- M100: these act on the whole browser selection -->
-                              <MenuItem Header="Import Files…" Command="{Binding $parent[Window].DataContext.ImportFilesCommand}" />
+                              <MenuItem Header="New Folder…" Command="{Binding $parent[Window].DataContext.NewFolderCommand}" />
+  <MenuItem Header="Import Files…" Command="{Binding $parent[Window].DataContext.ImportFilesCommand}" />
                               <MenuItem Header="Copy To…" Command="{Binding $parent[Window].DataContext.CopySelectionToCommand}" />
                               <MenuItem Header="Move To…" Command="{Binding $parent[Window].DataContext.MoveSelectionToCommand}" />
                               <MenuItem Header="Delete" Command="{Binding $parent[Window].DataContext.DeleteSelectionCommand}" />

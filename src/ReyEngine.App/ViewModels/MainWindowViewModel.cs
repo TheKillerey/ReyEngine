@@ -1242,6 +1242,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         ContentBrowser.FileSelected = OpenAssetDocument;
         ContentBrowser.CanImportInto = f => TryResolveFolderDiskDir(f, out _);   // M107
+        ContentBrowser.SelectionStateChanged = RaiseAssetCommandsCanExecute;          // M108
         ContentBrowser.ExtractMaterials = ExtractMaterialsForNode;
         ContentBrowser.MaterialSelected = OpenMaterialAsset;
         _thumbnails = new ThumbnailService(p =>
@@ -1749,7 +1750,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         LoadWad(_archive.FilePath);
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanExportSelected))]
     private async Task ExportSelected()
     {
         var entry = ContextNode?.Entry;
@@ -4106,7 +4107,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // ---- Import / replace / revert --------------------------------------
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanReplaceSelected))]
     private async Task ReplaceSelected()
     {
         var entry = ContextNode?.Entry;
@@ -4135,7 +4136,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Project", ex.Message); }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanRevertSelected))]
     private void RevertSelected()
     {
         var entry = ContextNode?.Entry;
@@ -4163,7 +4164,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Export", ex.Message); }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanCopyEntryText))]
     private async Task CopyResolvedPath()
     {
         var entry = ContextNode?.Entry;
@@ -4172,7 +4173,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _log.Info("Clipboard", entry.Path);
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanCopyEntryText))]
     private async Task CopyHash()
     {
         var entry = ContextNode?.Entry;
@@ -4198,7 +4199,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public Action? ShowMapBinEditorWindow;
 
     /// <summary>M98: right-click ▸ Open in Map Bin Editor — the fast structured editor for map*.bin.</summary>
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanOpenInMapBinEditor))]
     private void OpenInMapBinEditor(AssetNodeViewModel? node)
     {
         if (node?.Entry is not { } entry) { _log.Warn("MapBin", "Select a .bin asset first."); return; }
@@ -4800,7 +4801,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _log.Success("Project", $"Added Riot reference {Path.GetFileName(path)} — {_mounts!.Count:n0} assets now mounted.");
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanCopyAssetToProject))]
     private async Task CopyAssetToProject()
     {
         var nodes = ContextNodes.Where(n => !n.IsFolder && n.Entry is not null).ToList();
@@ -5106,7 +5107,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return Directory.Exists(dir);
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanRenameAsset))]
     private async Task RenameAsset(AssetNodeViewModel? node)
     {
         if (node is null || PromptOwner is null) return;
@@ -5141,7 +5142,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Files", ex.Message); }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanDeleteAsset))]
     private async Task DeleteAsset(AssetNodeViewModel? node)
     {
         if (node is null || PromptOwner is null) return;
@@ -5190,7 +5191,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M74: open any asset's raw bytes in the system text editor. Editable files open in place
     /// (external saves show up after a browser refresh); read-only assets open as a temp copy.</summary>
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanOpenInTextEditor))]
     private void OpenInTextEditor(AssetNodeViewModel? node)
     {
         if (node?.Entry is not { } entry) return;
@@ -5214,7 +5215,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>M74: show the asset's real file in Windows Explorer (editable file-backed assets).</summary>
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanShowInExplorer))]
     private void ShowInExplorer(AssetNodeViewModel? node)
     {
         try
@@ -5298,8 +5299,81 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ? ContentBrowser.SelectedItems.ToList()
             : SelectedNode is { } n ? new List<AssetNodeViewModel> { n } : new List<AssetNodeViewModel>();
 
+    // ---- M108: context-menu gating ----
+    // Every asset command declares when it applies, so the menu greys out what can't work here
+    // instead of accepting the click and logging a refusal.
+
+    /// <summary>Re-query the selection-dependent commands (called whenever the selection or folder changes).</summary>
+    private void RaiseAssetCommandsCanExecute()
+    {
+        CopyAssetToProjectCommand.NotifyCanExecuteChanged();
+        ReplaceSelectedCommand.NotifyCanExecuteChanged();
+        RevertSelectedCommand.NotifyCanExecuteChanged();
+        CopySelectionToCommand.NotifyCanExecuteChanged();
+        MoveSelectionToCommand.NotifyCanExecuteChanged();
+        DeleteSelectionCommand.NotifyCanExecuteChanged();
+        ExportSelectedCommand.NotifyCanExecuteChanged();
+        CopyResolvedPathCommand.NotifyCanExecuteChanged();
+        CopyHashCommand.NotifyCanExecuteChanged();
+        ImportFilesCommand.NotifyCanExecuteChanged();
+        NewFolderCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>A file on disk we're allowed to move/rename/delete.</summary>
+    private bool IsEditableFile(AssetNodeViewModel? n) => n is not null && TryGetNodeFile(n, out _);
+    private bool IsEditableFolder(AssetNodeViewModel? n) => n is not null && TryResolveFolderDiskDir(n, out _);
+    private bool IsOverride(AssetNodeViewModel? n) => n?.Entry is { SourceKind: AssetSourceKind.ProjectOverride };
+
+    private bool CanCopyAssetToProject() => ProjectMode && _mounts is not null && ContextNodes.Any(n => n.Entry is not null);
+    private bool CanReplaceSelected() => ProjectMode && ContextNode?.Entry is not null;
+    private bool CanRevertSelected() => ContextNode?.Entry is { } e && _overrides.Has(e.PathHash);
+    private bool CanCopySelectionTo() => ContextNodes.Any(n => !n.IsFolder && n.Entry is not null);
+    private bool CanMoveSelectionTo() => ContextNodes.Any(IsEditableFile);
+    private bool CanDeleteSelection() => ContextNodes.Any(n => IsEditableFile(n) || IsEditableFolder(n) || IsOverride(n));
+    private bool CanExportSelected() => ContentLoaded && ContextNode?.Entry is not null;
+    private bool CanCopyEntryText() => ContextNode?.Entry is not null;
+    private bool CanImportFiles() => ContentBrowser.CanImportHere;
+
+    private bool CanRenameAsset(AssetNodeViewModel? node) => IsEditableFile(node) || IsEditableFolder(node);
+    private bool CanDeleteAsset(AssetNodeViewModel? node) => IsEditableFile(node) || IsEditableFolder(node) || IsOverride(node);
+    private bool CanShowInExplorer(AssetNodeViewModel? node) => IsEditableFile(node) || IsEditableFolder(node);
+    private bool CanOpenInTextEditor(AssetNodeViewModel? node) => node?.Entry is not null;
+    private bool CanOpenInMapBinEditor(AssetNodeViewModel? node) =>
+        node?.Entry is { } e && e.DisplayName.EndsWith(".bin", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>M108: create a subfolder in the project folder the browser is showing.</summary>
+    [RelayCommand(CanExecute = nameof(CanImportFiles))]
+    private async Task NewFolder()
+    {
+        if (PromptOwner is null) return;
+        if (!TryResolveFolderDiskDir(ContentBrowser.CurrentFolder, out var parent))
+        {
+            _log.Warn("Files", "New Folder needs a folder inside your project — the tree root and Riot References are read-only.");
+            return;
+        }
+        var name = await Views.PromptWindow.InputAsync(PromptOwner, "New Folder",
+            $"Create a folder inside:\n{parent}\n\nIt becomes part of the asset's WAD path, so name it the way the game expects.",
+            "NewFolder", "Create");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        // Keep it a single folder name — a path here would silently create a tree somewhere else.
+        name = name.Trim();
+        if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        { _log.Warn("Files", $"'{name}' contains characters a folder name can't have."); return; }
+
+        var target = Path.Combine(parent, name);
+        if (Directory.Exists(target)) { _log.Warn("Files", $"'{name}' already exists here."); return; }
+        try
+        {
+            Directory.CreateDirectory(target);
+            _log.Success("Files", $"Created {target}");
+            RefreshBrowser();
+        }
+        catch (Exception ex) { _log.Error("Files", ex.Message); }
+    }
+
     /// <summary>Import external files into the folder the browser is showing.</summary>
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanImportFiles))]
     private async Task ImportFiles()
     {
         if (!TryResolveFolderDiskDir(ContentBrowser.CurrentFolder, out var into))
@@ -5315,7 +5389,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Copy the selected assets out to a folder on disk. Works for read-only Riot references
     /// too (the bytes are read through the mounts), so it doubles as a bulk export.</summary>
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanCopySelectionTo))]
     private async Task CopySelectionTo()
     {
         var nodes = ContextNodes.Where(n => !n.IsFolder && n.Entry is not null).ToList();
@@ -5337,7 +5411,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Move the selected project files to another folder. Read-only references can't move —
     /// copy them into the project first.</summary>
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanMoveSelectionTo))]
     private async Task MoveSelectionTo()
     {
         var nodes = ContextNodes.Where(n => !n.IsFolder).ToList();
@@ -5364,7 +5438,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Delete every selected asset — one confirmation for the whole batch. Overrides revert
     /// to their original instead of being removed from disk.</summary>
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanDeleteSelection))]
     private async Task DeleteSelection()
     {
         var nodes = ContextNodes;

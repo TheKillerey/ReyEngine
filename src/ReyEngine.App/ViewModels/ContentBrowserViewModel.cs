@@ -67,6 +67,9 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
     /// <summary>Host hook: does this folder map to a writable directory on disk? (M107)</summary>
     public Func<AssetNodeViewModel?, bool>? CanImportInto { get; set; }
 
+    /// <summary>Host hook: the selection or current folder changed — re-query command availability (M108).</summary>
+    public Action? SelectionStateChanged { get; set; }
+
     /// <summary>True when Import can actually put files in the folder being shown — false at the tree
     /// root and anywhere under Riot References, which are read-only.</summary>
     [ObservableProperty] private bool _canImportHere;
@@ -149,6 +152,7 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
         CanGoUp = folder is not null;
 
         CanImportHere = CanImportInto?.Invoke(folder) ?? false;
+        SelectionStateChanged?.Invoke();
 
         // Lazily load thumbnails only for what's now on screen.
         if (RequestThumbnails is { } req)
@@ -194,6 +198,7 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
         };
         // The focused item drives the existing single-asset commands.
         SelectedItem = SelectedItems.Count > 0 ? SelectedItems[^1] : SelectedItem;
+        SelectionStateChanged?.Invoke();
     }
 
     public void ClearSelection()
