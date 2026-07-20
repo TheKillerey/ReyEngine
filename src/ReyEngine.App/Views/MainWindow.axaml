@@ -215,10 +215,9 @@
            Nesting the viewport + browser means the console splitter trades height with the VIEWPORT,
            not the content browser (M43 fix). -->
       <Grid Grid.Column="2" RowDefinitions="*,4,170">
-      <!-- M100: the Content Browser is a SIDE DOCK (~1/3 of the centre area) instead of a full-width
-           strip under the viewport — resizable via the splitter. -->
-      <Grid Grid.Row="0" ColumnDefinitions="2*,4,1*">
-        <Border Grid.Column="0" Background="{DynamicResource ReyBgBrush}">
+      <!-- M100: browser sits between viewport and console; 200px keeps the viewport large. -->
+      <Grid Grid.Row="0" RowDefinitions="*,4,200">
+        <Border Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
           <DockPanel>
             <!-- Document / viewport tabs (M33): the loaded map stays alive while other assets are inspected -->
             <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
@@ -471,10 +470,10 @@
           </DockPanel>
         </Border>
 
-        <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
+        <GridSplitter Grid.Row="1" Background="{DynamicResource ReyBorderBrush}" />
 
         <!-- CONTENT BROWSER (Unreal/Windows-style: folder tree + tiles) -->
-        <Border Grid.Column="2" MinWidth="260" Background="{DynamicResource ReyPanelBrush}">
+        <Border Grid.Row="2" Background="{DynamicResource ReyPanelBrush}">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto">
               <TextBlock Classes="panelHeader" Text="CONTENT BROWSER" VerticalAlignment="Center" />
@@ -519,8 +518,8 @@
               <TextBox Grid.Column="6" Width="150" Watermark="🔎 Search…" Text="{Binding ContentBrowser.Filter}"
                        FontSize="11" Margin="4,4,8,4" Padding="6,2" />
             </Grid>
-            <!-- M100: narrower folder tree - the browser is a side dock now, not full width -->
-            <Grid ColumnDefinitions="130,4,*">
+            <!-- folder tree + tiles -->
+            <Grid ColumnDefinitions="200,4,*">
               <TreeView Grid.Column="0" x:Name="BrowserFolderTree" ItemsSource="{Binding ContentBrowser.FolderRoots}"
                         SelectedItem="{Binding ContentBrowser.SelectedFolder, Mode=TwoWay}"
                         Background="Transparent" BorderThickness="0" DragDrop.AllowDrop="True">
