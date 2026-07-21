@@ -1431,6 +1431,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Particle", ex.Message); }
     }
 
+    /// <summary>M121: the Model Preview window closed — its document tabs go with it. Mesh and
+    /// Texture tabs are exactly the kinds whose content lives in that window (M50 meshes, M118
+    /// static objects, M120 images); Map/Bin tabs belong to the main viewport and stay.</summary>
+    public void OnPreviewWindowClosed()
+    {
+        MeshPreview.OnWindowClosed();
+        foreach (var doc in Documents.Where(d => d.Kind is DocumentKind.Mesh or DocumentKind.Texture).ToList())
+            CloseDocument(doc);
+    }
+
     [RelayCommand]
     private void CloseDocument(EditorDocument? doc)
     {

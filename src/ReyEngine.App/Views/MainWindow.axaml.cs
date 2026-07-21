@@ -309,7 +309,7 @@ public partial class MainWindow : Window
             _meshPreviewWindow.Closed += (_, _) =>
             {
                 _meshPreviewWindow = null;
-                vm.MeshPreview.OnWindowClosed();   // M120: stop sounds/animation - not just the visuals
+                vm.OnPreviewWindowClosed();   // M120/M121: stop sounds/animation AND close its tabs
             };
             _meshPreviewWindow.Show(this);
         }
