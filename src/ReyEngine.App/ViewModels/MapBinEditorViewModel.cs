@@ -173,6 +173,17 @@ public sealed partial class MapBinEditorViewModel : ObservableObject
 
     partial void OnSearchChanged(string value) => RebuildGroups();
 
+    /// <summary>M130: select an object by its path hash (Bin Issues "Go To"). Sets the search to the
+    /// object's name so the left list narrows down to the target instead of hiding it in 1,600 rows.</summary>
+    public bool SelectObject(uint pathHash)
+    {
+        var hit = _allObjects.FirstOrDefault(o => o.Root.NameHash == pathHash);
+        if (hit is null) return false;
+        Search = hit.Name;
+        SelectedObject = hit;
+        return true;
+    }
+
     partial void OnSelectedObjectChanged(MapBinObjectViewModel? value)
     {
         Rows.Clear();

@@ -5111,23 +5111,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>M127: jump to a bin object in its natural editor — VFX systems open in the Particle
-    /// Editor, everything else lands in the Materials tab filtered to the object.</summary>
-    private async Task NavigateToBinObjectAsync(WadAssetEntry entry, uint objHash, uint classHash)
+    /// Editor, everything else opens in the Map Bin Editor window with the object selected.
+    /// M130: the Map Bin Editor replaced the old Materials-tab navigation — the issues window is owned
+    /// by the main window, so the main window can never rise above it (the "Go To does nothing" bug);
+    /// sibling windows can. It also handles EVERY object class, not just materials
+    /// (SkinCharacterDataProperties in a skin bin has no material to search for).</summary>
+    private Task NavigateToBinObjectAsync(WadAssetEntry entry, uint objHash, uint classHash)
     {
         if (classHash == HashAlgorithms.Fnv1a("VfxSystemDefinitionData"))
         {
             OpenParticleEditorFor(entry);
             if (ParticleEditor.Systems.FirstOrDefault(s => s.Entry.PathHash == objHash) is { } node)
                 ParticleEditor.SelectedSystem = node;
-            return;
+            return Task.CompletedTask;
         }
-        await LoadMaterialBinAsync(entry, alsoRawBin: false);
-        InspectorTab = 1;
-        AssetDataExpanded = true;
-        MaterialEditor.SetMeshFilter(null);
-        MaterialEditor.OnlyUnresolved = false;
-        if (MaterialEditor.Materials.FirstOrDefault(m => m.Model.ObjectPathHash == objHash) is { } mat)
-            MaterialEditor.Search = mat.Name;
+        try
+        {
+            if (MapBinEditor.Entry?.PathHash != entry.PathHash)
+                MapBinEditor.Load(entry, ReadAsset(entry.PathHash));
+            ShowMapBinEditorWindow?.Invoke();
+            if (!MapBinEditor.SelectObject(objHash))
+                _log.Warn("Validate", $"Object 0x{objHash:x8} not found in {entry.DisplayName} — it may live in a dependency bin.");
+        }
+        catch (Exception ex) { _log.Error("Validate", $"{entry.DisplayName}: {ex.Message}"); }
+        return Task.CompletedTask;
     }
 
     /// <summary>M127: replace every reference to a dead asset path with an existing one, then save the
