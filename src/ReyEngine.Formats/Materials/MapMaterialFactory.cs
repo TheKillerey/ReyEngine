@@ -166,7 +166,12 @@ public static class MapMaterialFactory
             tree.Write(outMs);
             return outMs.ToArray();
         }
-        catch (Exception ex) { error = $"{ex.Message} ({ex.GetType().Name})"; return null; }
+        catch (Exception ex)
+        {
+            var frames = (ex.StackTrace ?? "").Split((char)10).Take(3).Select(f => f.Trim());
+            error = $"{ex.Message} ({ex.GetType().Name}) @ {string.Join(" | ", frames)}";
+            return null;
+        }
     }
 
     private static void RepointDiffuse(BinTreeObject material, string diffusePath, Func<uint, string?> resolve)

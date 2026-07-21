@@ -1052,6 +1052,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 { _log.Error("AddMesh", "No materials .bin found for this map — cannot create materials."); return; }
                 var binBytes = GetAssetBytes(binEntry);
                 if (binBytes is null) { _log.Error("AddMesh", "Could not read the materials .bin."); return; }
+                _log.Info("AddMesh", $"Materials bin: {binEntry.Path} ({binEntry.SourceKind}, {binBytes.Length:n0} bytes).");
 
                 foreach (var m in toCreate)
                 {
@@ -1062,7 +1063,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     var def = MaterialEditor.Catalog?.Find(m.ShaderPath);
                     if (def is null) { _log.Error("AddMesh", $"Material '{m.NewName}': shader '{m.ShaderPath}' not in the catalogue."); return; }
                     var newBytes = MapMaterialFactory.CreateFromShader(binBytes, m.NewName!, def, out var err, diffusePath);
-                    if (newBytes is null) { _log.Error("AddMesh", $"Material '{m.NewName}': {err}"); return; }
+                    if (newBytes is null)
+                    {
+                        // dump the exact input so the failure is reproducible offline
+                        try
+                        {
+                            var dump = Path.Combine(Path.GetTempPath(), "reyengine_addmesh_fail.bin");
+                            File.WriteAllBytes(dump, binBytes);
+                            _log.Error("AddMesh", $"Material '{m.NewName}': {err} — input dumped to {dump}");
+                        }
+                        catch { _log.Error("AddMesh", $"Material '{m.NewName}': {err}"); }
+                        return;
+                    }
                     binBytes = newBytes;
                     _log.Success("AddMesh", $"Material '{m.NewName}' built from shader {m.ShaderPath}"
                         + (diffusePath is not null ? $" with diffuse {diffusePath}" : "") + ".");
