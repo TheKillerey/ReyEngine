@@ -1892,7 +1892,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         if (entry.Type is not AssetType.SkinnedMesh) ClearViewport();
         if (entry.Type != AssetType.Bin) BinEditor.Clear();
-        HasInspectorBody = entry.Type is AssetType.SkinnedMesh or AssetType.MapGeometry or AssetType.Bin;
+        HasInspectorBody = entry.Type is AssetType.SkinnedMesh or AssetType.StaticMesh or AssetType.MapGeometry or AssetType.Bin;
         InspectorTab = entry.Type == AssetType.Bin ? 2 : 0;
         if (!HasInspectorBody)
         {
@@ -1909,6 +1909,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _ = LoadMeshPreviewAsync(entry);   // M50: separate model window — the map viewport stays untouched
                 TryLoadMaterialBin(entry, alsoRawBin: true);
                 break;
+            case AssetType.StaticMesh:
+                _ = LoadStaticMeshPreviewAsync(entry);   // M118: .scb/.sco in the model preview
+                break;
             case AssetType.MapGeometry:
                 _ = LoadMapGeoAsync(entry);
                 TryLoadMaterialBin(entry, alsoRawBin: true);
@@ -1918,6 +1921,73 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 TryLoadMaterialBin(entry, alsoRawBin: false);
                 break;
         }
+    }
+
+    /// <summary>M118: open a static object (.scb binary / .sco ascii) in the Model Preview. These are
+    /// the VFX mesh primitives (weapon swipes, rings, cylinders) — no skeleton, no textures of their
+    /// own (the emitter supplies the sprite in a VFX context), and usually no normals, so normals are
+    /// synthesized from the faces for lighting.</summary>
+    private async Task LoadStaticMeshPreviewAsync(WadAssetEntry entry)
+    {
+        try
+        {
+            var mesh = await Task.Run(() =>
+            {
+                var data = StaticObjectDecoder.Decode(ReadAsset(entry.PathHash), entry.Path);
+                if (data is null) return null;
+
+                int vc = data.Positions.Length / 3;
+                var normals = new float[data.Positions.Length];
+                // accumulate face normals per vertex, then normalize — flat-ish but lightable
+                for (int i = 0; i + 2 < data.Indices.Length; i += 3)
+                {
+                    int a = (int)data.Indices[i], b = (int)data.Indices[i + 1], d = (int)data.Indices[i + 2];
+                    var pa = new System.Numerics.Vector3(data.Positions[a*3], data.Positions[a*3+1], data.Positions[a*3+2]);
+                    var pb = new System.Numerics.Vector3(data.Positions[b*3], data.Positions[b*3+1], data.Positions[b*3+2]);
+                    var pd = new System.Numerics.Vector3(data.Positions[d*3], data.Positions[d*3+1], data.Positions[d*3+2]);
+                    var n = System.Numerics.Vector3.Cross(pb - pa, pd - pa);
+                    foreach (var vi in new[] { a, b, d })
+                    { normals[vi*3] += n.X; normals[vi*3+1] += n.Y; normals[vi*3+2] += n.Z; }
+                }
+                for (int i = 0; i < vc; i++)
+                {
+                    var n = new System.Numerics.Vector3(normals[i*3], normals[i*3+1], normals[i*3+2]);
+                    if (n.LengthSquared() > 1e-12f) { n = System.Numerics.Vector3.Normalize(n); normals[i*3] = n.X; normals[i*3+1] = n.Y; normals[i*3+2] = n.Z; }
+                    else normals[i*3+1] = 1f;   // degenerate vertex: point up
+                }
+
+                var min = new System.Numerics.Vector3(float.MaxValue); var max = new System.Numerics.Vector3(float.MinValue);
+                for (int i = 0; i < vc; i++)
+                {
+                    var v = new System.Numerics.Vector3(data.Positions[i*3], data.Positions[i*3+1], data.Positions[i*3+2]);
+                    min = System.Numerics.Vector3.Min(min, v); max = System.Numerics.Vector3.Max(max, v);
+                }
+
+                return new MeshAsset
+                {
+                    Positions = data.Positions,
+                    Normals = normals,
+                    Uvs = data.Uvs,
+                    Indices = data.Indices,
+                    SubMeshes = new[] { new SubMeshInfo(string.IsNullOrEmpty(data.Name) ? "(static mesh)" : data.Name, 0, data.Indices.Length, vc) },
+                    VertexCount = vc,
+                    BoundsMin = min,
+                    BoundsMax = max,
+                };
+            });
+            if (mesh is null) { _log.Warn("Mesh", $"{entry.DisplayName}: not a readable .scb/.sco static object."); return; }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                MeshPreview.Show(entry.DisplayName, mesh, skeleton: null, textures: null);
+                MeshPreview.SetAnimations(Enumerable.Empty<AnimationEntryViewModel>());
+                MeshPreview.SetVfx(new Dictionary<uint, ReyEngine.Formats.Vfx.VfxSystemDefinition>());
+                MeshInspector.ShowMesh(mesh, null);
+                ShowMeshPreviewWindow?.Invoke();
+                _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris (static object — untextured; VFX supply the sprite).");
+            });
+        }
+        catch (Exception ex) { _log.Error("Mesh", $"{entry.DisplayName}: {ex.Message}"); }
     }
 
     // ---- Material editor: load + apply + save ---------------------------
