@@ -436,6 +436,8 @@
               <ToggleButton Classes="vp" Content="⊞ Buckets" IsChecked="{Binding ShowBucketGrid}"
                             IsVisible="{Binding HasBucketGrids}"
                             ToolTip.Tip="Show the map's culling bucket grid: the baked scene mesh as 3D wireframe + the flat cell boundaries." />
+              <Button Classes="tool" Content="⟳ Reload Map" Command="{Binding ReloadMapCommand}"
+                      ToolTip.Tip="Re-decode the open map from its current bytes — after Save Map Edits or a materials change. Confirms if unsaved edits would be lost." />
               <Button Classes="tool" Content="⟳ Rebuild Grids" Command="{Binding RebuildBucketGridsCommand}"
                       IsVisible="{Binding HasBucketGrids}" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Regenerate every bucket grid from the map's CURRENT geometry (after moving/scaling meshes). Preview updates immediately; saving the map writes the new grids into the mapgeo." />

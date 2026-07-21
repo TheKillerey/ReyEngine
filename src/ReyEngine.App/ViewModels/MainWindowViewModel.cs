@@ -3748,6 +3748,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>M124: reload the open map from its current bytes — after Save Map Edits (appended
+    /// meshes become native geometry) or a materials change (staged meshes pick up their textures).
+    /// Unsaved transforms, layer edits and staged meshes are lost, so it confirms first.</summary>
+    [RelayCommand]
+    private async Task ReloadMap()
+    {
+        if (_currentMapEntry is not { } entry) { _log.Warn("MapGeo", "No map open to reload."); return; }
+        bool hasEdits = (_currentMap is { } m && (MapGeoWriter.HasMoves(m.Meshes) || MapGeoLayerWriter.HasEdits(m.Meshes)))
+                        || MapContent.AddedMeshes.Count > 0;
+        if (hasEdits && PromptOwner is not null
+            && !await Views.PromptWindow.ConfirmAsync(PromptOwner, "Reload Map",
+                "Reload discards unsaved mesh moves, layer edits and staged meshes." + (char)10 + (char)10 + "Save Map Edits first if you want to keep them.", "Reload"))
+            return;
+
+        MapContent.AddedMeshes.Clear();
+        OnPropertyChanged(nameof(HasAddedMeshes));
+        // drop the tab's cached scene so switching tabs can't restore the stale state
+        if (Documents.FirstOrDefault(d => d.Key == entry.PathHash) is { } doc) doc.Scene = null;
+        _log.Info("MapGeo", $"Reloading {entry.DisplayName}…");
+        await LoadMapGeoAsync(entry);
+    }
+
     private async Task LoadMapGeoAsync(WadAssetEntry entry)
     {
         if (!ContentLoaded) return;
