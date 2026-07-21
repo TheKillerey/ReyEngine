@@ -4926,11 +4926,88 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     list.Add((rel, report, alts));
                 }
             }
-            return list;
+
+            // ---- M129: usage analysis — does the current game even LOAD each of these bins? ----
+            // Old mods drag along skin*.bin files for characters the map no longer spawns, and
+            // linked "skins_skin0_skin1_…" bins whose filename Riot has since changed (more skins
+            // merged in). Those bins fail validation loudly but the game never requests them.
+            var usage = new Dictionary<string, List<(string Kind, string Message, string Suggestion)>>(StringComparer.OrdinalIgnoreCase);
+
+            // exact strings the CURRENT maps' shipping bins carry — spawn tables reference
+            // characters by exact name string (verified on live map11.bin: 1,645 objects, all
+            // character names present as plain strings)
+            var mapNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (rel, _, _) in list)
+            {
+                var segs = rel.Split('/');
+                for (int i = 0; i + 1 < segs.Length; i++)
+                    if ((segs[i].Equals("mapgeometry", StringComparison.OrdinalIgnoreCase)
+                         || segs[i].Equals("shipping", StringComparison.OrdinalIgnoreCase))
+                        && segs[i + 1].StartsWith("map", StringComparison.OrdinalIgnoreCase))
+                        mapNames.Add(segs[i + 1]);
+            }
+            var mapExact = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var mapPathStrings = new List<string>();
+            foreach (var map in mapNames)
+            {
+                string prefix = $"data/maps/shipping/{map}/";
+                foreach (var e in AssetEntries)
+                {
+                    if (!e.IsResolved
+                        || !e.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                        || !e.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) continue;
+                    try
+                    {
+                        var strings = new List<string>();
+                        Formats.Meta.BinStringHarvester.Collect(
+                            Formats.Meta.SafeBinTree.Parse(ReadAsset(e.PathHash)), strings);
+                        foreach (var s in strings)
+                        {
+                            mapExact.Add(s);
+                            if (s.Contains('/')) mapPathStrings.Add(s.ToLowerInvariant());
+                        }
+                    }
+                    catch { /* a broken shipping bin only weakens the analysis */ }
+                }
+            }
+
+            bool RiotHasPath(ulong h) =>
+                _mounts is not null
+                && (_mounts.Mounts.Any(m => m.Kind == AssetSourceKind.RiotReference && m.Contains(h))
+                    || _mounts.Fallback.Any(f => f.Contains(h)));
+
+            foreach (var (rel, _, _) in list)
+            {
+                var findings = new List<(string, string, string)>();
+
+                bool riotHas = RiotHasPath(HashAlgorithms.WadPath(rel));
+                bool referenced = list.Any(o => !o.Rel.Equals(rel, StringComparison.OrdinalIgnoreCase)
+                                                && o.Report.ReferencedPaths.Contains(rel));
+                if (!riotHas && !referenced)
+                    findings.Add(("unused-bin",
+                        "The current game has no file at this path and nothing else in the project references it — the game never requests this bin.",
+                        "Safe to delete (Delete .bin above). Typical for renamed linked bins: Riot merges more skins into 'skins_skin0_skin1_…' files and the filename changes each patch."));
+
+                string? charName = null;
+                var parts = rel.Split('/');
+                for (int i = 0; i + 1 < parts.Length; i++)
+                    if (parts[i].Equals("characters", StringComparison.OrdinalIgnoreCase)) { charName = parts[i + 1]; break; }
+                if (charName is not null && mapExact.Count > 0
+                    && !mapExact.Contains(charName)
+                    && !mapPathStrings.Any(pth => pth.Contains($"characters/{charName.ToLowerInvariant()}/")))
+                    findings.Add(("possibly-unused",
+                        $"Character '{charName}' appears nowhere in the current map data ({string.Join(", ", mapNames)}) — the map no longer spawns it.",
+                        "Probably a leftover from an older patch. If no other game mode needs it, Delete .bin above removes it from the mod."));
+
+                if (findings.Count > 0) usage[rel] = findings;
+            }
+
+            return (list, usage);
         });
+        var (reports, usage) = results;
 
         int bad = 0, issueCount = 0;
-        foreach (var (_, r, _) in results)
+        foreach (var (_, r, _) in reports)
         {
             if (r.IsClean) continue;
             bad++; issueCount += r.Issues.Count;
@@ -4939,23 +5016,33 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _log.Warn("Validate", $"   [{i.Category}] {i.ObjectName} → {i.Detail}");
             if (r.Issues.Count > 8) _log.Warn("Validate", $"   … {r.Issues.Count - 8} more");
         }
-        if (results.Count == 0) { _log.Warn("Validate", "No .bin files found in the project folders."); return; }
-        if (bad == 0) { _log.Success("Validate", $"All {results.Count} project .bin(s) clean — every link and asset reference resolves in the injected view."); return; }
-        _log.Error("Validate", $"{bad}/{results.Count} bin(s) have {issueCount} issue(s) — these would break in-game (details above).");
+        foreach (var (rel, findings) in usage)
+            foreach (var f in findings)
+                _log.Warn("Validate", $"{rel}: [{f.Kind}] {f.Message}");
+
+        if (reports.Count == 0) { _log.Warn("Validate", "No .bin files found in the project folders."); return; }
+        if (bad == 0 && usage.Count == 0)
+        { _log.Success("Validate", $"All {reports.Count} project .bin(s) clean — every link and asset reference resolves in the injected view, and everything is still used by the current game."); return; }
+        if (bad > 0)
+            _log.Error("Validate", $"{bad}/{reports.Count} bin(s) have {issueCount} issue(s) — these would break in-game (details above).");
+        if (usage.Count > 0)
+            _log.Warn("Validate", $"{usage.Count} bin(s) look unused by the current game — see the issues window (they can be deleted there).");
 
         // M127: the issues are also a window now — navigable (Go To) and, where a replacement
         // exists, fixable in one click (repoint + save). No more hunting refs by hand.
         var vm = new BinIssuesWindowViewModel
         {
-            BinName = $"Validate Project Bins — {bad} bin(s), {issueCount} issue(s)",
+            BinName = $"Validate Project Bins — {bad} bin(s) with issues, {usage.Count} unused",
             Description = "Broken references the game would fail to load, checked against the injected view "
                 + "(project overrides + Riot originals). Go To jumps to the object holding the reference; "
                 + "where an existing replacement was found, Fix repoints every reference and saves the bin. "
+                + "Bins marked unused are never requested by the current game — Delete .bin removes them. "
                 + "Re-run Validate afterwards to confirm.",
         };
-        foreach (var (rel, report, alts) in results)
+        foreach (var (rel, report, alts) in reports)
         {
-            if (report.IsClean) continue;
+            bool hasUsage = usage.TryGetValue(rel, out var findings);
+            if (report.IsClean && !hasUsage) continue;
             bool haveEntry = TryResolveEntry(HashAlgorithms.WadPath(rel), out var binEntry);
             // M128: one group per bin, deletable — old mods often carry bins that are no longer
             // needed at all; dropping the file beats fixing its references one by one.
@@ -4971,6 +5058,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 } : null,
             };
             vm.Groups.Add(group);
+            // M129: usage verdicts first — "this whole file is never loaded" outranks its detail issues
+            if (hasUsage)
+                foreach (var f in findings!)
+                    group.Rows.Add(new BinIssueRowViewModel
+                    {
+                        Kind = f.Kind,
+                        ObjectName = Path.GetFileName(rel),
+                        ClassName = "file",
+                        Message = f.Message,
+                        Suggestion = f.Suggestion,
+                    });
             foreach (var i in report.Issues)
             {
                 string? alt = i.Category == "missing-asset" && alts.TryGetValue(i.Detail, out var a) ? a : null;

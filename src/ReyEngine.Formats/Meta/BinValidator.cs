@@ -14,6 +14,10 @@ public sealed record BinValidationReport(
     IReadOnlyList<BinIssue> Issues)
 {
     public bool IsClean => Issues.Count == 0;
+
+    /// <summary>M129: every file path this bin references (asset strings + dependency list) — feeds
+    /// the is-anything-still-using-this-bin analysis.</summary>
+    public IReadOnlyCollection<string> ReferencedPaths { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>
@@ -108,7 +112,10 @@ public static class BinValidator
             foreach (var v in obj.Properties.Values) Walk(v, owner, hash, obj.ClassHash);
         }
 
-        return new BinValidationReport(binName, tree.Objects.Count, links, assets, issues);
+        var refPaths = new HashSet<string>(checkedAssets, StringComparer.OrdinalIgnoreCase);
+        foreach (var dep in tree.Dependencies) refPaths.Add(dep);
+        return new BinValidationReport(binName, tree.Objects.Count, links, assets, issues)
+        { ReferencedPaths = refPaths };
     }
 
     /// <summary>Strings that reference files the game will try to load. Requires a path separator so
