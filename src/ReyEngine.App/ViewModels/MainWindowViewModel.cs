@@ -4767,10 +4767,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 return true;
             },
         };
+        var group = new BinIssueGroupViewModel { BinName = entry.DisplayName };
+        vm.Groups.Add(group);
         foreach (var i in MaterialEditor.Issues)
         {
             var mat = MaterialEditor.Materials.FirstOrDefault(m => m.Model.ObjectPathHash == i.ObjectPathHash);
-            vm.Rows.Add(new BinIssueRowViewModel
+            group.Rows.Add(new BinIssueRowViewModel
             {
                 Kind = i.Kind,
                 ObjectName = mat?.Name ?? ResolveBinName(i.ObjectPathHash) ?? $"0x{i.ObjectPathHash:x8}",
@@ -4806,10 +4808,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 return true;
             },
         };
+        var group = new BinIssueGroupViewModel { BinName = entry.DisplayName };
+        vm.Groups.Add(group);
         foreach (var i in doc.Issues)
         {
             var node = ParticleEditor.Systems.FirstOrDefault(s => s.Entry.PathHash == i.ObjectPathHash);
-            vm.Rows.Add(new BinIssueRowViewModel
+            group.Rows.Add(new BinIssueRowViewModel
             {
                 Kind = i.Kind,
                 ObjectName = node?.Name ?? ResolveBinName(i.ObjectPathHash) ?? $"0x{i.ObjectPathHash:x8}",
@@ -4953,16 +4957,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             if (report.IsClean) continue;
             bool haveEntry = TryResolveEntry(HashAlgorithms.WadPath(rel), out var binEntry);
+            // M128: one group per bin, deletable — old mods often carry bins that are no longer
+            // needed at all; dropping the file beats fixing its references one by one.
+            var group = new BinIssueGroupViewModel
+            {
+                BinName = report.BinName,
+                DeleteAsync = haveEntry ? async () =>
+                {
+                    if (PromptOwner is not null && !await Views.PromptWindow.ConfirmAsync(PromptOwner, "Delete Bin",
+                        $"Delete {rel} from the project?\n\nThe mod stops overriding this file — the game will use Riot's original instead.", "Delete"))
+                        return false;
+                    return DeleteProjectBin(binEntry);
+                } : null,
+            };
+            vm.Groups.Add(group);
             foreach (var i in report.Issues)
             {
                 string? alt = i.Category == "missing-asset" && alts.TryGetValue(i.Detail, out var a) ? a : null;
-                vm.Rows.Add(new BinIssueRowViewModel
+                group.Rows.Add(new BinIssueRowViewModel
                 {
                     Kind = i.Category,
                     ObjectName = i.ObjectName,
-                    ClassName = (i.ObjectClassHash != 0
+                    ClassName = i.ObjectClassHash != 0
                         ? ResolveBinName(i.ObjectClassHash) ?? $"class 0x{i.ObjectClassHash:x8}"
-                        : "file") + "  ·  " + rel,
+                        : "file",
                     Message = i.Category switch
                     {
                         "missing-asset" => $"References {i.Detail} — it doesn't exist in the project or the game files; the game would fail to load it.",
@@ -5035,6 +5053,39 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (MaterialEditor.BinEntry?.PathHash == entry.PathHash)
             await LoadMaterialBinAsync(entry, alsoRawBin: false);   // refresh the open editor
         return true;
+    }
+
+    /// <summary>M128: remove a project bin entirely — the mod stops overriding it and the game falls
+    /// back to Riot's original. Deletes the project file AND any shadow override, then rescans.</summary>
+    private bool DeleteProjectBin(WadAssetEntry entry)
+    {
+        bool any = false;
+        try
+        {
+            if (_mounts is not null && _mounts.TryGet(entry.PathHash, out var a))
+                foreach (var src in new[] { a.Source }.Concat(a.AllSources).Distinct())
+                    if (src is { Kind: AssetSourceKind.ProjectFolder or AssetSourceKind.ProjectOverride }
+                        && src.TryGetFilePath(entry.PathHash, out var f) && File.Exists(f))
+                    {
+                        try { File.Delete(f); any = true; }
+                        catch (Exception ex) { _log.Error("Validate", $"{f}: {ex.Message}"); }
+                    }
+            try
+            {
+                var orphan = Path.Combine(ProjectWorkspace.OverridesDir(Project), $"{entry.PathHash:x16}.bin");
+                if (File.Exists(orphan)) { File.Delete(orphan); any = true; }
+            }
+            catch { }
+            _overrides.Remove(entry.PathHash);
+            if (!any) { _log.Warn("Validate", $"{entry.DisplayName}: no project file found to delete."); return false; }
+
+            Project.IsDirty = true;
+            if (MaterialEditor.BinEntry?.PathHash == entry.PathHash) { MaterialEditor.Clear(); HasMaterialData = false; }
+            RefreshBrowser();
+            _log.Success("Validate", $"Deleted {entry.DisplayName} from the project — the game will use the original file.");
+            return true;
+        }
+        catch (Exception ex) { _log.Error("Validate", ex.Message); return false; }
     }
 
     /// <summary>M94: convert a .fantome mod package into an editable folder project under
