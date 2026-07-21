@@ -1106,6 +1106,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
             OnPropertyChanged(nameof(HasAddedMeshes));
             PublishAddedMeshPreview();
+            if (MapContent.AddedMeshes.Count > 0)
+                SelectedOutlinerItem = MapContent.AddedMeshes[^1];   // M123e: routes to selection -> gizmo
             _log.Success("AddMesh", $"Staged {staged} mesh(es) (layer mask 0b{Convert.ToString(plan.VisibilityMask & 0xFF, 2).PadLeft(8, '0')}). "
                 + "Position them with the gizmo, then Save Map Edits.");
         }
@@ -1727,7 +1729,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .DistinctBy(n => n.Entry!.PathHash)
             .ToList();
         MapContent.SetMaps(maps);
-        MapContent.ClearMap();
+        // M123e: tree rebuilds fire on every project-file save (Add Mesh writes the materials bin,
+        // the watcher fires on any disk change) - clearing the outliner then guts an OPEN map's
+        // panel mid-session. Only clear when no map is actually loaded.
+        if (_currentMap is null) MapContent.ClearMap();
         RebuildSkyboxOptions();   // M122
     }
 
@@ -2856,6 +2861,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 foreach (var p in MapContent.Probes) TestPx(p, p.Position);
             if (ShowPlaceables && MapContent.HasSounds)
                 foreach (var s in MapContent.Sounds.Where(v => IsSoundVisible(v.Sound))) TestPx(s, s.Position);
+            // M123e: staged (not yet saved) meshes are click-selectable at their world center
+            foreach (var a in MapContent.AddedMeshes) TestPx(a, a.LocalCenter + a.Offset);
             if (bestPx is not null) { SelectedOutlinerItem = bestPx; return; }
         }
 
