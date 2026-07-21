@@ -21,6 +21,9 @@ public sealed class VfxParticleRenderer
     private int _instCapFloats;
     private bool _ready;
     private readonly List<uint> _ownedTextures = new();
+    /// <summary>M117c: per uploaded texture, whether its alpha channel varies (any pixel below ~1.0).
+    /// Drives the mode-3 blend split — see <see cref="IsAdditiveFor"/>.</summary>
+    private readonly Dictionary<uint, bool> _texHasAlpha = new();
     private uint _sceneTexture;
     private int _sceneWidth, _sceneHeight;
 
@@ -91,6 +94,11 @@ public sealed class VfxParticleRenderer
 
     public unsafe uint UploadTexture(byte[] rgba, int width, int height)
     {
+        // M117c: does this texture use its alpha channel at all? (>1% of pixels below ~opaque)
+        int _n = width * height, _varied = 0;
+        for (int _i = 3; _i < rgba.Length; _i += 4) if (rgba[_i] < 250) _varied++;
+        bool _hasAlpha = _varied > _n / 100;
+
         uint tex = _gl.GenTexture();
         _gl.BindTexture(TextureTarget.Texture2D, tex);
         fixed (byte* p = rgba)
@@ -104,6 +112,7 @@ public sealed class VfxParticleRenderer
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _ownedTextures.Add(tex);
+        _texHasAlpha[tex] = _hasAlpha;
         return tex;
     }
 
@@ -193,7 +202,7 @@ public sealed class VfxParticleRenderer
             // Distortion replaces the covered scene sample through its normal-map mask; Riot's authored
             // blendMode=1 must not make that refracted sample additive (which would turn heat haze white).
             if (isDistortion) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-            else if (IsAdditive(es.Def.BlendMode)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
+            else if (IsAdditiveFor(es.Def.BlendMode, es.Texture)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
             else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
             _gl.Uniform2(_uTexDiv, es.Def.TexDiv.X <= 0 ? 1f : es.Def.TexDiv.X, es.Def.TexDiv.Y <= 0 ? 1f : es.Def.TexDiv.Y);
@@ -258,12 +267,23 @@ public sealed class VfxParticleRenderer
     /// </summary>
     private static bool IsAdditive(int blendMode) => blendMode is 1 or 3 or 4 or 5;
 
+    /// <summary>M117c: the effective blend for an emitter. Mode 3 is texture-dependent in practice —
+    /// Kayn's base R scythe flipbooks are dark-background with NO alpha (must be additive or they show
+    /// as black boxes), while skin02's R ghost .skn uses the skin's TX_CM WITH alpha and washes into an
+    /// oversaturated blob when added. Both are mode 3, so the alpha channel decides: no alpha =>
+    /// additive, real alpha => alpha blend. Modes 1/4/5 stay additive, 0/2 stay alpha.</summary>
+    private bool IsAdditiveFor(int blendMode, uint texture) =>
+        blendMode == 3
+            ? !(_texHasAlpha.TryGetValue(texture, out var hasAlpha) && hasAlpha)
+            : IsAdditive(blendMode);
+
     /// <summary>Delete all sprite textures + emitter meshes uploaded so far (before a new system uploads).</summary>
     public void ClearTextures()
     {
         if (!_ready) return;
         foreach (var t in _ownedTextures) _gl.DeleteTexture(t);
         _ownedTextures.Clear();
+        _texHasAlpha.Clear();
         foreach (var (vao, vbo, ebo) in _ownedMeshes) { _gl.DeleteVertexArray(vao); _gl.DeleteBuffer(vbo); if (ebo != 0) _gl.DeleteBuffer(ebo); }
         _ownedMeshes.Clear();
         _whiteTex = 0; // owned-texture list held it; EnsureMeshProgram re-creates on demand
@@ -274,6 +294,7 @@ public sealed class VfxParticleRenderer
         if (!_ready) return;
         foreach (var t in _ownedTextures) _gl.DeleteTexture(t);
         _ownedTextures.Clear();
+        _texHasAlpha.Clear();
         _gl.DeleteBuffer(_quadVbo);
         _gl.DeleteBuffer(_instVbo);
         _gl.DeleteVertexArray(_vao);
@@ -409,7 +430,7 @@ public sealed class VfxParticleRenderer
             _gl.BindTexture(TextureTarget.Texture2D, es.TextureMult);
             _gl.ActiveTexture(TextureUnit.Texture0);
         }
-        if (IsAdditive(es.Def.BlendMode)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
+        if (IsAdditiveFor(es.Def.BlendMode, es.Texture)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
         else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         // M47c: mesh particles animate by SCROLLING their texture along the mesh UVs (waterfall flow) -
         // matches Riot's particle-system shader (Scrolling_Rate cbuffer + birthUvScrollRate data).
@@ -452,7 +473,7 @@ uniform float uScale;
 uniform float uRot;
 uniform vec2 uUvOffset;
 uniform vec2 uUvOffsetMult;
-uniform vec2 uMeshTexDiv;      // M117: UV divisor - fractional = tiling (0.25 tiles 4x), >1 = atlas cell
+uniform vec2 uMeshTexDiv;      // M117c: UV tiling factor (uv * texDiv)
 uniform vec2 uMeshTexDivMult;
 uniform vec3 uPlacementRight;
 uniform vec3 uPlacementUp;
@@ -464,12 +485,11 @@ void main(){
     vec3 local = vec3(aPos.x * c - aPos.z * s, aPos.y, aPos.x * s + aPos.z * c) * uScale;
     vec3 p = uPlacementRight * local.x + uPlacementUp * local.y + uPlacementForward * local.z + uWorldPos;
     gl_Position = uViewProj * vec4(p, 1.0);
-    // M117: Riot's texDiv on mesh emitters is a UV DIVISOR, same convention as the billboard
-    // flipbook grid - Kayn's ring swirl (0.25 -> 4x tiling) and 2x2 variant atlases both fit.
-    vec2 div = max(uMeshTexDiv, vec2(0.0001));
-    vec2 divMult = max(uMeshTexDivMult, vec2(0.0001));
-    vUv = aUv / div + uUvOffset;
-    vUvMult = aUv / divMult + uUvOffsetMult;
+    // M117c: on mesh emitters texDiv is a TILING factor (uv * texDiv) - Kayn skin02's R pillar
+    // cylinders (1x2 / 1x3 erode textures repeating up the pillar) pinned the direction; 0.25 on
+    // the base ring swirl stretches the texture 4x along the ring, which also fits.
+    vUv = aUv * max(uMeshTexDiv, vec2(0.0001)) + uUvOffset;
+    vUvMult = aUv * max(uMeshTexDivMult, vec2(0.0001)) + uUvOffsetMult;
 }";
 
     private const string MeshFrag = @"
