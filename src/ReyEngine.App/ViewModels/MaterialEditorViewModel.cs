@@ -206,6 +206,10 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
 
     [ObservableProperty] private bool _isVisible = true;
 
+    /// <summary>M125: this material's bin object needed repairs while loading (marked red in the list).</summary>
+    [ObservableProperty] private bool _hasIssue;
+    [ObservableProperty] private string? _issueTip;
+
     public MaterialBindingViewModel(MaterialBinding model, MaterialEditorViewModel owner)
     {
         Model = model;
@@ -612,6 +616,15 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     public bool HasUnresolved => UnresolvedCount > 0;
     partial void OnUnresolvedCountChanged(int value) => OnPropertyChanged(nameof(HasUnresolved));
 
+    // ---- M125: repairs the tolerant reader applied while loading this bin ----
+    /// <summary>The loaded document's repair issues (empty = the bin is well-formed).</summary>
+    public IReadOnlyList<Formats.Meta.BinRepairIssue> Issues => _doc?.Issues ?? Array.Empty<Formats.Meta.BinRepairIssue>();
+    [ObservableProperty] private bool _hasBinIssues;
+    [ObservableProperty] private string _binIssuesLabel = "";
+    /// <summary>Host hook — open the Bin Issues window for this document.</summary>
+    public Action? OpenIssues { get; set; }
+    [RelayCommand] private void ShowIssues() => OpenIssues?.Invoke();
+
     // ---- M52: shader selector — swap the pass shader + auto-add the samplers that shader uses ----
     /// <summary>Distinct shaders seen in the loaded document (the realistic choices for this map/skin).</summary>
     public ObservableCollection<string> KnownShaders { get; } = new();
@@ -754,8 +767,20 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         foreach (var m in doc.Materials)
         {
             var vm = new MaterialBindingViewModel(m, this) { Owner = this };
+            // M125: mark materials whose bin object the tolerant reader had to repair
+            if (m.ObjectPathHash != 0)
+            {
+                var issues = doc.Issues.Where(i => i.ObjectPathHash == m.ObjectPathHash).ToList();
+                if (issues.Count > 0)
+                {
+                    vm.HasIssue = true;
+                    vm.IssueTip = string.Join(Environment.NewLine, issues.Select(i => $"{i.Kind}: {i.Message}"));
+                }
+            }
             Materials.Add(vm);
         }
+        HasBinIssues = doc.Issues.Count > 0;
+        BinIssuesLabel = $"⚠ {doc.Issues.Count} issue(s) found in this bin — strict tools would refuse the file";
         HasMaterials = Materials.Count > 0;
         IsDirty = false;
         Search = ""; OnlyUnresolved = false;
@@ -771,6 +796,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         _doc = null; BinEntry = null;
         Materials.Clear();
         HasMaterials = false; IsDirty = false; Search = ""; Summary = ""; UnresolvedCount = 0;
+        HasBinIssues = false; BinIssuesLabel = "";
     }
 
     public byte[]? Serialize() => _doc?.Serialize();

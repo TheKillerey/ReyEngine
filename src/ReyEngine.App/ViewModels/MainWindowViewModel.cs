@@ -1351,6 +1351,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.MarkDocumentDirty = () => { }; // window has its own dirty state via Document.IsDirty
         ParticleEditor.LoadThumbnail = LoadThumbnailByPath;
         ParticleEditor.SaveOverrideAsync = SaveParticleOverride;
+        ParticleEditor.OpenIssues = OpenParticleBinIssues;   // M125
+        MaterialEditor.OpenIssues = OpenMaterialBinIssues;   // M125
 
         ContentBrowser.FileSelected = OpenAssetDocument;
         ContentBrowser.CanImportInto = f => TryComputeFolderDiskDir(f, out _);   // M107/M113: virtual folders materialize on write
@@ -2250,6 +2252,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     _log.Warn("Material", $"{binEntry.DisplayName}: {matDoc.Materials.Count} material(s), {MaterialEditor.UnresolvedCount} texture path(s) unresolved in this WAD.");
                 else
                     _log.Info("Material", $"{binEntry.DisplayName}: {matDoc.Materials.Count} material(s).");
+                if (matDoc.Issues.Count > 0)   // M125
+                    _log.Warn("Material", $"{binEntry.DisplayName}: {matDoc.Issues.Count} issue(s) repaired while reading — see the ⚠ banner in the Materials tab (affected materials are marked red).");
             }
             else { MaterialEditor.Clear(); HasMaterialData = false; }
         });
@@ -4768,6 +4772,91 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return true;
         }
         catch (Exception ex) { _log.Error("MapBin", ex.Message); return false; }
+    }
+
+    // ---- M125: Bin Issues window — repairs the tolerant reader applied, navigable + fixable ----
+
+    /// <summary>Open the Bin Issues window for the materials document (map/champion .bin).</summary>
+    private void OpenMaterialBinIssues()
+    {
+        if (MaterialEditor.BinEntry is not { } entry || MaterialEditor.Issues.Count == 0) return;
+        var vm = new BinIssuesWindowViewModel
+        {
+            BinName = entry.DisplayName,
+            RepairAsync = entry.ReadOnly ? null : async () =>
+            {
+                // The tolerantly-parsed tree IS the healed form — re-saving it writes a clean file.
+                var bytes = MaterialEditor.Serialize();
+                if (bytes is null || !await SaveMapBinBytesAsync(entry, bytes)) return false;
+                await LoadMaterialBinAsync(entry, alsoRawBin: false);   // reload: the red marks clear
+                return true;
+            },
+        };
+        foreach (var i in MaterialEditor.Issues)
+        {
+            var mat = MaterialEditor.Materials.FirstOrDefault(m => m.Model.ObjectPathHash == i.ObjectPathHash);
+            vm.Rows.Add(new BinIssueRowViewModel
+            {
+                Kind = i.Kind,
+                ObjectName = mat?.Name ?? ResolveBinName(i.ObjectPathHash) ?? $"0x{i.ObjectPathHash:x8}",
+                ClassName = ResolveBinName(i.ObjectClassHash) ?? $"class 0x{i.ObjectClassHash:x8}",
+                FieldName = i.FieldHash is { } fh ? ResolveBinName(fh) ?? $"0x{fh:x8}" : null,
+                Message = i.Message,
+                Suggestion = i.Suggestion,
+                GoTo = mat is null ? null : () =>
+                {
+                    InspectorTab = 1;
+                    AssetDataExpanded = true;
+                    MaterialEditor.SetMeshFilter(null);      // the filter must not hide the target
+                    MaterialEditor.OnlyUnresolved = false;
+                    MaterialEditor.Search = mat.Name;        // narrows the list to the affected material
+                },
+            });
+        }
+        ShowBinIssuesWindow(vm);
+    }
+
+    /// <summary>Open the Bin Issues window for the particle document.</summary>
+    private void OpenParticleBinIssues()
+    {
+        if (ParticleEditor.Entry is not { } entry || ParticleEditor.Document is not { } doc || doc.Issues.Count == 0) return;
+        var vm = new BinIssuesWindowViewModel
+        {
+            BinName = entry.DisplayName,
+            RepairAsync = entry.ReadOnly ? null : async () =>
+            {
+                var bytes = doc.Serialize();
+                if (!await SaveMapBinBytesAsync(entry, bytes)) return false;
+                ParticleEditor.Load(entry, bytes, editable: true);   // reload from the healed bytes
+                return true;
+            },
+        };
+        foreach (var i in doc.Issues)
+        {
+            var node = ParticleEditor.Systems.FirstOrDefault(s => s.Entry.PathHash == i.ObjectPathHash);
+            vm.Rows.Add(new BinIssueRowViewModel
+            {
+                Kind = i.Kind,
+                ObjectName = node?.Name ?? ResolveBinName(i.ObjectPathHash) ?? $"0x{i.ObjectPathHash:x8}",
+                ClassName = ResolveBinName(i.ObjectClassHash) ?? $"class 0x{i.ObjectClassHash:x8}",
+                FieldName = i.FieldHash is { } fh ? ResolveBinName(fh) ?? $"0x{fh:x8}" : null,
+                Message = i.Message,
+                Suggestion = i.Suggestion,
+                GoTo = node is null ? null : () =>
+                {
+                    ParticleEditor.SelectedSystem = node;
+                    ShowParticleEditorWindow?.Invoke();
+                },
+            });
+        }
+        ShowBinIssuesWindow(vm);
+    }
+
+    private void ShowBinIssuesWindow(BinIssuesWindowViewModel vm)
+    {
+        var win = new Views.BinIssuesWindow { DataContext = vm };
+        if (PromptOwner is not null) win.Show(PromptOwner);
+        else win.Show();
     }
 
     /// <summary>M97: emulated-injection check — validate every project .bin against the merged view

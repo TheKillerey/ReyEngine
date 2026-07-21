@@ -24,6 +24,10 @@
             </Border>
             <Button Classes="tool" Content="💾 Save Override" Command="{Binding SaveOverrideCommand}"
                     IsEnabled="{Binding IsEditable}" ToolTip.Tip="Write the edited particle .bin to the project override" />
+            <!-- M125: this bin needed repairs while loading — details + fix in the Issues window -->
+            <Button Classes="tool" Content="{Binding BinIssuesLabel}" Foreground="#FF7B72"
+                    Command="{Binding ShowIssuesCommand}" IsVisible="{Binding HasBinIssues}"
+                    ToolTip.Tip="Problems were repaired while reading this bin — affected systems are marked red. Click for details and a one-click fix." />
             <Button Classes="tool" Content="⟲ Restart" Command="{Binding RestartCommand}" ToolTip.Tip="Restart the preview simulation" />
             <ToggleButton Classes="vp" Content="⏯ Pause" IsChecked="{Binding Paused}" />
             <TextBlock Text="Speed" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
@@ -43,8 +47,18 @@
                      Background="Transparent" Padding="2">
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:ParticleSystemNodeViewModel">
-                  <StackPanel Margin="2">
-                    <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                  <StackPanel Margin="2" ToolTip.Tip="{Binding IssueTip}">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                      <!-- M125: red name + ⚠ when this system's bin object needed repairs -->
+                      <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="10" VerticalAlignment="Center"
+                                 IsVisible="{Binding HasIssue}" />
+                      <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis"
+                                 Classes.issue="{Binding HasIssue}">
+                        <TextBlock.Styles>
+                          <Style Selector="TextBlock.issue"><Setter Property="Foreground" Value="#FF7B72" /></Style>
+                        </TextBlock.Styles>
+                      </TextBlock>
+                    </StackPanel>
                     <TextBlock Text="{Binding Detail}" FontSize="9" Opacity="0.55" />
                   </StackPanel>
                 </DataTemplate>

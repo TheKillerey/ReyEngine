@@ -30,6 +30,8 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     public Action<string>? Error;
     public Action? MarkDocumentDirty;
     public Func<System.Threading.Tasks.Task>? SaveOverrideAsync;
+    /// <summary>M125: host hook — open the Bin Issues window for this document.</summary>
+    public Action? OpenIssues;
 
     [ObservableProperty] private ParticleDocument? _document;
     [ObservableProperty] private string _assetName = "";
@@ -40,6 +42,11 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     [ObservableProperty] private string _status = "";
     [ObservableProperty] private ParticleSystemNodeViewModel? _selectedSystem;
     [ObservableProperty] private ParticlePropertyRowViewModel? _selectedProperty;
+
+    // M125: repairs the tolerant reader applied while loading this bin
+    [ObservableProperty] private bool _hasBinIssues;
+    [ObservableProperty] private string _binIssuesLabel = "";
+    [RelayCommand] private void ShowIssues() => OpenIssues?.Invoke();
 
     public WadAssetEntry? Entry { get; private set; }
     public ObservableCollection<ParticleSystemNodeViewModel> Systems { get; } = new();
@@ -62,8 +69,19 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
 
         Systems.Clear();
         foreach (var s in doc.Systems)
-            Systems.Add(new ParticleSystemNodeViewModel(s));
+        {
+            var issues = doc.Issues.Where(i => i.ObjectPathHash == s.PathHash).ToList();
+            Systems.Add(new ParticleSystemNodeViewModel(s)
+            {
+                HasIssue = issues.Count > 0,
+                IssueTip = issues.Count > 0
+                    ? string.Join(Environment.NewLine, issues.Select(i => $"{i.Kind}: {i.Message}"))
+                    : null,
+            });
+        }
         SelectedSystem = Systems.FirstOrDefault();
+        HasBinIssues = doc.Issues.Count > 0;
+        BinIssuesLabel = $"⚠ {doc.Issues.Count} issue(s)";
         Status = $"{doc.Systems.Count} system(s), {doc.Systems.Sum(s => s.Emitters.Count)} emitter(s)" +
                  (editable ? "" : "  ·  READ-ONLY (Copy To Project to edit)");
         return true;
@@ -157,6 +175,10 @@ public sealed partial class ParticleSystemNodeViewModel : ObservableObject
     public string Name => Entry.Name;
     public string Detail => $"{Entry.Emitters.Count} emitter(s)";
     public IReadOnlyList<string> EmitterNames { get; }
+
+    /// <summary>M125: this system's bin object needed repairs while loading (marked red in the tree).</summary>
+    public bool HasIssue { get; init; }
+    public string? IssueTip { get; init; }
 
     public ParticleSystemNodeViewModel(ParticleSystemEntry entry)
     {

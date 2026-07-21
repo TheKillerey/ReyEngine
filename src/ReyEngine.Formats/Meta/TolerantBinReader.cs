@@ -6,6 +6,15 @@ using LeagueToolkit.Core.Meta.Properties;
 namespace ReyEngine.Formats.Meta;
 
 /// <summary>
+/// M125: one problem the tolerant reader found (and worked around) while reading a malformed bin.
+/// Strict readers (LeagueToolkit-based tools, and the game's own expectations) refuse such files,
+/// so these are worth surfacing: the object they live in can be marked in the UI and repaired.
+/// </summary>
+public sealed record BinRepairIssue(
+    uint ObjectPathHash, uint ObjectClassHash, string Kind, uint? FieldHash,
+    string Message, string Suggestion);
+
+/// <summary>
 /// A fault-tolerant PROP/.bin reader for malformed files that LeagueToolkit's strict reader rejects
 /// (e.g. a struct/object with two properties sharing one name hash — common in hand-edited or
 /// old-tooling mod bins, which makes <c>new BinTree(stream)</c> throw on its internal ToDictionary).
@@ -29,7 +38,9 @@ public static class TolerantBinReader
             typeof(Func<BinaryReader, bool, BinTreeProperty>), m);
     }
 
-    public static BinTree Read(byte[] data)
+    public static BinTree Read(byte[] data) => Read(data, null);
+
+    public static BinTree Read(byte[] data, ICollection<BinRepairIssue>? issues)
     {
         using var ms = new MemoryStream(data, writable: false);
         using var br = new BinaryReader(ms);
@@ -72,7 +83,17 @@ public static class TolerantBinReader
             {
                 BinTreeProperty prop;
                 try { prop = ReadProperty(br, false); }
-                catch { break; } // give up on this object's tail; keep what parsed
+                catch
+                {
+                    issues?.Add(new BinRepairIssue(pathHash, classHashes[i], "Unreadable data", null,
+                        $"Only {p} of {propCount} properties could be read - the rest of this object was skipped.",
+                        "The unreadable tail is dropped when the bin is saved. Check this object's remaining values before relying on it."));
+                    break; // give up on this object's tail; keep what parsed
+                }
+                if (issues is not null && props.ContainsKey(prop.NameHash))
+                    issues.Add(new BinRepairIssue(pathHash, classHashes[i], "Duplicate field", prop.NameHash,
+                        "The same field appears twice in this object - strict tools (LeagueToolkit-based) refuse the whole file over this.",
+                        "The last value was kept. Saving this bin from ReyEngine (Repair, Save Override, Add Mesh...) writes it back without the duplicate."));
                 props[prop.NameHash] = prop; // tolerant: last value wins on duplicate name
             }
 
@@ -84,7 +105,14 @@ public static class TolerantBinReader
         // old-tooling / hand-edited bins, e.g. some bloom.materials.bin copies) would throw. De-dupe here too,
         // last object wins, so those bins load instead of failing outright.
         var byHash = new Dictionary<uint, BinTreeObject>(objects.Count);
-        foreach (var o in objects) byHash[o.PathHash] = o;
+        foreach (var o in objects)
+        {
+            if (issues is not null && byHash.ContainsKey(o.PathHash))
+                issues.Add(new BinRepairIssue(o.PathHash, o.ClassHash, "Duplicate object", null,
+                    "Two objects in this bin share the same path hash - strict tools refuse the whole file over this.",
+                    "The last object was kept. Saving this bin from ReyEngine writes it back with only that one."));
+            byHash[o.PathHash] = o;
+        }
         return new BinTree(byHash.Values, dependencies);
     }
 }
@@ -93,9 +121,24 @@ public static class TolerantBinReader
 /// the file is malformed (so old-tooling / hand-edited mod bins still load).</summary>
 public static class SafeBinTree
 {
-    public static BinTree Parse(byte[] data)
+    public static BinTree Parse(byte[] data) => Parse(data, out _);
+
+    /// <summary>M125: like <see cref="Parse(byte[])"/>, but reports what the tolerant fallback had to
+    /// repair. An empty list means the file is well-formed (the strict parser accepted it).</summary>
+    public static BinTree Parse(byte[] data, out IReadOnlyList<BinRepairIssue> issues)
     {
-        try { return new BinTree(new MemoryStream(data, writable: false)); }
-        catch { return TolerantBinReader.Read(data); }
+        try
+        {
+            var tree = new BinTree(new MemoryStream(data, writable: false));
+            issues = Array.Empty<BinRepairIssue>();
+            return tree;
+        }
+        catch
+        {
+            var list = new List<BinRepairIssue>();
+            var tree = TolerantBinReader.Read(data, list);
+            issues = list;
+            return tree;
+        }
     }
 }

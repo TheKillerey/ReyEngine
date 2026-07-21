@@ -33,6 +33,10 @@ public sealed class MaterialDocument
         Materials = materials;
     }
 
+    /// <summary>M125: what the tolerant reader had to repair while reading this bin (empty = well-formed).
+    /// <see cref="Serialize"/> always writes the repaired form, so saving clears these for good.</summary>
+    public IReadOnlyList<BinRepairIssue> Issues { get; private init; } = Array.Empty<BinRepairIssue>();
+
     /// <summary>M106: re-derive one material's preview profile after its render state changed, so the
     /// derived read-outs (blend mode, depth-write, alpha-cutout) follow the fields the user just edited.</summary>
     public void Reclassify(MaterialBinding b) => b.Profile = MaterialProfiles.Classify(b, Kind);
@@ -103,7 +107,7 @@ public sealed class MaterialDocument
 
     public static MaterialDocument Parse(byte[] data, Func<uint, string?> resolve)
     {
-        var tree = SafeBinTree.Parse(data);
+        var tree = SafeBinTree.Parse(data, out var issues);
         bool champion = tree.Objects.Values.Any(o => Field(o.Properties, "skinMeshProperties") is not null);
         var materials = new List<MaterialBinding>();
 
@@ -260,6 +264,7 @@ public sealed class MaterialDocument
 
             materials.Add(new MaterialBinding(name, renderShader ?? shader, subs, isDefault, slots, parameters)
             {
+                ObjectPathHash = pathHash,
                 SamplerContainer = samplers,
                 NameFieldHash = nameFieldHash,
                 PathFieldHash = pathFieldHash,
@@ -283,7 +288,7 @@ public sealed class MaterialDocument
         foreach (var b in materials) b.Profile = MaterialProfiles.Classify(b, kind);
 
         // (see Reclassify below — the profile is re-derived when the render state is edited)
-        return new MaterialDocument(tree, kind, materials);
+        return new MaterialDocument(tree, kind, materials) { Issues = issues };
     }
 
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> props, string name)
@@ -322,6 +327,9 @@ public sealed class MaterialBinding
     public string ShaderName { get; }
     public IReadOnlyList<string> Submeshes { get; }
     public bool IsDefault { get; }
+    /// <summary>M125: the bin object this binding came from (0 for champion pseudo-bindings) —
+    /// links repair issues back to the material they live in.</summary>
+    public uint ObjectPathHash { get; init; }
     public IReadOnlyList<TextureSlot> Slots => _slots;
     public IReadOnlyList<MaterialParameter> Parameters => _params;
 

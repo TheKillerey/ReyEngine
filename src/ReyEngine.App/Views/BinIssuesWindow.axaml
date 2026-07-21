@@ -1,0 +1,71 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.BinIssuesWindow"
+        x:DataType="vm:BinIssuesWindowViewModel"
+        Title="ReyEngine — Bin Issues" Width="660" Height="540"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- footer -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,8">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Classes="primary" Content="🔧 Repair File Now"
+                Command="{Binding RepairCommand}" IsVisible="{Binding CanRepair}"
+                IsEnabled="{Binding RepairEnabled}" Padding="14,4"
+                ToolTip.Tip="Re-save this bin through the normal save pipeline — the rewritten file no longer carries any of the problems listed above" />
+        <TextBlock Text="{Binding Status}" VerticalAlignment="Center" FontSize="11"
+                   Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+      </DockPanel>
+    </Border>
+
+    <ScrollViewer>
+      <StackPanel Margin="14" Spacing="10">
+        <StackPanel Spacing="4">
+          <TextBlock Text="{Binding BinName}" FontSize="13" FontWeight="Bold"
+                     Foreground="{DynamicResource ReyTextBrush}" TextWrapping="Wrap" />
+          <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
+                     Text="These problems were found (and worked around) while reading this bin. The file still loads in ReyEngine, but strict tools reject it outright — the classic 'an item with the same key has already been added' error. Affected entries are marked red in the materials list and the particle tree." />
+        </StackPanel>
+
+        <ItemsControl ItemsSource="{Binding Rows}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:BinIssueRowViewModel">
+              <Border Classes="card" Margin="0,0,0,6">
+                <StackPanel Spacing="4">
+                  <DockPanel>
+                    <Button DockPanel.Dock="Right" Classes="tool" Content="Go To ▸"
+                            Command="{Binding NavigateCommand}" IsVisible="{Binding CanGoTo}"
+                            ToolTip.Tip="Jump to this object in its editor" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <Border Background="#33FF5555" CornerRadius="3" Padding="5,2" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Kind}" FontSize="9" FontWeight="SemiBold" Foreground="#FF7B72" />
+                      </Border>
+                      <TextBlock Text="{Binding ObjectName}" FontSize="12" FontWeight="SemiBold"
+                                 VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                 ToolTip.Tip="{Binding ObjectName}" />
+                    </StackPanel>
+                  </DockPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="{Binding ClassName}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" />
+                    <TextBlock Text="{Binding FieldName, StringFormat='field: {0}'}" FontSize="10"
+                               Foreground="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding HasField}" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding Message}" FontSize="11" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyTextBrush}" />
+                  <TextBlock Text="{Binding Suggestion}" FontSize="10" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyAccentBrush}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

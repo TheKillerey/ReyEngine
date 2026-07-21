@@ -19,10 +19,14 @@ public sealed class ParticleDocument
     public IReadOnlyList<ParticleSystemEntry> Systems { get; }
     public bool IsDirty => Systems.Any(s => s.IsDirty);
 
-    private ParticleDocument(BinTree tree, IReadOnlyList<ParticleSystemEntry> systems)
+    /// <summary>M125: what the tolerant reader had to repair while reading this bin (empty = well-formed).</summary>
+    public IReadOnlyList<BinRepairIssue> Issues { get; }
+
+    private ParticleDocument(BinTree tree, IReadOnlyList<ParticleSystemEntry> systems, IReadOnlyList<BinRepairIssue> issues)
     {
         _tree = tree;
         Systems = systems;
+        Issues = issues;
     }
 
     public byte[] Serialize()
@@ -36,7 +40,8 @@ public sealed class ParticleDocument
     public static ParticleDocument? Parse(byte[] data)
     {
         BinTree tree;
-        try { tree = SafeBinTree.Parse(data); }
+        IReadOnlyList<BinRepairIssue> issues;
+        try { tree = SafeBinTree.Parse(data, out issues); }
         catch { return null; }
 
         uint sysClass = HashAlgorithms.Fnv1a("VfxSystemDefinitionData");
@@ -60,7 +65,7 @@ public sealed class ParticleDocument
             if (emitters.Count > 0)
                 systems.Add(new ParticleSystemEntry(o.PathHash, name, path, emitters));
         }
-        return systems.Count > 0 ? new ParticleDocument(tree, systems) : null;
+        return systems.Count > 0 ? new ParticleDocument(tree, systems, issues) : null;
     }
 
     private static string? Str(IReadOnlyDictionary<uint, BinTreeProperty> p, string name) =>

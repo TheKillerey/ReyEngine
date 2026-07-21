@@ -930,6 +930,16 @@
                       <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6" IsVisible="{Binding MaterialEditor.HasUnresolved}">
                         <TextBlock Text="⚠ Some texture paths don't resolve in this WAD — see the ⚠ slots below." Foreground="#FFB454" FontSize="11" TextWrapping="Wrap" />
                       </Border>
+                      <!-- M125: the tolerant reader had to repair this bin — red banner, details + fix in the Issues window -->
+                      <Border Background="#26FF5555" CornerRadius="4" Padding="6" IsVisible="{Binding MaterialEditor.HasBinIssues}">
+                        <DockPanel>
+                          <Button DockPanel.Dock="Right" Classes="tool" Content="View Issues"
+                                  Command="{Binding MaterialEditor.ShowIssuesCommand}" VerticalAlignment="Center"
+                                  ToolTip.Tip="Every repaired problem, where it lives, and a one-click fix" />
+                          <TextBlock Text="{Binding MaterialEditor.BinIssuesLabel}" Foreground="#FF7B72" FontSize="11"
+                                     TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                      </Border>
                       <TextBox Watermark="Search materials / textures…" Text="{Binding MaterialEditor.Search}" FontSize="11" Padding="4,2" />
                       <StackPanel Orientation="Horizontal" Spacing="10">
                         <CheckBox Content="Only unresolved" IsChecked="{Binding MaterialEditor.OnlyUnresolved}" FontSize="11" />
@@ -949,7 +959,16 @@
                             <Border IsVisible="{Binding IsVisible}" Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
                               <StackPanel Spacing="5">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                  <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextBrush}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                  <!-- M125: red name + ⚠ when this material's bin object needed repairs -->
+                                  <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="12" VerticalAlignment="Center"
+                                             IsVisible="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}" />
+                                  <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"
+                                             Classes.issue="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}">
+                                    <TextBlock.Styles>
+                                      <Style Selector="TextBlock"><Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" /></Style>
+                                      <Style Selector="TextBlock.issue"><Setter Property="Foreground" Value="#FF7B72" /></Style>
+                                    </TextBlock.Styles>
+                                  </TextBlock>
                                   <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" Spacing="6">
