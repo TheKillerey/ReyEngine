@@ -81,7 +81,92 @@ public static class MapMaterialFactory
             tree.Write(outMs);
             return outMs.ToArray();
         }
-        catch (Exception ex) { error = ex.Message; return null; }
+        catch (Exception ex) { error = $"{ex.Message} ({ex.GetType().Name} in {ex.StackTrace?.Split((char)10).FirstOrDefault()?.Trim()})"; return null; }
+    }
+
+    /// <summary>
+    /// M123b: author a StaticMaterialDef FROM a shader definition (data/shaders/shaders.bin), no map
+    /// template involved. Schema surveyed across all 184 base_srx materials: type=0 always, technique
+    /// named 'normal', minimal pass = just the shader objlink (54/184 ship exactly that), samplers are
+    /// StaticMaterialShaderSamplerDef { TextureName, texturePath }, params carry the shader's vector4
+    /// defaults, shaderMacros is a String->String map (empty is valid), switches may be omitted.
+    /// </summary>
+    public static byte[]? CreateFromShader(byte[] materialsBin, string newName,
+        Shaders.LeagueShaderDef shader, out string? error, string? diffuseOverride = null)
+    {
+        error = null;
+        try
+        {
+            var tree = new BinTree(new MemoryStream(materialsBin, writable: false));
+            uint newHash = HashAlgorithms.Fnv1a(newName);
+            if (tree.Objects.ContainsKey(newHash)) { error = $"A material named '{newName}' already exists."; return null; }
+
+            uint F(string n) => HashAlgorithms.Fnv1a(n);
+            const uint SamplerClass = 0x0904b150;   // StaticMaterialShaderSamplerDef
+            const uint ParamClass   = 0xde480eef;   // StaticMaterialShaderParamDef
+            const uint TechClass    = 0x060a4413;   // StaticMaterialTechniqueDef
+            const uint PassClass    = 0x8537d0c2;   // StaticMaterialPassDef
+            const uint MaterialClass = 0xad4b8ac0;  // StaticMaterialDef (overwritten below from a real object when present)
+            uint materialClass = tree.Objects.Values
+                .Select(o => o.ClassHash)
+                .FirstOrDefault(h => tree.Objects.Values.Count(x => x.ClassHash == h) > 3, MaterialClass);
+
+            // samplers: the shader's declared textures with their default paths; the diffuse-ish one
+            // takes the override (imported texture) when provided
+            var samplers = new List<BinTreeProperty>();
+            bool overrideUsed = false;
+            foreach (var t in shader.Textures)
+            {
+                string path = t.DefaultTexturePath;
+                bool diffuseIsh = t.Name.Contains("Diffuse", StringComparison.OrdinalIgnoreCase);
+                if (diffuseOverride is not null && !overrideUsed && (diffuseIsh || shader.Textures.Count == 1))
+                { path = diffuseOverride; overrideUsed = true; }
+                samplers.Add(new BinTreeStruct(0, SamplerClass, new BinTreeProperty[]
+                {
+                    new BinTreeString(F("TextureName"), t.Name),
+                    new BinTreeString(F("texturePath"), path),
+                }));
+            }
+            if (diffuseOverride is not null && !overrideUsed && samplers.Count > 0)
+            {
+                // no obviously-diffuse sampler: repoint the first one
+                var first = (BinTreeStruct)samplers[0];
+                ((BinTreeString)first.Properties[F("texturePath")]).Value = diffuseOverride;
+            }
+
+            var parameters = shader.Parameters.Select(pd => (BinTreeProperty)new BinTreeStruct(0, ParamClass, new BinTreeProperty[]
+            {
+                new BinTreeString(F("name"), pd.Name),
+                new BinTreeVector4(F("value"), new System.Numerics.Vector4(pd.X, pd.Y, pd.Z, pd.W)),
+            })).ToList();
+
+            var pass = new BinTreeStruct(0, PassClass, new BinTreeProperty[]
+            {
+                new BinTreeObjectLink(F("shader"), HashAlgorithms.Fnv1a(shader.Name)),
+            });
+            var technique = new BinTreeStruct(0, TechClass, new BinTreeProperty[]
+            {
+                new BinTreeString(F("name"), "normal"),
+                new BinTreeContainer(F("passes"), BinPropertyType.Struct, new BinTreeProperty[] { pass }),
+            });
+
+            var props = new List<BinTreeProperty>
+            {
+                new BinTreeString(F("name"), newName),
+                new BinTreeU32(F("type"), 0),
+                new BinTreeMap(F("shaderMacros"), BinPropertyType.String, BinPropertyType.String,
+                    Enumerable.Empty<KeyValuePair<BinTreeProperty, BinTreeProperty>>()),
+                new BinTreeUnorderedContainer(F("samplerValues"), BinPropertyType.Struct, samplers),
+                new BinTreeUnorderedContainer(F("paramValues"), BinPropertyType.Struct, parameters),
+                new BinTreeContainer(F("techniques"), BinPropertyType.Struct, new BinTreeProperty[] { technique }),
+            };
+
+            tree.Objects[newHash] = new BinTreeObject(newHash, materialClass, props);
+            using var outMs = new MemoryStream();
+            tree.Write(outMs);
+            return outMs.ToArray();
+        }
+        catch (Exception ex) { error = $"{ex.Message} ({ex.GetType().Name})"; return null; }
     }
 
     private static void RepointDiffuse(BinTreeObject material, string diffusePath, Func<uint, string?> resolve)
@@ -96,7 +181,7 @@ public static class MapMaterialFactory
             foreach (var (ph, pr) in el.Properties)
             {
                 var n = resolve(ph);
-                if (n is "samplerName" && pr is BinTreeString sn) sampler = sn.Value;
+                if (n is "TextureName" && pr is BinTreeString sn) sampler = sn.Value;   // the real field name (surveyed)
                 if (n is "texturePath" or "textureName" && pr is BinTreeString tp) path = tp;
             }
             if (path is null) continue;

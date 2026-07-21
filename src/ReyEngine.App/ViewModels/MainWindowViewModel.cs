@@ -1012,12 +1012,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (file is null) return;
 
         // M123: the dedicated import + setup window replaces the old direct-add flow.
-        var shaders = new List<string> { "(keep the template's shader)" };
-        shaders.AddRange(MaterialEditor.KnownShaders);
+        // M123b: new materials build from the shader catalogue, so it must be loaded.
+        if (MaterialEditor.Catalog is null && MaterialEditor.SelectedShaderEnvironment is { } env)
+            await LoadShaderCatalogAsync(env);
+        if (MaterialEditor.Catalog is not { } cat)
+        { _log.Warn("AddMesh", "No shader catalogue — pick a game environment in the Materials tab first."); return; }
+
         var vm = new AddMeshWindowViewModel
         {
             ExistingMaterials = MapMaterialNames,
-            ShaderChoices = shaders,
+            ShaderChoices = cat.Shaders
+                .Where(sh => sh.Category is "StaticMesh" or "Environment")
+                .Select(sh => sh.Name).ToList(),
         };
         vm.PickFile = async title => await Dialogs.OpenFileAsync(title,
             new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
@@ -1053,13 +1059,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (m.TextureBytes is not null)
                         diffusePath = SaveImportedTexture(m.TextureBytes, m.TextureFileNameHint ?? m.NewName!);
 
-                    var newBytes = MapMaterialFactory.CloneMaterial(binBytes, m.Template!, m.NewName!,
-                        ResolveBinName, out var err, diffusePath, m.ShaderPath);
+                    var def = MaterialEditor.Catalog?.Find(m.ShaderPath);
+                    if (def is null) { _log.Error("AddMesh", $"Material '{m.NewName}': shader '{m.ShaderPath}' not in the catalogue."); return; }
+                    var newBytes = MapMaterialFactory.CreateFromShader(binBytes, m.NewName!, def, out var err, diffusePath);
                     if (newBytes is null) { _log.Error("AddMesh", $"Material '{m.NewName}': {err}"); return; }
                     binBytes = newBytes;
-                    _log.Success("AddMesh", $"Material '{m.NewName}' created from template '{m.Template}'"
-                        + (diffusePath is not null ? $" with diffuse {diffusePath}" : "")
-                        + (m.ShaderPath is not null ? $" and shader {m.ShaderPath}" : "") + ".");
+                    _log.Success("AddMesh", $"Material '{m.NewName}' built from shader {m.ShaderPath}"
+                        + (diffusePath is not null ? $" with diffuse {diffusePath}" : "") + ".");
                 }
                 if (!await SaveMapBinBytesAsync(binEntry, binBytes))
                 { _log.Error("AddMesh", "Could not save the materials .bin — meshes were NOT staged."); return; }

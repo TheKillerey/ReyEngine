@@ -65,7 +65,7 @@
         <Border Classes="card" IsVisible="{Binding HasScene}">
           <StackPanel Spacing="6">
             <TextBlock Classes="cardTitle" Text="MATERIALS" />
-            <TextBlock Text="Each imported material becomes a map material: reuse one the map already has, or clone a template into a new material (optionally with a different shader and the imported texture)."
+            <TextBlock Text="Each imported material becomes a map material: reuse one the map already has, or build a new one from a League shader — it gets exactly the samplers and parameters that shader declares, plus your imported texture as diffuse."
                        FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
             <ItemsControl ItemsSource="{Binding Materials}">
               <ItemsControl.ItemTemplate>
@@ -78,20 +78,13 @@
                       </StackPanel>
                       <ComboBox SelectedIndex="{Binding Mode}" FontSize="10" HorizontalAlignment="Stretch">
                         <ComboBoxItem Content="Use an existing map material" />
-                        <ComboBoxItem Content="Create a new material from a template" />
+                        <ComboBoxItem Content="Create a new material from a League shader" />
                       </ComboBox>
 
                       <ComboBox ItemsSource="{Binding ExistingMaterials}" SelectedItem="{Binding ExistingMaterial}"
                                 FontSize="10" HorizontalAlignment="Stretch" IsVisible="{Binding IsExistingMode}" />
 
                       <StackPanel Spacing="4" IsVisible="{Binding IsNewMode}">
-                        <Grid ColumnDefinitions="Auto,*">
-                          <TextBlock Grid.Column="0" Text="Template" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
-                                     Foreground="{DynamicResource ReyTextDimBrush}" />
-                          <ComboBox Grid.Column="1" ItemsSource="{Binding ExistingMaterials}" SelectedItem="{Binding Template}"
-                                    FontSize="10" HorizontalAlignment="Stretch"
-                                    ToolTip.Tip="The clone keeps every switch and render-state block of a material that provably works on this map" />
-                        </Grid>
                         <Grid ColumnDefinitions="Auto,*">
                           <TextBlock Grid.Column="0" Text="Name" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
                                      Foreground="{DynamicResource ReyTextDimBrush}" />
@@ -101,7 +94,8 @@
                           <TextBlock Grid.Column="0" Text="Shader" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
                                      Foreground="{DynamicResource ReyTextDimBrush}" />
                           <ComboBox Grid.Column="1" ItemsSource="{Binding ShaderChoices}" SelectedIndex="{Binding ShaderIndex}"
-                                    FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="380" />
+                                    FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="380"
+                                    ToolTip.Tip="From the game's own shaders.bin — the material gets exactly the samplers, parameters and defaults this shader declares" />
                         </Grid>
                         <CheckBox Content="Use the imported texture as diffuse" IsChecked="{Binding UseImportedTexture}"
                                   IsEnabled="{Binding HasImportedTexture}" FontSize="10" />

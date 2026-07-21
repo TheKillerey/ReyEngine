@@ -24,12 +24,11 @@ public sealed partial class AddMeshMaterialViewModel : ObservableObject
 {
     public required ImportedSceneMaterial Source { get; init; }
     public required IReadOnlyList<string> ExistingMaterials { get; init; }
-    public required IReadOnlyList<string> ShaderChoices { get; init; }   // [0] = keep template's shader
+    public required IReadOnlyList<string> ShaderChoices { get; init; }   // League shaders from the catalogue
 
-    /// <summary>0 = use an existing map material, 1 = create a new one from a template.</summary>
+    /// <summary>0 = use an existing map material, 1 = create a new one from a League shader.</summary>
     [ObservableProperty] private int _mode = 1;
     [ObservableProperty] private string? _existingMaterial;
-    [ObservableProperty] private string? _template;
     [ObservableProperty] private string _newName = "";
     [ObservableProperty] private int _shaderIndex;
     [ObservableProperty] private bool _useImportedTexture;
@@ -53,8 +52,8 @@ public sealed record AddMeshMaterialPlan(
     string ImportedName,
     bool CreateNew,
     string? ExistingMaterial,          // when CreateNew == false
-    string? Template, string? NewName, // when CreateNew == true
-    string? ShaderPath,                // null = keep the template's shader
+    string? NewName,                   // when CreateNew == true
+    string? ShaderPath,                // the League shader the new material is built from
     byte[]? TextureBytes,              // png/jpg blob to convert + save (null = no texture change)
     string? TextureFileNameHint);
 
@@ -132,15 +131,18 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
         }
         _scene = scene;
         foreach (var m in scene.Meshes) Meshes.Add(new AddMeshRowViewModel { Mesh = m });
+        int defaultShader = 0;
+        for (int i = 0; i < ShaderChoices.Count; i++)
+            if (ShaderChoices[i].EndsWith("DefaultEnv_Flat", StringComparison.OrdinalIgnoreCase)) { defaultShader = i; break; }
         foreach (var mat in scene.Materials)
             Materials.Add(new AddMeshMaterialViewModel
             {
                 Source = mat,
                 ExistingMaterials = ExistingMaterials,
                 ShaderChoices = ShaderChoices,
-                Template = ExistingMaterials.FirstOrDefault(),
                 ExistingMaterial = ExistingMaterials.FirstOrDefault(),
                 NewName = SanitizeName(mat.Name),
+                ShaderIndex = defaultShader,
                 UseImportedTexture = mat.HasTexture,
             });
         HasScene = true;
@@ -199,8 +201,9 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
             if (createNew && final.Length == 0) { Status = $"Material '{m.Source.Name}' needs a name."; return; }
             if (!createNew && final.Length == 0) { Status = $"Material '{m.Source.Name}': pick an existing material."; return; }
 
-            string? shader = createNew && m.ShaderIndex > 0 && m.ShaderIndex < m.ShaderChoices.Count
+            string? shader = createNew && m.ShaderIndex >= 0 && m.ShaderIndex < m.ShaderChoices.Count
                 ? m.ShaderChoices[m.ShaderIndex] : null;
+            if (createNew && shader is null) { Status = $"Material '{m.Source.Name}': pick a shader."; return; }
             byte[]? texBytes = null;
             string? texHint = null;
             if (createNew && m.UseImportedTexture && m.Source.HasTexture)
@@ -213,7 +216,7 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
                     if (File.Exists(abs)) { texBytes = File.ReadAllBytes(abs); texHint = Path.GetFileNameWithoutExtension(abs); }
                 }
             }
-            plans.Add(new AddMeshMaterialPlan(m.Source.Name, createNew, m.ExistingMaterial, m.Template, final, shader, texBytes, texHint));
+            plans.Add(new AddMeshMaterialPlan(m.Source.Name, createNew, m.ExistingMaterial, final, shader, texBytes, texHint));
             nameMap[m.Source.Name] = final;
         }
 
