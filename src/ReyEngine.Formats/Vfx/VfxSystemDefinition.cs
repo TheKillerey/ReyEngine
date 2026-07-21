@@ -26,7 +26,7 @@ public sealed record VfxEmitterDefinition(
     float TimeBeforeFirstEmission,
     bool IsSingleParticle,          // burst of exactly one particle
     bool Disabled,
-    int BlendMode,                  // 1 = additive (most VFX), else alpha
+    int BlendMode,                  // 1/3/4/5 = additive family, 0/2 = alpha (M117 survey — see VfxParticleRenderer.IsAdditive)
     VfxCurve3 BirthScale,           // ABSOLUTE size at birth (birthScale0), world units
     VfxCurve3? ScaleOverLife,       // scale0: normalised MULTIPLIER over age → effective size = BirthScale * this
     VfxCurve4 BirthColor,           // rgba at birth

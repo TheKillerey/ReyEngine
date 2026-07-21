@@ -243,7 +243,20 @@ public sealed class VfxParticleRenderer
         _gl.ActiveTexture(TextureUnit.Texture0);
     }
 
-    private static bool IsAdditive(int blendMode) => blendMode is 0 or 1 or 4 or 5;
+    /// <summary>
+    /// M117: which emitter blendModes render additively (SrcAlpha, One). Grounded in a survey of
+    /// every emitter across six champions (Kayn/Ahri/Jinx/Lux/Yasuo/Thresh), correlating each mode
+    /// with its textures' alpha usage:
+    ///   1 → additive (canonical; 653 real-alpha + 360 flat-alpha dark-bg glows)
+    ///   3 → additive (Kayn R scythe flipbooks + skinned scythe .skn, Jinx R missile — dark-bg
+    ///       NO-alpha textures that rendered as black boxes under alpha blending)
+    ///   4 → additive (flash/glow/fresnel family)
+    ///   5 → additive (weapon streaks; "HeartMesh_ADD" literally says so)
+    ///   0 → alpha (legacy .troy convention; zero occurrences in the survey)
+    ///   2 → alpha (BlackMotes / Darkunderglow — DARK on-screen effects, which additive cannot
+    ///       produce: additive only ever brightens)
+    /// </summary>
+    private static bool IsAdditive(int blendMode) => blendMode is 1 or 3 or 4 or 5;
 
     /// <summary>Delete all sprite textures + emitter meshes uploaded so far (before a new system uploads).</summary>
     public void ClearTextures()
@@ -275,6 +288,7 @@ public sealed class VfxParticleRenderer
     private uint _meshProgram;
     private int _muViewProj, _muWorldPos, _muScale, _muRot, _muColor, _muTex, _muUvOffset;
     private int _muTexMult, _muHasTexMult, _muUvOffsetMult;
+    private int _muMeshTexDiv, _muMeshTexDivMult;   // M117
     private int _muPlacementRight, _muPlacementUp, _muPlacementForward;
     private uint _whiteTex;
 
@@ -293,6 +307,8 @@ public sealed class VfxParticleRenderer
             _muTexMult = _gl.GetUniformLocation(_meshProgram, "uTexMult");
             _muHasTexMult = _gl.GetUniformLocation(_meshProgram, "uHasTexMult");
             _muUvOffsetMult = _gl.GetUniformLocation(_meshProgram, "uUvOffsetMult");
+            _muMeshTexDiv = _gl.GetUniformLocation(_meshProgram, "uMeshTexDiv");
+            _muMeshTexDivMult = _gl.GetUniformLocation(_meshProgram, "uMeshTexDivMult");
             _muPlacementRight = _gl.GetUniformLocation(_meshProgram, "uPlacementRight");
             _muPlacementUp = _gl.GetUniformLocation(_meshProgram, "uPlacementUp");
             _muPlacementForward = _gl.GetUniformLocation(_meshProgram, "uPlacementForward");
@@ -389,6 +405,12 @@ public sealed class VfxParticleRenderer
         _gl.Uniform2(_muUvOffset, scroll.X, scroll.Y);
         var scrollMult = es.Def.TextureMultUvScrollRate * es.Age;
         _gl.Uniform2(_muUvOffsetMult, scrollMult.X, scrollMult.Y);
+        // M117: texDiv = UV divisor (fractional tiling / atlas cell) — was ignored, which smeared
+        // whole atlases across .scb meshes and broke tiled ring/cloud textures.
+        var mdiv = es.Def.TexDiv;
+        _gl.Uniform2(_muMeshTexDiv, mdiv.X > 0 ? mdiv.X : 1f, mdiv.Y > 0 ? mdiv.Y : 1f);
+        var mdivMult = es.Def.TextureMultTexDiv;
+        _gl.Uniform2(_muMeshTexDivMult, mdivMult.X > 0 ? mdivMult.X : 1f, mdivMult.Y > 0 ? mdivMult.Y : 1f);
         for (int i = 0; i < es.InstanceCount; i++)
         {
             int o = i * Stride;   // [cx,cy,cz, sx,sy, r,g,b,a, rot, frame]
@@ -418,6 +440,8 @@ uniform float uScale;
 uniform float uRot;
 uniform vec2 uUvOffset;
 uniform vec2 uUvOffsetMult;
+uniform vec2 uMeshTexDiv;      // M117: UV divisor — fractional = tiling (0.25 tiles 4x), >1 = atlas cell
+uniform vec2 uMeshTexDivMult;
 uniform vec3 uPlacementRight;
 uniform vec3 uPlacementUp;
 uniform vec3 uPlacementForward;
@@ -428,8 +452,12 @@ void main(){
     vec3 local = vec3(aPos.x * c - aPos.z * s, aPos.y, aPos.x * s + aPos.z * c) * uScale;
     vec3 p = uPlacementRight * local.x + uPlacementUp * local.y + uPlacementForward * local.z + uWorldPos;
     gl_Position = uViewProj * vec4(p, 1.0);
-    vUv = aUv + uUvOffset;
-    vUvMult = aUv + uUvOffsetMult;
+    // M117: Riot's texDiv on mesh emitters is a UV DIVISOR, same convention as the billboard
+    // flipbook grid — Kayn's ring swirl (0.25 -> 4x tiling) and 2x2 variant atlases both fit.
+    vec2 div = max(uMeshTexDiv, vec2(0.0001));
+    vec2 divMult = max(uMeshTexDivMult, vec2(0.0001));
+    vUv = aUv / div + uUvOffset;
+    vUvMult = aUv / divMult + uUvOffsetMult;
 }";
 
     private const string MeshFrag = @"
