@@ -4847,7 +4847,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _log.Info("Validate", "Checking project .bins against the injected view (project overrides + Riot originals)…");
         var results = await Task.Run(() =>
         {
-            var list = new List<Formats.Meta.BinValidationReport>();
+            // M127: per missing asset, hunt for an existing replacement — the base variant of a dead
+            // skin-suffixed path (Riot vaults map skins; X.HA_CREPE.scb dies, X.scb stays), else any
+            // mounted file with the same filename. Powers the one-click Fix in the issues window.
+            string? FindAlternative(string missing)
+            {
+                if (Formats.Meta.BinAssetRepointer.BaseVariant(missing) is { } baseVar
+                    && TryResolveEntry(HashAlgorithms.WadPath(baseVar), out _))
+                    return baseVar;
+                string fileName = Path.GetFileName(missing);
+                foreach (var e in AssetEntries)
+                    if (e.IsResolved && Path.GetFileName(e.Path).Equals(fileName, StringComparison.OrdinalIgnoreCase))
+                        return e.Path;
+                return null;
+            }
+
+            var list = new List<(string Rel, Formats.Meta.BinValidationReport Report, Dictionary<string, string> Alts)>();
             foreach (var folder in Project.ProjectFolders)
             {
                 string root = Path.Combine(Project.RootPath!, folder);
@@ -4894,17 +4909,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                         if (TryResolveEntry(HashAlgorithms.WadPath(dep), out var de))
                         { try { deps.Add(GetAssetBytes(de)); } catch { /* counted as missing-dependency */ } }
 
-                    list.Add(Formats.Meta.BinValidator.Validate(display, bytes, deps,
+                    var report = Formats.Meta.BinValidator.Validate(display, bytes, deps,
                         p => TryResolveEntry(HashAlgorithms.WadPath(p), out _),
                         ResolveBinName,
-                        h => ResolveBinName(h)?.StartsWith("Shaders/", StringComparison.OrdinalIgnoreCase) == true));
+                        h => ResolveBinName(h)?.StartsWith("Shaders/", StringComparison.OrdinalIgnoreCase) == true);
+
+                    var alts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var i in report.Issues)
+                        if (i.Category == "missing-asset" && !alts.ContainsKey(i.Detail)
+                            && FindAlternative(i.Detail) is { } alt)
+                            alts[i.Detail] = alt;
+                    list.Add((rel, report, alts));
                 }
             }
             return list;
         });
 
         int bad = 0, issueCount = 0;
-        foreach (var r in results)
+        foreach (var (_, r, _) in results)
         {
             if (r.IsClean) continue;
             bad++; issueCount += r.Issues.Count;
@@ -4913,9 +4935,106 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _log.Warn("Validate", $"   [{i.Category}] {i.ObjectName} → {i.Detail}");
             if (r.Issues.Count > 8) _log.Warn("Validate", $"   … {r.Issues.Count - 8} more");
         }
-        if (results.Count == 0) _log.Warn("Validate", "No .bin files found in the project folders.");
-        else if (bad == 0) _log.Success("Validate", $"All {results.Count} project .bin(s) clean — every link and asset reference resolves in the injected view.");
-        else _log.Error("Validate", $"{bad}/{results.Count} bin(s) have {issueCount} issue(s) — these would break in-game (details above).");
+        if (results.Count == 0) { _log.Warn("Validate", "No .bin files found in the project folders."); return; }
+        if (bad == 0) { _log.Success("Validate", $"All {results.Count} project .bin(s) clean — every link and asset reference resolves in the injected view."); return; }
+        _log.Error("Validate", $"{bad}/{results.Count} bin(s) have {issueCount} issue(s) — these would break in-game (details above).");
+
+        // M127: the issues are also a window now — navigable (Go To) and, where a replacement
+        // exists, fixable in one click (repoint + save). No more hunting refs by hand.
+        var vm = new BinIssuesWindowViewModel
+        {
+            BinName = $"Validate Project Bins — {bad} bin(s), {issueCount} issue(s)",
+            Description = "Broken references the game would fail to load, checked against the injected view "
+                + "(project overrides + Riot originals). Go To jumps to the object holding the reference; "
+                + "where an existing replacement was found, Fix repoints every reference and saves the bin. "
+                + "Re-run Validate afterwards to confirm.",
+        };
+        foreach (var (rel, report, alts) in results)
+        {
+            if (report.IsClean) continue;
+            bool haveEntry = TryResolveEntry(HashAlgorithms.WadPath(rel), out var binEntry);
+            foreach (var i in report.Issues)
+            {
+                string? alt = i.Category == "missing-asset" && alts.TryGetValue(i.Detail, out var a) ? a : null;
+                vm.Rows.Add(new BinIssueRowViewModel
+                {
+                    Kind = i.Category,
+                    ObjectName = i.ObjectName,
+                    ClassName = (i.ObjectClassHash != 0
+                        ? ResolveBinName(i.ObjectClassHash) ?? $"class 0x{i.ObjectClassHash:x8}"
+                        : "file") + "  ·  " + rel,
+                    Message = i.Category switch
+                    {
+                        "missing-asset" => $"References {i.Detail} — it doesn't exist in the project or the game files; the game would fail to load it.",
+                        "missing-dependency" => $"Dependency bin {i.Detail} doesn't exist in the injected view.",
+                        _ => i.Detail,
+                    },
+                    Suggestion = i.Category switch
+                    {
+                        "missing-asset" when alt is not null =>
+                            $"An existing file matches: {alt}",
+                        "missing-asset" =>
+                            "No replacement found automatically — bring the file into the project at exactly this path, or repoint the reference in the editor.",
+                        "missing-link" =>
+                            "The linked object exists in none of this bin's dependency bins — usually a stale link from an older patch.",
+                        "missing-dependency" =>
+                            "The game hard-requires listed dependencies. Bring the bin into the project, or remove the dependency entry.",
+                        _ => "",
+                    },
+                    GoTo = haveEntry && i.ObjectPathHash != 0
+                        ? () => _ = NavigateToBinObjectAsync(binEntry, i.ObjectPathHash, i.ObjectClassHash)
+                        : null,
+                    FixLabel = alt is not null ? $"🔧 Repoint to {alt}" : null,
+                    FixAsync = haveEntry && alt is not null
+                        ? () => RepointAssetRefAsync(binEntry, i.Detail, alt)
+                        : null,
+                });
+            }
+        }
+        ShowBinIssuesWindow(vm);
+    }
+
+    /// <summary>M127: jump to a bin object in its natural editor — VFX systems open in the Particle
+    /// Editor, everything else lands in the Materials tab filtered to the object.</summary>
+    private async Task NavigateToBinObjectAsync(WadAssetEntry entry, uint objHash, uint classHash)
+    {
+        if (classHash == HashAlgorithms.Fnv1a("VfxSystemDefinitionData"))
+        {
+            OpenParticleEditorFor(entry);
+            if (ParticleEditor.Systems.FirstOrDefault(s => s.Entry.PathHash == objHash) is { } node)
+                ParticleEditor.SelectedSystem = node;
+            return;
+        }
+        await LoadMaterialBinAsync(entry, alsoRawBin: false);
+        InspectorTab = 1;
+        AssetDataExpanded = true;
+        MaterialEditor.SetMeshFilter(null);
+        MaterialEditor.OnlyUnresolved = false;
+        if (MaterialEditor.Materials.FirstOrDefault(m => m.Model.ObjectPathHash == objHash) is { } mat)
+            MaterialEditor.Search = mat.Name;
+    }
+
+    /// <summary>M127: replace every reference to a dead asset path with an existing one, then save the
+    /// bin through the normal pipeline (in place for folder projects; shadows dissolve).</summary>
+    private async Task<bool> RepointAssetRefAsync(WadAssetEntry entry, string fromPath, string toPath)
+    {
+        byte[] bytes;
+        try { bytes = ReadAsset(entry.PathHash); }
+        catch (Exception ex) { _log.Error("Validate", $"{entry.DisplayName}: {ex.Message}"); return false; }
+        LeagueToolkit.Core.Meta.BinTree tree;
+        try { tree = Formats.Meta.SafeBinTree.Parse(bytes); }
+        catch (Exception ex) { _log.Error("Validate", $"{entry.DisplayName}: {ex.Message}"); return false; }
+
+        int hits = Formats.Meta.BinAssetRepointer.Repoint(tree, fromPath, toPath);
+        if (hits == 0) { _log.Warn("Validate", $"{entry.DisplayName}: no reference to {fromPath} found — already fixed?"); return false; }
+
+        using var ms = new MemoryStream();
+        tree.Write(ms);
+        if (!await SaveMapBinBytesAsync(entry, ms.ToArray())) return false;
+        _log.Success("Validate", $"{entry.DisplayName}: repointed {hits} reference(s) {fromPath} → {toPath}.");
+        if (MaterialEditor.BinEntry?.PathHash == entry.PathHash)
+            await LoadMaterialBinAsync(entry, alsoRawBin: false);   // refresh the open editor
+        return true;
     }
 
     /// <summary>M94: convert a .fantome mod package into an editable folder project under

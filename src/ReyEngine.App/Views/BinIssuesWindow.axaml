@@ -30,7 +30,7 @@
           <TextBlock Text="{Binding BinName}" FontSize="13" FontWeight="Bold"
                      Foreground="{DynamicResource ReyTextBrush}" TextWrapping="Wrap" />
           <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
-                     Text="These problems were found (and worked around) while reading this bin. The file still loads in ReyEngine, but strict tools reject it outright — the classic 'an item with the same key has already been added' error. Affected entries are marked red in the materials list and the particle tree." />
+                     Text="{Binding Description}" />
         </StackPanel>
 
         <ItemsControl ItemsSource="{Binding Rows}">
@@ -60,6 +60,14 @@
                              Foreground="{DynamicResource ReyTextBrush}" />
                   <TextBlock Text="{Binding Suggestion}" FontSize="10" TextWrapping="Wrap"
                              Foreground="{DynamicResource ReyAccentBrush}" />
+                  <!-- M127: one-click fix for this row (repoint dead refs etc.) -->
+                  <DockPanel IsVisible="{Binding HasFix}">
+                    <Button DockPanel.Dock="Left" Classes="tool" Content="{Binding FixLabel}"
+                            Command="{Binding ApplyFixCommand}" IsEnabled="{Binding FixEnabled}"
+                            ToolTip.Tip="Applies this change to the bin and saves it through the normal save pipeline" />
+                    <TextBlock Text="{Binding FixStatus}" FontSize="10" VerticalAlignment="Center" Margin="8,0,0,0"
+                               Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                  </DockPanel>
                 </StackPanel>
               </Border>
             </DataTemplate>

@@ -22,6 +22,27 @@ public sealed partial class BinIssueRowViewModel : ObservableObject
     public Action? GoTo { get; init; }
     public bool CanGoTo => GoTo is not null;
     [RelayCommand] private void Navigate() => GoTo?.Invoke();
+
+    // ---- M127: per-row one-click fix (e.g. repoint a dead skin-variant ref to its base file) ----
+    public string? FixLabel { get; init; }
+    public Func<Task<bool>>? FixAsync { get; init; }
+    public bool HasFix => FixAsync is not null;
+    [ObservableProperty] private bool _fixApplied;
+    public bool FixEnabled => !FixApplied;
+    partial void OnFixAppliedChanged(bool value) => OnPropertyChanged(nameof(FixEnabled));
+    [ObservableProperty] private string _fixStatus = "";
+
+    [RelayCommand]
+    private async Task ApplyFix()
+    {
+        if (FixAsync is null || FixApplied) return;
+        FixStatus = "Fixing…";
+        bool ok = false;
+        try { ok = await FixAsync(); }
+        catch (Exception ex) { FixStatus = $"Fix failed: {ex.Message}"; return; }
+        FixApplied = ok;
+        FixStatus = ok ? "Fixed — saved to the project." : "Fix failed — see the console log.";
+    }
 }
 
 /// <summary>
@@ -32,6 +53,14 @@ public sealed partial class BinIssueRowViewModel : ObservableObject
 public sealed partial class BinIssuesWindowViewModel : ObservableObject
 {
     public required string BinName { get; init; }
+
+    /// <summary>Intro text under the title — defaults to the tolerant-repair story (M125); the
+    /// validation window (M127) sets its own.</summary>
+    public string Description { get; init; } =
+        "These problems were found (and worked around) while reading this bin. The file still loads in ReyEngine, "
+        + "but strict tools reject it outright — the classic 'an item with the same key has already been added' error. "
+        + "Affected entries are marked red in the materials list and the particle tree.";
+
     public ObservableCollection<BinIssueRowViewModel> Rows { get; } = new();
 
     /// <summary>Host hook: save the tolerantly-parsed (= already healed) tree back through the normal
