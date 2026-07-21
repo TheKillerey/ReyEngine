@@ -3429,7 +3429,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             });
             _ = ApplyPreviewBackgroundAsync();   // M88: stream in the NVR map backdrop (non-blocking)
         }
-        catch (Exception ex) { _log.Error("Mesh", ex.Message); }
+        catch (Exception ex) { _log.Error("Mesh", $"{entry.DisplayName}: {ex.Message}"); }
     }
 
     // M88: cache the last-loaded backdrop so re-previewing skins doesn't re-read the ~60 MB room.nvr.

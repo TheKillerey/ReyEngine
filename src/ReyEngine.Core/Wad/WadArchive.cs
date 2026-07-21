@@ -14,6 +14,11 @@ public sealed class WadArchive : IDisposable
 {
     private readonly WadFile _wad;
     private readonly Dictionary<ulong, WadAssetEntry> _byHash;
+    /// <summary>M119: LeagueToolkit's WadFile seeks ONE shared FileStream — concurrent extracts from
+    /// different tasks interleave seeks and return garbage ("Invalid file signature" on files that are
+    /// provably fine). The preview pipeline reads mesh/skl/textures, audio banks and the backdrop from
+    /// the same archive in parallel, so every read takes this lock.</summary>
+    private readonly object _readLock = new();
 
     public string FilePath { get; }
     public string Name => System.IO.Path.GetFileName(FilePath);
@@ -83,9 +88,12 @@ public sealed class WadArchive : IDisposable
 
     public byte[] Extract(ulong pathHash)
     {
-        var chunk = _wad.Chunks[pathHash];
-        using MemoryOwner<byte> owner = _wad.LoadChunkDecompressed(chunk);
-        return owner.Span.ToArray();
+        lock (_readLock)
+        {
+            var chunk = _wad.Chunks[pathHash];
+            using MemoryOwner<byte> owner = _wad.LoadChunkDecompressed(chunk);
+            return owner.Span.ToArray();
+        }
     }
 
     public void ExtractToFile(WadAssetEntry entry, string outPath)
