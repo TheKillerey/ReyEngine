@@ -1512,7 +1512,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OpenParticleEditorFor(entry);
     }
 
-    /// <summary>M46: write the edited particle .bin to the project override (mirrors SaveMaterialOverride).</summary>
+    /// <summary>M46: save the edited particle .bin — in place for folder-project files, to the
+    /// override workspace for wad-backed assets (mirrors SaveMaterialOverride).</summary>
     private async Task SaveParticleOverride()
     {
         if (ParticleEditor.Entry is not { } entry) { _log.Warn("Particle", "No particle .bin open."); return; }
@@ -1525,22 +1526,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
         catch (Exception ex) { _log.Error("Particle", $"Edited particle .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
 
-        try
-        {
-            var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".bin");
-            _overrides.Set(new ProjectAssetOverride
-            {
-                PathHash = entry.PathHash,
-                ResolvedPath = entry.IsResolved ? entry.Path : null,
-                OverrideFile = dest,
-                AddedUtc = DateTime.UtcNow.ToString("o"),
-            });
-            SetNodeStatus(entry.PathHash, AssetStatus.Modified);
-            Project.IsDirty = true;
-            UpdateTitle();
-            _log.Success("Particle", $"Saved edited particles {entry.DisplayName} to override ({bytes.Length:n0} bytes, re-parse OK). Build Package will include it.");
-        }
-        catch (Exception ex) { _log.Error("Particle", ex.Message); }
+        // M126: one save path for project bins — folder-project files are written IN PLACE (and any
+        // stale shadow override dissolves); only wad-backed assets go to the override workspace.
+        await SaveMapBinBytesAsync(entry, bytes);
     }
 
     /// <summary>M121: the Model Preview window closed — its document tabs go with it. Mesh and
@@ -2295,24 +2283,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
         catch (Exception ex) { _log.Error("Material", $"Edited material .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
 
-        try
-        {
-            var dest = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
-            _overrides.Set(new ProjectAssetOverride
-            {
-                PathHash = binEntry.PathHash,
-                ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
-                OverrideFile = dest,
-                AddedUtc = DateTime.UtcNow.ToString("o"),
-            });
-            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
-            Project.IsDirty = true;
-            UpdateTitle();
-            ApplyMaterialToViewport();
-            UndoService.MarkSaved();
-            _log.Success("Material", $"Saved edited material {binEntry.DisplayName} to override ({bytes.Length:n0} bytes, re-parse OK). Build Package will include it.");
-        }
-        catch (Exception ex) { _log.Error("Material", ex.Message); }
+        // M126: one save path for project bins — folder-project files are written IN PLACE (and any
+        // stale shadow override dissolves); only wad-backed assets go to the override workspace.
+        if (!await SaveMapBinBytesAsync(binEntry, bytes)) return;
+        ApplyMaterialToViewport();
+        UndoService.MarkSaved();
     }
 
     private async Task ReplaceTextureForSlot(TextureSlotViewModel slot)
@@ -4884,13 +4859,42 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     byte[] bytes;
                     try { bytes = File.ReadAllBytes(file); } catch { continue; }
 
+                    // M126: validate what the game actually MOUNTS. A shadow override outranks the
+                    // project file, so validating the raw file reported issues the user had already
+                    // fixed (the fix lived in the override). Saves now dissolve shadows, but existing
+                    // projects may still carry one — even record-less (the override mount scans its
+                    // directory, project.json entries are optional) — prefer its bytes and say so.
+                    string display = rel;
+                    ulong relHash = HashAlgorithms.WadPath(rel);
+                    string? shadowFile = null;
+                    if (_overrides.TryGet(relHash, out var shadow) && File.Exists(shadow.OverrideFile))
+                        shadowFile = shadow.OverrideFile;
+                    else
+                    {
+                        try
+                        {
+                            var orphan = Path.Combine(ProjectWorkspace.OverridesDir(Project), $"{relHash:x16}.bin");
+                            if (File.Exists(orphan)) shadowFile = orphan;
+                        }
+                        catch { }
+                    }
+                    if (shadowFile is not null && !string.Equals(shadowFile, file, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            bytes = File.ReadAllBytes(shadowFile);
+                            display = $"{rel}  [an override shadows this file — save it once in ReyEngine to merge]";
+                        }
+                        catch { /* unreadable shadow: validate the project file */ }
+                    }
+
                     // resolve this bin's dependency bins through the SAME merged view the game would see
                     var deps = new List<byte[]>();
                     foreach (var dep in Formats.Vfx.VfxSystemResolver.ExtractDependencies(bytes))
                         if (TryResolveEntry(HashAlgorithms.WadPath(dep), out var de))
                         { try { deps.Add(GetAssetBytes(de)); } catch { /* counted as missing-dependency */ } }
 
-                    list.Add(Formats.Meta.BinValidator.Validate(rel, bytes, deps,
+                    list.Add(Formats.Meta.BinValidator.Validate(display, bytes, deps,
                         p => TryResolveEntry(HashAlgorithms.WadPath(p), out _),
                         ResolveBinName,
                         h => ResolveBinName(h)?.StartsWith("Shaders/", StringComparison.OrdinalIgnoreCase) == true));
@@ -5600,14 +5604,47 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         file = "";
         if (_mounts is null || !_mounts.TryGet(entry.PathHash, out var a)) return false;
-        foreach (var src in new[] { a.Source }.Concat(a.AllSources))
-        {
-            if (src?.Kind is not (AssetSourceKind.ProjectFolder or AssetSourceKind.ProjectOverride)) continue;
-            if (!src.TryGetFilePath(entry.PathHash, out file) || !File.Exists(file)) continue;
-            File.WriteAllBytes(file, bytes);
-            return true;
-        }
+        // M126: prefer the real project FILE over a shadow override. Overrides outrank folder files in
+        // the mount order, so writing "the first editable source" kept updating the shadow while the
+        // project file went stale — and the validator (reading files from disk) reported issues the
+        // user had already fixed. The project file is the single source of truth; once it's written,
+        // any shadow override of it is deleted so it can never mask an edit again.
+        var sources = new[] { a.Source }.Concat(a.AllSources).Where(s => s is not null).Distinct().ToList();
+        foreach (var kind in new[] { AssetSourceKind.ProjectFolder, AssetSourceKind.ProjectOverride })
+            foreach (var src in sources)
+            {
+                if (src!.Kind != kind) continue;
+                if (!src.TryGetFilePath(entry.PathHash, out file) || !File.Exists(file)) continue;
+                File.WriteAllBytes(file, bytes);
+                if (kind == AssetSourceKind.ProjectFolder) RemoveShadowOverride(entry, file);
+                return true;
+            }
         return false;
+    }
+
+    /// <summary>M126: dissolve a shadow override that duplicates a project file we just wrote in place.
+    /// Rebuilds the mounts afterwards — the override mount indexes its directory, so the deleted file
+    /// would otherwise still win reads for this hash. Handles record-less orphans too: the override
+    /// mount is directory-scanned, so a shadow can exist with no entry in project.json.</summary>
+    private void RemoveShadowOverride(WadAssetEntry entry, string projectFile)
+    {
+        var candidates = new List<string>();
+        if (_overrides.TryGet(entry.PathHash, out var ov)) candidates.Add(ov.OverrideFile);
+        try { candidates.Add(Path.Combine(ProjectWorkspace.OverridesDir(Project), $"{entry.PathHash:x16}.bin")); }
+        catch { }
+
+        bool removed = false;
+        foreach (var f in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.Equals(f, projectFile, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!File.Exists(f)) continue;
+            try { File.Delete(f); removed = true; } catch { }
+        }
+        _overrides.Remove(entry.PathHash);
+        if (!removed) return;
+        Project.IsDirty = true;
+        RefreshBrowser();
+        _log.Info("Project", $"Removed the stale shadow override of {entry.DisplayName} — the project file is the single source of truth again.");
     }
 
     /// <summary>Block editing read-only Riot assets; suggest Copy to Project.</summary>
