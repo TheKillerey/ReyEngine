@@ -360,6 +360,10 @@
               <ToggleButton Classes="vp" Content="⬓ Regions" IsChecked="{Binding RenderRegionsEnabled}"
                             IsVisible="{Binding HasRenderRegions}"
                             ToolTip.Tip="Render meshes that belong to a render region (mapgeo v18 renderRegionHash). Off = hide every region-assigned mesh, leaving only the region-independent base geometry." />
+              <ToggleButton Classes="vp" Content="🔊" IsChecked="{Binding ShowSoundIcons}"
+                            ToolTip.Tip="Show audio placement icons" />
+              <ToggleButton Classes="vp" Content="🧍" IsChecked="{Binding ShowPropIcons}"
+                            ToolTip.Tip="Show mob / animated-prop icons" />
               <!-- M122: skybox picker (cubemaps, authored domes, sky textures, custom image) -->
               <ComboBox ItemsSource="{Binding SkyboxOptions}" SelectedIndex="{Binding SelectedSkyboxIndex}"
                         FontSize="10" MaxWidth="170" MaxDropDownHeight="420" VerticalAlignment="Center"

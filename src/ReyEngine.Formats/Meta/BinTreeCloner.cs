@@ -37,6 +37,9 @@ public static class BinTreeCloner
         BinTreeEmbedded v => new BinTreeEmbedded(nameHash, v.ClassHash, v.Properties.Select(kv => Clone(kv.Value, kv.Key))),
         BinTreeStruct v => new BinTreeStruct(nameHash, v.ClassHash, v.Properties.Select(kv => Clone(kv.Value, kv.Key))),
         BinTreeOptional v => new BinTreeOptional(nameHash, v.Value is null ? null : Clone(v.Value, 0)),
+        // M123: maps (shaderMacros on every StaticMaterialDef) — keys and values cloned pairwise
+        BinTreeMap v => new BinTreeMap(nameHash, v.KeyType, v.ValueType,
+            v.Select(kv => new KeyValuePair<BinTreeProperty, BinTreeProperty>(Clone(kv.Key, 0), Clone(kv.Value, 0)))),
         _ => throw new NotSupportedException($"Cannot duplicate a {p.Type} property yet."),
     };
 

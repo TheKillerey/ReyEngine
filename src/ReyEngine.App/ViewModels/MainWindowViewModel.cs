@@ -620,11 +620,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
     partial void OnShowPlaceablesChanged(bool value) => UpdatePlaceableMarkers();
 
+    // ---- M123: independent icon toggles - audio + mob icons no longer all-or-nothing ----
+    [ObservableProperty] private bool _showSoundIcons = true;
+    [ObservableProperty] private bool _showPropIcons = true;
+    partial void OnShowSoundIconsChanged(bool value) => UpdatePlaceableMarkers();
+    partial void OnShowPropIconsChanged(bool value) => UpdatePlaceableMarkers();
+
     private void UpdatePlaceableMarkers()
     {
-        PropMarkers = (ShowPlaceables && MapContent.HasProps) ? MapContent.AllProps.Select(p => p.Position).ToList() : null;
+        PropMarkers = (ShowPlaceables && ShowPropIcons && MapContent.HasProps) ? MapContent.AllProps.Select(p => p.Position).ToList() : null;
         ProbeMarkers = (ShowPlaceables && MapContent.HasProbes) ? MapContent.Probes.Select(p => p.Position).ToList() : null;
-        SoundMarkers = (ShowPlaceables && MapContent.HasSounds)
+        SoundMarkers = (ShowPlaceables && ShowSoundIcons && MapContent.HasSounds)
             ? MapContent.Sounds.Where(s => IsSoundVisible(s.Sound)).Select(s => s.Position).ToList() : null;   // M55
     }
 
@@ -998,40 +1004,123 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task AddMeshToMap()
     {
-        if (_currentMap is not { } map) { _log.Warn("AddMesh", "Open a map (.mapgeo) first."); return; }
-        var file = await Dialogs.OpenFileAsync("Add mesh to map (.obj / .scb / .sco)",
-            new Avalonia.Platform.Storage.FilePickerFileType("Mesh") { Patterns = new[] { "*.obj", "*.scb", "*.sco" } },
+        if (_currentMap is null) { _log.Warn("AddMesh", "Open a map (.mapgeo) first."); return; }
+        var file = await Dialogs.OpenFileAsync("Import mesh (.fbx / .glb / .gltf / .obj / .scb / .sco)",
+            new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
+            { Patterns = new[] { "*.fbx", "*.glb", "*.gltf", "*.obj", "*.scb", "*.sco" } },
             DialogService.All);
         if (file is null) return;
+
+        // M123: the dedicated import + setup window replaces the old direct-add flow.
+        var shaders = new List<string> { "(keep the template's shader)" };
+        shaders.AddRange(MaterialEditor.KnownShaders);
+        var vm = new AddMeshWindowViewModel
+        {
+            ExistingMaterials = MapMaterialNames,
+            ShaderChoices = shaders,
+        };
+        vm.PickFile = async title => await Dialogs.OpenFileAsync(title,
+            new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
+            { Patterns = new[] { "*.fbx", "*.glb", "*.gltf", "*.obj", "*.scb", "*.sco" } },
+            DialogService.All);
+        vm.Confirmed = plan => _ = ExecuteAddMeshPlanAsync(plan);
+        vm.LoadFile(file);
+        ShowAddMeshWindow?.Invoke(vm);
+    }
+
+    /// <summary>Wired by MainWindow — owns the Add Mesh window instance.</summary>
+    public Action<AddMeshWindowViewModel>? ShowAddMeshWindow;
+
+    /// <summary>M123: run the confirmed plan — create the new materials in the map's .materials.bin,
+    /// bring imported textures into the project as plain DDS, then stage every included mesh.</summary>
+    private async Task ExecuteAddMeshPlanAsync(AddMeshPlan plan)
+    {
+        if (_currentMap is not { } map || _currentMapEntry is not { } mapEntry) return;
         try
         {
-            var (pos, nrm, uvs, idx) = ImportMeshFile(file);
-            if (pos is null || idx is null || pos.Length < 9 || idx.Length < 3)
-            { _log.Error("AddMesh", "Could not import the mesh (empty or unsupported format)."); return; }
-            if (pos.Length / 3 > 65535)
-            { _log.Error("AddMesh", $"Mesh has {pos.Length / 3:n0} vertices — mapgeo caps a mesh at 65,535 (u16 indices). Split it."); return; }
-
-            // local bbox center (gizmo pivot anchor) + placement at the camera/gizmo focus
-            var (cmin, cmax) = BoundsOf(pos);
-            var center = (cmin + cmax) * 0.5f;
-            var place = GizmoPivot ?? map.Center;
-
-            var vm = new AddedMapMeshViewModel
+            // 1) new materials (cloned templates), textures first so the clone can point at them
+            var toCreate = plan.Materials.Where(m => m.CreateNew).ToList();
+            if (toCreate.Count > 0)
             {
-                Name = Path.GetFileNameWithoutExtension(file),
-                Positions = pos, Normals = nrm ?? new float[pos.Length], Uvs = uvs ?? new float[pos.Length / 3 * 2],
-                Indices = idx, LocalCenter = center,
-                Material = DefaultMapMaterial(),
-                Offset = place - center,   // so the mesh's CENTER lands at the focus point
-            };
-            MapContent.AddedMeshes.Add(vm);
+                if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+                { _log.Error("AddMesh", "No materials .bin found for this map — cannot create materials."); return; }
+                var binBytes = GetAssetBytes(binEntry);
+                if (binBytes is null) { _log.Error("AddMesh", "Could not read the materials .bin."); return; }
+
+                foreach (var m in toCreate)
+                {
+                    string? diffusePath = null;
+                    if (m.TextureBytes is not null)
+                        diffusePath = SaveImportedTexture(m.TextureBytes, m.TextureFileNameHint ?? m.NewName!);
+
+                    var newBytes = MapMaterialFactory.CloneMaterial(binBytes, m.Template!, m.NewName!,
+                        ResolveBinName, out var err, diffusePath, m.ShaderPath);
+                    if (newBytes is null) { _log.Error("AddMesh", $"Material '{m.NewName}': {err}"); return; }
+                    binBytes = newBytes;
+                    _log.Success("AddMesh", $"Material '{m.NewName}' created from template '{m.Template}'"
+                        + (diffusePath is not null ? $" with diffuse {diffusePath}" : "")
+                        + (m.ShaderPath is not null ? $" and shader {m.ShaderPath}" : "") + ".");
+                }
+                if (!await SaveMapBinBytesAsync(binEntry, binBytes))
+                { _log.Error("AddMesh", "Could not save the materials .bin — meshes were NOT staged."); return; }
+            }
+
+            // 2) stage the meshes at the camera/gizmo focus with their chosen materials + layer mask
+            var place = GizmoPivot ?? map.Center;
+            int staged = 0;
+            foreach (var mesh in plan.Meshes)
+            {
+                var (cmin, cmax) = BoundsOf(mesh.Positions);
+                var center = (cmin + cmax) * 0.5f;
+                var material = plan.MeshMaterialNames.TryGetValue(mesh.MaterialName, out var mn) && mn.Length > 0
+                    ? mn : DefaultMapMaterial();
+                var vm = new AddedMapMeshViewModel
+                {
+                    Name = mesh.Name,
+                    Positions = mesh.Positions, Normals = mesh.Normals, Uvs = mesh.Uvs,
+                    Indices = mesh.Indices, LocalCenter = center,
+                    Material = material,
+                    Offset = place - center,
+                    VisibilityMask = plan.VisibilityMask,
+                };
+                MapContent.AddedMeshes.Add(vm);
+                staged++;
+            }
             OnPropertyChanged(nameof(HasAddedMeshes));
-            SelectedOutlinerItem = vm;   // routes to selection → gizmo
             PublishAddedMeshPreview();
-            _log.Success("AddMesh", $"Imported '{vm.Name}' ({pos.Length / 3:n0} verts) → material '{vm.Material}'. " +
-                "Move it with the gizmo, change its material in the inspector, then Save Map Edits.");
+            _log.Success("AddMesh", $"Staged {staged} mesh(es) (layer mask 0b{Convert.ToString(plan.VisibilityMask & 0xFF, 2).PadLeft(8, '0')}). "
+                + "Position them with the gizmo, then Save Map Edits.");
         }
         catch (Exception ex) { _log.Error("AddMesh", ex.Message); }
+    }
+
+    /// <summary>Decode a png/jpg blob and write it into the project folder as an uncompressed DDS.
+    /// Returns the WAD path the material should reference, or null on failure.</summary>
+    private string? SaveImportedTexture(byte[] imageBytes, string nameHint)
+    {
+        try
+        {
+            var mount = ProjectFolderMounts.FirstOrDefault();
+            if (mount is null) { _log.Warn("AddMesh", "No project folder — imported texture skipped."); return null; }
+
+            using var ms = new MemoryStream(imageBytes, writable: false);
+            var bmp = new Avalonia.Media.Imaging.Bitmap(ms);
+            int w = bmp.PixelSize.Width, h = bmp.PixelSize.Height;
+            var bgra = new byte[w * h * 4];
+            var handle = System.Runtime.InteropServices.GCHandle.Alloc(bgra, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try { bmp.CopyPixels(new Avalonia.PixelRect(0, 0, w, h), handle.AddrOfPinnedObject(), bgra.Length, w * 4); }
+            finally { handle.Free(); }
+            for (int i = 0; i < bgra.Length; i += 4) (bgra[i], bgra[i + 2]) = (bgra[i + 2], bgra[i]);
+
+            var clean = new string(nameHint.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray());
+            string rel = $"assets/maps/reyimported/{clean.ToLowerInvariant()}.dds";
+            string dest = Path.Combine(mount.Location, rel.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.WriteAllBytes(dest, MapMaterialFactory.WriteDds(w, h, bgra));
+            _log.Success("AddMesh", $"Imported texture saved: {rel} ({w}x{h}).");
+            return rel.ToUpperInvariant().StartsWith("ASSETS") ? "ASSETS" + rel[6..] : rel;
+        }
+        catch (Exception ex) { _log.Warn("AddMesh", $"Imported texture failed: {ex.Message}"); return null; }
     }
 
     [RelayCommand]
@@ -3309,6 +3398,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (appended is null) { _log.Error("MapGeo", $"Could not append meshes: {aErr}"); return; }
 
                 var reMap = await Task.Run(() => MapGeoDecoder.Decode(appended));
+
+                // M123: the appended meshes are the LAST N — give them their chosen layer masks
+                // before the grids bake per-face visibility from the mesh flags.
+                bool anyMask = added.Any(a => a.VisibilityMask is not 255 and not 0);
+                if (anyMask && reMap.Meshes.Count >= added.Count)
+                {
+                    for (int i = 0; i < added.Count; i++)
+                        reMap.Meshes[reMap.Meshes.Count - added.Count + i].VisibilityEdit = added[i].VisibilityMask;
+                    var layered = MapGeoLayerWriter.TryWriteLayerEdits(appended, reMap.Meshes, out var lErr);
+                    if (layered is not null) { appended = layered; reMap = await Task.Run(() => MapGeoDecoder.Decode(appended)); }
+                    else _log.Warn("MapGeo", $"Added-mesh layers not applied: {lErr}");
+                }
                 bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(appended, reMap);
             }
 

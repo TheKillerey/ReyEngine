@@ -126,6 +126,7 @@ public partial class MainWindow : Window
             vm.ShowParticleEditorWindow = () => ShowParticleEditor(vm);   // M46
             vm.ShowMapBinEditorWindow = () => ShowMapBinEditor(vm);       // M98
             vm.ShowMeshPreviewWindow = () => ShowMeshPreview(vm);         // M50
+            vm.ShowAddMeshWindow = ShowAddMesh;                           // M123
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop
@@ -297,6 +298,18 @@ public partial class MainWindow : Window
         foreach (var a in Avalonia.VisualTree.VisualExtensions.GetVisualAncestors(v))
             if (a is StyledElement { DataContext: AssetNodeViewModel node }) return node;
         return null;
+    }
+
+    // M123: Add Mesh import + setup window (modal-ish: one at a time).
+    private AddMeshWindow? _addMeshWindow;
+    private void ShowAddMesh(ViewModels.AddMeshWindowViewModel vm)
+    {
+        vm.Cancelled = () => _addMeshWindow?.Close();
+        var confirmed = vm.Confirmed;
+        vm.Confirmed = plan => { confirmed?.Invoke(plan); _addMeshWindow?.Close(); };
+        _addMeshWindow = new AddMeshWindow { DataContext = vm };
+        _addMeshWindow.Closed += (_, _) => _addMeshWindow = null;
+        _addMeshWindow.Show(this);
     }
 
     // M50: the model preview lives in its own (non-modal) window; reuse one instance while open.

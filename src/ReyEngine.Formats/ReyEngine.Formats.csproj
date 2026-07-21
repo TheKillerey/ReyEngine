@@ -1,7 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="LeagueToolkit" Version="4.1.0-beta.53" />
+    <PackageReference Include="Silk.NET.Assimp" Version="2.23.0" />
   </ItemGroup>
 
   <ItemGroup>

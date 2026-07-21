@@ -1,0 +1,136 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.AddMeshWindow"
+        x:DataType="vm:AddMeshWindowViewModel"
+        Title="ReyEngine — Add Mesh" Width="760" Height="680"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- footer -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,8">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+          <Button Content="Cancel" Command="{Binding CancelCommand}" Padding="14,4" />
+          <Button Classes="primary" Content="Add To Map" Command="{Binding ConfirmCommand}"
+                  IsEnabled="{Binding HasScene}" Padding="14,4" />
+        </StackPanel>
+        <TextBlock Text="{Binding Status}" VerticalAlignment="Center" FontSize="11"
+                   Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+      </DockPanel>
+    </Border>
+
+    <ScrollViewer>
+      <StackPanel Margin="14" Spacing="10">
+        <!-- file -->
+        <Border Classes="card">
+          <DockPanel>
+            <Button DockPanel.Dock="Right" Classes="tool" Content="Browse…" Command="{Binding BrowseCommand}" />
+            <TextBlock Text="{Binding FilePath}" FontSize="11" VerticalAlignment="Center"
+                       Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis"
+                       ToolTip.Tip="{Binding FilePath}" />
+          </DockPanel>
+        </Border>
+
+        <!-- meshes -->
+        <Border Classes="card" IsVisible="{Binding HasScene}">
+          <StackPanel Spacing="4">
+            <TextBlock Classes="cardTitle" Text="MESHES" />
+            <ItemsControl ItemsSource="{Binding Meshes}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <DockPanel Margin="0,1">
+                    <TextBlock DockPanel.Dock="Right" Text="over 65,535 verts — skipped" FontSize="9"
+                               Foreground="{DynamicResource ReyWarningBrush}" VerticalAlignment="Center"
+                               IsVisible="{Binding TooLarge}" />
+                    <CheckBox IsChecked="{Binding Include}" FontSize="11" IsEnabled="{Binding !TooLarge}">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding Mesh.Name}" FontSize="11" />
+                        <TextBlock Text="{Binding Info}" FontSize="9" Opacity="0.55" VerticalAlignment="Center" />
+                      </StackPanel>
+                    </CheckBox>
+                  </DockPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <!-- materials -->
+        <Border Classes="card" IsVisible="{Binding HasScene}">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="cardTitle" Text="MATERIALS" />
+            <TextBlock Text="Each imported material becomes a map material: reuse one the map already has, or clone a template into a new material (optionally with a different shader and the imported texture)."
+                       FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+            <ItemsControl ItemsSource="{Binding Materials}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8" Margin="0,3">
+                    <StackPanel Spacing="4">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="{Binding Source.Name}" FontSize="12" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding TextureNote}" FontSize="9" Opacity="0.6" VerticalAlignment="Center" />
+                      </StackPanel>
+                      <ComboBox SelectedIndex="{Binding Mode}" FontSize="10" HorizontalAlignment="Stretch">
+                        <ComboBoxItem Content="Use an existing map material" />
+                        <ComboBoxItem Content="Create a new material from a template" />
+                      </ComboBox>
+
+                      <ComboBox ItemsSource="{Binding ExistingMaterials}" SelectedItem="{Binding ExistingMaterial}"
+                                FontSize="10" HorizontalAlignment="Stretch" IsVisible="{Binding IsExistingMode}" />
+
+                      <StackPanel Spacing="4" IsVisible="{Binding IsNewMode}">
+                        <Grid ColumnDefinitions="Auto,*">
+                          <TextBlock Grid.Column="0" Text="Template" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <ComboBox Grid.Column="1" ItemsSource="{Binding ExistingMaterials}" SelectedItem="{Binding Template}"
+                                    FontSize="10" HorizontalAlignment="Stretch"
+                                    ToolTip.Tip="The clone keeps every switch and render-state block of a material that provably works on this map" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,*">
+                          <TextBlock Grid.Column="0" Text="Name" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <TextBox Grid.Column="1" Text="{Binding NewName}" FontSize="10" Padding="4,2" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,*">
+                          <TextBlock Grid.Column="0" Text="Shader" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <ComboBox Grid.Column="1" ItemsSource="{Binding ShaderChoices}" SelectedIndex="{Binding ShaderIndex}"
+                                    FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="380" />
+                        </Grid>
+                        <CheckBox Content="Use the imported texture as diffuse" IsChecked="{Binding UseImportedTexture}"
+                                  IsEnabled="{Binding HasImportedTexture}" FontSize="10" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <!-- visibility layers -->
+        <Border Classes="card" IsVisible="{Binding HasScene}">
+          <StackPanel Spacing="4">
+            <TextBlock Classes="cardTitle" Text="VISIBILITY LAYERS" />
+            <TextBlock Text="Which dragon layers the meshes belong to. All checked = visible on every configuration."
+                       FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+            <ItemsControl ItemsSource="{Binding Layers}">
+              <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <CheckBox Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="10" Margin="0,0,10,2" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

@@ -138,6 +138,8 @@ public sealed partial class AddedMapMeshViewModel : ObservableObject
     public required Vector3 LocalCenter { get; init; }  // local bbox center — the gizmo pivot anchor
     [ObservableProperty] private string _material = "";
     [ObservableProperty] private bool _isSelected;
+    /// <summary>M123: dragon-layer mask the mesh gets after append (255 = every configuration).</summary>
+    public int VisibilityMask { get; set; } = 255;
 
     public Vector3 Offset;                              // world translation of the mesh's local origin
     public Vector3 RotationDegrees;
