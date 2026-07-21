@@ -204,6 +204,17 @@
             </StackPanel>
           </Border>
 
+          <!-- M122: skybox picker (same catalogue as the map viewport, independent pick) -->
+          <Border Classes="card" IsVisible="{Binding HasSkyboxOptions}">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="cardTitle" Text="SKYBOX" />
+              <ComboBox HorizontalAlignment="Stretch" FontSize="10" MaxDropDownHeight="420"
+                        ItemsSource="{Binding SkyboxOptions}" SelectedIndex="{Binding SelectedSkyboxIndex}" />
+              <TextBlock Text="☁ cubemap · ⛰ authored dome · 🖼 sky texture. 'Custom image…' loads your own (png/jpg/tex/dds)."
+                         FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
           <!-- M116: EVENTS — complete sequences: animation + VFX + SFX, with caster systems on the
                champion, _tar systems on the target dummy and missiles travelling between. -->
           <Border Classes="card" IsVisible="{Binding HasEvents}">
@@ -255,6 +266,7 @@
                              AnimationClip="{Binding CurrentAnimation}"
                              AnimationTime="{Binding AnimationTime}"
                              ParticlePlayback="{Binding Playback}"
+                             Skybox="{Binding Skybox}"
                              TargetDummyPosition="{Binding DummyCubePosition}"
                              PropMeshes="{Binding DummyProps}"
                              PlayPropAnimations="True"

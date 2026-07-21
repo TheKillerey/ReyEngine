@@ -421,6 +421,30 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         return items;
     }
 
+    // ---- M122: skybox (same catalogue as the map viewport, independent pick) ----
+
+    public ObservableCollection<string> SkyboxOptions { get; } = new();
+    [ObservableProperty] private int _selectedSkyboxIndex;
+    [ObservableProperty] private Services.SkyboxSpec? _skybox;
+    [ObservableProperty] private bool _hasSkyboxOptions;
+
+    /// <summary>Host hook: decode the skybox behind a combo index (index 1 opens the custom picker).</summary>
+    public Func<int, Task<Services.SkyboxSpec?>>? LoadSkybox;
+
+    public void SetSkyboxOptions(IEnumerable<string> options)
+    {
+        SkyboxOptions.Clear();
+        foreach (var o in options) SkyboxOptions.Add(o);
+        HasSkyboxOptions = SkyboxOptions.Count > 1;
+        SelectedSkyboxIndex = 0;
+    }
+
+    partial void OnSelectedSkyboxIndexChanged(int value)
+    {
+        if (LoadSkybox is { } load) _ = Apply();
+        async Task Apply() { Skybox = await load(value); }
+    }
+
     // ---- M120: image mode - textures preview in THIS window instead of a second inspector card ----
 
     /// <summary>When set, an image overlay covers the viewport (the single preview surface for

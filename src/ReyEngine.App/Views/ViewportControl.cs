@@ -152,6 +152,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GroupBoundsMin));
     public static readonly StyledProperty<Vector3?> GroupBoundsMaxProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GroupBoundsMax));
+    /// <summary>M122: what the viewport draws as its sky; null = plain background.</summary>
+    public static readonly StyledProperty<Services.SkyboxSpec?> SkyboxProperty =
+        AvaloniaProperty.Register<ViewportControl, Services.SkyboxSpec?>(nameof(Skybox));
+
     /// <summary>M114: world position the target-dummy cube stands on; null hides it.</summary>
     public static readonly StyledProperty<Vector3?> TargetDummyPositionProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(TargetDummyPosition));
@@ -169,6 +173,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public Vector3? GroupBoundsMin { get => GetValue(GroupBoundsMinProperty); set => SetValue(GroupBoundsMinProperty, value); }
     public Vector3? GroupBoundsMax { get => GetValue(GroupBoundsMaxProperty); set => SetValue(GroupBoundsMaxProperty, value); }
     /// <summary>World-space center of the selection — the translate-gizmo origin (null = no selection).</summary>
+    public Services.SkyboxSpec? Skybox { get => GetValue(SkyboxProperty); set => SetValue(SkyboxProperty, value); }
     public Vector3? TargetDummyPosition { get => GetValue(TargetDummyPositionProperty); set => SetValue(TargetDummyPositionProperty, value); }
     public Vector3? GizmoPivot { get => GetValue(GizmoPivotProperty); set => SetValue(GizmoPivotProperty, value); }
     /// <summary>Transform gizmo mode (M42): 0 move · 1 rotate · 2 scale.</summary>
@@ -282,6 +287,9 @@ public sealed class ViewportControl : OpenGlControlBase
     private bool _particlePlaybackDirty;
     private uint _softDotTex;
     private readonly System.Diagnostics.Stopwatch _particleClock = new();
+    private SkyboxRenderer? _skyboxRenderer;   // M122
+    private bool _skyboxDirty;
+    private bool SetSkyboxDirty() { _skyboxDirty = true; return true; }
     private readonly System.Diagnostics.Stopwatch _waterClock = new();   // M44: flowmap-water animation clock
 
     // Offscreen target with a real depth buffer (Avalonia's default FBO has none).
@@ -472,6 +480,9 @@ public sealed class ViewportControl : OpenGlControlBase
         _bgRenderer.Initialize(_gl, _gles);
 
         _particleRenderer = new VfxParticleRenderer();
+        _skyboxRenderer = new SkyboxRenderer();
+        _skyboxRenderer.Initialize(_gl);
+        _skyboxDirty = true;   // re-apply the spec on a fresh context
         _particleRenderer.Initialize(_gl);
         _softDotTex = _particleRenderer.UploadTexture(SoftDot(64), 64, 64);
 
@@ -491,6 +502,8 @@ public sealed class ViewportControl : OpenGlControlBase
         _meshRenderer = null;
         _bgRenderer = null;
         _particleRenderer = null;
+        _skyboxRenderer?.Dispose();
+        _skyboxRenderer = null;
         _particleSims.Clear();
         _gl = null;
     }
@@ -643,6 +656,27 @@ public sealed class ViewportControl : OpenGlControlBase
         float aspect = h == 0 ? 1f : (float)w / h;
         // League's engine is -X oriented; mirror world X so assets match their in-game orientation.
         var viewProj = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjection(aspect);
+
+        // M122: sky first - rotation-only view (same X-mirror), depth writes off, scene overdraws it.
+        if (_skyboxRenderer is { } sky)
+        {
+            if (_skyboxDirty)
+            {
+                var spec = Skybox;
+                if (spec is null) sky.Clear();
+                else if (spec.Cubemap is { } cm) sky.SetCubemap(cm);
+                else if (spec.Equirect is { } eq) sky.SetEquirect(eq);
+                else if (spec.MeshPositions is { } mp && spec.MeshIndices is { } mi)
+                    sky.SetMesh(mp, spec.MeshUvs ?? Array.Empty<float>(), mi, spec.MeshTexture);
+                _skyboxDirty = false;
+            }
+            if (sky.HasSkybox)
+            {
+                var viewRot = _camera.View;
+                viewRot.M41 = 0f; viewRot.M42 = 0f; viewRot.M43 = 0f;
+                sky.Render(Matrix4x4.CreateScale(-1f, 1f, 1f) * viewRot, _camera.Projection(aspect));
+            }
+        }
 
         // Cache the exact matrices/size used for THIS frame so gizmo hit-testing (driven by pointer
         // events, outside the render loop) always matches what's actually on screen. The eye is stored
@@ -1089,6 +1123,7 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == SelectionBoxesProperty || change.Property == GroupBoundsMinProperty
                  || change.Property == GroupBoundsMaxProperty || change.Property == GizmoPivotProperty
                  || change.Property == TargetDummyPositionProperty
+                 || change.Property == SkyboxProperty && SetSkyboxDirty()
                  || change.Property == GizmoModeProperty || change.Property == GizmoAxesProperty)
         { RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }

@@ -1219,6 +1219,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.Animation.ClipLoader = DecodeAnimation;
         MeshPreview.LoadDummyMesh = () => Services.TargetDummyLoader.Get(Project.GameDirectory, _resolver,
             m => _log.Warn("Preview", m));   // M115: Riot's practice dummy from Map11.wad
+        MeshPreview.LoadSkybox = LoadSkyboxAtAsync;   // M122: same catalogue, its own pick
         MeshPreview.ResolveTextures = ResolveSystemTextures;
         MeshPreview.ResolveDistortionTextures = ResolveSystemDistortionTextures;
         MeshPreview.ResolveColorTextures = ResolveSystemColorTextures;   // M68
@@ -1529,6 +1530,86 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Push the freshly-built asset tree into the Content Browser + Map Content panels.</summary>
+    // ---- M122: skyboxes (map viewport + model preview share the catalogue) ----
+
+    /// <summary>Combo labels: [None, Custom image..., ...discovered assets].</summary>
+    public ObservableCollection<string> SkyboxOptions { get; } = new();
+    private List<Services.SkyboxOption> _skyboxCatalog = new();
+    [ObservableProperty] private int _selectedSkyboxIndex;
+    [ObservableProperty] private Services.SkyboxSpec? _currentSkybox;
+
+    private void RebuildSkyboxOptions()
+    {
+        _skyboxCatalog = Services.SkyboxCatalog.Discover(AssetEntries);
+        SkyboxOptions.Clear();
+        SkyboxOptions.Add("No skybox");
+        SkyboxOptions.Add("Custom image…");
+        foreach (var o in _skyboxCatalog) SkyboxOptions.Add(o.Label);
+        SelectedSkyboxIndex = 0;
+        MeshPreview.SetSkyboxOptions(SkyboxOptions);
+        if (_skyboxCatalog.Count > 0)
+            _log.Info("Skybox", $"{_skyboxCatalog.Count} skybox asset(s) discovered (cubemaps, domes, sky textures).");
+    }
+
+    partial void OnSelectedSkyboxIndexChanged(int value) => _ = ApplyMapSkyboxAsync(value);
+
+    private async Task ApplyMapSkyboxAsync(int index)
+    {
+        CurrentSkybox = await LoadSkyboxAtAsync(index);
+    }
+
+    /// <summary>Decode the skybox behind one combo index (shared by both viewports). Index 0 = none,
+    /// 1 = pick a custom image file, 2+ = the discovered catalogue.</summary>
+    private async Task<Services.SkyboxSpec?> LoadSkyboxAtAsync(int index)
+    {
+        try
+        {
+            if (index <= 0) return null;
+            if (index == 1)
+            {
+                var file = await Dialogs.OpenFileAsync("Choose a skybox image (png/jpg/tex/dds)", DialogService.All);
+                if (file is null) return null;
+                var custom = await Task.Run(() => Services.SkyboxCatalog.LoadCustomFile(file));
+                if (custom is null) _log.Warn("Skybox", $"{Path.GetFileName(file)}: not a decodable image.");
+                return custom;
+            }
+            int ci = index - 2;
+            if (ci < 0 || ci >= _skyboxCatalog.Count) return null;
+            var opt = _skyboxCatalog[ci];
+            return await Task.Run(() =>
+            {
+                var bytes = ReadAsset(opt.Main.PathHash);
+                switch (opt.Kind)
+                {
+                    case Services.SkyboxSourceKind.Cubemap:
+                        var cm = CubemapDecoder.TryDecodeDds(bytes);
+                        if (cm is not null) return new Services.SkyboxSpec(Cubemap: cm);
+                        return new Services.SkyboxSpec(Equirect: TextureDecoder.Decode(bytes));
+                    case Services.SkyboxSourceKind.Texture:
+                        return new Services.SkyboxSpec(Equirect: TextureDecoder.Decode(bytes));
+                    default:
+                        TextureImage? tex = opt.PairedTexture is { } pt
+                            ? TextureDecoder.Decode(ReadAsset(pt.PathHash)) : null;
+                        if (opt.Main.Path.EndsWith(".skn", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var skn = SkinnedMeshDecoder.Decode(bytes);
+                            return new Services.SkyboxSpec(MeshPositions: skn.Positions, MeshUvs: skn.Uvs,
+                                MeshIndices: skn.Indices, MeshTexture: tex);
+                        }
+                        var so = Formats.Meshes.StaticObjectDecoder.Decode(bytes, opt.Main.Path);
+                        if (so is null) return null;
+                        return new Services.SkyboxSpec(MeshPositions: so.Positions, MeshUvs: so.Uvs,
+                            MeshIndices: so.Indices, MeshTexture: tex);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Skybox", ex.Message);
+            return null;
+        }
+    }
+
     private void RefreshContentPanels()
     {
         ContentBrowser.SetRoots(RootNodes);
@@ -1540,6 +1621,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .ToList();
         MapContent.SetMaps(maps);
         MapContent.ClearMap();
+        RebuildSkyboxOptions();   // M122
     }
 
     // ---- Material editor: asset access helpers --------------------------

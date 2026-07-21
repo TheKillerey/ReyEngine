@@ -262,6 +262,7 @@
             </Border>
           <Grid>
             <views:ViewportControl x:Name="Viewport"
+                Skybox="{Binding CurrentSkybox}"
                 Mesh="{Binding CurrentMesh}"
                 ModelTextures="{Binding CurrentModelTextures}"
                 ModelMaskTextures="{Binding CurrentModelMaskTextures}"
@@ -359,6 +360,10 @@
               <ToggleButton Classes="vp" Content="⬓ Regions" IsChecked="{Binding RenderRegionsEnabled}"
                             IsVisible="{Binding HasRenderRegions}"
                             ToolTip.Tip="Render meshes that belong to a render region (mapgeo v18 renderRegionHash). Off = hide every region-assigned mesh, leaving only the region-independent base geometry." />
+              <!-- M122: skybox picker (cubemaps, authored domes, sky textures, custom image) -->
+              <ComboBox ItemsSource="{Binding SkyboxOptions}" SelectedIndex="{Binding SelectedSkyboxIndex}"
+                        FontSize="10" MaxWidth="170" MaxDropDownHeight="420" VerticalAlignment="Center"
+                        ToolTip.Tip="Skybox - League ships hundreds; pick one or use a custom image" />
             </StackPanel>
 
             <!-- row 2: map lighting + tools -->
