@@ -170,7 +170,7 @@ public sealed class VfxParticleRenderer
         {
             if (es.InstanceCount == 0) continue;
             // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
-            if (es.MeshVao != 0) { RenderMeshEmitter(es, viewProj); continue; }
+            if (es.MeshVao != 0) { if (_meshProgram != 0) RenderMeshEmitter(es, viewProj); continue; }
             if (es.Texture == 0) continue;
             bool isDistortion = es.Def.Distortion is not null;
             if (isDistortion && (es.DistortionTexture == 0 || _sceneTexture == 0)) continue;
@@ -292,11 +292,22 @@ public sealed class VfxParticleRenderer
     private int _muPlacementRight, _muPlacementUp, _muPlacementForward;
     private uint _whiteTex;
 
+    /// <summary>M117b: a mesh-shader compile failure must NOT throw on the render thread — that
+    /// killed the whole app the moment any mesh emitter uploaded. Mesh particles just stay invisible.</summary>
+    private bool _meshProgramFailed;
+
     private unsafe void EnsureMeshProgram()
     {
+        if (_meshProgramFailed) return;
         if (_meshProgram == 0)
         {
-            _meshProgram = ShaderUtil.CreateProgram(_gl, _gles, MeshVert, MeshFrag);
+            try { _meshProgram = ShaderUtil.CreateProgram(_gl, _gles, MeshVert, MeshFrag); }
+            catch (Exception ex)
+            {
+                _meshProgramFailed = true;
+                System.Diagnostics.Debug.WriteLine($"VFX mesh shader failed to compile - mesh particles disabled: {ex.Message}");
+                return;
+            }
             _muViewProj = _gl.GetUniformLocation(_meshProgram, "uViewProj");
             _muWorldPos = _gl.GetUniformLocation(_meshProgram, "uWorldPos");
             _muScale = _gl.GetUniformLocation(_meshProgram, "uScale");
@@ -322,6 +333,7 @@ public sealed class VfxParticleRenderer
     {
         if (!_ready) return;
         EnsureMeshProgram();
+        if (_meshProgramFailed) return;   // M117b: no program - the emitter falls back to billboards upstream
         int verts = positions.Length / 3;
         var inter = new float[verts * 5];
         for (int i = 0; i < verts; i++)
@@ -440,7 +452,7 @@ uniform float uScale;
 uniform float uRot;
 uniform vec2 uUvOffset;
 uniform vec2 uUvOffsetMult;
-uniform vec2 uMeshTexDiv;      // M117: UV divisor — fractional = tiling (0.25 tiles 4x), >1 = atlas cell
+uniform vec2 uMeshTexDiv;      // M117: UV divisor - fractional = tiling (0.25 tiles 4x), >1 = atlas cell
 uniform vec2 uMeshTexDivMult;
 uniform vec3 uPlacementRight;
 uniform vec3 uPlacementUp;
@@ -453,7 +465,7 @@ void main(){
     vec3 p = uPlacementRight * local.x + uPlacementUp * local.y + uPlacementForward * local.z + uWorldPos;
     gl_Position = uViewProj * vec4(p, 1.0);
     // M117: Riot's texDiv on mesh emitters is a UV DIVISOR, same convention as the billboard
-    // flipbook grid — Kayn's ring swirl (0.25 -> 4x tiling) and 2x2 variant atlases both fit.
+    // flipbook grid - Kayn's ring swirl (0.25 -> 4x tiling) and 2x2 variant atlases both fit.
     vec2 div = max(uMeshTexDiv, vec2(0.0001));
     vec2 divMult = max(uMeshTexDivMult, vec2(0.0001));
     vUv = aUv / div + uUvOffset;
