@@ -53,7 +53,10 @@ public static class MapMaterialFactory
         error = null;
         try
         {
-            var tree = new BinTree(new MemoryStream(materialsBin, writable: false));
+            // Tolerant parse (M123d): modded bins can carry duplicate struct fields (RitoBin permits
+            // them; LT's strict dictionary throws). The map loader reads such bins fine via SafeBinTree,
+            // so the factory must too - the duplicate field is dropped and the rewrite comes out clean.
+            var tree = SafeBinTree.Parse(materialsBin);
             uint templateHash = HashAlgorithms.Fnv1a(templateName);
             if (!tree.Objects.TryGetValue(templateHash, out var template))
             {
@@ -97,7 +100,7 @@ public static class MapMaterialFactory
         error = null;
         try
         {
-            var tree = new BinTree(new MemoryStream(materialsBin, writable: false));
+            var tree = SafeBinTree.Parse(materialsBin);   // tolerant - see CloneMaterial (M123d)
             uint newHash = HashAlgorithms.Fnv1a(newName);
             if (tree.Objects.ContainsKey(newHash)) { error = $"A material named '{newName}' already exists."; return null; }
 
