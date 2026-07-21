@@ -54,6 +54,15 @@ public static class GameReferenceLibrary
         return File.Exists(p) ? p : null;
     }
 
+    /// <summary>M115: the WAD holding the practice-tool target dummy (and all Map11 assets).</summary>
+    public static string? FindMap11Wad(string? gameDirectory)
+    {
+        var final = FindFinalDir(gameDirectory);
+        if (final is null) return null;
+        var p = Path.Combine(final, "Maps", "Shipping", "Map11.wad.client");
+        return File.Exists(p) ? p : null;
+    }
+
     /// <summary>Resolve the DATA/FINAL directory from a configured game path (Game, Game/DATA/FINAL, …).</summary>
     private static string? FindFinalDir(string? gameDirectory)
     {

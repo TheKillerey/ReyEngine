@@ -1217,6 +1217,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         // M55: model-preview window — its own animation clock (AnimationInspectorViewModel) + VFX resolvers
         MeshPreview.Animation.ClipLoader = DecodeAnimation;
+        MeshPreview.LoadDummyMesh = () => Services.TargetDummyLoader.Get(Project.GameDirectory, _resolver,
+            m => _log.Warn("Preview", m));   // M115: Riot's practice dummy from Map11.wad
         MeshPreview.ResolveTextures = ResolveSystemTextures;
         MeshPreview.ResolveDistortionTextures = ResolveSystemDistortionTextures;
         MeshPreview.ResolveColorTextures = ResolveSystemColorTextures;   // M68
@@ -1582,15 +1584,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>M85: gather the champion's submesh-visibility rules — initialSubmeshToHide from every
     /// skins/*.bin and per-clip show/hide lists from every animations/*.bin under the champ folder
     /// (keyed by .anm file name to match the preview's animation entries).</summary>
-    private (IReadOnlyList<string> InitialHide, IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? Clips)
+    private (IReadOnlyList<string> InitialHide, IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? Clips,
+             IReadOnlySet<string> OwnAnms)
         LoadSubmeshRules(WadAssetEntry skn)
     {
+        var ownAnms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            if (!skn.IsResolved) return (Array.Empty<string>(), null);
+            if (!skn.IsResolved) return (Array.Empty<string>(), null, ownAnms);
             var parts = skn.Path.Split('/');
             int ci = Array.FindIndex(parts, p => p.Equals("characters", StringComparison.OrdinalIgnoreCase));
-            if (ci < 0 || ci + 1 >= parts.Length) return (Array.Empty<string>(), null);
+            if (ci < 0 || ci + 1 >= parts.Length) return (Array.Empty<string>(), null, ownAnms);
             string champ = parts[ci + 1];
             const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
             string animDir = $"characters/{champ}/animations/";
@@ -1610,6 +1614,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 {
                     var file = Path.GetFileName(c.AnmPath.Replace('\\', '/'));
                     if (file.Length > 0 && !clips.ContainsKey(file)) clips[file] = c;
+                    if (file.Length > 0) ownAnms.Add(file);   // M115: THIS skin's animation set
                 }
 
             foreach (var e in AssetEntries)
@@ -1628,12 +1633,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
             if (clips.Count > 0)
                 _log.Info("Preview", $"{champ}: {clips.Count} named clip(s) with visibility data, initial-hide: {(hide.Count > 0 ? string.Join(' ', hide) : "(none)")}.");
-            return (hide, clips.Count > 0 ? clips : null);
+            return (hide, clips.Count > 0 ? clips : null, ownAnms);
         }
-        catch { return (Array.Empty<string>(), null); }
+        catch { return (Array.Empty<string>(), null, ownAnms); }
     }
 
-    private IEnumerable<AnimationEntryViewModel> FindAnimations(WadAssetEntry skn)
+    private IEnumerable<AnimationEntryViewModel> FindAnimations(WadAssetEntry skn, IReadOnlySet<string>? currentSkinAnms = null)
     {
         if (!ContentLoaded || !skn.IsResolved) return Enumerable.Empty<AnimationEntryViewModel>();
         var parts = skn.Path.Split('/');
@@ -1644,18 +1649,39 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         bool Match(string path, bool resolved) =>
             resolved && path.EndsWith(".anm", OIC) && (champ.Length == 0 || path.Contains(marker, OIC));
 
+        // M115: which .anm files the LOADED skin's own animation graph references (green highlight);
+        // when the graph didn't resolve, fall back to path matching against the skn's own skin folder.
+        string sknGroup = AnimationEntryViewModel.GroupFromPath(skn.Path);
+        bool IsCurrent(string path, string fileName) =>
+            currentSkinAnms is { Count: > 0 }
+                ? currentSkinAnms.Contains(fileName)
+                : AnimationEntryViewModel.GroupFromPath(path) == sknGroup;
+
+        AnimationEntryViewModel Make(WadAssetEntry e) => new(e)
+        {
+            SkinGroup = AnimationEntryViewModel.GroupFromPath(e.Path),
+            IsCurrentSkin = IsCurrent(e.Path, Path.GetFileName(e.Path)),
+        };
+
         var seen = new HashSet<ulong>();
         var list = new List<AnimationEntryViewModel>();
         foreach (var e in AssetEntries)
-            if (Match(e.Path, e.IsResolved) && seen.Add(e.PathHash)) list.Add(new AnimationEntryViewModel(e));
+            if (Match(e.Path, e.IsResolved) && seen.Add(e.PathHash)) list.Add(Make(e));
 
         // If the mod doesn't ship this unit's animations, fall back to the original game WADs.
         if (list.Count == 0 && _mounts is not null)
             foreach (var fb in _mounts.Fallback)
                 foreach (var a in fb.Enumerate())
-                    if (Match(a.VirtualPath, a.IsResolved) && seen.Add(a.PathHash)) list.Add(new AnimationEntryViewModel(a.ToEntry()));
+                    if (Match(a.VirtualPath, a.IsResolved) && seen.Add(a.PathHash)) list.Add(Make(a.ToEntry()));
 
-        return list.OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        // Loaded skin's clips first, then grouped by skin (Base, Skin 01…, Shared last), names within.
+        static int GroupRank(string g) => g == "Base" ? 0 : g == "Shared" ? 999 : 1;
+        return list
+            .OrderByDescending(a => a.IsCurrentSkin)
+            .ThenBy(a => GroupRank(a.SkinGroup))
+            .ThenBy(a => a.SkinGroup, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     [RelayCommand]
@@ -3315,7 +3341,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 return (m, s, t, v);
             });
             // M85: game-accurate submesh visibility — skin bin initial-hide + animation-graph clip lists.
-            var (initialHide, clipsByAnm) = LoadSubmeshRules(entry);
+            var (initialHide, clipsByAnm, ownAnms) = LoadSubmeshRules(entry);
             await Task.Run(() => LoadChampionAudio(entry));   // M90: clip SFX banks
 
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -3323,7 +3349,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MeshPreview.Show(entry.DisplayName, mesh, skeleton, textures);
                 MeshPreview.SetSubmeshRules(initialHide, clipsByAnm);
                 MeshPreview.SetAnimations(mesh.CanSkin && skeleton is not null
-                    ? FindAnimations(entry)
+                    ? FindAnimations(entry, ownAnms)
                     : Enumerable.Empty<AnimationEntryViewModel>());
                 MeshPreview.SetVfx(vfx.systems, vfx.resourceMap);
                 MeshPreview.SetVoiceEvents(TryLoadVoiceEvents(entry));   // M95c: authored VO lines

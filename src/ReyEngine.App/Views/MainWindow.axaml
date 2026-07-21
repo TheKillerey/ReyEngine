@@ -816,11 +816,21 @@
                           ItemsSource="{Binding Animation.Animations}"
                           SelectedItem="{Binding Animation.SelectedAnimation, Mode=TwoWay}"
                           IsVisible="{Binding Animation.HasAnimations}">
-                  <ComboBox.ItemTemplate>
-                    <DataTemplate>
-                      <TextBlock Text="{Binding Name}" FontSize="11" />
-                    </DataTemplate>
-                  </ComboBox.ItemTemplate>
+                <ComboBox.ItemTemplate>
+                  <DataTemplate>
+                    <!-- M115: grouped by skin — the loaded skin's clips glow green, others carry a badge -->
+                    <Border CornerRadius="3" Padding="4,1" Margin="-2,0"
+                            Background="{Binding IsCurrentSkin, Converter={x:Static views:M115Converters.CurrentSkinBrush}}">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="11" VerticalAlignment="Center" />
+                        <Border Grid.Column="1" Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="3"
+                                Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding SkinGroup}" FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        </Border>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
                 </ComboBox>
                 <Button Classes="tool" Content="Assign Animation…" HorizontalAlignment="Left"
                         Command="{Binding AssignAnimationCommand}" />

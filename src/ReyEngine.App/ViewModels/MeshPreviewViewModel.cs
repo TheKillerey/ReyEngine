@@ -236,12 +236,39 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// <summary>Play the manually selected VFX at the dummy even when its name isn't target-ish.</summary>
     [ObservableProperty] private bool _playSelectedAtDummy;
 
-    /// <summary>The cube's base position for the viewport; null hides it.</summary>
+    /// <summary>The dummy's base position; null when disabled.</summary>
     public System.Numerics.Vector3? TargetDummyPosition =>
         TargetDummyEnabled ? new System.Numerics.Vector3((float)DummyX, (float)DummyY, (float)DummyZ) : null;
 
     /// <summary>Gizmo pivot (bound by the preview window) — the dummy is the only gizmo user here.</summary>
     public System.Numerics.Vector3? DummyGizmoPivot => TargetDummyPosition;
+
+    // ---- M115: render Riot's practice-tool dummy instead of the cube when its assets load ----
+
+    /// <summary>Host hook: decode Riot's target dummy from Map11.wad (cached; null = keep the cube).</summary>
+    public Func<PropMesh?>? LoadDummyMesh { get; set; }
+    private PropMesh? _dummyMesh;
+    private bool _dummyMeshTried;
+
+    /// <summary>The real dummy as a one-instance prop set; null when disabled or assets unavailable.</summary>
+    [ObservableProperty] private PropRenderSet? _dummyProps;
+
+    /// <summary>Cube fallback position — only set while the real model isn't available.</summary>
+    public System.Numerics.Vector3? DummyCubePosition => DummyProps is null ? TargetDummyPosition : null;
+
+    private void RebuildDummyProps()
+    {
+        if (TargetDummyPosition is not { } pos) { DummyProps = null; OnPropertyChanged(nameof(DummyCubePosition)); return; }
+        if (!_dummyMeshTried) { _dummyMeshTried = true; _dummyMesh = LoadDummyMesh?.Invoke(); }
+        if (_dummyMesh is null) { DummyProps = null; OnPropertyChanged(nameof(DummyCubePosition)); return; }
+
+        // Face the champion (at the origin), the way a unit would face its attacker.
+        float yaw = MathF.Atan2(-pos.X, -pos.Z);
+        var transform = System.Numerics.Matrix4x4.CreateRotationY(yaw)
+                        * System.Numerics.Matrix4x4.CreateTranslation(pos);
+        DummyProps = new PropRenderSet(new[] { new PropInstanceData(_dummyMesh, transform) });
+        OnPropertyChanged(nameof(DummyCubePosition));
+    }
 
     partial void OnTargetDummyEnabledChanged(bool value) => OnDummyMoved();
     partial void OnDummyXChanged(double value) => OnDummyMoved();
@@ -253,6 +280,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(TargetDummyPosition));
         OnPropertyChanged(nameof(DummyGizmoPivot));
+        RebuildDummyProps();      // M115: the model rides the gizmo
         ReplaySelectedOrClip();   // re-anchor whatever is playing
     }
 

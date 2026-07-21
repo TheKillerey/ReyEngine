@@ -12,6 +12,26 @@ public sealed class AnimationEntryViewModel
     public WadAssetEntry Entry { get; }
     public AnimationEntryViewModel(WadAssetEntry entry) => Entry = entry;
     public string Name => Entry.DisplayName;
+
+    // ---- M115: skin grouping ----
+    /// <summary>Which skin folder this .anm lives in — "Base", "Skin 02", … or "Shared" for
+    /// champion-level animation folders outside skins/.</summary>
+    public string SkinGroup { get; init; } = "Shared";
+    /// <summary>True when the loaded skin's own animation graph references this clip (green highlight).</summary>
+    public bool IsCurrentSkin { get; init; }
+
+    /// <summary>Derive the group label from the .anm path (…/skins/skin02/animations/…).</summary>
+    public static string GroupFromPath(string path)
+    {
+        var parts = path.Replace('\\', '/').Split('/');
+        int si = System.Array.FindIndex(parts, p => p.Equals("skins", StringComparison.OrdinalIgnoreCase));
+        if (si < 0 || si + 1 >= parts.Length) return "Shared";
+        var skin = parts[si + 1];
+        if (skin.Equals("base", StringComparison.OrdinalIgnoreCase)) return "Base";
+        return skin.StartsWith("skin", StringComparison.OrdinalIgnoreCase) && int.TryParse(skin.AsSpan(4), out int n)
+            ? $"Skin {n:00}"
+            : skin;
+    }
 }
 
 /// <summary>
