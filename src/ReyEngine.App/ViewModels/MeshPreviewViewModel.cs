@@ -111,6 +111,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Animation.SetSkeleton(skeleton?.BoneCount ?? 0);
         Playback = null;
         SelectedVfx = null;
+        ImagePreview = null;    // M120: a model preview replaces a texture preview
         StopSounds?.Invoke();   // M90: previous champion's SFX must not bleed into the new preview
 
         // M84: per-submesh visibility toggles (all visible on load)
@@ -418,6 +419,39 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         foreach (var h in ev.TargetSystems) if (Make(h, dummy, null) is { } i) items.Add(i);
         foreach (var h in ev.MissileSystems) if (Make(h, System.Numerics.Vector3.Zero, dummy) is { } i) items.Add(i);
         return items;
+    }
+
+    // ---- M120: image mode - textures preview in THIS window instead of a second inspector card ----
+
+    /// <summary>When set, an image overlay covers the viewport (the single preview surface for
+    /// textures). Cleared by its close button, by previewing a model, or by closing the window.</summary>
+    [ObservableProperty] private Avalonia.Media.Imaging.Bitmap? _imagePreview;
+    [ObservableProperty] private string _imagePreviewInfo = "";
+    public bool HasImagePreview => ImagePreview is not null;
+    partial void OnImagePreviewChanged(Avalonia.Media.Imaging.Bitmap? value) => OnPropertyChanged(nameof(HasImagePreview));
+
+    [RelayCommand] private void CloseImagePreview() => ImagePreview = null;
+
+    /// <summary>Show a decoded texture in the preview window (title bar reflects it; the 3D scene
+    /// underneath is left untouched so closing the image returns to the model).</summary>
+    public void ShowImage(string title, Avalonia.Media.Imaging.Bitmap bmp, string info)
+    {
+        Title = title;
+        ImagePreview = bmp;
+        ImagePreviewInfo = info;
+    }
+
+    /// <summary>M120: the window was closed - stop EVERYTHING that outlives the visuals. The animation
+    /// clock and the sound schedule live in this view-model, so without this the closed preview kept
+    /// playing SFX/VO into the void.</summary>
+    public void OnWindowClosed()
+    {
+        StopEvent();                          // event bundle + playback + sound schedule
+        SelectedVfx = null;
+        Animation.SelectedAnimation = null;   // stops the clip drive
+        Animation.Pause();
+        StopSounds?.Invoke();
+        ImagePreview = null;
     }
 
     // ---- M90: preview model scale (compare champion size against the map backdrop) ----

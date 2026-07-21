@@ -280,7 +280,21 @@
                              DynamicLightsEnabled="{Binding BackgroundLightsEnabled}"
                              DynamicLightIntensity="{Binding BackgroundLightIntensity}"
                              ShowLightMarkers="False" />
-      <Border x:Name="PreviewInput" Background="Transparent" />
+      <!-- M120: texture preview overlay - the window is the single preview surface for images too -->
+      <Border Background="#E60D1117" IsVisible="{Binding HasImagePreview}">
+        <DockPanel Margin="14">
+          <DockPanel DockPanel.Dock="Top">
+            <Button DockPanel.Dock="Right" Classes="tool" Content="✕ Close image" FontSize="11" Padding="8,3"
+                    Command="{Binding CloseImagePreviewCommand}" />
+            <TextBlock Text="{Binding ImagePreviewInfo}" FontSize="11" VerticalAlignment="Center"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+          </DockPanel>
+          <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="6" Padding="8" Margin="0,10,0,0">
+            <Image Source="{Binding ImagePreview}" Stretch="Uniform" RenderOptions.BitmapInterpolationMode="None" />
+          </Border>
+        </DockPanel>
+      </Border>
+      <Border x:Name="PreviewInput" Background="Transparent" IsVisible="{Binding !HasImagePreview}" />
       <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
                  Margin="8,6" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />
     </Grid>

@@ -3386,7 +3386,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var img = await Task.Run(() => TextureDecoder.Decode(GetAssetBytes(entry)));
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                Inspector.SetPreview(BitmapFactory.FromRgba(img));
+                // M120: ONE preview surface - the image shows in the Model Preview window (replacing
+                // whatever it showed) instead of stacking a second preview card into the inspector.
+                MeshPreview.ShowImage(entry.DisplayName, BitmapFactory.FromRgba(img),
+                    $"{img.Width}×{img.Height} · {entry.Compression}");
+                ShowMeshPreviewWindow?.Invoke();
                 _log.Info("Preview", $"Decoded {entry.DisplayName} ({img.Width}×{img.Height}).");
             });
         }

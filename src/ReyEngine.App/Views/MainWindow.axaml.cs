@@ -306,7 +306,11 @@ public partial class MainWindow : Window
         if (_meshPreviewWindow is null)
         {
             _meshPreviewWindow = new MeshPreviewWindow { DataContext = vm.MeshPreview };
-            _meshPreviewWindow.Closed += (_, _) => _meshPreviewWindow = null;
+            _meshPreviewWindow.Closed += (_, _) =>
+            {
+                _meshPreviewWindow = null;
+                vm.MeshPreview.OnWindowClosed();   // M120: stop sounds/animation - not just the visuals
+            };
             _meshPreviewWindow.Show(this);
         }
         else _meshPreviewWindow.Activate();
