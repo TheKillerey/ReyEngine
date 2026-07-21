@@ -5193,6 +5193,60 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Validate", ex.Message); return false; }
     }
 
+    /// <summary>M97c: the Patch Update wizard — rebase every project .bin from the patch the mod was
+    /// built for onto the current patch (CommunityDragon old original + M97a three-way merge).</summary>
+    [RelayCommand]
+    private void OpenPatchUpdateWizard()
+    {
+        if (!ContentLoaded) { _log.Warn("PatchUpdate", "Open a project first."); return; }
+        if (Project.RootPath is null || Project.ProjectFolders.Count == 0)
+        { _log.Warn("PatchUpdate", "The wizard needs a folder project."); return; }
+
+        var vm = new PatchUpdateWindowViewModel
+        {
+            ListPatches = Services.CommunityDragonClient.ListPatchesAsync,
+            DownloadOld = (patch, rel) => Services.CommunityDragonClient.DownloadBinAsync(
+                patch, rel, Services.CommunityDragonClient.DefaultCacheDir),
+            ReadCurrentOriginal = ReadRiotOriginalBytes,
+            ReadProjectBytes = ReadAsset,
+            SaveBytes = SaveMapBinBytesAsync,
+            RunValidate = ValidateProjectBins,
+            Resolve = ResolveBinName,
+        };
+        string? backupDir = null;   // one folder per wizard run, created lazily
+        vm.Backup = (rel, bytes) =>
+        {
+            try
+            {
+                backupDir ??= Path.Combine(Project.RootPath!, ".reyengine", "backups",
+                    $"patch-update-{DateTime.Now:yyyyMMdd-HHmmss}");
+                var dest = Path.Combine(backupDir, rel.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.WriteAllBytes(dest, bytes);
+                return dest;
+            }
+            catch (Exception ex) { _log.Warn("PatchUpdate", $"Backup of {rel} failed: {ex.Message}"); return null; }
+        };
+
+        foreach (var folder in Project.ProjectFolders)
+        {
+            string root = Path.Combine(Project.RootPath!, folder);
+            if (!Directory.Exists(root)) continue;
+            foreach (var file in Directory.EnumerateFiles(root, "*.bin", SearchOption.AllDirectories))
+            {
+                string rel = Path.GetRelativePath(root, file).Replace('\\', '/');
+                if (!rel.Contains('/')) continue;   // loose unresolved-chunk dumps, not real bins
+                if (TryResolveEntry(HashAlgorithms.WadPath(rel), out var entry))
+                    vm.Bins.Add(new PatchUpdateBinRowViewModel { Rel = rel, Entry = entry });
+            }
+        }
+        if (vm.Bins.Count == 0) { _log.Warn("PatchUpdate", "No project .bin files found."); return; }
+
+        var win = new Views.PatchUpdateWindow { DataContext = vm };
+        if (PromptOwner is not null) win.Show(PromptOwner); else win.Show();
+        _ = vm.InitAsync();
+    }
+
     /// <summary>M94: convert a .fantome mod package into an editable folder project under
     /// Documents\ReyEngine Projects, then open it — lets users mod existing mods.</summary>
     [RelayCommand]

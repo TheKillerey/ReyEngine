@@ -1,0 +1,78 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.PatchUpdateWindow"
+        x:DataType="vm:PatchUpdateWindowViewModel"
+        Title="ReyEngine — Patch Update Wizard" Width="720" Height="560"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- footer -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,8">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+          <CheckBox Content="Validate afterwards" IsChecked="{Binding ValidateAfter}" FontSize="11"
+                    ToolTip.Tip="Run Validate Project Bins when the update finishes — leftover problems open in the issues window with Go To / Fix / Delete" />
+          <Button Classes="primary" Content="▶ Run Update" Command="{Binding RunCommand}"
+                  IsEnabled="{Binding CanRun}" Padding="14,4" />
+        </StackPanel>
+        <TextBlock Text="{Binding Status}" VerticalAlignment="Center" FontSize="11"
+                   Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+      </DockPanel>
+    </Border>
+
+    <ScrollViewer>
+      <StackPanel Margin="14" Spacing="10">
+        <!-- patch pick -->
+        <Border Classes="card">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="cardTitle" Text="OLD PATCH" />
+            <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
+                       Text="The patch this mod was BUILT for (its last known working patch). For every project .bin, the wizard downloads that patch's original from CommunityDragon, diffs it against your file to isolate the mod's actual edits, and re-applies exactly those edits onto the current patch's original. Your current files are backed up to .reyengine/backups/ first." />
+            <ComboBox ItemsSource="{Binding Patches}" SelectedItem="{Binding SelectedPatch}"
+                      FontSize="11" HorizontalAlignment="Stretch" MaxDropDownHeight="380"
+                      IsEnabled="{Binding PatchesLoaded}" />
+          </StackPanel>
+        </Border>
+
+        <!-- bins -->
+        <Border Classes="card">
+          <StackPanel Spacing="4">
+            <DockPanel>
+              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4">
+                <Button Classes="tool" Content="All" Command="{Binding IncludeAllCommand}" />
+                <Button Classes="tool" Content="None" Command="{Binding IncludeNoneCommand}" />
+              </StackPanel>
+              <TextBlock Classes="cardTitle" Text="PROJECT BINS" />
+            </DockPanel>
+            <ItemsControl ItemsSource="{Binding Bins}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:PatchUpdateBinRowViewModel">
+                  <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8,5" Margin="0,2">
+                    <StackPanel Spacing="3">
+                      <DockPanel>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding Status}" FontSize="10"
+                                   Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+                        <CheckBox IsChecked="{Binding Include}" FontSize="11" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Rel}" FontSize="11" TextTrimming="CharacterEllipsis"
+                                     ToolTip.Tip="{Binding Rel}" />
+                        </CheckBox>
+                      </DockPanel>
+                      <TextBlock Text="{Binding Detail}" FontSize="10" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding HasDetail}" />
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

@@ -94,6 +94,8 @@
         <MenuItem Header="Export Shader Dump…" Command="{Binding ExportShaderDumpCommand}" />
         <MenuItem Header="Validate Project Bins" Command="{Binding ValidateProjectBinsCommand}"
                   ToolTip.Tip="Emulate mod injection (project overrides over Riot originals) and check every project .bin for broken object links and missing assets — what would break in-game" />
+        <MenuItem Header="Patch Update Wizard…" Command="{Binding OpenPatchUpdateWizardCommand}"
+                  ToolTip.Tip="Update this mod to the current patch: old originals from CommunityDragon + three-way merge carries only the mod's edits onto the new base — with backups, a per-bin report and validation" />
         <MenuItem Header="Map Material Diagnostics" Command="{Binding MapMaterialDiagnosticsCommand}"
                   ToolTip.Tip="Scan the loaded map's bins + mapgeo and write an honest diagnostics report (classes, unknown fields, lighting/lightmap/visibility) to .reyengine/reports/" />
         <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"
