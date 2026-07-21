@@ -91,6 +91,11 @@ public sealed class ViewportMeshRenderer : IDisposable
     private readonly List<PropGeometry> _propGeoms = new();
     private readonly List<(int Geo, Matrix4x4 Model)> _propMeshInstances = new();
     private readonly List<uint> _propTextures = new();
+    // M114: target dummy — a solid practice-target cube for targeted-spell VFX previews
+    private uint _dummyVao, _dummyVbo;
+    private int _dummyTriVerts, _dummyEdgeVerts;
+    private bool _hasDummy;
+
     private bool _hasGizmo;
     private Vector3 _gizmoPivot;
     private float _gizmoArmLength;
@@ -653,6 +658,8 @@ void main() { FragColor = uColor; }";
         _groupBoundsVbo = gl.GenBuffer();
         _gizmoVao = gl.GenVertexArray();
         _gizmoVbo = gl.GenBuffer();
+        _dummyVao = gl.GenVertexArray();
+        _dummyVbo = gl.GenBuffer();
         _particleVao = gl.GenVertexArray();
         _particleVbo = gl.GenBuffer();
         _particleSelVao = gl.GenVertexArray();
@@ -1408,6 +1415,41 @@ void main(){
         return v.ToArray();
     }
 
+    /// <summary>M114: place the target dummy cube — <paramref name="position"/> is the point the cube
+    /// STANDS on (its base), like a unit on the ground. Null hides it.</summary>
+    public unsafe void SetTargetDummy(Vector3? position, float size)
+    {
+        if (!_ready) return;
+        if (position is not { } basePos || size <= 0f) { _hasDummy = false; return; }
+
+        float h = size * 0.5f;
+        var ctr = basePos + new Vector3(0f, h, 0f);
+        Vector3 C(int sx, int sy, int sz) => ctr + new Vector3(sx * h, sy * h, sz * h);
+        var k = new[] { C(-1,-1,-1), C(1,-1,-1), C(1,1,-1), C(-1,1,-1), C(-1,-1,1), C(1,-1,1), C(1,1,1), C(-1,1,1) };
+        // 12 triangles (two per face), then 12 edges — one VBO, tris first
+        int[] tri = { 0,1,2, 0,2,3,  5,4,7, 5,7,6,  4,0,3, 4,3,7,  1,5,6, 1,6,2,  3,2,6, 3,6,7,  4,5,1, 4,1,0 };
+        int[,] ed = { {0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7} };
+
+        var v = new float[tri.Length * 3 + ed.Length * 3];
+        int w = 0;
+        foreach (var i in tri) { v[w++] = k[i].X; v[w++] = k[i].Y; v[w++] = k[i].Z; }
+        for (int i = 0; i < 12; i++)
+            foreach (var idx in new[] { ed[i, 0], ed[i, 1] })
+            { v[w++] = k[idx].X; v[w++] = k[idx].Y; v[w++] = k[idx].Z; }
+
+        _gl.BindVertexArray(_dummyVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _dummyVbo);
+        fixed (float* fp = v)
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(v.Length * sizeof(float)), fp, BufferUsageARB.DynamicDraw);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+        _gl.BindVertexArray(0);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        _dummyTriVerts = tri.Length;
+        _dummyEdgeVerts = ed.Length * 2;
+        _hasDummy = true;
+    }
+
     /// <summary>Set the placed-particle markers (M35/M53): an icon billboard at each world position, plus a
     /// larger highlighted one at the selected. An empty list clears them.</summary>
     public void SetParticleMarkers(IReadOnlyList<Vector3> positions, Vector3? selected, float size)
@@ -1795,6 +1837,21 @@ void main(){
                 _gl.BindVertexArray(_highlightVao);
                 _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_highlightVerts);
             }
+            _gl.BindVertexArray(0);
+        }
+
+        // M114: target dummy — a solid depth-tested cube so it sits IN the scene like a unit would;
+        // practice-dummy red with brighter edges for read-at-a-glance.
+        if (_hasDummy && _dummyTriVerts > 0)
+        {
+            _gl.UseProgram(_lineProgram);
+            _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+            _gl.Enable(EnableCap.DepthTest);
+            _gl.BindVertexArray(_dummyVao);
+            _gl.Uniform4(_lColor, 0.72f, 0.22f, 0.18f, 1f);
+            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_dummyTriVerts);
+            _gl.Uniform4(_lColor, 1.0f, 0.55f, 0.35f, 1f);
+            _gl.DrawArrays(PrimitiveType.Lines, _dummyTriVerts, (uint)_dummyEdgeVerts);
             _gl.BindVertexArray(0);
         }
 

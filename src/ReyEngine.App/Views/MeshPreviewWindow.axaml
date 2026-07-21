@@ -17,6 +17,8 @@
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
           <ToggleButton Classes="vp" Content="🗺 Map" IsChecked="{Binding BackgroundVisible}"
                         IsVisible="{Binding HasBackground}" ToolTip.Tip="{Binding BackgroundMapName, StringFormat='Backdrop: {0}'}" />
+          <ToggleButton Classes="vp" Content="🎯 Dummy" IsChecked="{Binding TargetDummyEnabled}"
+                        ToolTip.Tip="Target dummy — a stand-in unit so targeted spells (Kayn R…) have somewhere to land. Drag its gizmo arrows to move it." />
           <ToggleButton Classes="vp" Content="▦ Grid" IsChecked="{Binding ShowGrid}" ToolTip.Tip="Show the reference grid" />
           <ToggleButton Classes="vp" Content="🔊 SFX" IsChecked="{Binding SfxEnabled}" ToolTip.Tip="Play the clip's sound events (like in-game)" />
           <ToggleButton Classes="vp" Content="⌗ Wire" IsChecked="{Binding Wireframe}" />
@@ -48,6 +50,29 @@
                 <Slider Minimum="0.1" Maximum="5" Value="{Binding ModelScale, Mode=TwoWay}" Width="120" />
                 <TextBlock Text="{Binding ModelScale, StringFormat='{}{0:0.00}×'}" FontSize="11" VerticalAlignment="Center" />
               </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <!-- M114: target dummy — position + behaviour -->
+          <Border Classes="card" IsVisible="{Binding TargetDummyEnabled}">
+            <StackPanel Spacing="4">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Classes="cardTitle" Grid.Column="0" Text="TARGET DUMMY" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="tool" Content="Reset" FontSize="10" Padding="6,1"
+                        Command="{Binding ResetDummyCommand}" ToolTip.Tip="Back to 350 units in front" />
+              </Grid>
+              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" >
+                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="1" Text="{Binding DummyX, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="3" Text="{Binding DummyY, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
+                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBox Grid.Column="5" Text="{Binding DummyZ, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
+              </Grid>
+              <CheckBox Content="Play selected VFX at dummy" IsChecked="{Binding PlaySelectedAtDummy}" FontSize="10"
+                        ToolTip.Tip="Force the manually picked system onto the dummy. Systems named *_tar* go there automatically." />
+              <TextBlock Text="Drag the gizmo arrows in the viewport to move it. Target-bound systems (*_tar*) land here automatically."
+                         FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
 
@@ -190,6 +215,8 @@
                              AnimationClip="{Binding CurrentAnimation}"
                              AnimationTime="{Binding AnimationTime}"
                              ParticlePlayback="{Binding Playback}"
+                             TargetDummyPosition="{Binding TargetDummyPosition}"
+                             GizmoPivot="{Binding DummyGizmoPivot}"
                              ShowBones="{Binding ShowBones}"
                              Wireframe="{Binding Wireframe}"
                              CullBackfaces="{Binding CullBackfaces}"

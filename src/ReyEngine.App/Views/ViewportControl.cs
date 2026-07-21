@@ -152,6 +152,9 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GroupBoundsMin));
     public static readonly StyledProperty<Vector3?> GroupBoundsMaxProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GroupBoundsMax));
+    /// <summary>M114: world position the target-dummy cube stands on; null hides it.</summary>
+    public static readonly StyledProperty<Vector3?> TargetDummyPositionProperty =
+        AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(TargetDummyPosition));
     public static readonly StyledProperty<Vector3?> GizmoPivotProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(GizmoPivot));
     public static readonly StyledProperty<int> GizmoModeProperty =
@@ -166,6 +169,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public Vector3? GroupBoundsMin { get => GetValue(GroupBoundsMinProperty); set => SetValue(GroupBoundsMinProperty, value); }
     public Vector3? GroupBoundsMax { get => GetValue(GroupBoundsMaxProperty); set => SetValue(GroupBoundsMaxProperty, value); }
     /// <summary>World-space center of the selection — the translate-gizmo origin (null = no selection).</summary>
+    public Vector3? TargetDummyPosition { get => GetValue(TargetDummyPositionProperty); set => SetValue(TargetDummyPositionProperty, value); }
     public Vector3? GizmoPivot { get => GetValue(GizmoPivotProperty); set => SetValue(GizmoPivotProperty, value); }
     /// <summary>Transform gizmo mode (M42): 0 move · 1 rotate · 2 scale.</summary>
     public int GizmoMode { get => GetValue(GizmoModeProperty); set => SetValue(GizmoModeProperty, value); }
@@ -581,6 +585,7 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             var pts = ParticleMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>();
             _meshRenderer.SetParticleMarkers(pts, SelectedParticlePosition, _markerSize);
+            _meshRenderer.SetTargetDummy(TargetDummyPosition, 120f);   // M114: ~melee-minion sized cube
             _meshRenderer.SetPropMarkers(PropMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize);
             _meshRenderer.SetProbeMarkers(ProbeMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.4f);
             _meshRenderer.SetSoundMarkers(SoundMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.2f);
@@ -1067,6 +1072,7 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         else if (change.Property == SelectionBoxesProperty || change.Property == GroupBoundsMinProperty
                  || change.Property == GroupBoundsMaxProperty || change.Property == GizmoPivotProperty
+                 || change.Property == TargetDummyPositionProperty
                  || change.Property == GizmoModeProperty || change.Property == GizmoAxesProperty)
         { RequestNextFrameRendering(); }
         else if (change.Property == SkeletonProperty) { _bonesDirty = true; _skinDirty = true; RequestNextFrameRendering(); }

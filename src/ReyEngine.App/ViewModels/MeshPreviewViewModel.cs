@@ -212,16 +212,77 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                     || ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(d.Name) == ev.EffectHash)));
             if (def is null || !def.Emitters.Any(e => e.IsVisual)) continue;
             var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
-            items.Add(new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs,
+            // M114: target-bound systems ("_tar") anchor at the dummy, not on the caster's bones.
+            var anchor = AnchorFor(def);
+            bool atDummy = anchor != System.Numerics.Vector3.Zero;
+            items.Add(new VfxPlaybackItem(def, anchor, texs,
                 ResolveMeshes?.Invoke(def),
                 emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
                 emitterColorTextures: ResolveColorTextures?.Invoke(def))
             {
-                AttachBone = ResolveBoneName(ev),
+                AttachBone = atDummy ? null : ResolveBoneName(ev),
                 StartDelay = MathF.Max(0f, ev.StartFrame) / ClipFps(),   // M91: fire at the authored frame
             });
         }
         if (items.Count > 0) Playback = new VfxPlayback(items);
+    }
+
+    // ---- M114: target dummy — a stand-in unit so targeted-spell VFX have somewhere to land ----
+
+    [ObservableProperty] private bool _targetDummyEnabled;
+    [ObservableProperty] private double _dummyX = 350;
+    [ObservableProperty] private double _dummyY;
+    [ObservableProperty] private double _dummyZ;
+    /// <summary>Play the manually selected VFX at the dummy even when its name isn't target-ish.</summary>
+    [ObservableProperty] private bool _playSelectedAtDummy;
+
+    /// <summary>The cube's base position for the viewport; null hides it.</summary>
+    public System.Numerics.Vector3? TargetDummyPosition =>
+        TargetDummyEnabled ? new System.Numerics.Vector3((float)DummyX, (float)DummyY, (float)DummyZ) : null;
+
+    /// <summary>Gizmo pivot (bound by the preview window) — the dummy is the only gizmo user here.</summary>
+    public System.Numerics.Vector3? DummyGizmoPivot => TargetDummyPosition;
+
+    partial void OnTargetDummyEnabledChanged(bool value) => OnDummyMoved();
+    partial void OnDummyXChanged(double value) => OnDummyMoved();
+    partial void OnDummyYChanged(double value) => OnDummyMoved();
+    partial void OnDummyZChanged(double value) => OnDummyMoved();
+    partial void OnPlaySelectedAtDummyChanged(bool value) => ReplaySelectedOrClip();
+
+    private void OnDummyMoved()
+    {
+        OnPropertyChanged(nameof(TargetDummyPosition));
+        OnPropertyChanged(nameof(DummyGizmoPivot));
+        ReplaySelectedOrClip();   // re-anchor whatever is playing
+    }
+
+    /// <summary>Move the dummy from a viewport gizmo drag (world axis + amount).</summary>
+    public void MoveDummy(System.Numerics.Vector3 delta)
+    {
+        _dummyX += delta.X; _dummyY += delta.Y; _dummyZ += delta.Z;
+        OnPropertyChanged(nameof(DummyX)); OnPropertyChanged(nameof(DummyY)); OnPropertyChanged(nameof(DummyZ));
+        OnDummyMoved();
+    }
+
+    [RelayCommand]
+    private void ResetDummy() { DummyX = 350; DummyY = 0; DummyZ = 0; }
+
+    /// <summary>Riot's naming convention for target-attached systems — "_tar" (e.g. Kayn_Base_Primary_
+    /// R_tar_enemy). Verified against Kayn: matches exactly the systems the game plays on the target.</summary>
+    private static bool IsTargetVfxName(string name) =>
+        name.Contains("_tar", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Where a system should be anchored: at the dummy for target-bound systems (when the dummy
+    /// is enabled), else at the champion's root.</summary>
+    private System.Numerics.Vector3 AnchorFor(VfxSystemDefinition def, bool forceDummy = false) =>
+        TargetDummyPosition is { } dummy && (forceDummy || IsTargetVfxName(def.Name))
+            ? dummy
+            : System.Numerics.Vector3.Zero;
+
+    private void ReplaySelectedOrClip()
+    {
+        if (SelectedVfx is not null) OnSelectedVfxChanged(SelectedVfx);
+        else ApplyClipParticles();
     }
 
     // ---- M90: preview model scale (compare champion size against the map backdrop) ----
@@ -348,7 +409,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     {
         if (value is null || !_vfxDefs.TryGetValue(value.Hash, out var def)) { Playback = null; return; }
         var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
-        Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs,
+        // M114: "_tar" systems (or the explicit override) play at the target dummy — Kayn's
+        // R_tar_enemy lands on the dummy instead of stacking on the caster.
+        Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, AnchorFor(def, PlaySelectedAtDummy), texs,
             ResolveMeshes?.Invoke(def), emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
             emitterColorTextures: ResolveColorTextures?.Invoke(def)) });
     }
