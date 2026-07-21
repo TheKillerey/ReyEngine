@@ -78,7 +78,9 @@
 
           <Border Classes="card">
             <StackPanel Spacing="6">
-              <TextBlock Classes="cardTitle" Text="ANIMATION" />
+              <TextBlock Classes="cardTitle" Text="ANIMATIONS" />
+              <TextBlock Text="Pure .anm playback — no VFX or sounds. Use EVENTS below for the full sequence."
+                         FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding Animation.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
               <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Select animation…"
                         ItemsSource="{Binding Animation.Animations}"
@@ -199,6 +201,32 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
+            </StackPanel>
+          </Border>
+
+          <!-- M116: EVENTS — complete sequences: animation + VFX + SFX, with caster systems on the
+               champion, _tar systems on the target dummy and missiles travelling between. -->
+          <Border Classes="card" IsVisible="{Binding HasEvents}">
+            <StackPanel Spacing="5">
+              <TextBlock Classes="cardTitle" Text="EVENTS" />
+              <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Play an event…"
+                        ItemsSource="{Binding ChampionEvents}"
+                        SelectedItem="{Binding SelectedEvent, Mode=TwoWay}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel>
+                      <TextBlock Text="{Binding Name}" FontSize="11" />
+                      <TextBlock Text="{Binding Description}" FontSize="9" Opacity="0.55" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <Button Classes="tool" Content="↺ Replay" Command="{Binding ReplayEventCommand}" />
+                <Button Classes="tool" Content="■ Stop" Command="{Binding StopEventCommand}" />
+              </StackPanel>
+              <TextBlock Text="Spell composites are assembled from Riot's VFX naming — timing between caster, missile and target is approximate."
+                         FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
 

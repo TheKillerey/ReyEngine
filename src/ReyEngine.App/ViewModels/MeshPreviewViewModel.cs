@@ -66,19 +66,34 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     public MeshPreviewViewModel()
     {
-        Animation.ClipChanged = clip => { CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility(); ApplyClipParticles(); ResetSoundSchedule(stopCurrent: true); TryAutoVoice(); };   // M85/M86/M90/M95c
+        // M116: two playback modes. ANIMATIONS = the pure .anm (no VFX, no SFX, no VO); EVENTS = the
+        // full authored sequence. EventPlaybackActive flips when PlayEvent drives the clip selection.
+        Animation.ClipChanged = clip =>
+        {
+            CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility();
+            if (_eventPlaybackActive)
+            {
+                ApplyClipParticles(); ResetSoundSchedule(stopCurrent: true); TryAutoVoice();   // M85/M86/M90/M95c
+            }
+            else
+            {
+                _eventBundle = null; _activeEvent = null;
+                if (SelectedVfx is null) Playback = null;
+                ClearSoundSchedule();
+            }
+        };
         Animation.TimeChanged = t =>
         {
             // M86: clip event VFX are one-shot — respawn them each time the looping clip wraps around
             // (manual VFX picks are left alone). Backward jump in time = the loop restarted.
-            if (t + 0.05 < _lastAnimTime)
+            if (t + 0.05 < _lastAnimTime && _eventPlaybackActive)
             {
                 if (SelectedVfx is null) ApplyClipParticles();
                 ResetSoundSchedule(stopCurrent: false);   // M91: refire from the top; one-shots finish across the seam
             }
             _lastAnimTime = t;
             AnimationTime = t;
-            TickSoundSchedule(t);   // M91: frame-accurate SFX
+            if (_eventPlaybackActive) TickSoundSchedule(t);   // M91: frame-accurate SFX
         };
     }
 
@@ -193,9 +208,15 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// Each item carries its StartFrame as a sim delay, so effects fire at their authored moment.</summary>
     private void ApplyClipParticles()
     {
-        if (_clipsByAnm is null || Animation.SelectedAnimation?.Name is not { } anm) return;
-        if (_clipsByAnm.GetValueOrDefault(anm) is not { ParticleEvents.Count: > 0 } clip)
-        { if (SelectedVfx is null) Playback = null; return; }   // no events: stop auto VFX, keep manual picks
+        if (Animation.SelectedAnimation?.Name is not { } anm) return;
+        var clip = _clipsByAnm?.GetValueOrDefault(anm);
+        if (clip is not { ParticleEvents.Count: > 0 })
+        {
+            // no clip-authored events: the event bundle (spell composite) still plays (M116)
+            if (_eventBundle is { Count: > 0 }) Playback = new VfxPlayback(_eventBundle);
+            else if (SelectedVfx is null) Playback = null;
+            return;
+        }
 
         var items = new List<VfxPlaybackItem>();
         foreach (var ev in clip.ParticleEvents!)
@@ -224,6 +245,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 StartDelay = MathF.Max(0f, ev.StartFrame) / ClipFps(),   // M91: fire at the authored frame
             });
         }
+        if (_eventBundle is { Count: > 0 }) items.AddRange(_eventBundle);   // M116: spell composite rides along
         if (items.Count > 0) Playback = new VfxPlayback(items);
     }
 
@@ -309,8 +331,93 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     private void ReplaySelectedOrClip()
     {
+        if (_activeEvent is { } ev && _eventPlaybackActive) { _eventBundle = BuildEventBundle(ev); ApplyClipParticles(); return; }
         if (SelectedVfx is not null) OnSelectedVfxChanged(SelectedVfx);
         else ApplyClipParticles();
+    }
+
+    // ---- M116: EVENTS — full sequences (anim + VFX + SFX + caster/target/missile routing) ----
+
+    public ObservableCollection<Formats.Vfx.ChampionEvent> ChampionEvents { get; } = new();
+    [ObservableProperty] private Formats.Vfx.ChampionEvent? _selectedEvent;
+    [ObservableProperty] private bool _hasEvents;
+
+    /// <summary>True while an EVENTS-section playback drives the clip (full VFX/SFX pipeline);
+    /// false = the ANIMATIONS section is in charge and plays the bare .anm.</summary>
+    private bool _eventPlaybackActive;
+    private List<VfxPlaybackItem>? _eventBundle;   // the spell composite riding the current event
+    private Formats.Vfx.ChampionEvent? _activeEvent;
+
+    partial void OnSelectedEventChanged(Formats.Vfx.ChampionEvent? value)
+    {
+        if (value is not null) PlayEvent(value);
+    }
+
+    [RelayCommand]
+    private void ReplayEvent() { if (_activeEvent is { } ev) PlayEvent(ev); }
+
+    [RelayCommand]
+    private void StopEvent()
+    {
+        _eventPlaybackActive = false;
+        _eventBundle = null;
+        _activeEvent = null;
+        SelectedEvent = null;
+        Playback = null;
+        ClearSoundSchedule();
+        Animation.SelectedAnimation = null;
+    }
+
+    private void PlayEvent(Formats.Vfx.ChampionEvent ev)
+    {
+        SelectedVfx = null;                       // manual pick and events are exclusive
+        _activeEvent = ev;
+        _eventPlaybackActive = true;
+        if (ev.NeedsTarget && !TargetDummyEnabled) TargetDummyEnabled = true;   // _tar plays ONLY on the dummy
+        _eventBundle = BuildEventBundle(ev);
+
+        // The clip drives timing when the event has one; else the bundle plays on its own.
+        var entry = ev.ClipAnmFile is { } anm
+            ? Animation.Animations.FirstOrDefault(a => string.Equals(a.Name, anm, StringComparison.OrdinalIgnoreCase))
+            : null;
+        if (entry is not null)
+        {
+            if (ReferenceEquals(Animation.SelectedAnimation, entry)) ApplyClipParticles();  // re-fire same clip
+            else Animation.SelectedAnimation = entry;                                        // ClipChanged runs the full path
+        }
+        else
+        {
+            Playback = _eventBundle is { Count: > 0 } ? new VfxPlayback(_eventBundle) : null;
+        }
+    }
+
+    /// <summary>The spell composite: caster systems on the champion, target systems on the dummy,
+    /// missiles travelling between at ~1800 u/s (League's common missile speed band).</summary>
+    private List<VfxPlaybackItem> BuildEventBundle(Formats.Vfx.ChampionEvent ev)
+    {
+        var items = new List<VfxPlaybackItem>();
+        var dummy = TargetDummyPosition ?? new System.Numerics.Vector3(350, 0, 0);
+
+        VfxPlaybackItem? Make(uint hash, System.Numerics.Vector3 at, System.Numerics.Vector3? travelTo)
+        {
+            if (!_vfxDefs.TryGetValue(hash, out var def)) return null;
+            var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
+            float dist = travelTo is { } dst ? (dst - at).Length() : 0f;
+            return new VfxPlaybackItem(def, at, texs,
+                ResolveMeshes?.Invoke(def),
+                emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
+                emitterColorTextures: ResolveColorTextures?.Invoke(def))
+            {
+                TravelTo = travelTo,
+                TravelSeconds = dist > 1f ? dist / 1800f : 0f,
+                StartDelay = travelTo is not null ? 0.15f : 0f,   // small windup before the missile leaves
+            };
+        }
+
+        foreach (var h in ev.CasterSystems) if (Make(h, System.Numerics.Vector3.Zero, null) is { } i) items.Add(i);
+        foreach (var h in ev.TargetSystems) if (Make(h, dummy, null) is { } i) items.Add(i);
+        foreach (var h in ev.MissileSystems) if (Make(h, System.Numerics.Vector3.Zero, dummy) is { } i) items.Add(i);
+        return items;
     }
 
     // ---- M90: preview model scale (compare champion size against the map backdrop) ----
@@ -421,6 +528,26 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     /// <summary>Populate the champion VFX library for this skin (visual systems only). The resource map
     /// (M86) translates clip effect keys → system object hashes, the way the game resolves them.</summary>
+    /// <summary>M116: stop pending clip SFX without touching a playing event (pure-animation mode).</summary>
+    private void ClearSoundSchedule()
+    {
+        StopSounds?.Invoke();
+        _soundSchedule.Clear();
+        _soundsFired = 0;
+    }
+
+    /// <summary>M116: rebuild the EVENTS list (spell composites + authored clips) for this skin.</summary>
+    private void RebuildChampionEvents()
+    {
+        ChampionEvents.Clear();
+        _activeEvent = null; _eventBundle = null; _eventPlaybackActive = false;
+        if (_vfxDefs.Count > 0 || _clipsByAnm is { Count: > 0 })
+            foreach (var ev in ChampionEventBuilder.Build(_vfxDefs,
+                         (_clipsByAnm?.Values ?? Enumerable.Empty<Formats.Skeletons.AnimClipInfo>()).ToList()))
+                ChampionEvents.Add(ev);
+        HasEvents = ChampionEvents.Count > 0;
+    }
+
     public void SetVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems,
         IReadOnlyDictionary<uint, uint>? resourceMap = null)
     {
@@ -431,11 +558,15 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             if (System.Linq.Enumerable.Any(s.Emitters, e => e.IsVisual))
                 VfxSystems.Add(new VfxSystemItemViewModel { Hash = s.PathHash, Name = s.Name, EmitterCount = s.Emitters.Count });
         HasVfx = VfxSystems.Count > 0;
+        RebuildChampionEvents();   // M116: events derive from the VFX set + this skin's clips
     }
 
     partial void OnSelectedVfxChanged(VfxSystemItemViewModel? value)
     {
-        if (value is null || !_vfxDefs.TryGetValue(value.Hash, out var def)) { Playback = null; return; }
+        if (value is null || !_vfxDefs.TryGetValue(value.Hash, out var def)) { if (_eventBundle is null) Playback = null; return; }
+        _eventPlaybackActive = false; _eventBundle = null; _activeEvent = null;   // manual pick replaces an event
+        // M116: _tar systems play ONLY on the target dummy — picking one turns the dummy on.
+        if (IsTargetVfxName(def.Name) && !TargetDummyEnabled) { TargetDummyEnabled = true; return; }   // re-enters via ReplaySelectedOrClip
         var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         // M114: "_tar" systems (or the explicit override) play at the target dummy — Kayn's
         // R_tar_enemy lands on the dummy instead of stacking on the caster.

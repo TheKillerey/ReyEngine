@@ -266,6 +266,8 @@ public sealed class ViewportControl : OpenGlControlBase
     private VfxParticleRenderer? _particleRenderer;
     private readonly List<VfxParticleSimulator> _particleSims = new();
     private readonly Dictionary<VfxPlaybackItem, VfxParticleSimulator> _particleSimCache = new(ReferenceEqualityComparer.Instance);
+    /// <summary>M116: per travelling item, seconds since its playback started (drives caster→target flight).</summary>
+    private readonly Dictionary<VfxPlaybackItem, float> _travelElapsed = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<TextureImage, uint> _particleTextureCache = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<VfxParticleSimulator.EmitterState, VfxMeshAnimation> _particleMeshAnimations = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<VfxParticleSimulator> _wantedParticleSims = new(ReferenceEqualityComparer.Instance);
@@ -762,6 +764,19 @@ public sealed class ViewportControl : OpenGlControlBase
                 var frame = SkinnedMeshAnimator.Skin(anim.Mesh, anim.Skeleton, anim.Clip, t);
                 prend.UpdateEmitterMeshPositions(es, frame.Positions);
             }
+            // M116: missiles fly — travelling systems lerp from their spawn point to TravelTo after
+            // their StartDelay, re-anchoring the sim the same way bone attachment does.
+            if (dt > 0f)
+                foreach (var (item, sim) in _particleSimCache)
+                {
+                    if (item.TravelTo is not { } dest || item.TravelSeconds <= 0f) continue;
+                    float elapsed = (_travelElapsed.TryGetValue(item, out var te) ? te : 0f) + dt;
+                    _travelElapsed[item] = elapsed;
+                    float t01 = Math.Clamp((elapsed - item.StartDelay) / item.TravelSeconds, 0f, 1f);
+                    var pos = Vector3.Lerp(item.WorldPos, dest, t01);
+                    sim.SetWorldTransform(Matrix4x4.CreateTranslation(pos));
+                }
+
             foreach (var psim in _particleSims)
             {
                 psim.Update(dt);
@@ -891,6 +906,7 @@ public sealed class ViewportControl : OpenGlControlBase
         if (_particleRenderer is null) return;
         _particleSims.Clear();
         _particleSimCache.Clear();
+        _travelElapsed.Clear();
         _particleTextureCache.Clear();
         _particleMeshAnimations.Clear();
         _animatedMeshEmitters.Clear();   // M48: rebuilt with the sims

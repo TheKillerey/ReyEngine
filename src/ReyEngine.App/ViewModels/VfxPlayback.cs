@@ -39,6 +39,11 @@ public sealed record VfxPlaybackItem(
     /// <summary>M91: seconds after playback start before this system begins simulating — clip events
     /// fire at their authored StartFrame instead of all at clip start.</summary>
     public float StartDelay { get; init; }
+
+    /// <summary>M116: when set, the system TRAVELS from its spawn position to this point over
+    /// <see cref="TravelSeconds"/> (after <see cref="StartDelay"/>) — missiles fly caster → target.</summary>
+    public Vector3? TravelTo { get; init; }
+    public float TravelSeconds { get; init; }
 }
 
 /// <summary>
