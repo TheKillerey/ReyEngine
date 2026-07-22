@@ -91,9 +91,46 @@ public sealed class WadArchive : IDisposable
         lock (_readLock)
         {
             var chunk = _wad.Chunks[pathHash];
-            using MemoryOwner<byte> owner = _wad.LoadChunkDecompressed(chunk);
-            return owner.Span.ToArray();
+            try
+            {
+                using MemoryOwner<byte> owner = _wad.LoadChunkDecompressed(chunk);
+                return owner.Span.ToArray();
+            }
+            catch (Exception) when (chunk.Compression == WadChunkCompression.ZstdChunked)
+            {
+                // M135: LeagueToolkit can only decode ZstdChunked entries when it found the wad's
+                // subchunk TOC — mod-built and overlay wads carry the entries WITHOUT a TOC LT can
+                // locate, and LT dies with the (in)famous NullReferenceException (the M44 gap that
+                // made fantome imports drop "failed chunks — usually subchunked textures").
+                // A TOC is not actually needed to decode: the stored bytes are the subchunks'
+                // zstd frames back-to-back, and a streaming decoder walks concatenated frames.
+                // Verified byte-identical to LT's TOC-driven output on 400 riot Map12 entries.
+                return ExtractSubchunkedWithoutToc(chunk);
+            }
         }
+    }
+
+    private FileStream? _rawStream;   // fallback reads; guarded by _readLock, disposed with the archive
+
+    private byte[] ExtractSubchunkedWithoutToc(WadChunk chunk)
+    {
+        _rawStream ??= File.OpenRead(FilePath);
+        var stored = new byte[chunk.CompressedSize];
+        _rawStream.Position = chunk.DataOffset;
+        _rawStream.ReadExactly(stored, 0, stored.Length);
+
+        using var ds = new ZstdSharp.DecompressionStream(new MemoryStream(stored, writable: false));
+        var result = new byte[chunk.UncompressedSize];
+        int total = 0;
+        while (total < result.Length)
+        {
+            int n = ds.Read(result, total, result.Length - total);
+            if (n <= 0) break;
+            total += n;
+        }
+        if (total != result.Length)
+            throw new InvalidDataException($"Subchunked chunk 0x{chunk.PathHash:x16}: only {total:n0} of {result.Length:n0} bytes decoded.");
+        return result;
     }
 
     public void ExtractToFile(WadAssetEntry entry, string outPath)
@@ -103,5 +140,9 @@ public sealed class WadArchive : IDisposable
         File.WriteAllBytes(outPath, Extract(entry));
     }
 
-    public void Dispose() => _wad.Dispose();
+    public void Dispose()
+    {
+        _rawStream?.Dispose();
+        _wad.Dispose();
+    }
 }
