@@ -55,6 +55,11 @@
         <Button Content="Browse…" Command="{Binding BrowseOutputCommand}" />
       </StackPanel>
 
+      <!-- M132 -->
+      <CheckBox Content="Clean unknown files when packing (only known game formats go into the WAD)"
+                IsChecked="{Binding PackKnownTypesOnly}" FontSize="11"
+                ToolTip.Tip="Skips editor leftovers — notes, PSDs, temp files — anything that isn't a game format (.tex/.dds/.bin/.skn/.anm/…). Every skipped file is listed in the console." />
+
       <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,12,0,0">
         <Button Content="Cancel" Command="{Binding CancelCommand}" Padding="14,5" />
         <Button Content="Save" Command="{Binding SaveCommand}" Padding="18,5"

@@ -16,6 +16,8 @@ public sealed class WadPackReport
     public bool Reopened { get; set; }
     public string Validation { get; set; } = "";
     public List<string> Warnings { get; } = new();
+    /// <summary>M132: files excluded by the known-game-types filter (relative paths).</summary>
+    public List<string> CleanedUnknown { get; } = new();
     public bool Success => Reopened;
 }
 
@@ -31,13 +33,39 @@ public static class WadPackService
     private const long TocStart = 272;
     private const int TocEntrySize = 32;
 
-    public static WadPackReport Pack(string folder, string outputWad, IProgress<float>? progress = null, CancellationToken ct = default)
+    /// <summary>M132: every file type the game's wads actually carry. Anything else in a staged
+    /// folder is editor leftovers (notes, sources, thumbnails) — the game never requests it, and it
+    /// bloats/pollutes the package.</summary>
+    private static readonly HashSet<string> KnownGameExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".bin", ".bnk", ".wpk", ".dds", ".tex", ".skn", ".skl", ".anm", ".scb", ".sco",
+        ".mapgeo", ".nvr", ".preload", ".stringtable", ".luaobj", ".troybin", ".dat", ".cfg",
+        ".png", ".jpg", ".jpeg", ".webm", ".ogg", ".svg", ".ttf", ".otf", ".subchunktoc",
+    };
+
+    public static WadPackReport Pack(string folder, string outputWad, IProgress<float>? progress = null,
+        CancellationToken ct = default, bool knownTypesOnly = false)
     {
         var report = new WadPackReport { OutputPath = outputWad };
 
         // Resolve files → hash (last file wins on a hash clash).
         var byHash = new Dictionary<ulong, string>();
-        foreach (var (hash, path) in EnumerateChunkFiles(folder)) byHash[hash] = path;
+        foreach (var (hash, path) in EnumerateChunkFiles(folder))
+        {
+            if (knownTypesOnly)
+            {
+                var rel = Path.GetRelativePath(folder, path).Replace('\\', '/');
+                // hash-named loose chunks carry no extension info worth trusting — always packed
+                bool loose = !rel.Contains('/') && Path.GetFileNameWithoutExtension(rel).Length == 16;
+                if (!loose && !KnownGameExtensions.Contains(Path.GetExtension(rel)))
+                {
+                    report.CleanedUnknown.Add(rel);
+                    report.Skipped++;
+                    continue;
+                }
+            }
+            byHash[hash] = path;
+        }
 
         var entries = new List<(ulong hash, byte[] data, int uncompressed, byte compression)>(byHash.Count);
         using var compressor = new ZstdSharp.Compressor(level: 6);

@@ -20,6 +20,7 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     [ObservableProperty] private string _thumbnailPath = "";
     [ObservableProperty] private string _gameDirectory = "";
     [ObservableProperty] private string _outputDirectory = "";
+    [ObservableProperty] private bool _packKnownTypesOnly = true;   // M132
 
     public bool Saved { get; private set; }
     public event Action? CloseRequested;
@@ -36,6 +37,7 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         _thumbnailPath = p.ThumbnailPath ?? "";
         _gameDirectory = p.GameDirectory ?? "";
         _outputDirectory = p.OutputDirectory ?? "";
+        _packKnownTypesOnly = p.PackKnownTypesOnly;
     }
 
     public void ApplyTo(ReyProject p)
@@ -49,6 +51,7 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         p.ThumbnailPath = string.IsNullOrWhiteSpace(ThumbnailPath) ? null : ThumbnailPath.Trim();
         if (!string.IsNullOrWhiteSpace(GameDirectory)) p.GameDirectory = GameDirectory.Trim();
         if (!string.IsNullOrWhiteSpace(OutputDirectory)) p.OutputDirectory = OutputDirectory.Trim();
+        p.PackKnownTypesOnly = PackKnownTypesOnly;
     }
 
     [RelayCommand]

@@ -6662,9 +6662,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var packProgress = new Progress<float>(fr => progress?.Report(
                 (0.30 + 0.65 * (idx - 1 + fr) / stagedFolders.Count, $"Packing {name}.wad.client… {fr:P0}")));
             WadPackReport pr;
-            try { pr = WadPackService.Pack(dir, outWad, packProgress); }
+            try { pr = WadPackService.Pack(dir, outWad, packProgress, knownTypesOnly: Project.PackKnownTypesOnly); }
             catch (Exception ex) { _log.Error("Build", $"Pack failed for {name}: {ex.Message}"); continue; }
             foreach (var w in pr.Warnings) _log.Warn("Build", w);
+            if (pr.CleanedUnknown.Count > 0)   // M132
+            {
+                _log.Info("Build", $"{name}: cleaned {pr.CleanedUnknown.Count} unknown file(s) from the package (not game formats):");
+                foreach (var c in pr.CleanedUnknown.Take(10)) _log.Info("Build", $"   skipped {c}");
+                if (pr.CleanedUnknown.Count > 10) _log.Info("Build", $"   … {pr.CleanedUnknown.Count - 10} more");
+            }
             if (pr.Success)
             {
                 packed++;

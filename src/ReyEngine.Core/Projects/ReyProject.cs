@@ -27,6 +27,10 @@ public sealed class ReyProject
     public List<string> ReferenceWads { get; set; } = new();
     public List<string> RecentAssets { get; set; } = new();
 
+    /// <summary>M132: pack only known game file types into wads — editor leftovers, notes, PSDs and
+    /// other unknown extensions are skipped (each skip is logged). Default on.</summary>
+    public bool PackKnownTypesOnly { get; set; } = true;
+
     // M17 .fantome mod metadata.
     public string? ModName { get; set; }
     public string? ModAuthor { get; set; }
