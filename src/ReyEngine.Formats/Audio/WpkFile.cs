@@ -23,44 +23,65 @@ public sealed class WpkFile
     /// <summary>Order of wem ids as they appear in the pack (preserved for rebuild).</summary>
     private readonly List<uint> _order = new();
 
-    /// <summary>M57: rewrite the pack with some wems replaced (id → new .wem bytes). Layout matches
-    /// LtMAO's wpk.write: r3d2 / version 1 / offset table / entries {u32 dataOffset, u32 size, u32 nameLen,
-    /// UTF-16 "id.wem"} / concatenated data.</summary>
+    /// <summary>M57: rewrite the pack with some wems replaced (id → new .wem bytes).</summary>
     public byte[] Rebuild(IReadOnlyDictionary<uint, byte[]> replacements)
     {
-        var data = new Dictionary<uint, byte[]>();
+        var entries = new List<(uint Id, byte[] Data)>();
         foreach (var id in _order)
-            data[id] = replacements.TryGetValue(id, out var rep) ? rep : (GetWemData(id) ?? System.Array.Empty<byte>());
+            entries.Add((id, replacements.TryGetValue(id, out var rep) ? rep : (GetWemData(id) ?? System.Array.Empty<byte>())));
+        return RebuildEntries(entries);
+    }
 
+    /// <summary>The wem ids in pack order (preserved across a rebuild).</summary>
+    public IReadOnlyList<uint> Order => _order;
+
+    /// <summary>
+    /// M137: rewrite the pack so its contents are EXACTLY <paramref name="entries"/> — added, removed,
+    /// re-identified and reordered wems included. Layout matches LtMAO's wpk.write: r3d2 / version 1 /
+    /// count / offset table / entries {u32 dataOffset, u32 size, u32 nameLen, UTF-16 "id.wem"} / data.
+    /// </summary>
+    /// <summary>Shipped packs 8-align both the entry headers and the payloads (verified across Riot
+    /// .wpk files — the stride only reveals it when entry name lengths differ, e.g. 8- vs 9-digit ids).</summary>
+    private const int EntryAlignment = 8;
+    private const int DataAlignment = 8;
+
+    public static byte[] RebuildEntries(IReadOnlyList<(uint Id, byte[] Data)> entries)
+    {
         using var ms = new MemoryStream();
         using var w = new BinaryWriter(ms);
-        w.Write(Encoding.ASCII.GetBytes("r3d2"));
-        w.Write(1u);                            // version
-        w.Write((uint)_order.Count);
-        long offsetTablePos = ms.Position;
-        foreach (var _ in _order) w.Write(0u);  // entry offsets, filled below
-
-        var entryOffsets = new long[_order.Count];
-        var dataPatchPos = new long[_order.Count];
-        for (int i = 0; i < _order.Count; i++)
+        void Pad(int alignment)
         {
+            while (ms.Position % alignment != 0) w.Write((byte)0);
+        }
+
+        w.Write(Encoding.ASCII.GetBytes("r3d2"));
+        w.Write(1u);                              // version
+        w.Write((uint)entries.Count);
+        long offsetTablePos = ms.Position;
+        foreach (var _ in entries) w.Write(0u);   // entry offsets, filled below
+
+        var entryOffsets = new long[entries.Count];
+        var dataPatchPos = new long[entries.Count];
+        for (int i = 0; i < entries.Count; i++)
+        {
+            Pad(EntryAlignment);
             entryOffsets[i] = ms.Position;
-            var name = $"{_order[i]}.wem";
+            var name = $"{entries[i].Id}.wem";
             dataPatchPos[i] = ms.Position;
-            w.Write(0u);                        // dataOffset (patched after data written)
-            w.Write((uint)data[_order[i]].Length);
+            w.Write(0u);                          // dataOffset (patched after data written)
+            w.Write((uint)entries[i].Data.Length);
             w.Write((uint)name.Length);
             w.Write(Encoding.Unicode.GetBytes(name));
         }
-        for (int i = 0; i < _order.Count; i++)
+        for (int i = 0; i < entries.Count; i++)
         {
+            Pad(DataAlignment);
             long dataStart = ms.Position;
-            w.Write(data[_order[i]]);
+            w.Write(entries[i].Data);
             long resume = ms.Position;
             ms.Position = dataPatchPos[i]; w.Write((uint)dataStart);
             ms.Position = resume;
         }
-        // write the entry-offset table
         ms.Position = offsetTablePos;
         foreach (var off in entryOffsets) w.Write((uint)off);
         return ms.ToArray();

@@ -4697,6 +4697,101 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MapBinEditorViewModel MapBinEditor { get; } = new();
     public Action? ShowMapBinEditorWindow;
 
+    /// <summary>M137: open a Wwise .bnk/.wpk in the Audio Bank Editor — play, replace, add, rename,
+    /// delete and copy/paste its embedded sounds.</summary>
+    [RelayCommand]
+    private void OpenInAudioEditor(AssetNodeViewModel? node)
+    {
+        var entry = node?.Entry ?? ContextNode?.Entry;
+        if (entry is null) { _log.Warn("Audio", "Select a .bnk or .wpk asset first."); return; }
+        if (!entry.DisplayName.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase)
+            && !entry.DisplayName.EndsWith(".wpk", StringComparison.OrdinalIgnoreCase))
+        { _log.Warn("Audio", $"{entry.DisplayName} is not a Wwise bank or wem pack."); return; }
+
+        try
+        {
+            var bytes = GetAssetBytes(entry);
+            var vm = new AudioBankEditorViewModel
+            {
+                DecodeToWav = (id, data) => Sound.DecodeToWav(id, data),
+                PlayWav = wav => Sound.PlayWav(wav, 1f, loop: false, tag: "bankedit"),
+                StopAll = () => Sound.StopAll(),
+                ClearDecodeCache = id => Sound.ClearCache(id),
+                Info = m => _log.Info("Audio", m),
+                Warn = m => _log.Warn("Audio", m),
+                PickImportFile = title => Dialogs.OpenFileAsync(title,
+                    new Avalonia.Platform.Storage.FilePickerFileType("Wwise wem") { Patterns = new[] { "*.wem" } },
+                    DialogService.All),
+                PickExportFile = suggested => Dialogs.SaveFileAsync("Export sound", suggested),
+                PromptText = (title, initial) => PromptOwner is null
+                    ? Task.FromResult<string?>(null)
+                    : Views.PromptWindow.InputAsync(PromptOwner, title,
+                        "Wwise identifies sounds by number — this id is what events reference.", initial),
+                SaveAsync = async (doc, e, data) =>
+                {
+                    if (!GuardEditable(e)) return false;
+                    if (!await EnsureProjectSavedAsync()) return false;
+                    bool ok = await SaveMapBinBytesAsync(e, data);   // in-place for folder projects; override otherwise
+                    if (ok) _log.Success("Audio", $"Saved {e.DisplayName} ({data.Length:n0} bytes, {doc.Entries.Count} sound(s)).");
+                    return ok;
+                },
+            };
+
+            if (!vm.Load(entry, bytes, null))
+            { _log.Warn("Audio", $"{entry.DisplayName} isn't a readable Wwise bank/pack."); return; }
+            if (vm.Document is { IsEditable: false, ReadOnlyReason: { } reason })
+                _log.Warn("Audio", $"{entry.DisplayName}: {reason}");
+
+            // "played by": reverse-resolve the sibling *_events.bnk so each sound shows what triggers it
+            if (BuildUsedByLookup(entry) is { } lookup) vm.SetUsedByLookup(lookup);
+
+            var win = new Views.AudioBankEditorWindow { DataContext = vm };
+            if (PromptOwner is not null) win.Show(PromptOwner); else win.Show();
+            _log.Info("Audio", $"Audio Bank Editor: {entry.DisplayName} — {vm.Document!.Entries.Count} sound(s)."
+                + (Sound.IsAvailable ? "" : " vgmstream-cli NOT found — playback disabled."));
+        }
+        catch (Exception ex) { _log.Error("Audio", $"{entry.DisplayName}: {ex.Message}"); }
+    }
+
+    /// <summary>Map wem id → the event(s) that play it, read from the bank's sibling <c>*_events.bnk</c>
+    /// (media and hierarchy ship as separate files). Event names aren't stored in the banks, so known
+    /// names come from the loaded map's sound placements; anything else shows as its hex id.</summary>
+    private Func<uint, string[]>? BuildUsedByLookup(WadAssetEntry mediaEntry)
+    {
+        try
+        {
+            var path = mediaEntry.Path;
+            var eventsPath = path.Contains("_audio.", StringComparison.OrdinalIgnoreCase)
+                ? System.Text.RegularExpressions.Regex.Replace(path, "_audio\\.(bnk|wpk)$", "_events.bnk",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                : null;
+            if (eventsPath is null || !TryResolveEntry(HashAlgorithms.WadPath(eventsPath), out var evEntry)) return null;
+            if (Formats.Audio.BnkFile.Parse(GetAssetBytes(evEntry)) is not { HasHirc: true } evBank) return null;
+
+            var set = new Formats.Audio.AudioBankSet();
+            set.AddBank(evBank, evEntry.PathHash, evEntry.Path);
+
+            // known event names (hash -> name) from the map's placed sounds
+            var names = new Dictionary<uint, string>();
+            foreach (var s in MapContent.Sounds)
+                names[Formats.Audio.WwiseHash.Fnv1(s.EventName)] = s.EventName;
+
+            var reverse = new Dictionary<uint, List<string>>();
+            foreach (var eventId in evBank.Events.Keys)
+            {
+                string label = names.TryGetValue(eventId, out var n) ? n : $"event 0x{eventId:x8}";
+                foreach (var wemId in set.ResolveEvent(eventId))
+                {
+                    if (!reverse.TryGetValue(wemId, out var list)) reverse[wemId] = list = new List<string>();
+                    if (!list.Contains(label)) list.Add(label);
+                }
+            }
+            _log.Info("Audio", $"Matched {System.IO.Path.GetFileName(eventsPath)}: {evBank.Events.Count} event(s) → {reverse.Count} sound(s).");
+            return id => reverse.TryGetValue(id, out var l) ? l.ToArray() : Array.Empty<string>();
+        }
+        catch { return null; }
+    }
+
     /// <summary>M98: right-click ▸ Open in Map Bin Editor — the fast structured editor for map*.bin.</summary>
     [RelayCommand(CanExecute = nameof(CanOpenInMapBinEditor))]
     private void OpenInMapBinEditor(AssetNodeViewModel? node)

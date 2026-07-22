@@ -98,6 +98,8 @@
                   ToolTip.Tip="Update this mod to the current patch: old originals from CommunityDragon + three-way merge carries only the mod's edits onto the new base — with backups, a per-bin report and validation" />
         <MenuItem Header="Overlay Footprint" Command="{Binding OverlayFootprintCommand}"
                   ToolTip.Tip="How many game WADs will mod loaders have to patch for this mod? Shows the fan-out per WAD and which project folders cause it — very wide overlays (200+ WADs) have crashed the game" />
+        <MenuItem Header="Open in Audio Editor" Command="{Binding OpenInAudioEditorCommand}"
+                  ToolTip.Tip="Edit the selected .bnk/.wpk directly: play, replace, add, rename, delete and copy/paste its embedded sounds" />
         <MenuItem Header="Asset Usage Report" Command="{Binding AssetUsageCommand}"
                   ToolTip.Tip="Which project files can nothing ever load (dead — deletable in one click) and which recolor OTHER content (champions/items — the wad fan-out drivers)" />
         <MenuItem Header="Map Material Diagnostics" Command="{Binding MapMaterialDiagnosticsCommand}"
@@ -612,6 +614,7 @@
                             <Separator />
                             <MenuItem Header="Open in Text Editor" Command="{Binding $parent[Window].DataContext.OpenInTextEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in Map Bin Editor" Command="{Binding $parent[Window].DataContext.OpenInMapBinEditorCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Open in Audio Editor" Command="{Binding $parent[Window].DataContext.OpenInAudioEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
                             <Separator />
                             <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />
@@ -683,6 +686,7 @@
                               <Separator />
                               <MenuItem Header="Open in Text Editor" Command="{Binding $parent[Window].DataContext.OpenInTextEditorCommand}" CommandParameter="{Binding}" />
                               <MenuItem Header="Open in Map Bin Editor" Command="{Binding $parent[Window].DataContext.OpenInMapBinEditorCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Open in Audio Editor" Command="{Binding $parent[Window].DataContext.OpenInAudioEditorCommand}" CommandParameter="{Binding}" />
                               <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
                               <Separator />
                               <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />

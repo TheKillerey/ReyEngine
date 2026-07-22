@@ -58,30 +58,80 @@ public sealed class BnkFile
     public byte[]? Rebuild(IReadOnlyDictionary<uint, byte[]> replacements)
     {
         if (!HasEmbeddedWems) return null;
+        var entries = new List<(uint Id, byte[] Data)>();
+        foreach (var id in DidxOrder())
+            entries.Add((id, replacements.TryGetValue(id, out var rep) ? rep : (GetWemData(id) ?? System.Array.Empty<byte>())));
+        return RebuildEntries(entries);
+    }
 
-        // ordered wem list (preserve DIDX order); pull current bytes, apply replacements
+    /// <summary>The wem ids in DIDX order (the order the bank stores them in).</summary>
+    public IReadOnlyList<uint> DidxOrder()
+    {
         var order = new List<uint>();
-        var bytesById = new Dictionary<uint, byte[]>();
-        using (var ms = new MemoryStream(_raw, writable: false))
-        using (var r = new BinaryReader(ms))
+        using var ms = new MemoryStream(_raw, writable: false);
+        using var r = new BinaryReader(ms);
+        while (ms.Position + 8 <= ms.Length)
         {
-            while (ms.Position + 8 <= ms.Length)
+            string sig = Encoding.ASCII.GetString(r.ReadBytes(4));
+            uint size = r.ReadUInt32();
+            long end = ms.Position + size;
+            if (sig == "DIDX")
+                for (uint i = 0; i < size / 12; i++)
+                { uint id = r.ReadUInt32(); r.ReadInt32(); r.ReadInt32(); order.Add(id); }
+            ms.Position = end;
+        }
+        return order;
+    }
+
+    /// <summary>
+    /// M137: rewrite the bank so its embedded media is EXACTLY <paramref name="entries"/> — supports
+    /// added, removed, re-identified and reordered wems, not just in-place replacement. Every other
+    /// section (BKHD/HIRC/STID/…) is copied verbatim; DIDX/DATA are regenerated contiguously.
+    /// A bank with no DIDX/DATA yet gets both inserted right after BKHD (standard Wwise order).
+    /// </summary>
+    /// <summary>Riot ships embedded media 16-byte aligned inside DATA (verified on shipped banks:
+    /// every DIDX offset % 16 == 0, with zero padding between entries). Wwise wants aligned media for
+    /// memory-mapped playback, so rebuilds reproduce that layout rather than packing contiguously.</summary>
+    private const int MediaAlignment = 16;
+
+    public byte[] RebuildEntries(IReadOnlyList<(uint Id, byte[] Data)> entries)
+    {
+        // offsets first: each entry starts on the next 16-byte boundary
+        var offsets = new int[entries.Count];
+        int cursor = 0;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            offsets[i] = cursor;
+            cursor += entries[i].Data.Length;
+            if (i + 1 < entries.Count && cursor % MediaAlignment != 0)
+                cursor += MediaAlignment - (cursor % MediaAlignment);
+        }
+        int dataLength = cursor;   // no trailing padding, matching the shipped layout
+
+        void WriteMedia(BinaryWriter w)
+        {
+            w.Write(Encoding.ASCII.GetBytes("DIDX"));
+            w.Write((uint)(entries.Count * 12));
+            for (int i = 0; i < entries.Count; i++)
             {
-                string sig = Encoding.ASCII.GetString(r.ReadBytes(4));
-                uint size = r.ReadUInt32();
-                long end = ms.Position + size;
-                if (sig == "DIDX")
-                    for (uint i = 0; i < size / 12; i++)
-                    { uint id = r.ReadUInt32(); r.ReadInt32(); r.ReadInt32(); order.Add(id); }
-                ms.Position = end;
+                w.Write(entries[i].Id); w.Write(offsets[i]); w.Write(entries[i].Data.Length);
+            }
+            w.Write(Encoding.ASCII.GetBytes("DATA"));
+            w.Write((uint)dataLength);
+            for (int i = 0; i < entries.Count; i++)
+            {
+                w.Write(entries[i].Data);
+                int end = offsets[i] + entries[i].Data.Length;
+                int next = i + 1 < entries.Count ? offsets[i + 1] : end;
+                for (int p = end; p < next; p++) w.Write((byte)0);
             }
         }
-        foreach (var id in order)
-            bytesById[id] = replacements.TryGetValue(id, out var rep) ? rep : (GetWemData(id) ?? System.Array.Empty<byte>());
 
         using var outMs = new MemoryStream();
         using var w = new BinaryWriter(outMs);
-        // re-walk and copy sections, swapping DIDX + DATA
+        bool wroteMedia = false;
+        bool hadMediaSections = false;
+
         using (var ms = new MemoryStream(_raw, writable: false))
         using (var r = new BinaryReader(ms))
         {
@@ -91,29 +141,21 @@ public sealed class BnkFile
                 string sig = Encoding.ASCII.GetString(r.ReadBytes(4));
                 uint size = r.ReadUInt32();
                 long end = ms.Position + size;
-                if (sig == "DIDX")
+                if (end > ms.Length) break;
+
+                if (sig is "DIDX" or "DATA")
                 {
-                    w.Write(Encoding.ASCII.GetBytes("DIDX"));
-                    w.Write((uint)(order.Count * 12));
-                    int off = 0;
-                    foreach (var id in order)
-                    {
-                        int len = bytesById[id].Length;
-                        w.Write(id); w.Write(off); w.Write(len);
-                        off += len;
-                    }
-                }
-                else if (sig == "DATA")
-                {
-                    int totalLen = order.Sum(id => bytesById[id].Length);
-                    w.Write(Encoding.ASCII.GetBytes("DATA"));
-                    w.Write((uint)totalLen);
-                    foreach (var id in order) w.Write(bytesById[id]);
+                    hadMediaSections = true;
+                    // both are replaced by one regenerated pair, emitted at the DIDX slot
+                    if (!wroteMedia && entries.Count > 0) { WriteMedia(w); wroteMedia = true; }
                 }
                 else
                 {
                     ms.Position = secStart;
                     w.Write(r.ReadBytes((int)(end - secStart)));
+                    // no media sections in this bank: insert the pair right after BKHD
+                    if (!hadMediaSections && !wroteMedia && sig == "BKHD" && entries.Count > 0)
+                    { WriteMedia(w); wroteMedia = true; }
                 }
                 ms.Position = end;
             }
