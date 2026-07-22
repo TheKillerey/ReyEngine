@@ -101,6 +101,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private ReyProject _project = new();
     [ObservableProperty] private bool _isBuilding;
 
+    // M131: determinate build/export progress in the status bar
+    [ObservableProperty] private double _buildProgress;          // 0..100
+    [ObservableProperty] private string _buildStage = "";
+    public bool BuildProgressActive => IsBuilding;
+    partial void OnIsBuildingChanged(bool value)
+    {
+        if (!value) { BuildProgress = 0; BuildStage = ""; }
+        OnPropertyChanged(nameof(BuildProgressActive));
+    }
+
+    /// <summary>UI-thread progress sink for build/export pipelines.</summary>
+    private IProgress<(double Frac, string Stage)> BuildProgressSink() =>
+        new Progress<(double Frac, string Stage)>(t =>
+        {
+            BuildProgress = Math.Clamp(t.Frac, 0, 1) * 100.0;
+            BuildStage = t.Stage;
+            Status = t.Stage;
+        });
+
     // Viewport-bound state
     [ObservableProperty] private MeshAsset? _currentMesh;
     [ObservableProperty] private SkeletonAsset? _currentSkeleton;
@@ -5674,6 +5693,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         };
 
         IsBuilding = true; Status = "Exporting .fantome…";
+        var progress = BuildProgressSink();
         try
         {
             await Task.Run(() =>
@@ -5682,9 +5702,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (BuildSafety.IsInsideGameInstall(buildRoot))
                     throw new InvalidOperationException("Build output is inside the game install — change it in Project Settings.");
                 Directory.CreateDirectory(buildRoot);
-                BuildProjectCore(buildRoot);
-                var wads = Directory.GetFiles(buildRoot, "*.wad.client").ToList();
+                // M131: fresh build + bundle EXACTLY what it produced — stale wads lying in the
+                // build folder from earlier project layouts used to sneak into the package.
+                var wads = BuildProjectCore(buildRoot, progress);
                 if (wads.Count == 0) throw new InvalidOperationException("No WAD was produced — the project has no packable content.");
+                progress.Report((0.98, $"Zipping {Path.GetFileName(outPath)}…"));
                 FantomeExporter.Export(meta, wads, thumb, outPath);
             });
             _log.Success("Export", $"Wrote {outPath} ({new FileInfo(outPath).Length / 1048576.0:0.0} MB) — {meta.Name} v{meta.Version} by {meta.Author}.");
@@ -6540,9 +6562,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Directory.CreateDirectory(buildRoot);
         _log.Info("Build", $"Building project '{Project.Name}' → {buildRoot}");
         IsBuilding = true; Status = "Building project…";
+        var progress = BuildProgressSink();
         try
         {
-            await Task.Run(() => BuildProjectCore(buildRoot));
+            await Task.Run(() => BuildProjectCore(buildRoot, progress));
             Status = $"Built project to {buildRoot}";
             _log.Success("Build", $"Project build ready: {buildRoot}. Open it via File ▸ Open Project Folder to verify.");
         }
@@ -6550,16 +6573,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         finally { IsBuilding = false; }
     }
 
-    private void BuildProjectCore(string buildRoot)
+    /// <summary>M131: build the project into <paramref name="buildRoot"/>. Returns the wads this
+    /// build produced — callers must bundle exactly these, never "whatever sits in the folder".</summary>
+    private List<string> BuildProjectCore(string buildRoot, IProgress<(double Frac, string Stage)>? progress = null)
     {
         var overridesByHash = _overrides.All.ToDictionary(o => o.PathHash, o => o.OverrideFile);
         int wads = 0, staged = 0, files = 0, skipped = 0;
+        var produced = new List<string>();
+
+        // M131: a fresh build starts from a CLEAN slate — leftover staging from earlier builds kept
+        // files the project has since deleted or renamed, and they leaked into every later package.
+        var stagingRoot = Path.Combine(buildRoot, "staged");
+        progress?.Report((0.02, "Cleaning old staging…"));
+        if (Directory.Exists(stagingRoot))
+        {
+            try { Directory.Delete(stagingRoot, recursive: true); }
+            catch (Exception ex) { _log.Warn("Build", $"Could not fully clean {stagingRoot}: {ex.Message} — close programs holding files there."); }
+        }
 
         // Project WADs: safe in-place replace of existing chunks.
         foreach (var w in Project.ProjectWads)
         {
             var src = Project.ResolveProjectPath(w);
             if (!File.Exists(src)) { _log.Warn("Build", $"missing project WAD {w}"); continue; }
+            progress?.Report((0.05, $"Repacking {Path.GetFileName(w)}…"));
             using var arc = WadArchive.Open(src, _resolver);
             var apply = new Dictionary<ulong, byte[]>();
             foreach (var (hash, file) in overridesByHash)
@@ -6569,22 +6606,31 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             WadRepackService.Repack(src, apply, outWad, report);
             foreach (var i in report.Issues) _log.Warn("Build", i.Message);
             _log.Info("Build", $"WAD {Path.GetFileName(w)}: {apply.Count} replaced → {Path.GetFileName(outWad)}");
+            produced.Add(outWad);
             wads++;
         }
 
         // Project folders: stage (copy tree + apply overrides as files — new files are safe in folder format).
         var stagedFolders = new List<(string name, string dir)>();
+        int folderIdx = 0;
         foreach (var f in Project.ProjectFolders)
         {
             var srcFolder = Project.ResolveProjectPath(f);
             var name = f == "." ? Project.Name : f.Replace('/', '_');
-            var outFolder = Path.Combine(buildRoot, "staged", name);
-            files += CopyTree(srcFolder, outFolder);
+            var outFolder = Path.Combine(stagingRoot, name);
+            folderIdx++;
+            int idx = folderIdx;
+            files += CopyTree(srcFolder, outFolder,
+                n => progress?.Report((0.05 + 0.25 * (idx - 1 + Math.Min(1.0, n / 15000.0)) / Project.ProjectFolders.Count,
+                    $"Staging {name}… ({n:n0} files)")));
             stagedFolders.Add((name, outFolder));
             staged++;
         }
 
         // Apply overrides into the first staged folder at their resolved path.
+        // M131: the project FILE is the single source of truth (M126) — an override must never
+        // clobber a file the project actually ships. Only overrides for paths the folder does NOT
+        // provide (wad-source assets copied to the workspace) belong in the package.
         if (stagedFolders.Count > 0)
         {
             var outFolder = stagedFolders[0].dir;
@@ -6593,33 +6639,56 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (!File.Exists(ov.OverrideFile)) { skipped++; continue; }
                 string rel = ov.ResolvedPath ?? $"0x{ov.PathHash:x16}{Path.GetExtension(ov.OverrideFile)}";
                 var dest = Path.Combine(outFolder, rel.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(dest))
+                {
+                    _log.Warn("Build", $"Stale shadow override IGNORED for {rel} — the project file wins. Save that asset once in ReyEngine to dissolve the shadow.");
+                    skipped++;
+                    continue;
+                }
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                File.Copy(ov.OverrideFile, dest, overwrite: true);
+                File.Copy(ov.OverrideFile, dest, overwrite: false);
                 files++;
             }
         }
 
         // Pack each staged folder into a distributable .wad.client.
         int packed = 0;
+        int packIdx = 0;
         foreach (var (name, dir) in stagedFolders)
         {
             var outWad = Path.Combine(buildRoot, name + ".wad.client");
+            packIdx++;
+            int idx = packIdx;
+            var packProgress = new Progress<float>(fr => progress?.Report(
+                (0.30 + 0.65 * (idx - 1 + fr) / stagedFolders.Count, $"Packing {name}.wad.client… {fr:P0}")));
             WadPackReport pr;
-            try { pr = WadPackService.Pack(dir, outWad); }
+            try { pr = WadPackService.Pack(dir, outWad, packProgress); }
             catch (Exception ex) { _log.Error("Build", $"Pack failed for {name}: {ex.Message}"); continue; }
             foreach (var w in pr.Warnings) _log.Warn("Build", w);
             if (pr.Success)
             {
                 packed++;
+                produced.Add(outWad);
                 _log.Success("Build", $"Packed {name}.wad.client — {pr.Chunks:n0} chunks, {pr.InputBytes / 1048576.0:0.0}→{pr.OutputBytes / 1048576.0:0.0} MB. {pr.Validation}");
             }
             else _log.Error("Build", $"Pack didn't validate for {name} — the staged folder is at {dir}.");
         }
 
+        // M131: stale wads from renamed/removed folders must not linger next to fresh output —
+        // the fantome export used to bundle every *.wad.client it found.
+        foreach (var w in Directory.GetFiles(buildRoot, "*.wad.client"))
+            if (!produced.Contains(w, StringComparer.OrdinalIgnoreCase))
+            {
+                try { File.Delete(w); _log.Info("Build", $"Removed stale build output {Path.GetFileName(w)} (not part of this project anymore)."); }
+                catch (Exception ex) { _log.Warn("Build", $"Stale {Path.GetFileName(w)} could not be removed: {ex.Message}"); }
+            }
+
+        progress?.Report((1.0, "Build finished."));
         _log.Info("Build", $"project WADs: {wads} · folders packed: {packed}/{staged} · files: {files:n0} · skipped: {skipped}");
+        return produced;
     }
 
-    private static int CopyTree(string src, string dst)
+    private static int CopyTree(string src, string dst, Action<int>? onProgress = null)
     {
         int n = 0;
         foreach (var file in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
@@ -6630,7 +6699,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.Copy(file, dest, overwrite: true);
             n++;
+            if (n % 250 == 0) onProgress?.Invoke(n);
         }
+        onProgress?.Invoke(n);
         return n;
     }
 
@@ -6657,9 +6728,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_overrides.Count == 0) _log.Warn("Build", "No overrides — output will mirror the source WAD.");
         IsBuilding = true;
         Status = "Building package…";
+        var sink = BuildProgressSink();
+        var wadProgress = new Progress<float>(f => sink.Report((f, $"Repacking {Path.GetFileName(outPath)}… {f:P0}")));
         try
         {
-            var report = await Task.Run(() => BuildPackageService.Build(Project, outPath, null, CancellationToken.None));
+            var report = await Task.Run(() => BuildPackageService.Build(Project, outPath, wadProgress, CancellationToken.None));
             LogBuildReport(report);
             Status = report.Success
                 ? $"Built {Path.GetFileName(outPath)} — {report.OutputSize / 1024.0 / 1024.0:0.0} MB in {report.Duration.TotalSeconds:0.0}s"

@@ -186,8 +186,13 @@
           <TextBlock Text="REYENGINE" FontSize="9" LetterSpacing="1.2" FontWeight="SemiBold"
                      Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
         </StackPanel>
-        <TextBlock Text="{Binding Status}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center"
-                   TextTrimming="CharacterEllipsis" />
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <!-- M131: determinate build/export progress with stage info -->
+          <ProgressBar Width="170" Height="10" Minimum="0" Maximum="100" Value="{Binding BuildProgress}"
+                       VerticalAlignment="Center" IsVisible="{Binding BuildProgressActive}" />
+          <TextBlock Text="{Binding Status}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center"
+                     TextTrimming="CharacterEllipsis" />
+        </StackPanel>
       </DockPanel>
     </Border>
 
