@@ -367,7 +367,7 @@ public partial class MainWindow : Window
     /// <summary>M73: template-based New Project wizard; on success the created project opens directly.</summary>
     private async void ShowNewProject(MainWindowViewModel vm)
     {
-        var wizard = new NewProjectViewModel(vm.PathResolver);
+        var wizard = new NewProjectViewModel(vm.PathResolver) { Location = vm.ProjectsFolder };   // M133
         var win = new NewProjectWindow { DataContext = wizard };
         wizard.CloseRequested += () => win.Close();
         await win.ShowDialog(this);

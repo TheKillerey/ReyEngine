@@ -5328,9 +5328,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Project", ex.Message); }
     }
 
-    /// <summary>The canonical projects folder (Documents\ReyEngine Projects — follows OneDrive redirection,
-    /// same default the New Project wizard uses). Created on demand.</summary>
-    public static string ProjectsFolder =>
+    /// <summary>M133: the projects folder — the configured one (Settings ▸ General) when set,
+    /// else Documents\ReyEngine Projects (which OneDrive may redirect). Created on demand.</summary>
+    public string ProjectsFolder =>
+        !string.IsNullOrWhiteSpace(Settings.ProjectsDirectory) ? Settings.ProjectsDirectory : DefaultProjectsFolder;
+
+    public static string DefaultProjectsFolder =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ReyEngine Projects");
 
     private void LoadRecentProjects(IEnumerable<string> folders)

@@ -29,6 +29,29 @@ public partial class SettingsWindow : Window
         if (vm.AssignCapturedKey(e.Key.ToString())) e.Handled = true;
     }
 
+    // M133: pick the projects folder (where new projects and .fantome imports are created).
+    private async void OnBrowseProjectsFolder(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is not SettingsViewModel vm) return;
+        try
+        {
+            var start = vm.ProjectsDirectory;
+            IStorageFolder? suggested = null;
+            if (!string.IsNullOrWhiteSpace(start) && System.IO.Directory.Exists(start))
+                suggested = await StorageProvider.TryGetFolderFromPathAsync(start);
+
+            var picked = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Select the folder where projects should live",
+                AllowMultiple = false,
+                SuggestedStartLocation = suggested,
+            });
+            if (picked.FirstOrDefault()?.TryGetLocalPath() is { Length: > 0 } path)
+                vm.ProjectsDirectory = path;
+        }
+        catch { /* picker cancelled or unavailable */ }
+    }
+
     // M88: pick the legacy LEVELS/<Map> folder used as the preview backdrop.
     private async void OnBrowsePreviewMap(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {

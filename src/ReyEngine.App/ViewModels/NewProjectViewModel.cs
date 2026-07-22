@@ -101,7 +101,7 @@ public sealed partial class NewProjectViewModel : ObservableObject
     public NewProjectViewModel(WadPathResolver resolver)
     {
         _resolver = resolver;
-        _location = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ReyEngine Projects");
+        _location = MainWindowViewModel.DefaultProjectsFolder;   // M133: host overrides with the configured folder
         _author = Environment.UserName;
 
         foreach (var t in ProjectTemplate.All)

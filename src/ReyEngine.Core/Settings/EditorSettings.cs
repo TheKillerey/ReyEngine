@@ -78,6 +78,11 @@ public sealed class EditorSettings
     public EditorSettings Clone() => (EditorSettings)MemberwiseClone();
 
     /// <summary>Overwrite this instance's values from another (apply an edited copy in place).</summary>
+    /// <summary>M133: where new projects and .fantome imports are created. Empty = the default
+    /// Documents/ReyEngine Projects (which OneDrive may redirect - a plain local folder avoids
+    /// sync locks and churn on 10k-file staging trees).</summary>
+    public string ProjectsDirectory { get; set; } = "";
+
     public void CopyFrom(EditorSettings s)
     {
         FlyForward = s.FlyForward; FlyBack = s.FlyBack; FlyLeft = s.FlyLeft; FlyRight = s.FlyRight;
@@ -88,5 +93,6 @@ public sealed class EditorSettings
         Theme = s.Theme;
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder; PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
         FirstRunCompleted = s.FirstRunCompleted;
+        ProjectsDirectory = s.ProjectsDirectory;
     }
 }

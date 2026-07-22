@@ -48,6 +48,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _invertLookY;
     [ObservableProperty] private double _flySpeed;
     [ObservableProperty] private bool _cullBackfacesDefault;
+    [ObservableProperty] private string _projectsDirectory = "";   // M133
 
     // M88: character-preview NVR map backdrop
     [ObservableProperty] private string _previewBackgroundMapFolder = "";
@@ -138,6 +139,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         InvertLookY = s.InvertLookY;
         FlySpeed = s.FlySpeed;
         CullBackfacesDefault = s.CullBackfacesDefault;
+        ProjectsDirectory = s.ProjectsDirectory;
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder;
         PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
 
@@ -160,6 +162,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             InvertLookY = InvertLookY, FlySpeed = FlySpeed, CullBackfacesDefault = CullBackfacesDefault,
             Theme = _theme,
             PreviewBackgroundMapFolder = PreviewBackgroundMapFolder, PreviewBackgroundEnabled = PreviewBackgroundEnabled,
+            ProjectsDirectory = ProjectsDirectory.Trim(),
         };
     }
 

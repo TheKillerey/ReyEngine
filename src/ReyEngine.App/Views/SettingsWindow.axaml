@@ -74,6 +74,19 @@
 
         <!-- GENERAL -->
         <StackPanel Spacing="14" IsVisible="{Binding ShowGeneral}">
+          <!-- M133 -->
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="settingsTitle" Text="PROJECTS FOLDER" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Where new projects and .fantome imports are created. Empty = Documents\ReyEngine Projects. Tip: a plain local folder (e.g. D:\ReyEngineProjects) avoids OneDrive sync locks and churn on large staging trees." />
+              <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+                <TextBox Grid.Column="0" Text="{Binding ProjectsDirectory}" FontSize="12"
+                         Watermark="Documents\ReyEngine Projects (default)" />
+                <Button Grid.Column="1" Content="Browse…" Margin="6,0,0,0" Click="OnBrowseProjectsFolder" />
+              </Grid>
+            </StackPanel>
+          </Border>
           <Border Classes="settingsCard">
             <StackPanel Spacing="8">
               <TextBlock Classes="settingsTitle" Text="VIEWPORT DEFAULTS" />
