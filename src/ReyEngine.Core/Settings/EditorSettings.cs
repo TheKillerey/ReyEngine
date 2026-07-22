@@ -83,6 +83,11 @@ public sealed class EditorSettings
     /// sync locks and churn on 10k-file staging trees).</summary>
     public string ProjectsDirectory { get; set; } = "";
 
+    /// <summary>M138: explicit WwiseConsole.exe / .wproj used for wav→wem conversion. Empty = probe
+    /// the usual locations (an LtMAO install bundles both; a Wwise install provides the console).</summary>
+    public string WwiseConsolePath { get; set; } = "";
+    public string WwiseProjectPath { get; set; } = "";
+
     public void CopyFrom(EditorSettings s)
     {
         FlyForward = s.FlyForward; FlyBack = s.FlyBack; FlyLeft = s.FlyLeft; FlyRight = s.FlyRight;
@@ -94,5 +99,6 @@ public sealed class EditorSettings
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder; PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
         FirstRunCompleted = s.FirstRunCompleted;
         ProjectsDirectory = s.ProjectsDirectory;
+        WwiseConsolePath = s.WwiseConsolePath; WwiseProjectPath = s.WwiseProjectPath;
     }
 }

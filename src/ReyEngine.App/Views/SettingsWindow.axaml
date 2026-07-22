@@ -87,6 +87,18 @@
               </Grid>
             </StackPanel>
           </Border>
+          <!-- M138 -->
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="settingsTitle" Text="AUDIO CONVERSION (WAV to WEM)" />
+              <TextBlock Classes="settingsDesc"
+                         Text="League ships Wwise Vorbis audio only, so importing ordinary audio needs Wwise's own encoder. Leave these empty to auto-detect an LtMAO install (it bundles both) or a Wwise installation." />
+              <TextBlock Text="WwiseConsole.exe" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+              <TextBox Text="{Binding WwiseConsolePath}" FontSize="12" Watermark="auto-detect" />
+              <TextBlock Text="Wwise project (.wproj)" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBox Text="{Binding WwiseProjectPath}" FontSize="12" Watermark="auto-detect" />
+            </StackPanel>
+          </Border>
           <Border Classes="settingsCard">
             <StackPanel Spacing="8">
               <TextBlock Classes="settingsTitle" Text="VIEWPORT DEFAULTS" />

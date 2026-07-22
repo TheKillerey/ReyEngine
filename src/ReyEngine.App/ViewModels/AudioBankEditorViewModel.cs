@@ -67,6 +67,9 @@ public sealed partial class AudioBankEditorViewModel : ObservableObject
     public Action<uint>? ClearDecodeCache;
     public Func<string, Task<string?>>? PickImportFile;       // title -> path
     public Func<string, Task<string?>>? PickExportFile;       // suggested name -> path
+    /// <summary>M138: convert an ordinary audio file to .wem bytes (null + reason when unavailable).</summary>
+    public Func<string, (byte[]? Data, string? Error)>? ConvertToWem;
+    public Func<bool>? ConverterAvailable;
     public Func<string, string, Task<string?>>? PromptText;   // title, initial -> value
     public Func<AudioBankDocument, WadAssetEntry, byte[], Task<bool>>? SaveAsync;
     public Action<string>? Info;
@@ -132,14 +135,37 @@ public sealed partial class AudioBankEditorViewModel : ObservableObject
     {
         if (Selected is not { } row || !RequireEditable()) return;
         if (PickImportFile is null) return;
-        var file = await PickImportFile($"Replace sound {row.Id} with a .wem");
+        var file = await PickImportFile($"Replace sound {row.Id} — .wem or ordinary audio");
         if (file is null) return;
-        var data = await System.IO.File.ReadAllBytesAsync(file);
-        if (!IsRiff(data)) { Status = "That file isn't a RIFF/WAVE .wem — convert it to .wem first."; return; }
+        var data = await LoadAsWemAsync(file);
+        if (data is null) return;
         Document!.Replace(row.Id, data);
         ClearDecodeCache?.Invoke(row.Id);
         AfterEdit(row.Id);
         Status = $"Replaced {row.Id} with {System.IO.Path.GetFileName(file)} ({data.Length / 1024.0:n0} KB).";
+    }
+
+    /// <summary>M138: read a picked file as wem bytes — .wem is used as-is, anything else is encoded
+    /// to Wwise Vorbis first (League ships no other codec). Sets <see cref="Status"/> and returns null
+    /// on failure.</summary>
+    private async Task<byte[]?> LoadAsWemAsync(string file)
+    {
+        var data = await System.IO.File.ReadAllBytesAsync(file);
+        bool isWem = file.EndsWith(".wem", StringComparison.OrdinalIgnoreCase);
+        if (isWem && IsRiff(data)) return data;
+
+        if (ConvertToWem is null || ConverterAvailable?.Invoke() == false)
+        {
+            Status = isWem
+                ? "That .wem isn't a valid RIFF file."
+                : $"{System.IO.Path.GetFileName(file)} needs converting to .wem, but no Wwise encoder is configured — see Preferences ▸ Audio.";
+            return null;
+        }
+        Status = $"Converting {System.IO.Path.GetFileName(file)} to Wwise Vorbis…";
+        var (wem, err) = await Task.Run(() => ConvertToWem(file));
+        if (wem is null) { Status = $"Conversion failed: {err}"; Warn?.Invoke($"{Title}: conversion failed — {err}"); return null; }
+        Info?.Invoke($"Converted {System.IO.Path.GetFileName(file)} → {wem.Length / 1024.0:n0} KB wem.");
+        return wem;
     }
 
     [RelayCommand]
@@ -156,10 +182,10 @@ public sealed partial class AudioBankEditorViewModel : ObservableObject
     private async Task Add()
     {
         if (!RequireEditable() || PickImportFile is null) return;
-        var file = await PickImportFile("Add a .wem to this file");
+        var file = await PickImportFile("Add a sound — .wem or ordinary audio");
         if (file is null) return;
-        var data = await System.IO.File.ReadAllBytesAsync(file);
-        if (!IsRiff(data)) { Status = "That file isn't a RIFF/WAVE .wem — convert it to .wem first."; return; }
+        var data = await LoadAsWemAsync(file);
+        if (data is null) return;
         uint id = await AskIdAsync("Add sound — Wwise id", Document!.SuggestFreeId());
         if (id == 0) return;
         if (!Document.Add(id, data, out var err)) { Status = err ?? "Add failed."; return; }

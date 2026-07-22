@@ -218,6 +218,68 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // ---- M56: Wwise audio — banks, one-shot playback, positional map ambience ----
     public Services.SoundPlaybackService Sound { get; } = new();
+    /// <summary>M138: wav/mp3/ogg → .wem via Wwise's own encoder (League ships Vorbis wems only).</summary>
+    public Services.WemEncoder Encoder { get; } = new();
+    /// <summary>M138: recovered Wwise event names (id → name), cached across sessions.</summary>
+    public Services.WwiseNameIndex WwiseNames { get; private set; } = Services.WwiseNameIndex.Load();
+
+    /// <summary>M138: rebuild the Wwise event-name index by harvesting name strings from every mounted
+    /// .bin and matching their FNV-1 hashes against the ids in the mounted event banks.</summary>
+    [RelayCommand]
+    private async Task RebuildWwiseNames()
+    {
+        if (!ContentLoaded) { _log.Warn("Audio", "Open a project or WAD first."); return; }
+        IsBuilding = true;
+        var progress = BuildProgressSink();
+        try
+        {
+            var result = await Task.Run(() =>
+            {
+                var wanted = new HashSet<uint>();
+                var eventBanks = AssetEntries.Where(e => e.IsResolved
+                    && e.Path.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase)).ToList();
+                int i = 0;
+                foreach (var e in eventBanks)
+                {
+                    if (++i % 25 == 0) progress.Report((0.35 * i / Math.Max(1, eventBanks.Count), $"Reading banks… {i}/{eventBanks.Count}"));
+                    try
+                    {
+                        if (Formats.Audio.BnkFile.Parse(ReadAsset(e.PathHash)) is { HasHirc: true } b)
+                            foreach (var id in b.Events.Keys) wanted.Add(id);
+                    }
+                    catch { }
+                }
+
+                var idx = new Services.WwiseNameIndex();
+                var bins = AssetEntries.Where(e => e.IsResolved
+                    && e.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)).ToList();
+                i = 0;
+                foreach (var e in bins)
+                {
+                    if (++i % 100 == 0) progress.Report((0.35 + 0.6 * i / Math.Max(1, bins.Count), $"Scanning bins… {i:n0}/{bins.Count:n0}"));
+                    try
+                    {
+                        var strings = new List<string>();
+                        Formats.Meta.BinStringHarvester.Collect(
+                            Formats.Meta.SafeBinTree.Parse(ReadAsset(e.PathHash)), strings);
+                        idx.Harvest(strings, wanted);
+                    }
+                    catch { }
+                }
+                progress.Report((0.97, "Deriving sibling events…"));
+                int derived = idx.ExpandVerbs(wanted);
+                return (Index: idx, Wanted: wanted.Count, Derived: derived);
+            });
+
+            result.Index.Merge(WwiseNames);   // keep anything a previous scan found
+            WwiseNames = result.Index;
+            WwiseNames.Save();
+            _log.Success("Audio", $"Wwise names: {WwiseNames.Count:n0} of {result.Wanted:n0} event id(s) resolved "
+                + $"({100.0 * WwiseNames.Count / Math.Max(1, result.Wanted):0.#}%, {result.Derived} derived from Play_/Stop_ siblings). Cached for next time.");
+        }
+        catch (Exception ex) { _log.Error("Audio", ex.Message); }
+        finally { IsBuilding = false; }
+    }
     private Formats.Audio.AudioBankSet? _mapAudioBanks;
     [ObservableProperty] private MapSoundViewModel? _selectedSound;
     [ObservableProperty] private bool _ambienceEnabled;
@@ -1372,6 +1434,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.SaveOverrideAsync = SaveParticleOverride;
         ParticleEditor.OpenIssues = OpenParticleBinIssues;   // M125
         MaterialEditor.OpenIssues = OpenMaterialBinIssues;   // M125
+
+        // M138: the wem encoder reuses vgmstream for input formats Media Foundation can't read
+        Encoder.VgmstreamPath = Sound.VgmstreamPath;
+        Encoder.ConsolePathSetting = Settings.WwiseConsolePath;
+        Encoder.ProjectPathSetting = Settings.WwiseProjectPath;
 
         ContentBrowser.FileSelected = OpenAssetDocument;
         ContentBrowser.CanImportInto = f => TryComputeFolderDiskDir(f, out _);   // M107/M113: virtual folders materialize on write
@@ -4720,8 +4787,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 Info = m => _log.Info("Audio", m),
                 Warn = m => _log.Warn("Audio", m),
                 PickImportFile = title => Dialogs.OpenFileAsync(title,
-                    new Avalonia.Platform.Storage.FilePickerFileType("Wwise wem") { Patterns = new[] { "*.wem" } },
+                    new Avalonia.Platform.Storage.FilePickerFileType("Audio (wem / wav / mp3 / ogg)")
+                    { Patterns = new[] { "*.wem", "*.wav", "*.mp3", "*.ogg", "*.flac", "*.m4a", "*.wma" } },
                     DialogService.All),
+                ConvertToWem = path => { var d = Encoder.Convert(path, out var err); return (d, err); },
+                ConverterAvailable = () => Encoder.IsAvailable,
                 PickExportFile = suggested => Dialogs.SaveFileAsync("Export sound", suggested),
                 PromptText = (title, initial) => PromptOwner is null
                     ? Task.FromResult<string?>(null)
@@ -4771,7 +4841,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var set = new Formats.Audio.AudioBankSet();
             set.AddBank(evBank, evEntry.PathHash, evEntry.Path);
 
-            // known event names (hash -> name) from the map's placed sounds
+            // known event names (hash -> name): the recovered index plus the map's placed sounds
             var names = new Dictionary<uint, string>();
             foreach (var s in MapContent.Sounds)
                 names[Formats.Audio.WwiseHash.Fnv1(s.EventName)] = s.EventName;
@@ -4779,7 +4849,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var reverse = new Dictionary<uint, List<string>>();
             foreach (var eventId in evBank.Events.Keys)
             {
-                string label = names.TryGetValue(eventId, out var n) ? n : $"event 0x{eventId:x8}";
+                string label = names.TryGetValue(eventId, out var n) ? n : WwiseNames.Label(eventId);
                 foreach (var wemId in set.ResolveEvent(eventId))
                 {
                     if (!reverse.TryGetValue(wemId, out var list)) reverse[wemId] = list = new List<string>();

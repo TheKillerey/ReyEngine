@@ -49,6 +49,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private double _flySpeed;
     [ObservableProperty] private bool _cullBackfacesDefault;
     [ObservableProperty] private string _projectsDirectory = "";   // M133
+    [ObservableProperty] private string _wwiseConsolePath = "";    // M138
+    [ObservableProperty] private string _wwiseProjectPath = "";
 
     // M88: character-preview NVR map backdrop
     [ObservableProperty] private string _previewBackgroundMapFolder = "";
@@ -140,6 +142,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         FlySpeed = s.FlySpeed;
         CullBackfacesDefault = s.CullBackfacesDefault;
         ProjectsDirectory = s.ProjectsDirectory;
+        WwiseConsolePath = s.WwiseConsolePath;
+        WwiseProjectPath = s.WwiseProjectPath;
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder;
         PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
 
@@ -163,6 +167,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             Theme = _theme,
             PreviewBackgroundMapFolder = PreviewBackgroundMapFolder, PreviewBackgroundEnabled = PreviewBackgroundEnabled,
             ProjectsDirectory = ProjectsDirectory.Trim(),
+            WwiseConsolePath = WwiseConsolePath.Trim(), WwiseProjectPath = WwiseProjectPath.Trim(),
         };
     }
 
