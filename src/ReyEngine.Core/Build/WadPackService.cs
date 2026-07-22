@@ -139,7 +139,8 @@ public static class WadPackService
         return report;
     }
 
-    private static IEnumerable<(ulong hash, string path)> EnumerateChunkFiles(string folder)
+    /// <summary>Public since M134 — the Overlay Footprint analysis walks the same file set the packer would.</summary>
+    public static IEnumerable<(ulong hash, string path)> EnumerateChunkFiles(string folder)
     {
         foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
         {

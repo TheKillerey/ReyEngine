@@ -1,0 +1,74 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.OverlayFootprintWindow"
+        x:DataType="vm:OverlayFootprintWindowViewModel"
+        Title="ReyEngine — Overlay Footprint" Width="700" Height="600"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+    <ScrollViewer>
+      <StackPanel Margin="14" Spacing="10">
+        <StackPanel Spacing="4">
+          <TextBlock Text="{Binding Summary}" FontSize="13" FontWeight="Bold"
+                     Foreground="{DynamicResource ReyTextBrush}" TextWrapping="Wrap" />
+          <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
+                     Text="Mod loaders overlay files by path hash across EVERY game WAD containing that path — shared assets (character/item textures) exist in dozens of WADs, so each one must be patched. The wider the overlay, the slower the patch step and the higher the risk of loader failures." />
+        </StackPanel>
+
+        <Border Background="#26FF5555" CornerRadius="4" Padding="8" IsVisible="{Binding HasWarning}">
+          <TextBlock Text="{Binding WarningText}" Foreground="#FF7B72" FontSize="11" TextWrapping="Wrap" />
+        </Border>
+
+        <!-- fan-out sources: what to trim -->
+        <Border Classes="card">
+          <StackPanel Spacing="4">
+            <TextBlock Classes="cardTitle" Text="BIGGEST FAN-OUT SOURCES" />
+            <TextBlock FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
+                       Text="Project folders ranked by how many game WADs their files drag in. Removing unneeded files here shrinks the overlay the most." />
+            <ItemsControl ItemsSource="{Binding Sources}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:FootprintSourceRowViewModel">
+                  <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,1">
+                    <TextBlock Grid.Column="0" Text="{Binding Folder}" FontSize="11" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding Folder}" />
+                    <TextBlock Grid.Column="1" Text="{Binding WadsTouched, StringFormat='{}{0} WADs'}" FontSize="10"
+                               Foreground="{DynamicResource ReyAccent2Brush}" Margin="10,0,0,0" />
+                    <TextBlock Grid.Column="2" Text="{Binding Files, StringFormat='{}{0:n0} files'}" FontSize="10"
+                               Foreground="{DynamicResource ReyTextDimBrush}" Margin="10,0,0,0" />
+                    <TextBlock Grid.Column="3" Text="{Binding Size}" FontSize="10"
+                               Foreground="{DynamicResource ReyTextDimBrush}" Margin="10,0,0,0" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <!-- the wads themselves -->
+        <Border Classes="card">
+          <StackPanel Spacing="4">
+            <TextBlock Classes="cardTitle" Text="PATCHED GAME WADS" />
+            <ItemsControl ItemsSource="{Binding Wads}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:FootprintWadRowViewModel">
+                  <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
+                    <TextBlock Grid.Column="0" Text="{Binding WadName}" FontSize="11" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding WadName}" />
+                    <TextBlock Grid.Column="1" Text="{Binding Files, StringFormat='{}{0:n0} files'}" FontSize="10"
+                               Foreground="{DynamicResource ReyTextDimBrush}" Margin="10,0,0,0" />
+                    <TextBlock Grid.Column="2" Text="{Binding Size}" FontSize="10"
+                               Foreground="{DynamicResource ReyTextDimBrush}" Margin="10,0,0,0" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

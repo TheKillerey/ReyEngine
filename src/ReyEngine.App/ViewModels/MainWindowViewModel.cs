@@ -5212,6 +5212,49 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Validate", ex.Message); return false; }
     }
 
+    /// <summary>M134: Overlay Footprint — how many game WADs will loaders have to patch for this mod?
+    /// Shared-path assets (characters/items) exist in dozens of WADs; a texture-heavy map mod can force
+    /// 200+ patches, which has crashed the game via LTK. Shows the fan-out and what causes it.</summary>
+    [RelayCommand]
+    private async Task OverlayFootprint()
+    {
+        if (!ContentLoaded || Project.RootPath is null || Project.ProjectFolders.Count == 0)
+        { _log.Warn("Footprint", "Open a folder project first."); return; }
+        string gameFinal = Path.Combine(
+            (Project.GameDirectory ?? "").Replace('/', Path.DirectorySeparatorChar), "DATA", "FINAL");
+        if (!Directory.Exists(gameFinal))
+        { _log.Warn("Footprint", "Game folder not set (Project ▸ Set Game Folder) — the analysis scans the game's WADs."); return; }
+
+        IsBuilding = true;
+        var progress = BuildProgressSink();
+        try
+        {
+            var fp = await Task.Run(() =>
+            {
+                var files = new List<(ulong Hash, string RelPath, long Bytes)>();
+                foreach (var f in Project.ProjectFolders)
+                {
+                    var root = Project.ResolveProjectPath(f);
+                    if (!Directory.Exists(root)) continue;
+                    foreach (var (hash, path) in Core.Build.WadPackService.EnumerateChunkFiles(root))
+                    {
+                        var rel = Path.GetRelativePath(root, path).Replace('\\', '/');
+                        files.Add((hash, rel, new FileInfo(path).Length));
+                    }
+                }
+                return Core.Build.OverlayFootprintService.Analyze(files, gameFinal, progress);
+            });
+            _log.Info("Footprint", $"{fp.ProjectFiles:n0} file(s) → loaders patch {fp.TouchedWads} of {fp.GameWadsScanned} game WADs.");
+            foreach (var s in fp.TopSources.Take(5))
+                _log.Info("Footprint", $"   {s.Folder}: touches {s.WadsTouched} WAD(s) ({s.Files:n0} files, {s.Bytes / 1048576.0:0.0} MB)");
+            var win = new Views.OverlayFootprintWindow
+            { DataContext = OverlayFootprintWindowViewModel.From(fp) };
+            if (PromptOwner is not null) win.Show(PromptOwner); else win.Show();
+        }
+        catch (Exception ex) { _log.Error("Footprint", ex.Message); }
+        finally { IsBuilding = false; }
+    }
+
     /// <summary>M97c: the Patch Update wizard — rebase every project .bin from the patch the mod was
     /// built for onto the current patch (CommunityDragon old original + M97a three-way merge).</summary>
     [RelayCommand]
