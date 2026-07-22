@@ -98,6 +98,8 @@
                   ToolTip.Tip="Update this mod to the current patch: old originals from CommunityDragon + three-way merge carries only the mod's edits onto the new base — with backups, a per-bin report and validation" />
         <MenuItem Header="Overlay Footprint" Command="{Binding OverlayFootprintCommand}"
                   ToolTip.Tip="How many game WADs will mod loaders have to patch for this mod? Shows the fan-out per WAD and which project folders cause it — very wide overlays (200+ WADs) have crashed the game" />
+        <MenuItem Header="Asset Usage Report" Command="{Binding AssetUsageCommand}"
+                  ToolTip.Tip="Which project files can nothing ever load (dead — deletable in one click) and which recolor OTHER content (champions/items — the wad fan-out drivers)" />
         <MenuItem Header="Map Material Diagnostics" Command="{Binding MapMaterialDiagnosticsCommand}"
                   ToolTip.Tip="Scan the loaded map's bins + mapgeo and write an honest diagnostics report (classes, unknown fields, lighting/lightmap/visibility) to .reyengine/reports/" />
         <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"

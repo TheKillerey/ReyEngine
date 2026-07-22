@@ -1,0 +1,82 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.AssetUsageWindow"
+        x:DataType="vm:AssetUsageWindowViewModel"
+        Title="ReyEngine — Asset Usage" Width="720" Height="620"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,8">
+      <TextBlock Text="{Binding Status}" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}"
+                 VerticalAlignment="Center" TextWrapping="Wrap" />
+    </Border>
+
+    <ScrollViewer>
+      <StackPanel Margin="14" Spacing="10">
+        <TextBlock Text="{Binding Summary}" FontSize="13" FontWeight="Bold"
+                   Foreground="{DynamicResource ReyTextBrush}" TextWrapping="Wrap" />
+
+        <!-- DEAD: safe to delete -->
+        <Border Classes="card">
+          <StackPanel Spacing="4">
+            <DockPanel>
+              <Button DockPanel.Dock="Right" Classes="tool" Content="🗑 Delete All Dead Files…"
+                      Command="{Binding DeleteDeadCommand}" IsVisible="{Binding CanDeleteDead}"
+                      IsEnabled="{Binding DeleteEnabled}"
+                      ToolTip.Tip="Removes every dead file from the project (confirmation first). Nothing can load them - no game wad ships these paths and no project bin references them." />
+              <TextBlock Classes="cardTitle" Text="DEAD FILES — SAFE TO DELETE" />
+            </DockPanel>
+            <TextBlock Text="{Binding DeadSummary}" FontSize="10"
+                       Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+            <ItemsControl ItemsSource="{Binding Dead}" IsVisible="{Binding HasDead}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:DeadAssetRowViewModel">
+                  <Grid ColumnDefinitions="*,Auto" Margin="0,1">
+                    <TextBlock Grid.Column="0" Text="{Binding RelPath}" FontSize="10" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding RelPath}" />
+                    <TextBlock Grid.Column="1" Text="{Binding Size}" FontSize="10"
+                               Foreground="{DynamicResource ReyTextDimBrush}" Margin="10,0,0,0" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <!-- OUTSIDE MAP: the fan-out drivers -->
+        <Border Classes="card">
+          <StackPanel Spacing="4">
+            <TextBlock Classes="cardTitle" Text="OUTSIDE THE MAP — WAD FAN-OUT DRIVERS" />
+            <TextBlock Text="{Binding OutsideSummary}" FontSize="10"
+                       Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+            <ItemsControl ItemsSource="{Binding Outside}" IsVisible="{Binding HasOutside}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:OutsideMapRowViewModel">
+                  <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,1"
+                        ToolTip.Tip="{Binding SampleWads}">
+                    <TextBlock Grid.Column="0" Text="{Binding Folder}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="1" Text="{Binding WadsTouched, StringFormat='{}{0} WADs'}" FontSize="10"
+                               Foreground="{DynamicResource ReyAccent2Brush}" Margin="10,0,0,0" />
+                    <TextBlock Grid.Column="2" Text="{Binding Files, StringFormat='{}{0:n0} files'}" FontSize="10"
+                               Foreground="{DynamicResource ReyTextDimBrush}" Margin="10,0,0,0" />
+                    <TextBlock Grid.Column="3" Text="{Binding Size}" FontSize="10"
+                               Foreground="{DynamicResource ReyTextDimBrush}" Margin="10,0,0,0" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <TextBlock Text="{Binding MapScopedSummary}" FontSize="10"
+                   Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

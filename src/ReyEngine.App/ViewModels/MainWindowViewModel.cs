@@ -5255,6 +5255,94 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         finally { IsBuilding = false; }
     }
 
+    /// <summary>M136: Asset Usage — which project files can nothing ever load (dead: not shipped by
+    /// any game wad, referenced by no project bin — deletable) and which belong to other content
+    /// (outside-map: the wad fan-out drivers). Completes the trim workflow the Overlay Footprint opens.</summary>
+    [RelayCommand]
+    private async Task AssetUsage()
+    {
+        if (!ContentLoaded || Project.RootPath is null || Project.ProjectFolders.Count == 0)
+        { _log.Warn("AssetUsage", "Open a folder project first."); return; }
+        string gameFinal = Path.Combine(
+            (Project.GameDirectory ?? "").Replace('/', Path.DirectorySeparatorChar), "DATA", "FINAL");
+        if (!Directory.Exists(gameFinal))
+        { _log.Warn("AssetUsage", "Game folder not set (Project ▸ Set Game Folder) — the analysis scans the game's WADs."); return; }
+
+        IsBuilding = true;
+        var progress = BuildProgressSink();
+        try
+        {
+            var report = await Task.Run(() =>
+            {
+                var files = new List<(ulong Hash, string RelPath, string AbsPath, long Bytes)>();
+                var mapNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var f in Project.ProjectFolders)
+                {
+                    var root = Project.ResolveProjectPath(f);
+                    if (!Directory.Exists(root)) continue;
+                    // The mount folder is NAMED after the wad it targets (cslol/fantome convention:
+                    // "Map11" -> Map11.wad.client) — the reliable home-wad source even for
+                    // assets-only projects that carry no data/maps paths at all.
+                    var folderName = Path.GetFileName(root.TrimEnd('/', '\\'));
+                    if (folderName.Length > 0 && folderName != ".") mapNames.Add(folderName);
+                    foreach (var (hash, path) in Core.Build.WadPackService.EnumerateChunkFiles(root))
+                    {
+                        var rel = Path.GetRelativePath(root, path).Replace('\\', '/');
+                        files.Add((hash, rel, path, new FileInfo(path).Length));
+
+                        var segs = rel.Split('/');
+                        for (int i = 0; i + 1 < segs.Length; i++)
+                            if ((segs[i].Equals("mapgeometry", StringComparison.OrdinalIgnoreCase)
+                                 || segs[i].Equals("shipping", StringComparison.OrdinalIgnoreCase))
+                                && segs[i + 1].StartsWith("map", StringComparison.OrdinalIgnoreCase))
+                                mapNames.Add(segs[i + 1]);
+
+                        if (rel.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) && rel.Contains('/'))
+                        {
+                            try
+                            {
+                                var strings = new List<string>();
+                                Formats.Meta.BinStringHarvester.Collect(
+                                    Formats.Meta.SafeBinTree.Parse(File.ReadAllBytes(path)), strings);
+                                foreach (var s in strings)
+                                    if (s.Contains('/') || s.Contains('\\')) referenced.Add(s.Replace('\\', '/'));
+                            }
+                            catch { /* a broken bin just contributes no references */ }
+                        }
+                    }
+                }
+                return Core.Build.AssetUsageService.Analyze(files, gameFinal, mapNames,
+                    rel => referenced.Contains(rel), progress);
+            });
+
+            _log.Info("AssetUsage", $"{report.TotalFiles:n0} file(s): {report.Dead.Count:n0} dead ({report.DeadBytes / 1048576.0:0.0} MB), "
+                + $"{report.OutsideMapFiles:n0} outside the map ({report.OutsideMapBytes / 1048576.0:0.0} MB), {report.MapScopedFiles:n0} map-scoped.");
+
+            var vm = AssetUsageWindowViewModel.Build(report, async () =>
+            {
+                if (PromptOwner is null) return 0;
+                if (!await Views.PromptWindow.ConfirmAsync(PromptOwner, "Delete Dead Files",
+                    $"Delete {report.Dead.Count:n0} dead file(s) ({report.DeadBytes / 1048576.0:0.0} MB)?\n\nNo game wad ships these paths and no project bin references them — nothing can ever load them.",
+                    "Delete"))
+                    return 0;
+                int n = 0;
+                foreach (var d in report.Dead)
+                {
+                    try { File.Delete(d.AbsPath); n++; }
+                    catch (Exception ex) { _log.Warn("AssetUsage", $"{d.RelPath}: {ex.Message}"); }
+                }
+                _log.Success("AssetUsage", $"Deleted {n:n0} dead file(s).");
+                RefreshBrowser();
+                return n;
+            });
+            var win = new Views.AssetUsageWindow { DataContext = vm };
+            if (PromptOwner is not null) win.Show(PromptOwner); else win.Show();
+        }
+        catch (Exception ex) { _log.Error("AssetUsage", ex.Message); }
+        finally { IsBuilding = false; }
+    }
+
     /// <summary>M97c: the Patch Update wizard — rebase every project .bin from the patch the mod was
     /// built for onto the current patch (CommunityDragon old original + M97a three-way merge).</summary>
     [RelayCommand]
