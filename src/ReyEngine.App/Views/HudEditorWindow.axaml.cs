@@ -18,6 +18,14 @@ public partial class HudEditorWindow : Window
                 else vm.SelectByHash(hash);
             }
         };
+        Canvas.RenderFailed += err =>
+        {
+            if (DataContext is HudEditorViewModel vm)
+            {
+                vm.Status = "Canvas render error — " + err.Split('\n')[0];
+                vm.Info?.Invoke("HUD canvas render error: " + err);
+            }
+        };
     }
 
     private void OnFitView(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Canvas.FitView();

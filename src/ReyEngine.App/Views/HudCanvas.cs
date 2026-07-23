@@ -92,13 +92,43 @@ public sealed class HudCanvas : Control
         }
     }
 
+    /// <summary>Fires once with the exception text when a draw throws — so the window can log it
+    /// instead of the app dying (there is no UI-thread exception net).</summary>
+    public event Action<string>? RenderFailed;
+    private bool _reported;
+
     public override void Render(DrawingContext ctx)
+    {
+        // backdrop first (always safe), then guard the rest — a draw exception must dim the canvas,
+        // not crash the process.
+        ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x12, 0x16, 0x1d)), new Rect(Bounds.Size));
+        try { RenderCore(ctx); }
+        catch (Exception ex)
+        {
+            if (!_reported)
+            {
+                _reported = true;
+                try { System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "reyengine_hud_render_error.txt"), ex.ToString()); } catch { }
+                RenderFailed?.Invoke(ex.ToString());
+            }
+            try
+            {
+                var txt = new FormattedText("HUD render error — see the console.",
+                    System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    Typeface.Default, 12, new SolidColorBrush(Color.FromRgb(0xFF, 0x7B, 0x72)));
+                ctx.DrawText(txt, new Point(12, 12));
+            }
+            catch { /* even the error text failed — nothing more we can safely do */ }
+        }
+    }
+
+    private void RenderCore(DrawingContext ctx)
     {
         EnsureView();
         double scale = _scale, ox = _offset.X, oy = _offset.Y;
+        if (double.IsNaN(scale) || double.IsInfinity(scale) || scale <= 0) { FitView(); scale = _scale; ox = _offset.X; oy = _offset.Y; }
 
-        // backdrop (a neutral game-ish dark) + reference frame
-        ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x12, 0x16, 0x1d)), new Rect(Bounds.Size));
+        // reference frame
         var frame = new Rect(ox, oy, RefWidth * scale, RefHeight * scale);
         ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x1c, 0x22, 0x2c)), frame);
         ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromArgb(0x55, 0x55, 0x66, 0x77)), 1), frame);
@@ -107,12 +137,23 @@ public sealed class HudCanvas : Control
         using var clip = ctx.PushClip(new Rect(Bounds.Size));
 
         if (Items is null) return;
+        var visible = new Rect(Bounds.Size);
         foreach (var it in Items)
         {
             var dest = new Rect(ox + it.X * scale, oy + it.Y * scale, it.W * scale, it.H * scale);
+            // cull: elements parked at absurd off-screen coords (League hides them at x/y ~1e5) must
+            // never reach the GPU — a real Skia draw at 100k+ px with a bitmap can crash natively.
+            if (!RectFinite(dest) || !dest.Intersects(visible)) continue;
+
             if (it.Atlas is { } bmp && it.SrcW > 0 && it.SrcH > 0)
             {
-                var src = new Rect(it.SrcX, it.SrcY, it.SrcW, it.SrcH);
+                // clamp the UV crop to the atlas's real pixels — a source rect outside the bitmap is
+                // another native-crash source (elements pointing at a mismatched/tiny atlas).
+                var ps = bmp.PixelSize;
+                double sx = Math.Clamp(it.SrcX, 0, ps.Width), sy = Math.Clamp(it.SrcY, 0, ps.Height);
+                double sw = Math.Clamp(it.SrcW, 0, ps.Width - sx), sh = Math.Clamp(it.SrcH, 0, ps.Height - sy);
+                if (sw < 1 || sh < 1) continue;
+                var src = new Rect(sx, sy, sw, sh);
                 try
                 {
                     if (it.Tint is { } tint && tint != Colors.White)
@@ -150,10 +191,17 @@ public sealed class HudCanvas : Control
         if (SelectedHash != 0 && Items.FirstOrDefault(i => i.Element.PathHash == SelectedHash) is { } sel)
         {
             var r = new Rect(ox + sel.X * scale, oy + sel.Y * scale, sel.W * scale, sel.H * scale);
-            ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromArgb(0x66, 0, 0, 0)), 4), r.Inflate(1));
-            ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromRgb(0x35, 0xd0, 0x8a)), 2), r);
+            if (RectFinite(r) && r.Intersects(visible))
+            {
+                ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromArgb(0x66, 0, 0, 0)), 4), r.Inflate(1));
+                ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromRgb(0x35, 0xd0, 0x8a)), 2), r);
+            }
         }
     }
+
+    private static bool RectFinite(Rect r) =>
+        double.IsFinite(r.X) && double.IsFinite(r.Y) && double.IsFinite(r.Width) && double.IsFinite(r.Height)
+        && r.Width >= 0 && r.Height >= 0;
 
     protected override void OnPointerWheelChanged(Avalonia.Input.PointerWheelEventArgs e)
     {
