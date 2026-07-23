@@ -154,6 +154,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _backgroundColor1Textures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _backgroundColor2Textures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _backgroundColor3Textures;
+    // M142.9: give the backdrop the same M142 treatment as the standalone legacy-map viewer.
+    [ObservableProperty] private IReadOnlyList<ReyEngine.Rendering.ViewportMeshRenderer.SubmeshMaterial>? _backgroundMaterials;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _backgroundMaskTextures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _backgroundLightmapTextures;
     [ObservableProperty] private bool _backgroundVisible = true;
     [ObservableProperty] private IReadOnlyList<ReyEngine.Formats.Lighting.PointLight>? _backgroundLights;
     [ObservableProperty] private bool _backgroundLightsEnabled;
@@ -190,6 +194,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         BackgroundColor1Textures = bg?.SubmeshColor1;
         BackgroundColor2Textures = bg?.SubmeshColor2;
         BackgroundColor3Textures = bg?.SubmeshColor3;
+        BackgroundMaterials = bg?.SubmeshMaterials;         // M142.9
+        BackgroundMaskTextures = bg?.SubmeshMask;
+        BackgroundLightmapTextures = bg?.SubmeshLightmap;
         BackgroundLights = bg?.Lights;
         BackgroundLightsEnabled = bg?.Lights is { Count: > 0 };
         BackgroundMapName = bg?.MapName;

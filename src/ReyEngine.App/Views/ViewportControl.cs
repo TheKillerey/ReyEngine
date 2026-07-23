@@ -122,6 +122,15 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(BackgroundColor2Textures));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> BackgroundColor3TexturesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(BackgroundColor3Textures));
+    // M142.9: give the BACKDROP the same treatment the standalone legacy-map viewer gets — per-submesh
+    // materials (composite ground / alpha / decal clamp), the height-scale map (mask slot) and the baked
+    // composite ground atlas (lightmap slot). Null for maps with no height-blend ground (e.g. Map8).
+    public static readonly StyledProperty<IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?> BackgroundMaterialsProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?>(nameof(BackgroundMaterials));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> BackgroundMaskTexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(BackgroundMaskTextures));
+    public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> BackgroundLightmapTexturesProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<TextureImage?>?>(nameof(BackgroundLightmapTextures));
     public static readonly StyledProperty<bool> BackgroundVisibleProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(BackgroundVisible), true);
     public static readonly StyledProperty<Vector3> BackgroundOffsetProperty =        // M89: move the map
@@ -202,6 +211,9 @@ public sealed class ViewportControl : OpenGlControlBase
     public IReadOnlyList<TextureImage?>? BackgroundColor1Textures { get => GetValue(BackgroundColor1TexturesProperty); set => SetValue(BackgroundColor1TexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? BackgroundColor2Textures { get => GetValue(BackgroundColor2TexturesProperty); set => SetValue(BackgroundColor2TexturesProperty, value); }
     public IReadOnlyList<TextureImage?>? BackgroundColor3Textures { get => GetValue(BackgroundColor3TexturesProperty); set => SetValue(BackgroundColor3TexturesProperty, value); }
+    public IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? BackgroundMaterials { get => GetValue(BackgroundMaterialsProperty); set => SetValue(BackgroundMaterialsProperty, value); }   // M142.9
+    public IReadOnlyList<TextureImage?>? BackgroundMaskTextures { get => GetValue(BackgroundMaskTexturesProperty); set => SetValue(BackgroundMaskTexturesProperty, value); }
+    public IReadOnlyList<TextureImage?>? BackgroundLightmapTextures { get => GetValue(BackgroundLightmapTexturesProperty); set => SetValue(BackgroundLightmapTexturesProperty, value); }
     public bool BackgroundVisible { get => GetValue(BackgroundVisibleProperty); set => SetValue(BackgroundVisibleProperty, value); }
     public Vector3 BackgroundOffset { get => GetValue(BackgroundOffsetProperty); set => SetValue(BackgroundOffsetProperty, value); }
     public double BackgroundRotation { get => GetValue(BackgroundRotationProperty); set => SetValue(BackgroundRotationProperty, value); }
@@ -574,11 +586,22 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             var uploaded = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
             UploadBgLayer(BackgroundTextures, 0, uploaded);        // COLOR_MAP_0 (base diffuse)
-            UploadBgLayer(BackgroundBlendTextures, 1, uploaded);   // BLEND_MAP (mask slot — gates four-blend)
+            // M142.9: slot 1 is the mask slot. Height-blend ground (Map10) puts its terrainHeightScale map
+            // there; every other submesh keeps its four-blend BLEND_MAP (Map8) — they're mutually exclusive
+            // per submesh (uCompositeGround picks the branch), so prefer the height-scale where present.
+            UploadBgLayer(Merge(BackgroundMaskTextures, BackgroundBlendTextures), 1, uploaded);
             UploadBgLayer(BackgroundColor1Textures, 2, uploaded);  // COLOR_MAP_1 (gradient slot)
             UploadBgLayer(BackgroundColor2Textures, 3, uploaded);  // COLOR_MAP_2 (emissive slot)
             UploadBgLayer(BackgroundColor3Textures, 4, uploaded);  // COLOR_MAP_3 (matcap slot)
+            UploadBgLayer(BackgroundLightmapTextures, 6, uploaded); // M142.9: baked composite ground atlas
             _bgTexDirty = false;
+
+            // M142.9: per-submesh backdrop materials (composite-ground flag, alpha mode, decal UV clamp).
+            var bgMats = BackgroundMaterials;
+            if (bgMats is null) _bgRenderer.ClearSubmeshMaterials();
+            else
+                for (int i = 0; i < _bgRenderer.SubmeshCount; i++)
+                    _bgRenderer.SetSubmeshMaterial(i, i < bgMats.Count ? bgMats[i] : ViewportMeshRenderer.SubmeshMaterial.Default);
         }
         if (_materialsDirty && _meshRenderer.HasMesh)
         {
@@ -775,15 +798,30 @@ public sealed class ViewportControl : OpenGlControlBase
             bg.SetDynamicLightsEnabled(DynamicLightsEnabled);
             bg.SetLightIntensity((float)DynamicLightIntensity);
             bg.SetLightRadiusScale((float)DynamicLightRadiusScale);
-            bg.SetVertexBakedLight(true, (float)BackgroundVertexLight);   // M89: NVR ground baked shading
-            bg.SetNvrFourBlend(true);                                     // M89: CREATE_GROUND_MOSAIC_FOUR_BLEND
-            bg.SetWorldTransform(BackgroundModel());                      // M89: move + rotate the map
+            // M142.9: only maps that actually ship the baked composite ground (Map10-style height blend)
+            // switch to the M142 lighting model — PrimaryColor AS the baked lightmap, and NOT the M89
+            // additive term (alternative models; running both double-counts). Mask-blend maps like Map8
+            // have no composite, so they keep their established M89 look exactly.
+            bool m142 = BackgroundLightmapTextures is not null;
+            bg.SetVertexLightmap(m142, 2f);
+            bg.SetVertexBakedLight(!m142, (float)BackgroundVertexLight);   // M89: NVR ground baked shading
+            bg.SetNvrFourBlend(true);                                      // M89: CREATE_GROUND_MOSAIC_FOUR_BLEND
+            bg.SetWorldTransform(BackgroundModel());                       // M89: move + rotate the map
             // M89: base sun/sky kept DARK by default — old maps are meant to be lit by their Light.dat
             // point lights, and a bright base washes the ground flat (in-game look = dark + warm pools).
             float bright = (float)BackgroundBrightness;
             var bgLight = new Vector4(bright, bright, bright, 1f);
             if (SunProperties is { } bsun)
                 bg.SetSunLighting(bsun.SunDirection, bsun.SunColor * bright, bsun.SkyLightColor * bright, bsun.SkyLightScale);
+            else if (m142)
+            {
+                // M142.9: same dim directional night sun/sky as the standalone viewer (which un-baked LM_/
+                // decal meshes fall through to), scaled by the Bright slider so it still tunes the map.
+                float k = bright / 0.55f;   // 0.55 = the slider default -> exact parity with the viewer
+                bg.SetSunLighting(new Vector3(-0.3f, -0.85f, -0.4f),
+                    new Vector4(0.30f * k, 0.30f * k, 0.36f * k, 1f),
+                    new Vector4(0.20f * k, 0.21f * k, 0.26f * k, 1f), 1f);
+            }
             else
                 bg.SetSunLighting(Vector3.Zero, bgLight, bgLight, 1f);
             bg.Render(viewProj, view, _camera.Position, 0, Wireframe, false, false, cullBackfaces: false);
@@ -881,6 +919,19 @@ public sealed class ViewportControl : OpenGlControlBase
 
     /// <summary>Upload a per-submesh texture list into a renderer layer (0 diffuse · 1 mask · 2 gradient · 3 emissive).</summary>
     // M89: upload one texture layer to the background renderer (shared image → shared GL id).
+    /// <summary>M142.9: per-index overlay — take <paramref name="primary"/> where it has a texture, else
+    /// fall back to <paramref name="fallback"/>. Used for the shared mask slot (height-scale vs blend map).</summary>
+    private static IReadOnlyList<TextureImage?>? Merge(IReadOnlyList<TextureImage?>? primary, IReadOnlyList<TextureImage?>? fallback)
+    {
+        if (primary is null) return fallback;
+        if (fallback is null) return primary;
+        int n = Math.Max(primary.Count, fallback.Count);
+        var merged = new TextureImage?[n];
+        for (int i = 0; i < n; i++)
+            merged[i] = (i < primary.Count ? primary[i] : null) ?? (i < fallback.Count ? fallback[i] : null);
+        return merged;
+    }
+
     private void UploadBgLayer(IReadOnlyList<TextureImage?>? texs, int slot, Dictionary<TextureImage, uint> uploaded)
     {
         if (_bgRenderer is null) return;
@@ -1123,7 +1174,9 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == BackgroundMeshProperty) { _bgMeshDirty = true; _bgTexDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == BackgroundTexturesProperty || change.Property == BackgroundBlendTexturesProperty
                  || change.Property == BackgroundColor1TexturesProperty || change.Property == BackgroundColor2TexturesProperty
-                 || change.Property == BackgroundColor3TexturesProperty) { _bgTexDirty = true; RequestNextFrameRendering(); }
+                 || change.Property == BackgroundColor3TexturesProperty
+                 || change.Property == BackgroundMaskTexturesProperty || change.Property == BackgroundLightmapTexturesProperty
+                 || change.Property == BackgroundMaterialsProperty) { _bgTexDirty = true; RequestNextFrameRendering(); }   // M142.9
         else if (change.Property == BackgroundVisibleProperty || change.Property == BackgroundVertexLightProperty
                  || change.Property == BackgroundBrightnessProperty || change.Property == ShowGridProperty
                  || change.Property == UseVertexLightmapProperty || change.Property == VertexLightmapScaleProperty) { RequestNextFrameRendering(); }
