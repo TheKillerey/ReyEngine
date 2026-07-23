@@ -269,6 +269,8 @@
                              ModelEmissiveTextures="{Binding EmissiveTextures}"
                              ModelMatCapTextures="{Binding MatCapTextures}"
                              ModelLightmapTextures="{Binding LightmapTextures}"
+                             UseVertexLightmap="{Binding UseVertexLightmap}"
+                             VertexLightmapScale="{Binding VertexLightmapScale}"
                              AnimationClip="{Binding CurrentAnimation}"
                              AnimationTime="{Binding AnimationTime}"
                              ParticlePlayback="{Binding Playback}"

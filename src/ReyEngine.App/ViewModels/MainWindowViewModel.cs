@@ -3713,6 +3713,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             MeshPreview.EmissiveTextures = bg.SubmeshColor2;
             MeshPreview.MatCapTextures = bg.SubmeshColor3;
             MeshPreview.LightmapTextures = bg.SubmeshLightmap;
+            // M142.4: structures/trees/props bake their night lighting into PrimaryColor — use it as the
+            // lightmap so they read the map's dark blue mood instead of a flat neutral fallback.
+            MeshPreview.UseVertexLightmap = true;
             // M142.2: Light.dat loaded but OFF by default — the composite already bakes the light pools
             // in, so the runtime lights double them up. Toggleable later if a map needs them.
             MeshPreview.BackgroundLights = bg.Lights;

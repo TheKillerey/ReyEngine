@@ -45,6 +45,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _emissiveTextures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _matCapTextures;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _lightmapTextures;
+    // M142.4: legacy NVR statics use PrimaryColor AS their baked lightmap (night mood). Off for champions.
+    [ObservableProperty] private bool _useVertexLightmap;
+    [ObservableProperty] private double _vertexLightmapScale = 2.0;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _wireframe;
     [ObservableProperty] private bool _cullBackfaces = true;
@@ -117,6 +120,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Materials = null;   // M142: cleared per preview; only the legacy-map viewer sets it after Show
         MaskTextures = null; GradientTextures = null; EmissiveTextures = null;   // M142.2: map-only layers
         MatCapTextures = null; LightmapTextures = null;
+        UseVertexLightmap = false;   // M142.4: map-only; champions use normal lighting
         ShowBones = skeleton is not null;
         Stats = $"{mesh.VertexCount:n0} verts · {mesh.TriangleCount:n0} tris · {mesh.SubMeshes.Count} submesh(es)" +
                 (skeleton is not null ? $" · {skeleton.BoneCount} bones" : "");

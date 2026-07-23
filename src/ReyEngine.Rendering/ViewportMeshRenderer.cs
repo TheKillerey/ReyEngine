@@ -20,6 +20,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mUvScaleOffset, _mUvRot, _mUsesRim, _mUsesSpec;   // M32: per-material UV + feature flags
     private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
     private int _mVertexBakedLight, _mVertexBakedScale;            // M89: NVR vertex-colour baked light
+    private int _mVertexLightmap, _mVertexLightmapScale;           // M142.4: PrimaryColor AS baked lightmap
     private int _mNvrFourBlend;                                    // M89: NVR ground four-blend flag
     private int _mCompositeGround;                                 // M142: Map10 baked height-blend ground (2nd-UV composite)
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
@@ -54,6 +55,8 @@ public sealed class ViewportMeshRenderer : IDisposable
     private bool _dynamicLightsEnabled;
     private bool _vertexBakedLight;              // M89: apply PrimaryColor as a baked light (NVR ground)
     private float _vertexBakedScale = 3f;
+    private bool _vertexLightmap;                // M142.4: use PrimaryColor AS the baked lightmap (NVR statics)
+    private float _vertexLightmapScale = 2f;
     private bool _nvrFourBlend;                  // M89: NVR ground four-blend (gated per submesh by uHasMask)
     private Matrix4x4 _worldModel = Matrix4x4.Identity;   // M89: world transform for the whole mesh (move/rotate map)
     private int _mLightsTex, _mNumLights, _mLightIntensity, _mLightRadiusScale, _mLightPosScale, _mLightPosScaleXZ, _mLightPosOffset;
@@ -241,6 +244,8 @@ uniform int uUsesSpec;         // specular highlight only when the material prof
 uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map baked-term/mask data)
 uniform int uVertexBakedLight; // M89: 1 = add PrimaryColor as a baked light term (NVR ground shading)
 uniform float uVertexBakedScale;
+uniform int uVertexLightmap;   // M142.4: 1 = use PrimaryColor AS the baked lightmap (legacy NVR statics)
+uniform float uVertexLightmapScale;
 uniform int uNvrFourBlend;     // M89: 1 = CREATE_GROUND_MOSAIC_FOUR_BLEND (blend 4 colour maps by a mask)
 uniform int uCompositeGround;  // M142: 1 = Map10 baked height-blend ground atlas, sampled by the 2nd UV
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
@@ -506,6 +511,13 @@ void main() {
     // authors these dark on purpose - the map is meant to be lit mostly by Light.dat, so scale is tunable.
     if (uVertexBakedLight == 1) col += base * vColor.rgb * uVertexBakedScale;
 
+    // M142.4: legacy NVR static meshes (structures/trees/props) bake their night lighting — a dark, blue-
+    // tinted ambient + AO — into PrimaryColor. Use it AS the lightmap so they read the map's night mood
+    // instead of the flat neutral fallback. The ground uses its composite atlas, so it is excluded. A small
+    // ambient floor keeps meshes that shipped without PrimaryColor (stored black) from going invisible.
+    if (uVertexLightmap == 1 && uCompositeGround == 0 && uHasVertexColor == 1)
+        col = base * (vColor.rgb * uVertexLightmapScale + 0.03);
+
     // M70: legacy Riot dynamic point lights (Light.dat) added on top of the baked/fallback lighting - this is
     // how the old client lit torches and braziers. Each light is a radial term with a quadratic falloff to its
     // radius, wrapped by a softened N.L so surfaces turned partly away still catch some glow. Off entirely when
@@ -645,6 +657,8 @@ void main() { FragColor = uColor; }";
         _mHasVertexColor = gl.GetUniformLocation(_meshProgram, "uHasVertexColor");
         _mVertexBakedLight = gl.GetUniformLocation(_meshProgram, "uVertexBakedLight");
         _mVertexBakedScale = gl.GetUniformLocation(_meshProgram, "uVertexBakedScale");
+        _mVertexLightmap = gl.GetUniformLocation(_meshProgram, "uVertexLightmap");
+        _mVertexLightmapScale = gl.GetUniformLocation(_meshProgram, "uVertexLightmapScale");
         _mNvrFourBlend = gl.GetUniformLocation(_meshProgram, "uNvrFourBlend");
         _mCompositeGround = gl.GetUniformLocation(_meshProgram, "uCompositeGround");
         _mLightmap = gl.GetUniformLocation(_meshProgram, "uLightmap");
@@ -1266,6 +1280,14 @@ void main(){
         _vertexBakedScale = System.Math.Clamp(scale, 0f, 16f);
     }
 
+    /// <summary>M142.4: use PrimaryColor AS the baked lightmap (multiply) for legacy NVR static meshes —
+    /// their night lighting is baked per-vertex. Composite-ground submeshes ignore it (they use the atlas).</summary>
+    public void SetVertexLightmap(bool enabled, float scale)
+    {
+        _vertexLightmap = enabled;
+        _vertexLightmapScale = System.Math.Clamp(scale, 0f, 16f);
+    }
+
     /// <summary>M89: world transform (translation + rotation) applied to the whole mesh — used to slide and
     /// spin the NVR map backdrop under the previewed character.</summary>
     public void SetWorldTransform(Matrix4x4 model) => _worldModel = model;
@@ -1632,6 +1654,8 @@ void main(){
                 _gl.UniformMatrix4(_mModel, 1, false, in model.M11);
                 _gl.Uniform1(_mVertexBakedLight, _vertexBakedLight ? 1 : 0);
                 _gl.Uniform1(_mVertexBakedScale, _vertexBakedScale);
+                _gl.Uniform1(_mVertexLightmap, _vertexLightmap ? 1 : 0);       // M142.4
+                _gl.Uniform1(_mVertexLightmapScale, _vertexLightmapScale);
                 _gl.Uniform1(_mNvrFourBlend, _nvrFourBlend ? 1 : 0);
                 _gl.Uniform3(_mLight, _lightDirection.X, _lightDirection.Y, _lightDirection.Z);
                 _gl.Uniform3(_mSunColor, _sunColor.X, _sunColor.Y, _sunColor.Z);
@@ -1797,6 +1821,7 @@ void main(){
             _gl.Uniform1(_mMode, previewMode);
             _gl.Uniform1(_mHasVertexColor, 0);
             _gl.Uniform1(_mVertexBakedLight, 0);   // M89: props never use the NVR baked-light term
+            _gl.Uniform1(_mVertexLightmap, 0);     // M142.4: props are not NVR statics
             _gl.Uniform1(_mNvrFourBlend, 0);
             _gl.Uniform1(_mCompositeGround, 0);    // M142: props are not composite ground
             _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);
