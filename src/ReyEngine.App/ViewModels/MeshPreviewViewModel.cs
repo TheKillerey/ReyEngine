@@ -209,6 +209,16 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     [RelayCommand] private void ShowAllSubmeshes() { foreach (var s in Submeshes) s.IsVisible = true; }
     [RelayCommand] private void HideAllSubmeshes() { foreach (var s in Submeshes) s.IsVisible = false; }
 
+    /// <summary>M142.6: hide specific submeshes on load (legacy-map ground-clutter decals) — the user can
+    /// re-check them. Call after Show (which recreates the toggles all-visible).</summary>
+    public void SetSubmeshHidden(IReadOnlyList<bool>? hide)
+    {
+        if (hide is null) return;
+        for (int i = 0; i < Submeshes.Count && i < hide.Count; i++)
+            if (hide[i]) Submeshes[i].IsVisible = false;
+        RebuildSubmeshVisibility();
+    }
+
     // ---- M85: game-accurate submesh visibility — skin bin initial-hide + per-clip show/hide events.
     // AUTO (default): selecting an animation applies the game's lists; MANUAL: checkboxes are yours. ----
     [ObservableProperty] private bool _autoSubmeshVisibility = true;

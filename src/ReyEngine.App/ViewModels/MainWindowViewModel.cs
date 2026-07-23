@@ -3716,6 +3716,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M142.4: structures/trees/props bake their night lighting into PrimaryColor — use it as the
             // lightmap so they read the map's dark blue mood instead of a flat neutral fallback.
             MeshPreview.UseVertexLightmap = true;
+            // M142.6: ground-clutter overlays (rubble/damage/decal patches) hidden by default — the
+            // composite ground already carries that detail. Recoverable via the SUBMESHES checkboxes.
+            MeshPreview.SetSubmeshHidden(bg.SubmeshHidden);
             // M142.2: Light.dat loaded but OFF by default — the composite already bakes the light pools
             // in, so the runtime lights double them up. Toggleable later if a map needs them.
             MeshPreview.BackgroundLights = bg.Lights;

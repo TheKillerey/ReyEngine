@@ -34,7 +34,11 @@ public sealed record MapPreviewBackground(
     // lightmap slot = compositeColorMap (baked light/colour, modulates the height-blended detail 2X).
     // Both only on the flagged ground submeshes; null when the map has no height-blend ground.
     IReadOnlyList<TextureImage?>? SubmeshMask = null,
-    IReadOnlyList<TextureImage?>? SubmeshLightmap = null);
+    IReadOnlyList<TextureImage?>? SubmeshLightmap = null,
+    // M142.6: ground-clutter overlay submeshes (rubble/damage/decal patches sitting on the composite
+    // ground) hidden by DEFAULT — the composite already carries that detail. True = hide on load;
+    // recoverable via the SUBMESHES checkboxes. Null when nothing qualifies.
+    IReadOnlyList<bool>? SubmeshHidden = null);
 
 /// <summary>M88: loads a legacy League <c>LEVELS/&lt;Map&gt;</c> folder as a character-preview backdrop.
 /// Reads <c>Scene/room.nvr</c>, resolves diffuse from <c>Scene/Textures/</c>, loads <c>Light.dat</c>, and
@@ -170,6 +174,8 @@ public static class MapPreviewLoader
             return cut;
         }
         var mats = new ViewportMeshRenderer.SubmeshMaterial[subTex.Length];
+        var hide = new bool[subTex.Length];
+        bool anyHide = false;
         TextureImage?[]? subMask = null, subLightmap = null;
         bool detail = ground is not null && heightScale is not null;   // M142.2: real height blend possible
         if (detail) { subMask = new TextureImage?[subTex.Length]; subLightmap = new TextureImage?[subTex.Length]; }
@@ -180,9 +186,16 @@ public static class MapPreviewLoader
             // outside [0,1]; with GL_REPEAT that wraps into hard tile seams (mud path, tower/step decals).
             // Clamp their UVs so the out-of-range border shows the (transparent) edge texel — cut out by the
             // alpha pass — and the decal paints once. Ground/rubble map within [0,1] and are left tiling.
+            string mname = src.SubMeshes[i].Material ?? "";
             bool decal = !g &&
                 ((nvr.SubmeshDiffuseTextures[i]?.StartsWith("decal", StringComparison.OrdinalIgnoreCase) ?? false)
-                 || (src.SubMeshes[i].Material?.Contains("decal", StringComparison.OrdinalIgnoreCase) ?? false));
+                 || mname.Contains("decal", StringComparison.OrdinalIgnoreCase));
+            // M142.6: ground-clutter overlays (rubble/damage/decal patches) sit on the composite ground,
+            // which already bakes that detail — hide them by default (the user can re-check them).
+            hide[i] = decal
+                || mname.Contains("rubble", StringComparison.OrdinalIgnoreCase)
+                || mname.Contains("damge", StringComparison.OrdinalIgnoreCase);   // Riot's spelling
+            anyHide |= hide[i];
             mats[i] = ViewportMeshRenderer.SubmeshMaterial.Default with
             {
                 CompositeGround = g,
@@ -212,7 +225,8 @@ public static class MapPreviewLoader
 
         return new MapPreviewBackground(
             new DirectoryInfo(mapFolder).Name, shifted, subTex, subBlend, subColor1, subColor2, subColor3,
-            nvr.SubmeshDoubleSided, lights, nvr.MeshCount, missing, mats, subMask, subLightmap);
+            nvr.SubmeshDoubleSided, lights, nvr.MeshCount, missing, mats, subMask, subLightmap,
+            anyHide ? hide : null);
     }
 
     /// <summary>M142: a submesh is height-blend ground when its four-blend BLEND_MAP is the null_black
