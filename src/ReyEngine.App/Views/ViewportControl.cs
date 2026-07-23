@@ -744,6 +744,12 @@ public sealed class ViewportControl : OpenGlControlBase
         _meshRenderer.SetLightPositionOffset((float)DynamicLightOffsetX, (float)DynamicLightOffsetZ);
         if (SunProperties is { } sun)
             _meshRenderer.SetSunLighting(sun.SunDirection, sun.SunColor, sun.SkyLightColor, sun.SkyLightScale);
+        else if (UseVertexLightmap)
+            // M142.5: legacy maps light most statics by baked vertex colour; meshes that shipped WITHOUT it
+            // (LM_/decal, PrimaryColor black) fall through to this — a dim directional night sun/sky so they
+            // read as shaped night geometry, not a flat too-dark patch. White (below) would blow them out.
+            _meshRenderer.SetSunLighting(new Vector3(-0.3f, -0.85f, -0.4f),
+                new Vector4(0.30f, 0.30f, 0.36f, 1f), new Vector4(0.20f, 0.21f, 0.26f, 1f), 1f);
         else
             _meshRenderer.SetSunLighting(Vector3.Zero, Vector4.One, Vector4.One, 1f);
         _meshRenderer.SetSubmeshHighlight(HighlightSubmeshes);  // M50b: selection outline overlay

@@ -176,12 +176,21 @@ public static class MapPreviewLoader
         for (int i = 0; i < mats.Length; i++)
         {
             bool g = ground is not null && ground[i];
+            // M142.6: decals (decalVersion3 / decal_*.dds) project their texture ONCE but their UVs run
+            // outside [0,1]; with GL_REPEAT that wraps into hard tile seams (mud path, tower/step decals).
+            // Clamp their UVs so the out-of-range border shows the (transparent) edge texel — cut out by the
+            // alpha pass — and the decal paints once. Ground/rubble map within [0,1] and are left tiling.
+            bool decal = !g &&
+                ((nvr.SubmeshDiffuseTextures[i]?.StartsWith("decal", StringComparison.OrdinalIgnoreCase) ?? false)
+                 || (src.SubMeshes[i].Material?.Contains("decal", StringComparison.OrdinalIgnoreCase) ?? false));
             mats[i] = ViewportMeshRenderer.SubmeshMaterial.Default with
             {
                 CompositeGround = g,
                 DoubleSided = nvr.SubmeshDoubleSided[i],
-                AlphaMode = !g && HasCutoutAlpha(subTex[i]) ? 1 : 0,
+                AlphaMode = !g && (decal || HasCutoutAlpha(subTex[i])) ? 1 : 0,
                 AlphaCutoff = 0.25f,
+                ClampU = decal,
+                ClampV = decal,
             };
             if (!g) continue;
             if (detail) { subMask![i] = heightScale; subLightmap![i] = composite; }

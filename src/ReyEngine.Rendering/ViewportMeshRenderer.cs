@@ -515,12 +515,13 @@ void main() {
     // tinted ambient + AO — into PrimaryColor. Use it AS the lightmap so they read the map's night mood
     // instead of the flat neutral fallback. The ground uses its composite atlas, so it is excluded.
     // M142.5: LM_ and decal meshes were lightmapped with a separate texture instead and ship PrimaryColor =
-    // pure black; multiplying by that blacks them out (stairs, rubble, ground decals). Blend to a dim
-    // neutral-blue ambient wherever the baked colour is ~0 so they read as dim night geometry, not holes.
+    // pure black; multiplying by that blacks them out (stairs, rubble, ground decals). Where the baked
+    // colour is ~0, keep the fallback lighting (col, set to the map's dim directional night sun/sky by the
+    // host) so they read as dim night geometry with shape; genuinely baked meshes use their vertex colour.
     if (uVertexLightmap == 1 && uCompositeGround == 0 && uHasVertexColor == 1) {
         float vlum = dot(vColor.rgb, vec3(0.3333));
-        vec3 lit = vColor.rgb * uVertexLightmapScale;
-        col = base * mix(vec3(0.34, 0.36, 0.42), lit, smoothstep(0.0, 0.05, vlum));
+        vec3 lit = base * vColor.rgb * uVertexLightmapScale;
+        col = mix(col, lit, smoothstep(0.0, 0.05, vlum));
     }
 
     // M70: legacy Riot dynamic point lights (Light.dat) added on top of the baked/fallback lighting - this is
