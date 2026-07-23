@@ -3705,6 +3705,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var bg = await Task.Run(() => Services.MapPreviewLoader.Load(folder));
             MeshPreview.Show($"{bg.MapName} (legacy NVR map)", bg.Mesh, skeleton: null, textures: bg.SubmeshTextures);
+            // M142.8: a legacy map IS the subject — drop any character-preview backdrop still attached from
+            // an earlier skin preview, or both maps render at once (Map8 backdrop behind the Map10 subject).
+            MeshPreview.SetBackground(null);
             MeshPreview.Materials = bg.SubmeshMaterials;   // M142: double-sided + alpha cutout + ground flags
             // M142.2: height-blend ground layers — height-scale map (mask), COLOR_MAP_1/2/3
             // (gradient/emissive/matcap) and the baked composite as the modulating lightmap.

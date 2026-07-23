@@ -18,6 +18,48 @@ public sealed partial class ThemeItemViewModel : ObservableObject
     [ObservableProperty] private bool _isSelected;
 }
 
+/// <summary>M142.8: one downloadable legacy (NVR) map pack in Settings ▸ Preview. Each pack can be
+/// downloaded on demand and picked as the model-preview backdrop, so the user chooses which classic map
+/// their skins are previewed in (Crystal Scar, Twisted Treeline, …).</summary>
+public sealed partial class MapPackRowViewModel : ObservableObject
+{
+    public required string Name { get; init; }
+    public required string InstallDir { get; init; }
+    public required string Url { get; init; }
+
+    [ObservableProperty] private bool _installed;
+    [ObservableProperty] private bool _isSelected;   // currently the preview backdrop
+    [ObservableProperty] private string _status = "";
+    [ObservableProperty] private bool _busy;
+
+    /// <summary>Host hooks (wired by SettingsViewModel): use this pack as the backdrop / global busy gate.</summary>
+    public Action<MapPackRowViewModel>? UseAsBackdrop;
+    public Func<bool>? AnyBusy;
+
+    public string ActionLabel => Installed ? "Use as backdrop" : "⬇ Download";
+    partial void OnInstalledChanged(bool value) => OnPropertyChanged(nameof(ActionLabel));
+
+    [RelayCommand]
+    private async System.Threading.Tasks.Task Activate()
+    {
+        if (Busy || (AnyBusy?.Invoke() ?? false)) return;
+        try
+        {
+            if (!Installed)
+            {
+                Busy = true;
+                var progress = new Progress<string>(s => Status = s);
+                await SetupService.DownloadAndExtractAsync(Url, InstallDir, progress);
+                Installed = true;
+            }
+            UseAsBackdrop?.Invoke(this);
+            Status = "Selected as the preview backdrop. Save to apply.";
+        }
+        catch (Exception ex) { Status = $"Download failed: {ex.Message}"; }
+        finally { Busy = false; }
+    }
+}
+
 /// <summary>One rebindable action row in the Settings ▸ Controls tab (M40).</summary>
 public sealed partial class KeybindRowViewModel : ObservableObject
 {
@@ -56,34 +98,37 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _previewBackgroundMapFolder = "";
     [ObservableProperty] private bool _previewBackgroundEnabled;
 
-    // M92/M93: one-click Dominion (Map8) asset-pack download — shared logic in SetupService.
-    [ObservableProperty] private string _mapDownloadStatus = "";
-    [ObservableProperty] private bool _mapDownloadBusy;
+    // M92/M93 → M142.8: legacy map packs are a LIST now (Crystal Scar, Twisted Treeline, …) — each can be
+    // downloaded on demand and picked as the preview backdrop, instead of a hardcoded Map8-only button.
+    public ObservableCollection<MapPackRowViewModel> MapPacks { get; } = new();
 
-    [RelayCommand]
-    private async System.Threading.Tasks.Task DownloadMap8()
+    /// <summary>Build the pack rows from SetupService and wire their host hooks. Marks the row whose
+    /// install dir is the current backdrop folder as selected.</summary>
+    private void BuildMapPacks()
     {
-        if (MapDownloadBusy) return;
-        try
+        MapPacks.Clear();
+        foreach (var (name, dir, url, installed) in SetupService.LegacyMapPacks)
         {
-            string dest = SetupService.Map8InstallDir;
-            if (SetupService.Map8Installed)
+            var row = new MapPackRowViewModel
             {
-                PreviewBackgroundMapFolder = dest;
+                Name = name, InstallDir = dir, Url = url, Installed = installed,
+                IsSelected = string.Equals(PreviewBackgroundMapFolder, dir, StringComparison.OrdinalIgnoreCase),
+            };
+            row.AnyBusy = () => MapPacks.Any(p => p.Busy);
+            row.UseAsBackdrop = r =>
+            {
+                PreviewBackgroundMapFolder = r.InstallDir;
                 PreviewBackgroundEnabled = true;
-                MapDownloadStatus = "Already installed — backdrop enabled.";
-                return;
-            }
-
-            MapDownloadBusy = true;
-            var progress = new Progress<string>(s => MapDownloadStatus = s);
-            await SetupService.DownloadAndExtractAsync(SetupService.Map8Url, dest, progress);
-            PreviewBackgroundMapFolder = dest;
-            PreviewBackgroundEnabled = true;
-            MapDownloadStatus = $"Installed to {dest} — backdrop enabled. Save to apply.";
+                foreach (var p in MapPacks) p.IsSelected = ReferenceEquals(p, r);
+            };
+            MapPacks.Add(row);
         }
-        catch (Exception ex) { MapDownloadStatus = $"Download failed: {ex.Message}"; }
-        finally { MapDownloadBusy = false; }
+    }
+
+    partial void OnPreviewBackgroundMapFolderChanged(string value)
+    {
+        foreach (var p in MapPacks)
+            p.IsSelected = string.Equals(value, p.InstallDir, StringComparison.OrdinalIgnoreCase);
     }
 
     // M72: sidebar section switching (0 General · 1 Camera · 2 Controls · 3 Theme · 4 Preview)
@@ -146,6 +191,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         WwiseProjectPath = s.WwiseProjectPath;
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder;
         PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
+        BuildMapPacks();   // M142.8: downloadable/selectable legacy map packs (reflects the folder above)
 
         // theme: reflect + live-apply (LoadFrom also runs on Reset to Defaults)
         _theme = s.Theme;
