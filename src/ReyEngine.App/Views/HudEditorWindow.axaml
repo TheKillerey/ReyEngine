@@ -53,7 +53,10 @@
                   BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1">
             <StackPanel Orientation="Horizontal" Spacing="12">
               <CheckBox Content="Show element bounds" IsChecked="{Binding #Canvas.ShowBounds}" FontSize="11" />
-              <TextBlock Text="Click an element to select it" FontSize="10" Opacity="0.55" VerticalAlignment="Center" />
+              <CheckBox Content="16:9 screen guide" IsChecked="{Binding #Canvas.ShowSafeArea}" FontSize="11" />
+              <Button Classes="tool" Content="⤢ Fit" Click="OnFitView" Padding="10,2"
+                      ToolTip.Tip="Reset the view to fit the whole HUD" />
+              <TextBlock Text="Click to select · wheel to zoom · right-drag to pan" FontSize="10" Opacity="0.55" VerticalAlignment="Center" />
             </StackPanel>
           </Border>
           <views:HudCanvas x:Name="Canvas"

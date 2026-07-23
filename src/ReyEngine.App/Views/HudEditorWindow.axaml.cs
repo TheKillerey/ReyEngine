@@ -19,6 +19,8 @@ public partial class HudEditorWindow : Window
             }
         };
     }
+
+    private void OnFitView(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Canvas.FitView();
 }
 
 /// <summary>Small value converters for the HUD editor.</summary>
