@@ -70,25 +70,34 @@ public sealed class HudCanvas : Control
 
     private void OnItemsChanged(object? s, NotifyCollectionChangedEventArgs e) => InvalidateVisual();
 
-    /// <summary>Reset the view to fit the whole reference frame, centred with a small margin.</summary>
+    /// <summary>Reset the view to fit the whole reference frame, centred with a small margin.
+    /// Public entry (Fit button) — invalidates so the change repaints.</summary>
     public void FitView()
+    {
+        ComputeFit();
+        InvalidateVisual();
+    }
+
+    /// <summary>Set the fit transform WITHOUT invalidating — safe to call during a render pass
+    /// (Avalonia throws "Visual was invalidated during the render pass" if you invalidate mid-render).</summary>
+    private void ComputeFit()
     {
         double bw = Bounds.Width, bh = Bounds.Height;
         double rw = Math.Max(1, RefWidth), rh = Math.Max(1, RefHeight);
         _scale = Math.Min(bw / rw, bh / rh) * 0.92;
         _offset = new Point((bw - rw * _scale) / 2, (bh - rh * _scale) / 2);
-        InvalidateVisual();
     }
 
     private void EnsureView()
     {
         // auto-fit only when never fitted yet, or the reference/document changed (not on every resize,
-        // so the user's zoom/pan survives). A first fit also needs real Bounds.
+        // so the user's zoom/pan survives). A first fit also needs real Bounds. Runs INSIDE Render, so
+        // it must not invalidate — ComputeFit only.
         bool refChanged = RefWidth != _lastRefW || RefHeight != _lastRefH;
         if ((_scale <= 0 || refChanged) && Bounds.Width > 0 && Bounds.Height > 0)
         {
             _lastRefW = RefWidth; _lastRefH = RefHeight;
-            FitView();
+            ComputeFit();
         }
     }
 
@@ -126,7 +135,7 @@ public sealed class HudCanvas : Control
     {
         EnsureView();
         double scale = _scale, ox = _offset.X, oy = _offset.Y;
-        if (double.IsNaN(scale) || double.IsInfinity(scale) || scale <= 0) { FitView(); scale = _scale; ox = _offset.X; oy = _offset.Y; }
+        if (double.IsNaN(scale) || double.IsInfinity(scale) || scale <= 0) { ComputeFit(); scale = _scale; ox = _offset.X; oy = _offset.Y; }
 
         // reference frame
         var frame = new Rect(ox, oy, RefWidth * scale, RefHeight * scale);
