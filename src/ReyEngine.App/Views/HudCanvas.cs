@@ -5,7 +5,9 @@ using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using ReyEngine.App.ViewModels;
 
 namespace ReyEngine.App.Views;
@@ -56,6 +58,23 @@ public sealed class HudCanvas : Control
     private Point _panLast;
     private double _lastRefW, _lastRefH, _lastBoundsW, _lastBoundsH;
 
+    // M140.4: composited element layer — the elements are drawn ONCE into this bitmap (in ref space)
+    // and blitted each frame, so panning/zooming a 700-element HUD is one DrawImage, not hundreds.
+    private RenderTargetBitmap? _layer;
+    private double _layerScale = 1;
+    private bool _layerDirty = true;
+    private bool _rebuildQueued;
+
+    // reused draw resources (no per-frame allocation)
+    private static readonly IBrush FrameBrush = new ImmutableSolidColorBrush(Color.FromRgb(0x1c, 0x22, 0x2c));
+    private static readonly IPen FramePen = new ImmutablePen(new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0x55, 0x66, 0x77)), 1);
+    private static readonly IBrush PlaceholderFill = new ImmutableSolidColorBrush(Color.FromArgb(0x22, 0x8a, 0xd0, 0xff));
+    private static readonly IPen PlaceholderPen = new ImmutablePen(new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0x8a, 0xd0, 0xff)), 1);
+    private static readonly ImmutableSolidColorBrush GuideBrush = new(Color.FromArgb(0xAA, 0xFF, 0xB4, 0x54));
+    private static readonly IPen GuidePen = new ImmutablePen(GuideBrush, 1.5, new ImmutableDashStyle(new double[] { 4, 4 }, 0));
+    private static readonly IPen SelPen = new ImmutablePen(new ImmutableSolidColorBrush(Color.FromRgb(0x35, 0xd0, 0x8a)), 2);
+    private static readonly IPen SelShadowPen = new ImmutablePen(new ImmutableSolidColorBrush(Color.FromArgb(0x66, 0, 0, 0)), 4);
+
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs e)
     {
         base.OnPropertyChanged(e);
@@ -64,11 +83,87 @@ public sealed class HudCanvas : Control
             if (_observed is not null) _observed.CollectionChanged -= OnItemsChanged;
             _observed = Items as INotifyCollectionChanged;
             if (_observed is not null) _observed.CollectionChanged += OnItemsChanged;
-            InvalidateVisual();
+            MarkLayerDirty();
+        }
+        // these change the CACHED element layer (content), not just the view
+        else if (e.Property == ShowBoundsProperty || e.Property == RefWidthProperty || e.Property == RefHeightProperty)
+            MarkLayerDirty();
+    }
+
+    private void OnItemsChanged(object? s, NotifyCollectionChangedEventArgs e) => MarkLayerDirty();
+
+    /// <summary>Schedule a layer rebuild off the render pass, coalescing a burst of collection adds
+    /// (Load populates the ObservableCollection one item at a time) into a single rebuild.</summary>
+    private void MarkLayerDirty()
+    {
+        _layerDirty = true;
+        if (_rebuildQueued) return;
+        _rebuildQueued = true;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            _rebuildQueued = false;
+            if (_layerDirty) { RebuildLayer(); InvalidateVisual(); }
+        }, Avalonia.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>Composite every element into <see cref="_layer"/> in ref-space, once. Off the render
+    /// pass, so CreateDrawingContext is safe.</summary>
+    private void RebuildLayer()
+    {
+        _layerDirty = false;
+        if (Items is null) { _layer?.Dispose(); _layer = null; return; }
+
+        double rw = Math.Max(1, RefWidth), rh = Math.Max(1, RefHeight);
+        const double maxDim = 2600;   // cap the cache so an exotic reference size can't blow memory
+        _layerScale = Math.Min(1.0, maxDim / Math.Max(rw, rh));
+        int lw = Math.Max(1, (int)Math.Ceiling(rw * _layerScale)), lh = Math.Max(1, (int)Math.Ceiling(rh * _layerScale));
+
+        try
+        {
+            _layer?.Dispose();
+            _layer = new RenderTargetBitmap(new PixelSize(lw, lh));
+            using var dc = _layer.CreateDrawingContext();
+            var lb = new Rect(0, 0, lw, lh);
+            double ls = _layerScale;
+            foreach (var it in Items)
+            {
+                var dest = new Rect(it.X * ls, it.Y * ls, it.W * ls, it.H * ls);
+                if (!RectFinite(dest) || !dest.Intersects(lb)) continue;   // cull parked/off-screen
+                if (it.Atlas is { } bmp && it.SrcW > 0 && it.SrcH > 0)
+                {
+                    var ps = bmp.PixelSize;
+                    double sx = Math.Clamp(it.SrcX, 0, ps.Width), sy = Math.Clamp(it.SrcY, 0, ps.Height);
+                    double sw = Math.Clamp(it.SrcW, 0, ps.Width - sx), sh = Math.Clamp(it.SrcH, 0, ps.Height - sy);
+                    if (sw < 1 || sh < 1) continue;
+                    var src = new Rect(sx, sy, sw, sh);
+                    try
+                    {
+                        if (it.Tint is { } tint && tint != Colors.White)
+                            using (dc.PushOpacity(tint.A / 255.0)) dc.DrawImage(bmp, src, dest);
+                        else dc.DrawImage(bmp, src, dest);
+                    }
+                    catch { /* a bad crop must not abort the whole layer */ }
+                }
+                else if (ShowBounds || it.Atlas is null)
+                {
+                    dc.FillRectangle(PlaceholderFill, dest);
+                    dc.DrawRectangle(PlaceholderPen, dest);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!_reported) { _reported = true; RenderFailed?.Invoke(ex.ToString()); }
+            _layer?.Dispose(); _layer = null;
         }
     }
 
-    private void OnItemsChanged(object? s, NotifyCollectionChangedEventArgs e) => InvalidateVisual();
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        _layer?.Dispose();
+        _layer = null;
+    }
 
     /// <summary>Reset the view to fit the whole reference frame, centred with a small margin.
     /// Public entry (Fit button) — invalidates so the change repaints.</summary>
@@ -139,48 +234,18 @@ public sealed class HudCanvas : Control
 
         // reference frame
         var frame = new Rect(ox, oy, RefWidth * scale, RefHeight * scale);
-        ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x1c, 0x22, 0x2c)), frame);
-        ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromArgb(0x55, 0x55, 0x66, 0x77)), 1), frame);
+        ctx.FillRectangle(FrameBrush, frame);
+        ctx.DrawRectangle(FramePen, frame);
 
-        // clip drawing to the control so parked/off-screen elements can't paint over the panels
         using var clip = ctx.PushClip(new Rect(Bounds.Size));
-
         if (Items is null) return;
         var visible = new Rect(Bounds.Size);
-        foreach (var it in Items)
-        {
-            var dest = new Rect(ox + it.X * scale, oy + it.Y * scale, it.W * scale, it.H * scale);
-            // cull: elements parked at absurd off-screen coords (League hides them at x/y ~1e5) must
-            // never reach the GPU — a real Skia draw at 100k+ px with a bitmap can crash natively.
-            if (!RectFinite(dest) || !dest.Intersects(visible)) continue;
 
-            if (it.Atlas is { } bmp && it.SrcW > 0 && it.SrcH > 0)
-            {
-                // clamp the UV crop to the atlas's real pixels — a source rect outside the bitmap is
-                // another native-crash source (elements pointing at a mismatched/tiny atlas).
-                var ps = bmp.PixelSize;
-                double sx = Math.Clamp(it.SrcX, 0, ps.Width), sy = Math.Clamp(it.SrcY, 0, ps.Height);
-                double sw = Math.Clamp(it.SrcW, 0, ps.Width - sx), sh = Math.Clamp(it.SrcH, 0, ps.Height - sy);
-                if (sw < 1 || sh < 1) continue;
-                var src = new Rect(sx, sy, sw, sh);
-                try
-                {
-                    if (it.Tint is { } tint && tint != Colors.White)
-                    {
-                        using (ctx.PushOpacity(tint.A / 255.0))
-                            ctx.DrawImage(bmp, src, dest);
-                    }
-                    else ctx.DrawImage(bmp, src, dest);
-                }
-                catch { /* a bad crop rect must not kill the whole render */ }
-            }
-            else if (ShowBounds || it.Atlas is null)
-            {
-                // no texture (or atlas missing): a faint placeholder box so the element is still visible
-                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(0x22, 0x8a, 0xd0, 0xff)), dest);
-                ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromArgb(0x55, 0x8a, 0xd0, 0xff)), 1), dest);
-            }
-        }
+        // blit the cached element layer (composited once) scaled to the frame — one draw, not hundreds
+        if (_layer is { } layer)
+            ctx.DrawImage(layer, new Rect(0, 0, layer.PixelSize.Width, layer.PixelSize.Height), frame);
+        else if (_layerDirty)
+            MarkLayerDirty();   // first frame before the layer exists — schedule it
 
         // 16:9 screen guide inside the 4:3 design space (League composites the HUD onto a 16:9 screen)
         if (ShowSafeArea)
@@ -189,21 +254,20 @@ public sealed class HudCanvas : Control
             if (sh > RefHeight) { sh = RefHeight; sw = RefHeight * 16.0 / 9.0; }
             double sx = (RefWidth - sw) / 2, sy = (RefHeight - sh) / 2;
             var guide = new Rect(ox + sx * scale, oy + sy * scale, sw * scale, sh * scale);
-            ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromArgb(0xAA, 0xFF, 0xB4, 0x54)), 1.5,
-                dashStyle: new DashStyle(new double[] { 4, 4 }, 0)), guide);
+            ctx.DrawRectangle(GuidePen, guide);
             var txt = new FormattedText("16:9 screen", System.Globalization.CultureInfo.InvariantCulture,
-                FlowDirection.LeftToRight, Typeface.Default, 11, new SolidColorBrush(Color.FromArgb(0xAA, 0xFF, 0xB4, 0x54)));
+                FlowDirection.LeftToRight, Typeface.Default, 11, GuideBrush);
             ctx.DrawText(txt, new Point(guide.X + 4, guide.Y + 2));
         }
 
-        // selection outline
+        // selection outline (live — changing selection doesn't rebuild the layer)
         if (SelectedHash != 0 && Items.FirstOrDefault(i => i.Element.PathHash == SelectedHash) is { } sel)
         {
             var r = new Rect(ox + sel.X * scale, oy + sel.Y * scale, sel.W * scale, sel.H * scale);
             if (RectFinite(r) && r.Intersects(visible))
             {
-                ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromArgb(0x66, 0, 0, 0)), 4), r.Inflate(1));
-                ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromRgb(0x35, 0xd0, 0x8a)), 2), r);
+                ctx.DrawRectangle(SelShadowPen, r.Inflate(1));
+                ctx.DrawRectangle(SelPen, r);
             }
         }
     }
