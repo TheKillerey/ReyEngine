@@ -513,10 +513,15 @@ void main() {
 
     // M142.4: legacy NVR static meshes (structures/trees/props) bake their night lighting — a dark, blue-
     // tinted ambient + AO — into PrimaryColor. Use it AS the lightmap so they read the map's night mood
-    // instead of the flat neutral fallback. The ground uses its composite atlas, so it is excluded. A small
-    // ambient floor keeps meshes that shipped without PrimaryColor (stored black) from going invisible.
-    if (uVertexLightmap == 1 && uCompositeGround == 0 && uHasVertexColor == 1)
-        col = base * (vColor.rgb * uVertexLightmapScale + 0.03);
+    // instead of the flat neutral fallback. The ground uses its composite atlas, so it is excluded.
+    // M142.5: LM_ and decal meshes were lightmapped with a separate texture instead and ship PrimaryColor =
+    // pure black; multiplying by that blacks them out (stairs, rubble, ground decals). Blend to a dim
+    // neutral-blue ambient wherever the baked colour is ~0 so they read as dim night geometry, not holes.
+    if (uVertexLightmap == 1 && uCompositeGround == 0 && uHasVertexColor == 1) {
+        float vlum = dot(vColor.rgb, vec3(0.3333));
+        vec3 lit = vColor.rgb * uVertexLightmapScale;
+        col = base * mix(vec3(0.34, 0.36, 0.42), lit, smoothstep(0.0, 0.05, vlum));
+    }
 
     // M70: legacy Riot dynamic point lights (Light.dat) added on top of the baked/fallback lighting - this is
     // how the old client lit torches and braziers. Each light is a radial term with a quadratic falloff to its
