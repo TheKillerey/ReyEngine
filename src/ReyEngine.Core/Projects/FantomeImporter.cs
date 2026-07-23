@@ -9,11 +9,12 @@ public sealed record FantomeImportResult(string RootPath, string ProjectName, in
 
 /// <summary>
 /// M94: converts a .fantome mod package into an editable ReyEngine folder project. A fantome zip holds
-/// META/info.json (name/author/version/description), WAD/*.wad.client (packed mod WADs) and optionally
-/// RAW/ loose files + META/image.png. Each packed WAD is unpacked into the cslol-style per-WAD folder
-/// layout the editor works with (resolved paths, or &lt;hash&gt;.bin for unknown chunks), RAW files are
-/// copied as-is, and same-named Riot WADs from the game install become read-only references so
-/// everything else still resolves. Never touches the source .fantome.
+/// META/info.json (name/author/version/description), WAD/… (mod WADs) and optionally RAW/ loose files +
+/// META/image.png. A WAD ships either PACKED (<c>WAD/Foo.wad.client</c> is a .wad.client file) or as a
+/// RAW FOLDER (<c>WAD/Foo.wad.client/…</c> is a directory of loose files already at resolved paths — the
+/// cslol "unpacked" layout common to HUD/UI mods, M139). Both become the same per-WAD project folder;
+/// RAW/ files are copied as-is, and same-named Riot WADs from the game install become read-only
+/// references so everything else still resolves. Never touches the source .fantome.
 /// </summary>
 public static class FantomeImporter
 {
@@ -47,44 +48,95 @@ public static class FantomeImporter
         int wads = 0, extracted = 0, raw = 0, failed = 0;
         var folders = new List<string>();
 
-        // ---- WAD/*.wad.client → unpack into per-WAD project folders ----
+        // ---- WAD/… → per-WAD project folders. A fantome ships each WAD one of two ways:
+        //   packed    : WAD/Foo.wad.client is a single .wad.client FILE (unpack via WadArchive)
+        //   raw folder: WAD/Foo.wad.client/ is a DIRECTORY of loose files already at resolved paths
+        //               (the cslol "unpacked" layout, e.g. many HUD/UI mods) — just copy them across
+        // Both end as root/<Foo>/ with files at their resolved paths, so downstream is identical.
+        // Group WAD/ entries by the first segment after WAD/ to tell the two apart.
+        var wadGroups = new Dictionary<string, List<ZipArchiveEntry>>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in zip.Entries)
         {
             string full = entry.FullName.Replace('\\', '/');
-            if (!full.StartsWith("WAD/", StringComparison.OrdinalIgnoreCase)
-                || !full.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase)
-                || entry.Length == 0) continue;
+            if (!full.StartsWith("WAD/", StringComparison.OrdinalIgnoreCase)) continue;
+            string rest = full["WAD/".Length..];
+            if (rest.Length == 0) continue;
+            int slash = rest.IndexOf('/');
+            string wadName = slash < 0 ? rest : rest[..slash];   // "Foo.wad.client"
+            if (!wadGroups.TryGetValue(wadName, out var list)) wadGroups[wadName] = list = new();
+            list.Add(entry);
+        }
 
-            string wadBase = Path.GetFileName(full);
-            wadBase = wadBase[..^".wad.client".Length];
+        foreach (var (wadName, entries) in wadGroups)
+        {
+            string wadBase = wadName.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase)
+                ? wadName[..^".wad.client".Length] : wadName;
             string outDir = Path.Combine(root, Sanitize(wadBase));
-            progress?.Report($"Unpacking {Path.GetFileName(full)}…");
 
-            // WadArchive reads from a file path — stage the packed WAD to a temp file first.
-            string tmp = Path.Combine(Path.GetTempPath(), $"reyimport-{Guid.NewGuid():N}.wad.client");
-            try
+            // packed = a single file entry named exactly WAD/<wadName> with content
+            var packedFile = entries.FirstOrDefault(e =>
+                string.Equals(e.FullName.Replace('\\', '/'), $"WAD/{wadName}", StringComparison.OrdinalIgnoreCase)
+                && e.Length > 0);
+
+            if (packedFile is not null)
             {
-                entry.ExtractToFile(tmp, overwrite: true);
-                using var wad = WadArchive.Open(tmp, resolver);
-                int done = 0;
-                foreach (var we in wad.Entries)
+                progress?.Report($"Unpacking {wadName}…");
+                string tmp = Path.Combine(Path.GetTempPath(), $"reyimport-{Guid.NewGuid():N}.wad.client");
+                try
                 {
+                    packedFile.ExtractToFile(tmp, overwrite: true);
+                    using var wad = WadArchive.Open(tmp, resolver);
+                    int done = 0;
+                    foreach (var we in wad.Entries)
+                    {
+                        try
+                        {
+                            string target = we.IsResolved
+                                ? Path.Combine(outDir, we.Path.Replace('/', Path.DirectorySeparatorChar))
+                                : Path.Combine(outDir, $"{we.PathHash:x16}.bin");
+                            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                            wad.ExtractToFile(we, target);
+                            extracted++;
+                        }
+                        catch { failed++; }
+                        if (++done % 500 == 0) progress?.Report($"Unpacking {wadBase}… {done:n0} chunks");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // One unreadable WAD (e.g. LT rejects a duplicate chunk hash in a hand-built mod)
+                    // must not abort the whole import — skip it and let the rest through.
+                    progress?.Report($"Skipped {wadName}: {ex.Message}");
+                    failed++;
+                }
+                finally { try { File.Delete(tmp); } catch { } }
+            }
+            else
+            {
+                // raw folder: copy the loose files, stripping the WAD/<wadName>/ prefix
+                progress?.Report($"Copying {wadName} (raw folder)…");
+                string prefix = $"WAD/{wadName}/";
+                int done = 0;
+                foreach (var e in entries)
+                {
+                    if (e.Length == 0) continue;   // directory placeholder
+                    string full = e.FullName.Replace('\\', '/');
+                    if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                    string rel = full[prefix.Length..];
+                    if (rel.Length == 0) continue;
                     try
                     {
-                        string target = we.IsResolved
-                            ? Path.Combine(outDir, we.Path.Replace('/', Path.DirectorySeparatorChar))
-                            : Path.Combine(outDir, $"{we.PathHash:x16}.bin");
+                        string target = Path.Combine(outDir, rel.Replace('/', Path.DirectorySeparatorChar));
                         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                        wad.ExtractToFile(we, target);
+                        e.ExtractToFile(target, overwrite: true);
                         extracted++;
                     }
                     catch { failed++; }
-                    if (++done % 500 == 0) progress?.Report($"Unpacking {wadBase}… {done:n0} chunks");
+                    if (++done % 500 == 0) progress?.Report($"Copying {wadBase}… {done:n0} files");
                 }
-                wads++;
-                if (Directory.Exists(outDir)) folders.Add(Sanitize(wadBase));
             }
-            finally { try { File.Delete(tmp); } catch { } }
+
+            if (Directory.Exists(outDir)) { wads++; folders.Add(Sanitize(wadBase)); }
         }
 
         // ---- RAW/ → loose files, copied as-is (mount resolves them by relative path) ----
