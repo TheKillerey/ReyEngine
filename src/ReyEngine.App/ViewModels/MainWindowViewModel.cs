@@ -3705,10 +3705,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var bg = await Task.Run(() => Services.MapPreviewLoader.Load(folder));
             MeshPreview.Show($"{bg.MapName} (legacy NVR map)", bg.Mesh, skeleton: null, textures: bg.SubmeshTextures);
-            MeshPreview.Materials = bg.SubmeshMaterials;   // M142: Map10 baked height-blend ground (if present)
-            // M142.1: the map's Light.dat torches/braziers light the scene (anchor-shifted by the loader).
+            MeshPreview.Materials = bg.SubmeshMaterials;   // M142: double-sided + alpha cutout + ground flags
+            // M142.2: height-blend ground layers — height-scale map (mask), COLOR_MAP_1/2/3
+            // (gradient/emissive/matcap) and the baked composite as the modulating lightmap.
+            MeshPreview.MaskTextures = bg.SubmeshMask;
+            MeshPreview.GradientTextures = bg.SubmeshColor1;
+            MeshPreview.EmissiveTextures = bg.SubmeshColor2;
+            MeshPreview.MatCapTextures = bg.SubmeshColor3;
+            MeshPreview.LightmapTextures = bg.SubmeshLightmap;
+            // M142.2: Light.dat loaded but OFF by default — the composite already bakes the light pools
+            // in, so the runtime lights double them up. Toggleable later if a map needs them.
             MeshPreview.BackgroundLights = bg.Lights;
-            MeshPreview.BackgroundLightsEnabled = bg.Lights.Count > 0;
+            MeshPreview.BackgroundLightsEnabled = false;
             ShowMeshPreviewWindow?.Invoke();
             Status = $"Legacy map {bg.MapName} loaded.";
             _log.Success("Map", $"Legacy NVR map {bg.MapName}: {bg.MeshCount:n0} meshes, {bg.Mesh.VertexCount:n0} verts"

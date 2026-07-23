@@ -350,12 +350,28 @@ void main() {
         alpha = 1.0;
     }
 
-    // M142: Map10's ground uses HEIGHT blending (its blend map is the null_black placeholder, so the
-    // four-blend above is a no-op). Riot bakes the real per-pixel height blend of its 4 tile layers into a
-    // single ground atlas (compositeColorMap) that the game samples by the 2nd UV set. Reproduce that: this
-    // submesh's diffuse slot holds the atlas, so sample uTex by vLmUv. The atlas already carries the baked
-    // shading/AO/lighting, so the lit-colour term below is bypassed for this surface (uCompositeGround).
-    if (uCompositeGround == 1) { base = texture(uTex, vLmUv).rgb; alpha = 1.0; }
+    // M142: Map10-style HEIGHT-blended ground (its four-blend BLEND_MAP is the null_black placeholder, so
+    // the branch above is a no-op). M142.2 does the real thing (HeightBlending.hls): per-layer height =
+    // tile alpha * the painted per-layer height-scale map (uMask, planar over the level rect = vLmUv);
+    // winner-takes-most weights with a soft blend band, gated so zero-height layers never bleed in. The
+    // baked compositeColorMap rides in the LIGHTMAP slot and modulates this detail below. Without the
+    // height-scale map, fall back to showing the baked composite directly (sampled by the planar 2nd UV).
+    if (uCompositeGround == 1) {
+        if (uHasMask == 1) {
+            vec4 hscale = texture(uMask, vLmUv);
+            vec4 c1 = texture(uGradient, uv);
+            vec4 c2 = texture(uEmissive, uv);
+            vec4 c3 = texture(uMatCap,   uv);
+            vec4 h = vec4(tex.a, c1.a, c2.a, c3.a) * hscale;
+            float hmax = max(max(h.x, h.y), max(h.z, h.w));
+            vec4 w = clamp(h - hmax + 0.25, 0.0, 1.0) * clamp(h * 32.0, 0.0, 1.0);
+            float wsum = max(w.x + w.y + w.z + w.w, 0.0001);
+            base = (tex.rgb * w.x + c1.rgb * w.y + c2.rgb * w.z + c3.rgb * w.w) / wsum;
+        } else {
+            base = texture(uTex, vLmUv).rgb;
+        }
+        alpha = 1.0;
+    }
 
     // The mask uses the mesh UV atlas. Detail layers are planar world-space textures and are stacked in
     // authored order: R selects Middle, G selects Top, B selects Extras. The pass blend flag describes this
@@ -480,6 +496,11 @@ void main() {
     // scale is MapSunProperties.lightMapColorScale (2.0 on live Map12) - without it the map is too dark.
     if (uHasLightmap == 1) col = base * bakedLightColour(texture(uLightmap, vLmUv).rgb * uLightmapScale);
 
+    // M142.2: composite ground — the baked atlas (lightmap slot) modulates the height-blended detail 2X
+    // (classic D3D9 modulate2x). The atlas is already fully lit AND display-encoded, so no bakedLightColour
+    // re-encode here; without the atlas the earlier assignment keeps the raw composite/detail colour.
+    if (uCompositeGround == 1 && uHasLightmap == 1) col = base * texture(uLightmap, vLmUv).rgb * 2.0;
+
     // M89: NVR ground bakes its shading/AO into vertex colour (a dark mask the raw diffuse lacks). Add it
     // as a baked light term so terrain reads its painted variation instead of a flat repeated texture. NVR
     // authors these dark on purpose - the map is meant to be lit mostly by Light.dat, so scale is tunable.
@@ -534,11 +555,13 @@ void main() {
             float gate = (uHasMask == 1) ? mix(0.5, 1.0, texture(uMask, uv).r) : 1.0;
             col += fres * 0.6 * rimCol * gate;
         }
-        if (uHasMatCap == 1 && uIsTerrainBlend == 0) {
+        // M142.2: composite ground reuses the matcap/emissive slots as height-blend colour layers —
+        // they are part of the ground diffuse, never matcap/glow terms.
+        if (uHasMatCap == 1 && uIsTerrainBlend == 0 && uCompositeGround == 0) {
             float mcGate = (uHasMatCapMask == 1) ? texture(uMatCapMask, uv).r : 1.0;
             col += matcapColour(n) * 0.6 * mcGate;
         }
-        if (uHasEmissive == 1 && uIsTerrainBlend == 0) {
+        if (uHasEmissive == 1 && uIsTerrainBlend == 0 && uCompositeGround == 0) {
             float em = texture(uEmissive, uv).r;
             col += base * em * 1.5;
         }

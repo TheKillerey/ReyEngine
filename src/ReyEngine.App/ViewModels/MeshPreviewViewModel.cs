@@ -37,6 +37,14 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     // M142: per-submesh preview materials for the SUBJECT mesh — used by the legacy-map viewer to flag
     // Map10's baked height-blend ground submeshes (CompositeGround). Null for champions/props.
     [ObservableProperty] private IReadOnlyList<ReyEngine.Rendering.ViewportMeshRenderer.SubmeshMaterial>? _materials;
+    // M142.2: extra SUBJECT texture layers for the legacy-map viewer — height-scale map (mask slot),
+    // the four-blend colour layers (gradient/emissive/matcap slots) and the baked composite (lightmap
+    // slot). All null for champions/props.
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _maskTextures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _gradientTextures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _emissiveTextures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _matCapTextures;
+    [ObservableProperty] private IReadOnlyList<TextureImage?>? _lightmapTextures;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _wireframe;
     [ObservableProperty] private bool _cullBackfaces = true;
@@ -107,6 +115,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Skeleton = skeleton;
         Textures = textures;
         Materials = null;   // M142: cleared per preview; only the legacy-map viewer sets it after Show
+        MaskTextures = null; GradientTextures = null; EmissiveTextures = null;   // M142.2: map-only layers
+        MatCapTextures = null; LightmapTextures = null;
         ShowBones = skeleton is not null;
         Stats = $"{mesh.VertexCount:n0} verts · {mesh.TriangleCount:n0} tris · {mesh.SubMeshes.Count} submesh(es)" +
                 (skeleton is not null ? $" · {skeleton.BoneCount} bones" : "");

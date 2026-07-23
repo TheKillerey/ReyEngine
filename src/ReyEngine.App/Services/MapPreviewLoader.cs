@@ -27,9 +27,14 @@ public sealed record MapPreviewBackground(
     IReadOnlyList<PointLight> Lights,
     int MeshCount,
     int MissingTextures,
-    // M142: per-submesh preview material — set only when a baked height-blend ground atlas (Map10) is
-    // present, flagging the ground submeshes as CompositeGround. Null when the map ships no such atlas.
-    IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? SubmeshMaterials = null);
+    // M142: per-submesh preview material for the SUBJECT (legacy-map) viewer — double-sided from the NVR,
+    // alpha cutout for foliage/decals, CompositeGround on height-blend ground submeshes.
+    IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? SubmeshMaterials = null,
+    // M142.2: mask slot = terrainHeightScale (per-layer height scales, planar over the level rect) and
+    // lightmap slot = compositeColorMap (baked light/colour, modulates the height-blended detail 2X).
+    // Both only on the flagged ground submeshes; null when the map has no height-blend ground.
+    IReadOnlyList<TextureImage?>? SubmeshMask = null,
+    IReadOnlyList<TextureImage?>? SubmeshLightmap = null);
 
 /// <summary>M88: loads a legacy League <c>LEVELS/&lt;Map&gt;</c> folder as a character-preview backdrop.
 /// Reads <c>Scene/room.nvr</c>, resolves diffuse from <c>Scene/Textures/</c>, loads <c>Light.dat</c>, and
@@ -61,28 +66,26 @@ public static class MapPreviewLoader
         // Map10; verified by splatting the ground verts onto the atlas). Texcoord7 is the four-blend MASK
         // UV and does NOT map onto the composite, so write planar composite UVs (unshifted world XZ over
         // the level rect) into the flagged ground vertices' 2nd UV set, which the renderer samples.
-        IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? subMats = null;
+        bool[]? ground = null;             // per-submesh: height-blend ground flag
         float[]? lmUvOverride = null;
+        TextureImage? heightScale = null;  // M142.2: per-layer height-scale map (same planar rect)
         var composite = LoadComposite(mapFolder, sceneDir);
         if (composite is not null && ReadLevelRect(sceneDir) is { } rect)
         {
-            var mats = new ViewportMeshRenderer.SubmeshMaterial[src.SubMeshes.Count];
+            var flags = new bool[src.SubMeshes.Count];
             bool anyGround = false;
-            for (int i = 0; i < mats.Length; i++)
-            {
-                bool heightGround = IsHeightBlendGround(nvr.SubmeshBlendTextures[i]);
-                mats[i] = heightGround
-                    ? ViewportMeshRenderer.SubmeshMaterial.Default with { CompositeGround = true }
-                    : ViewportMeshRenderer.SubmeshMaterial.Default;
-                anyGround |= heightGround;
-            }
+            for (int i = 0; i < flags.Length; i++)
+                anyGround |= flags[i] = IsHeightBlendGround(nvr.SubmeshBlendTextures[i]);
             if (anyGround)
             {
-                subMats = mats;
+                ground = flags;
+                // M142.2: terrainHeightScale.dds — the painted per-layer height scales, planar over the
+                // SAME level rect (verified: ground-vs-paint coverage is best under the LevelSize mapping).
+                heightScale = LoadHeightScale(mapFolder);
                 lmUvOverride = src.LightmapUvs is { } lm0 ? (float[])lm0.Clone() : new float[src.VertexCount * 2];
-                for (int i = 0; i < mats.Length; i++)
+                for (int i = 0; i < flags.Length; i++)
                 {
-                    if (!mats[i].CompositeGround) continue;
+                    if (!flags[i]) continue;
                     var s = src.SubMeshes[i];
                     int end = s.StartIndex + s.IndexCount;
                     for (int k = s.StartIndex; k < end; k++)
@@ -148,11 +151,42 @@ public static class MapPreviewLoader
         for (int i = 0; i < subTex.Length; i++)
             if (nvr.SubmeshDiffuseTextures[i] is null || subTex[i] is null) missing++;
 
-        // M142: each flagged ground submesh's diffuse slot holds the composite atlas (the renderer samples
-        // it by the 2nd UV set, which now carries the planar composite UVs computed above).
-        if (subMats is not null)
-            for (int i = 0; i < subTex.Length; i++)
-                if (subMats[i].CompositeGround) subTex[i] = composite;
+        // M142.3: per-submesh SUBJECT materials — double-sided from the NVR, alpha CUTOUT wherever the
+        // diffuse has fully transparent texels (foliage, webs, grass tufts, ground decals — NVR draws
+        // them cut out; opaque they read as solid boxes), CompositeGround for the height-blend ground.
+        var alphaCache = new Dictionary<TextureImage, bool>(ReferenceEqualityComparer.Instance);
+        bool HasCutoutAlpha(TextureImage? t)
+        {
+            if (t is null) return false;
+            if (alphaCache.TryGetValue(t, out bool cut)) return cut;
+            long clear = 0, total = 0;
+            var px = t.Rgba;
+            for (int p = 3; p < px.Length; p += 64)   // every 16th pixel — plenty for a yes/no
+            {
+                total++;
+                if (px[p] < 16) clear++;
+            }
+            alphaCache[t] = cut = total > 0 && clear * 100 > total;   // >1% fully transparent texels
+            return cut;
+        }
+        var mats = new ViewportMeshRenderer.SubmeshMaterial[subTex.Length];
+        TextureImage?[]? subMask = null, subLightmap = null;
+        bool detail = ground is not null && heightScale is not null;   // M142.2: real height blend possible
+        if (detail) { subMask = new TextureImage?[subTex.Length]; subLightmap = new TextureImage?[subTex.Length]; }
+        for (int i = 0; i < mats.Length; i++)
+        {
+            bool g = ground is not null && ground[i];
+            mats[i] = ViewportMeshRenderer.SubmeshMaterial.Default with
+            {
+                CompositeGround = g,
+                DoubleSided = nvr.SubmeshDoubleSided[i],
+                AlphaMode = !g && HasCutoutAlpha(subTex[i]) ? 1 : 0,
+                AlphaCutoff = 0.25f,
+            };
+            if (!g) continue;
+            if (detail) { subMask![i] = heightScale; subLightmap![i] = composite; }
+            else subTex[i] = composite;   // no height-scale map: show the baked composite directly
+        }
 
         // Lights: legacy Light.dat, shifted by the same anchor.
         var lights = Array.Empty<PointLight>() as IReadOnlyList<PointLight>;
@@ -169,7 +203,7 @@ public static class MapPreviewLoader
 
         return new MapPreviewBackground(
             new DirectoryInfo(mapFolder).Name, shifted, subTex, subBlend, subColor1, subColor2, subColor3,
-            nvr.SubmeshDoubleSided, lights, nvr.MeshCount, missing, subMats);
+            nvr.SubmeshDoubleSided, lights, nvr.MeshCount, missing, mats, subMask, subLightmap);
     }
 
     /// <summary>M142: a submesh is height-blend ground when its four-blend BLEND_MAP is the null_black
@@ -201,6 +235,15 @@ public static class MapPreviewLoader
             return maxX - minX > 1f && maxZ - minZ > 1f ? (minX, minZ, maxX - minX, maxZ - minZ) : null;
         }
         catch { return null; }
+    }
+
+    /// <summary>M142.2: the painted per-layer height-scale map (terrainHeightScale.dds at the map root) —
+    /// R/G/B/A scale layers 0..3, planar over the SAME level rect as the composite. Null when absent.</summary>
+    private static TextureImage? LoadHeightScale(string mapFolder)
+    {
+        string p = Path.Combine(mapFolder, "terrainHeightScale.dds");
+        if (!File.Exists(p)) return null;
+        try { return TextureDecoder.Decode(File.ReadAllBytes(p)); } catch { return null; }
     }
 
     /// <summary>M142: load the map's baked ground atlas (compositeColorMap.dds) if it ships with the map;
