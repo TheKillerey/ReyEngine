@@ -717,9 +717,11 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             var lights = DynamicLights ?? (IReadOnlyList<PointLight>)Array.Empty<PointLight>();
             // M89: when the backdrop is moved/rotated, transform its lights the same way so terrain stays lit
-            // consistently and the character moves through the light field.
+            // consistently and the character moves through the light field. M142.1: only when a backdrop is
+            // actually loaded — a legacy map viewed as the SUBJECT keeps its lights in world space (the
+            // backdrop offset defaults are non-identity and would teleport them).
             var bgModel = BackgroundModel();
-            if (!bgModel.IsIdentity)
+            if (!bgModel.IsIdentity && BackgroundMesh is not null)
                 lights = lights.Select(l => l with { Position = Vector3.Transform(l.Position, bgModel) }).ToList();
             _meshRenderer.SetPointLights(lights);
             _bgRenderer?.SetPointLights(lights);   // M88: light the backdrop identically

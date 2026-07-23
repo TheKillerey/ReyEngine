@@ -117,6 +117,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         SelectedVfx = null;
         ImagePreview = null;    // M120: a model preview replaces a texture preview
         StopSounds?.Invoke();   // M90: previous champion's SFX must not bleed into the new preview
+        // M142.1: a legacy map (no backdrop) sets its Light.dat lights directly — drop them when the next
+        // preview isn't backdrop-lit, or the previous map's 95 torches keep lighting the new champion.
+        if (!HasBackground) { BackgroundLights = null; BackgroundLightsEnabled = false; }
 
         // M84: per-submesh visibility toggles (all visible on load)
         Submeshes.Clear();

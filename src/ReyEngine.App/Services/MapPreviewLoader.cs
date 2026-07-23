@@ -52,8 +52,50 @@ public static class MapPreviewLoader
         // Anchor: prefer a team spawn's CentralPoint; else the ground under the map's XZ center.
         Vector3 anchor = ReadSpawnAnchor(sceneDir) ?? GroundCenter(nvr.Mesh);
 
-        // Shift geometry so the anchor is at the origin (character stands here).
         var src = nvr.Mesh;
+
+        // M142: Map10 height-blended ground. Its ground materials use a null_black placeholder BLEND_MAP
+        // (Riot height-blends the 4 tile layers by their alpha rather than by an authored RGB mask), and
+        // the game bakes that per-pixel blend into ONE ground atlas (compositeColorMap.dds). The atlas is
+        // a PLANAR WORLD-SPACE bake over the level's footprint — the __LevelSize_.SCB quad ([0..15398]² on
+        // Map10; verified by splatting the ground verts onto the atlas). Texcoord7 is the four-blend MASK
+        // UV and does NOT map onto the composite, so write planar composite UVs (unshifted world XZ over
+        // the level rect) into the flagged ground vertices' 2nd UV set, which the renderer samples.
+        IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? subMats = null;
+        float[]? lmUvOverride = null;
+        var composite = LoadComposite(mapFolder, sceneDir);
+        if (composite is not null && ReadLevelRect(sceneDir) is { } rect)
+        {
+            var mats = new ViewportMeshRenderer.SubmeshMaterial[src.SubMeshes.Count];
+            bool anyGround = false;
+            for (int i = 0; i < mats.Length; i++)
+            {
+                bool heightGround = IsHeightBlendGround(nvr.SubmeshBlendTextures[i]);
+                mats[i] = heightGround
+                    ? ViewportMeshRenderer.SubmeshMaterial.Default with { CompositeGround = true }
+                    : ViewportMeshRenderer.SubmeshMaterial.Default;
+                anyGround |= heightGround;
+            }
+            if (anyGround)
+            {
+                subMats = mats;
+                lmUvOverride = src.LightmapUvs is { } lm0 ? (float[])lm0.Clone() : new float[src.VertexCount * 2];
+                for (int i = 0; i < mats.Length; i++)
+                {
+                    if (!mats[i].CompositeGround) continue;
+                    var s = src.SubMeshes[i];
+                    int end = s.StartIndex + s.IndexCount;
+                    for (int k = s.StartIndex; k < end; k++)
+                    {
+                        int v = (int)src.Indices[k];
+                        lmUvOverride[2 * v] = (src.Positions[3 * v] - rect.MinX) / rect.SizeX;
+                        lmUvOverride[2 * v + 1] = (src.Positions[3 * v + 2] - rect.MinZ) / rect.SizeZ;
+                    }
+                }
+            }
+        }
+
+        // Shift geometry so the anchor is at the origin (character stands here).
         var pos = (float[])src.Positions.Clone();
         for (int i = 0; i + 2 < pos.Length; i += 3)
         {
@@ -65,7 +107,9 @@ public static class MapPreviewLoader
             Normals = src.Normals,
             Uvs = src.Uvs,
             Colors = src.Colors,             // M89: baked ground shading — dropping this killed the Ground slider
-            LightmapUvs = src.LightmapUvs,   // M89: four-blend mask UV — dropping this killed the mask blend
+            // M89: four-blend mask UV — dropping this killed the mask blend. M142: on height-blend maps the
+            // flagged ground vertices instead carry planar composite UVs (world XZ over the level rect).
+            LightmapUvs = lmUvOverride ?? src.LightmapUvs,
             Indices = src.Indices,
             SubMeshes = src.SubMeshes,
             VertexCount = src.VertexCount,
@@ -104,27 +148,11 @@ public static class MapPreviewLoader
         for (int i = 0; i < subTex.Length; i++)
             if (nvr.SubmeshDiffuseTextures[i] is null || subTex[i] is null) missing++;
 
-        // M142: Map10 height-blended ground. Its ground materials use a null_black placeholder BLEND_MAP
-        // (Riot height-blends the 4 tile layers by their alpha rather than by an authored RGB mask), and the
-        // game bakes that per-pixel blend into ONE ground atlas (compositeColorMap.dds) sampled by the 2nd UV
-        // set. If that atlas ships with the map, point each height-blend ground submesh's diffuse at it and
-        // flag it CompositeGround so the renderer samples it by the 2nd UV — reproducing the game's own ground.
-        IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? subMats = null;
-        var composite = LoadComposite(mapFolder, sceneDir);
-        if (composite is not null)
-        {
-            var mats = new ViewportMeshRenderer.SubmeshMaterial[subTex.Length];
-            bool anyGround = false;
+        // M142: each flagged ground submesh's diffuse slot holds the composite atlas (the renderer samples
+        // it by the 2nd UV set, which now carries the planar composite UVs computed above).
+        if (subMats is not null)
             for (int i = 0; i < subTex.Length; i++)
-            {
-                bool heightGround = IsHeightBlendGround(nvr.SubmeshBlendTextures[i]);
-                mats[i] = heightGround
-                    ? ViewportMeshRenderer.SubmeshMaterial.Default with { CompositeGround = true }
-                    : ViewportMeshRenderer.SubmeshMaterial.Default;
-                if (heightGround) { subTex[i] = composite; anyGround = true; }
-            }
-            if (anyGround) subMats = mats;
-        }
+                if (subMats[i].CompositeGround) subTex[i] = composite;
 
         // Lights: legacy Light.dat, shifted by the same anchor.
         var lights = Array.Empty<PointLight>() as IReadOnlyList<PointLight>;
@@ -149,6 +177,31 @@ public static class MapPreviewLoader
     /// mask-blended by an authored RGB texture (Map8/Map1 use real masks and are left alone).</summary>
     private static bool IsHeightBlendGround(string? blendName) =>
         blendName is not null && blendName.Contains("null_black", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>M142: the world-space rect the composite atlas covers — the level's __LevelSize_.SCB
+    /// marker quad (a Riot-standard flat square under the map). Null when absent/degenerate, which
+    /// disables the composite ground entirely (a wrong rect would look worse than the base tiles).</summary>
+    private static (float MinX, float MinZ, float SizeX, float SizeZ)? ReadLevelRect(string sceneDir)
+    {
+        string p = Path.Combine(sceneDir, "__LevelSize_.SCB");
+        if (!File.Exists(p)) return null;
+        try
+        {
+            using var ms = new MemoryStream(File.ReadAllBytes(p), writable: false);
+            var m = LeagueToolkit.Core.Mesh.StaticMesh.ReadBinary(ms);
+            if (m.Vertices.Count == 0) return null;
+            float minX = float.MaxValue, minZ = float.MaxValue, maxX = float.MinValue, maxZ = float.MinValue;
+            foreach (var v in m.Vertices)
+            {
+                if (v.X < minX) minX = v.X;
+                if (v.X > maxX) maxX = v.X;
+                if (v.Z < minZ) minZ = v.Z;
+                if (v.Z > maxZ) maxZ = v.Z;
+            }
+            return maxX - minX > 1f && maxZ - minZ > 1f ? (minX, minZ, maxX - minX, maxZ - minZ) : null;
+        }
+        catch { return null; }
+    }
 
     /// <summary>M142: load the map's baked ground atlas (compositeColorMap.dds) if it ships with the map;
     /// checked at the map root and under Scene/ (and Scene/Textures/). Null when absent or undecodable.</summary>

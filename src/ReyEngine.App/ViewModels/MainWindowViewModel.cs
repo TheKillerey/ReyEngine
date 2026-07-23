@@ -3706,6 +3706,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var bg = await Task.Run(() => Services.MapPreviewLoader.Load(folder));
             MeshPreview.Show($"{bg.MapName} (legacy NVR map)", bg.Mesh, skeleton: null, textures: bg.SubmeshTextures);
             MeshPreview.Materials = bg.SubmeshMaterials;   // M142: Map10 baked height-blend ground (if present)
+            // M142.1: the map's Light.dat torches/braziers light the scene (anchor-shifted by the loader).
+            MeshPreview.BackgroundLights = bg.Lights;
+            MeshPreview.BackgroundLightsEnabled = bg.Lights.Count > 0;
             ShowMeshPreviewWindow?.Invoke();
             Status = $"Legacy map {bg.MapName} loaded.";
             _log.Success("Map", $"Legacy NVR map {bg.MapName}: {bg.MeshCount:n0} meshes, {bg.Mesh.VertexCount:n0} verts"
