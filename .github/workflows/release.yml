@@ -86,6 +86,24 @@ jobs:
           if (Test-Path "dist-signed/$name") { "path=dist-signed/$name" >> $env:GITHUB_OUTPUT }
           else { "path=dist/$name" >> $env:GITHUB_OUTPUT }
 
+      # Hand-written changelogs live at docs/release-notes/<tag>.md and ship as the release body. When a
+      # tag has no such file the release falls back to GitHub's auto-generated commit list, so a release
+      # is never published with empty notes (v0.1.8 shipped blank before this existed).
+      - name: Locate release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $f = "docs/release-notes/$env:TAG.md"
+          if (Test-Path $f) {
+            "path=$f"       >> $env:GITHUB_OUTPUT
+            "generate=false" >> $env:GITHUB_OUTPUT
+            Write-Host "Using hand-written notes: $f"
+          } else {
+            "path="         >> $env:GITHUB_OUTPUT
+            "generate=true" >> $env:GITHUB_OUTPUT
+            Write-Warning "No docs/release-notes/$env:TAG.md - falling back to auto-generated notes."
+          }
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -94,5 +112,7 @@ jobs:
           # prerelease flag below. Change both together when the project leaves beta.
           name: ReyEngine ${{ env.TAG }}-beta
           prerelease: true
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.generate }}
           files: ${{ steps.asset.outputs.path }}
           fail_on_unmatched_files: true
