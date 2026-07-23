@@ -21,6 +21,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
     private int _mVertexBakedLight, _mVertexBakedScale;            // M89: NVR vertex-colour baked light
     private int _mNvrFourBlend;                                    // M89: NVR ground four-blend flag
+    private int _mCompositeGround;                                 // M142: Map10 baked height-blend ground (2nd-UV composite)
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
     private int _mAlphaMode;                                       // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
     private int _mTint;                                            // M34: TintColor for untextured effects / authored decals
@@ -147,6 +148,10 @@ public sealed class ViewportMeshRenderer : IDisposable
         public float TerrainWorldScale;
         public Vector3 TerrainMaskMultipliers;
 
+        // M142: Map10 height-blended ground. Riot bakes the 4-layer height blend into one ground atlas
+        // (compositeColorMap) indexed by the 2nd UV set; this submesh's diffuse slot holds that atlas.
+        public bool CompositeGround;
+
         public static SubmeshDraw Create(int start, int count) =>
             new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One, AlphaCutoff = 0.35f };
     }
@@ -166,7 +171,10 @@ public sealed class ViewportMeshRenderer : IDisposable
         bool IsTerrainBlend = false, Vector2 TerrainBottomTiling = default, Vector2 TerrainMiddleTiling = default,
         Vector2 TerrainTopTiling = default, Vector2 TerrainExtrasTiling = default, float TerrainWorldScale = 1f,
         Vector3 TerrainMaskMultipliers = default,
-        bool UsesGrassTint = false)   // M78: multiply the map's world-space grass tint into the diffuse
+        bool UsesGrassTint = false,   // M78: multiply the map's world-space grass tint into the diffuse
+        // M142: Map10 height-blended ground — this submesh's diffuse slot holds the baked ground atlas
+        // (compositeColorMap), sampled by the 2nd UV set instead of the tiling primary UV.
+        bool CompositeGround = false)
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
@@ -234,6 +242,7 @@ uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map bake
 uniform int uVertexBakedLight; // M89: 1 = add PrimaryColor as a baked light term (NVR ground shading)
 uniform float uVertexBakedScale;
 uniform int uNvrFourBlend;     // M89: 1 = CREATE_GROUND_MOSAIC_FOUR_BLEND (blend 4 colour maps by a mask)
+uniform int uCompositeGround;  // M142: 1 = Map10 baked height-blend ground atlas, sampled by the 2nd UV
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
 uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
 uniform int uAlphaMode;        // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
@@ -340,6 +349,13 @@ void main() {
         base = g;
         alpha = 1.0;
     }
+
+    // M142: Map10's ground uses HEIGHT blending (its blend map is the null_black placeholder, so the
+    // four-blend above is a no-op). Riot bakes the real per-pixel height blend of its 4 tile layers into a
+    // single ground atlas (compositeColorMap) that the game samples by the 2nd UV set. Reproduce that: this
+    // submesh's diffuse slot holds the atlas, so sample uTex by vLmUv. The atlas already carries the baked
+    // shading/AO/lighting, so the lit-colour term below is bypassed for this surface (uCompositeGround).
+    if (uCompositeGround == 1) { base = texture(uTex, vLmUv).rgb; alpha = 1.0; }
 
     // The mask uses the mesh UV atlas. Detail layers are planar world-space textures and are stacked in
     // authored order: R selects Middle, G selects Top, B selects Extras. The pass blend flag describes this
@@ -456,7 +472,8 @@ void main() {
     // encode it before it modulates the already display-encoded diffuse. Without this, geometry with no
     // BakedLight UV (alpha decals, effects, props) is systematically darker than the encoded baked ground
     // it sits on - the M64/M65 encode only covered the lightmap path, leaving decals too dark.
-    vec3 col = base * bakedLightColour(uSkyLight + uSunColor * d);
+    // M142: the composite ground atlas is already fully baked (lighting + AO) — use it as-is.
+    vec3 col = (uCompositeGround == 1) ? base : base * bakedLightColour(uSkyLight + uSunColor * d);
 
     // Baked lightmap: when the mesh carries a real BakedLight atlas, that IS the lighting for this
     // surface, so it replaces the fake directional term (finalColor = diffuse * lightmap * scale). The
@@ -606,6 +623,7 @@ void main() { FragColor = uColor; }";
         _mVertexBakedLight = gl.GetUniformLocation(_meshProgram, "uVertexBakedLight");
         _mVertexBakedScale = gl.GetUniformLocation(_meshProgram, "uVertexBakedScale");
         _mNvrFourBlend = gl.GetUniformLocation(_meshProgram, "uNvrFourBlend");
+        _mCompositeGround = gl.GetUniformLocation(_meshProgram, "uCompositeGround");
         _mLightmap = gl.GetUniformLocation(_meshProgram, "uLightmap");
         _mHasLightmap = gl.GetUniformLocation(_meshProgram, "uHasLightmap");
         _mAlphaMode = gl.GetUniformLocation(_meshProgram, "uAlphaMode");
@@ -1286,6 +1304,7 @@ void main(){
         _submeshes[index].TerrainExtrasTiling = mat.TerrainExtrasTiling;
         _submeshes[index].TerrainWorldScale = mat.TerrainWorldScale;
         _submeshes[index].TerrainMaskMultipliers = mat.TerrainMaskMultipliers;
+        _submeshes[index].CompositeGround = mat.CompositeGround;   // M142
     }
 
     /// <summary>Reset every submesh's preview material to identity UV + no rim/specular (M32).</summary>
@@ -1307,6 +1326,7 @@ void main(){
             _submeshes[i].ClampUv = Vector2.Zero;
             _submeshes[i].IsFlowmap = false;
             _submeshes[i].IsTerrainBlend = false;
+            _submeshes[i].CompositeGround = false;   // M142
         }
     }
 
@@ -1676,6 +1696,7 @@ void main(){
                         _gl.Uniform3(_mTerrainMaskMultipliers, s.TerrainMaskMultipliers.X,
                             s.TerrainMaskMultipliers.Y, s.TerrainMaskMultipliers.Z);
                     }
+                    _gl.Uniform1(_mCompositeGround, s.CompositeGround ? 1 : 0);   // M142: Map10 baked ground
                     _gl.ActiveTexture(TextureUnit.Texture0);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);
                     _gl.Uniform1(_mHasTex, s.Texture != 0 ? 1 : 0);
@@ -1754,6 +1775,7 @@ void main(){
             _gl.Uniform1(_mHasVertexColor, 0);
             _gl.Uniform1(_mVertexBakedLight, 0);   // M89: props never use the NVR baked-light term
             _gl.Uniform1(_mNvrFourBlend, 0);
+            _gl.Uniform1(_mCompositeGround, 0);    // M142: props are not composite ground
             _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);
             _gl.UniformMatrix4(_mView, 1, false, in view.M11);
             _gl.Uniform1(_mTex, 0); _gl.Uniform1(_mMask, 1); _gl.Uniform1(_mGradient, 2);

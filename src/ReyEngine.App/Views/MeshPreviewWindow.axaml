@@ -263,6 +263,7 @@
                              Mesh="{Binding Mesh}"
                              Skeleton="{Binding Skeleton}"
                              ModelTextures="{Binding Textures}"
+                             ModelSubmeshMaterials="{Binding Materials}"
                              AnimationClip="{Binding CurrentAnimation}"
                              AnimationTime="{Binding AnimationTime}"
                              ParticlePlayback="{Binding Playback}"

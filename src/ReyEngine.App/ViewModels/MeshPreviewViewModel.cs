@@ -34,6 +34,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     [ObservableProperty] private MeshAsset? _mesh;
     [ObservableProperty] private SkeletonAsset? _skeleton;
     [ObservableProperty] private IReadOnlyList<TextureImage?>? _textures;
+    // M142: per-submesh preview materials for the SUBJECT mesh — used by the legacy-map viewer to flag
+    // Map10's baked height-blend ground submeshes (CompositeGround). Null for champions/props.
+    [ObservableProperty] private IReadOnlyList<ReyEngine.Rendering.ViewportMeshRenderer.SubmeshMaterial>? _materials;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _wireframe;
     [ObservableProperty] private bool _cullBackfaces = true;
@@ -103,6 +106,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Mesh = mesh;
         Skeleton = skeleton;
         Textures = textures;
+        Materials = null;   // M142: cleared per preview; only the legacy-map viewer sets it after Show
         ShowBones = skeleton is not null;
         Stats = $"{mesh.VertexCount:n0} verts · {mesh.TriangleCount:n0} tris · {mesh.SubMeshes.Count} submesh(es)" +
                 (skeleton is not null ? $" · {skeleton.BoneCount} bones" : "");

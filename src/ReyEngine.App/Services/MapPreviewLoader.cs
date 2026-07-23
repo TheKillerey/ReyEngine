@@ -8,6 +8,7 @@ using ReyEngine.Core.Decoding;
 using ReyEngine.Formats.Environment;
 using ReyEngine.Formats.Lighting;
 using ReyEngine.Formats.Meshes;
+using ReyEngine.Rendering;
 
 namespace ReyEngine.App.Services;
 
@@ -25,7 +26,10 @@ public sealed record MapPreviewBackground(
     IReadOnlyList<bool> SubmeshDoubleSided,
     IReadOnlyList<PointLight> Lights,
     int MeshCount,
-    int MissingTextures);
+    int MissingTextures,
+    // M142: per-submesh preview material — set only when a baked height-blend ground atlas (Map10) is
+    // present, flagging the ground submeshes as CompositeGround. Null when the map ships no such atlas.
+    IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? SubmeshMaterials = null);
 
 /// <summary>M88: loads a legacy League <c>LEVELS/&lt;Map&gt;</c> folder as a character-preview backdrop.
 /// Reads <c>Scene/room.nvr</c>, resolves diffuse from <c>Scene/Textures/</c>, loads <c>Light.dat</c>, and
@@ -100,6 +104,28 @@ public static class MapPreviewLoader
         for (int i = 0; i < subTex.Length; i++)
             if (nvr.SubmeshDiffuseTextures[i] is null || subTex[i] is null) missing++;
 
+        // M142: Map10 height-blended ground. Its ground materials use a null_black placeholder BLEND_MAP
+        // (Riot height-blends the 4 tile layers by their alpha rather than by an authored RGB mask), and the
+        // game bakes that per-pixel blend into ONE ground atlas (compositeColorMap.dds) sampled by the 2nd UV
+        // set. If that atlas ships with the map, point each height-blend ground submesh's diffuse at it and
+        // flag it CompositeGround so the renderer samples it by the 2nd UV — reproducing the game's own ground.
+        IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? subMats = null;
+        var composite = LoadComposite(mapFolder, sceneDir);
+        if (composite is not null)
+        {
+            var mats = new ViewportMeshRenderer.SubmeshMaterial[subTex.Length];
+            bool anyGround = false;
+            for (int i = 0; i < subTex.Length; i++)
+            {
+                bool heightGround = IsHeightBlendGround(nvr.SubmeshBlendTextures[i]);
+                mats[i] = heightGround
+                    ? ViewportMeshRenderer.SubmeshMaterial.Default with { CompositeGround = true }
+                    : ViewportMeshRenderer.SubmeshMaterial.Default;
+                if (heightGround) { subTex[i] = composite; anyGround = true; }
+            }
+            if (anyGround) subMats = mats;
+        }
+
         // Lights: legacy Light.dat, shifted by the same anchor.
         var lights = Array.Empty<PointLight>() as IReadOnlyList<PointLight>;
         string lightPath = Path.Combine(mapFolder, "Light.dat");
@@ -115,7 +141,30 @@ public static class MapPreviewLoader
 
         return new MapPreviewBackground(
             new DirectoryInfo(mapFolder).Name, shifted, subTex, subBlend, subColor1, subColor2, subColor3,
-            nvr.SubmeshDoubleSided, lights, nvr.MeshCount, missing);
+            nvr.SubmeshDoubleSided, lights, nvr.MeshCount, missing, subMats);
+    }
+
+    /// <summary>M142: a submesh is height-blend ground when its four-blend BLEND_MAP is the null_black
+    /// placeholder — Riot's marker that the ground is height-blended (by tile alpha) rather than
+    /// mask-blended by an authored RGB texture (Map8/Map1 use real masks and are left alone).</summary>
+    private static bool IsHeightBlendGround(string? blendName) =>
+        blendName is not null && blendName.Contains("null_black", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>M142: load the map's baked ground atlas (compositeColorMap.dds) if it ships with the map;
+    /// checked at the map root and under Scene/ (and Scene/Textures/). Null when absent or undecodable.</summary>
+    private static TextureImage? LoadComposite(string mapFolder, string sceneDir)
+    {
+        foreach (var p in new[]
+        {
+            Path.Combine(mapFolder, "compositeColorMap.dds"),
+            Path.Combine(sceneDir, "compositeColorMap.dds"),
+            Path.Combine(sceneDir, "Textures", "compositeColorMap.dds"),
+        })
+        {
+            if (!File.Exists(p)) continue;
+            try { return TextureDecoder.Decode(File.ReadAllBytes(p)); } catch { return null; }
+        }
+        return null;
     }
 
     /// <summary>Case-insensitive file-name → full-path index of Scene/Textures (and the Scene root).</summary>
