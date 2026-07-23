@@ -3684,6 +3684,35 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MeshPreviewViewModel MeshPreview { get; } = new();
     public Action? ShowMeshPreviewWindow;   // wired by MainWindow (owns the window instance)
 
+    /// <summary>M141: open a legacy (NVR) map folder — LEVELS/&lt;Map&gt; with Scene/room.nvr — as a
+    /// standalone map in the Model Preview window. Reuses the M88/M89 NVR loader (mesh + per-submesh
+    /// textures + lights); the preview auto-frames the whole map.</summary>
+    [RelayCommand]
+    private async Task OpenLegacyMap()
+    {
+        var folder = await Dialogs.OpenFolderAsync("Open a legacy NVR map folder (e.g. LEVELS/Map10)");
+        if (folder is null) return;
+        // Accept either the map folder or its Scene subfolder.
+        if (!Services.MapPreviewLoader.IsNvrMapFolder(folder))
+        {
+            var parent = Path.GetDirectoryName(folder.TrimEnd('/', '\\'));
+            if (parent is not null && Services.MapPreviewLoader.IsNvrMapFolder(parent)) folder = parent;
+            else { _log.Warn("Map", $"No Scene/room.nvr in {folder} — pick a legacy LEVELS/MapN folder."); return; }
+        }
+
+        Status = "Loading legacy map…";
+        try
+        {
+            var bg = await Task.Run(() => Services.MapPreviewLoader.Load(folder));
+            MeshPreview.Show($"{bg.MapName} (legacy NVR map)", bg.Mesh, skeleton: null, textures: bg.SubmeshTextures);
+            ShowMeshPreviewWindow?.Invoke();
+            Status = $"Legacy map {bg.MapName} loaded.";
+            _log.Success("Map", $"Legacy NVR map {bg.MapName}: {bg.MeshCount:n0} meshes, {bg.Mesh.VertexCount:n0} verts"
+                + (bg.MissingTextures > 0 ? $", {bg.MissingTextures} texture(s) unresolved." : "."));
+        }
+        catch (Exception ex) { _log.Error("Map", $"Legacy map load failed: {ex.Message}"); Status = "Legacy map load failed."; }
+    }
+
     private async Task LoadMeshPreviewAsync(WadAssetEntry entry)
     {
         if (!ContentLoaded) return;

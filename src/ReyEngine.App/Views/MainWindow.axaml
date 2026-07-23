@@ -68,6 +68,8 @@
         <MenuItem Header="Save Project As…" Command="{Binding SaveProjectAsCommand}" />
         <Separator />
         <MenuItem Header="Open WAD (inspect)…" Command="{Binding OpenWadCommand}" />
+        <MenuItem Header="Open Legacy Map (NVR)…" Command="{Binding OpenLegacyMapCommand}"
+                  ToolTip.Tip="View an old-format League map (a LEVELS/MapN folder with Scene/room.nvr) — e.g. Twisted Treeline / Crystal Scar — rendered in the Model Preview window" />
         <MenuItem Header="Export Selected…" Command="{Binding ExportSelectedCommand}" />
         <Separator />
         <MenuItem Header="Exit" Command="{Binding ExitCommand}" />

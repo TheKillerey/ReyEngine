@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -24,12 +25,29 @@ public static class SetupService
     public const string VgmstreamUrl =
         "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-win64.zip";
 
-    // ---- Dominion (Map8) preview-backdrop asset pack ----
-    public static string Map8InstallDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ReyEngine Projects", "Maps", "Map8");
-    public static bool Map8Installed => File.Exists(Path.Combine(Map8InstallDir, "Scene", "room.nvr"));
+    // ---- legacy (NVR) map asset packs — download + view via Open Legacy Map / preview backdrop ----
+    private static string MapsRoot => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ReyEngine Projects", "Maps");
+    private static bool HasNvr(string dir) => File.Exists(Path.Combine(dir, "Scene", "room.nvr"));
+
+    // Dominion (Map8)
+    public static string Map8InstallDir => Path.Combine(MapsRoot, "Map8");
+    public static bool Map8Installed => HasNvr(Map8InstallDir);
     public const string Map8Url =
         $"https://github.com/{AppInfo.RepoOwner}/{AppInfo.RepoName}/releases/download/maps/ReyEngine-Map8-Dominion.zip";
+
+    // M141: Twisted Treeline (Map10) — height-blended ground
+    public static string Map10InstallDir => Path.Combine(MapsRoot, "Map10");
+    public static bool Map10Installed => HasNvr(Map10InstallDir);
+    public const string Map10Url =
+        $"https://github.com/{AppInfo.RepoOwner}/{AppInfo.RepoName}/releases/download/maps/ReyEngine-Map10-TwistedTreeline.zip";
+
+    /// <summary>All downloadable legacy-map packs (name, install dir, url, installed?) — for a picker/UI.</summary>
+    public static IReadOnlyList<(string Name, string InstallDir, string Url, bool Installed)> LegacyMapPacks => new[]
+    {
+        ("Crystal Scar (Map8)", Map8InstallDir, Map8Url, Map8Installed),
+        ("Twisted Treeline (Map10)", Map10InstallDir, Map10Url, Map10Installed),
+    };
 
     /// <summary>Download a zip with progress and extract it into <paramref name="destDir"/> (created;
     /// existing files overwritten). Reports "Downloading… NN%" / "Extracting…" through
