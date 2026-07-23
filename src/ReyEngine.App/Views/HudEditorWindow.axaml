@@ -1,0 +1,111 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.HudEditorWindow"
+        x:DataType="vm:HudEditorViewModel"
+        Title="ReyEngine — HUD Editor" Width="1180" Height="760"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="12,6">
+      <StackPanel Spacing="3">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="🖥" FontSize="13" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+        <TextBlock Text="{Binding Subtitle}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" />
+      </StackPanel>
+    </Border>
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,6">
+      <TextBlock Text="{Binding Status}" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+    </Border>
+
+    <Grid ColumnDefinitions="280,4,*,4,300">
+      <!-- element tree -->
+      <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}">
+        <DockPanel>
+          <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="ELEMENTS" />
+          <TreeView ItemsSource="{Binding Tree}" SelectedItem="{Binding SelectedNode}" Background="Transparent">
+            <TreeView.ItemTemplate>
+              <TreeDataTemplate ItemsSource="{Binding Children}" x:DataType="vm:HudElementNodeViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="6" Opacity="{Binding Dimmed, Converter={x:Static views:HudConverters.DimOpacity}}">
+                  <TextBlock Text="{Binding Name}" FontSize="11" />
+                  <TextBlock Text="{Binding ClassShort}" FontSize="9" Opacity="0.5" VerticalAlignment="Center" />
+                </StackPanel>
+              </TreeDataTemplate>
+            </TreeView.ItemTemplate>
+          </TreeView>
+        </DockPanel>
+      </Border>
+      <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
+
+      <!-- canvas -->
+      <Border Grid.Column="2" Background="{DynamicResource ReyBgBrush}">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Background="{DynamicResource ReyPanelBrush}" Padding="8,4"
+                  BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+              <CheckBox Content="Show element bounds" IsChecked="{Binding #Canvas.ShowBounds}" FontSize="11" />
+              <TextBlock Text="Click an element to select it" FontSize="10" Opacity="0.55" VerticalAlignment="Center" />
+            </StackPanel>
+          </Border>
+          <views:HudCanvas x:Name="Canvas"
+                           Items="{Binding DrawItems}"
+                           RefWidth="{Binding CanvasWidth}"
+                           RefHeight="{Binding CanvasHeight}"
+                           SelectedHash="{Binding Selected.PathHash, FallbackValue=0}" />
+        </DockPanel>
+      </Border>
+      <GridSplitter Grid.Column="3" Background="{DynamicResource ReyBorderBrush}" />
+
+      <!-- inspector -->
+      <Border Grid.Column="4" Background="{DynamicResource ReyPanelBrush}">
+        <ScrollViewer>
+          <StackPanel Margin="10" Spacing="10" IsVisible="{Binding HasSelection}">
+            <TextBlock Classes="panelHeader" Text="INSPECTOR" />
+            <StackPanel Spacing="2">
+              <TextBlock Text="NAME" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBlock Text="{Binding InspName}" FontSize="11" TextWrapping="Wrap" />
+            </StackPanel>
+            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Class" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,10,3" />
+              <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding InspClass}" FontSize="10" />
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Layer" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,10,3" />
+              <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding InspLayer}" FontSize="10" />
+              <TextBlock Grid.Row="2" Grid.Column="0" Text="Enabled" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,10,3" />
+              <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding InspEnabled}" FontSize="10" />
+            </Grid>
+            <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8">
+              <StackPanel Spacing="4">
+                <TextBlock Text="LAYOUT" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBlock Text="{Binding InspRect}" FontSize="11" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding InspAnchor, StringFormat='Anchor {0}'}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" />
+              </StackPanel>
+            </Border>
+            <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8">
+              <StackPanel Spacing="6">
+                <TextBlock Text="TEXTURE" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <Border Background="#10141B" CornerRadius="3" Height="120" IsVisible="{Binding InspTexturePreview, Converter={x:Static ObjectConverters.IsNotNull}}">
+                  <Image Source="{Binding InspTexturePreview}" Stretch="Uniform" Margin="4" />
+                </Border>
+                <TextBlock Text="{Binding InspTexture}" FontSize="9" TextWrapping="Wrap"
+                           Foreground="{DynamicResource ReyTextDimBrush}" />
+              </StackPanel>
+            </Border>
+            <StackPanel Spacing="2">
+              <TextBlock Text="COLOR" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBlock Text="{Binding InspColor}" FontSize="11" />
+            </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+  </DockPanel>
+</Window>

@@ -4764,6 +4764,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MapBinEditorViewModel MapBinEditor { get; } = new();
     public Action? ShowMapBinEditorWindow;
 
+    /// <summary>M140: open a HUD layout bin (ClientStates/…/UIBase) in the visual HUD Editor.</summary>
+    [RelayCommand]
+    private void OpenInHudEditor(AssetNodeViewModel? node)
+    {
+        var entry = node?.Entry ?? ContextNode?.Entry;
+        if (entry is null) { _log.Warn("Hud", "Select a HUD layout .bin (ClientStates/…/UIBase) first."); return; }
+        try
+        {
+            var bytes = GetAssetBytes(entry);
+            var doc = Formats.Hud.HudDocument.Parse(bytes, ResolveBinName);
+            if (doc is null || doc.AllElements.Count == 0)
+            { _log.Warn("Hud", $"{entry.DisplayName} isn't a HUD layout bin (no UiElement objects)."); return; }
+
+            var vm = new HudEditorViewModel
+            {
+                ResolveAtlas = LoadThumbnailByPath,
+                Info = m => _log.Info("Hud", m),
+            };
+            vm.Load(entry, doc);
+            var win = new Views.HudEditorWindow { DataContext = vm };
+            if (PromptOwner is not null) win.Show(PromptOwner); else win.Show();
+            _log.Info("Hud", $"HUD Editor: {entry.DisplayName} — {doc.AllElements.Count} element(s), {doc.AtlasPaths.Count} atlas(es), reference {doc.ReferenceWidth}×{doc.ReferenceHeight}.");
+        }
+        catch (Exception ex) { _log.Error("Hud", $"{entry.DisplayName}: {ex.Message}"); }
+    }
+
     /// <summary>M137: open a Wwise .bnk/.wpk in the Audio Bank Editor — play, replace, add, rename,
     /// delete and copy/paste its embedded sounds.</summary>
     [RelayCommand]
