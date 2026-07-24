@@ -175,26 +175,20 @@ public static class AtlasRasterizer
         }
         pointLight *= lighting.LightIntensity;
 
-        // Reproduce the viewport's DISPLAY math exactly. The Dynamic shader display-encodes the
-        // sun/sky term and then ADDS the point lights LINEARLY on top:
-        //     display = pow(ambient, 1/2.2) + pointLight
-        // A lightmap can only carry one value per texel, which the shader display-encodes as a whole
-        // (pow(atlas*scale, 1/2.2)). Baking the raw linear SUM (ambient+pointLight) folds the point
-        // lights INTO that curve, and because pow(x,1/2.2) is concave that compresses them to roughly
-        // HALF strength — the exact "baked colour is about half" the user sees. So compute the display
-        // value the viewport would, then PRE-invert the shader's gamma (pow 2.2) and divide by scale, so
-        // the shader's forward gamma reproduces `display` bit for bit.
-        var display = (GammaEncode(ambient) + pointLight) * settings.Exposure;
-        return InverseGamma(display) / MathF.Max(lighting.LightMapColorScale, 1e-3f);
+        // Store LINEAR irradiance — the standard lightmap convention, and specifically what Riot's own
+        // atlases store (so the GAME renders ours the same way it renders theirs: correctly). The map
+        // multiplies the atlas by lightMapColorScale, so divide it out; the sum is ambient + point lights,
+        // all linear, which is what the in-game lightmap shader expects.
+        //
+        // NOTE this deliberately does NOT pre-invert the ReyEngine viewport's pow(1/2.2) display curve.
+        // That curve is a preview-only approximation; baking to cancel it made the atlas correct in the
+        // editor but too bright in-game, because the game applies a weaker transform. Matching Riot's
+        // linear storage is what makes the shipped result right. The trade-off is that the editor preview
+        // renders point lights a touch softer than in-game (its pow compresses them) — a preview
+        // limitation, not a bake error.
+        var lit = (ambient + pointLight) * settings.Exposure;
+        return lit / MathF.Max(lighting.LightMapColorScale, 1e-3f);
     }
-
-    // The viewport's bakedLightColour() is pow(max(x,0), 0.45454545) = pow(x, 1/2.2). These match it
-    // exactly (same exponent) so the round-trip through the shader is an identity.
-    private const float InvGamma = 1f / 2.2f, Gamma = 2.2f;
-    private static Vector3 GammaEncode(Vector3 v) => new(
-        MathF.Pow(MathF.Max(v.X, 0f), InvGamma), MathF.Pow(MathF.Max(v.Y, 0f), InvGamma), MathF.Pow(MathF.Max(v.Z, 0f), InvGamma));
-    private static Vector3 InverseGamma(Vector3 v) => new(
-        MathF.Pow(MathF.Max(v.X, 0f), Gamma), MathF.Pow(MathF.Max(v.Y, 0f), Gamma), MathF.Pow(MathF.Max(v.Z, 0f), Gamma));
 
     private static float SunVisibility(Vector3 origin, Vector3 nrm, BakeLighting lighting,
         BakeScene scene, BakeSettings settings, int seed)
