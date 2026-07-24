@@ -112,14 +112,26 @@ public static class AtlasRasterizer
                 float w1 = ((c.X - p.X) * (a.Y - p.Y) - (a.X - p.X) * (c.Y - p.Y)) * invArea;
                 float w2 = 1f - w0 - w1;
 
-                // Snap texels that fall just outside onto the nearest point of the triangle instead of
-                // dropping them: their world position stays on the surface, which is what matters.
-                const float Edge = -0.35f;      // ~1/3 texel of slack, in barycentric units
-                if (w0 < Edge || w1 < Edge || w2 < Edge) continue;
-                w0 = Math.Clamp(w0, 0f, 1f); w1 = Math.Clamp(w1, 0f, 1f); w2 = Math.Clamp(w2, 0f, 1f);
-                float sum = w0 + w1 + w2;
-                if (sum < 1e-6f) continue;
-                w0 /= sum; w1 /= sum; w2 /= sum;
+                // Accept texel centres that fall just OUTSIDE the triangle, so boundary texels are not
+                // dropped — but only by about half a texel, and WITHOUT clamping.
+                //
+                // This used to be a flat -0.35 in BARYCENTRIC units with the weights then clamped to
+                // [0,1]. Barycentric units are not texels: on a 238-texel triangle (measured, mesh 257)
+                // 0.35 is a ~35% apron around every triangle, and clamping snaps every texel in that
+                // apron onto the triangle's edge — so they all resolve to the SAME world position and
+                // bake as a constant-brightness polygon. That is exactly the faceting seen inside light
+                // pools, and it appeared even on meshes with smooth normals and ample texel density.
+                //
+                // Barycentric w_i changes by |opposite edge| / (2*area) per texel, so half a texel of
+                // slack is |edge_i| / (4*area). Raw (unclamped) weights are then used for interpolation:
+                // they extrapolate linearly by at most half a texel, keeping position and normal
+                // CONTINUOUS across every triangle boundary. They also still sum to exactly 1.
+                float absArea = MathF.Abs(area);
+                float inv2A = 1f / MathF.Max(2f * absArea, 1e-6f);
+                float s0 = Vector2.Distance(b, c) * inv2A * 0.5f;
+                float s1 = Vector2.Distance(c, a) * inv2A * 0.5f;
+                float s2 = Vector2.Distance(a, b) * inv2A * 0.5f;
+                if (w0 < -s0 || w1 < -s1 || w2 < -s2) continue;
 
                 var pos = t.P0 * w0 + t.P1 * w1 + t.P2 * w2;
                 var nrm = t.N0 * w0 + t.N1 * w1 + t.N2 * w2;
