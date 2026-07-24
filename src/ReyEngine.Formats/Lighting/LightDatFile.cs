@@ -35,4 +35,26 @@ public static class LightDatFile
 
     private static bool TryF(string s, out float v) =>
         float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v);
+
+    /// <summary>M152: write the table back in Riot's own format — one light per line,
+    /// <c>X Y Z R G B Radius</c>, colour scaled back to 0..255 and everything invariant-formatted so a
+    /// German locale can't emit commas the game (or our own reader) would reject.</summary>
+    public static string ToText(IEnumerable<PointLight> lights)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var l in lights)
+        {
+            if (l.Radius <= 0f) continue;   // Parse drops these, so never write one
+            var c = Vector3.Clamp(l.Color, Vector3.Zero, Vector3.One) * 255f;
+            sb.Append(F(l.Position.X)).Append(' ').Append(F(l.Position.Y)).Append(' ').Append(F(l.Position.Z)).Append(' ')
+              .Append(F(MathF.Round(c.X))).Append(' ').Append(F(MathF.Round(c.Y))).Append(' ').Append(F(MathF.Round(c.Z))).Append(' ')
+              .Append(F(l.Radius)).Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    public static byte[] Write(IEnumerable<PointLight> lights) =>
+        System.Text.Encoding.ASCII.GetBytes(ToText(lights));
+
+    private static string F(float v) => v.ToString("0.####", CultureInfo.InvariantCulture);
 }

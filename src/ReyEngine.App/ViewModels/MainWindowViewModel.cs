@@ -424,10 +424,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var lights = LightDatFile.Parse(await File.ReadAllBytesAsync(file));
             if (lights.Count == 0) { _log.Warn("Lights", $"No point lights parsed from {Path.GetFileName(file)}."); return; }
-            DynamicLights = lights;
-            HasDynamicLights = true;
+            LightDatPath = file;              // M152: Save writes straight back here
+            LoadEditableLights(lights);       // republishes DynamicLights + status
             ShowDynamicLights = true;
-            DynamicLightsStatus = $"{lights.Count} point light(s) — {Path.GetFileName(file)}";
             _log.Success("Lights", $"Loaded {lights.Count} point light(s) from {Path.GetFileName(file)}. Toggle 'Lights' in the viewport toolbar.");
         }
         catch (Exception ex) { _log.Error("Lights", ex.Message); }
@@ -1015,6 +1014,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public void DragSelectedPlacementTo(System.Numerics.Vector3 absoluteOffset)
     {
+        // M152: a selected point light is dragged like any other placement.
+        if (SelectedLight is { } light)
+        {
+            light.MoveTo(absoluteOffset);
+            GizmoPivot = light.Position;
+            return;
+        }
         if (SelectedParticleNode is { } p)
         {
             p.Offset = absoluteOffset;
@@ -1325,6 +1331,100 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<PointLight>? _dynamicLights;
     [ObservableProperty] private string? _dynamicLightsStatus;
     [ObservableProperty] private bool _hasDynamicLights;
+
+    // ---- M152: place and edit the point lights, then save the table back ----
+
+    /// <summary>The editable light set. DynamicLights (what the viewport renders) is republished from
+    /// this whenever it changes, so edits are live.</summary>
+    public ObservableCollection<PointLightViewModel> EditableLights { get; } = new();
+    [ObservableProperty] private PointLightViewModel? _selectedLight;
+    [ObservableProperty] private string? _lightDatPath;      // where Save writes back to
+    public bool HasSelectedLight => SelectedLight is not null;
+
+    partial void OnSelectedLightChanged(PointLightViewModel? value)
+    {
+        OnPropertyChanged(nameof(HasSelectedLight));
+        GizmoPivot = value?.Position;   // M75 gizmo drives the selected light
+    }
+
+    /// <summary>Rebuild the render list from the editable set (called after any add/edit/delete).</summary>
+    public void RepublishLights()
+    {
+        DynamicLights = EditableLights.Select(l => l.ToPointLight()).ToList();
+        HasDynamicLights = EditableLights.Count > 0;
+        DynamicLightsStatus = EditableLights.Count == 0
+            ? "no point lights"
+            : $"{EditableLights.Count} point light(s)" + (LightDatPath is { } p ? $" — {Path.GetFileName(p)}" : " — unsaved");
+    }
+
+    private void LoadEditableLights(IEnumerable<PointLight> lights)
+    {
+        EditableLights.Clear();
+        foreach (var l in lights) EditableLights.Add(new PointLightViewModel(l, this));
+        SelectedLight = null;
+        RepublishLights();
+    }
+
+    /// <summary>Add a light at the camera's focus so it lands in view rather than at the origin.</summary>
+    [RelayCommand]
+    private void AddLight()
+    {
+        var at = GizmoPivot ?? SelectedParticleMarker ?? System.Numerics.Vector3.Zero;
+        var vm = new PointLightViewModel(new PointLight(at, new System.Numerics.Vector3(1f, 0.85f, 0.6f), 600f), this);
+        EditableLights.Add(vm);
+        SelectedLight = vm;
+        ShowDynamicLights = true;
+        RepublishLights();
+        _log.Info("Lights", $"Added a point light at ({at.X:0}, {at.Y:0}, {at.Z:0}). Drag the gizmo to place it.");
+    }
+
+    [RelayCommand]
+    private void DeleteLight()
+    {
+        if (SelectedLight is not { } l) return;
+        EditableLights.Remove(l);
+        SelectedLight = null;
+        RepublishLights();
+    }
+
+    [RelayCommand]
+    private void DuplicateLight()
+    {
+        if (SelectedLight is not { } l) return;
+        var copy = new PointLightViewModel(l.ToPointLight(), this);
+        copy.X += 100;   // offset so the copy is visibly separate
+        EditableLights.Add(copy);
+        SelectedLight = copy;
+        RepublishLights();
+    }
+
+    /// <summary>Write the table back out in Riot's Light.dat format.</summary>
+    [RelayCommand]
+    private async Task SaveLightDat()
+    {
+        if (EditableLights.Count == 0) { _log.Warn("Lights", "No lights to save."); return; }
+        string? target = LightDatPath;
+        if (target is null)
+        {
+            target = await Dialogs.SaveFileAsync("Save Light.dat", "Light.dat");
+            if (target is null) return;
+        }
+        try
+        {
+            await File.WriteAllBytesAsync(target, LightDatFile.Write(EditableLights.Select(l => l.ToPointLight())));
+            LightDatPath = target;
+            RepublishLights();
+            _log.Success("Lights", $"Saved {EditableLights.Count} point light(s) to {Path.GetFileName(target)}.");
+        }
+        catch (Exception ex) { _log.Error("Lights", $"Save failed: {ex.Message}"); }
+    }
+
+    [RelayCommand]
+    private async Task SaveLightDatAs()
+    {
+        LightDatPath = null;
+        await SaveLightDatCommand.ExecuteAsync(null);
+    }
     [ObservableProperty] private bool _showLightMarkers = true;   // M71: show a glow icon at each light position
     // M71: manual lighting controls. Sun + sky feed the fallback lighting term (visible with lightmaps off or
     // on geometry without baked light); lightmap brightness scales the baked atlas. All initialise from the
@@ -7187,4 +7287,65 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void Exit() =>
         (Avalonia.Application.Current?.ApplicationLifetime
             as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+}
+
+/// <summary>
+/// M152: one editable Light.dat point light. Position/colour/radius are individually bindable so the
+/// inspector can edit them, and every change republishes the render list so the viewport updates live.
+/// Colour is edited as 0..255 (how the file stores it) while PointLight carries linear 0..1.
+/// </summary>
+public sealed partial class PointLightViewModel : ObservableObject
+{
+    private readonly MainWindowViewModel _owner;
+    private bool _loading = true;
+
+    [ObservableProperty] private double _x, _y, _z;
+    [ObservableProperty] private double _r, _g, _b;      // 0..255, matching the file
+    [ObservableProperty] private double _radius;
+
+    public PointLightViewModel(PointLight light, MainWindowViewModel owner)
+    {
+        _owner = owner;
+        _x = light.Position.X; _y = light.Position.Y; _z = light.Position.Z;
+        _r = Math.Round(light.Color.X * 255); _g = Math.Round(light.Color.Y * 255); _b = Math.Round(light.Color.Z * 255);
+        _radius = light.Radius;
+        _loading = false;
+    }
+
+    public System.Numerics.Vector3 Position => new((float)X, (float)Y, (float)Z);
+
+    public PointLight ToPointLight() => new(
+        Position,
+        new System.Numerics.Vector3((float)(R / 255.0), (float)(G / 255.0), (float)(B / 255.0)),
+        (float)Math.Max(Radius, 0.01));   // Parse drops radius <= 0, so never produce one
+
+    /// <summary>Label for the list — position and a colour hint, so lights are tellable apart.</summary>
+    public string Label => $"({X:0}, {Y:0}, {Z:0})  r{Radius:0}";
+    public string ColorHex => $"#{(int)R:X2}{(int)G:X2}{(int)B:X2}";
+
+    /// <summary>Move from a viewport gizmo drag.</summary>
+    public void MoveTo(System.Numerics.Vector3 p)
+    {
+        _loading = true;
+        X = p.X; Y = p.Y; Z = p.Z;
+        _loading = false;
+        Changed();
+    }
+
+    partial void OnXChanged(double v) => Changed();
+    partial void OnYChanged(double v) => Changed();
+    partial void OnZChanged(double v) => Changed();
+    partial void OnRChanged(double v) => Changed();
+    partial void OnGChanged(double v) => Changed();
+    partial void OnBChanged(double v) => Changed();
+    partial void OnRadiusChanged(double v) => Changed();
+
+    private void Changed()
+    {
+        if (_loading) return;
+        OnPropertyChanged(nameof(Label));
+        OnPropertyChanged(nameof(ColorHex));
+        OnPropertyChanged(nameof(Position));
+        _owner.RepublishLights();
+    }
 }
