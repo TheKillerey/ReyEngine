@@ -19,6 +19,8 @@ public sealed class PlacementTransformCommand : IEditorCommand
             ParticlePlacementViewModel p => new State(p.Offset, p.RotationDegrees, p.Scale),
             MapSoundViewModel s => new State(s.Offset, Vector3.Zero, Vector3.One),
             AddedMapMeshViewModel a => new State(a.Offset, a.RotationDegrees, a.Scale),   // M79
+            // M154: a light stores an ABSOLUTE position, so that stands in for the offset here.
+            PointLightViewModel l => new State(l.Position, Vector3.Zero, Vector3.One),
             _ => default,
         };
 
@@ -34,6 +36,9 @@ public sealed class PlacementTransformCommand : IEditorCommand
                     break;
                 case AddedMapMeshViewModel a:   // M79
                     a.Offset = Offset; a.RotationDegrees = Rotation; a.Scale = Scale;
+                    break;
+                case PointLightViewModel l:   // M154
+                    l.MoveTo(Offset);
                     break;
             }
         }

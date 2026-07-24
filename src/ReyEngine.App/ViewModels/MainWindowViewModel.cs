@@ -970,12 +970,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private AddedMapMeshViewModel? _selectedAddedMesh;   // M79
 
     /// <summary>True when the gizmo should operate on a placement (no mesh selected, placement is).</summary>
-    public bool HasPlacementGizmoTarget => SelectedParticleNode is not null || SelectedSound is not null || SelectedAddedMesh is not null;
+    public bool HasPlacementGizmoTarget => SelectedParticleNode is not null || SelectedSound is not null
+                                           || SelectedAddedMesh is not null || SelectedLight is not null;   // M154
 
-    /// <summary>Drag-start state for the active placement (sounds report identity rotation/scale).</summary>
+    /// <summary>Drag-start state for the active placement (sounds report identity rotation/scale).
+    /// M154: a light has no offset model — it stores an absolute position, so it reports that as the
+    /// "offset" and DragSelectedPlacementTo writes start+delta straight back as the new position.</summary>
     public (System.Numerics.Vector3 Offset, System.Numerics.Vector3 Rotation, System.Numerics.Vector3 Scale) PlacementDragStart =>
         SelectedParticleNode is { } p ? (p.Offset, p.RotationDegrees, p.Scale)
         : SelectedAddedMesh is { } a ? (a.Offset, a.RotationDegrees, a.Scale)
+        : SelectedLight is { } l ? (l.Position, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One)
         : (SelectedSound?.Offset ?? System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One);
 
     // M76: undo support — the whole drag is ONE step, captured at press, pushed at release.
@@ -985,7 +989,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Called at gizmo-press on a placement: capture the before-state for the undo step.</summary>
     public void BeginPlacementDrag()
     {
-        _placementDragTarget = (object?)SelectedParticleNode ?? (object?)SelectedSound ?? SelectedAddedMesh;
+        _placementDragTarget = (object?)SelectedParticleNode ?? (object?)SelectedSound
+                               ?? (object?)SelectedAddedMesh ?? SelectedLight;   // M154
         if (_placementDragTarget is { } t) _placementDragBefore = PlacementTransformCommand.State.Capture(t);
     }
 
@@ -1007,6 +1012,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             case AddedMapMeshViewModel a:   // M79
                 if (ReferenceEquals(a, SelectedAddedMesh)) GizmoPivot = a.PivotWorld;
                 PublishAddedMeshPreview();
+                break;
+            case PointLightViewModel l:   // M154
+                if (ReferenceEquals(l, SelectedLight)) GizmoPivot = l.Position;
+                RepublishLights();
                 break;
         }
         HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved) || MapContent.Sounds.Any(v => v.IsMoved);
@@ -7339,6 +7348,23 @@ public sealed partial class PointLightViewModel : ObservableObject
         (float)Math.Max(Radius, 0.01),    // Parse drops radius <= 0, so never produce one
         (float)Math.Max(Intensity, 0));
 
+    /// <summary>M154: the colour as a real Color, so the inspector can use a proper picker (spectrum +
+    /// palette + hex) instead of three raw sliders. Backed by the same R/G/B the file stores.</summary>
+    public Avalonia.Media.Color Color
+    {
+        get => Avalonia.Media.Color.FromRgb(Byte(R), Byte(G), Byte(B));
+        set
+        {
+            if (value.R == Byte(R) && value.G == Byte(G) && value.B == Byte(B)) return;
+            _loading = true;                      // one Changed() for the whole colour, not three
+            R = value.R; G = value.G; B = value.B;
+            _loading = false;
+            Changed();
+        }
+    }
+
+    private static byte Byte(double v) => (byte)Math.Clamp(Math.Round(v), 0, 255);
+
     /// <summary>Outliner label — position + radius, so lights are tellable apart at a glance.</summary>
     public string Label => $"{Name}  ({X:0}, {Y:0}, {Z:0})  r{Radius:0}";
     public string ColorHex => $"#{(int)Math.Clamp(R, 0, 255):X2}{(int)Math.Clamp(G, 0, 255):X2}{(int)Math.Clamp(B, 0, 255):X2}";
@@ -7368,6 +7394,7 @@ public sealed partial class PointLightViewModel : ObservableObject
         if (_loading) return;
         OnPropertyChanged(nameof(Label));
         OnPropertyChanged(nameof(ColorHex));
+        OnPropertyChanged(nameof(Color));
         OnPropertyChanged(nameof(Info));
         OnPropertyChanged(nameof(Position));
         _owner.RepublishLights();

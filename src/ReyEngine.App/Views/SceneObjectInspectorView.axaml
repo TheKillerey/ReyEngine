@@ -285,11 +285,13 @@
         <TextBlock Text="{Binding SelectedLight.Radius, StringFormat='Radius: {0:0}'}" FontSize="10" />
         <Slider Minimum="10" Maximum="5000" Value="{Binding SelectedLight.Radius}" />
 
-        <TextBlock Text="COLOUR (0-255)" FontSize="8" FontWeight="SemiBold" Margin="0,3,0,0"
+        <!-- M154: a real colour picker (spectrum, palette, hex, eyedropper) instead of three raw sliders -->
+        <TextBlock Text="COLOUR" FontSize="8" FontWeight="SemiBold" Margin="0,3,0,0"
                    Foreground="{DynamicResource ReyTextDimBrush}" />
-        <TextBlock Text="R" FontSize="9" /><Slider Minimum="0" Maximum="255" Value="{Binding SelectedLight.R}" />
-        <TextBlock Text="G" FontSize="9" /><Slider Minimum="0" Maximum="255" Value="{Binding SelectedLight.G}" />
-        <TextBlock Text="B" FontSize="9" /><Slider Minimum="0" Maximum="255" Value="{Binding SelectedLight.B}" />
+        <ColorPicker Color="{Binding SelectedLight.Color, Mode=TwoWay}"
+                     HorizontalAlignment="Stretch"
+                     IsAlphaVisible="False" IsAlphaEnabled="False"
+                     ToolTip.Tip="Pick the light's colour — spectrum, palette or hex. Light.dat stores it as 0-255 RGB." />
 
         <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,4,0,0">
           <Button Classes="tool" Content="⧉ Duplicate" Command="{Binding DuplicateLightCommand}" FontSize="10" Padding="7,2" />
