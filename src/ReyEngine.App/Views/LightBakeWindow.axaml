@@ -1,0 +1,180 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.LightBakeWindow"
+        x:DataType="vm:LightBakeViewModel"
+        Title="ReyEngine — Bake Lighting" Width="560" Height="720"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- footer: estimate + progress + actions -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="14,10">
+      <StackPanel Spacing="8">
+        <TextBlock Text="{Binding Estimate}" FontSize="10" TextWrapping="Wrap"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <ProgressBar Value="{Binding Progress}" Minimum="0" Maximum="1" Height="6"
+                     IsVisible="{Binding IsBaking}" />
+        <TextBlock Text="{Binding Stage}" FontSize="10" IsVisible="{Binding IsBaking}"
+                   Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
+        <TextBlock Text="{Binding Status}" FontSize="10" TextWrapping="Wrap"
+                   IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   Foreground="{DynamicResource ReyTextBrush}" />
+        <TextBlock Text="{Binding BlockReason}" FontSize="10" TextWrapping="Wrap"
+                   IsVisible="{Binding BlockReason, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   Foreground="{DynamicResource ReyWarningBrush}" />
+        <DockPanel>
+          <Button DockPanel.Dock="Right" Classes="primary" Content="🔦 Bake Now"
+                  Command="{Binding BakeCommand}" IsEnabled="{Binding CanBake}"
+                  IsVisible="{Binding !IsBaking}" Padding="16,5"
+                  ToolTip.Tip="Trace lighting into the map's existing lightmap atlases and write them into the project's override store" />
+          <Button DockPanel.Dock="Right" Classes="tool" Content="Cancel" Margin="0,0,8,0"
+                  Command="{Binding CancelCommand}" Padding="14,5" />
+          <TextBlock VerticalAlignment="Center" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                     Text="Atlases replace Riot's in the WAD — no bin edit needed." />
+        </DockPanel>
+      </StackPanel>
+    </Border>
+
+    <ScrollViewer>
+      <StackPanel Margin="16" Spacing="14">
+
+        <TextBlock Text="Bake lighting into this map's lightmap layout"
+                   FontSize="13" FontWeight="Bold" Foreground="{DynamicResource ReyTextBrush}" />
+        <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                   Text="Traces the sun, sky, ambient occlusion and every dynamic point light into the atlases the map already references — using the exact light model the viewport shows. Defaults match Riot's shipped Map12 lightmaps." />
+
+        <!-- ATLAS -->
+        <Border Classes="card" Padding="14" CornerRadius="6">
+          <StackPanel Spacing="10">
+            <TextBlock Text="ATLAS" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+            <Grid ColumnDefinitions="150,*" RowDefinitions="Auto">
+              <TextBlock Grid.Column="0" Text="Resolution" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <ComboBox Grid.Column="1" ItemsSource="{Binding ResolutionChoices}"
+                        SelectedItem="{Binding AtlasResolution}" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="Texel density" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         ToolTip.Tip="Texels per world unit — informational for the existing-layout bake, which reuses Riot's UVs" />
+              <NumericUpDown Grid.Column="1" Value="{Binding TexelDensity}" Increment="0.01" Minimum="0.005" Maximum="2"
+                             FormatString="0.###" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="Padding (texels)" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <NumericUpDown Grid.Column="1" Value="{Binding Padding}" Increment="1" Minimum="0" Maximum="32"
+                             FormatString="0" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="Edge dilation" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         ToolTip.Tip="Texels of chart-edge bleed so bilinear filtering can't sample the gutter. Riot uses 2." />
+              <NumericUpDown Grid.Column="1" Value="{Binding Dilation}" Increment="1" Minimum="0" Maximum="8"
+                             FormatString="0" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
+
+            <CheckBox Content="Compress as BC3 (Riot's format)" IsChecked="{Binding CompressBc3}" FontSize="11" />
+            <CheckBox Content="Generate full mip chain" IsChecked="{Binding GenerateMips}" FontSize="11" />
+          </StackPanel>
+        </Border>
+
+        <!-- QUALITY -->
+        <Border Classes="card" Padding="14" CornerRadius="6">
+          <StackPanel Spacing="10">
+            <TextBlock Text="QUALITY" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="Sun shadow samples" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         ToolTip.Tip="Rays per texel for the sun. 0 = no sun shadows; 1 = hard; higher softens the penumbra." />
+              <NumericUpDown Grid.Column="1" Value="{Binding SunSamples}" Increment="1" Minimum="0" Maximum="256"
+                             FormatString="0" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="Point-light samples" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         ToolTip.Tip="Rays per texel per point light. 0 = no point-light shadows." />
+              <NumericUpDown Grid.Column="1" Value="{Binding PointLightSamples}" Increment="1" Minimum="0" Maximum="64"
+                             FormatString="0" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="AO samples" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         ToolTip.Tip="Ambient-occlusion rays per texel. 0 disables AO." />
+              <NumericUpDown Grid.Column="1" Value="{Binding AmbientOcclusionSamples}" Increment="4" Minimum="0" Maximum="512"
+                             FormatString="0" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="AO radius" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <NumericUpDown Grid.Column="1" Value="{Binding AmbientOcclusionRadius}" Increment="25" Minimum="1" Maximum="4000"
+                             FormatString="0" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="Ray bias" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         ToolTip.Tip="Nudge along the normal before tracing, so a texel can't shadow its own surface." />
+              <NumericUpDown Grid.Column="1" Value="{Binding RayBias}" Increment="0.1" Minimum="0" Maximum="20"
+                             FormatString="0.##" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <!-- LIGHTGRID -->
+        <Border Classes="card" Padding="14" CornerRadius="6">
+          <StackPanel Spacing="10">
+            <TextBlock Text="LIGHTGRID" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <CheckBox Content="Bake the probe lightgrid (lightgrid.dat)" IsChecked="{Binding BakeLightGrid}" FontSize="11"
+                      ToolTip.Tip="Probe volume that lights characters, effects and NO_BAKED_LIGHTING meshes. Riot ships 256×256." />
+            <Grid ColumnDefinitions="150,*" IsEnabled="{Binding BakeLightGrid}">
+              <TextBlock Grid.Column="0" Text="Grid width × height" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Value="{Binding LightGridWidth}" Increment="16" Minimum="8" Maximum="1024"
+                               FormatString="0" FontSize="11" MinWidth="90" />
+                <TextBlock Text="×" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <NumericUpDown Value="{Binding LightGridHeight}" Increment="16" Minimum="8" Maximum="1024"
+                               FormatString="0" FontSize="11" MinWidth="90" />
+              </StackPanel>
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <!-- OUTPUT -->
+        <Border Classes="card" Padding="14" CornerRadius="6">
+          <StackPanel Spacing="10">
+            <TextBlock Text="OUTPUT" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="Lightmap root" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <TextBox Grid.Column="1" Text="{Binding OutputRoot}" FontSize="11" />
+            </Grid>
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="Theme token" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         ToolTip.Tip="Optional, e.g. kiwi16_9 → 0.kiwi16_9.tex. Empty writes the base atlases the map already samples." />
+              <TextBox Grid.Column="1" Text="{Binding ThemeToken}" FontSize="11" Watermark="(base)" />
+            </Grid>
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="Baked atlases are written back to the exact paths the mapgeo references, so they drop straight into the map. Meshes whose material sets NO_BAKED_LIGHTING are skipped — they read the lightgrid instead." />
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

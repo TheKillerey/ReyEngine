@@ -127,6 +127,7 @@ public partial class MainWindow : Window
             vm.ShowMapBinEditorWindow = () => ShowMapBinEditor(vm);       // M98
             vm.ShowMeshPreviewWindow = () => ShowMeshPreview(vm);         // M50
             vm.ShowAddMeshWindow = ShowAddMesh;                           // M123
+            vm.ShowLightBakeWindow = () => ShowLightBake(vm);             // M158
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop
@@ -353,6 +354,20 @@ public partial class MainWindow : Window
             _mapBinEditorWindow.Show(this);
         }
         else _mapBinEditorWindow.Activate();
+    }
+
+    // M158: the Light Baking window is non-modal (a bake can take minutes) — reuse one instance.
+    private LightBakeWindow? _lightBakeWindow;
+    private void ShowLightBake(MainWindowViewModel vm)
+    {
+        if (_lightBakeWindow is null)
+        {
+            var bakeVm = new LightBakeViewModel(vm.GatherBakeInputs, vm.MakeBakeService, vm.OnLightBakeFinished);
+            _lightBakeWindow = new LightBakeWindow { DataContext = bakeVm };
+            _lightBakeWindow.Closed += (_, _) => _lightBakeWindow = null;
+            _lightBakeWindow.Show(this);
+        }
+        else _lightBakeWindow.Activate();
     }
 
     private async void ShowProjectSettings(MainWindowViewModel vm)

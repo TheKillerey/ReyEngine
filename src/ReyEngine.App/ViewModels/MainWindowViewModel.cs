@@ -1438,6 +1438,75 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         LightDatPath = null;
         await SaveLightDatCommand.ExecuteAsync(null);
     }
+
+    // ---- M158: light baking ---------------------------------------------------------------------
+
+    /// <summary>Set by the view so the ViewModel can open the (non-modal) Light Baking window.</summary>
+    public Action? ShowLightBakeWindow { get; set; }
+
+    /// <summary>True when the loaded map actually has a lightmap layout to bake into. A lightmap-less
+    /// mapgeo, or a legacy NVR map (which loads into MeshPreview, never into _currentMap), has nothing to
+    /// re-light, so the command stays disabled.</summary>
+    public bool CanBakeLighting => _currentMap is { } m && _currentMapEntry is not null
+                                   && Formats.Baking.LightBaker.CanBakeExistingLayout(m);
+
+    [RelayCommand]
+    private void OpenLightBake()
+    {
+        if (!CanBakeLighting)
+        {
+            _log.Warn("Bake", "This map has no lightmap layout to bake into.");
+            return;
+        }
+        ShowLightBakeWindow?.Invoke();
+    }
+
+    /// <summary>Assemble the bake inputs from the current map + the live viewport lighting, so a bake
+    /// reproduces exactly what the viewport shows. Returns null when nothing can be baked.</summary>
+    public Services.LightBakeInputs? GatherBakeInputs()
+    {
+        if (_currentMap is not { } map || _currentMapEntry is not { } entry) return null;
+        if (!Formats.Baking.LightBaker.CanBakeExistingLayout(map)) return null;
+
+        var lights = EditableLights
+            .Select(l => l.ToPointLight())
+            .Select(pl => new Formats.Baking.BakePointLight(pl.Position, pl.Color, pl.Radius, pl.Intensity))
+            .ToList();
+
+        var sun = CurrentSunProperties ?? _baseSun;
+        var lighting = Services.LightBakeService.BuildLighting(
+            sunDirectionTowardSun: sun.SunDirection,
+            sunColor: new System.Numerics.Vector3(sun.SunColor.X, sun.SunColor.Y, sun.SunColor.Z),
+            skyColor: new System.Numerics.Vector3(sun.SkyLightColor.X, sun.SkyLightColor.Y, sun.SkyLightColor.Z),
+            skyScale: sun.SkyLightScale,
+            lightMapColorScale: (float)CurrentLightmapScale,
+            lights: lights,
+            lightIntensity: (float)DynamicLightIntensity,
+            lightRadiusScale: (float)DynamicLightRadiusScale,
+            lightPositionScale: (float)DynamicLightPositionScale,
+            settings: new Formats.Baking.BakeSettings());   // sample counts refined per-bake in the window
+
+        return new Services.LightBakeInputs
+        {
+            Map = map,
+            MapgeoPath = entry.Path,
+            Lighting = lighting,
+            GroupLightmapEnabled = Services.LightBakeService.BuildGroupFlags(map, _currentMapProfiles),
+        };
+    }
+
+    /// <summary>Build a bake service bound to the current project (or null when unsaved — atlases go to
+    /// the project's override store).</summary>
+    public Services.LightBakeService? MakeBakeService() =>
+        Project.OverridesDirectory is null ? null : new Services.LightBakeService(Project);
+
+    public void OnLightBakeFinished(Services.LightBakeResult result)
+    {
+        _log.Success("Bake", result.OutputDescription + $" ({result.AtlasCount} atlas(es)).");
+        // The baked atlases now live in the override store; re-read the map's textures so the viewport
+        // shows the freshly baked lighting instead of Riot's.
+        if (_currentMapEntry is { } e) _ = LoadMapGeoAsync(e);
+    }
     [ObservableProperty] private bool _showLightMarkers = true;   // M71: show a glow icon at each light position
     // M71: manual lighting controls. Sun + sky feed the fallback lighting term (visible with lightmaps off or
     // on geometry without baked light); lightmap brightness scales the baked atlas. All initialise from the
@@ -2552,6 +2621,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _visibilityResolver = null;
         _currentMapBytes = null;
         _currentMapEntry = null;
+        OnPropertyChanged(nameof(CanBakeLighting));   // M158
         _selection.Clear();
         HasMapMoves = false;
         CurrentModelTextures = null;
@@ -4066,6 +4136,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _currentMapBytes = rawMapBytes;
                 _currentMapEntry = entry;
                 HasMapGeo = true;   // M79
+                OnPropertyChanged(nameof(CanBakeLighting));   // M158
                 _selection.Clear();
                 CurrentModelTextures = textures;
                 ApplySunProperties(sunProperties);

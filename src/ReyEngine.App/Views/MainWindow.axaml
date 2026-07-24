@@ -475,6 +475,14 @@
                       </StackPanel>
 
                       <Button Content="Reset to map" Command="{Binding ResetLightingCommand}" HorizontalAlignment="Stretch" Margin="0,8,0,0" FontSize="10" />
+
+                      <!-- M158: bake the current lighting into the map's lightmap atlases -->
+                      <Separator Margin="0,8,0,2" />
+                      <TextBlock Text="BAKE" FontSize="10" FontWeight="Bold"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <Button Classes="primary" Content="🔦 Bake Lighting…" Command="{Binding OpenLightBakeCommand}"
+                              IsEnabled="{Binding CanBakeLighting}" HorizontalAlignment="Stretch" FontSize="10" Padding="8,4"
+                              ToolTip.Tip="Trace the sun, sky, AO and every point light into this map's lightmap atlases (Map12-style). Needs a map with a lightmap layout and a saved project." />
                     </StackPanel>
                   </Flyout>
                 </Button.Flyout>
