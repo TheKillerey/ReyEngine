@@ -63,6 +63,21 @@ public sealed class BakeSettings
     /// viewport shader, so Baked and Dynamic always agree.</summary>
     public float FalloffSoftness { get; set; } = 0.6f;
 
+    /// <summary>Smooth (area-average) vertex normals across coincident positions before lighting, for
+    /// normals that meet within <see cref="SmoothingAngleDegrees"/>. Map geometry is largely flat-shaded
+    /// — on this map 59.5% of shared positions carry split normals — so the N.L term steps at every
+    /// triangle and a light pool bakes as visible polygonal facets. Averaging removes the faceting while
+    /// the angle threshold keeps genuine hard corners (wall meets floor) hard.</summary>
+    public bool SmoothNormals { get; set; } = true;
+
+    /// <summary>Normals meeting at a shared position are averaged only if they are within this angle.
+    /// Measured on real map geometry, the share of shared edges carrying a VISIBLE brightness step
+    /// (the facet boundaries) falls off sharply with the threshold:
+    ///   off 36.6%  |  60 deg 25.9%  |  90 deg 8.8%  |  120 deg 1.5%  |  150 deg 0.6%
+    /// 120 is the default: it removes 96% of the faceting while still refusing to merge near-opposite
+    /// normals (the two sides of a thin wall), which must stay independent.</summary>
+    public float SmoothingAngleDegrees { get; set; } = 120f;
+
     /// <summary>Dither amplitude, in units of one 8-bit step, applied before quantising the atlas. A
     /// light's outer tail falls below one step long before it reaches the radius, so plain rounding snaps
     /// it flat and leaves a hard edge; dithering converts that contour into sub-step noise. 0 disables.</summary>

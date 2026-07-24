@@ -147,6 +147,16 @@
               <NumericUpDown Grid.Column="1" Value="{Binding FalloffSoftness}" Increment="0.1" Minimum="0" Maximum="1"
                              FormatString="0.##" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
             </Grid>
+
+            <CheckBox Content="Smooth normals for lighting" IsChecked="{Binding SmoothNormals}" FontSize="11"
+                      ToolTip.Tip="Average vertex normals across shared positions before shading. Map geometry is largely flat-shaded, so without this the N.L term steps at every triangle and a light pool bakes as visible polygonal facets." />
+            <Grid ColumnDefinitions="150,*" IsEnabled="{Binding SmoothNormals}">
+              <TextBlock Grid.Column="0" Text="Smoothing angle" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         ToolTip.Tip="Normals meeting within this angle are averaged; sharper joins stay hard, so real corners (wall meets floor) keep their edge." />
+              <NumericUpDown Grid.Column="1" Value="{Binding SmoothingAngle}" Increment="5" Minimum="0" Maximum="180"
+                             FormatString="0" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
           </StackPanel>
         </Border>
 

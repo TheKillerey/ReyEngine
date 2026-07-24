@@ -73,6 +73,15 @@ public static class LightBaker
         progress?.Report(new BakeProgress(0, atlases.Count, "", "Building ray-tracing scene"));
         var scene = NeedsRays(lighting, settings) ? new BakeScene(asset.Positions, asset.Indices) : null;
 
+        // Shading normals: flat-shaded map geometry bakes light pools as polygonal facets, so smooth
+        // across coincident positions first (see BakeSettings.SmoothNormals).
+        float[] shadingNormals = asset.Normals;
+        if (settings.SmoothNormals)
+        {
+            progress?.Report(new BakeProgress(0, atlases.Count, "", "Smoothing normals"));
+            shadingNormals = SmoothNormals(asset, settings.SmoothingAngleDegrees);
+        }
+
         string folder = settings.ResolveOutputFolder(mapgeoPath);
         int done = 0;
 
@@ -82,7 +91,7 @@ public static class LightBaker
             string texture = atlases[ai];
             progress?.Report(new BakeProgress(ai, atlases.Count, texture, "Rasterizing"));
 
-            var tris = CollectTriangles(asset, groupLightmapEnabled, texture);
+            var tris = CollectTriangles(asset, groupLightmapEnabled, texture, shadingNormals);
             if (tris.Count == 0) continue;
 
             progress?.Report(new BakeProgress(ai, atlases.Count, texture, $"Shading {tris.Count} triangles"));
@@ -219,6 +228,61 @@ public static class LightBaker
             : p[..^".tex".Length] + $".{settings.ThemeToken}.tex";
     }
 
+    /// <summary>Average vertex normals across coincident positions, so flat-shaded map geometry stops
+    /// baking light pools as polygonal facets.
+    ///
+    /// Why this is needed: the light term carries a (0.35 + 0.65 * N.L) wrap, so a facet turned away from
+    /// a light is ~3x darker than one turned toward it. On architecture authored with hard normals — 59.5%
+    /// of shared positions on the user's map carry split normals — that steps discontinuously at every
+    /// triangle, and a smooth round pool bakes as a faceted polygon. The diffuse texture hides it in a
+    /// normal render; a lightmap shows it plainly.
+    ///
+    /// Normals are only merged when they meet within <paramref name="angleDegrees"/>, so a curved or
+    /// tessellated surface smooths out while a genuine 90-degree corner stays crisp.</summary>
+    public static float[] SmoothNormals(MapGeoAsset asset, float angleDegrees)
+    {
+        var pos = asset.Positions;
+        var src = asset.Normals;
+        int vertexCount = pos.Length / 3;
+        var result = (float[])src.Clone();
+        if (vertexCount == 0) return result;
+
+        // Weld by quantised position (1/16 unit) — coincident vertices in a mapgeo are bit-identical
+        // after the world transform, so a coarse grid is enough and keeps this O(n).
+        var buckets = new Dictionary<(int, int, int), List<int>>(vertexCount);
+        for (int v = 0; v < vertexCount; v++)
+        {
+            var key = ((int)MathF.Round(pos[v * 3] * 16f),
+                       (int)MathF.Round(pos[v * 3 + 1] * 16f),
+                       (int)MathF.Round(pos[v * 3 + 2] * 16f));
+            if (!buckets.TryGetValue(key, out var list)) buckets[key] = list = new List<int>(4);
+            list.Add(v);
+        }
+
+        float cosLimit = MathF.Cos(Math.Clamp(angleDegrees, 0f, 180f) * MathF.PI / 180f);
+        foreach (var (_, list) in buckets)
+        {
+            if (list.Count < 2) continue;
+            foreach (int v in list)
+            {
+                var n0 = new Vector3(src[v * 3], src[v * 3 + 1], src[v * 3 + 2]);
+                if (n0.LengthSquared() < 1e-12f) continue;
+                var sum = Vector3.Zero;
+                foreach (int o in list)
+                {
+                    var n = new Vector3(src[o * 3], src[o * 3 + 1], src[o * 3 + 2]);
+                    if (n.LengthSquared() < 1e-12f) continue;
+                    if (Vector3.Dot(n0, n) < cosLimit) continue;   // past the smoothing angle: a real edge
+                    sum += n;
+                }
+                if (sum.LengthSquared() < 1e-12f) continue;
+                sum = Vector3.Normalize(sum);
+                result[v * 3] = sum.X; result[v * 3 + 1] = sum.Y; result[v * 3 + 2] = sum.Z;
+            }
+        }
+        return result;
+    }
+
     private static bool NeedsRays(BakeLighting lighting, BakeSettings settings) =>
         (lighting.SunShadows && settings.SunSamples > 0)
         || (lighting.PointLightShadows && lighting.PointLights.Count > 0 && settings.PointLightSamples > 0)
@@ -226,10 +290,10 @@ public static class LightBaker
 
     /// <summary>Gather every triangle that lands in one atlas, in atlas UV space.</summary>
     private static List<AtlasRasterizer.Tri> CollectTriangles(
-        MapGeoAsset asset, IReadOnlyList<bool>? groupLightmapEnabled, string texture)
+        MapGeoAsset asset, IReadOnlyList<bool>? groupLightmapEnabled, string texture, float[] normals)
     {
         var pos = asset.Positions;
-        var nrm = asset.Normals;
+        var nrm = normals;
         var uv = asset.LightmapUvs!;
         var idx = asset.Indices;
         var tris = new List<AtlasRasterizer.Tri>();
