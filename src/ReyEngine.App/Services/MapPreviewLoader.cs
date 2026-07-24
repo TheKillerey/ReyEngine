@@ -184,6 +184,51 @@ public static class MapPreviewLoader
             alphaCache[t] = cut = total > 0 && clear * 100 > total;   // >1% fully transparent texels
             return cut;
         }
+
+        // M147: is this texture meant to be PLACED ONCE rather than tiled? A decal/sprite fades out at its
+        // edges, so its border texels are transparent; a tiling surface is opaque edge-to-edge. Verified
+        // across Map10: every decal scores >=98% transparent border while tiling art (damage tile, shop
+        // props, branches) scores 0%, with a wide margin either side of the threshold.
+        var borderCache = new Dictionary<TextureImage, bool>(ReferenceEqualityComparer.Instance);
+        bool HasTransparentBorder(TextureImage? t)
+        {
+            if (t is null) return false;
+            if (borderCache.TryGetValue(t, out bool b)) return b;
+            int w = t.Width, h = t.Height;
+            var px = t.Rgba;
+            long clear = 0, total = 0;
+            void Edge(int x, int y) { total++; if (px[(y * w + x) * 4 + 3] < 16) clear++; }
+            for (int x = 0; x < w; x++) { Edge(x, 0); Edge(x, h - 1); }
+            for (int y = 0; y < h; y++) { Edge(0, y); Edge(w - 1, y); }
+            borderCache[t] = b = total > 0 && clear * 2 > total;   // over half the border is transparent
+            return b;
+        }
+
+        // M147: per-submesh — do its primary UVs leave [0,1]? Only then does the wrap mode matter, so
+        // pairing this with the border test isolates real decals from art that tiles on purpose.
+        // Also track whether the surface lies FLAT (normals mostly +Y): a ground decal does, foliage
+        // doesn't. Flat decals alpha-blend smoothly; upright alpha art keeps its hard cutout, which both
+        // matches how leaves should read and avoids unsorted-transparency artefacts on trees.
+        var uvOverflow = new bool[src.SubMeshes.Count];
+        var flatUp = new bool[src.SubMeshes.Count];
+        {
+            var uvs = src.Uvs;
+            var nrm = src.Normals;
+            for (int i = 0; i < uvOverflow.Length; i++)
+            {
+                var s = src.SubMeshes[i];
+                int end = s.StartIndex + s.IndexCount;
+                double ny = 0; int n = 0;
+                for (int k = s.StartIndex; k < end; k++)
+                {
+                    int v = (int)src.Indices[k];
+                    float u = uvs[2 * v], w2 = uvs[2 * v + 1];
+                    if (u < -0.02f || u > 1.02f || w2 < -0.02f || w2 > 1.02f) uvOverflow[i] = true;
+                    if (3 * v + 1 < nrm.Length) { ny += nrm[3 * v + 1]; n++; }
+                }
+                flatUp[i] = n > 0 && ny / n > 0.7;
+            }
+        }
         var mats = new ViewportMeshRenderer.SubmeshMaterial[subTex.Length];
         TextureImage?[]? subMask = null, subLightmap = null;
         bool detail = ground is not null && heightScale is not null;   // M142.2: real height blend possible
@@ -191,18 +236,26 @@ public static class MapPreviewLoader
         for (int i = 0; i < mats.Length; i++)
         {
             bool g = ground is not null && ground[i];
-            // M142.6: decals (decalVersion3 / decal_*.dds) project their texture ONCE but their UVs run
-            // outside [0,1]; with GL_REPEAT that wraps into hard tile seams (mud path, tower/step decals).
-            // Clamp their UVs so the out-of-range border shows the (transparent) edge texel and the decal
-            // paints once. Ground/rubble map within [0,1] and are left tiling.
+            // M142.6: decals project their texture ONCE but sit on an oversized quad, so their UVs run
+            // outside [0,1]; with GL_REPEAT that wraps the decal into hard tile seams. Clamping makes the
+            // out-of-range area sample the (transparent) edge texel, so the decal paints once.
+            // M147: detect them from the DATA, not the name. Names only work on maps whose artists used
+            // them (Map10's decalVersion3); old levels like Map4 name everything lambertNNN, so nothing
+            // matched and every decal tiled. A decal fades out at its edges (transparent border) AND
+            // overflows [0,1]; art that tiles on purpose is opaque edge-to-edge. Both signals are required,
+            // so a legitimately tiling texture (damage tiles, branches, shop props) is never clamped.
             string mname = src.SubMeshes[i].Material ?? "";
-            bool decal = !g &&
-                ((nvr.SubmeshDiffuseTextures[i]?.StartsWith("decal", StringComparison.OrdinalIgnoreCase) ?? false)
-                 || mname.Contains("decal", StringComparison.OrdinalIgnoreCase));
+            bool namedDecal =
+                (nvr.SubmeshDiffuseTextures[i]?.StartsWith("decal", StringComparison.OrdinalIgnoreCase) ?? false)
+                || mname.Contains("decal", StringComparison.OrdinalIgnoreCase);
+            bool decal = !g && (namedDecal || (uvOverflow[i] && HasTransparentBorder(subTex[i])));
             // M142.7: decals blend SMOOTHLY — their soft alpha gradients read hard/aliased as a cutout, so
-            // render them transparent (AlphaMode 2: alpha-blend over the ground). Foliage/webs keep cutout
-            // (hard alpha is correct for leaves). Ground stays opaque.
-            int alphaMode = g ? 0 : decal ? 2 : HasCutoutAlpha(subTex[i]) ? 1 : 0;
+            // render them transparent (AlphaMode 2: alpha-blend over the ground). M147: only for decals
+            // lying FLAT on the ground; upright alpha art (leaves, vines, webs) keeps its cutout, which
+            // reads correctly and stays depth-sorted. Ground stays opaque.
+            int alphaMode = g ? 0
+                : decal && flatUp[i] ? 2
+                : decal || HasCutoutAlpha(subTex[i]) ? 1 : 0;
             mats[i] = ViewportMeshRenderer.SubmeshMaterial.Default with
             {
                 CompositeGround = g,
