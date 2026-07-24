@@ -1566,6 +1566,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             File.WriteAllBytes(dest, bytes);
             if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase))
                 Project.ProjectFolders.Add(folderName);
+            // A hashed override (ProjectOverride, priority 0) outranks a folder file (ProjectFolder,
+            // priority 1) for the same hash — so an atlas left in the override store by an EARLIER bake
+            // (before atlases landed in the folder) would shadow this one and the viewport would keep
+            // showing the stale bake no matter how we re-bake. Clear it so the folder file wins.
+            ClearShadowOverride(hash, ext);
             return dest;
         }
 
@@ -1578,6 +1583,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             AddedUtc = DateTime.UtcNow.ToString("o"),
         });
         return overrideFile;
+    }
+
+    /// <summary>Delete a hashed override that would shadow a folder-placed baked file (and its record),
+    /// so the fresh folder file wins. Lightweight — the caller rebuilds mounts once after the whole bake.</summary>
+    private void ClearShadowOverride(ulong hash, string ext)
+    {
+        try
+        {
+            if (Project.OverridesDirectory is { } dir)
+            {
+                var f = Path.Combine(dir, $"{hash:x16}{ext}");
+                if (File.Exists(f)) File.Delete(f);
+            }
+        }
+        catch { /* best-effort — a locked/absent override just stays, BuildMounts still favours nothing worse */ }
+        _overrides.Remove(hash);
     }
 
     public void OnLightBakeFinished(Services.LightBakeResult result)
