@@ -4,10 +4,7 @@ using System.Linq;
 using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
-using ReyEngine.Core.Hashing;
-using ReyEngine.Core.Projects;
 using ReyEngine.Formats.Baking;
-using ReyEngine.Formats.Lighting;
 using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.MapGeo;
 
@@ -26,13 +23,17 @@ public sealed class LightBakeInputs
 
 public sealed record LightBakeResult(int AtlasCount, long TotalBytes, bool WroteLightGrid, string OutputDescription);
 
-/// <summary>M158: drives a bake from the app's live map + lighting + project state and writes the
-/// results into the project's override store, keyed by the same WAD path hashes the game uses — so a
-/// baked atlas simply replaces Riot's, no bin edit required.</summary>
+/// <summary>M158: drives a bake from the app's live map + lighting state. WHERE each baked file lands is
+/// the host's decision — passed in as <c>writeAsset</c> — so a folder project gets the atlas at its real
+/// path (…/Map12/assets/maps/lightmaps/…/0.tex, which the packer hashes straight back to the chunk the
+/// game reads) while a single-WAD project falls back to the hashed override store. The service just
+/// bakes and hands each finished file to that writer.</summary>
 public sealed class LightBakeService
 {
-    private readonly ReyProject _project;
-    public LightBakeService(ReyProject project) => _project = project;
+    /// <summary>Writes one baked file. (assetPath, bytes, extension) → the on-disk path written.</summary>
+    private readonly Func<string, byte[], string, string> _writeAsset;
+
+    public LightBakeService(Func<string, byte[], string, string> writeAsset) => _writeAsset = writeAsset;
 
     /// <summary>Assemble the light model from the live viewport values, applying the renderer's clamps so
     /// a bake can never exceed what preview would show.</summary>
@@ -66,24 +67,18 @@ public sealed class LightBakeService
         return flags;
     }
 
-    /// <summary>Run the bake. Each atlas is written to the override store as it finishes (streamed — a
-    /// large map is dozens of atlases and holding them all would cost gigabytes), and the lightgrid last.</summary>
+    /// <summary>Run the bake. Each atlas is handed to the writer as it finishes (streamed — a large map
+    /// is dozens of atlases and holding them all would cost gigabytes), and the lightgrid last.</summary>
     public async Task<LightBakeResult> BakeAsync(
         LightBakeInputs inputs, BakeSettings settings,
         IProgress<BakeProgress>? progress = null, CancellationToken ct = default)
     {
-        if (_project.OverridesDirectory is null)
-            throw new InvalidOperationException("Save the project before baking — atlases are written into its override store.");
-
         long totalBytes = 0;
         int atlasCount = await LightBaker.BakeExistingLayoutAsync(
             inputs.Map, inputs.GroupLightmapEnabled, inputs.Lighting, settings, inputs.MapgeoPath,
             baked =>
             {
-                // The mapgeo already samples this atlas by its own path; write the new bytes under that
-                // path's hash so the built WAD serves them in place of Riot's.
-                ulong hash = HashAlgorithms.WadPath(baked.OutputPath);
-                ProjectWorkspace.StoreOverrideBytes(_project, hash, baked.TexBytes, ".tex");
+                _writeAsset(baked.OutputPath, baked.TexBytes, ".tex");
                 totalBytes += baked.TexBytes.Length;
                 return Task.CompletedTask;
             },
@@ -95,9 +90,8 @@ public sealed class LightBakeService
             var grid = await Task.Run(() => LightBaker.BakeLightGrid(inputs.Map, inputs.Lighting, settings, progress: progress, ct: ct), ct)
                                  .ConfigureAwait(false);
             string gridPath = settings.ResolveOutputFolder(inputs.MapgeoPath) + settings.LightGridFileName();
-            ulong gridHash = HashAlgorithms.WadPath(gridPath);
             var gridBytes = grid.Write();
-            ProjectWorkspace.StoreOverrideBytes(_project, gridHash, gridBytes, ".dat");
+            _writeAsset(gridPath, gridBytes, ".dat");
             totalBytes += gridBytes.Length;
             wroteGrid = true;
         }

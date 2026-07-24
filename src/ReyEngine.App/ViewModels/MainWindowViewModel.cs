@@ -1538,19 +1538,65 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         };
     }
 
-    /// <summary>Build a bake service bound to the current project (or null when unsaved — atlases go to
-    /// the project's override store).</summary>
-    public Services.LightBakeService? MakeBakeService() =>
-        Project.OverridesDirectory is null ? null : new Services.LightBakeService(Project);
+    /// <summary>Build a bake service bound to the current project, or null when there is nowhere to write
+    /// (an unsaved project). A folder project writes atlases to their real path; a saved single-WAD
+    /// project uses the hashed override store.</summary>
+    public Services.LightBakeService? MakeBakeService()
+    {
+        bool canWrite = (Project.IsFolderProject && Project.RootPath is not null)
+                        || Project.OverridesDirectory is not null;
+        return canWrite ? new Services.LightBakeService(WriteBakedAsset) : null;
+    }
+
+    /// <summary>M158: write a baked lightmap file where it BELONGS. For a folder project that means the
+    /// asset's real path inside the map's project folder (…/Map12/assets/maps/lightmaps/…/0.tex) — the
+    /// packer hashes folder files by their relative path, so this lands as the exact chunk the game
+    /// reads, and it shows up in the project tree instead of as an opaque hash. A single-WAD project has
+    /// no folder to place into, so it falls back to the hashed override store. Returns the path written.</summary>
+    private string WriteBakedAsset(string assetPath, byte[] bytes, string ext)
+    {
+        ulong hash = HashAlgorithms.WadPath(assetPath);
+        if (Project.IsFolderProject && Project.RootPath is { } root && _currentMapEntry is { } mapEntry)
+        {
+            // Stage under the SAME WAD folder the map itself lives in (Map12.wad.client → "Map12"): the
+            // game loads a map's lightmaps from that same wad.
+            string folderName = RiotWadFolderName(mapEntry);
+            string dest = Path.Combine(root, folderName, assetPath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.WriteAllBytes(dest, bytes);
+            if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase))
+                Project.ProjectFolders.Add(folderName);
+            return dest;
+        }
+
+        var overrideFile = ProjectWorkspace.StoreOverrideBytes(Project, hash, bytes, ext);
+        _overrides.Set(new ProjectAssetOverride
+        {
+            PathHash = hash,
+            ResolvedPath = assetPath,
+            OverrideFile = overrideFile,
+            AddedUtc = DateTime.UtcNow.ToString("o"),
+        });
+        return overrideFile;
+    }
 
     public void OnLightBakeFinished(Services.LightBakeResult result)
     {
         _log.Success("Bake", result.OutputDescription + $" ({result.AtlasCount} atlas(es)).");
+        Project.IsDirty = true;
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        // Re-index: a folder project just gained new files on disk that the mounts don't know about yet;
+        // without a remount ReadAsset would still serve Riot's atlases and the viewport wouldn't change.
+        if (Project.IsFolderProject)
+        {
+            BuildMounts();
+            BuildProjectTree();
+        }
+        UpdateTitle();
         // Switch the viewport to Baked so the user immediately sees the freshly baked lighting (atlas on,
         // dynamic lights off) instead of the live authoring view they baked from.
         LightingMode = LightingModeBaked;
-        // The baked atlases now live in the override store; re-read the map's textures so the viewport
-        // shows them instead of Riot's.
+        // Re-read the map so the viewport samples the freshly baked atlases instead of Riot's.
         if (_currentMapEntry is { } e) _ = LoadMapGeoAsync(e);
     }
     [ObservableProperty] private bool _showLightMarkers = true;   // M71: show a glow icon at each light position
@@ -6562,16 +6608,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Project", $"{entry.DisplayName}: {ex.Message}"); return false; }
     }
 
-    /// <summary>M98c/d: write bytes to the asset's REAL path inside the per-WAD project folder
-    /// (Map11.wad.client → Map11/data/…). False when this isn't a folder project or the path is
-    /// unresolved — the caller falls back to the hashed override store.</summary>
-    private bool TryPlaceInProjectFolder(WadAssetEntry entry, byte[] bytes, out string placedRelative)
+    /// <summary>M98c/d: the project-folder name a Riot asset should be staged under — the source WAD's
+    /// base name (Map12.wad.client → "Map12"), or "Overrides" when the source WAD can't be determined.</summary>
+    private string RiotWadFolderName(WadAssetEntry entry)
     {
-        placedRelative = "";
-        if (!Project.IsFolderProject || !entry.IsResolved || Project.RootPath is null || _mounts is null) return false;
-
-        string folderName = "Overrides";
-        if (_mounts.TryGet(entry.PathHash, out var mounted))
+        if (_mounts is not null && _mounts.TryGet(entry.PathHash, out var mounted))
         {
             var riotSrc = mounted.Source.Kind == AssetSourceKind.RiotReference ? mounted.Source
                 : mounted.AllSources.FirstOrDefault(s => s.Kind == AssetSourceKind.RiotReference);
@@ -6581,10 +6622,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (wadName.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase))
                     wadName = wadName[..^".wad.client".Length];
                 foreach (var c in Path.GetInvalidFileNameChars()) wadName = wadName.Replace(c, '_');
-                if (wadName.Length > 0) folderName = wadName;
+                if (wadName.Length > 0) return wadName;
             }
         }
+        return "Overrides";
+    }
 
+    /// <summary>M98c/d: write bytes to the asset's REAL path inside the per-WAD project folder
+    /// (Map11.wad.client → Map11/data/…). False when this isn't a folder project or the path is
+    /// unresolved — the caller falls back to the hashed override store.</summary>
+    private bool TryPlaceInProjectFolder(WadAssetEntry entry, byte[] bytes, out string placedRelative)
+    {
+        placedRelative = "";
+        if (!Project.IsFolderProject || !entry.IsResolved || Project.RootPath is null || _mounts is null) return false;
+
+        string folderName = RiotWadFolderName(entry);
         string destFile = Path.Combine(Project.RootPath, folderName, entry.Path.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
         File.WriteAllBytes(destFile, bytes);
