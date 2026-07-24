@@ -133,6 +133,15 @@
           </StackPanel>
         </DataTemplate>
 
+        <DataTemplate DataType="vm:PointLightViewModel">
+          <StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding Info}">
+            <Border Width="9" Height="9" CornerRadius="2" VerticalAlignment="Center"
+                    Background="{Binding ColorHex}" BorderBrush="#555" BorderThickness="1" />
+            <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          </StackPanel>
+        </DataTemplate>
+
         <DataTemplate DataType="vm:BucketGridViewModel">
           <StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding Info}">
             <TextBlock Text="⌗" FontSize="9" Foreground="#9E73F2" VerticalAlignment="Center" />

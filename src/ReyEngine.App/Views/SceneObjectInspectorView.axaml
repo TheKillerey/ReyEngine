@@ -250,6 +250,56 @@
       </StackPanel>
     </Border>
 
+    <!-- M153: POINT LIGHT — selected in the outliner's Lights folder or picked in the viewport. Position
+         comes from the gizmo; strength is PER LIGHT (the Lighting flyout's slider is a global multiplier). -->
+    <Border Classes="card" IsVisible="{Binding SelectedLight, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <StackPanel Spacing="4">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Classes="cardTitle" Grid.Column="0" Text="POINT LIGHT" VerticalAlignment="Center" />
+          <Button Classes="tool" Grid.Column="1" Content="🎯 Focus" Command="{Binding FocusSelectedPlaceableCommand}"
+                  FontSize="10" Padding="6,1" ToolTip.Tip="Frame the camera on this light" />
+        </Grid>
+        <TextBox Text="{Binding SelectedLight.Name}" FontSize="11" Watermark="Light name" />
+        <TextBlock Text="Drag the viewport gizmo to move it." FontSize="9"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+
+        <TextBlock Text="POSITION" FontSize="8" FontWeight="SemiBold" Margin="0,3,0,0"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" ColumnSpacing="3">
+          <TextBlock Grid.Column="0" Text="X" FontSize="9" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="1" Value="{Binding SelectedLight.X}" FontSize="10" ShowButtonSpinner="False" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="9" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="3" Value="{Binding SelectedLight.Y}" FontSize="10" ShowButtonSpinner="False" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="9" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="5" Value="{Binding SelectedLight.Z}" FontSize="10" ShowButtonSpinner="False" />
+        </Grid>
+
+        <Grid ColumnDefinitions="*,Auto" Margin="0,3,0,0">
+          <TextBlock Grid.Column="0" Text="{Binding SelectedLight.Intensity, StringFormat='Strength: {0:0.00}'}" FontSize="10" />
+          <Border Grid.Column="1" Width="22" Height="12" CornerRadius="2" BorderBrush="#555" BorderThickness="1"
+                  Background="{Binding SelectedLight.ColorHex}" />
+        </Grid>
+        <Slider Minimum="0" Maximum="8" Value="{Binding SelectedLight.Intensity}"
+                ToolTip.Tip="This light's own strength. The Lighting flyout's Strength slider multiplies every light on top of this." />
+
+        <TextBlock Text="{Binding SelectedLight.Radius, StringFormat='Radius: {0:0}'}" FontSize="10" />
+        <Slider Minimum="10" Maximum="5000" Value="{Binding SelectedLight.Radius}" />
+
+        <TextBlock Text="COLOUR (0-255)" FontSize="8" FontWeight="SemiBold" Margin="0,3,0,0"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <TextBlock Text="R" FontSize="9" /><Slider Minimum="0" Maximum="255" Value="{Binding SelectedLight.R}" />
+        <TextBlock Text="G" FontSize="9" /><Slider Minimum="0" Maximum="255" Value="{Binding SelectedLight.G}" />
+        <TextBlock Text="B" FontSize="9" /><Slider Minimum="0" Maximum="255" Value="{Binding SelectedLight.B}" />
+
+        <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,4,0,0">
+          <Button Classes="tool" Content="⧉ Duplicate" Command="{Binding DuplicateLightCommand}" FontSize="10" Padding="7,2" />
+          <Button Classes="tool" Content="✕ Delete" Command="{Binding DeleteLightCommand}" FontSize="10" Padding="7,2" />
+        </StackPanel>
+        <TextBlock Text="Light.dat stores no strength field — Save folds it into the light's colour."
+                   FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+      </StackPanel>
+    </Border>
+
     <!-- M79: ADDED MESH (imported, queued for append) — material picker + gizmo hint + save/remove -->
     <Border Classes="card" IsVisible="{Binding SelectedAddedMesh, Converter={x:Static ObjectConverters.IsNotNull}}">
       <StackPanel Spacing="4">

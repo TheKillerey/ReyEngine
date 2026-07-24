@@ -561,9 +561,10 @@ void main() {
             if (dist < radius) {
                 float atten = 1.0 - dist / radius;
                 atten *= atten;
-                vec3 lightColour = texelFetch(uLightsTex, ivec2(i, 1), 0).rgb;
+                // M153: .a is the light's OWN strength; uLightIntensity below stays the global multiplier.
+                vec4 lightColour = texelFetch(uLightsTex, ivec2(i, 1), 0);
                 float ndl = max(dot(n, toLight / max(dist, 0.0001)), 0.0);
-                dynamicLight += lightColour * atten * (0.35 + 0.65 * ndl);
+                dynamicLight += lightColour.rgb * lightColour.a * atten * (0.35 + 0.65 * ndl);
             }
         }
         col += base * dynamicLight * uLightIntensity;
@@ -1274,8 +1275,10 @@ void main(){
             var l = lights![i];
             int row0 = i * 4;                         // texel (i, 0): position + radius
             data[row0 + 0] = l.Position.X; data[row0 + 1] = l.Position.Y; data[row0 + 2] = l.Position.Z; data[row0 + 3] = l.Radius;
-            int row1 = (_lightCount + i) * 4;         // texel (i, 1): colour
-            data[row1 + 0] = l.Color.X; data[row1 + 1] = l.Color.Y; data[row1 + 2] = l.Color.Z; data[row1 + 3] = 0f;
+            // texel (i, 1): colour + M153 per-light strength in the previously unused alpha
+            int row1 = (_lightCount + i) * 4;
+            data[row1 + 0] = l.Color.X; data[row1 + 1] = l.Color.Y; data[row1 + 2] = l.Color.Z;
+            data[row1 + 3] = System.Math.Clamp(l.Intensity, 0f, 64f);
         }
         if (_lightsTex == 0) _lightsTex = _gl.GenTexture();
         _gl.BindTexture(TextureTarget.Texture2D, _lightsTex);

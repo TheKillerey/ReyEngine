@@ -458,55 +458,19 @@
                       <Slider Minimum="-20000" Maximum="20000" Value="{Binding DynamicLightOffsetZ}" />
                       <CheckBox Content="Show light position icons" IsChecked="{Binding ShowLightMarkers}" FontSize="10" Margin="0,4,0,0" />
 
-                      <!-- M152: place / edit / save the actual point lights, not just how they're rendered -->
-                      <TextBlock Text="PLACE LIGHTS" FontSize="10" FontWeight="Bold" Margin="0,8,0,0"
+                      <!-- M153: per-light editing lives in Map Content + the Inspector now; only the
+                           overall settings and the add/save actions stay here. -->
+                      <TextBlock Text="LIGHTS" FontSize="10" FontWeight="Bold" Margin="0,8,0,0"
                                  Foreground="{DynamicResource ReyTextDimBrush}" />
                       <TextBlock Text="{Binding DynamicLightsStatus}" FontSize="9" TextWrapping="Wrap"
                                  Foreground="{DynamicResource ReyAccent2Brush}" />
+                      <TextBlock Text="Select a light under Map Content ▸ Lights to edit it."
+                                 FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
                       <StackPanel Orientation="Horizontal" Spacing="4">
-                        <Button Classes="tool" Content="+ Add" Command="{Binding AddLightCommand}" FontSize="10" Padding="7,2"
+                        <Button Classes="tool" Content="+ Add light" Command="{Binding AddLightCommand}" FontSize="10" Padding="7,2"
                                 ToolTip.Tip="Add a point light at the gizmo (or the origin) — then drag it into place." />
-                        <Button Classes="tool" Content="⧉ Copy" Command="{Binding DuplicateLightCommand}" FontSize="10" Padding="7,2"
-                                IsEnabled="{Binding HasSelectedLight}" ToolTip.Tip="Duplicate the selected light" />
-                        <Button Classes="tool" Content="✕ Delete" Command="{Binding DeleteLightCommand}" FontSize="10" Padding="7,2"
-                                IsEnabled="{Binding HasSelectedLight}" />
-                      </StackPanel>
-                      <ListBox ItemsSource="{Binding EditableLights}" SelectedItem="{Binding SelectedLight}"
-                               MaxHeight="150" FontSize="10" Margin="0,2,0,0">
-                        <ListBox.ItemTemplate>
-                          <DataTemplate>
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                              <Border Width="10" Height="10" CornerRadius="2" VerticalAlignment="Center"
-                                      Background="{Binding ColorHex}" BorderBrush="#555" BorderThickness="1" />
-                              <TextBlock Text="{Binding Label}" FontSize="10" VerticalAlignment="Center" />
-                            </StackPanel>
-                          </DataTemplate>
-                        </ListBox.ItemTemplate>
-                      </ListBox>
-
-                      <StackPanel IsVisible="{Binding HasSelectedLight}" Spacing="2" Margin="0,4,0,0"
-                                  DataContext="{Binding SelectedLight}">
-                        <TextBlock Text="SELECTED LIGHT — drag the viewport gizmo to move" FontSize="9"
-                                   Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-                        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" ColumnSpacing="3">
-                          <TextBlock Grid.Column="0" Text="X" FontSize="9" VerticalAlignment="Center" />
-                          <NumericUpDown Grid.Column="1" Value="{Binding X}" FontSize="9" ShowButtonSpinner="False" />
-                          <TextBlock Grid.Column="2" Text="Y" FontSize="9" VerticalAlignment="Center" />
-                          <NumericUpDown Grid.Column="3" Value="{Binding Y}" FontSize="9" ShowButtonSpinner="False" />
-                          <TextBlock Grid.Column="4" Text="Z" FontSize="9" VerticalAlignment="Center" />
-                          <NumericUpDown Grid.Column="5" Value="{Binding Z}" FontSize="9" ShowButtonSpinner="False" />
-                        </Grid>
-                        <TextBlock Text="{Binding Radius, StringFormat='Radius: {0:0}'}" FontSize="9" />
-                        <Slider Minimum="10" Maximum="5000" Value="{Binding Radius}" />
-                        <TextBlock Text="Colour (0-255)" FontSize="9" />
-                        <TextBlock Text="R" FontSize="9" /><Slider Minimum="0" Maximum="255" Value="{Binding R}" />
-                        <TextBlock Text="G" FontSize="9" /><Slider Minimum="0" Maximum="255" Value="{Binding G}" />
-                        <TextBlock Text="B" FontSize="9" /><Slider Minimum="0" Maximum="255" Value="{Binding B}" />
-                      </StackPanel>
-
-                      <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,4,0,0">
-                        <Button Classes="tool" Content="💾 Save Light.dat" Command="{Binding SaveLightDatCommand}" FontSize="10" Padding="7,2"
-                                ToolTip.Tip="Write the table back in Riot's Light.dat format (X Y Z R G B Radius per line)." />
+                        <Button Classes="tool" Content="💾 Save" Command="{Binding SaveLightDatCommand}" FontSize="10" Padding="7,2"
+                                ToolTip.Tip="Write the table back in Riot's Light.dat format." />
                         <Button Classes="tool" Content="Save as…" Command="{Binding SaveLightDatAsCommand}" FontSize="10" Padding="7,2" />
                       </StackPanel>
 

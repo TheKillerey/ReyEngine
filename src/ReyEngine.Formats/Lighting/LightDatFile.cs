@@ -3,8 +3,11 @@ using System.Numerics;
 
 namespace ReyEngine.Formats.Lighting;
 
-/// <summary>One legacy Riot point light (Light.dat): world-space position, linear RGB colour (0..1), radius.</summary>
-public readonly record struct PointLight(Vector3 Position, Vector3 Color, float Radius);
+/// <summary>One legacy Riot point light (Light.dat): world-space position, linear RGB colour (0..1), radius.
+/// M153: <paramref name="Intensity"/> is a PER-LIGHT strength multiplier on top of the colour. Light.dat has
+/// no such field (a line is only X Y Z R G B Radius), so it is an editor-side value — the writer folds it
+/// into the colour, which is exactly how the format expresses a brighter light.</summary>
+public readonly record struct PointLight(Vector3 Position, Vector3 Color, float Radius, float Intensity = 1f);
 
 /// <summary>
 /// Reads Riot's old <c>LEVELS/MapN/Light.dat</c> point-light table — how the pre-2013 client placed the
@@ -45,7 +48,8 @@ public static class LightDatFile
         foreach (var l in lights)
         {
             if (l.Radius <= 0f) continue;   // Parse drops these, so never write one
-            var c = Vector3.Clamp(l.Color, Vector3.Zero, Vector3.One) * 255f;
+            // M153: fold the per-light strength into the colour — the only way the format can carry it.
+            var c = Vector3.Clamp(l.Color * MathF.Max(l.Intensity, 0f), Vector3.Zero, Vector3.One) * 255f;
             sb.Append(F(l.Position.X)).Append(' ').Append(F(l.Position.Y)).Append(' ').Append(F(l.Position.Z)).Append(' ')
               .Append(F(MathF.Round(c.X))).Append(' ').Append(F(MathF.Round(c.Y))).Append(' ').Append(F(MathF.Round(c.Z))).Append(' ')
               .Append(F(l.Radius)).Append('\n');

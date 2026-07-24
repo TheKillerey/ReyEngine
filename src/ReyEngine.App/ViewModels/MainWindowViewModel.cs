@@ -1334,9 +1334,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // ---- M152: place and edit the point lights, then save the table back ----
 
-    /// <summary>The editable light set. DynamicLights (what the viewport renders) is republished from
-    /// this whenever it changes, so edits are live.</summary>
-    public ObservableCollection<PointLightViewModel> EditableLights { get; } = new();
+    /// <summary>The editable light set — M153: this IS MapContent.Lights, so the outliner's "Lights"
+    /// folder and the renderer stay one source of truth. DynamicLights (what the viewport draws) is
+    /// republished from it on every change, so edits are live.</summary>
+    public ObservableCollection<PointLightViewModel> EditableLights => MapContent.Lights;
     [ObservableProperty] private PointLightViewModel? _selectedLight;
     [ObservableProperty] private string? _lightDatPath;      // where Save writes back to
     public bool HasSelectedLight => SelectedLight is not null;
@@ -1360,7 +1361,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void LoadEditableLights(IEnumerable<PointLight> lights)
     {
         EditableLights.Clear();
-        foreach (var l in lights) EditableLights.Add(new PointLightViewModel(l, this));
+        int n = 1;
+        foreach (var l in lights)
+            EditableLights.Add(new PointLightViewModel(l, this) { Name = $"Light {n++}" });
         SelectedLight = null;
         RepublishLights();
     }
@@ -1370,7 +1373,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void AddLight()
     {
         var at = GizmoPivot ?? SelectedParticleMarker ?? System.Numerics.Vector3.Zero;
-        var vm = new PointLightViewModel(new PointLight(at, new System.Numerics.Vector3(1f, 0.85f, 0.6f), 600f), this);
+        var vm = new PointLightViewModel(new PointLight(at, new System.Numerics.Vector3(1f, 0.85f, 0.6f), 600f), this)
+        { Name = $"Light {EditableLights.Count + 1}" };
         EditableLights.Add(vm);
         SelectedLight = vm;
         ShowDynamicLights = true;
@@ -2965,6 +2969,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             case CubemapProbeViewModel pr:
                 SelectedProbe = pr;
                 break;
+            case PointLightViewModel lt:   // M153: lights are scene objects now
+                _selection.Clear();
+                if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
+                if (SelectedParticleNode is not null) SelectedParticleNode = null;
+                if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
+                if (SelectedSound is not null) SelectedSound = null;
+                SelectedLight = lt;
+                break;
             case MapSoundViewModel snd:   // M55
                 _selection.Clear();
                 if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
@@ -3072,6 +3084,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var p in MapContent.Probes) Test(p, p.Position);
         if (ShowPlaceables && MapContent.HasSounds && !additive)
             foreach (var s in MapContent.Sounds.Where(v => IsSoundVisible(v.Sound))) Test(s, s.Position);   // M55/M60
+        // M153: point lights pick like any other placement, so you can click one in the viewport.
+        if (ShowDynamicLights && !additive)
+            foreach (var l in MapContent.Lights) Test(l, l.Position);
 
         // nearest placeable beats a farther mesh face (icons draw on top, so this matches what you see)
         if (bestNode is not null && bestT < meshT)
@@ -3139,6 +3154,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedProbe is not null) SelectedProbe = null;
         if (SelectedSound is not null) SelectedSound = null;
         if (SelectedAddedMesh is not null) SelectedAddedMesh = null;   // M79
+        if (SelectedLight is not null) SelectedLight = null;           // M153
         SelectedParticleMarker = null;
         SelectedPlaceableInfo = "";
         if (_selection.IsEmpty) GizmoPivot = null;
@@ -7302,6 +7318,8 @@ public sealed partial class PointLightViewModel : ObservableObject
     [ObservableProperty] private double _x, _y, _z;
     [ObservableProperty] private double _r, _g, _b;      // 0..255, matching the file
     [ObservableProperty] private double _radius;
+    [ObservableProperty] private double _intensity = 1;  // M153: this light's OWN strength
+    [ObservableProperty] private string _name = "Light";
 
     public PointLightViewModel(PointLight light, MainWindowViewModel owner)
     {
@@ -7309,6 +7327,7 @@ public sealed partial class PointLightViewModel : ObservableObject
         _x = light.Position.X; _y = light.Position.Y; _z = light.Position.Z;
         _r = Math.Round(light.Color.X * 255); _g = Math.Round(light.Color.Y * 255); _b = Math.Round(light.Color.Z * 255);
         _radius = light.Radius;
+        _intensity = light.Intensity;
         _loading = false;
     }
 
@@ -7317,11 +7336,13 @@ public sealed partial class PointLightViewModel : ObservableObject
     public PointLight ToPointLight() => new(
         Position,
         new System.Numerics.Vector3((float)(R / 255.0), (float)(G / 255.0), (float)(B / 255.0)),
-        (float)Math.Max(Radius, 0.01));   // Parse drops radius <= 0, so never produce one
+        (float)Math.Max(Radius, 0.01),    // Parse drops radius <= 0, so never produce one
+        (float)Math.Max(Intensity, 0));
 
-    /// <summary>Label for the list — position and a colour hint, so lights are tellable apart.</summary>
-    public string Label => $"({X:0}, {Y:0}, {Z:0})  r{Radius:0}";
-    public string ColorHex => $"#{(int)R:X2}{(int)G:X2}{(int)B:X2}";
+    /// <summary>Outliner label — position + radius, so lights are tellable apart at a glance.</summary>
+    public string Label => $"{Name}  ({X:0}, {Y:0}, {Z:0})  r{Radius:0}";
+    public string ColorHex => $"#{(int)Math.Clamp(R, 0, 255):X2}{(int)Math.Clamp(G, 0, 255):X2}{(int)Math.Clamp(B, 0, 255):X2}";
+    public string Info => $"radius {Radius:0} · strength {Intensity:0.##}";
 
     /// <summary>Move from a viewport gizmo drag.</summary>
     public void MoveTo(System.Numerics.Vector3 p)
@@ -7339,12 +7360,15 @@ public sealed partial class PointLightViewModel : ObservableObject
     partial void OnGChanged(double v) => Changed();
     partial void OnBChanged(double v) => Changed();
     partial void OnRadiusChanged(double v) => Changed();
+    partial void OnIntensityChanged(double v) => Changed();
+    partial void OnNameChanged(string v) => Changed();
 
     private void Changed()
     {
         if (_loading) return;
         OnPropertyChanged(nameof(Label));
         OnPropertyChanged(nameof(ColorHex));
+        OnPropertyChanged(nameof(Info));
         OnPropertyChanged(nameof(Position));
         _owner.RepublishLights();
     }

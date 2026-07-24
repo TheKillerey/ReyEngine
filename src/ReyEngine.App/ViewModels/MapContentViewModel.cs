@@ -197,12 +197,18 @@ public sealed partial class MapContentViewModel : ViewModelBase
         OutlinerRoots.Add(new("🎭", "Mobs / Props", PropGroups));
         OutlinerRoots.Add(new("🪞", "Reflection Probes", Probes));
         OutlinerRoots.Add(new("🔊", "Sounds", Sounds));           // M55: MapAudio placements
+        OutlinerRoots.Add(new("💡", "Lights", Lights));           // M153: Light.dat point lights
         OutlinerRoots.Add(new("➕", "Added Meshes", AddedMeshes)); // M79: meshes queued for append
         OutlinerRoots.Add(new("⌗", "Bucket Grid", BucketGrids)); // M55: scene culling grid(s)
     }
 
     /// <summary>M79: meshes the user imported and queued to append to the map on save.</summary>
     public ObservableCollection<AddedMapMeshViewModel> AddedMeshes { get; } = new();
+
+    /// <summary>M153: the map's dynamic point lights, as first-class scene objects — selectable in the
+    /// outliner, editable in the Inspector, movable with the viewport gizmo. Owned by MainWindowViewModel
+    /// (which republishes the render list); this collection is the outliner's view of it.</summary>
+    public ObservableCollection<PointLightViewModel> Lights { get; } = new();
 
     // ---- M55: sound placements (MapAudio) + bucket grids ----
     public ObservableCollection<MapSoundViewModel> Sounds { get; } = new();
