@@ -128,13 +128,28 @@ public static class MapPreviewLoader
         {
             if (string.IsNullOrEmpty(name)) return null;
             if (cache.TryGetValue(name, out var img)) return img;
-            img = null;
-            if (texIndex.TryGetValue(name, out var full) || texIndex.TryGetValue(Path.GetFileName(name), out full))
+            img = Load(name);
+            // M144: old levels ship the same texture twice (foo.tga next to foo.dds) and the .nvr may
+            // name either — Map4 has room.nvr referencing .tga and room_dds.nvr referencing .dds. If the
+            // named one is absent or won't decode, fall back to its siblings so the surface still paints.
+            if (img is null)
             {
-                try { img = TextureDecoder.Decode(File.ReadAllBytes(full)); } catch { img = null; }
+                string bare = Path.GetFileNameWithoutExtension(name);
+                foreach (var ext in new[] { ".dds", ".tga", ".tex", ".png" })
+                {
+                    if (name.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) continue;
+                    if ((img = Load(bare + ext)) is not null) break;
+                }
             }
             cache[name] = img;
             return img;
+
+            TextureImage? Load(string candidate)
+            {
+                if (!texIndex.TryGetValue(candidate, out var full)
+                    && !texIndex.TryGetValue(Path.GetFileName(candidate), out full)) return null;
+                try { return TextureDecoder.Decode(File.ReadAllBytes(full)); } catch { return null; }
+            }
         }
         TextureImage?[] ResolveAll(IReadOnlyList<string?> names)
         {

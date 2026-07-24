@@ -19,11 +19,16 @@ public sealed class TextureImage
     }
 }
 
-/// <summary>Decodes League .tex and .dds textures (via LeagueToolkit) to RGBA8.</summary>
+/// <summary>Decodes League .tex and .dds textures (via LeagueToolkit) to RGBA8, plus .tga (M144 —
+/// old NVR levels reference Targa files, which LeagueToolkit cannot read).</summary>
 public static class TextureDecoder
 {
     public static TextureImage Decode(byte[] data)
     {
+        // M144: checked first — TGA has no leading magic, so LeagueToolkit would misparse it rather
+        // than fail cleanly. LooksLikeTga validates the header, so .tex/.dds are never taken by mistake.
+        if (TgaDecoder.LooksLikeTga(data) && TgaDecoder.TryDecode(data) is { } tga) return tga;
+
         using var ms = new MemoryStream(data, writable: false);
         Texture texture = Texture.Load(ms);
 
