@@ -122,7 +122,10 @@ public static class MapGeoDecoder
                     BoundsMin = vc > 0 ? meshMin : transform.Translation,
                     BoundsMax = vc > 0 ? meshMax : transform.Translation,
                     Attributes = attrs.ToArray(),
-                    HasLightmapUv = view.TryGetAccessor(ElementName.Texcoord1, out _),
+                    // M158: the lightmap UV channel is Texcoord7 (see the BakedLight read above), not
+                    // Texcoord1 — this flag read the wrong channel and so was false for every
+                    // lightmapped mesh in the game (all 330/1303/515 of Map12's, measured).
+                    HasLightmapUv = view.TryGetAccessor(ElementName.Texcoord7, out _),
                     HasVertexColor = meshCol is not null,
                     RenderFlags = mesh.RenderFlags.ToString(),
                     DisableBackfaceCulling = mesh.DisableBackfaceCulling,
