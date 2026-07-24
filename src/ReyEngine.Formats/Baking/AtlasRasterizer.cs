@@ -179,6 +179,10 @@ public static class AtlasRasterizer
         }
         lit += dynamic * lighting.LightIntensity;
 
+        // Bake exposure: a uniform brightness lever so the baked result can be dialled to match the
+        // Dynamic preview, which is a shadowless/AO-less flat wash and so reads brighter by nature.
+        lit *= settings.Exposure;
+
         // The renderer multiplies the sampled atlas by lightMapColorScale, so divide it out here —
         // otherwise the preview comes back scale-squared too bright (4x on live Map12, where it is 2).
         return lit / MathF.Max(lighting.LightMapColorScale, 1e-3f);

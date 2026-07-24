@@ -53,6 +53,11 @@ public sealed class BakeSettings
     /// <summary>Nudge along the normal before tracing, so a texel can't shadow its own surface.</summary>
     public float RayBias { get; set; } = 0.5f;
 
+    /// <summary>Uniform brightness multiplier on the baked result. The Dynamic viewport preview is a
+    /// shadowless, AO-less flat wash and so reads brighter than a real bake; raise this to bring the
+    /// baked look back up to it. 1 = physically-matched (baked is darker by exactly its occlusion).</summary>
+    public float Exposure { get; set; } = 1f;
+
     // ---- lightgrid ----
 
     /// <summary>Write the lightgrid alongside the atlases (probe lighting for meshes that can't take a

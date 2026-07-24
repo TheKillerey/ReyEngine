@@ -188,7 +188,7 @@ public static class LightBaker
             if (lighting.PointLightShadows && scene.Occluded(p, ld, dist)) continue;
             lit += l.Color * (Math.Clamp(l.Intensity, 0f, 64f) * atten * (0.35f + 0.65f * nl)) * lighting.LightIntensity;
         }
-        return lit;
+        return lit * settings.Exposure;   // same brightness lever the atlas bake uses
     }
 
     private static Vector3 Bounds(MapGeoAsset asset, out Vector3 max)

@@ -131,6 +131,14 @@
               <NumericUpDown Grid.Column="1" Value="{Binding RayBias}" Increment="0.1" Minimum="0" Maximum="20"
                              FormatString="0.##" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
             </Grid>
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Grid.Column="0" Text="Exposure" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         ToolTip.Tip="Brightness multiplier on the baked result. The Dynamic preview is a shadowless, AO-less flat wash and reads brighter than a real bake — raise this (e.g. 1.3–1.8) to bring Baked back up to match it. 1.0 = physically matched." />
+              <NumericUpDown Grid.Column="1" Value="{Binding Exposure}" Increment="0.1" Minimum="0.1" Maximum="8"
+                             FormatString="0.##" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
+            </Grid>
           </StackPanel>
         </Border>
 
