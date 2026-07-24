@@ -16,6 +16,10 @@
 
   <Application.Styles>
     <FluentTheme />
+    <!-- M155: ColorPicker/ColorView ship their control themes in their own assembly. FluentTheme above
+         only themes the base Avalonia.Controls, so without this include the picker resolves at compile
+         time but renders as a zero-size blank. Must come before ReyTheme so our styles can override it. -->
+    <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml" />
     <StyleInclude Source="avares://ReyEngine.App/Themes/ReyTheme.axaml" />
   </Application.Styles>
 

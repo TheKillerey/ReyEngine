@@ -4231,10 +4231,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         };
         OnPropertyChanged(nameof(SunSwatch));
         OnPropertyChanged(nameof(SkySwatch));
+        OnPropertyChanged(nameof(SunColorPick));   // M155
+        OnPropertyChanged(nameof(SkyColorPick));
     }
 
     public Avalonia.Media.IBrush SunSwatch => Swatch(SunColorR * SunIntensity, SunColorG * SunIntensity, SunColorB * SunIntensity);
     public Avalonia.Media.IBrush SkySwatch => Swatch(SkyColorR * SkyIntensity, SkyColorG * SkyIntensity, SkyColorB * SkyIntensity);
+
+    /// <summary>M155: sun/sky colour as a real Color so the lighting panel can use the picker instead of
+    /// three sliders. These are the UNSCALED hues — the Intensity sliders stay separate, which is what
+    /// makes a colour picker usable here (picking a hue shouldn't also change the brightness).</summary>
+    public Avalonia.Media.Color SunColorPick
+    {
+        get => Col(SunColorR, SunColorG, SunColorB);
+        set { _suppressSunRebuild = true; SunColorR = value.R / 255.0; SunColorG = value.G / 255.0; _suppressSunRebuild = false; SunColorB = value.B / 255.0; }
+    }
+
+    public Avalonia.Media.Color SkyColorPick
+    {
+        get => Col(SkyColorR, SkyColorG, SkyColorB);
+        set { _suppressSunRebuild = true; SkyColorR = value.R / 255.0; SkyColorG = value.G / 255.0; _suppressSunRebuild = false; SkyColorB = value.B / 255.0; }
+    }
+
+    private static Avalonia.Media.Color Col(double r, double g, double b) => Avalonia.Media.Color.FromRgb(
+        (byte)Math.Clamp(Math.Round(r * 255), 0, 255),
+        (byte)Math.Clamp(Math.Round(g * 255), 0, 255),
+        (byte)Math.Clamp(Math.Round(b * 255), 0, 255));
     private static Avalonia.Media.IBrush Swatch(double r, double g, double b) =>
         new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(B(r), B(g), B(b)));
     private static byte B(double v) => (byte)System.Math.Clamp(v * 255.0, 0, 255);

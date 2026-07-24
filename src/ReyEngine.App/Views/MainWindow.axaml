@@ -427,9 +427,9 @@
                         <Border Grid.Column="1" Width="22" Height="12" CornerRadius="2" Background="{Binding SunSwatch}" BorderBrush="#555" BorderThickness="1" />
                       </Grid>
                       <Slider Minimum="0" Maximum="3" Value="{Binding SunIntensity}" />
-                      <TextBlock Text="R" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SunColorR}" />
-                      <TextBlock Text="G" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SunColorG}" />
-                      <TextBlock Text="B" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SunColorB}" />
+                      <ColorPicker Color="{Binding SunColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                                   IsAlphaVisible="False" IsAlphaEnabled="False"
+                                   ToolTip.Tip="Sun hue. Brightness stays on the Intensity slider above." />
 
                       <TextBlock Text="SKY / AMBIENT" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,6,0,0" />
                       <Grid ColumnDefinitions="*,Auto">
@@ -437,9 +437,9 @@
                         <Border Grid.Column="1" Width="22" Height="12" CornerRadius="2" Background="{Binding SkySwatch}" BorderBrush="#555" BorderThickness="1" />
                       </Grid>
                       <Slider Minimum="0" Maximum="3" Value="{Binding SkyIntensity}" />
-                      <TextBlock Text="R" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SkyColorR}" />
-                      <TextBlock Text="G" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SkyColorG}" />
-                      <TextBlock Text="B" FontSize="9" /><Slider Minimum="0" Maximum="1" Value="{Binding SkyColorB}" />
+                      <ColorPicker Color="{Binding SkyColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                                   IsAlphaVisible="False" IsAlphaEnabled="False"
+                                   ToolTip.Tip="Sky/ambient hue. Brightness stays on the Intensity slider above." />
 
                       <TextBlock Text="DYNAMIC LIGHTS (Light.dat)" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,6,0,0" />
                       <TextBlock Text="{Binding DynamicLightIntensity, StringFormat='Strength: {0:0.00}'}" FontSize="10" />

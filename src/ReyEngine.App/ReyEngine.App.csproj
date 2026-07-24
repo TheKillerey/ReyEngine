@@ -14,6 +14,9 @@
     <PackageReference Include="Avalonia" Version="11.3.18" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.18" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.18" />
+    <!-- M155: ColorPicker lives in its own assembly with its own control themes; FluentTheme does NOT
+         merge them, so without this (and the StyleInclude in App.axaml) the control renders as nothing. -->
+    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.18" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.18" />
     <PackageReference Include="Avalonia.Diagnostics" Version="11.3.18">
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
