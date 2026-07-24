@@ -382,4 +382,58 @@
     <Setter Property="MinHeight" Value="24" />
   </Style>
 
+  <!-- ── M156: colour picker ────────────────────────────────────────────────────
+       ColorPicker/ColorView come from their own assembly with their own Fluent
+       control themes, which paint the popup in Fluent's near-white/near-black
+       defaults and clash badly with the editor chrome. Their themes read four
+       resource keys for the popup chrome, so overriding those re-skins the whole
+       flyout without touching a single template; the styles below then tighten
+       the density (tabs, hex box, spectrum) to match the rest of the editor. -->
+
+  <Styles.Resources>
+    <SolidColorBrush x:Key="ColorViewContentBackgroundBrush" Color="{DynamicResource ReyPanel}" />
+    <SolidColorBrush x:Key="ColorViewContentBorderBrush" Color="{DynamicResource ReyBorder}" />
+    <SolidColorBrush x:Key="ColorViewTabBackgroundBrush" Color="{DynamicResource ReyHeader}" />
+    <SolidColorBrush x:Key="ColorViewTabBorderBrush" Color="{DynamicResource ReyBorder}" />
+  </Styles.Resources>
+
+  <!-- the inline trigger: a swatch button sized like our other compact inputs -->
+  <Style Selector="ColorPicker">
+    <Setter Property="MinHeight" Value="26" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Background" Value="{DynamicResource ReyPanelAltBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderSoftBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="ColorView">
+    <Setter Property="Background" Value="{DynamicResource ReyPanelBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+
+  <!-- tabs inside the picker are chunkier than ours by default -->
+  <Style Selector="ColorView TabItem">
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="MinHeight" Value="26" />
+    <Setter Property="Padding" Value="8,3" />
+  </Style>
+
+  <!-- hex / channel entry -->
+  <Style Selector="ColorView TextBox">
+    <Setter Property="MinHeight" Value="24" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="CornerRadius" Value="3" />
+  </Style>
+
+  <Style Selector="ColorView NumericUpDown">
+    <Setter Property="MinHeight" Value="24" />
+    <Setter Property="FontSize" Value="11" />
+  </Style>
+
+  <!-- the channel sliders read cleaner with our corner radius than Fluent's pill -->
+  <Style Selector="ColorSlider">
+    <Setter Property="MinHeight" Value="18" />
+  </Style>
+
 </Styles>
