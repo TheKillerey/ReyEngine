@@ -71,6 +71,23 @@ public sealed class BinDocument
                     node.Children.Add(BuildProperty("value", opt.Value, resolve));
                 return node;
             }
+            // M151: Map (StaticMaterialDef.shaderMacros and friends) — without this it rendered as an
+            // empty leaf, hiding its entries entirely.
+            case BinTreeMap map:
+            {
+                var node = new BinNode { Name = name, Value = $"Map[{map.Count}]", IsBranch = true };
+                foreach (var e in map)
+                {
+                    string key = e.Key switch
+                    {
+                        BinTreeString ks => ks.Value,
+                        BinTreeHash kh => resolve(kh.Value) ?? $"0x{kh.Value:x8}",
+                        _ => e.Key?.ToString() ?? "?",
+                    };
+                    node.Children.Add(BuildProperty(key, e.Value, resolve));
+                }
+                return node;
+            }
             default:
                 return new BinNode { Name = name, Value = FormatValue(prop, resolve) };
         }
@@ -95,6 +112,9 @@ public sealed class BinDocument
         BinTreeVector2 v => $"({v.Value.X:0.##}, {v.Value.Y:0.##})",
         BinTreeVector3 v => $"({v.Value.X:0.##}, {v.Value.Y:0.##}, {v.Value.Z:0.##})",
         BinTreeVector4 v => $"({v.Value.X:0.##}, {v.Value.Y:0.##}, {v.Value.Z:0.##}, {v.Value.W:0.##})",
+        // M151: were showing as the bare type name, hiding the actual value.
+        BinTreeColor c => $"({c.Value.R:0.##}, {c.Value.G:0.##}, {c.Value.B:0.##}, {c.Value.A:0.##})",
+        BinTreeMatrix44 m => $"[{m.Value.M11:0.##} {m.Value.M12:0.##} {m.Value.M13:0.##} {m.Value.M14:0.##} | …]",
         _ => p.Type.ToString(),
     };
 

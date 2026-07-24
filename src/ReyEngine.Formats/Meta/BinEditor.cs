@@ -80,6 +80,29 @@ public sealed class BinEditorDocument
                 if (o.Value is not null) node.Children.Add(Build("value", 0, o.Value, resolve, path));
                 return node;
             }
+            // M151: Map (e.g. StaticMaterialDef.shaderMacros) was falling through to the leaf case, so it
+            // rendered as an empty un-expandable row — the macros were invisible and uneditable even though
+            // the data was there. Each entry becomes a child named by its key, with the VALUE editable.
+            case BinTreeMap m:
+            {
+                var node = new EditableBinField
+                {
+                    Name = name, NameHash = nameHash,
+                    TypeName = $"Map[{m.Count}]",
+                    IsBranch = true, Kind = BinValueKind.ReadOnly, PathLabel = path,
+                };
+                foreach (var e in m)
+                {
+                    string key = e.Key switch
+                    {
+                        BinTreeString ks => ks.Value,
+                        BinTreeHash kh => resolve(kh.Value) ?? $"0x{kh.Value:x8}",
+                        _ => e.Key?.ToString() ?? "?",
+                    };
+                    node.Children.Add(Build(key, 0, e.Value, resolve, path));
+                }
+                return node;
+            }
             default:
                 return new EditableBinField
                 {
@@ -131,6 +154,8 @@ public static class BinValueEditor
 
     public static BinValueKind KindOf(BinTreeProperty p) => p switch
     {
+        // M151: Color is 4 editable floats (rgba); without this it was ReadOnly and showed as "Color".
+        BinTreeColor => BinValueKind.Vector4,
         BinTreeBool or BinTreeBitBool => BinValueKind.Bool,
         BinTreeI8 or BinTreeI16 or BinTreeI32 or BinTreeI64 => BinValueKind.Int,
         BinTreeU8 or BinTreeU16 or BinTreeU32 or BinTreeU64 => BinValueKind.UInt,
@@ -162,8 +187,18 @@ public static class BinValueEditor
         BinTreeVector3 v => $"{v.Value.X.ToString("R", Inv)}, {v.Value.Y.ToString("R", Inv)}, {v.Value.Z.ToString("R", Inv)}",
         BinTreeVector4 v => $"{v.Value.X.ToString("R", Inv)}, {v.Value.Y.ToString("R", Inv)}, {v.Value.Z.ToString("R", Inv)}, {v.Value.W.ToString("R", Inv)}",
         BinTreeObjectLink l => $"0x{l.Value:x8}",
+        // M151: these were falling through to the bare type name, so their values were invisible.
+        BinTreeColor c => $"{c.Value.R.ToString("R", Inv)}, {c.Value.G.ToString("R", Inv)}, {c.Value.B.ToString("R", Inv)}, {c.Value.A.ToString("R", Inv)}",
+        BinTreeMatrix44 m => FormatMatrix(m.Value),
         _ => p.Type.ToString(),
     };
+
+    /// <summary>M151: a 4x4 matrix as four comma-separated rows — readable, and not editable as text.</summary>
+    private static string FormatMatrix(Matrix4x4 m) =>
+        $"[{m.M11:0.###}, {m.M12:0.###}, {m.M13:0.###}, {m.M14:0.###}] " +
+        $"[{m.M21:0.###}, {m.M22:0.###}, {m.M23:0.###}, {m.M24:0.###}] " +
+        $"[{m.M31:0.###}, {m.M32:0.###}, {m.M33:0.###}, {m.M34:0.###}] " +
+        $"[{m.M41:0.###}, {m.M42:0.###}, {m.M43:0.###}, {m.M44:0.###}]";
 
     public static void Apply(BinTreeProperty p, string text)
     {
@@ -183,6 +218,7 @@ public static class BinValueEditor
             case BinTreeF32 v: v.Value = float.Parse(t, NumberStyles.Float, Inv); break;
             case BinTreeString v: v.Value = text; break;
             case BinTreeHash v: v.Value = ParseHexOrUInt(t); break;
+            case BinTreeColor v: { var f = ParseFloats(t, 4); v.Value = new LeagueToolkit.Core.Primitives.Color(f[0], f[1], f[2], f[3]); break; }   // M151
             case BinTreeVector2 v: { var f = ParseFloats(t, 2); v.Value = new Vector2(f[0], f[1]); break; }
             case BinTreeVector3 v: { var f = ParseFloats(t, 3); v.Value = new Vector3(f[0], f[1], f[2]); break; }
             case BinTreeVector4 v: { var f = ParseFloats(t, 4); v.Value = new Vector4(f[0], f[1], f[2], f[3]); break; }
