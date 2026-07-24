@@ -270,7 +270,14 @@ public static class LightBaker
         for (int i = 0; i < surface.Linear.Length; i++)
         {
             var c = surface.Linear[i];
-            byte r = ToByte(c.X), g = ToByte(c.Y), b = ToByte(c.Z);
+            // Ordered (Bayer) dither before the 8-bit round. A light's smooth outer tail spans values far
+            // below one quantisation step (at d/r=0.95 the term is ~0.0025, which is 0.3/255 and would
+            // round flat to 0) — so plain rounding SNAPS the whole tail to zero and the pool ends on a
+            // hard, texel-aligned border. That is the "sharp edge in the bake but not in Dynamic": the
+            // dynamic path keeps the tail in float. Dithering trades that contour for sub-LSB noise, which
+            // is how any renderer stores a smooth gradient in 8 bits.
+            float d = settings.DitherStrength * (Bayer8(i % surface.Width, i / surface.Width) - 0.5f);
+            byte r = ToByte(c.X, d), g = ToByte(c.Y, d), b = ToByte(c.Z, d);
             int o = i * 4;
             rgba[o] = r; rgba[o + 1] = g; rgba[o + 2] = b;
             rgba[o + 3] = settings.AlphaFromLuminance
@@ -280,5 +287,19 @@ public static class LightBaker
         return new TextureImage(surface.Width, surface.Height, rgba);
     }
 
-    private static byte ToByte(float v) => (byte)Math.Clamp(MathF.Round(v * 255f), 0f, 255f);
+    /// <summary>8x8 Bayer threshold in [0,1) — a fixed pattern, so a re-bake stays deterministic.</summary>
+    private static float Bayer8(int x, int y)
+    {
+        int v = 0, mask = 4, xc = x ^ y, yc = y;
+        for (int bit = 0; bit < 6; mask >>= 1)
+        {
+            v |= ((yc & mask) != 0 ? 1 : 0) << bit++;
+            v |= ((xc & mask) != 0 ? 1 : 0) << bit++;
+        }
+        return v / 64f;
+    }
+
+    /// <summary>Quantise to 8 bits with a sub-LSB dither offset (in units of one step).</summary>
+    private static byte ToByte(float v, float dither) =>
+        (byte)Math.Clamp(MathF.Round(v * 255f + dither), 0f, 255f);
 }

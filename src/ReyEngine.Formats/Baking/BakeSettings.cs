@@ -58,6 +58,11 @@ public sealed class BakeSettings
     /// baked look back up to it. 1 = physically-matched (baked is darker by exactly its occlusion).</summary>
     public float Exposure { get; set; } = 1f;
 
+    /// <summary>Dither amplitude, in units of one 8-bit step, applied before quantising the atlas. A
+    /// light's outer tail falls below one step long before it reaches the radius, so plain rounding snaps
+    /// it flat and leaves a hard edge; dithering converts that contour into sub-step noise. 0 disables.</summary>
+    public float DitherStrength { get; set; } = 1f;
+
     // ---- lightgrid ----
 
     /// <summary>Write the lightgrid alongside the atlases (probe lighting for meshes that can't take a
