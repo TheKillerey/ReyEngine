@@ -382,20 +382,43 @@
     <Setter Property="MinHeight" Value="24" />
   </Style>
 
-  <!-- ── M156: colour picker ────────────────────────────────────────────────────
-       ColorPicker/ColorView come from their own assembly with their own Fluent
-       control themes, which paint the popup in Fluent's near-white/near-black
-       defaults and clash badly with the editor chrome. Their themes read four
-       resource keys for the popup chrome, so overriding those re-skins the whole
-       flyout without touching a single template; the styles below then tighten
-       the density (tabs, hex box, spectrum) to match the rest of the editor. -->
+  <!-- ── M156/M157: colour picker ───────────────────────────────────────
+       ColorPicker/ColorView ship their own Fluent control themes inside
+       Avalonia.Controls.ColorPicker.dll and paint the flyout in Fluent's defaults.
+
+       Two things to know before editing this block (both verified against a live
+       flyout, not assumed):
+       1. A bare type selector in Avalonia is an EXACT-type match. The app only ever
+          instantiates <ColorPicker>, and ColorPicker : ColorView, so a "ColorView ..."
+          selector matches NOTHING. ":is(ColorView) ..." hits both and cannot reach any
+          other control in the app.
+       2. "/template/" does NOT reach the flyout's tabs — Popup assigns their
+          TemplatedParent after styling is evaluated, so the selector caches a permanent
+          no-match. The plain descendant combinator works (template children are logical
+          children). Piercing the TabItem's OWN template is fine and is required for the
+          hover/pressed states, which the ControlTheme paints onto PART_LayoutRoot.
+       Style setters outrank ControlTheme setters, so these win without retemplating. -->
 
   <Styles.Resources>
     <SolidColorBrush x:Key="ColorViewContentBackgroundBrush" Color="{DynamicResource ReyPanel}" />
     <SolidColorBrush x:Key="ColorViewContentBorderBrush" Color="{DynamicResource ReyBorder}" />
-    <SolidColorBrush x:Key="ColorViewTabBackgroundBrush" Color="{DynamicResource ReyHeader}" />
+    <!-- Inert today: the template never gives TabBackgroundBorder a BorderThickness.
+         Kept so the strip picks up the palette if upstream ever sets one. -->
     <SolidColorBrush x:Key="ColorViewTabBorderBrush" Color="{DynamicResource ReyBorder}" />
+    <!-- The 48px tab strip. ColorViewTabBackgroundBrush is a DEAD key — commented out in
+         the ColorPicker's own Fluent.xaml AND at every usage — so overriding it did
+         nothing. The strip's Background is hard-wired to SystemControlBackgroundBaseLowBrush
+         (Fluent dark #33FFFFFF: the washed-out white bar) as a LOCAL value in the template,
+         which no Style can reach. The resource key is the only lever. -->
+    <SolidColorBrush x:Key="SystemControlBackgroundBaseLowBrush" Color="{DynamicResource ReyHeader}" />
   </Styles.Resources>
+
+  <!-- SystemControlBackgroundBaseLowBrush is shared with exactly one other control we use:
+       ProgressBar's track. Restate it so the status bar keeps a visible track instead of
+       inheriting the strip colour. -->
+  <Style Selector="ProgressBar">
+    <Setter Property="Background" Value="{DynamicResource ReyBorderBrush}" />
+  </Style>
 
   <!-- the inline trigger: a swatch button sized like our other compact inputs -->
   <Style Selector="ColorPicker">
@@ -406,29 +429,59 @@
     <Setter Property="BorderThickness" Value="1" />
   </Style>
 
-  <Style Selector="ColorView">
-    <Setter Property="Background" Value="{DynamicResource ReyPanelBrush}" />
-    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" />
+  <!-- ── picker tabs ─────────────────────────────────────────────────────
+       The generic "TabItem" style above (MinHeight 30 / Padding 10,4) also lands on these
+       and outranks their ControlTheme — that mismatch WAS the bug. The strip is hard-coded
+       to 48px in three places (TabBackgroundBorder Height, ContentBackgroundBorder Margin,
+       and the header Borders bound to ColorViewTabStripHeight), so the tabs must be
+       restored to 48 here, NOT shrunk to editor density. -->
+  <Style Selector=":is(ColorView) TabItem">
     <Setter Property="FontSize" Value="12" />
+    <Setter Property="MinHeight" Value="48" />
+    <Setter Property="Padding" Value="6,0" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextDimBrush}" />
   </Style>
 
-  <!-- tabs inside the picker are chunkier than ours by default -->
-  <Style Selector="ColorView TabItem">
-    <Setter Property="FontSize" Value="11" />
-    <Setter Property="MinHeight" Value="26" />
-    <Setter Property="Padding" Value="8,3" />
+  <!-- the outer two tabs follow the flyout's rounded top so an opaque selected tab never
+       squares off the popup corner. (nth-child counts hidden tabs — fine here, the app
+       leaves all three tabs visible.) -->
+  <Style Selector=":is(ColorView) TabItem:nth-child(1)">
+    <Setter Property="CornerRadius" Value="5,0,0,0" />
+  </Style>
+  <Style Selector=":is(ColorView) TabItem:nth-last-child(1)">
+    <Setter Property="CornerRadius" Value="0,5,0,0" />
   </Style>
 
-  <!-- hex / channel entry -->
-  <Style Selector="ColorView TextBox">
-    <Setter Property="MinHeight" Value="24" />
-    <Setter Property="FontSize" Value="11" />
-    <Setter Property="CornerRadius" Value="3" />
+  <!-- selected: merges into the content panel below, accent icon. The underline
+       (PART_SelectedPipe) is already crimson via the palettes' own
+       TabItemHeaderSelectedPipeFill — don't touch that key, the inspector tabs share it. -->
+  <Style Selector=":is(ColorView) TabItem:selected">
+    <Setter Property="Background" Value="{DynamicResource ReyPanelBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyAccentBrush}" />
   </Style>
 
-  <Style Selector="ColorView NumericUpDown">
-    <Setter Property="MinHeight" Value="24" />
-    <Setter Property="FontSize" Value="11" />
+  <!-- hover / pressed: the ControlTheme paints these straight onto Border#PART_LayoutRoot,
+       so a TabItem.Background setter would lose to it — pierce to the same element.
+       TextElement.Foreground is what tints the PathIcon. -->
+  <Style Selector=":is(ColorView) TabItem:pointerover /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{DynamicResource ReyHoverBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyTextBrightBrush}" />
+  </Style>
+  <Style Selector=":is(ColorView) TabItem:selected:pointerover /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{DynamicResource ReyPanelAltBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyAccentHoverBrush}" />
+  </Style>
+  <Style Selector=":is(ColorView) TabItem:pressed /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{DynamicResource ReySelectionBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyAccentBrush}" />
+  </Style>
+  <Style Selector=":is(ColorView) TabItem:selected:pressed /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{DynamicResource ReySelectionBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyAccentBrush}" />
   </Style>
 
   <!-- the channel sliders read cleaner with our corner radius than Fluent's pill -->
