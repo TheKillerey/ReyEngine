@@ -85,34 +85,44 @@
       <MenuItem Header="_View">
         <MenuItem Header="Reload WAD" Command="{Binding ReloadWadCommand}" />
       </MenuItem>
+      <!-- M143: grouped by purpose — open-an-editor and per-asset actions up top (used constantly),
+           the occasional utilities tucked into submenus. Build Package lives in Project + the toolbar. -->
       <MenuItem Header="_Tools">
-        <MenuItem Header="Sync Hashes (CommunityDragon)" Command="{Binding SyncHashesCommand}" />
-        <MenuItem Header="Reload Local Hashes" Command="{Binding ReloadLocalHashesCommand}" />
-        <Separator />
-        <MenuItem Header="Hash Lookup" Command="{Binding HashLookupCommand}" />
-        <MenuItem Header="Assign Skeleton…" Command="{Binding AssignSkeletonCommand}" />
-        <MenuItem Header="Assign Animation…" Command="{Binding AssignAnimationCommand}" />
-        <MenuItem Header="Scan Riot Shaders" Command="{Binding ScanRiotShadersCommand}" />
-        <MenuItem Header="Export Shader Dump…" Command="{Binding ExportShaderDumpCommand}" />
-        <MenuItem Header="Validate Project Bins" Command="{Binding ValidateProjectBinsCommand}"
-                  ToolTip.Tip="Emulate mod injection (project overrides over Riot originals) and check every project .bin for broken object links and missing assets — what would break in-game" />
-        <MenuItem Header="Patch Update Wizard…" Command="{Binding OpenPatchUpdateWizardCommand}"
-                  ToolTip.Tip="Update this mod to the current patch: old originals from CommunityDragon + three-way merge carries only the mod's edits onto the new base — with backups, a per-bin report and validation" />
-        <MenuItem Header="Overlay Footprint" Command="{Binding OverlayFootprintCommand}"
-                  ToolTip.Tip="How many game WADs will mod loaders have to patch for this mod? Shows the fan-out per WAD and which project folders cause it — very wide overlays (200+ WADs) have crashed the game" />
-        <MenuItem Header="Rebuild Wwise Name Index" Command="{Binding RebuildWwiseNamesCommand}"
-                  ToolTip.Tip="Recover Wwise event names by hashing name strings found in the game's .bin files — makes the Audio Editor show real event names instead of hex ids" />
+        <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"
+                  ToolTip.Tip="Open the active document's .bin in the Particle Editor (works for skin bins and map materials.bin that contain VFX systems)" />
         <MenuItem Header="Open in HUD Editor" Command="{Binding OpenInHudEditorCommand}"
                   ToolTip.Tip="Open a HUD layout bin (ClientStates/…/UIBase) in the visual HUD editor — see every element rendered at its position with its texture" />
         <MenuItem Header="Open in Audio Editor" Command="{Binding OpenInAudioEditorCommand}"
                   ToolTip.Tip="Edit the selected .bnk/.wpk directly: play, replace, add, rename, delete and copy/paste its embedded sounds" />
-        <MenuItem Header="Asset Usage Report" Command="{Binding AssetUsageCommand}"
-                  ToolTip.Tip="Which project files can nothing ever load (dead — deletable in one click) and which recolor OTHER content (champions/items — the wad fan-out drivers)" />
-        <MenuItem Header="Map Material Diagnostics" Command="{Binding MapMaterialDiagnosticsCommand}"
-                  ToolTip.Tip="Scan the loaded map's bins + mapgeo and write an honest diagnostics report (classes, unknown fields, lighting/lightmap/visibility) to .reyengine/reports/" />
-        <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"
-                  ToolTip.Tip="Open the active document's .bin in the Particle Editor (works for skin bins and map materials.bin that contain VFX systems)" />
-        <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />
+        <Separator />
+        <MenuItem Header="Assign Skeleton…" Command="{Binding AssignSkeletonCommand}" />
+        <MenuItem Header="Assign Animation…" Command="{Binding AssignAnimationCommand}" />
+        <Separator />
+        <MenuItem Header="Mod Health">
+          <MenuItem Header="Validate Project Bins" Command="{Binding ValidateProjectBinsCommand}"
+                    ToolTip.Tip="Emulate mod injection (project overrides over Riot originals) and check every project .bin for broken object links and missing assets — what would break in-game" />
+          <MenuItem Header="Overlay Footprint" Command="{Binding OverlayFootprintCommand}"
+                    ToolTip.Tip="How many game WADs will mod loaders have to patch for this mod? Shows the fan-out per WAD and which project folders cause it — very wide overlays (200+ WADs) have crashed the game" />
+          <MenuItem Header="Asset Usage Report" Command="{Binding AssetUsageCommand}"
+                    ToolTip.Tip="Which project files can nothing ever load (dead — deletable in one click) and which recolor OTHER content (champions/items — the wad fan-out drivers)" />
+          <MenuItem Header="Map Material Diagnostics" Command="{Binding MapMaterialDiagnosticsCommand}"
+                    ToolTip.Tip="Scan the loaded map's bins + mapgeo and write an honest diagnostics report (classes, unknown fields, lighting/lightmap/visibility) to .reyengine/reports/" />
+          <Separator />
+          <MenuItem Header="Patch Update Wizard…" Command="{Binding OpenPatchUpdateWizardCommand}"
+                    ToolTip.Tip="Update this mod to the current patch: old originals from CommunityDragon + three-way merge carries only the mod's edits onto the new base — with backups, a per-bin report and validation" />
+        </MenuItem>
+        <MenuItem Header="Hashes &amp; Names">
+          <MenuItem Header="Sync Hashes (CommunityDragon)" Command="{Binding SyncHashesCommand}" />
+          <MenuItem Header="Reload Local Hashes" Command="{Binding ReloadLocalHashesCommand}" />
+          <MenuItem Header="Hash Lookup" Command="{Binding HashLookupCommand}" />
+          <Separator />
+          <MenuItem Header="Rebuild Wwise Name Index" Command="{Binding RebuildWwiseNamesCommand}"
+                    ToolTip.Tip="Recover Wwise event names by hashing name strings found in the game's .bin files — makes the Audio Editor show real event names instead of hex ids" />
+        </MenuItem>
+        <MenuItem Header="Shaders">
+          <MenuItem Header="Scan Riot Shaders" Command="{Binding ScanRiotShadersCommand}" />
+          <MenuItem Header="Export Shader Dump…" Command="{Binding ExportShaderDumpCommand}" />
+        </MenuItem>
       </MenuItem>
       <MenuItem Header="_Project">
         <MenuItem Header="Build Package" Command="{Binding BuildPackageCommand}" />

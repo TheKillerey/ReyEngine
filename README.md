@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="docs/reyengine_logo.png" width="160" alt="ReyEngine logo" />
+  <img src="docs/reyengine_logo_wide.png" width="620" alt="ReyEngine" />
 </p>
-
-<h1 align="center">ReyEngine</h1>
 
 <p align="center">
   <b>A modern map &amp; asset editor for League of Legends mods</b> — think Unreal/Unity for LoL assets.<br/>
