@@ -3738,6 +3738,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             MeshPreview.UseVertexLightmap = heightBlend;
             MeshPreview.NvrVertexLight = 0;         // M89 default — the baked term is opt-in per map
             MeshPreview.NvrBrightness = 0.55;
+            // M149: light it with the level's OWN sun/ambient when it ships one (terrain.inibin / sun.ini).
+            MeshPreview.NvrSun = bg.Sun;
+            MeshPreview.NvrUseMapSun = true;
             // M142.2: Light.dat loaded but OFF by default — the composite already bakes the light pools
             // in, so the runtime lights double them up. Toggleable later if a map needs them.
             MeshPreview.BackgroundLights = bg.Lights;

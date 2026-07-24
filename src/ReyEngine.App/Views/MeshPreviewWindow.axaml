@@ -66,6 +66,11 @@
                          Text="Mask-blend ground (four-blend BLEND_MAP) lit by a flat sun/sky."
                          IsVisible="{Binding !NvrHeightBlend}" />
 
+              <TextBlock Text="{Binding NvrSunSource}" FontSize="10" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyAccent2Brush}" />
+              <CheckBox Content="Use map's sun / ambient" IsChecked="{Binding NvrUseMapSun}" FontSize="11"
+                        IsVisible="{Binding HasNvrSun}"
+                        ToolTip.Tip="Light the map with the sun direction and sun/ambient colours it actually shipped (terrain.inibin on newer levels, sun.ini on older ones). Off falls back to a flat neutral sun/sky." />
               <CheckBox Content="Four-blend ground" IsChecked="{Binding NvrFourBlend}" FontSize="11"
                         ToolTip.Tip="Blend the ground's 4 colour maps through its BLEND_MAP (CREATE_GROUND_MOSAIC_FOUR_BLEND). Off shows only the base tile — useful for checking the raw layer." />
               <CheckBox Content="Baked vertex lighting" IsChecked="{Binding UseVertexLightmap}" FontSize="11"
@@ -321,6 +326,8 @@
                              NvrFourBlend="{Binding NvrFourBlend}"
                              NvrVertexLight="{Binding NvrVertexLight}"
                              NvrBrightness="{Binding NvrBrightness}"
+                             NvrSun="{Binding NvrSun}"
+                             NvrUseMapSun="{Binding NvrUseMapSun}"
                              AnimationClip="{Binding CurrentAnimation}"
                              AnimationTime="{Binding AnimationTime}"
                              ParticlePlayback="{Binding Playback}"

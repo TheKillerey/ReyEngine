@@ -34,7 +34,9 @@ public sealed record MapPreviewBackground(
     // lightmap slot = compositeColorMap (baked light/colour, modulates the height-blended detail 2X).
     // Both only on the flagged ground submeshes; null when the map has no height-blend ground.
     IReadOnlyList<TextureImage?>? SubmeshMask = null,
-    IReadOnlyList<TextureImage?>? SubmeshLightmap = null);
+    IReadOnlyList<TextureImage?>? SubmeshLightmap = null,
+    // M149: the level's own sun/ambient lighting (terrain.inibin or sun.ini); null when it ships none.
+    NvrSunSettings? Sun = null);
 
 /// <summary>M88: loads a legacy League <c>LEVELS/&lt;Map&gt;</c> folder as a character-preview backdrop.
 /// Reads <c>Scene/room.nvr</c>, resolves diffuse from <c>Scene/Textures/</c>, loads <c>Light.dat</c>, and
@@ -285,7 +287,8 @@ public static class MapPreviewLoader
 
         return new MapPreviewBackground(
             new DirectoryInfo(mapFolder).Name, shifted, subTex, subBlend, subColor1, subColor2, subColor3,
-            nvr.SubmeshDoubleSided, lights, nvr.MeshCount, missing, mats, subMask, subLightmap);
+            nvr.SubmeshDoubleSided, lights, nvr.MeshCount, missing, mats, subMask, subLightmap,
+            NvrSunSettings.TryLoad(mapFolder));   // M149: the level's authored sun/ambient
     }
 
     /// <summary>M142: a submesh is height-blend ground when its four-blend BLEND_MAP is the null_black

@@ -4,6 +4,7 @@ using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using ReyEngine.Core.Decoding;
 using ReyEngine.Formats.Animation;
+using ReyEngine.Formats.Environment;
 using ReyEngine.Formats.Lighting;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Meshes;
@@ -158,6 +159,12 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, double>(nameof(NvrVertexLight));
     public static readonly StyledProperty<double> NvrBrightnessProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(NvrBrightness), 0.55);
+    // M149: the level's own environment lighting (terrain.inibin / sun.ini). When set AND NvrUseMapSun is
+    // on, it replaces the flat grey guess with the sun direction + sun/ambient colours the map authored.
+    public static readonly StyledProperty<NvrSunSettings?> NvrSunProperty =
+        AvaloniaProperty.Register<ViewportControl, NvrSunSettings?>(nameof(NvrSun));
+    public static readonly StyledProperty<bool> NvrUseMapSunProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(NvrUseMapSun), true);
     public static readonly StyledProperty<double> VertexLightmapScaleProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(VertexLightmapScale), 2.0);
     public static readonly StyledProperty<double> BackgroundBrightnessProperty =     // M89: base sun/sky on the backdrop
@@ -242,6 +249,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool NvrFourBlend { get => GetValue(NvrFourBlendProperty); set => SetValue(NvrFourBlendProperty, value); }
     public double NvrVertexLight { get => GetValue(NvrVertexLightProperty); set => SetValue(NvrVertexLightProperty, value); }
     public double NvrBrightness { get => GetValue(NvrBrightnessProperty); set => SetValue(NvrBrightnessProperty, value); }
+    public NvrSunSettings? NvrSun { get => GetValue(NvrSunProperty); set => SetValue(NvrSunProperty, value); }   // M149
+    public bool NvrUseMapSun { get => GetValue(NvrUseMapSunProperty); set => SetValue(NvrUseMapSunProperty, value); }
     public double VertexLightmapScale { get => GetValue(VertexLightmapScaleProperty); set => SetValue(VertexLightmapScaleProperty, value); }
     public double BackgroundBrightness { get => GetValue(BackgroundBrightnessProperty); set => SetValue(BackgroundBrightnessProperty, value); }
     public bool ShowGrid { get => GetValue(ShowGridProperty); set => SetValue(ShowGridProperty, value); }
@@ -805,11 +814,20 @@ public sealed class ViewportControl : OpenGlControlBase
             // sun/sky so they read as shaped night geometry. White (below) would blow them out.
             _meshRenderer.SetSunLighting(new Vector3(-0.3f, -0.85f, -0.4f),
                 new Vector4(0.30f, 0.30f, 0.36f, 1f), new Vector4(0.20f, 0.21f, 0.26f, 1f), 1f);
+        else if (LegacyMap && NvrUseMapSun && NvrSun is { } nsun)
+        {
+            // M149: the level's OWN environment lighting — sun direction + sun/ambient colours straight from
+            // terrain.inibin (newer levels) or sun.ini (older ones), scaled by the brightness slider so the
+            // authored mood is preserved but still tunable.
+            float b = (float)NvrBrightness / 0.55f;   // 0.55 (the slider default) = the map's own level
+            _meshRenderer.SetSunLighting(nsun.SunDirection,
+                new Vector4(nsun.SunColor * b, 1f), new Vector4(nsun.AmbientColor * b, 1f), 1f);
+        }
         else if (LegacyMap)
         {
-            // M148: mask-blend / plain NVR maps use the M89 backdrop model — a flat tunable sun+sky. Their
-            // vertex colours are near-black mask/AO data (Dominion averages 0.05), NOT usable as lighting,
-            // so brightness carries the image and NvrVertexLight adds the baked term only if asked.
+            // M148: mask-blend / plain NVR maps with no authored environment fall back to the M89 backdrop
+            // model — a flat tunable sun+sky. Their vertex colours are near-black mask/AO data (Dominion
+            // averages 0.05), NOT usable as lighting, so brightness carries the image.
             float b = (float)NvrBrightness;
             var lit = new Vector4(b, b, b, 1f);
             _meshRenderer.SetSunLighting(Vector3.Zero, lit, lit, 1f);
@@ -1223,7 +1241,8 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == UseVertexLightmapProperty || change.Property == VertexLightmapScaleProperty
                  || change.Property == FogEnabledProperty                                      // M145
                  || change.Property == LegacyMapProperty || change.Property == NvrFourBlendProperty
-                 || change.Property == NvrVertexLightProperty || change.Property == NvrBrightnessProperty) { RequestNextFrameRendering(); }   // M148
+                 || change.Property == NvrVertexLightProperty || change.Property == NvrBrightnessProperty   // M148
+                 || change.Property == NvrSunProperty || change.Property == NvrUseMapSunProperty) { RequestNextFrameRendering(); }   // M149
         else if (change.Property == ModelScaleProperty) { _skinDirty = true; RequestNextFrameRendering(); }   // M90: rescale attached VFX too
         else if (change.Property == BackgroundOffsetProperty || change.Property == BackgroundRotationProperty)
         { _dynamicLightsDirty = true; RequestNextFrameRendering(); }   // M89: move/rotate lights with the map

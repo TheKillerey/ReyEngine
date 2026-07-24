@@ -56,6 +56,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     [ObservableProperty] private double _nvrVertexLight;          // additive baked-vertex term (M89 "Ground")
     [ObservableProperty] private double _nvrBrightness = 0.55;    // flat sun/sky for mask-blend + plain maps
     [ObservableProperty] private bool _nvrHeightBlend;            // read-only indicator: composite ground map
+    // M149: the level's authored sun/ambient (terrain.inibin / sun.ini) + whether to use it.
+    [ObservableProperty] private Formats.Environment.NvrSunSettings? _nvrSun;
+    [ObservableProperty] private bool _nvrUseMapSun = true;
+    public bool HasNvrSun => NvrSun is not null;
+    public string NvrSunSource => NvrSun is { } s ? $"Environment: {s.Source}" : "No environment file — flat sun/sky";
+    partial void OnNvrSunChanged(Formats.Environment.NvrSunSettings? value)
+    { OnPropertyChanged(nameof(HasNvrSun)); OnPropertyChanged(nameof(NvrSunSource)); }
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _wireframe;
     [ObservableProperty] private bool _cullBackfaces = true;
@@ -132,6 +139,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // M148: clear the legacy-map render mode so a champion preview never inherits a map's lighting
         IsLegacyMap = false; NvrFourBlend = false; NvrHeightBlend = false;
         NvrVertexLight = 0; NvrBrightness = 0.55;
+        NvrSun = null; NvrUseMapSun = true;   // M149
         ShowBones = skeleton is not null;
         Stats = $"{mesh.VertexCount:n0} verts · {mesh.TriangleCount:n0} tris · {mesh.SubMeshes.Count} submesh(es)" +
                 (skeleton is not null ? $" · {skeleton.BoneCount} bones" : "");
