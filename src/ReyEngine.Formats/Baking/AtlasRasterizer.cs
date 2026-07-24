@@ -140,23 +140,19 @@ public static class AtlasRasterizer
     {
         var origin = pos + nrm * settings.RayBias;
 
-        // --- sun: sky term + N.L, optionally shadowed ---
+        // --- sun: sky term + N.L, optionally shadowed --- (linear illumination)
         float ndl = MathF.Max(Vector3.Dot(nrm, lighting.DirectionToSun), 0f);
         float sunVis = 1f;
         if (ndl > 0f && lighting.SunShadows && scene is not null)
             sunVis = SunVisibility(origin, nrm, lighting, scene, settings, texelSeed);
 
-        var lit = lighting.SkyLight + lighting.SunColor * (ndl * sunVis);
-
-        // --- ambient occlusion, applied to the sky term only (the sun already has its own shadow) ---
-        if (settings.AmbientOcclusionSamples > 0 && scene is not null)
-        {
-            float ao = AmbientOcclusion(origin, nrm, scene, settings, texelSeed);
-            lit = lighting.SkyLight * ao + lighting.SunColor * (ndl * sunVis);
-        }
+        // Ambient occlusion darkens the sky term only (the sun already carries its own shadow).
+        float ao = settings.AmbientOcclusionSamples > 0 && scene is not null
+            ? AmbientOcclusion(origin, nrm, scene, settings, texelSeed) : 1f;
+        var ambient = lighting.SkyLight * ao + lighting.SunColor * (ndl * sunVis);
 
         // --- point lights: identical falloff to the shader's, including the 0.35/0.65 N.L wrap ---
-        var dynamic = Vector3.Zero;
+        var pointLight = Vector3.Zero;
         var lights = lighting.PointLights;
         for (int i = 0; i < lights.Count; i++)
         {
@@ -175,18 +171,30 @@ public static class AtlasRasterizer
             float vis = 1f;
             if (lighting.PointLightShadows && scene is not null)
                 vis = PointVisibility(origin, lp, l, radius, scene, settings, texelSeed + i);
-            dynamic += l.Color * (Math.Clamp(l.Intensity, 0f, 64f) * atten * (0.35f + 0.65f * nl) * vis);
+            pointLight += l.Color * (Math.Clamp(l.Intensity, 0f, 64f) * atten * (0.35f + 0.65f * nl) * vis);
         }
-        lit += dynamic * lighting.LightIntensity;
+        pointLight *= lighting.LightIntensity;
 
-        // Bake exposure: a uniform brightness lever so the baked result can be dialled to match the
-        // Dynamic preview, which is a shadowless/AO-less flat wash and so reads brighter by nature.
-        lit *= settings.Exposure;
-
-        // The renderer multiplies the sampled atlas by lightMapColorScale, so divide it out here —
-        // otherwise the preview comes back scale-squared too bright (4x on live Map12, where it is 2).
-        return lit / MathF.Max(lighting.LightMapColorScale, 1e-3f);
+        // Reproduce the viewport's DISPLAY math exactly. The Dynamic shader display-encodes the
+        // sun/sky term and then ADDS the point lights LINEARLY on top:
+        //     display = pow(ambient, 1/2.2) + pointLight
+        // A lightmap can only carry one value per texel, which the shader display-encodes as a whole
+        // (pow(atlas*scale, 1/2.2)). Baking the raw linear SUM (ambient+pointLight) folds the point
+        // lights INTO that curve, and because pow(x,1/2.2) is concave that compresses them to roughly
+        // HALF strength — the exact "baked colour is about half" the user sees. So compute the display
+        // value the viewport would, then PRE-invert the shader's gamma (pow 2.2) and divide by scale, so
+        // the shader's forward gamma reproduces `display` bit for bit.
+        var display = (GammaEncode(ambient) + pointLight) * settings.Exposure;
+        return InverseGamma(display) / MathF.Max(lighting.LightMapColorScale, 1e-3f);
     }
+
+    // The viewport's bakedLightColour() is pow(max(x,0), 0.45454545) = pow(x, 1/2.2). These match it
+    // exactly (same exponent) so the round-trip through the shader is an identity.
+    private const float InvGamma = 1f / 2.2f, Gamma = 2.2f;
+    private static Vector3 GammaEncode(Vector3 v) => new(
+        MathF.Pow(MathF.Max(v.X, 0f), InvGamma), MathF.Pow(MathF.Max(v.Y, 0f), InvGamma), MathF.Pow(MathF.Max(v.Z, 0f), InvGamma));
+    private static Vector3 InverseGamma(Vector3 v) => new(
+        MathF.Pow(MathF.Max(v.X, 0f), Gamma), MathF.Pow(MathF.Max(v.Y, 0f), Gamma), MathF.Pow(MathF.Max(v.Z, 0f), Gamma));
 
     private static float SunVisibility(Vector3 origin, Vector3 nrm, BakeLighting lighting,
         BakeScene scene, BakeSettings settings, int seed)
