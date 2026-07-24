@@ -1326,6 +1326,49 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showLightmaps = true; // M69: baked lightmaps on by default; off = sun/sky fallback lighting
     // M70: legacy Riot dynamic point lights (Light.dat)
     [ObservableProperty] private bool _showDynamicLights;
+
+    // M158: viewport lighting-mode preset. A convenience over the two flags above so the user can flip
+    // between how a bake will look (Baked) and how the live editable lighting looks (Dynamic), plus a
+    // debug view with both. -1 = "custom" (the individual toggles were flipped by hand, no preset owns
+    // the current state). Setting a mode drives ShowLightmaps + ShowDynamicLights; flipping either flag
+    // by hand resets the mode to custom rather than fighting the user.
+    public const int LightingModeCustom = -1, LightingModeDynamic = 0, LightingModeBaked = 1, LightingModeCombined = 2;
+    private bool _applyingLightingMode;
+    [ObservableProperty] private int _lightingMode = LightingModeBaked;
+
+    partial void OnLightingModeChanged(int value)
+    {
+        if (value < 0) return;   // custom: leave the flags as the user set them
+        _applyingLightingMode = true;
+        // Dynamic  = fallback sun/sky + editable point lights (no baked atlas) — the live authoring view.
+        // Baked    = baked atlas only, point lights off — how the map ships after a bake.
+        // Combined = both, a debug overlay to compare baked vs dynamic.
+        ShowLightmaps = value != LightingModeDynamic;
+        ShowDynamicLights = value != LightingModeBaked;
+        _applyingLightingMode = false;
+        OnPropertyChanged(nameof(IsLightingDynamic));
+        OnPropertyChanged(nameof(IsLightingBaked));
+        OnPropertyChanged(nameof(IsLightingCombined));
+    }
+
+    // Bindable one-per-mode flags for a segmented ToggleButton group in the toolbar.
+    public bool IsLightingDynamic { get => LightingMode == LightingModeDynamic; set { if (value) LightingMode = LightingModeDynamic; } }
+    public bool IsLightingBaked { get => LightingMode == LightingModeBaked; set { if (value) LightingMode = LightingModeBaked; } }
+    public bool IsLightingCombined { get => LightingMode == LightingModeCombined; set { if (value) LightingMode = LightingModeCombined; } }
+
+    partial void OnShowLightmapsChanged(bool value) => DropLightingPreset();
+    partial void OnShowDynamicLightsChanged(bool value) => DropLightingPreset();
+    private void DropLightingPreset()
+    {
+        if (_applyingLightingMode) return;
+        if (LightingMode != LightingModeCustom)
+        {
+            LightingMode = LightingModeCustom;
+            OnPropertyChanged(nameof(IsLightingDynamic));
+            OnPropertyChanged(nameof(IsLightingBaked));
+            OnPropertyChanged(nameof(IsLightingCombined));
+        }
+    }
     // M145: MapSunProperties distance fog. Off by default; only meaningful when the loaded map's sun
     // component authored a real fog range, which HasMapFog reflects so the toggle can hide itself.
     [ObservableProperty] private bool _showFog;
@@ -1503,8 +1546,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public void OnLightBakeFinished(Services.LightBakeResult result)
     {
         _log.Success("Bake", result.OutputDescription + $" ({result.AtlasCount} atlas(es)).");
+        // Switch the viewport to Baked so the user immediately sees the freshly baked lighting (atlas on,
+        // dynamic lights off) instead of the live authoring view they baked from.
+        LightingMode = LightingModeBaked;
         // The baked atlases now live in the override store; re-read the map's textures so the viewport
-        // shows the freshly baked lighting instead of Riot's.
+        // shows them instead of Riot's.
         if (_currentMapEntry is { } e) _ = LoadMapGeoAsync(e);
     }
     [ObservableProperty] private bool _showLightMarkers = true;   // M71: show a glow icon at each light position

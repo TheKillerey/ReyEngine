@@ -402,6 +402,19 @@
 
             <!-- row 2: map lighting + tools -->
             <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+              <!-- M158: lighting-mode preset — Dynamic (live editable lighting) / Baked (how it ships
+                   after a bake) / Combined (both, debug). Drives the Lightmap + Lights toggles below. -->
+              <Border IsVisible="{Binding HasMapGeo}"
+                      Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="2">
+                <StackPanel Orientation="Horizontal" Spacing="1">
+                  <ToggleButton Classes="vp" Content="Dynamic" IsChecked="{Binding IsLightingDynamic}"
+                                ToolTip.Tip="Sun/sky fallback + editable point lights, no baked atlas — the live authoring view you bake from." />
+                  <ToggleButton Classes="vp" Content="Baked" IsChecked="{Binding IsLightingBaked}"
+                                ToolTip.Tip="Baked lightmap only, point lights off — how the map looks in game after a bake." />
+                  <ToggleButton Classes="vp" Content="Combined" IsChecked="{Binding IsLightingCombined}"
+                                ToolTip.Tip="Baked lightmap AND dynamic lights together — a debug overlay to compare the two." />
+                </StackPanel>
+              </Border>
               <ToggleButton Classes="vp" Content="☀ Lightmap" IsChecked="{Binding ShowLightmaps}"
                             ToolTip.Tip="Baked lightmaps on/off. Off = the map is lit by the sun/sky fallback term only (useful for seeing raw textures or previewing dynamic lights)." />
               <ToggleButton Classes="vp" Content="💡 Lights" IsChecked="{Binding ShowDynamicLights}"
