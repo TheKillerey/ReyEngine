@@ -163,6 +163,50 @@ public sealed partial class MaterialParameterViewModel : ViewModelBase
 }
 
 /// <summary>M103: one editable shader feature switch (checkbox row).</summary>
+/// <summary>M150: one shaderMacros define (NO_BAKED_LIGHTING, DISABLE_DEPTH_FOG, …) as a live toggle.
+/// Separate from switches: macros are map entries with "0"/"1" values, and REMOVING one is not the same
+/// as setting it to 0 — absent means the shader's own default applies.</summary>
+public sealed partial class MaterialMacroViewModel : ViewModelBase
+{
+    private readonly MaterialBindingViewModel _binding;
+    private bool _initializing = true;
+    public MaterialMacro Model { get; }
+
+    [ObservableProperty] private bool _isOn;
+
+    public MaterialMacroViewModel(MaterialMacro model, MaterialBindingViewModel binding)
+    {
+        Model = model;
+        _binding = binding;
+        _isOn = model.On;
+        _initializing = false;
+    }
+
+    public string Name => Model.Name;
+    public bool IsDirty => Model.IsDirty;
+    public string Hint => Name.ToUpperInvariant() switch
+    {
+        MaterialBinding.MacroNoBakedLighting => "Ignores the baked lightmap on this surface",
+        MaterialBinding.MacroDisableDepthFog => "Excludes this surface from the map's distance fog",
+        "PREMULTIPLIED_ALPHA" => "Colour is already multiplied by alpha",
+        "DISABLE_FOW" => "Not darkened by fog of war",
+        _ => "",
+    };
+    public void RaiseDirty() => OnPropertyChanged(nameof(IsDirty));
+
+    partial void OnIsOnChanged(bool value)
+    {
+        if (_initializing) return;
+        _binding.SetMacro(Name, value);
+        RaiseDirty();
+        _binding.RaiseDirty();
+        _binding.Owner?.NotifyChanged();
+    }
+
+    [RelayCommand]
+    private void Remove() => _binding.RemoveMacro(this);
+}
+
 public sealed partial class MaterialSwitchViewModel : ViewModelBase
 {
     private readonly MaterialBindingViewModel _binding;
@@ -203,6 +247,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     public ObservableCollection<MaterialParameterViewModel> Parameters { get; } = new();
     /// <summary>M103: the material's shader feature switches, editable.</summary>
     public ObservableCollection<MaterialSwitchViewModel> Switches { get; } = new();
+    /// <summary>M150: the material's shaderMacros defines, editable.</summary>
+    public ObservableCollection<MaterialMacroViewModel> Macros { get; } = new();
 
     [ObservableProperty] private bool _isVisible = true;
 
@@ -218,6 +264,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         foreach (var s in model.Slots) Slots.Add(new TextureSlotViewModel(s, owner) { Binding = this });
         foreach (var p in model.Parameters) Parameters.Add(new MaterialParameterViewModel(p, owner));
         foreach (var w in model.AllSwitches) Switches.Add(new MaterialSwitchViewModel(w, this));   // M103
+        foreach (var m in model.AllMacros) Macros.Add(new MaterialMacroViewModel(m, this));        // M150
+        RefreshMissingMacros();
         LoadRenderState();   // M106
     }
 
@@ -271,6 +319,56 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         RaiseDirty();
         Owner!.NotifyChanged();
         Owner!.RefreshShaderDefs();
+    }
+
+    // ---- M150: shaderMacros (NO_BAKED_LIGHTING / DISABLE_DEPTH_FOG / …) ----
+
+    /// <summary>The defines Riot actually uses on map materials, offered for one-click add.</summary>
+    private static readonly string[] KnownMacros =
+    {
+        MaterialBinding.MacroNoBakedLighting, MaterialBinding.MacroDisableDepthFog,
+        "PREMULTIPLIED_ALPHA", "DISABLE_FOW",
+    };
+
+    public ObservableCollection<string> MissingMacros { get; } = new();
+    public bool HasMacros => Macros.Count > 0;
+    public bool CanEditMacros => Model.CanEditMacros;
+    public bool HasMissingMacros => MissingMacros.Count > 0;
+
+    private void RefreshMissingMacros()
+    {
+        MissingMacros.Clear();
+        var have = Macros.Select(m => m.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (CanEditMacros)
+            foreach (var m in KnownMacros)
+                if (!have.Contains(m)) MissingMacros.Add(m);
+        OnPropertyChanged(nameof(HasMacros));
+        OnPropertyChanged(nameof(HasMissingMacros));
+    }
+
+    internal void SetMacro(string name, bool on) => Model.SetMacro(name, on);
+
+    /// <summary>Add a define this material doesn't carry yet (enabled — the reason you'd add it).</summary>
+    [RelayCommand]
+    private void AddMacro(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return;
+        var macro = Model.SetMacro(name.Trim(), true);
+        if (macro is null) return;
+        Macros.Add(new MaterialMacroViewModel(macro, this));
+        RefreshMissingMacros();
+        RaiseDirty();
+        Owner!.NotifyChanged();
+    }
+
+    /// <summary>Removing is NOT the same as setting 0 — absent falls back to the shader's own default.</summary>
+    public void RemoveMacro(MaterialMacroViewModel vm)
+    {
+        if (!Model.RemoveMacro(vm.Name)) return;
+        Macros.Remove(vm);
+        RefreshMissingMacros();
+        RaiseDirty();
+        Owner!.NotifyChanged();
     }
 
     [ObservableProperty] private bool _hasShaderDef;

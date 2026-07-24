@@ -1172,6 +1172,44 @@
                                       </ItemsControl.ItemTemplate>
                                     </ItemsControl>
                                   </StackPanel>
+
+                                  <!-- M150: shaderMacros — the defines that decide how a surface reacts to the
+                                       SCENE (lightmap / fog), separate from the feature switches above. -->
+                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasMacros}">
+                                    <TextBlock Text="SHADER MACROS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding Macros}">
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
+                                            <CheckBox Grid.Column="0" Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="9"
+                                                      ToolTip.Tip="{Binding Hint}" />
+                                            <Ellipse Grid.Column="1" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
+                                                     Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsDirty}" />
+                                            <Button Grid.Column="2" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
+                                                    Command="{Binding RemoveCommand}"
+                                                    ToolTip.Tip="Remove the define entirely — not the same as unticking it, which writes 0. Absent means the shader's own default applies." />
+                                          </Grid>
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+
+                                  <StackPanel Spacing="2" IsVisible="{Binding HasMissingMacros}">
+                                    <TextBlock Text="ADD SHADER MACRO" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding MissingMacros}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding StringFormat='+ {0}'}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddMacroCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
                                 </StackPanel>
 
                                 <ItemsControl ItemsSource="{Binding Slots}">

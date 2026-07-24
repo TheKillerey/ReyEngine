@@ -220,6 +220,27 @@ public sealed class MaterialDocument
                     }
             }
 
+            // M150: shaderMacros — a SECOND, separate feature system from 'switches': a string->string map
+            // of preprocessor defines, values "0"/"1". This is where Riot puts the flags that change how a
+            // surface reacts to the scene rather than how it shades: NO_BAKED_LIGHTING (ignore the lightmap)
+            // and DISABLE_DEPTH_FOG (exclude the mesh from distance fog). Map11 uses them heavily —
+            // NO_BAKED_LIGHTING on 1901 materials, DISABLE_DEPTH_FOG on 1709. Kept live so they can be
+            // toggled/added/removed exactly like switches.
+            var macros = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var macroList = new List<MaterialMacro>();
+            BinTreeMap? macroMap = null;
+            if (Field(o.Properties, "shaderMacros") is BinTreeMap mm)
+            {
+                macroMap = mm;
+                foreach (var e in mm)
+                    if (e.Key is BinTreeString mk)
+                    {
+                        string mv = e.Value is BinTreeString ms ? ms.Value : e.Value?.ToString() ?? "";
+                        macros[mk.Value] = mv;
+                        macroList.Add(new MaterialMacro(mk.Value, mv));
+                    }
+            }
+
             // Technique/pass render state (M34): the FIRST technique's FIRST pass carries the real shader
             // link + blend state (the class-hash "shader" above is just "StaticMaterialDef").
             string? renderShader = null;
@@ -271,6 +292,9 @@ public sealed class MaterialDocument
                 Switches = switches,
                 SwitchContainer = switchContainer,
                 SwitchEntries = switchList,
+                Macros = macros,                 // M150
+                MacroMap = macroMap,
+                MacroEntries = macroList,
                 PassStruct = passStruct,
                 RenderShader = renderShader,
                 ShaderLink = shaderLink,
@@ -346,6 +370,32 @@ public sealed class MaterialBinding
     public IReadOnlyDictionary<string, bool> Switches { get; init; } = EmptySwitches;
     private static readonly IReadOnlyDictionary<string, bool> EmptySwitches = new Dictionary<string, bool>();
 
+    /// <summary>M150: shaderMacros (name → "0"/"1") — the preprocessor defines, separate from
+    /// <see cref="Switches"/>. Carries NO_BAKED_LIGHTING and DISABLE_DEPTH_FOG.</summary>
+    public IReadOnlyDictionary<string, string> Macros { get; init; } = EmptyMacros;
+    private static readonly IReadOnlyDictionary<string, string> EmptyMacros = new Dictionary<string, string>();
+    public IReadOnlyList<MaterialMacro> MacroEntries { get; init; } = Array.Empty<MaterialMacro>();
+    internal BinTreeMap? MacroMap { get; init; }
+
+    /// <summary>True when a macro is present AND set to a truthy value ("1"/"true"). Reads the LIVE
+    /// entries, not the parse-time snapshot, so an edit is reflected immediately (the viewport
+    /// re-derives the profile after every material change).</summary>
+    public bool MacroOn(string name)
+    {
+        foreach (var m in AllMacros)
+            if (m.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) return m.On;
+        return false;
+    }
+
+    /// <summary>Riot's define for "ignore the baked lightmap on this surface".</summary>
+    public const string MacroNoBakedLighting = "NO_BAKED_LIGHTING";
+    /// <summary>Riot's define for "exclude this surface from distance fog".</summary>
+    public const string MacroDisableDepthFog = "DISABLE_DEPTH_FOG";
+
+    /// <summary>Macros live in a map, so unlike switches there is no prototype to clone — a material can
+    /// always gain one as long as it has the shaderMacros field.</summary>
+    public bool CanEditMacros => MacroMap is not null;
+
     // ---- M103: editable feature switches ----
     /// <summary>The material's switches as live, toggleable entries.</summary>
     public IReadOnlyList<MaterialSwitch> SwitchEntries { get; init; } = Array.Empty<MaterialSwitch>();
@@ -388,6 +438,57 @@ public sealed class MaterialBinding
     /// <summary>Switches added after parse (SwitchEntries is the parse-time list).</summary>
     private readonly List<MaterialSwitch> _switchEdits = new();
     public IEnumerable<MaterialSwitch> AllSwitches => SwitchEntries.Concat(_switchEdits);
+
+    // ---- M150: editable shaderMacros ----
+    private readonly List<MaterialMacro> _macroEdits = new();
+    private readonly HashSet<string> _macroRemoved = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Every macro currently on the material — parsed plus added, minus removed.</summary>
+    public IEnumerable<MaterialMacro> AllMacros =>
+        MacroEntries.Concat(_macroEdits).Where(m => !_macroRemoved.Contains(m.Name));
+
+    /// <summary>Set (or add) a shaderMacro, writing straight into the live bin map so Serialize persists it.
+    /// Values are Riot's "0"/"1" strings.</summary>
+    public MaterialMacro? SetMacro(string name, bool on)
+    {
+        if (MacroMap is null || string.IsNullOrWhiteSpace(name)) return null;
+        string value = on ? "1" : "0";
+        _macroRemoved.Remove(name);
+
+        foreach (var e in MacroMap)
+            if (e.Key is BinTreeString k && k.Value.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                if (e.Value is BinTreeString vs) vs.Value = value;
+                var hit = AllMacros.FirstOrDefault(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                hit?.Apply(value);
+                return hit;
+            }
+
+        // Not present yet — clone an existing entry's schema so the new pair matches the map's key/value types.
+        var proto = MacroMap.FirstOrDefault();
+        if (proto.Key is not BinTreeString || proto.Value is not BinTreeString) return null;
+        var newKey = (BinTreeString)BinTreeCloner.Clone(proto.Key, 0);
+        var newVal = (BinTreeString)BinTreeCloner.Clone(proto.Value, 0);
+        newKey.Value = name;
+        newVal.Value = value;
+        MacroMap.Add(newKey, newVal);
+        var macro = new MaterialMacro(name, value);
+        _macroEdits.Add(macro);
+        return macro;
+    }
+
+    /// <summary>Remove a shaderMacro entirely (absent = the shader's default, which differs from "0").</summary>
+    public bool RemoveMacro(string name)
+    {
+        if (MacroMap is null) return false;
+        BinTreeProperty? key = null;
+        foreach (var e in MacroMap)
+            if (e.Key is BinTreeString k && k.Value.Equals(name, StringComparison.OrdinalIgnoreCase)) { key = e.Key; break; }
+        if (key is null) return false;
+        MacroMap.Remove(key);
+        _macroEdits.RemoveAll(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        _macroRemoved.Add(name);
+        return true;
+    }
 
     /// <summary>The material's real technique-pass shader (e.g. Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest),
     /// resolved from the first technique's first pass; null when the material has no techniques (M34).</summary>
@@ -694,6 +795,31 @@ public sealed class MaterialSwitch
     }
 
     public void Revert() => SetOn(_originalOn);
+}
+
+/// <summary>
+/// M150: one shaderMacros entry — a preprocessor define with a "0"/"1" value. Separate from
+/// <see cref="MaterialSwitch"/>: macros are map entries, not structs, and carry the flags that decide how
+/// a surface reacts to the scene (NO_BAKED_LIGHTING, DISABLE_DEPTH_FOG) rather than how it shades.
+/// </summary>
+public sealed class MaterialMacro
+{
+    private readonly string _originalValue;
+
+    public string Name { get; }
+    public string Value { get; private set; }
+    public bool On => Value == "1" || Value.Equals("true", StringComparison.OrdinalIgnoreCase);
+    public bool IsDirty => !string.Equals(Value, _originalValue, StringComparison.Ordinal);
+
+    internal MaterialMacro(string name, string value)
+    {
+        Name = name;
+        Value = value;
+        _originalValue = value;
+    }
+
+    internal void Apply(string value) => Value = value;
+    public void Revert() => Value = _originalValue;
 }
 
 /// <summary>One texture sampler slot whose path is an editable live BinTree string.</summary>

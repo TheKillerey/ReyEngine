@@ -159,6 +159,10 @@ public sealed class ViewportMeshRenderer : IDisposable
         // (compositeColorMap) indexed by the 2nd UV set; this submesh's diffuse slot holds that atlas.
         public bool CompositeGround;
 
+        // M150: shaderMacros NO_BAKED_LIGHTING / DISABLE_DEPTH_FOG.
+        public bool NoBakedLighting;
+        public bool DisableDepthFog;
+
         public static SubmeshDraw Create(int start, int count) =>
             new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One, AlphaCutoff = 0.35f };
     }
@@ -181,7 +185,10 @@ public sealed class ViewportMeshRenderer : IDisposable
         bool UsesGrassTint = false,   // M78: multiply the map's world-space grass tint into the diffuse
         // M142: Map10 height-blended ground — this submesh's diffuse slot holds the baked ground atlas
         // (compositeColorMap), sampled by the 2nd UV set instead of the tiling primary UV.
-        bool CompositeGround = false)
+        bool CompositeGround = false,
+        // M150: Riot shaderMacros — NO_BAKED_LIGHTING ignores the baked lightmap on this surface,
+        // DISABLE_DEPTH_FOG excludes it from distance fog (skyboxes, FX, water use these).
+        bool NoBakedLighting = false, bool DisableDepthFog = false)
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
@@ -1386,6 +1393,8 @@ void main(){
         _submeshes[index].TerrainWorldScale = mat.TerrainWorldScale;
         _submeshes[index].TerrainMaskMultipliers = mat.TerrainMaskMultipliers;
         _submeshes[index].CompositeGround = mat.CompositeGround;   // M142
+        _submeshes[index].NoBakedLighting = mat.NoBakedLighting;   // M150
+        _submeshes[index].DisableDepthFog = mat.DisableDepthFog;
     }
 
     /// <summary>Reset every submesh's preview material to identity UV + no rim/specular (M32).</summary>
@@ -1408,6 +1417,8 @@ void main(){
             _submeshes[i].IsFlowmap = false;
             _submeshes[i].IsTerrainBlend = false;
             _submeshes[i].CompositeGround = false;   // M142
+            _submeshes[i].NoBakedLighting = false;   // M150
+            _submeshes[i].DisableDepthFog = false;
         }
     }
 
@@ -1783,6 +1794,8 @@ void main(){
                             s.TerrainMaskMultipliers.Y, s.TerrainMaskMultipliers.Z);
                     }
                     _gl.Uniform1(_mCompositeGround, s.CompositeGround ? 1 : 0);   // M142: Map10 baked ground
+                    // M150: DISABLE_DEPTH_FOG excludes this surface from the scene's distance fog.
+                    _gl.Uniform1(_mFogEnabled, (_fogEnabled && !s.DisableDepthFog) ? 1 : 0);
                     _gl.ActiveTexture(TextureUnit.Texture0);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);
                     _gl.Uniform1(_mHasTex, s.Texture != 0 ? 1 : 0);
@@ -1803,7 +1816,9 @@ void main(){
                     _gl.Uniform1(_mHasMatCapMask, s.MatCapMask != 0 ? 1 : 0);
                     _gl.ActiveTexture(TextureUnit.Texture6);
                     _gl.BindTexture(TextureTarget.Texture2D, s.Lightmap != 0 ? s.Lightmap : _whiteTex);
-                    _gl.Uniform1(_mHasLightmap, (_lightmapsEnabled && s.Lightmap != 0 && _hasLightmapUv) ? 1 : 0);
+                    // M150: NO_BAKED_LIGHTING makes the surface ignore the baked lightmap entirely.
+                    _gl.Uniform1(_mHasLightmap,
+                        (_lightmapsEnabled && s.Lightmap != 0 && _hasLightmapUv && !s.NoBakedLighting) ? 1 : 0);
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
                 }
 

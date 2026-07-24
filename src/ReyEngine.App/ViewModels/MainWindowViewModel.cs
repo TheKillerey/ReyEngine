@@ -4566,7 +4566,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             TerrainWorldScale: p.TerrainWorldScale,
             TerrainMaskMultipliers: new System.Numerics.Vector3(
                 p.TerrainRMaskMultiplier, p.TerrainGMaskMultiplier, p.TerrainBMaskMultiplier),
-            UsesGrassTint: p.UsesGrassTint);   // M78
+            UsesGrassTint: p.UsesGrassTint,    // M78
+            NoBakedLighting: p.NoBakedLighting,   // M150: shaderMacros NO_BAKED_LIGHTING
+            DisableDepthFog: p.DisableDepthFog);  //           DISABLE_DEPTH_FOG
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 
