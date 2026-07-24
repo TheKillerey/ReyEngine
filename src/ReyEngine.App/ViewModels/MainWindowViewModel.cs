@@ -1296,6 +1296,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _isParticleEditorActive;      // M46: overlay visible for the active tab
     [ObservableProperty] private double _currentLightmapScale = 1.0; // M45: MapSunProperties.lightMapColorScale
     [ObservableProperty] private MapSunProperties? _currentSunProperties;
+    // M145: the fog toggle's visibility follows whichever map is loaded.
+    partial void OnCurrentSunPropertiesChanged(MapSunProperties? value)
+    {
+        OnPropertyChanged(nameof(HasMapFog));
+        if (!HasMapFog) ShowFog = false;   // don't carry a fog toggle onto a map that has none
+    }
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
     [ObservableProperty] private bool _showWireframe;
@@ -1305,6 +1311,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showLightmaps = true; // M69: baked lightmaps on by default; off = sun/sky fallback lighting
     // M70: legacy Riot dynamic point lights (Light.dat)
     [ObservableProperty] private bool _showDynamicLights;
+    // M145: MapSunProperties distance fog. Off by default; only meaningful when the loaded map's sun
+    // component authored a real fog range, which HasMapFog reflects so the toggle can hide itself.
+    [ObservableProperty] private bool _showFog;
+    public bool HasMapFog => CurrentSunProperties is { } s && s.TryGetFogRange(out _, out _);
     [ObservableProperty] private double _dynamicLightIntensity = 1.0;
     [ObservableProperty] private double _dynamicLightRadiusScale = 1.0;   // M71: global light-radius multiplier
     [ObservableProperty] private double _dynamicLightPositionScale = 1.0; // M71: master light-position spread (XZ)

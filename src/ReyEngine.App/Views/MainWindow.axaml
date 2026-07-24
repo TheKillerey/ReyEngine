@@ -342,6 +342,7 @@
                 AnimateWater="{Binding HasFlowmapWater}"
                 LightmapScale="{Binding CurrentLightmapScale}"
                 SunProperties="{Binding CurrentSunProperties}"
+                FogEnabled="{Binding ShowFog}"
                 FocusPoint="{Binding ParticleFocusPoint}"
                 PreviewMode="{Binding PreviewMode}" />
 
@@ -406,6 +407,9 @@
               <ToggleButton Classes="vp" Content="💡 Lights" IsChecked="{Binding ShowDynamicLights}"
                             IsVisible="{Binding HasDynamicLights}"
                             ToolTip.Tip="Render the loaded Riot Light.dat point lights (additive, radial). Load a Light.dat first via the ⏻ button." />
+              <ToggleButton Classes="vp" Content="🌫 Fog" IsChecked="{Binding ShowFog}"
+                            IsVisible="{Binding HasMapFog}"
+                            ToolTip.Tip="Apply the map's own distance fog (MapSunProperties fogColor + fogStartAndEnd) — the haze the game blends distant terrain into. Only shown for maps that author a fog range." />
               <Button Classes="tool" Content="⏻ Light.dat" Command="{Binding LoadLightDatCommand}" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Load a legacy Riot LEVELS/MapN/Light.dat point-light table and preview it as dynamic lights (lines up when the loaded map matches the file)." />
               <Button Classes="tool" Content="☼ Lighting" FontSize="11" Padding="8,3" Margin="0"

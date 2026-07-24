@@ -25,6 +25,20 @@ public sealed record MapSunProperties
     public Vector4 FogColor { get; init; } = Vector4.One;
     public Vector2 FogStartAndEnd { get; init; }
 
+    /// <summary>
+    /// M145: the fog range as usable positive world distances. Riot stores <c>fogStartAndEnd</c> in a
+    /// view-space depth convention — negative, and with the far value "smaller" (Twisted Treeline ships
+    /// <c>(-10000, -50000)</c>, i.e. fog from 10000 to 50000). Normalise by magnitude so callers get
+    /// (near, far) regardless of sign or ordering. False when the map authored no usable range.
+    /// </summary>
+    public bool TryGetFogRange(out float start, out float end)
+    {
+        float a = Math.Abs(FogStartAndEnd.X), b = Math.Abs(FogStartAndEnd.Y);
+        start = Math.Min(a, b);
+        end = Math.Max(a, b);
+        return end > start && end > 0f;
+    }
+
     /// <summary>Find the MapContainer's MapSunProperties component. Never throws; null when absent.</summary>
     public static MapSunProperties? Extract(byte[] materialsBin)
     {

@@ -143,6 +143,10 @@ public sealed class ViewportControl : OpenGlControlBase
     // the legacy-map viewer turns it on so props/structures read the map's baked night lighting.
     public static readonly StyledProperty<bool> UseVertexLightmapProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(UseVertexLightmap));
+    // M145: distance fog from the map's MapSunProperties (fogColor + fogStartAndEnd). Off by default —
+    // it only applies when the map actually carries fog values and the user enables it.
+    public static readonly StyledProperty<bool> FogEnabledProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(FogEnabled));
     public static readonly StyledProperty<double> VertexLightmapScaleProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(VertexLightmapScale), 2.0);
     public static readonly StyledProperty<double> BackgroundBrightnessProperty =     // M89: base sun/sky on the backdrop
@@ -222,6 +226,7 @@ public sealed class ViewportControl : OpenGlControlBase
         Matrix4x4.CreateTranslation(BackgroundOffset) * Matrix4x4.CreateRotationY((float)(BackgroundRotation * Math.PI / 180.0));
     public double BackgroundVertexLight { get => GetValue(BackgroundVertexLightProperty); set => SetValue(BackgroundVertexLightProperty, value); }
     public bool UseVertexLightmap { get => GetValue(UseVertexLightmapProperty); set => SetValue(UseVertexLightmapProperty, value); }   // M142.4
+    public bool FogEnabled { get => GetValue(FogEnabledProperty); set => SetValue(FogEnabledProperty, value); }   // M145
     public double VertexLightmapScale { get => GetValue(VertexLightmapScaleProperty); set => SetValue(VertexLightmapScaleProperty, value); }
     public double BackgroundBrightness { get => GetValue(BackgroundBrightnessProperty); set => SetValue(BackgroundBrightnessProperty, value); }
     public bool ShowGrid { get => GetValue(ShowGridProperty); set => SetValue(ShowGridProperty, value); }
@@ -759,6 +764,12 @@ public sealed class ViewportControl : OpenGlControlBase
             _dynamicLightsDirty = false;
         }
         _meshRenderer.SetVertexLightmap(UseVertexLightmap, (float)VertexLightmapScale);   // M142.4: NVR statics
+        // M145: distance fog straight from the map's MapSunProperties. Only fires when the toggle is on
+        // AND the map authored a usable range (TryGetFogRange normalises Riot's negative/reversed values).
+        float fogStart = 0f, fogEnd = 1f;
+        bool fog = false;
+        if (FogEnabled && SunProperties is { } fs) fog = fs.TryGetFogRange(out fogStart, out fogEnd);
+        _meshRenderer.SetFog(fog, fog ? SunProperties!.FogColor : Vector4.One, new Vector2(fogStart, fogEnd));
         _meshRenderer.SetDynamicLightsEnabled(DynamicLightsEnabled);
         _meshRenderer.SetLightIntensity((float)DynamicLightIntensity);
         _meshRenderer.SetLightRadiusScale((float)DynamicLightRadiusScale);
@@ -1179,7 +1190,8 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == BackgroundMaterialsProperty) { _bgTexDirty = true; RequestNextFrameRendering(); }   // M142.9
         else if (change.Property == BackgroundVisibleProperty || change.Property == BackgroundVertexLightProperty
                  || change.Property == BackgroundBrightnessProperty || change.Property == ShowGridProperty
-                 || change.Property == UseVertexLightmapProperty || change.Property == VertexLightmapScaleProperty) { RequestNextFrameRendering(); }
+                 || change.Property == UseVertexLightmapProperty || change.Property == VertexLightmapScaleProperty
+                 || change.Property == FogEnabledProperty) { RequestNextFrameRendering(); }   // M145
         else if (change.Property == ModelScaleProperty) { _skinDirty = true; RequestNextFrameRendering(); }   // M90: rescale attached VFX too
         else if (change.Property == BackgroundOffsetProperty || change.Property == BackgroundRotationProperty)
         { _dynamicLightsDirty = true; RequestNextFrameRendering(); }   // M89: move/rotate lights with the map
