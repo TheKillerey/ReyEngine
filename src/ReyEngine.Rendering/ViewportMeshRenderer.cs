@@ -50,6 +50,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _lightCount;
     private float _lightIntensity = 1f;
     private float _lightRadiusScale = 1f;
+    private float _lightFalloffSoftness;   // M160: 0 = classic (1-t)^2 falloff
     private float _lightPosScale = 1f;
     private Vector2 _lightPosScaleXZ = Vector2.One;
     private Vector2 _lightPosOffset = Vector2.Zero;
@@ -64,6 +65,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private bool _nvrFourBlend;                  // M89: NVR ground four-blend (gated per submesh by uHasMask)
     private Matrix4x4 _worldModel = Matrix4x4.Identity;   // M89: world transform for the whole mesh (move/rotate map)
     private int _mLightsTex, _mNumLights, _mLightIntensity, _mLightRadiusScale, _mLightPosScale, _mLightPosScaleXZ, _mLightPosOffset;
+    private int _mLightFalloffSoftness;   // M160
     private Vector3 _lightDirection = new(-0.4f, -0.85f, -0.45f);
     private Vector3 _sunColor = new(0.75f);
     private Vector3 _skyLight = new(0.35f);
@@ -296,6 +298,7 @@ uniform vec4 uGrassTintRect;
 uniform highp sampler2D uLightsTex;
 uniform int uNumLights;
 uniform float uLightIntensity;
+uniform float uLightFalloffSoftness; // M160: 0 = (1-t)^2, 1 = (1-t^2)^2 (wider, softer rim)
 uniform float uLightRadiusScale;   // M71: global multiplier on every light's radius (fit lights to the map)
 uniform float uLightPosScale;      // M71: master multiplier on every light's XZ position (spread the layout)
 uniform vec2 uLightPosScaleXZ;     // M71: per-axis fine scale (x, z), on top of the master spread
@@ -559,8 +562,15 @@ void main() {
             vec3 toLight = lightPos - vWorld;
             float dist = length(toLight);
             if (dist < radius) {
-                float atten = 1.0 - dist / radius;
-                atten *= atten;
+                // Falloff. The classic (1-t)^2 is already smooth into zero, but it collapses fast (4% by
+                // half radius) so the pool ends in a visible terminator. uLightFalloffSoftness blends it
+                // toward (1-t^2)^2, which holds brightness further out and lands far more gently, so the
+                // rim fades instead of drawing an edge. The baker uses this EXACT blend (BakeLighting) -
+                // if the two ever differ, baked and dynamic stop matching.
+                float t = dist / radius;
+                float sharpF = 1.0 - t;      sharpF *= sharpF;
+                float softF  = 1.0 - t * t;  softF  *= softF;
+                float atten = mix(sharpF, softF, uLightFalloffSoftness);
                 // M153: .a is the light's OWN strength; uLightIntensity below stays the global multiplier.
                 vec4 lightColour = texelFetch(uLightsTex, ivec2(i, 1), 0);
                 float ndl = max(dot(n, toLight / max(dist, 0.0001)), 0.0);
@@ -728,6 +738,7 @@ void main() { FragColor = uColor; }";
         _mNumLights = gl.GetUniformLocation(_meshProgram, "uNumLights");
         _mLightIntensity = gl.GetUniformLocation(_meshProgram, "uLightIntensity");
         _mLightRadiusScale = gl.GetUniformLocation(_meshProgram, "uLightRadiusScale");
+        _mLightFalloffSoftness = gl.GetUniformLocation(_meshProgram, "uLightFalloffSoftness");   // M160
         _mLightPosScale = gl.GetUniformLocation(_meshProgram, "uLightPosScale");
         _mLightPosScaleXZ = gl.GetUniformLocation(_meshProgram, "uLightPosScaleXZ");
         _mLightPosOffset = gl.GetUniformLocation(_meshProgram, "uLightPosOffset");
@@ -1300,6 +1311,10 @@ void main(){
     /// <summary>M71: global multiplier on every point light's radius, so a Light.dat authored for one map's
     /// scale can be fit to the geometry currently loaded.</summary>
     public void SetLightRadiusScale(float scale) => _lightRadiusScale = System.Math.Clamp(scale, 0.01f, 40f);
+    /// <summary>M160: 0 = the classic (1-t)^2 falloff, 1 = (1-t^2)^2 - a wider pool with a much gentler
+    /// rim, so a light fades out instead of ending on a visible terminator. The baker applies the SAME
+    /// blend, so baked and dynamic stay in agreement.</summary>
+    public void SetLightFalloffSoftness(float softness) => _lightFalloffSoftness = System.Math.Clamp(softness, 0f, 1f);
     /// <summary>M71: global multiplier on every point light's XZ position (about world origin), to spread a
     /// light layout authored for one map's footprint across a bigger/smaller one. Height is unaffected.</summary>
     public void SetLightPositionScale(float scale) => _lightPosScale = System.Math.Clamp(scale, 0.05f, 20f);
@@ -1742,6 +1757,7 @@ void main(){
                 _gl.Uniform1(_mNumLights, activeLights);
                 _gl.Uniform1(_mLightIntensity, _lightIntensity);
                 _gl.Uniform1(_mLightRadiusScale, _lightRadiusScale);
+                _gl.Uniform1(_mLightFalloffSoftness, _lightFalloffSoftness);   // M160
                 _gl.Uniform1(_mLightPosScale, _lightPosScale);
                 _gl.Uniform2(_mLightPosScaleXZ, _lightPosScaleXZ.X, _lightPosScaleXZ.Y);
                 _gl.Uniform2(_mLightPosOffset, _lightPosOffset.X, _lightPosOffset.Y);

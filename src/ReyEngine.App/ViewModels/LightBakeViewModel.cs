@@ -44,6 +44,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
     [ObservableProperty] private double _ambientOcclusionRadius = 400;
     [ObservableProperty] private double _rayBias = 0.5;
     [ObservableProperty] private double _exposure = 1.0;
+    [ObservableProperty] private double _falloffSoftness = 0.6;
 
     // ---- lightgrid ----
     [ObservableProperty] private bool _bakeLightGrid = true;
@@ -80,6 +81,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
         AmbientOcclusionRadius = (float)AmbientOcclusionRadius,
         RayBias = (float)RayBias,
         Exposure = (float)Exposure,
+        FalloffSoftness = (float)FalloffSoftness,
         BakeLightGrid = BakeLightGrid,
         LightGridWidth = LightGridWidth,
         LightGridHeight = LightGridHeight,

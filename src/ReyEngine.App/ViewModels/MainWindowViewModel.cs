@@ -1375,6 +1375,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public bool HasMapFog => CurrentSunProperties is { } s && s.TryGetFogRange(out _, out _);
     [ObservableProperty] private double _dynamicLightIntensity = 1.0;
     [ObservableProperty] private double _dynamicLightRadiusScale = 1.0;   // M71: global light-radius multiplier
+    // M160: point-light falloff shape (0 = tight (1-t)^2, 1 = wide soft (1-t^2)^2). Kept in sync with
+    // BakeSettings.FalloffSoftness so the Dynamic preview and the bake draw the same pools.
+    [ObservableProperty] private double _lightFalloffSoftness = 0.6;
     [ObservableProperty] private double _dynamicLightPositionScale = 1.0; // M71: master light-position spread (XZ)
     [ObservableProperty] private double _dynamicLightScaleX = 1.0;        // M71: per-axis fine scale
     [ObservableProperty] private double _dynamicLightScaleZ = 1.0;

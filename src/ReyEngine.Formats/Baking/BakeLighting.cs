@@ -62,6 +62,22 @@ public sealed class BakeLighting
 
     public float ResolveRadius(in BakePointLight l) => l.Radius * LightRadiusScale;
 
+    /// <summary>0 = the classic (1-t)^2 falloff, 1 = (1-t^2)^2. Blending toward the latter holds the
+    /// light further out and lands far more gently, so its rim fades instead of drawing a visible
+    /// terminator. Must stay identical to the shader's uLightFalloffSoftness blend.</summary>
+    public float FalloffSoftness { get; init; }
+
+    /// <summary>The shared falloff curve. THE single definition used by the atlas bake, the lightgrid
+    /// probes and (mirrored in GLSL) the viewport — so all three agree by construction.</summary>
+    public float Attenuation(float dist, float radius)
+    {
+        if (radius <= 0f || dist >= radius) return 0f;
+        float t = dist / radius;
+        float sharp = 1f - t;      sharp *= sharp;
+        float soft = 1f - t * t;   soft *= soft;
+        return sharp + (soft - sharp) * Math.Clamp(FalloffSoftness, 0f, 1f);
+    }
+
     /// <summary>Build the lighting model straight from the renderer-facing values the viewport is using,
     /// applying the SAME clamps so a bake can never exceed what the preview would have shown.</summary>
     public static BakeLighting FromViewport(
@@ -69,7 +85,7 @@ public sealed class BakeLighting
         float lightMapColorScale, IReadOnlyList<BakePointLight> lights,
         float lightIntensity, float lightRadiusScale, float lightPositionScale,
         Vector2 lightPositionScaleXZ, Vector2 lightPositionOffset,
-        bool sunShadows = true, bool pointLightShadows = true)
+        bool sunShadows = true, bool pointLightShadows = true, float falloffSoftness = 0f)
     {
         var dir = sunDirectionTowardSun.LengthSquared() < 1e-6f
             ? new Vector3(0.4f, 0.85f, 0.45f)                 // SetSunLighting's own fallback
@@ -89,6 +105,7 @@ public sealed class BakeLighting
             LightPositionOffset = lightPositionOffset,
             SunShadows = sunShadows,
             PointLightShadows = pointLightShadows,
+            FalloffSoftness = Math.Clamp(falloffSoftness, 0f, 1f),
         };
     }
 }

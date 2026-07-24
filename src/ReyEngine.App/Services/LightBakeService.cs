@@ -47,7 +47,8 @@ public sealed class LightBakeService
             lightIntensity, lightRadiusScale, lightPositionScale,
             Vector2.One, Vector2.Zero,
             sunShadows: settings.SunSamples > 0,
-            pointLightShadows: settings.PointLightSamples > 0);
+            pointLightShadows: settings.PointLightSamples > 0,
+            falloffSoftness: settings.FalloffSoftness);
 
     /// <summary>Per-group baked-lighting flags from the map's material profiles. A group whose material
     /// sets NO_BAKED_LIGHTING is excluded from the bake so its texels are never written — matching the

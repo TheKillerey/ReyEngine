@@ -164,8 +164,7 @@ public static class AtlasRasterizer
             float dist = toLight.Length();
             if (dist >= radius) continue;
 
-            float atten = 1f - dist / radius;
-            atten *= atten;
+            float atten = lighting.Attenuation(dist, radius);   // shared curve — identical to the shader
             var dir = toLight / MathF.Max(dist, 1e-4f);
             float nl = MathF.Max(Vector3.Dot(nrm, dir), 0f);
             float vis = 1f;

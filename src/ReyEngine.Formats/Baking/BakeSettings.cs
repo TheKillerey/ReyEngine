@@ -58,6 +58,11 @@ public sealed class BakeSettings
     /// baked look back up to it. 1 = physically-matched (baked is darker by exactly its occlusion).</summary>
     public float Exposure { get; set; } = 1f;
 
+    /// <summary>Shape of the point-light falloff: 0 = the classic (1-t)^2 (tight pool, visible rim),
+    /// 1 = (1-t^2)^2 (wider pool that fades out gently). Applied identically by the bake and the
+    /// viewport shader, so Baked and Dynamic always agree.</summary>
+    public float FalloffSoftness { get; set; } = 0.6f;
+
     /// <summary>Dither amplitude, in units of one 8-bit step, applied before quantising the atlas. A
     /// light's outer tail falls below one step long before it reaches the radius, so plain rounding snaps
     /// it flat and leaves a hard edge; dithering converts that contour into sub-step noise. 0 disables.</summary>

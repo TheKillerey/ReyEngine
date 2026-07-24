@@ -181,8 +181,7 @@ public static class LightBaker
             var toLight = lp - p;
             float dist = toLight.Length();
             if (radius <= 0f || dist >= radius) continue;
-            float atten = 1f - dist / radius;
-            atten *= atten;
+            float atten = lighting.Attenuation(dist, radius);   // shared curve — identical to the shader
             var ld = toLight / MathF.Max(dist, 1e-4f);
             float nl = MathF.Max(Vector3.Dot(dir, ld), 0f);
             if (lighting.PointLightShadows && scene.Occluded(p, ld, dist)) continue;

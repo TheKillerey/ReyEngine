@@ -322,6 +322,7 @@
                 DynamicLightsEnabled="{Binding ShowDynamicLights}"
                 DynamicLightIntensity="{Binding DynamicLightIntensity}"
                 DynamicLightRadiusScale="{Binding DynamicLightRadiusScale}"
+                LightFalloffSoftness="{Binding LightFalloffSoftness}"
                 DynamicLightPositionScale="{Binding DynamicLightPositionScale}"
                 DynamicLightScaleX="{Binding DynamicLightScaleX}"
                 DynamicLightScaleZ="{Binding DynamicLightScaleZ}"

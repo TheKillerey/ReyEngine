@@ -80,6 +80,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, VfxPlayback?>(nameof(ParticlePlayback));
     public static readonly StyledProperty<bool> AnimateWaterProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(AnimateWater));
+    // M160: point-light falloff shape, shared with the baker so Dynamic and Baked agree.
+    public static readonly StyledProperty<double> LightFalloffSoftnessProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(LightFalloffSoftness), 0.6);
+
     public static readonly StyledProperty<double> LightmapScaleProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(LightmapScale), 1.0);
     public static readonly StyledProperty<MapSunProperties?> SunPropertiesProperty =
@@ -291,6 +295,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public VfxPlayback? ParticlePlayback { get => GetValue(ParticlePlaybackProperty); set => SetValue(ParticlePlaybackProperty, value); }
     public bool AnimateWater { get => GetValue(AnimateWaterProperty); set => SetValue(AnimateWaterProperty, value); }
     public double LightmapScale { get => GetValue(LightmapScaleProperty); set => SetValue(LightmapScaleProperty, value); }
+    public double LightFalloffSoftness { get => GetValue(LightFalloffSoftnessProperty); set => SetValue(LightFalloffSoftnessProperty, value); }   // M160
     public MapSunProperties? SunProperties { get => GetValue(SunPropertiesProperty); set => SetValue(SunPropertiesProperty, value); }
     public IReadOnlyList<int>? HighlightSubmeshes { get => GetValue(HighlightSubmeshesProperty); set => SetValue(HighlightSubmeshesProperty, value); }
     public bool PlayPropAnimations { get => GetValue(PlayPropAnimationsProperty); set => SetValue(PlayPropAnimationsProperty, value); }
@@ -765,6 +770,7 @@ public sealed class ViewportControl : OpenGlControlBase
         // M44: advance the flowmap-water clock so the river flows; only ticks while water is on screen.
         if (AnimateWater) { if (!_waterClock.IsRunning) _waterClock.Start(); _meshRenderer.SetTime((float)_waterClock.Elapsed.TotalSeconds); }
         else if (_waterClock.IsRunning) _waterClock.Reset();
+        _meshRenderer.SetLightFalloffSoftness((float)LightFalloffSoftness);   // M160
         _meshRenderer.SetLightmapScale((float)LightmapScale);   // M45: MapSunProperties.lightMapColorScale
         _meshRenderer.SetLightmapsEnabled(LightmapsEnabled);    // M69: baked-lightmap on/off toggle
         if (_grassTintDirty)   // M78: (re)upload the map's grass-tint texture on the GL thread
@@ -1242,6 +1248,7 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == FogEnabledProperty                                      // M145
                  || change.Property == LegacyMapProperty || change.Property == NvrFourBlendProperty
                  || change.Property == NvrVertexLightProperty || change.Property == NvrBrightnessProperty   // M148
+                 || change.Property == LightFalloffSoftnessProperty                              // M160
                  || change.Property == NvrSunProperty || change.Property == NvrUseMapSunProperty) { RequestNextFrameRendering(); }   // M149
         else if (change.Property == ModelScaleProperty) { _skinDirty = true; RequestNextFrameRendering(); }   // M90: rescale attached VFX too
         else if (change.Property == BackgroundOffsetProperty || change.Property == BackgroundRotationProperty)
