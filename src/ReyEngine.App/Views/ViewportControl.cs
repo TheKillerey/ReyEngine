@@ -147,6 +147,17 @@ public sealed class ViewportControl : OpenGlControlBase
     // it only applies when the map actually carries fog values and the user enables it.
     public static readonly StyledProperty<bool> FogEnabledProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(FogEnabled));
+    // M148: the SUBJECT is a legacy NVR map (standalone map viewer), so light it like the M88/M89
+    // backdrop does instead of like a champion: a dim tunable sun/sky, the four-blend ground, and the
+    // additive baked-vertex term. Height-blend maps (Map10) opt into the M142 model via UseVertexLightmap.
+    public static readonly StyledProperty<bool> LegacyMapProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(LegacyMap));
+    public static readonly StyledProperty<bool> NvrFourBlendProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(NvrFourBlend));
+    public static readonly StyledProperty<double> NvrVertexLightProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(NvrVertexLight));
+    public static readonly StyledProperty<double> NvrBrightnessProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(NvrBrightness), 0.55);
     public static readonly StyledProperty<double> VertexLightmapScaleProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(VertexLightmapScale), 2.0);
     public static readonly StyledProperty<double> BackgroundBrightnessProperty =     // M89: base sun/sky on the backdrop
@@ -227,6 +238,10 @@ public sealed class ViewportControl : OpenGlControlBase
     public double BackgroundVertexLight { get => GetValue(BackgroundVertexLightProperty); set => SetValue(BackgroundVertexLightProperty, value); }
     public bool UseVertexLightmap { get => GetValue(UseVertexLightmapProperty); set => SetValue(UseVertexLightmapProperty, value); }   // M142.4
     public bool FogEnabled { get => GetValue(FogEnabledProperty); set => SetValue(FogEnabledProperty, value); }   // M145
+    public bool LegacyMap { get => GetValue(LegacyMapProperty); set => SetValue(LegacyMapProperty, value); }   // M148
+    public bool NvrFourBlend { get => GetValue(NvrFourBlendProperty); set => SetValue(NvrFourBlendProperty, value); }
+    public double NvrVertexLight { get => GetValue(NvrVertexLightProperty); set => SetValue(NvrVertexLightProperty, value); }
+    public double NvrBrightness { get => GetValue(NvrBrightnessProperty); set => SetValue(NvrBrightnessProperty, value); }
     public double VertexLightmapScale { get => GetValue(VertexLightmapScaleProperty); set => SetValue(VertexLightmapScaleProperty, value); }
     public double BackgroundBrightness { get => GetValue(BackgroundBrightnessProperty); set => SetValue(BackgroundBrightnessProperty, value); }
     public bool ShowGrid { get => GetValue(ShowGridProperty); set => SetValue(ShowGridProperty, value); }
@@ -764,6 +779,12 @@ public sealed class ViewportControl : OpenGlControlBase
             _dynamicLightsDirty = false;
         }
         _meshRenderer.SetVertexLightmap(UseVertexLightmap, (float)VertexLightmapScale);   // M142.4: NVR statics
+        // M148: mask-blend legacy maps (Dominion, and any NVR level with real BLEND_MAPs) need the M89
+        // four-blend ground on the SUBJECT too — without it the ground shows only its base tile. The
+        // additive baked-vertex term is their lighting model; the M142 vertex-lightmap model is for
+        // height-blend maps only, so the two never run together.
+        _meshRenderer.SetNvrFourBlend(NvrFourBlend);
+        _meshRenderer.SetVertexBakedLight(LegacyMap && !UseVertexLightmap, (float)NvrVertexLight);
         // M145: distance fog straight from the map's MapSunProperties. Only fires when the toggle is on
         // AND the map authored a usable range (TryGetFogRange normalises Riot's negative/reversed values).
         float fogStart = 0f, fogEnd = 1f;
@@ -779,11 +800,20 @@ public sealed class ViewportControl : OpenGlControlBase
         if (SunProperties is { } sun)
             _meshRenderer.SetSunLighting(sun.SunDirection, sun.SunColor, sun.SkyLightColor, sun.SkyLightScale);
         else if (UseVertexLightmap)
-            // M142.5: legacy maps light most statics by baked vertex colour; meshes that shipped WITHOUT it
-            // (LM_/decal, PrimaryColor black) fall through to this — a dim directional night sun/sky so they
-            // read as shaped night geometry, not a flat too-dark patch. White (below) would blow them out.
+            // M142.5: height-blend maps light most statics by baked vertex colour; meshes that shipped
+            // WITHOUT it (LM_/decal, PrimaryColor black) fall through to this — a dim directional night
+            // sun/sky so they read as shaped night geometry. White (below) would blow them out.
             _meshRenderer.SetSunLighting(new Vector3(-0.3f, -0.85f, -0.4f),
                 new Vector4(0.30f, 0.30f, 0.36f, 1f), new Vector4(0.20f, 0.21f, 0.26f, 1f), 1f);
+        else if (LegacyMap)
+        {
+            // M148: mask-blend / plain NVR maps use the M89 backdrop model — a flat tunable sun+sky. Their
+            // vertex colours are near-black mask/AO data (Dominion averages 0.05), NOT usable as lighting,
+            // so brightness carries the image and NvrVertexLight adds the baked term only if asked.
+            float b = (float)NvrBrightness;
+            var lit = new Vector4(b, b, b, 1f);
+            _meshRenderer.SetSunLighting(Vector3.Zero, lit, lit, 1f);
+        }
         else
             _meshRenderer.SetSunLighting(Vector3.Zero, Vector4.One, Vector4.One, 1f);
         _meshRenderer.SetSubmeshHighlight(HighlightSubmeshes);  // M50b: selection outline overlay
@@ -1191,7 +1221,9 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == BackgroundVisibleProperty || change.Property == BackgroundVertexLightProperty
                  || change.Property == BackgroundBrightnessProperty || change.Property == ShowGridProperty
                  || change.Property == UseVertexLightmapProperty || change.Property == VertexLightmapScaleProperty
-                 || change.Property == FogEnabledProperty) { RequestNextFrameRendering(); }   // M145
+                 || change.Property == FogEnabledProperty                                      // M145
+                 || change.Property == LegacyMapProperty || change.Property == NvrFourBlendProperty
+                 || change.Property == NvrVertexLightProperty || change.Property == NvrBrightnessProperty) { RequestNextFrameRendering(); }   // M148
         else if (change.Property == ModelScaleProperty) { _skinDirty = true; RequestNextFrameRendering(); }   // M90: rescale attached VFX too
         else if (change.Property == BackgroundOffsetProperty || change.Property == BackgroundRotationProperty)
         { _dynamicLightsDirty = true; RequestNextFrameRendering(); }   // M89: move/rotate lights with the map

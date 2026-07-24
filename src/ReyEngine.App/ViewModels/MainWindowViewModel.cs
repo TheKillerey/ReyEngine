@@ -3719,16 +3719,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // an earlier skin preview, or both maps render at once (Map8 backdrop behind the Map10 subject).
             MeshPreview.SetBackground(null);
             MeshPreview.Materials = bg.SubmeshMaterials;   // M142: double-sided + alpha cutout + ground flags
-            // M142.2: height-blend ground layers — height-scale map (mask), COLOR_MAP_1/2/3
-            // (gradient/emissive/matcap) and the baked composite as the modulating lightmap.
-            MeshPreview.MaskTextures = bg.SubmeshMask;
-            MeshPreview.GradientTextures = bg.SubmeshColor1;
+            // M148: NVR levels come in two flavours and need different ground + lighting models.
+            //   height-blend (Twisted Treeline): BLEND_MAP is the null_black placeholder and the real
+            //     ground is a baked composite atlas; its statics carry usable baked vertex lighting.
+            //   mask-blend (Dominion) / plain (Map4): a real four-blend BLEND_MAP or no blend at all,
+            //     and near-black vertex colours that are mask/AO data — NOT lighting. Applying the
+            //     height-blend model to those flattened Dominion's ground and washed out its lighting.
+            bool heightBlend = bg.SubmeshLightmap is not null;
+            MeshPreview.IsLegacyMap = true;
+            MeshPreview.NvrHeightBlend = heightBlend;
+            MeshPreview.LightmapTextures = bg.SubmeshLightmap;   // composite atlas (height-blend only)
+            MeshPreview.GradientTextures = bg.SubmeshColor1;     // COLOR_MAP_1/2/3 feed both models
             MeshPreview.EmissiveTextures = bg.SubmeshColor2;
             MeshPreview.MatCapTextures = bg.SubmeshColor3;
-            MeshPreview.LightmapTextures = bg.SubmeshLightmap;
-            // M142.4: structures/trees/props bake their night lighting into PrimaryColor — use it as the
-            // lightmap so they read the map's dark blue mood instead of a flat neutral fallback.
-            MeshPreview.UseVertexLightmap = true;
+            // Mask slot: the height-scale map for height-blend, else the four-blend BLEND_MAP.
+            MeshPreview.MaskTextures = heightBlend ? bg.SubmeshMask : bg.SubmeshBlend;
+            MeshPreview.NvrFourBlend = !heightBlend;
+            MeshPreview.UseVertexLightmap = heightBlend;
+            MeshPreview.NvrVertexLight = 0;         // M89 default — the baked term is opt-in per map
+            MeshPreview.NvrBrightness = 0.55;
             // M142.2: Light.dat loaded but OFF by default — the composite already bakes the light pools
             // in, so the runtime lights double them up. Toggleable later if a map needs them.
             MeshPreview.BackgroundLights = bg.Lights;

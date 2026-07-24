@@ -48,6 +48,14 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     // M142.4: legacy NVR statics use PrimaryColor AS their baked lightmap (night mood). Off for champions.
     [ObservableProperty] private bool _useVertexLightmap;
     [ObservableProperty] private double _vertexLightmapScale = 2.0;
+    // M148: legacy-map (NVR) render settings, exposed in the preview window so any map can be tuned.
+    // IsLegacyMap gates the panel; FourBlend is on for maps with real BLEND_MAPs (Dominion), off for
+    // height-blend (Twisted Treeline, which uses the composite atlas) and plain maps (Map4).
+    [ObservableProperty] private bool _isLegacyMap;
+    [ObservableProperty] private bool _nvrFourBlend;
+    [ObservableProperty] private double _nvrVertexLight;          // additive baked-vertex term (M89 "Ground")
+    [ObservableProperty] private double _nvrBrightness = 0.55;    // flat sun/sky for mask-blend + plain maps
+    [ObservableProperty] private bool _nvrHeightBlend;            // read-only indicator: composite ground map
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _wireframe;
     [ObservableProperty] private bool _cullBackfaces = true;
@@ -121,6 +129,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         MaskTextures = null; GradientTextures = null; EmissiveTextures = null;   // M142.2: map-only layers
         MatCapTextures = null; LightmapTextures = null;
         UseVertexLightmap = false;   // M142.4: map-only; champions use normal lighting
+        // M148: clear the legacy-map render mode so a champion preview never inherits a map's lighting
+        IsLegacyMap = false; NvrFourBlend = false; NvrHeightBlend = false;
+        NvrVertexLight = 0; NvrBrightness = 0.55;
         ShowBones = skeleton is not null;
         Stats = $"{mesh.VertexCount:n0} verts · {mesh.TriangleCount:n0} tris · {mesh.SubMeshes.Count} submesh(es)" +
                 (skeleton is not null ? $" · {skeleton.BoneCount} bones" : "");
