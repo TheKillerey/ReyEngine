@@ -1613,7 +1613,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Error("Layout", $"The rewritten mapgeo failed to decode ({ex.Message}) — not saved."); return null; }
 
         WriteBakedAsset(entry.Path, bytes, ".mapgeo");
-        int macrosCleared = ClearNoBakedLightingMacros(entry, result.LaidOutMaterials);
+        int macrosCleared = ClearNoBakedLightingMacros(entry, result.LaidOutMaterials, settings);
         Project.IsDirty = true;
         if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
         if (Project.IsFolderProject) { BuildMounts(); BuildProjectTree(); }
@@ -1635,11 +1635,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return result;
     }
 
+    /// <summary>M166: the shipped shader-permutation set, used to decide whether clearing a macro would
+    /// leave the material asking for a shader the client cannot load. Built once per game directory.</summary>
+    private Formats.Materials.ShaderPermutationIndex? _shaderPerms;
+    private string? _shaderPermsDir;
+    private Formats.Materials.ShaderPermutationIndex? ShaderPerms()
+    {
+        string? dir = string.IsNullOrEmpty(Project.GameDirectory) ? null
+            : Path.Combine(Project.GameDirectory, "DATA", "FINAL");
+        if (dir is null || !Directory.Exists(dir)) return null;
+        if (_shaderPerms is null || !string.Equals(_shaderPermsDir, dir, StringComparison.OrdinalIgnoreCase))
+        {
+            _shaderPerms = new Formats.Materials.ShaderPermutationIndex(dir);
+            _shaderPermsDir = dir;
+        }
+        return _shaderPerms;
+    }
+
     /// <summary>M164: clear NO_BAKED_LIGHTING from the materials that just received a lightmap layout.
     /// Without this the whole exercise is inert: the meshes point at an atlas, but both the game and our
     /// own bake skip them because the macro says "ignore baked lighting". This is the "remove
     /// incompatible shader macros" half of preparing a mesh for baking. Returns how many were cleared.</summary>
-    private int ClearNoBakedLightingMacros(WadAssetEntry mapEntry, IReadOnlyCollection<string> materials)
+    private int ClearNoBakedLightingMacros(WadAssetEntry mapEntry, IReadOnlyCollection<string> materials,
+        Formats.Baking.BakeSettings settings)
     {
         if (materials.Count == 0) return 0;
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) 
@@ -1649,14 +1667,38 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var binBytes = ReadAsset(binEntry.PathHash);
             var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName);
-            int cleared = 0;
+            var perms = ShaderPerms();
+            bool canValidate = perms is not null && perms.IsAvailable;
+            if (!canValidate)
+                _log.Warn("Layout", "No shader cache found (set the game folder) — NO_BAKED_LIGHTING was left alone. " +
+                                    "Clearing it blindly can ask the client for a shader permutation Riot never cooked.");
+
+            int cleared = 0, refused = 0;
             foreach (var m in doc.Materials)
             {
                 if (m.Name is not { } n || !materials.Contains(n)) continue;
+                // M166: only clear where the resulting define set is one the game actually ships. On
+                // Map11/base_srx 20 of 184 materials are NOT, and clearing them is what made the client
+                // log "Unable to find correct hash for shader ... in wad" and fail to compile.
+                if (!canValidate || !perms!.CanRemoveMacro(m, Formats.Materials.MaterialBinding.MacroNoBakedLighting)) { refused++; continue; }
                 if (m.RemoveMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting)) cleared++;
             }
-            if (cleared == 0) return 0;
-            WriteBakedAsset(binEntry.Path, doc.Serialize(), ".bin");
+            if (refused > 0)
+                _log.Info("Layout", $"{refused} material(s) keep NO_BAKED_LIGHTING — the game ships no shader " +
+                                    "permutation for them without it, so they stay unlit rather than failing to render.");
+            var binOut = cleared > 0 ? doc.Serialize() : binBytes;
+
+            // M167: register the lightgrid we are about to bake. Without lightGridFileName nothing loads
+            // it, so probe lighting for characters/effects/NO_BAKED_LIGHTING surfaces would stay dead.
+            string gridPath = settings.ResolveOutputFolder(mapEntry.Path) + settings.LightGridFileName();
+            var stamped = Formats.MapGeo.MapBakeProperties.Write(
+                binOut, gridPath, settings.LightGridWidth, 0.5f, out var bakeResult);
+            if (stamped is not null) { binOut = stamped; _log.Info("Layout", "MapBakeProperties: " + bakeResult.Detail); }
+            else _log.Warn("Layout", "Could not write MapBakeProperties (" + bakeResult.Detail +
+                                     ") — the baked lightgrid will not be loaded by the game.");
+
+            if (cleared == 0 && stamped is null) return 0;
+            WriteBakedAsset(binEntry.Path, binOut, ".bin");
             return cleared;
         }
         catch (Exception ex)
