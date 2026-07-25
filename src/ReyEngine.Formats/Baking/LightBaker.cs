@@ -68,6 +68,8 @@ public static class LightBaker
         var atlases = EnumerateAtlases(asset);
         if (atlases.Count == 0) return 0;
 
+        settings = ResolveExposure(settings, lighting);
+
         // Occluders: the whole map, including meshes whose own materials opt out of baked lighting —
         // a NO_BAKED_LIGHTING wall still casts a shadow.
         progress?.Report(new BakeProgress(0, atlases.Count, "", "Building ray-tracing scene"));
@@ -127,6 +129,7 @@ public static class LightBaker
         MapGeoAsset asset, BakeLighting lighting, BakeSettings settings,
         float probeHeight = 150f, IProgress<BakeProgress>? progress = null, CancellationToken ct = default)
     {
+        settings = ResolveExposure(settings, lighting);
         var min = Bounds(asset, out var boundsMax);
 
         int w = Math.Max(1, settings.LightGridWidth), h = Math.Max(1, settings.LightGridHeight);
@@ -281,6 +284,16 @@ public static class LightBaker
             }
         }
         return result;
+    }
+
+    /// <summary>M165: apply auto-exposure, once, so every consumer of the settings (atlas shading and
+    /// the lightgrid probes) uses the same value.</summary>
+    private static BakeSettings ResolveExposure(BakeSettings settings, BakeLighting lighting)
+    {
+        if (!settings.AutoExposure) return settings;
+        var s = settings.Clone();
+        s.Exposure = lighting.ComputeAutoExposure();
+        return s;
     }
 
     private static bool NeedsRays(BakeLighting lighting, BakeSettings settings) =>

@@ -80,7 +80,10 @@ public sealed partial class LightBakeViewModel : ObservableObject
     [ObservableProperty] private int _ambientOcclusionSamples = 32;
     [ObservableProperty] private double _ambientOcclusionRadius = 400;
     [ObservableProperty] private double _rayBias = 0.5;
+    [ObservableProperty] private bool _autoExposure = true;
     [ObservableProperty] private double _exposure = 1.0;
+    /// <summary>What auto-exposure resolved to for this map, shown so the choice isn't invisible.</summary>
+    [ObservableProperty] private string _exposureNote = "";
     [ObservableProperty] private double _falloffSoftness = 0.6;
     [ObservableProperty] private bool _smoothNormals = true;
     [ObservableProperty] private double _smoothingAngle = 120;
@@ -119,6 +122,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
         AmbientOcclusionSamples = AmbientOcclusionSamples,
         AmbientOcclusionRadius = (float)AmbientOcclusionRadius,
         RayBias = (float)RayBias,
+        AutoExposure = AutoExposure,
         Exposure = (float)Exposure,
         FalloffSoftness = (float)FalloffSoftness,
         SmoothNormals = SmoothNormals,
@@ -135,6 +139,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
     partial void OnCompressBc3Changed(bool value) => RecomputeEstimate();
     partial void OnGenerateMipsChanged(bool value) => RecomputeEstimate();
     partial void OnBakeLightGridChanged(bool value) => RecomputeEstimate();
+    partial void OnAutoExposureChanged(bool value) => RecomputeEstimate();
 
     private void RecomputeEstimate()
     {
@@ -161,6 +166,15 @@ public sealed partial class LightBakeViewModel : ObservableObject
                 : "Load a map with a lightmap layout, and save the project, before baking.";
             return;
         }
+
+        if (AutoExposure)
+        {
+            float auto = inputs.Lighting.ComputeAutoExposure();
+            ExposureNote = auto >= 0.999f
+                ? "Auto: 1.00 — this map has enough headroom, exposure unchanged."
+                : $"Auto: {auto:0.00} — lowered to stop the atlas clipping (lightMapColorScale {inputs.Lighting.LightMapColorScale:0.##}).";
+        }
+        else ExposureNote = "Manual exposure.";
 
         int atlasCount = LightBaker.EnumerateAtlases(inputs.Map).Count;
         long grid = s.BakeLightGrid ? (long)LightGridWidth * LightGridHeight * 24 + 32 : 0;

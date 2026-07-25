@@ -67,6 +67,29 @@ public sealed class BakeLighting
     /// terminator. Must stay identical to the shader's uLightFalloffSoftness blend.</summary>
     public float FalloffSoftness { get; init; }
 
+    /// <summary>M165: the exposure that keeps this map's ambient term inside the atlas's 8-bit range.
+    ///
+    /// The atlas stores <c>light / lightMapColorScale</c>, because the shader multiplies by that scale on
+    /// the way back. When the scale is SMALL the baker has no headroom: Map11 has sun and sky both at
+    /// (1,1,1) — linear light reaches 2.0 — and a scale of 0.6, so it must store 3.3x and 100% of lit
+    /// texels clip to white. Map12 gets away with exposure 1.0 only because its scale is 2.0.
+    ///
+    /// This returns <c>target * scale / maxAmbient</c>, CLAMPED TO AT MOST 1. It is deliberately a
+    /// clipping guard, not a normaliser: a map with plenty of headroom keeps exposure 1.0 and looks
+    /// exactly as before, rather than being brightened into a different look.
+    ///
+    /// Only the ambient (sky + sun at full N.L) term is considered. Point lights are local and their hot
+    /// cores clipping is normal HDR-to-LDR behaviour; folding their worst case in would crush the whole
+    /// map's exposure for a few bright spots.</summary>
+    public float ComputeAutoExposure(float target = 0.9f)
+    {
+        var ambient = SkyLight + SunColor;
+        float maxAmbient = MathF.Max(ambient.X, MathF.Max(ambient.Y, ambient.Z));
+        if (maxAmbient <= 1e-4f) return 1f;
+        float scale = MathF.Max(LightMapColorScale, 1e-3f);
+        return Math.Clamp(target * scale / maxAmbient, 0.02f, 1f);
+    }
+
     /// <summary>The shared falloff curve. THE single definition used by the atlas bake, the lightgrid
     /// probes and (mirrored in GLSL) the viewport — so all three agree by construction.</summary>
     public float Attenuation(float dist, float radius)

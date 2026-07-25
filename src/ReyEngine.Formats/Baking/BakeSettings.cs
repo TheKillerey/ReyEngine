@@ -53,6 +53,12 @@ public sealed class BakeSettings
     /// <summary>Nudge along the normal before tracing, so a texel can't shadow its own surface.</summary>
     public float RayBias { get; set; } = 0.5f;
 
+    /// <summary>M165: derive Exposure from the map itself instead of using the manual value — see
+    /// BakeLighting.ComputeAutoExposure. It only ever LOWERS exposure to stop the atlas clipping, so a
+    /// map with enough headroom (Map12, scale 2.0) is unaffected while one without (Map11, scale 0.6)
+    /// stops baking to solid white. On by default because the manual default was wrong for such maps.</summary>
+    public bool AutoExposure { get; set; } = true;
+
     /// <summary>Uniform brightness multiplier on the baked result. The Dynamic viewport preview is a
     /// shadowless, AO-less flat wash and so reads brighter than a real bake; raise this to bring the
     /// baked look back up to it. 1 = physically-matched (baked is darker by exactly its occlusion).</summary>

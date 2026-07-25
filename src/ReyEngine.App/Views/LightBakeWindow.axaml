@@ -160,8 +160,14 @@
                          Foreground="{DynamicResource ReyTextBrush}"
                          ToolTip.Tip="Brightness multiplier on the baked result. The Dynamic preview is a shadowless, AO-less flat wash and reads brighter than a real bake — raise this (e.g. 1.3–1.8) to bring Baked back up to match it. 1.0 = physically matched." />
               <NumericUpDown Grid.Column="1" Value="{Binding Exposure}" Increment="0.1" Minimum="0.1" Maximum="8"
+                             IsEnabled="{Binding !AutoExposure}"
                              FormatString="0.##" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
             </Grid>
+
+            <CheckBox Content="Auto exposure" IsChecked="{Binding AutoExposure}" FontSize="11"
+                      ToolTip.Tip="Derive exposure from the map so the atlas cannot clip to white. It only ever LOWERS exposure — a map with enough headroom is left at 1.0 and looks unchanged. Map11 needs ~0.29 because its lightMapColorScale is 0.6; Map12 needs nothing because its is 2.0." />
+            <TextBlock Text="{Binding ExposureNote}" FontSize="10" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
 
             <Grid ColumnDefinitions="150,*">
               <TextBlock Grid.Column="0" Text="Falloff softness" VerticalAlignment="Center" FontSize="11"
