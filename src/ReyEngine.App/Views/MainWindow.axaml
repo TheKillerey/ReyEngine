@@ -416,6 +416,20 @@
 
             <!-- row 2: map lighting + tools -->
             <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+              <!-- M169: the lighting-mode segment stays in the viewport — it is the control you click
+                   constantly while comparing a bake, and the rest of the lighting panel moved to
+                   Tools ▸ Light ▸ Lighting…, which is what shortened this row. -->
+              <Border IsVisible="{Binding HasMapGeo}"
+                      Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="2">
+                <StackPanel Orientation="Horizontal" Spacing="1">
+                  <ToggleButton Classes="vp" Content="Dynamic" IsChecked="{Binding IsLightingDynamic}"
+                                ToolTip.Tip="Sun/sky fallback + editable point lights, no baked atlas — the live authoring view you bake from." />
+                  <ToggleButton Classes="vp" Content="Baked" IsChecked="{Binding IsLightingBaked}"
+                                ToolTip.Tip="Baked lightmap only, point lights off — how the map looks in game after a bake." />
+                  <ToggleButton Classes="vp" Content="Combined" IsChecked="{Binding IsLightingCombined}"
+                                ToolTip.Tip="Baked lightmap AND dynamic lights together — a debug overlay to compare the two." />
+                </StackPanel>
+              </Border>
               <ToggleButton Classes="vp" Content="✧ Particles" IsChecked="{Binding ShowParticles}"
                             IsVisible="{Binding HasParticles}"
                             ToolTip.Tip="Show placed particle-system markers (MapParticle)" />
