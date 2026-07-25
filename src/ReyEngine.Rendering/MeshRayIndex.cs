@@ -213,6 +213,72 @@ public sealed class MeshRayIndex
     /// <summary>Which submesh owns a triangle (-1 when no submesh covers it).</summary>
     public int SubmeshOf(int triangle) => (uint)triangle < (uint)_submeshOf.Length ? _submeshOf[triangle] : -1;
 
+    /// <summary>The triangle's three world corners.</summary>
+    public void GetTriangle(int t, out Vector3 a, out Vector3 b, out Vector3 c)
+    {
+        a = _v0[t]; b = a + _e1[t]; c = a + _e2[t];
+    }
+
+    /// <summary>The triangle's three UV0 corners, in the same order as <see cref="GetTriangle"/>.</summary>
+    public void GetTriangleUv(int t, out Vector2 a, out Vector2 b, out Vector2 c)
+    {
+        a = b = c = Vector2.Zero;
+        if (_uvs is null) return;
+        int i0 = (int)_indices[t * 3] * 2, i1 = (int)_indices[t * 3 + 1] * 2, i2 = (int)_indices[t * 3 + 2] * 2;
+        if (i0 + 1 >= _uvs.Length || i1 + 1 >= _uvs.Length || i2 + 1 >= _uvs.Length) return;
+        a = new Vector2(_uvs[i0], _uvs[i0 + 1]);
+        b = new Vector2(_uvs[i1], _uvs[i1 + 1]);
+        c = new Vector2(_uvs[i2], _uvs[i2 + 1]);
+    }
+
+    /// <summary>Every triangle whose bounding box comes within <paramref name="radius"/> of
+    /// <paramref name="center"/>. A brush dab is a world-space sphere, and it has to find all the
+    /// geometry it covers — not just the one triangle the cursor ray hit, or a stroke would stop dead at
+    /// every triangle edge.
+    ///
+    /// Box-level, so it over-reports slightly; the caller is doing an exact per-texel distance test
+    /// anyway, and a few extra candidates are far cheaper than missing one.</summary>
+    public void OverlapSphere(Vector3 center, float radius, IReadOnlyList<bool>? visible, Action<int> onTriangle)
+    {
+        if (_nodeCount == 0 || radius <= 0f) return;
+        float r2 = radius * radius;
+
+        Span<int> stack = stackalloc int[64];
+        int sp = 0;
+        stack[sp++] = 0;
+        while (sp > 0)
+        {
+            int ni = stack[--sp];
+            ref var node = ref _nodes[ni];
+            if (SquaredDistanceToBox(center, node.Min, node.Max) > r2) continue;
+
+            if (node.Count > 0)
+            {
+                for (int i = node.Start; i < node.Start + node.Count; i++)
+                {
+                    int t = _order[i];
+                    int sm = _submeshOf[t];
+                    if (sm < 0) continue;
+                    if (visible is not null && sm < visible.Count && !visible[sm]) continue;
+                    onTriangle(t);
+                }
+            }
+            else if (sp + 2 <= stack.Length)
+            {
+                stack[sp++] = ni + 1;
+                stack[sp++] = node.Right;
+            }
+        }
+    }
+
+    private static float SquaredDistanceToBox(in Vector3 p, in Vector3 bmin, in Vector3 bmax)
+    {
+        float dx = MathF.Max(0f, MathF.Max(bmin.X - p.X, p.X - bmax.X));
+        float dy = MathF.Max(0f, MathF.Max(bmin.Y - p.Y, p.Y - bmax.Y));
+        float dz = MathF.Max(0f, MathF.Max(bmin.Z - p.Z, p.Z - bmax.Z));
+        return dx * dx + dy * dy + dz * dz;
+    }
+
     private static bool SlabHit(in Vector3 bmin, in Vector3 bmax, in Vector3 o, in Vector3 inv, float maxDist)
     {
         float t1 = (bmin.X - o.X) * inv.X, t2 = (bmax.X - o.X) * inv.X;

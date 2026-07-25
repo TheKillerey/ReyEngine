@@ -130,6 +130,7 @@ public partial class MainWindow : Window
             vm.ShowLightBakeWindow = () => ShowLightBake(vm);             // M158
             vm.ShowLightingWindow = () => ShowLighting(vm);               // M169
             vm.ShowTextureRecolorWindow = () => ShowTextureRecolor(vm);   // M171
+            vm.PushTextureRegion = Viewport.QueueTextureUpdate;            // M172c: live brush strokes
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop
@@ -491,6 +492,16 @@ public partial class MainWindow : Window
         e.Pointer.Capture(ViewportInput);
         ViewportInput.Focus(); // so WASD/F reach the viewport
 
+        // M172c: paint mode owns the left drag. Checked before the gizmo and before StartFly, because in
+        // paint mode a left-drag is a brush stroke, not a camera move or a handle grab.
+        if (_lmb && !_alt && DataContext is MainWindowViewModel pvm && pvm.IsPaintMode
+            && Viewport.TryGetPickRay(pt.Position, out var pOrigin, out var pDir))
+        {
+            _painting = true;
+            pvm.BeginPaintStroke(pOrigin, pDir);
+            return;
+        }
+
         if (_lmb && !_alt)
         {
             var axis = Viewport.HitTestGizmoAxis(pt.Position);
@@ -529,11 +540,20 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool _painting;
+
     private void OnViewportPointerMoved(object? sender, PointerEventArgs e)
     {
         var p = e.GetPosition(ViewportInput);
         if (Math.Abs(p.X - _pressPos.X) > ClickSlopPixels || Math.Abs(p.Y - _pressPos.Y) > ClickSlopPixels)
             _pressMoved = true;
+
+        if (DataContext is MainWindowViewModel mvm && mvm.IsPaintMode
+            && Viewport.TryGetPickRay(p, out var mOrigin, out var mDir))
+        {
+            if (_painting) { mvm.PaintStrokeMove(mOrigin, mDir); return; }
+            mvm.PaintHoverAt(mOrigin, mDir);   // badge: what would a stroke here change?
+        }
 
         if (_gizmoDragAxis is { } axis && DataContext is MainWindowViewModel gvm)
         {
@@ -591,6 +611,15 @@ public partial class MainWindow : Window
 
     private void OnViewportPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
+        if (_painting)
+        {
+            _painting = false;
+            (DataContext as MainWindowViewModel)?.EndPaintStroke();   // M172c: the whole drag = ONE undo step
+            _lmb = _rmb = _mmb = false;
+            e.Pointer.Capture(null);
+            return;
+        }
+
         bool wasGizmoDrag = _gizmoDragAxis is not null;
         if (wasGizmoDrag)
         {

@@ -375,6 +375,52 @@
                     KeyDown="OnViewportKeyDown"
                     KeyUp="OnViewportKeyUp" />
 
+            <!-- M172c: brush palette. Floats over the viewport bottom-left, out of the way of the
+                 toolbars top-right, and only while paint mode is on. -->
+            <Border IsVisible="{Binding IsPaintMode}" Classes="card" Margin="10" Padding="12"
+                    CornerRadius="6" HorizontalAlignment="Left" VerticalAlignment="Bottom" Width="252">
+              <StackPanel Spacing="6">
+                <TextBlock Text="BRUSH" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+                <ColorPicker Color="{Binding PaintColor}" HorizontalAlignment="Stretch"
+                             IsAlphaVisible="False" IsColorPaletteVisible="True"
+                             ToolTip.Tip="The colour laid down. Alpha is never painted — it carries cutout data for foliage." />
+
+                <TextBlock Text="{Binding PaintRadius, StringFormat='Size  {0:0} world units'}" FontSize="11"
+                           Foreground="{DynamicResource ReyTextBrush}" />
+                <Slider Minimum="10" Maximum="1200" Value="{Binding PaintRadius}"
+                        ToolTip.Tip="Radius in world units, not texels — so the brush stays the same physical size whatever the surface's texture density." />
+
+                <TextBlock Text="{Binding PaintOpacity, StringFormat='Strength  {0:0.00}'}" FontSize="11"
+                           Foreground="{DynamicResource ReyTextBrush}" />
+                <Slider Minimum="0.02" Maximum="1" Value="{Binding PaintOpacity}" />
+
+                <TextBlock Text="{Binding PaintHardness, StringFormat='Hardness  {0:0.00}'}" FontSize="11"
+                           Foreground="{DynamicResource ReyTextBrush}" />
+                <Slider Minimum="0" Maximum="1" Value="{Binding PaintHardness}"
+                        ToolTip.Tip="How much of the radius is full strength before the edge falls off. 1 = hard edge." />
+
+                <TextBlock Text="{Binding PaintSeamBleed, StringFormat='Seam bleed  {0:0} texels'}" FontSize="11"
+                           Foreground="{DynamicResource ReyTextBrush}" />
+                <Slider Minimum="0" Maximum="12" Value="{Binding PaintSeamBleed}"
+                        ToolTip.Tip="How far paint carries past a UV island's edge. Without it a stroke crossing a seam leaves a hairline crack, which filtering and mipmaps widen." />
+
+                <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6"
+                        IsVisible="{Binding PaintHover, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                  <TextBlock Text="{Binding PaintHover}" FontSize="10" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                </Border>
+
+                <Button Classes="primary" Content="💾 Save painted textures"
+                        Command="{Binding SavePaintedTexturesCommand}" IsEnabled="{Binding HasUnsavedPaint}"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        FontSize="11" Padding="8,5"
+                        ToolTip.Tip="Encode every painted texture back into its original .tex format and write it into the project." />
+                <TextBlock Text="{Binding PaintStatus}" FontSize="10" TextWrapping="Wrap"
+                           Foreground="{DynamicResource ReyTextDimBrush}" />
+              </StackPanel>
+            </Border>
+
             <!-- M104: view toggles in TWO rows (one row overflowed the viewport width).
                  Row 1 = history + shading/display · Row 2 = map lighting + tools. -->
             <StackPanel Spacing="4" Margin="10" HorizontalAlignment="Right" VerticalAlignment="Top">
@@ -438,6 +484,9 @@
               <ToggleButton Classes="vp" Content="✧ Particles" IsChecked="{Binding ShowParticles}"
                             IsVisible="{Binding HasParticles}"
                             ToolTip.Tip="Show placed particle-system markers (MapParticle)" />
+              <ToggleButton Classes="vp" Content="🖌 Paint" IsChecked="{Binding IsPaintMode}"
+                            IsVisible="{Binding HasMapGeo}"
+                            ToolTip.Tip="Paint colour straight onto the map with a brush. Left-drag paints; the camera keeps Alt-drag and right-drag." />
               <ToggleButton Classes="vp" Content="⊞ Buckets" IsChecked="{Binding ShowBucketGrid}"
                             IsVisible="{Binding HasBucketGrids}"
                             ToolTip.Tip="Show the map's culling bucket grid: the baked scene mesh as 3D wireframe + the flat cell boundaries." />

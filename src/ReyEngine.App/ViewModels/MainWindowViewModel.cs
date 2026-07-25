@@ -1869,6 +1869,203 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void InvalidateRayIndex()
     {
         lock (_rayIndexLock) { _rayIndex = null; _rayIndexMap = null; _rayIndexRevision = -1; }
+        // The paint session caches the index and the texture set; both are about to be different.
+        _paintSession = null;
+        _paintStrokeActive = false;
+    }
+
+    // ============================================================ M172c: paint on meshes
+
+    /// <summary>Set by the view: pushes a painted rectangle to the GPU without a reload.</summary>
+    public Action<TextureImage, Avalonia.PixelRect>? PushTextureRegion { get; set; }
+
+    [ObservableProperty] private bool _isPaintMode;
+    [ObservableProperty] private Avalonia.Media.Color _paintColor = Avalonia.Media.Color.FromRgb(200, 60, 40);
+    /// <summary>Brush radius in WORLD units. Texel density varies by orders of magnitude between meshes,
+    /// so a texel-sized brush would be a speck on the ground and swallow a prop whole.</summary>
+    [ObservableProperty] private double _paintRadius = 120;
+    [ObservableProperty] private double _paintHardness = 0.5;
+    [ObservableProperty] private double _paintOpacity = 1.0;
+    [ObservableProperty] private double _paintSeamBleed = 3;
+    [ObservableProperty] private string _paintStatus = "";
+    [ObservableProperty] private string _paintHover = "";
+    [ObservableProperty] private bool _paintHoverIsWarning;
+    [ObservableProperty] private int _paintedTextureCount;
+
+    /// <summary>Textures stacked over themselves badly enough that a stroke would show up in several
+    /// unrelated places. Periph_Vista is the whole distant backdrop — 33.7% of the map's world area with
+    /// its texture covered 5.04x over — so a single dab would appear five times across the horizon.</summary>
+    private static readonly string[] PaintBlockedTextures = { "periph_vista" };
+
+    private MapPaintSession? _paintSession;
+    private bool _paintStrokeActive;
+
+    partial void OnIsPaintModeChanged(bool value)
+    {
+        if (!value) { _paintSession = null; PaintHover = ""; return; }
+        if (_currentMap is null)
+        {
+            IsPaintMode = false;
+            _log.Warn("Paint", "Open a map (.mapgeo) first.");
+            return;
+        }
+        PaintStatus = "Drag on the map to paint. Painting edits the texture, so every mesh that shares it changes too.";
+    }
+
+    /// <summary>Build (or reuse) the session bound to the current map and its live texture set.</summary>
+    private MapPaintSession? EnsurePaintSession()
+    {
+        if (_currentMap is not { } map || RayIndex is not { } index) return null;
+        if (CurrentModelTextures is not { } textures) return null;
+        if (_paintSession is not null) return _paintSession;
+
+        // Per-submesh texture path + material, alongside the per-submesh TextureImage the viewport already
+        // uploaded. Painting through those instances is what makes a stroke appear without a reload.
+        var paths = new string?[map.Groups.Count];
+        var materials = new string[map.Groups.Count];
+        for (int i = 0; i < map.Groups.Count; i++)
+        {
+            materials[i] = map.Groups[i].Material ?? "";
+            paths[i] = _currentMaterialToTexture is { } m2t && m2t.TryGetValue(materials[i], out var p) ? p : null;
+        }
+
+        var blocked = paths.Where(p => p is not null)
+            .Where(p => PaintBlockedTextures.Any(b => p!.Contains(b, StringComparison.OrdinalIgnoreCase)))
+            .Select(p => p!).Distinct().ToList();
+
+        return _paintSession = new MapPaintSession(index, textures, paths, materials,
+            CurrentModelSubmeshVisible, blocked);
+    }
+
+    /// <summary>Hover feedback: what would a stroke here change?</summary>
+    public void PaintHoverAt(System.Numerics.Vector3 origin, System.Numerics.Vector3 dir)
+    {
+        if (!IsPaintMode || EnsurePaintSession() is not { } session) { PaintHover = ""; return; }
+        if (session.Probe(origin, System.Numerics.Vector3.Normalize(dir)) is not { } probe)
+        {
+            PaintHover = ""; PaintHoverIsWarning = false; return;
+        }
+        PaintHoverIsWarning = probe.Warning is not null;
+        PaintHover = $"{Path.GetFileName(probe.AssetPath)}  {probe.Width}x{probe.Height}"
+                     + (probe.Warning is { } w ? "  —  " + w : "");
+    }
+
+    public void BeginPaintStroke(System.Numerics.Vector3 origin, System.Numerics.Vector3 dir)
+    {
+        if (!IsPaintMode || EnsurePaintSession() is not { } session) return;
+        session.BeginStroke();
+        _paintStrokeActive = true;
+        PaintStrokeMove(origin, dir);
+    }
+
+    public void PaintStrokeMove(System.Numerics.Vector3 origin, System.Numerics.Vector3 dir)
+    {
+        if (!_paintStrokeActive || _paintSession is not { } session) return;
+        var d = System.Numerics.Vector3.Normalize(dir);
+        if (session.Pick(origin, d) is not { } hit) return;
+
+        var brush = new ReyEngine.Core.Painting.PaintBrush
+        {
+            Color = new System.Numerics.Vector3(PaintColor.R / 255f, PaintColor.G / 255f, PaintColor.B / 255f),
+            Radius = (float)PaintRadius,
+            Hardness = (float)PaintHardness,
+            Opacity = (float)PaintOpacity,
+            SeamBleedTexels = (float)PaintSeamBleed,
+        };
+
+        foreach (var painted in session.StrokeTo(hit.Position, d, brush))
+        {
+            session.MarkPainted(painted.Image, painted.AssetPath);
+            PushTextureRegion?.Invoke(painted.Image, new Avalonia.PixelRect(
+                painted.Rect.MinX, painted.Rect.MinY, painted.Rect.Width, painted.Rect.Height));
+        }
+    }
+
+    public void EndPaintStroke()
+    {
+        if (!_paintStrokeActive || _paintSession is not { } session) return;
+        _paintStrokeActive = false;
+        if (session.EndStroke() is not { } record) return;
+
+        UndoService.PushApplied(new PaintStrokeCommand(record, _currentMap!, RepaintAfterUndo));
+        PaintedTextureCount = session.PaintedTextures.Count;
+        HasUnsavedPaint = PaintedTextureCount > 0;
+        PaintStatus = $"{PaintedTextureCount} texture(s) painted — not saved yet.";
+    }
+
+    /// <summary>Undo/redo changed texels behind the viewport's back; push the affected rectangles.</summary>
+    private void RepaintAfterUndo(PaintStrokeRecord record)
+    {
+        foreach (var e in record.Entries)
+            PushTextureRegion?.Invoke(e.Image, new Avalonia.PixelRect(
+                e.Rect.MinX, e.Rect.MinY, e.Rect.Width, e.Rect.Height));
+    }
+
+    [ObservableProperty] private bool _hasUnsavedPaint;
+
+    /// <summary>M172d: write every painted texture back as a real .tex.
+    ///
+    /// Encoding happens ONCE, here — never per stroke. The painted master is uncompressed RGBA the whole
+    /// time it is being edited, so a session of hundreds of strokes still costs a single BC generation.
+    /// The source pixel format is preserved: 160 of base_srx's 169 diffuse textures are BC1, and letting
+    /// them default to BC3 would exactly double each one (2,796,228 -> 5,592,444 bytes).</summary>
+    [RelayCommand]
+    private async Task SavePaintedTextures()
+    {
+        if (_paintSession is not { } session) return;
+        var painted = session.PaintedTextures;
+        if (painted.Count == 0) { PaintStatus = "Nothing painted yet."; return; }
+        if (!Project.IsFolderProject && Project.OverridesDirectory is null)
+        {
+            PaintStatus = "This project has nowhere to write to — save the project first.";
+            return;
+        }
+
+        PaintStatus = $"Encoding {painted.Count} texture(s)…";
+        int written = 0, failed = 0;
+        long bytes = 0;
+        var notes = new List<string>();
+
+        await Task.Run(() =>
+        {
+            foreach (var (image, path) in painted)
+            {
+                try
+                {
+                    // Read the ORIGINAL only to learn its container shape — format and whether it had
+                    // mips. The pixels come from the painted master, not from a re-decode.
+                    var original = ReadRecolorBase(new RecolorTarget(HashAlgorithms.WadPath(path), path))
+                                   ?? TryReadAssetBytes(HashAlgorithms.WadPath(path));
+                    var format = original is not null ? TexWriter.DetectFormat(original) : null;
+                    if (format is null)
+                    {
+                        failed++;
+                        notes.Add($"{Path.GetFileName(path)}: could not read its original format — skipped rather than guessing.");
+                        continue;
+                    }
+                    bool mips = original is not null && TextureRecolor.HasMips(original);
+                    var texBytes = TexWriter.Write(image, format.Value, mips);
+                    WriteRecoloredAsset(path, texBytes, ".tex");
+                    written++;
+                    bytes += texBytes.Length;
+                }
+                catch (Exception ex) { failed++; notes.Add($"{Path.GetFileName(path)}: {ex.Message}"); }
+            }
+        });
+
+        foreach (var n in notes) _log.Warn("Paint", n);
+        _log.Success("Paint", $"{written:n0} painted texture(s) written ({bytes / 1048576.0:F1} MB)"
+                              + (failed > 0 ? $", {failed} failed" : "") + ".");
+        PaintStatus = $"Saved {written:n0} texture(s) ({bytes / 1048576.0:F1} MB)"
+                      + (failed > 0 ? $", {failed} failed — see the console" : "") + ".";
+        HasUnsavedPaint = failed > 0 && written == 0;
+
+        Project.IsDirty = true;
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        // Re-index so the project tree and the packer see the new files. Deliberately NOT reloading the
+        // map: the viewport already shows the painted pixels, and a reload would throw away the session.
+        if (Project.IsFolderProject) { BuildMounts(); BuildProjectTree(); }
+        UpdateTitle();
     }
 
     public Action? ShowTextureRecolorWindow { get; set; }
@@ -2119,7 +2316,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private int _previewMode; // 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal
     [ObservableProperty] private string _shaderDbStatus = "Riot shaders not scanned.";
     private MapGeoAsset? _currentMap;
-    private IReadOnlyDictionary<string, MaterialProfile>? _currentMapProfiles; // M34: material name → render-state profile
+    private IReadOnlyDictionary<string, MaterialProfile>? _currentMapProfiles;
+    private Dictionary<string, string>? _currentMaterialToTexture;   // M172c: material name -> diffuse .tex path // M34: material name → render-state profile
     // Map-only secondary layers. Flow water uses mask/gradient; terrain shader 0xe25b830f additionally reuses
     // emissive/matcap as top/extras. Keep them across ClearSecondaryTextures() just like baked lightmaps.
     private IReadOnlyList<TextureImage?>? _mapFlowMasks;
@@ -4833,6 +5031,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Info("MapGeo", "Materials .bin didn't resolve any textures — rendering flat.");
             return (null, sunProperties);
         }
+        _currentMaterialToTexture = materialToTexture;   // M172c: the paint session needs per-submesh paths
         return (BuildMapTextures(map, materialToTexture, profiles, names.Count), sunProperties);
     }
 
