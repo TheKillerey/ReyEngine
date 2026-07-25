@@ -84,11 +84,12 @@ public sealed class ViewportMeshRenderer : IDisposable
     private uint _boundsVao, _boundsVbo;
     private uint _boneVao, _boneVbo;
     private uint _highlightVao, _highlightVbo;
+    private uint _brushRingVao, _brushRingVbo;   // M172e: paint brush footprint
     private uint _groupBoundsVao, _groupBoundsVbo;
     private uint _gizmoVao, _gizmoVbo;
     private uint _particleVao, _particleVbo, _particleSelVao, _particleSelVbo;   // M35: placed-particle markers
     private uint _propVao, _propVbo, _probeVao, _probeVbo;                       // M38: prop / cubemap-probe markers
-    private int _boundsVerts, _boneVerts, _highlightVerts, _groupBoundsVerts;
+    private int _boundsVerts, _boneVerts, _highlightVerts, _groupBoundsVerts, _brushRingVerts;
     private int _particleVerts, _particleSelVerts, _propVerts, _probeVerts;
 
     // M41: placed animated-prop meshes — unique geometry registered once, instanced per placement.
@@ -753,6 +754,8 @@ void main() { FragColor = uColor; }";
         _boundsVbo = gl.GenBuffer();
         _boneVao = gl.GenVertexArray();
         _boneVbo = gl.GenBuffer();
+        _brushRingVao = gl.GenVertexArray();
+        _brushRingVbo = gl.GenBuffer();
         _highlightVao = gl.GenVertexArray();
         _highlightVbo = gl.GenBuffer();
         _groupBoundsVao = gl.GenVertexArray();
@@ -1243,7 +1246,7 @@ void main(){
     /// pulls back far enough to sample a lower level. That rebuild is the dominant cost here
     /// (~0.15–0.21 ms on a 2048² against ~0.05 ms for a 128² patch), and it is still ~1/80th of a frame.</summary>
     public unsafe void UpdateTextureRegion(uint textureId, byte[] rgba, int imageWidth, int imageHeight,
-        int x, int y, int width, int height)
+        int x, int y, int width, int height, bool regenerateMips = true)
     {
         if (!_ready || textureId == 0 || rgba is null) return;
 
@@ -1263,7 +1266,9 @@ void main(){
                 PixelFormat.Rgba, PixelType.UnsignedByte, origin);
         }
         _gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);   // GL state is global — always restore
-        _gl.GenerateMipmap(TextureTarget.Texture2D);
+        // Rebuilding the chain costs far more than the patch itself, and mid-stroke the user is looking at
+        // level 0 anyway. The caller throttles it and always forces one at the end of a stroke.
+        if (regenerateMips) _gl.GenerateMipmap(TextureTarget.Texture2D);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
     }
 
@@ -1668,6 +1673,53 @@ void main(){
     public void SetLightMarkers(IReadOnlyList<Vector3> positions, float size)
     { _lightMkSize = size * 1.4f; SetIconMarkers(_lightMkVbo, positions, out _lightMkVerts); }
 
+    /// <summary>M172e: the paint brush's footprint, drawn as a ring lying on the surface under the cursor.
+    ///
+    /// Built in world space rather than as a screen-space circle on purpose: the brush IS a world-space
+    /// sphere, so a world ring shows its true size — it foreshortens on a slope and grows as you zoom in,
+    /// which is exactly the feedback needed to judge coverage. A fixed screen circle would lie about all
+    /// of that.
+    ///
+    /// Two concentric rings: the outer one is the radius, the inner one marks where the hardness plateau
+    /// ends and the falloff begins. Pass a null centre to hide it.</summary>
+    public void SetBrushRing(Vector3? center, Vector3 normal, float radius, float hardness)
+    {
+        if (!_ready) return;
+        if (center is not { } c || radius <= 0f) { _brushRingVerts = 0; return; }
+
+        // An orthonormal basis in the surface plane. The seed axis is whichever cardinal is least
+        // parallel to the normal, so the cross product never collapses on a floor or a wall.
+        var n = normal.LengthSquared() > 1e-9f ? Vector3.Normalize(normal) : Vector3.UnitY;
+        var seed = MathF.Abs(n.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitX;
+        var u = Vector3.Normalize(Vector3.Cross(seed, n));
+        var v = Vector3.Cross(n, u);
+
+        const int Segments = 72;
+        float innerR = radius * Math.Clamp(hardness, 0f, 1f);
+        bool drawInner = innerR > radius * 0.03f;
+        int rings = drawInner ? 2 : 1;
+        var verts = new float[rings * Segments * 2 * 3];
+
+        int k = 0;
+        for (int ring = 0; ring < rings; ring++)
+        {
+            float r = ring == 0 ? radius : innerR;
+            // Lift slightly along the normal so the ring reads on top of the surface it hugs instead of
+            // z-fighting with it. Scaled by radius so it stays proportional at any brush size.
+            var lift = n * MathF.Max(1f, radius * 0.02f);
+            for (int i = 0; i < Segments; i++)
+            {
+                float a0 = i / (float)Segments * MathF.Tau;
+                float a1 = (i + 1) / (float)Segments * MathF.Tau;
+                var p0 = c + lift + (u * MathF.Cos(a0) + v * MathF.Sin(a0)) * r;
+                var p1 = c + lift + (u * MathF.Cos(a1) + v * MathF.Sin(a1)) * r;
+                verts[k++] = p0.X; verts[k++] = p0.Y; verts[k++] = p0.Z;
+                verts[k++] = p1.X; verts[k++] = p1.Y; verts[k++] = p1.Z;
+            }
+        }
+        UploadLines(_brushRingVao, _brushRingVbo, verts, out _brushRingVerts);
+    }
+
     /// <summary>M55: bucket-grid overlay — world-space line list (pairs of xyz endpoints); null/empty clears.</summary>
     public void SetBucketGridLines(float[]? lineVerts)
     {
@@ -1720,6 +1772,7 @@ void main(){
         _boneVerts = 0;
         _boundsVerts = 0;
         _highlightVerts = 0;
+        _brushRingVerts = 0;
         _groupBoundsVerts = 0;
         _particleVerts = 0;
         _particleSelVerts = 0;
@@ -2038,6 +2091,17 @@ void main(){
                 _gl.Uniform4(_lColor, 1.0f, 0.78f, 0.2f, 1f); // selection amber
                 _gl.BindVertexArray(_highlightVao);
                 _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_highlightVerts);
+            }
+            // M172e: the brush ring. Drawn with depth testing OFF so it stays visible where the surface
+            // curves away from the cursor — a ring that disappears into the terrain is worse than useless
+            // for judging where a stroke will land.
+            if (_brushRingVerts > 0)
+            {
+                _gl.Disable(EnableCap.DepthTest);
+                _gl.Uniform4(_lColor, 1.0f, 1.0f, 1.0f, 1f);
+                _gl.BindVertexArray(_brushRingVao);
+                _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_brushRingVerts);
+                _gl.Enable(EnableCap.DepthTest);
             }
             _gl.BindVertexArray(0);
         }

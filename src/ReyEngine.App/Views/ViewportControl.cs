@@ -608,12 +608,17 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             lock (_textureUpdateLock)
             {
+                // Mips are the expensive half of an update — a full chain on a 2048^2 costs many times the
+                // patch. Mid-stroke the surface under the cursor is sampling level 0, so the chain only
+                // has to keep up loosely; it is rebuilt on a timer and unconditionally when a stroke ends.
+                bool mips = _forceMipRebuild || _mipClock.ElapsedMilliseconds >= MipRebuildIntervalMs;
                 foreach (var (img, rect) in _textureUpdates)
                 {
                     if (_uploadedTextures is null || !_uploadedTextures.TryGetValue(img, out uint id) || id == 0) continue;
                     _meshRenderer.UpdateTextureRegion(id, img.Rgba, img.Width, img.Height,
-                        rect.X, rect.Y, rect.Width, rect.Height);
+                        rect.X, rect.Y, rect.Width, rect.Height, mips);
                 }
+                if (mips) { _mipClock.Restart(); _forceMipRebuild = false; }
                 _textureUpdates.Clear();
             }
         }
@@ -785,6 +790,11 @@ public sealed class ViewportControl : OpenGlControlBase
         var gax = GizmoAxes;
         _meshRenderer.SetGizmo(GizmoPivot, GizmoPivot is { } piv ? GizmoArmLength(piv) : 0f, GizmoMode,
             gax is { Count: 3 } ? gax[0] : null, gax is { Count: 3 } ? gax[1] : null, gax is { Count: 3 } ? gax[2] : null);
+        if (_brushRingDirty)
+        {
+            _meshRenderer.SetBrushRing(_brushRingCenter, _brushRingNormal, _brushRingRadius, _brushRingHardness);
+            _brushRingDirty = false;
+        }
 
         if (ShowGrid) _grid.Render(viewProj);   // M89: reference grid is now toggleable
         var view = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.View; // same X-mirror as viewProj, for the matcap lookup
@@ -1040,6 +1050,39 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private readonly List<(TextureImage Image, Avalonia.PixelRect Rect)> _textureUpdates = new();
     private readonly object _textureUpdateLock = new();
+    private readonly System.Diagnostics.Stopwatch _mipClock = System.Diagnostics.Stopwatch.StartNew();
+    private bool _forceMipRebuild;
+    /// <summary>How often the mip chain is rebuilt during a continuous stroke.</summary>
+    private const long MipRebuildIntervalMs = 150;
+
+    private Vector3? _brushRingCenter;
+    private Vector3 _brushRingNormal = Vector3.UnitY;
+    private float _brushRingRadius, _brushRingHardness;
+    private bool _brushRingDirty;
+
+    /// <summary>M172e: show the paint brush footprint at a world point, lying on the surface. Null hides it.</summary>
+    public void SetBrushRing(Vector3? center, Vector3 normal, float radius, float hardness)
+    {
+        // Cheap early-out: the hover path calls this on every mouse move, and re-tessellating an
+        // unchanged ring 500 times a second is exactly the sort of thing that makes a tool feel heavy.
+        bool same = (_brushRingCenter is null) == (center is null)
+                    && (center is null || Vector3.DistanceSquared(_brushRingCenter!.Value, center.Value) < 0.25f)
+                    && MathF.Abs(_brushRingRadius - radius) < 0.01f
+                    && MathF.Abs(_brushRingHardness - hardness) < 0.001f;
+        if (same) return;
+        _brushRingCenter = center; _brushRingNormal = normal;
+        _brushRingRadius = radius; _brushRingHardness = hardness;
+        _brushRingDirty = true;
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>Rebuild mip chains on the next drained update no matter what — call when a stroke ends,
+    /// so the finished result is correct at every distance.</summary>
+    public void RequestMipRebuild()
+    {
+        _forceMipRebuild = true;
+        RequestNextFrameRendering();
+    }
 
     /// <summary>M172b: push painted pixels to the GPU. The caller has already mutated
     /// <c>image.Rgba</c> in place; this says which rectangle changed. Coalesces per image, so a fast

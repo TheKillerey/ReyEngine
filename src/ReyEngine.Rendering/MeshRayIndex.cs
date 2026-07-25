@@ -12,7 +12,10 @@ public readonly record struct MeshRayHit(
     /// <summary>Barycentric weights of the second and third vertices; the first is 1 - U - V.</summary>
     float BaryU,
     float BaryV,
-    Vector2 Uv);
+    Vector2 Uv,
+    /// <summary>Geometric normal of the hit triangle, normalised. Orients the paint brush ring so it lies
+    /// on the surface rather than floating flat in world space.</summary>
+    Vector3 Normal);
 
 /// <summary>M172: a closest-hit BVH over the map's triangles.
 ///
@@ -192,9 +195,14 @@ public sealed class MeshRayIndex
         }
 
         if (bestTri < 0) return null;
+        var gn = Vector3.Cross(_e1[bestTri], _e2[bestTri]);
+        gn = gn.LengthSquared() > 1e-12f ? Vector3.Normalize(gn) : Vector3.UnitY;
+        // Face the normal toward the ray origin so the ring lifts toward the camera on either side of a
+        // two-sided surface.
+        if (Vector3.Dot(gn, dir) > 0f) gn = -gn;
         return new MeshRayHit(
             _submeshOf[bestTri], bestTri, bestT, origin + dir * bestT, bestU, bestV,
-            InterpolateUv(bestTri, bestU, bestV));
+            InterpolateUv(bestTri, bestU, bestV), gn);
     }
 
     /// <summary>The UV under a hit: the barycentric blend of the triangle's three vertex UVs. This is the

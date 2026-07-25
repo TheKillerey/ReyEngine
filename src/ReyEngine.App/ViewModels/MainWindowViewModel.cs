@@ -1878,6 +1878,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Set by the view: pushes a painted rectangle to the GPU without a reload.</summary>
     public Action<TextureImage, Avalonia.PixelRect>? PushTextureRegion { get; set; }
+    /// <summary>Set by the view: shows the brush footprint on the surface (null centre hides it).</summary>
+    public Action<System.Numerics.Vector3?, System.Numerics.Vector3, float, float>? ShowBrushRing { get; set; }
+    /// <summary>Set by the view: force a mip rebuild once a stroke has finished.</summary>
+    public Action? RebuildTextureMips { get; set; }
 
     [ObservableProperty] private bool _isPaintMode;
     [ObservableProperty] private Avalonia.Media.Color _paintColor = Avalonia.Media.Color.FromRgb(200, 60, 40);
@@ -1900,9 +1904,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private MapPaintSession? _paintSession;
     private bool _paintStrokeActive;
 
+    // Mouse moves arrive far faster than the screen refreshes — a gaming mouse can deliver 1000 events a
+    // second, and each one used to run a full stroke step plus a GPU upload. Painting is coalesced to
+    // roughly one step per frame instead; nothing is lost, because StrokeTo interpolates from wherever the
+    // last dab landed, so a skipped event just becomes part of the next segment.
+    private readonly System.Diagnostics.Stopwatch _paintClock = System.Diagnostics.Stopwatch.StartNew();
+    private long _lastPaintMs;
+    private const long PaintIntervalMs = 15;
+    private (System.Numerics.Vector3 Origin, System.Numerics.Vector3 Dir)? _pendingPaintRay;
+    private long _lastHoverMs;
+    private const long HoverIntervalMs = 33;
+
     partial void OnIsPaintModeChanged(bool value)
     {
-        if (!value) { _paintSession = null; PaintHover = ""; return; }
+        if (!value)
+        {
+            _paintSession = null; PaintHover = "";
+            ShowBrushRing?.Invoke(null, System.Numerics.Vector3.UnitY, 0f, 0f);
+            return;
+        }
         if (_currentMap is null)
         {
             IsPaintMode = false;
@@ -1941,13 +1961,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public void PaintHoverAt(System.Numerics.Vector3 origin, System.Numerics.Vector3 dir)
     {
         if (!IsPaintMode || EnsurePaintSession() is not { } session) { PaintHover = ""; return; }
-        if (session.Probe(origin, System.Numerics.Vector3.Normalize(dir)) is not { } probe)
+        var d = System.Numerics.Vector3.Normalize(dir);
+
+        // The ring follows the cursor every move — it is the cheap part (one BVH ray, ~1.3 us) and the
+        // thing that has to feel instant. The badge text behind it is throttled, because updating a bound
+        // string forces a layout pass and nobody reads it 500 times a second.
+        var hit = session.Pick(origin, d);
+        ShowBrushRing?.Invoke(hit?.Position, hit?.Normal ?? System.Numerics.Vector3.UnitY,
+            (float)PaintRadius, (float)PaintHardness);
+
+        long now = _paintClock.ElapsedMilliseconds;
+        if (now - _lastHoverMs < HoverIntervalMs) return;
+        _lastHoverMs = now;
+
+        if (hit is null || session.Probe(origin, d) is not { } probe)
         {
-            PaintHover = ""; PaintHoverIsWarning = false; return;
+            if (PaintHover.Length > 0) { PaintHover = ""; PaintHoverIsWarning = false; }
+            return;
         }
         PaintHoverIsWarning = probe.Warning is not null;
-        PaintHover = $"{Path.GetFileName(probe.AssetPath)}  {probe.Width}x{probe.Height}"
-                     + (probe.Warning is { } w ? "  —  " + w : "");
+        var text = $"{Path.GetFileName(probe.AssetPath)}  {probe.Width}x{probe.Height}"
+                   + (probe.Warning is { } w ? "  —  " + w : "");
+        if (text != PaintHover) PaintHover = text;
     }
 
     public void BeginPaintStroke(System.Numerics.Vector3 origin, System.Numerics.Vector3 dir)
@@ -1955,14 +1990,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!IsPaintMode || EnsurePaintSession() is not { } session) return;
         session.BeginStroke();
         _paintStrokeActive = true;
+        _lastPaintMs = 0;                       // the first dab of a stroke always lands immediately
+        _pendingPaintRay = null;
         PaintStrokeMove(origin, dir);
     }
 
     public void PaintStrokeMove(System.Numerics.Vector3 origin, System.Numerics.Vector3 dir)
     {
-        if (!_paintStrokeActive || _paintSession is not { } session) return;
+        if (!_paintStrokeActive) return;
+        _pendingPaintRay = (origin, dir);
+        long now = _paintClock.ElapsedMilliseconds;
+        if (now - _lastPaintMs < PaintIntervalMs) return;   // coalesced — see _paintClock
+        _lastPaintMs = now;
+        FlushPaint();
+    }
+
+    private void FlushPaint()
+    {
+        if (_pendingPaintRay is not { } ray || _paintSession is not { } session) return;
+        _pendingPaintRay = null;
+        var (origin, dir) = ray;
         var d = System.Numerics.Vector3.Normalize(dir);
         if (session.Pick(origin, d) is not { } hit) return;
+        ShowBrushRing?.Invoke(hit.Position, hit.Normal, (float)PaintRadius, (float)PaintHardness);
 
         var brush = new ReyEngine.Core.Painting.PaintBrush
         {
@@ -1984,7 +2034,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public void EndPaintStroke()
     {
         if (!_paintStrokeActive || _paintSession is not { } session) return;
+        FlushPaint();                 // the last mouse position may have been coalesced away
         _paintStrokeActive = false;
+        RebuildTextureMips?.Invoke(); // mips are throttled mid-stroke; the finished result must be right
         if (session.EndStroke() is not { } record) return;
 
         UndoService.PushApplied(new PaintStrokeCommand(record, _currentMap!, RepaintAfterUndo));

@@ -131,6 +131,8 @@ public partial class MainWindow : Window
             vm.ShowLightingWindow = () => ShowLighting(vm);               // M169
             vm.ShowTextureRecolorWindow = () => ShowTextureRecolor(vm);   // M171
             vm.PushTextureRegion = Viewport.QueueTextureUpdate;            // M172c: live brush strokes
+            vm.ShowBrushRing = Viewport.SetBrushRing;                      // M172e: brush footprint
+            vm.RebuildTextureMips = Viewport.RequestMipRebuild;
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop

@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Threading.Tasks;
 using ReyEngine.Core.Decoding;
 
 namespace ReyEngine.Core.Painting;
@@ -32,6 +33,10 @@ public struct PaintDirtyRect
     public int Width => IsEmpty ? 0 : MaxX - MinX;
     public int Height => IsEmpty ? 0 : MaxY - MinY;
 }
+
+/// <summary>A precomputed texel rectangle for one triangle's dab (inclusive bounds), so the caller can
+/// derive it once and share it between the undo snapshot and the paint.</summary>
+public readonly record struct DabBounds(int MinX, int MinY, int MaxX, int MaxY);
 
 /// <summary>Brush settings for one dab.</summary>
 public sealed record PaintBrush
@@ -132,11 +137,22 @@ public static class TexturePainter
                 float cxT = a0x + baryA * (a1x - a0x) + baryB * (a2x - a0x);
                 float cyT = a0y + baryA * (a1y - a0y) + baryB * (a2y - a0y);
 
-                float len1 = MathF.Sqrt(e11), len2 = MathF.Sqrt(e22), absE12 = MathF.Abs(e12);
-                float maxA = rInPlane * (e22 * len1 + absE12 * len2) / gram;
-                float maxB = rInPlane * (e11 * len2 + absE12 * len1) / gram;
-                float du = maxA * MathF.Abs(a1x - a0x) + maxB * MathF.Abs(a2x - a0x) + lo;
-                float dv = maxA * MathF.Abs(a1y - a0y) + maxB * MathF.Abs(a2y - a0y) + lo;
+                // Exact half-extents of the footprint. The brush disc maps to an ELLIPSE in texel space,
+                // and the axis-aligned extent of {M v : |v| <= r} along an axis is r * ||row of M||.
+                // Taking the gradient of each texel coordinate with respect to in-plane world position
+                // gives those rows directly.
+                //
+                // The previous bound summed the two barycentric contributions in absolute value, which is
+                // an L1 over-estimate of an L2 quantity — up to sqrt(2) too wide per axis, so up to 2x the
+                // area. That matters more than it looks: the loop is memory-bound (a radius-150 dab walks
+                // ~900,000 texels scattered across several 2048^2 images), so scanned area translates
+                // almost linearly into time, and no amount of threading buys it back.
+                var gradA = (e1w * e22 - e2w * e12) / gram;
+                var gradB = (e2w * e11 - e1w * e12) / gram;
+                var gradX = gradA * (a1x - a0x) + gradB * (a2x - a0x);
+                var gradY = gradA * (a1y - a0y) + gradB * (a2y - a0y);
+                float du = rInPlane * gradX.Length() + lo;
+                float dv = rInPlane * gradY.Length() + lo;
 
                 minX = Math.Max(minX, (int)MathF.Floor(cxT - du));
                 maxX = Math.Min(maxX, (int)MathF.Ceiling(cxT + du));
@@ -159,7 +175,7 @@ public static class TexturePainter
         in Vector3 p0, in Vector3 p1, in Vector3 p2,
         in Vector2 uv0, in Vector2 uv1, in Vector2 uv2,
         in Vector3 center, in Vector3 viewDir, PaintBrush brush,
-        ref PaintDirtyRect dirty)
+        ref PaintDirtyRect dirty, DabBounds? bounds = null)
     {
         int w = image.Width, h = image.Height;
         if (w <= 0 || h <= 0 || brush.Radius <= 0f) return false;
@@ -178,8 +194,12 @@ public static class TexturePainter
         float a2x = uv2.X * w, a2y = uv2.Y * h;
 
         float bleed = MathF.Max(0f, brush.SeamBleedTexels);
-        if (!TryGetDabBounds(w, h, p0, p1, p2, uv0, uv1, uv2, center, brush.Radius, bleed,
-                out int minX, out int minY, out int maxX, out int maxY)) return false;
+        // Bounds may be supplied by the caller. The undo snapshot needs the same rectangle, and deriving
+        // it twice per triangle was pure duplicated setup on the hot path.
+        int minX, minY, maxX, maxY;
+        if (bounds is { } b) { minX = b.MinX; minY = b.MinY; maxX = b.MaxX; maxY = b.MaxY; }
+        else if (!TryGetDabBounds(w, h, p0, p1, p2, uv0, uv1, uv2, center, brush.Radius, bleed,
+                out minX, out minY, out maxX, out maxY)) return false;
 
         // Barycentric setup in texel space (constant per triangle).
         float d00x = a1x - a0x, d00y = a1y - a0y;
@@ -196,63 +216,134 @@ public static class TexturePainter
         float cb = Math.Clamp(brush.Color.Z, 0f, 1f) * 255f;
 
         var px = image.Rgba;
-        bool touched = false;
 
-        for (int ty = minY; ty <= maxY; ty++)
+        // Everything the inner loop needs is AFFINE in texel coordinates, so it can be stepped instead of
+        // recomputed. Barycentrics are affine by construction, and the world position is
+        // p0 + bu*e1 + bv*e2 — affine in bu/bv, hence affine in (x, y). Recomputing all of it per texel
+        // cost about 63 ns/texel, which is what made a big brush feel sluggish; stepping leaves three
+        // adds for the barycentrics and one vector add for the position.
+        // Copied out of the `in` parameters: a local function cannot capture those, and copying three
+        // vectors once per triangle is nothing against a scan of hundreds of thousands of texels.
+        Vector3 v0 = p0, v1 = p1, v2 = p2, ctr = center;
+        var e1 = v1 - v0;
+        var e2 = v2 - v0;
+        float buDx = d01y * invDenom, buDy = -d01x * invDenom;
+        float bvDx = -d00y * invDenom, bvDy = d00x * invDenom;
+        var wDx = e1 * buDx + e2 * bvDx;
+
+        float startX = minX + 0.5f;
+        float bleed2 = bleed * bleed;
+        float innerR2 = (inner * brush.Radius) * (inner * brush.Radius);
+        float invRadius = 1f / brush.Radius;
+        float invSoft = 1f / (1f - inner);
+
+        // Row bands are disjoint by construction — no two of them can write the same texel — so this
+        // parallelises with no locking and no lost updates. It matters because the cost of a dab is
+        // dominated by one or two big ground triangles: a radius-150 dab measured 907,753 texels scanned,
+        // and 425,000 of those were in two triangles of the same two textures. Splitting by TEXTURE
+        // cannot help there; splitting by row can.
+        int rows = maxY - minY + 1;
+        long area = (long)rows * (maxX - minX + 1);
+        int bands = area >= ParallelTexelThreshold ? Math.Min(Environment.ProcessorCount, rows / 32) : 1;
+
+        if (bands <= 1)
         {
-            float py = ty + 0.5f;
-            for (int tx = minX; tx <= maxX; tx++)
-            {
-                float pxc = tx + 0.5f;
-
-                // Barycentrics of this texel centre within the UV triangle.
-                float vx = pxc - a0x, vy = py - a0y;
-                float bu = (vx * d01y - d01x * vy) * invDenom;
-                float bv = (d00x * vy - vx * d00y) * invDenom;
-                float bw = 1f - bu - bv;
-
-                // Outside the triangle? Clamp onto it, then require the texel to be within the seam
-                // bleed distance of where it landed. This is what carries a stroke across a UV seam.
-                float cu = bu, cv = bv, cw = bw;
-                if (bu < 0f || bv < 0f || bw < 0f)
-                {
-                    if (bleed <= 0f) continue;
-                    ClampToTriangle(ref cu, ref cv, ref cw);
-                    float ex = a0x * cw + a1x * cu + a2x * cv - pxc;
-                    float ey = a0y * cw + a1y * cu + a2y * cv - py;
-                    if (ex * ex + ey * ey > bleed * bleed) continue;
-                }
-
-                // Texel -> world, and the actual brush test.
-                var world = p0 * cw + p1 * cu + p2 * cv;
-                float dist2 = Vector3.DistanceSquared(world, center);
-                if (dist2 > r2) continue;
-
-                float t = MathF.Sqrt(dist2) / brush.Radius;
-                float f = t <= inner ? 1f : 1f - (t - inner) / (1f - inner);
-                f = f * f * (3f - 2f * f);                 // smoothstep, so the edge isn't a ring
-                float alpha = f * opacity;
-                if (alpha <= 0.0005f) continue;
-
-                int o = (ty * w + tx) * 4;
-
-                // Don't paint texels the texture cuts away. They are invisible in game, and on a BC1
-                // cutout texture they are actively harmful: writing colour into them forces the encoder
-                // to fit a wider colour range per block, which degrades the visible texels around them.
-                // Measured on Order_MidRiver_B_1bitalpha, painting through the cutouts pushed the
-                // save round-trip from ~1 to 20.15 RMSE.
-                if (px[o + 3] < 8) continue;
-
-                px[o] = (byte)(px[o] + (cr - px[o]) * alpha + 0.5f);
-                px[o + 1] = (byte)(px[o + 1] + (cg - px[o + 1]) * alpha + 0.5f);
-                px[o + 2] = (byte)(px[o + 2] + (cb - px[o + 2]) * alpha + 0.5f);
-                // px[o + 3] deliberately untouched — see the type remarks.
-                dirty.Add(tx, ty);
-                touched = true;
-            }
+            var single = PaintDirtyRect.Empty;
+            bool hit = PaintBand(minY, maxY, ref single);
+            if (hit) dirty.Union(single);
+            return hit;
         }
-        return touched;
+
+        var bandRects = new PaintDirtyRect[bands];
+        var bandHit = new bool[bands];
+        Parallel.For(0, bands, bi =>
+        {
+            int y0 = minY + (int)((long)rows * bi / bands);
+            int y1 = minY + (int)((long)rows * (bi + 1) / bands) - 1;
+            var r = PaintDirtyRect.Empty;
+            bandHit[bi] = PaintBand(y0, y1, ref r);
+            bandRects[bi] = r;
+        });
+
+        bool any = false;
+        for (int i = 0; i < bands; i++)
+        {
+            if (!bandHit[i]) continue;
+            any = true;
+            dirty.Union(bandRects[i]);
+        }
+        return any;
+
+        bool PaintBand(int y0, int y1, ref PaintDirtyRect rect)
+        {
+            bool touched = false;
+            for (int ty = y0; ty <= y1; ty++)
+            {
+                float py = ty + 0.5f;
+                float vx0 = startX - a0x, vy0 = py - a0y;
+                float bu = (vx0 * d01y - d01x * vy0) * invDenom;
+                float bv = (d00x * vy0 - vx0 * d00y) * invDenom;
+                var world = v0 + e1 * bu + e2 * bv;
+                int rowBase = ty * w;
+
+                for (int tx = minX; tx <= maxX; tx++, bu += buDx, bv += bvDx, world += wDx)
+                {
+                    float bw = 1f - bu - bv;
+
+                    // Outside the triangle? Clamp onto it, then require the texel to be within the seam
+                    // bleed distance of where it landed. This is what carries a stroke across a UV seam.
+                    // Rare branch, so it re-derives rather than complicating the stepped fast path.
+                    Vector3 sample = world;
+                    if (bu < 0f || bv < 0f || bw < 0f)
+                    {
+                        if (bleed <= 0f) continue;
+                        float cu = bu, cv = bv, cw = bw;
+                        ClampToTriangle(ref cu, ref cv, ref cw);
+                        float pxc = tx + 0.5f;
+                        float ex = a0x * cw + a1x * cu + a2x * cv - pxc;
+                        float ey = a0y * cw + a1y * cu + a2y * cv - py;
+                        if (ex * ex + ey * ey > bleed2) continue;
+                        sample = v0 * cw + v1 * cu + v2 * cv;
+                    }
+
+                    float dx = sample.X - ctr.X, dy = sample.Y - ctr.Y, dz = sample.Z - ctr.Z;
+                    float dist2 = dx * dx + dy * dy + dz * dz;
+                    if (dist2 > r2) continue;
+
+                    int o = (rowBase + tx) * 4;
+
+                    // Don't paint texels the texture cuts away. They are invisible in game, and on a BC1
+                    // cutout texture they are actively harmful: writing colour into them forces the encoder
+                    // to fit a wider colour range per block, which degrades the visible texels around them.
+                    // Measured on Order_MidRiver_B_1bitalpha, painting through the cutouts pushed the
+                    // save round-trip from 20.15 RMSE down to 1.20. Checked before the falloff maths so a
+                    // cut-away texel costs one byte compare, not a square root.
+                    if (px[o + 3] < 8) continue;
+
+                    // Inside the hard core the falloff is flat, so the square root is only paid on the rim.
+                    float alpha;
+                    if (dist2 <= innerR2) alpha = opacity;
+                    else
+                    {
+                        float f = 1f - (MathF.Sqrt(dist2) * invRadius - inner) * invSoft;
+                        alpha = f * f * (3f - 2f * f) * opacity;   // smoothstep, so the edge isn't a ring
+                        if (alpha <= 0.0005f) continue;
+                    }
+
+                    px[o] = (byte)(px[o] + (cr - px[o]) * alpha + 0.5f);
+                    px[o + 1] = (byte)(px[o + 1] + (cg - px[o + 1]) * alpha + 0.5f);
+                    px[o + 2] = (byte)(px[o + 2] + (cb - px[o + 2]) * alpha + 0.5f);
+                    // px[o + 3] deliberately untouched — see the type remarks.
+                    rect.Add(tx, ty);
+                    touched = true;
+                }
+            }
+            return touched;
+        }
     }
+
+    /// <summary>Below this many texels a dab is not worth splitting across threads.</summary>
+    private const long ParallelTexelThreshold = 24_000;
 
     /// <summary>Nearest point of the triangle, in barycentric form. Used only for seam bleed, where a
     /// texel just outside the island still needs a world position to distance-test against.</summary>
