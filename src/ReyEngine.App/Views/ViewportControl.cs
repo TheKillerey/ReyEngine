@@ -585,8 +585,13 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         if (_texturesDirty && _meshRenderer.HasMesh)
         {
+            // M172b: free the PREVIOUS set first. These ids used to be released only when the mesh
+            // changed, so every texture-only refresh (material edit, recolour, re-bake) abandoned a full
+            // set — ~2.2 GB of VRAM on Summoner's Rift.
+            _meshRenderer.ReleaseOwnedTextures();
             // Upload each unique image once (shared across all layers); submeshes sharing an image share its GL id.
-            var uploaded = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
+            // Kept (not local) so a paint stroke can find the GL id for the image it is editing.
+            var uploaded = _uploadedTextures = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
             UploadLayer(ModelTextures, 0, uploaded);            // diffuse
             UploadLayer(ModelMaskTextures, 1, uploaded);        // mask
             UploadLayer(ModelGradientTextures, 2, uploaded);    // gradient
@@ -595,6 +600,22 @@ public sealed class ViewportControl : OpenGlControlBase
             UploadLayer(ModelMatCapMaskTextures, 5, uploaded);  // matcap mask
             UploadLayer(ModelLightmapTextures, 6, uploaded);    // baked lightmap atlas
             _texturesDirty = false;
+        }
+
+        // M172b: painted texels. Drained here because GL calls are only legal inside OnOpenGlRender —
+        // a brush stroke arrives on the UI thread and can only queue.
+        if (_textureUpdates.Count > 0 && _meshRenderer.HasMesh)
+        {
+            lock (_textureUpdateLock)
+            {
+                foreach (var (img, rect) in _textureUpdates)
+                {
+                    if (_uploadedTextures is null || !_uploadedTextures.TryGetValue(img, out uint id) || id == 0) continue;
+                    _meshRenderer.UpdateTextureRegion(id, img.Rgba, img.Width, img.Height,
+                        rect.X, rect.Y, rect.Width, rect.Height);
+                }
+                _textureUpdates.Clear();
+            }
         }
         if (_visibilityDirty && _meshRenderer.HasMesh)
         {
@@ -1012,6 +1033,38 @@ public sealed class ViewportControl : OpenGlControlBase
             _bgRenderer.SetSubmeshLayer(i, slot, id);
         }
     }
+
+    /// <summary>Image -> GL id for the currently uploaded mesh textures. Survives the upload block so a
+    /// paint stroke can address the texture it just changed.</summary>
+    private Dictionary<TextureImage, uint>? _uploadedTextures;
+
+    private readonly List<(TextureImage Image, Avalonia.PixelRect Rect)> _textureUpdates = new();
+    private readonly object _textureUpdateLock = new();
+
+    /// <summary>M172b: push painted pixels to the GPU. The caller has already mutated
+    /// <c>image.Rgba</c> in place; this says which rectangle changed. Coalesces per image, so a fast
+    /// stroke producing many dabs between two frames costs one upload.</summary>
+    public void QueueTextureUpdate(TextureImage image, Avalonia.PixelRect rect)
+    {
+        if (image is null || rect.Width <= 0 || rect.Height <= 0) return;
+        lock (_textureUpdateLock)
+        {
+            for (int i = 0; i < _textureUpdates.Count; i++)
+            {
+                if (!ReferenceEquals(_textureUpdates[i].Image, image)) continue;
+                _textureUpdates[i] = (image, _textureUpdates[i].Rect.Union(rect));
+                RequestNextFrameRendering();
+                return;
+            }
+            _textureUpdates.Add((image, rect));
+        }
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>Is this image currently live on the GPU? Lets the paint tool tell "your stroke will show
+    /// up" from "this texture isn't in the viewport".</summary>
+    public bool IsTextureUploaded(TextureImage image) =>
+        _uploadedTextures is { } u && u.TryGetValue(image, out uint id) && id != 0;
 
     private void UploadLayer(IReadOnlyList<TextureImage?>? texs, int slot, Dictionary<TextureImage, uint> uploaded)
     {

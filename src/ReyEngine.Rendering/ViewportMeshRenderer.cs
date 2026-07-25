@@ -1211,6 +1211,62 @@ void main(){
         _propTextures.Clear();
     }
 
+    /// <summary>M172b: free every texture uploaded by <see cref="UploadTexture"/>.
+    ///
+    /// Call this before re-uploading a mesh's texture set. Without it the old ids leaked: they were only
+    /// released in DeleteMeshBuffers, which runs when the MESH changes — so any refresh that swapped
+    /// textures while keeping the geometry (a material edit, a recolour, a re-bake) allocated a whole new
+    /// set and abandoned the previous one. On Summoner's Rift that is ~2.2 GB of VRAM per refresh.</summary>
+    public void ReleaseOwnedTextures()
+    {
+        if (!_ready) return;
+        foreach (var t in _ownedTextures) _gl.DeleteTexture(t);
+        _ownedTextures.Clear();
+        // The submesh slots now hold dangling ids; the caller re-assigns every slot immediately after,
+        // but zero them so a caller that doesn't cannot sample freed memory.
+        for (int i = 0; i < _submeshes.Length; i++)
+        {
+            _submeshes[i].Texture = 0; _submeshes[i].Mask = 0; _submeshes[i].Gradient = 0;
+            _submeshes[i].Emissive = 0; _submeshes[i].MatCap = 0; _submeshes[i].MatCapMask = 0;
+            _submeshes[i].Lightmap = 0;
+        }
+    }
+
+    /// <summary>M172b: replace a rectangle of an already-uploaded texture, without reallocating it.
+    ///
+    /// This is what makes a brush feel live: a stroke touches a few hundred texels of a 2048² image, and
+    /// re-uploading the whole 16 MiB for each of those would stall the frame. <paramref name="rgba"/> is
+    /// the FULL image; the rectangle is read out of it using UNPACK_ROW_LENGTH, so the caller never has
+    /// to pack a scratch copy.
+    ///
+    /// The mip chain has to be rebuilt afterwards or the painted texels vanish the moment the camera
+    /// pulls back far enough to sample a lower level. That rebuild is the dominant cost here
+    /// (~0.15–0.21 ms on a 2048² against ~0.05 ms for a 128² patch), and it is still ~1/80th of a frame.</summary>
+    public unsafe void UpdateTextureRegion(uint textureId, byte[] rgba, int imageWidth, int imageHeight,
+        int x, int y, int width, int height)
+    {
+        if (!_ready || textureId == 0 || rgba is null) return;
+
+        // Clamp into the image; a brush at the edge legitimately produces a rect that hangs over.
+        int x0 = Math.Clamp(x, 0, imageWidth), y0 = Math.Clamp(y, 0, imageHeight);
+        int x1 = Math.Clamp(x + width, 0, imageWidth), y1 = Math.Clamp(y + height, 0, imageHeight);
+        int w = x1 - x0, h = y1 - y0;
+        if (w <= 0 || h <= 0) return;
+        if ((long)imageWidth * imageHeight * 4 > rgba.Length) return;
+
+        _gl.BindTexture(TextureTarget.Texture2D, textureId);
+        _gl.PixelStore(PixelStoreParameter.UnpackRowLength, imageWidth);
+        fixed (byte* p = rgba)
+        {
+            byte* origin = p + ((long)y0 * imageWidth + x0) * 4;
+            _gl.TexSubImage2D(TextureTarget.Texture2D, 0, x0, y0, (uint)w, (uint)h,
+                PixelFormat.Rgba, PixelType.UnsignedByte, origin);
+        }
+        _gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);   // GL state is global — always restore
+        _gl.GenerateMipmap(TextureTarget.Texture2D);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+    }
+
     public void SetSubmeshTextureId(int index, uint textureId) => SetSubmeshLayer(index, 0, textureId);
 
     /// <summary>Show/hide a submesh (map dragon/baron layer filter). No-op outside range.</summary>
