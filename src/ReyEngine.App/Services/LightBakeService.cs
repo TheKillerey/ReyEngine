@@ -19,6 +19,9 @@ public sealed class LightBakeInputs
     public required BakeLighting Lighting { get; init; }
     /// <summary>Per-group (index-aligned with Map.Groups) baked-lighting flag; false = NO_BAKED_LIGHTING.</summary>
     public IReadOnlyList<bool>? GroupLightmapEnabled { get; init; }
+    /// <summary>Per-group: may this group cast shadows? False for alpha-card foliage, which is solid
+    /// geometry in the BVH and would otherwise roof the map over.</summary>
+    public IReadOnlyList<bool>? GroupOccluderEnabled { get; init; }
 }
 
 public sealed record LightBakeResult(int AtlasCount, long TotalBytes, bool WroteLightGrid, string OutputDescription);
@@ -57,6 +60,23 @@ public sealed class LightBakeService
     ///    against their rest pose would slide off the geometry as it animates;
     ///  - M163: its mesh belongs to a render region (v18 renderRegionHash != 0) — region geometry is
     ///    swapped in and out per game mode, so a single baked atlas cannot be correct for it.</summary>
+    /// <summary>Per-group shadow-casting flags. Only alpha-card foliage is excluded: it is modelled as
+    /// solid two-sided triangles with no alpha test, so leaving it in makes every bush an opaque wall.
+    /// NO_BAKED_LIGHTING and render-region geometry DO occlude — they are real walls, they just don't
+    /// receive a lightmap themselves.</summary>
+    public static IReadOnlyList<bool> BuildOccluderFlags(
+        MapGeoAsset map, IReadOnlyDictionary<string, MaterialProfile>? profiles)
+    {
+        var flags = new bool[map.Groups.Count];
+        for (int i = 0; i < map.Groups.Count; i++)
+        {
+            var mat = map.Groups[i].Material;
+            flags[i] = string.IsNullOrEmpty(mat) || profiles is null
+                       || !profiles.TryGetValue(mat, out var p) || !p.IsVertexDeform;
+        }
+        return flags;
+    }
+
     public static IReadOnlyList<bool> BuildGroupFlags(
         MapGeoAsset map, IReadOnlyDictionary<string, MaterialProfile>? profiles,
         bool skipVertexDeform = true, bool skipRenderRegions = true)
@@ -88,7 +108,8 @@ public sealed class LightBakeService
     {
         long totalBytes = 0;
         int atlasCount = await LightBaker.BakeExistingLayoutAsync(
-            inputs.Map, inputs.GroupLightmapEnabled, inputs.Lighting, settings, inputs.MapgeoPath,
+            inputs.Map, inputs.GroupLightmapEnabled, inputs.GroupOccluderEnabled,
+            inputs.Lighting, settings, inputs.MapgeoPath,
             baked =>
             {
                 _writeAsset(baked.OutputPath, baked.TexBytes, ".tex");
@@ -100,7 +121,8 @@ public sealed class LightBakeService
         bool wroteGrid = false;
         if (settings.BakeLightGrid)
         {
-            var grid = await Task.Run(() => LightBaker.BakeLightGrid(inputs.Map, inputs.Lighting, settings, progress: progress, ct: ct), ct)
+            var grid = await Task.Run(() => LightBaker.BakeLightGrid(inputs.Map, inputs.Lighting, settings,
+                                          inputs.GroupOccluderEnabled, progress: progress, ct: ct), ct)
                                  .ConfigureAwait(false);
             string gridPath = settings.ResolveOutputFolder(inputs.MapgeoPath) + settings.LightGridFileName();
             var gridBytes = grid.Write();

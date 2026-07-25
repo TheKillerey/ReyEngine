@@ -51,9 +51,12 @@ public static class LightBaker
     /// where the material sets NO_BAKED_LIGHTING. Those groups are skipped so the baked coverage matches
     /// what the viewport will actually sample — 20 Map12 materials set it, and baking them anyway puts
     /// light into texels nothing ever reads while the meshes stay unlit.</param>
+    /// <param name="occluderGroupEnabled">Per-group flag: false where the group must NOT cast shadows
+    /// (alpha-card foliage). Null = everything occludes.</param>
     public static async Task<int> BakeExistingLayoutAsync(
         MapGeoAsset asset,
         IReadOnlyList<bool>? groupLightmapEnabled,
+        IReadOnlyList<bool>? occluderGroupEnabled,
         BakeLighting lighting,
         BakeSettings settings,
         string mapgeoPath,
@@ -71,9 +74,14 @@ public static class LightBaker
         settings = ResolveExposure(settings, lighting);
 
         // Occluders: the whole map, including meshes whose own materials opt out of baked lighting —
-        // a NO_BAKED_LIGHTING wall still casts a shadow.
+        // a NO_BAKED_LIGHTING wall still casts a shadow. Foliage is the exception: BakeScene triangles
+        // are solid and two-sided with no alpha test, so every grass/bush CARD would be an opaque
+        // occluder and the map would bake as if roofed over. That matters far more now that sky rays
+        // reach across the scene instead of 400 units.
         progress?.Report(new BakeProgress(0, atlases.Count, "", "Building ray-tracing scene"));
-        var scene = NeedsRays(lighting, settings) ? new BakeScene(asset.Positions, asset.Indices) : null;
+        var scene = NeedsRays(lighting, settings)
+            ? new BakeScene(asset.Positions, BuildOccluderIndices(asset, occluderGroupEnabled))
+            : null;
 
         // Shading normals: flat-shaded map geometry bakes light pools as polygonal facets, so smooth
         // across coincident positions first (see BakeSettings.SmoothNormals).
@@ -127,7 +135,7 @@ public static class LightBaker
     /// <param name="probeHeight">How far above the sampled ground a probe sits, in world units.</param>
     public static LightGridFile BakeLightGrid(
         MapGeoAsset asset, BakeLighting lighting, BakeSettings settings,
-        float probeHeight = 150f, IProgress<BakeProgress>? progress = null, CancellationToken ct = default)
+        IReadOnlyList<bool>? occluderGroupEnabled = null, float probeHeight = 150f, IProgress<BakeProgress>? progress = null, CancellationToken ct = default)
     {
         settings = ResolveExposure(settings, lighting);
         var min = Bounds(asset, out var boundsMax);
@@ -139,7 +147,7 @@ public static class LightBaker
         float sizeZ = settings.LightGridFromMapBounds ? MathF.Max(boundsMax.Z, 1f) : MathF.Max(settings.LightGridMax.Z, 1f);
 
         var grid = LightGridFile.Create(w, h, sizeX, sizeZ);
-        var scene = new BakeScene(asset.Positions, asset.Indices);
+        var scene = new BakeScene(asset.Positions, BuildOccluderIndices(asset, occluderGroupEnabled));
         float groundY = min.Y;
         float far = (boundsMax - min).Length() + 1f;
 
@@ -292,8 +300,26 @@ public static class LightBaker
     {
         if (!settings.AutoExposure) return settings;
         var s = settings.Clone();
-        s.Exposure = lighting.ComputeAutoExposure();
+        // MULTIPLY, don't replace. Replacing silently threw the user's Exposure away whenever auto was
+        // on (the default), so the one brightness lever the UI offers did nothing. The auto factor is
+        // still <= 1, so the M165 clipping guard is preserved exactly.
+        s.Exposure = settings.Exposure * lighting.ComputeAutoExposure();
         return s;
+    }
+
+    /// <summary>Indices of the triangles that may occlude light.</summary>
+    private static uint[] BuildOccluderIndices(MapGeoAsset asset, IReadOnlyList<bool>? enabled)
+    {
+        if (enabled is null) return asset.Indices;
+        var keep = new List<uint>(asset.Indices.Length);
+        for (int g = 0; g < asset.Groups.Count; g++)
+        {
+            if (g < enabled.Count && !enabled[g]) continue;
+            var grp = asset.Groups[g];
+            int end = Math.Min(grp.StartIndex + grp.IndexCount, asset.Indices.Length);
+            for (int k = grp.StartIndex; k < end; k++) keep.Add(asset.Indices[k]);
+        }
+        return keep.Count == 0 ? asset.Indices : keep.ToArray();
     }
 
     private static bool NeedsRays(BakeLighting lighting, BakeSettings settings) =>

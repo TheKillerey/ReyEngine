@@ -47,8 +47,17 @@ public sealed class BakeSettings
     /// <summary>Ambient-occlusion rays per texel. 0 disables AO.</summary>
     public int AmbientOcclusionSamples { get; set; } = 32;
 
-    /// <summary>How far an AO ray travels, in world units.</summary>
-    public float AmbientOcclusionRadius { get; set; } = 400f;
+    /// <summary>How far a sky/AO ray travels, in world units. 0 = 1% of the scene diagonal (~570 on
+    /// Summoner's Rift), which is the measured sweet spot and scales to other map sizes.
+    ///
+    /// The hemisphere integrator this feeds multiplies the SKY term only, so it IS sky visibility. Two
+    /// things were measured on Map11 and both are worth knowing:
+    ///  - Turning it ON is one of the two big contrast wins: texel-luminance stddev 35.7 -> 56.1.
+    ///  - Making it LONGER is not. A quarter-diagonal radius scored 55.3 — no better — while dropping the
+    ///    median from 191 to 128. Past room scale everything is occluded by something and the term
+    ///    flattens out again, just darker.
+    /// It is clipping-neutral either way: it only ever removes light, so auto-exposure's guarantee holds.</summary>
+    public float AmbientOcclusionRadius { get; set; }
 
     /// <summary>Nudge along the normal before tracing, so a texel can't shadow its own surface.</summary>
     public float RayBias { get; set; } = 0.5f;

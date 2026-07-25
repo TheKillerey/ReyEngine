@@ -251,11 +251,24 @@ public static class AtlasRasterizer
         return visible / (float)samples;
     }
 
+    /// <summary>Cosine-weighted hemisphere visibility. Applied to the SKY term, so this is sky occlusion:
+    /// how much of the sky this texel can actually see. The ray length decides what it expresses — short
+    /// is contact AO, scene-scale is real sky occlusion (see BakeSettings.AmbientOcclusionRadius).</summary>
     private static float AmbientOcclusion(Vector3 origin, Vector3 nrm, BakeScene scene,
         BakeSettings settings, int seed)
     {
         int samples = Math.Max(1, settings.AmbientOcclusionSamples);
-        float radius = MathF.Max(settings.AmbientOcclusionRadius, 1f);
+        // 0 = auto: 1% of the scene diagonal (~570 units on Summoner's Rift).
+        // This was briefly a QUARTER of the diagonal, on the theory that the old fixed 400 was too short
+        // to be real sky occlusion. Measured on Map11, that theory was wrong: 400 already produced
+        // essentially all the available contrast (stddev 35.7 -> 56.1) and the long radius added none
+        // (55.3) while crushing the median from 191 to 128 — darker, not more readable. Occlusion at
+        // contact-to-room scale is what carries the information; beyond that everything is occluded by
+        // something and the term goes flat again. 1% keeps the measured sweet spot while scaling to maps
+        // of other sizes.
+        float radius = settings.AmbientOcclusionRadius > 0f
+            ? settings.AmbientOcclusionRadius
+            : MathF.Max((scene.BoundsMax - scene.BoundsMin).Length() * 0.01f, 1f);
         BuildBasis(nrm, out var tangent, out var bitangent);
         int open = 0;
         for (int s = 0; s < samples; s++)

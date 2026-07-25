@@ -15,14 +15,14 @@ namespace ReyEngine.App.ViewModels;
 /// property of Riot's shipped Map12 lightmaps, surfaced so the user can see the real cost before baking.</summary>
 public sealed partial class LightBakeViewModel : ObservableObject
 {
-    private readonly Func<LightBakeInputs?> _gatherInputs;
+    private readonly Func<BakeSettings, LightBakeInputs?> _gatherInputs;
     private readonly Func<LightBakeService?> _service;
     private readonly Action<LightBakeResult> _onBaked;
     private readonly Func<BakeSettings, Task<LightmapLayoutResult?>>? _generateLayout;
     private readonly Func<(bool MapOpen, int Missing, int Total)>? _layoutState;
     private CancellationTokenSource? _cts;
 
-    public LightBakeViewModel(Func<LightBakeInputs?> gatherInputs, Func<LightBakeService?> service,
+    public LightBakeViewModel(Func<BakeSettings, LightBakeInputs?> gatherInputs, Func<LightBakeService?> service,
         Action<LightBakeResult> onBaked,
         Func<BakeSettings, Task<LightmapLayoutResult?>>? generateLayout = null,
         Func<(bool MapOpen, int Missing, int Total)>? layoutState = null)
@@ -192,7 +192,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
 
     private LightBakeInputs? SafeGatherForEstimate()
     {
-        try { return _gatherInputs(); } catch { return null; }
+        try { return _gatherInputs(ToSettings()); } catch { return null; }
     }
 
     [RelayCommand]

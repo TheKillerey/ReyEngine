@@ -1512,7 +1512,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Assemble the bake inputs from the current map + the live viewport lighting, so a bake
     /// reproduces exactly what the viewport shows. Returns null when nothing can be baked.</summary>
-    public Services.LightBakeInputs? GatherBakeInputs()
+    public Services.LightBakeInputs? GatherBakeInputs(Formats.Baking.BakeSettings settings)
     {
         if (_currentMap is not { } map || _currentMapEntry is not { } entry) return null;
         if (!Formats.Baking.LightBaker.CanBakeExistingLayout(map)) return null;
@@ -1533,7 +1533,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             lightIntensity: (float)DynamicLightIntensity,
             lightRadiusScale: (float)DynamicLightRadiusScale,
             lightPositionScale: (float)DynamicLightPositionScale,
-            settings: new Formats.Baking.BakeSettings());   // sample counts refined per-bake in the window
+            settings: settings);   // M168: the REAL settings — this used to be a throwaway default, so
+                                   // SunShadows/PointLightShadows/FalloffSoftness ignored the UI entirely
 
         return new Services.LightBakeInputs
         {
@@ -1541,6 +1542,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             MapgeoPath = entry.Path,
             Lighting = lighting,
             GroupLightmapEnabled = Services.LightBakeService.BuildGroupFlags(map, _currentMapProfiles),
+            GroupOccluderEnabled = Services.LightBakeService.BuildOccluderFlags(map, _currentMapProfiles),
         };
     }
 
