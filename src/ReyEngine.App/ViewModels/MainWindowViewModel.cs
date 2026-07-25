@@ -1541,6 +1541,68 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         };
     }
 
+    /// <summary>M147: true when a map is open that has NO lightmap layout — the case where a layout has
+    /// to be generated (UV2 + atlas regions) before anything can be baked into it.</summary>
+    public bool NeedsLightmapLayout => _currentMap is not null && _currentMapEntry is not null && !CanBakeLighting;
+
+    /// <summary>M147: give the open map a lightmap layout — unwrap UV2, pack atlas regions, assign each
+    /// mesh its BakedLight reference — then save the REWRITTEN mapgeo and reload it. Unlike baking, this
+    /// rewrites geometry, so the result is validated by re-reading it before anything is saved.</summary>
+    public async Task<Formats.Baking.LightmapLayoutResult?> GenerateLightmapLayoutAsync(Formats.Baking.BakeSettings settings)
+    {
+        if (_currentMap is null || _currentMapEntry is not { } entry || _currentMapBytes is null)
+        { _log.Warn("Layout", "No map open."); return null; }
+
+        var sourceBytes = _currentMapBytes;
+        var (result, bytes) = await Task.Run(() =>
+        {
+            // TryReadEditable refuses anything we cannot reproduce byte-for-byte, so we never rewrite a
+            // mapgeo we don't fully understand.
+            if (!Formats.MapGeo.MapGeoBinary.TryReadEditable(sourceBytes, out var map))
+                return ((Formats.Baking.LightmapLayoutResult?)null, (byte[]?)null);
+
+            var r = Formats.Baking.MapGeoLightmapBuilder.Build(map, new Formats.Baking.MapGeoLightmapBuilder.Settings
+            {
+                AtlasResolution = settings.AtlasResolution,
+                TexelDensity = settings.TexelDensity,
+                Padding = settings.Padding,
+                AtlasPathFormat = settings.ResolveOutputFolder(entry.Path) + "{0}.tex",
+            });
+            return (r, map.Write());
+        });
+
+        if (result is null || bytes is null)
+        { _log.Error("Layout", "This mapgeo could not be safely rewritten (it does not round-trip byte-exactly)."); return null; }
+
+        // Validate the rewrite BEFORE saving: it must decode again and actually carry the new layout.
+        try
+        {
+            var check = await Task.Run(() => Formats.MapGeo.MapGeoDecoder.Decode(bytes));
+            if (!Formats.Baking.LightBaker.CanBakeExistingLayout(check))
+            { _log.Error("Layout", "The rewritten mapgeo decoded but carries no usable lightmap layout — not saved."); return null; }
+        }
+        catch (Exception ex)
+        { _log.Error("Layout", $"The rewritten mapgeo failed to decode ({ex.Message}) — not saved."); return null; }
+
+        WriteBakedAsset(entry.Path, bytes, ".mapgeo");
+        Project.IsDirty = true;
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        if (Project.IsFolderProject) { BuildMounts(); BuildProjectTree(); }
+        UpdateTitle();
+
+        foreach (var w in result.Warnings.Take(5)) _log.Warn("Layout", w);
+        if (result.Warnings.Count > 5) _log.Warn("Layout", $"(+{result.Warnings.Count - 5} more warnings)");
+        _log.Success("Layout", $"Generated a lightmap layout: {result.MeshesLaidOut} mesh(es) over {result.AtlasCount} atlas(es) " +
+                               $"from {result.GeometriesUnwrapped} unique geometries" +
+                               (result.MeshesSkipped > 0 ? $", {result.MeshesSkipped} skipped" : "") +
+                               $". Mapgeo rewritten ({bytes.Length:n0} bytes) — now bake into it.");
+
+        await LoadMapGeoAsync(entry);
+        OnPropertyChanged(nameof(CanBakeLighting));
+        OnPropertyChanged(nameof(NeedsLightmapLayout));
+        return result;
+    }
+
     /// <summary>Build a bake service bound to the current project, or null when there is nowhere to write
     /// (an unsaved project). A folder project writes atlases to their real path; a saved single-WAD
     /// project uses the hashed override store.</summary>

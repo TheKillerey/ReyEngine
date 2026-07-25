@@ -18,14 +18,47 @@ public sealed partial class LightBakeViewModel : ObservableObject
     private readonly Func<LightBakeInputs?> _gatherInputs;
     private readonly Func<LightBakeService?> _service;
     private readonly Action<LightBakeResult> _onBaked;
+    private readonly Func<BakeSettings, Task<LightmapLayoutResult?>>? _generateLayout;
+    private readonly Func<bool>? _needsLayout;
     private CancellationTokenSource? _cts;
 
-    public LightBakeViewModel(Func<LightBakeInputs?> gatherInputs, Func<LightBakeService?> service, Action<LightBakeResult> onBaked)
+    public LightBakeViewModel(Func<LightBakeInputs?> gatherInputs, Func<LightBakeService?> service,
+        Action<LightBakeResult> onBaked,
+        Func<BakeSettings, Task<LightmapLayoutResult?>>? generateLayout = null,
+        Func<bool>? needsLayout = null)
     {
         _gatherInputs = gatherInputs;
         _service = service;
         _onBaked = onBaked;
+        _generateLayout = generateLayout;
+        _needsLayout = needsLayout;
         RecomputeEstimate();
+    }
+
+    /// <summary>M147: the open map has no lightmap layout, so one has to be generated before baking.</summary>
+    [ObservableProperty] private bool _canGenerateLayout;
+    [ObservableProperty] private bool _isGeneratingLayout;
+
+    /// <summary>M147: unwrap UV2, pack atlas regions and rewrite the mapgeo, so a map Riot never
+    /// lightmapped can be baked. This edits GEOMETRY, unlike baking which only writes images.</summary>
+    [RelayCommand]
+    private async Task GenerateLayoutAsync()
+    {
+        if (_generateLayout is null || IsGeneratingLayout) return;
+        IsGeneratingLayout = true;
+        Stage = "Generating lightmap layout";
+        Status = "";
+        try
+        {
+            var r = await _generateLayout(ToSettings());
+            Status = r is null
+                ? "Could not generate a layout for this map — see the console for why."
+                : $"Layout generated: {r.MeshesLaidOut} mesh(es) over {r.AtlasCount} atlas(es)" +
+                  (r.Warnings.Count > 0 ? $" ({r.Warnings.Count} warning(s), see console)" : "") + ". Now bake.";
+            Stage = r is null ? "Failed" : "Layout ready";
+        }
+        catch (Exception ex) { Stage = "Failed"; Status = "Layout generation failed: " + ex.Message; }
+        finally { IsGeneratingLayout = false; Refresh(); }
     }
 
     // ---- atlas ----
@@ -108,7 +141,10 @@ public sealed partial class LightBakeViewModel : ObservableObject
         {
             Estimate = $"{Mb(perAtlas)} per atlas.";
             CanBake = false;
-            BlockReason = "Load a map with a lightmap layout, and save the project, before baking.";
+            CanGenerateLayout = _generateLayout is not null && (_needsLayout?.Invoke() ?? false);
+            BlockReason = CanGenerateLayout
+                ? "This map has no lightmap layout. Generate one below — it unwraps UV2s, packs atlas regions and REWRITES the mapgeo, then you can bake."
+                : "Load a map with a lightmap layout, and save the project, before baking.";
             return;
         }
 
@@ -120,7 +156,11 @@ public sealed partial class LightBakeViewModel : ObservableObject
             : $"{atlasCount} atlas(es) × {Mb(perAtlas)} = {Mb(perAtlas * atlasCount)}" +
               (grid > 0 ? $" + {Mb(grid)} lightgrid" : "") + $"  →  {Mb(total)} total.";
         CanBake = atlasCount > 0;
-        BlockReason = atlasCount > 0 ? "" : "No lightmap atlases in this map.";
+        CanGenerateLayout = _generateLayout is not null && (_needsLayout?.Invoke() ?? false);
+        BlockReason = atlasCount > 0 ? ""
+            : CanGenerateLayout
+                ? "This map has no lightmap layout. Generate one below — it unwraps UV2s, packs atlas regions and REWRITES the mapgeo, then you can bake."
+                : "No lightmap atlases in this map.";
     }
 
     private LightBakeInputs? SafeGatherForEstimate()
