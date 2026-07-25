@@ -1,5 +1,9 @@
 using System.Buffers.Binary;
 
+using BCnEncoder.Encoder;
+using BCnEncoder.Shared;
+using CommunityToolkit.HighPerformance;
+
 namespace ReyEngine.Core.Decoding;
 
 /// <summary>On-disk pixel formats a Riot .tex can carry. The values ARE the byte written at offset 9,
@@ -31,6 +35,27 @@ public enum TexFormat : byte
 /// </summary>
 public static class TexWriter
 {
+    /// <summary>M171: the format a .tex is ALREADY stored in, so a rewrite can preserve it. Without this
+    /// every edited texture silently becomes BC3 — and 37.9% of Map11 is BC1, which would roughly double
+    /// those files. Null when the bytes are not a TEX container or carry a format we cannot write
+    /// (measured: 3 Map11 files are format 14, a 16-byte-block normal-map format LeagueToolkit cannot
+    /// even decode; they must be skipped, never rewritten as something else).</summary>
+    public static TexFormat? DetectFormat(byte[] tex)
+    {
+        if (tex is null || tex.Length < 12) return null;
+        if (tex[0] != 'T' || tex[1] != 'E' || tex[2] != 'X' || tex[3] != 0) return null;
+        return tex[9] switch { 10 => TexFormat.Bc1, 12 => TexFormat.Bc3, _ => (TexFormat?)null };
+    }
+
+    /// <summary>Does this image carry 1-bit (punch-through) transparency? BC1 can hold it, but only in
+    /// its 3-colour mode, and getting that wrong fills every cutout with solid geometry.</summary>
+    public static bool HasPunchThroughAlpha(TextureImage image)
+    {
+        var px = image.Rgba;
+        for (int i = 3; i < px.Length; i += 4) if (px[i] < 128) return true;
+        return false;
+    }
+
     /// <summary>Encode an RGBA8 top-left-origin image as a .tex byte blob.</summary>
     /// <param name="mipmaps">Write the full chain down to 1x1. Riot's lightmap atlases always do.</param>
     public static byte[] Write(TextureImage image, TexFormat format = TexFormat.Bc3, bool mipmaps = true)
@@ -89,12 +114,48 @@ public static class TexWriter
         return levels;
     }
 
-    private static byte[] EncodeLevel(TextureImage img, TexFormat format) => format switch
+    /// <summary>M171: encode one mip. Uses BCnEncoder rather than the hand-rolled encoder below, for two
+    /// measured reasons:
+    ///  - ALPHA. Our BC1 path never reads alpha and force-orders the endpoints c0 >= c1, which makes the
+    ///    3-colour punch-through mode unreachable. Round-tripping a cutout texture through it destroyed
+    ///    100% of transparent texels on every one of 11 tested files — and 609 of Map11's 6,862 BC1
+    ///    textures carry punch-through alpha (median 38.8% of their pixels). Bc1WithAlpha preserves them
+    ///    exactly (alpha RMSE 0.000, 100% kept).
+    ///  - QUALITY. Every source here is already BC-compressed, so its pixels lie in the format's
+    ///    representable set and a good encoder can recover the original endpoints. BCnEncoder is
+    ///    near-idempotent (median round-trip RMSE 0.417); ours re-quantises every pass (2.072), a 13.9 dB
+    ///    gap that compounds across edits.
+    /// The hand-rolled encoder is kept below only as a fallback if BCnEncoder ever throws.</summary>
+    private static byte[] EncodeLevel(TextureImage img, TexFormat format)
     {
-        TexFormat.Bc1 => EncodeBlocks(img, bc1: true),
-        TexFormat.Bc3 => EncodeBlocks(img, bc1: false),
-        _ => throw new NotSupportedException($"unsupported .tex format {format}"),
-    };
+        try
+        {
+            var fmt = format switch
+            {
+                TexFormat.Bc1 => HasPunchThroughAlpha(img) ? CompressionFormat.Bc1WithAlpha : CompressionFormat.Bc1,
+                TexFormat.Bc3 => CompressionFormat.Bc3,
+                _ => throw new NotSupportedException($"unsupported .tex format {format}"),
+            };
+            var pixels = new ColorRgba32[img.Width * img.Height];
+            for (int i = 0; i < pixels.Length; i++)
+                pixels[i] = new ColorRgba32(img.Rgba[i * 4], img.Rgba[i * 4 + 1], img.Rgba[i * 4 + 2], img.Rgba[i * 4 + 3]);
+
+            var encoder = new BcEncoder(fmt);
+            encoder.OutputOptions.GenerateMipMaps = false;   // we build and write the chain ourselves
+            encoder.OutputOptions.Quality = CompressionQuality.Balanced;
+            return encoder.EncodeToRawBytes(pixels.AsMemory().AsMemory2D(img.Height, img.Width), 0, out _, out _);
+        }
+        catch (NotSupportedException) { throw; }
+        catch
+        {
+            return format switch
+            {
+                TexFormat.Bc1 => EncodeBlocks(img, bc1: true),
+                TexFormat.Bc3 => EncodeBlocks(img, bc1: false),
+                _ => throw new NotSupportedException($"unsupported .tex format {format}"),
+            };
+        }
+    }
 
     /// <summary>BC1/BC3 block compression. Every level stores at least one whole 4x4 block, so a 1x1
     /// mip is still 8 (BC1) or 16 (BC3) bytes — that is what makes Riot's atlas sizes add up.</summary>
