@@ -13,6 +13,9 @@ public sealed class LightmapLayoutResult
     public int MeshesSkipped { get; init; }
     /// <summary>M163: deliberately left out (VertexDeform foliage, render-region geometry).</summary>
     public int MeshesExcluded { get; init; }
+    /// <summary>M164: materials on the meshes that received a layout. These are the ones whose
+    /// NO_BAKED_LIGHTING macro must be cleared, or the atlas they now point at is never sampled.</summary>
+    public HashSet<string> LaidOutMaterials { get; } = new(StringComparer.OrdinalIgnoreCase);
     public List<string> Warnings { get; } = new();
 }
 
@@ -132,6 +135,9 @@ public static class MapGeoLightmapBuilder
             MeshesExcluded = excluded,
         };
         result.Warnings.AddRange(warnings);
+        foreach (var (mesh, _, _, _) in placement)
+            foreach (var sm in mesh.Submeshes)
+                if (!string.IsNullOrEmpty(sm.Material)) result.LaidOutMaterials.Add(sm.Material);
         return result;
     }
 

@@ -1567,10 +1567,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Layout", "No map open."); return null; }
 
         var sourceBytes = _currentMapBytes;
+        // M164: exclude VertexDeform foliage only. NO_BAKED_LIGHTING must NOT exclude a mesh here: on a
+        // map with no lightmaps EVERY material carries it (all 183 on Map11/base_srx), because it
+        // describes the map's current state, not a wish about future lightmaps. Excluding on it removed
+        // every mesh, produced an empty layout, and the save gate then correctly rejected the result.
+        // Generating a layout is precisely the act of giving these meshes lightmaps — so the macro is
+        // CLEARED below instead, which is the "remove incompatible shader macros" step.
         var excludeMaterials = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (_currentMapProfiles is { } profs)
             foreach (var (name, p) in profs)
-                if (p.IsVertexDeform || p.NoBakedLighting) excludeMaterials.Add(name);
+                if (p.IsVertexDeform) excludeMaterials.Add(name);
 
         var (result, bytes) = await Task.Run(() =>
         {
@@ -1607,6 +1613,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Error("Layout", $"The rewritten mapgeo failed to decode ({ex.Message}) — not saved."); return null; }
 
         WriteBakedAsset(entry.Path, bytes, ".mapgeo");
+        int macrosCleared = ClearNoBakedLightingMacros(entry, result.LaidOutMaterials);
         Project.IsDirty = true;
         if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
         if (Project.IsFolderProject) { BuildMounts(); BuildProjectTree(); }
@@ -1618,6 +1625,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                                $"from {result.GeometriesUnwrapped} unique geometries" +
                                (result.MeshesExcluded > 0 ? $", {result.MeshesExcluded} excluded (foliage / render regions)" : "") +
                                (result.MeshesSkipped > 0 ? $", {result.MeshesSkipped} skipped" : "") +
+                               (macrosCleared > 0 ? $"; cleared NO_BAKED_LIGHTING on {macrosCleared} material(s)" : "") +
                                $". Mapgeo rewritten ({bytes.Length:n0} bytes) — now bake into it.");
 
         await LoadMapGeoAsync(entry);
@@ -1625,6 +1633,37 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(NeedsLightmapLayout));
         OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
         return result;
+    }
+
+    /// <summary>M164: clear NO_BAKED_LIGHTING from the materials that just received a lightmap layout.
+    /// Without this the whole exercise is inert: the meshes point at an atlas, but both the game and our
+    /// own bake skip them because the macro says "ignore baked lighting". This is the "remove
+    /// incompatible shader macros" half of preparing a mesh for baking. Returns how many were cleared.</summary>
+    private int ClearNoBakedLightingMacros(WadAssetEntry mapEntry, IReadOnlyCollection<string> materials)
+    {
+        if (materials.Count == 0) return 0;
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) 
+        { _log.Warn("Layout", "No materials .bin found — NO_BAKED_LIGHTING could not be cleared, so the new atlases will not be sampled."); return 0; }
+
+        try
+        {
+            var binBytes = ReadAsset(binEntry.PathHash);
+            var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName);
+            int cleared = 0;
+            foreach (var m in doc.Materials)
+            {
+                if (m.Name is not { } n || !materials.Contains(n)) continue;
+                if (m.RemoveMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting)) cleared++;
+            }
+            if (cleared == 0) return 0;
+            WriteBakedAsset(binEntry.Path, doc.Serialize(), ".bin");
+            return cleared;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Layout", $"Could not clear NO_BAKED_LIGHTING ({ex.Message}) — the new atlases will not be sampled until it is removed.");
+            return 0;
+        }
     }
 
     /// <summary>Build a bake service bound to the current project, or null when there is nowhere to write
