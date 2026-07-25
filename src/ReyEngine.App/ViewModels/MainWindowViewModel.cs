@@ -3209,6 +3209,31 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Tools ▸ Map Material Diagnostics — scan the loaded map's bins + mapgeo and write an honest
     /// report (classes, exposed vs unknown fields, lighting/lightmap/visibility signals) to
     /// <c>.reyengine/reports/materials_diagnostics_&lt;map&gt;.json</c> (M33).</summary>
+    /// <summary>M170: verify every MapCubemapProbe points at a real DDS cubemap. A plain 2D texture
+    /// bound where the engine expects 6 faces crashes the game at load — the fault that used to be
+    /// blamed on wide WAD overlays (ltk-manager#305).</summary>
+    [RelayCommand]
+    private void CheckCubemapProbes()
+    {
+        if (CurrentModelProbes is not { Count: > 0 } probes)
+        { _log.Warn("Cubemaps", "No cubemap probes in the loaded map (open a map's materials .bin first)."); return; }
+
+        var issues = Formats.MapGeo.CubemapProbeValidator.Validate(probes, path =>
+        {
+            try { return ReadAssetByPath(path); } catch { return null; }
+        });
+
+        if (issues.Count == 0)
+        { _log.Success("Cubemaps", $"All {probes.Count} cubemap probe(s) point at valid DDS cubemaps."); return; }
+
+        _log.Error("Cubemaps", $"{issues.Count} of {probes.Count} cubemap probe(s) would fail to bind — this crashes the game at load:");
+        foreach (var i in issues.Take(20))
+            _log.Error("Cubemaps", $"   '{i.ProbeName}' -> {i.TexturePath}  {i.Problem}");
+        if (issues.Count > 20) _log.Error("Cubemaps", $"   (+{issues.Count - 20} more)");
+        _log.Info("Cubemaps", "Fix: re-export the texture as a DDS cubemap (6 square faces, DDSCAPS2_CUBEMAP set), " +
+                              "or point the probe at one of Riot's existing cubemaps.");
+    }
+
     [RelayCommand]
     private void MapMaterialDiagnostics()
     {
@@ -5991,7 +6016,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M134: Overlay Footprint — how many game WADs will loaders have to patch for this mod?
     /// Shared-path assets (characters/items) exist in dozens of WADs; a texture-heavy map mod can force
-    /// 200+ patches, which has crashed the game via LTK. Shows the fan-out and what causes it.</summary>
+    /// 200+ patches. That is an install-time and merge-complexity cost, NOT a crash cause — the crash it
+    /// was blamed for is a non-cubemap texture behind a MapCubemapProbe (see CubemapProbeValidator).</summary>
     [RelayCommand]
     private async Task OverlayFootprint()
     {

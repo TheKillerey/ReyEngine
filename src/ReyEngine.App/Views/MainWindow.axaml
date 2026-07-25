@@ -115,9 +115,11 @@
           <MenuItem Header="Validate Project Bins" Command="{Binding ValidateProjectBinsCommand}"
                     ToolTip.Tip="Emulate mod injection (project overrides over Riot originals) and check every project .bin for broken object links and missing assets — what would break in-game" />
           <MenuItem Header="Overlay Footprint" Command="{Binding OverlayFootprintCommand}"
-                    ToolTip.Tip="How many game WADs will mod loaders have to patch for this mod? Shows the fan-out per WAD and which project folders cause it — very wide overlays (200+ WADs) have crashed the game" />
+                    ToolTip.Tip="How many game WADs will mod loaders have to patch for this mod? Shows the fan-out per WAD and which project folders cause it. A wide overlay means slow installs and messy merges — it is NOT a crash cause (see Check Cubemap Probes for the crash that was long blamed on it)" />
           <MenuItem Header="Asset Usage Report" Command="{Binding AssetUsageCommand}"
                     ToolTip.Tip="Which project files can nothing ever load (dead — deletable in one click) and which recolor OTHER content (champions/items — the wad fan-out drivers)" />
+          <MenuItem Header="Check Cubemap Probes" Command="{Binding CheckCubemapProbesCommand}"
+                    ToolTip.Tip="Every MapCubemapProbe must point at a real DDS CUBEMAP. A plain 2D DXT1/DXT3 texture bound where the engine expects 6 faces crashes the game — this is the fault that used to be misattributed to wide WAD overlays" />
           <MenuItem Header="Map Material Diagnostics" Command="{Binding MapMaterialDiagnosticsCommand}"
                     ToolTip.Tip="Scan the loaded map's bins + mapgeo and write an honest diagnostics report (classes, unknown fields, lighting/lightmap/visibility) to .reyengine/reports/" />
           <Separator />

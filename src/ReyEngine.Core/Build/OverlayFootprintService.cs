@@ -18,9 +18,17 @@ public sealed record OverlayFootprint(
 /// <summary>
 /// M134: how wide will this mod hit the game? Loaders (LTK, cslol) overlay mod files by PATH HASH
 /// across every game WAD that contains the hash — shared paths (assets/characters/…) exist in
-/// dozens of champion WADs, so a texture-heavy map mod can force 200+ WADs to be patched. That
-/// scale crashed the game via LTK (E_INVALIDARG at load, Jul 2026). This service reports the
-/// fan-out BEFORE the loader finds out: which WADs get touched, and which project folders cause it.
+/// dozens of champion WADs, so a texture-heavy map mod can force 200+ WADs to be patched. This
+/// service reports the fan-out BEFORE the loader finds out: which WADs get touched, and which
+/// project folders cause it.
+///
+/// CORRECTION (M170): a wide overlay was previously described here and in the UI as a CRASH cause,
+/// on the strength of an E_INVALIDARG-at-load that coincided with a 200+ WAD mod. That was a false
+/// diagnosis. The real fault was a MapCubemapProbe pointing at a plain 2D DXT1/DXT3 texture instead
+/// of a DDS cubemap, so the engine bound a 2D image where it needed 6 faces
+/// (https://github.com/LeagueToolkit/ltk-manager/issues/305). A wide overlay is an install-time and
+/// merge-complexity cost, worth reducing for those reasons — but it does not crash the game.
+/// See CubemapProbeValidator for the real check.
 /// </summary>
 public static class OverlayFootprintService
 {
