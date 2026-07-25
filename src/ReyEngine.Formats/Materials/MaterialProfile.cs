@@ -66,6 +66,11 @@ public sealed record MaterialProfile(
     // M78: VertexDeform grass/foliage materials with USE_GRASS_TINT_MAP multiply the map's world-space
     // grass-tint texture (mGrassTintTexture) into their diffuse — matches the MapgeoAddon semantics.
     bool UsesGrassTint = false,
+    // M163: any VertexDeform material — grass, bushes, foliage. These sway at RUNTIME, so light baked
+    // against their rest pose would slide off the geometry as it animates. They are excluded from both
+    // the lightmap layout and the bake (a broader test than UsesGrassTint, which additionally requires
+    // USE_GRASS_TINT_MAP and so misses plain foliage).
+    bool IsVertexDeform = false,
     // M150: shaderMacros that decide how the surface reacts to the SCENE rather than how it shades.
     bool NoBakedLighting = false,   // NO_BAKED_LIGHTING  — ignore the baked lightmap
     bool DisableDepthFog = false)   // DISABLE_DEPTH_FOG  — exclude from distance fog
@@ -238,7 +243,8 @@ public static class MaterialProfiles
 
         // M78: VertexDeform + USE_GRASS_TINT_MAP → world-space grass tint multiplies the diffuse.
         string shaderName = b.RenderShader ?? b.ShaderName ?? "";
-        bool grassTint = shaderName.Contains("VertexDeform", OIC)
+        bool vertexDeform = shaderName.Contains("VertexDeform", OIC);
+        bool grassTint = vertexDeform
             && b.Switches.TryGetValue("USE_GRASS_TINT_MAP", out var gtOn) && gtOn;
 
         return new MaterialProfile(kind, rim, specular, emissive, matcap, scale, offset, rotationDeg, scaleSrc, offsetSrc,
@@ -249,6 +255,7 @@ public static class MaterialProfiles
             terrain.ExtrasPath, terrain.BottomTiling, terrain.MiddleTiling, terrain.TopTiling, terrain.ExtrasTiling,
             terrain.WorldScale, terrain.RMultiplier, terrain.GMultiplier, terrain.BMultiplier,
             grassTint,
+            vertexDeform,                                      // M163
             b.MacroOn(MaterialBinding.MacroNoBakedLighting),   // M150
             b.MacroOn(MaterialBinding.MacroDisableDepthFog));
     }

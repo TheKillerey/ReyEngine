@@ -11,6 +11,8 @@ public sealed class LightmapLayoutResult
     public int MeshesLaidOut { get; init; }
     public int GeometriesUnwrapped { get; init; }
     public int MeshesSkipped { get; init; }
+    /// <summary>M163: deliberately left out (VertexDeform foliage, render-region geometry).</summary>
+    public int MeshesExcluded { get; init; }
     public List<string> Warnings { get; } = new();
 }
 
@@ -42,6 +44,12 @@ public static class MapGeoLightmapBuilder
         public int MinRegion { get; set; } = 8;
         public int MaxRegion { get; set; } = 512;
         public float SmoothingAngleDegrees { get; set; } = 40f;
+        /// <summary>M163: material names to leave out of the layout entirely (VertexDeform grass/bushes,
+        /// NO_BAKED_LIGHTING surfaces). They would consume atlas space that nothing ever samples.</summary>
+        public HashSet<string> ExcludeMaterials { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>M163: skip meshes assigned to a render region (v18 renderRegionHash != 0) — that
+        /// geometry is swapped per game mode, so one baked atlas cannot be right for it.</summary>
+        public bool SkipRenderRegionMeshes { get; set; } = true;
         /// <summary>Atlas path template; {0} is the atlas index.</summary>
         public string AtlasPathFormat { get; set; } = "ASSETS/Maps/Lightmaps/Maps/MapGeometry/Custom/{0}.tex";
     }
@@ -50,7 +58,7 @@ public static class MapGeoLightmapBuilder
     public static LightmapLayoutResult Build(MapGeoBinary map, Settings settings)
     {
         var warnings = new List<string>();
-        int skipped = 0;
+        int skipped = 0, excluded = 0;
 
         // ---- 1. group meshes by the geometry they share ----
         var groups = new Dictionary<string, List<MapGeoBinary.Mesh>>();
@@ -58,6 +66,10 @@ public static class MapGeoLightmapBuilder
         {
             if (map.MeshHasLightmapUv(mesh)) continue;          // already has a UV2 channel
             if (mesh.VertexCount <= 0 || mesh.IndexCount <= 0) continue;
+            if (settings.SkipRenderRegionMeshes && mesh.HasRegionHash && mesh.RegionHash != 0) { excluded++; continue; }
+            if (settings.ExcludeMaterials.Count > 0
+                && mesh.Submeshes.Count > 0
+                && mesh.Submeshes.All(sm => settings.ExcludeMaterials.Contains(sm.Material))) { excluded++; continue; }
             string key = $"{mesh.IndexBufferId}|{string.Join(',', mesh.VertexBufferIds)}|{mesh.VertexDeclarationBase}";
             if (!groups.TryGetValue(key, out var list)) groups[key] = list = new();
             list.Add(mesh);
@@ -117,6 +129,7 @@ public static class MapGeoLightmapBuilder
             MeshesLaidOut = placement.Count,
             GeometriesUnwrapped = geometries,
             MeshesSkipped = skipped,
+            MeshesExcluded = excluded,
         };
         result.Warnings.AddRange(warnings);
         return result;

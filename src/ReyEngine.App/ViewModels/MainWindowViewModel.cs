@@ -1567,6 +1567,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Layout", "No map open."); return null; }
 
         var sourceBytes = _currentMapBytes;
+        var excludeMaterials = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_currentMapProfiles is { } profs)
+            foreach (var (name, p) in profs)
+                if (p.IsVertexDeform || p.NoBakedLighting) excludeMaterials.Add(name);
+
         var (result, bytes) = await Task.Run(() =>
         {
             // TryReadEditable refuses anything we cannot reproduce byte-for-byte, so we never rewrite a
@@ -1580,6 +1585,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 TexelDensity = settings.TexelDensity,
                 Padding = settings.Padding,
                 AtlasPathFormat = settings.ResolveOutputFolder(entry.Path) + "{0}.tex",
+                // M163: don't spend atlas space on surfaces nothing will sample — VertexDeform foliage
+                // (it sways at runtime, so baked light would slide off it) and NO_BAKED_LIGHTING
+                // materials. Render-region meshes are skipped by the builder's own default.
+                ExcludeMaterials = excludeMaterials,
             });
             return (r, map.Write());
         });
@@ -1607,6 +1616,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (result.Warnings.Count > 5) _log.Warn("Layout", $"(+{result.Warnings.Count - 5} more warnings)");
         _log.Success("Layout", $"Generated a lightmap layout: {result.MeshesLaidOut} mesh(es) over {result.AtlasCount} atlas(es) " +
                                $"from {result.GeometriesUnwrapped} unique geometries" +
+                               (result.MeshesExcluded > 0 ? $", {result.MeshesExcluded} excluded (foliage / render regions)" : "") +
                                (result.MeshesSkipped > 0 ? $", {result.MeshesSkipped} skipped" : "") +
                                $". Mapgeo rewritten ({bytes.Length:n0} bytes) — now bake into it.");
 

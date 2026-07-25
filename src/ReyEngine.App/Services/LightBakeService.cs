@@ -50,20 +50,32 @@ public sealed class LightBakeService
             pointLightShadows: settings.PointLightSamples > 0,
             falloffSoftness: settings.FalloffSoftness);
 
-    /// <summary>Per-group baked-lighting flags from the map's material profiles. A group whose material
-    /// sets NO_BAKED_LIGHTING is excluded from the bake so its texels are never written — matching the
-    /// viewport, which does not sample the atlas for those meshes.</summary>
+    /// <summary>Per-group baked-lighting flags. A group is excluded from the bake when:
+    ///  - its material sets NO_BAKED_LIGHTING — so bake coverage matches the viewport, which does not
+    ///    sample the atlas for those meshes;
+    ///  - its material is VertexDeform (grass, bushes, foliage) — these sway at RUNTIME, so light baked
+    ///    against their rest pose would slide off the geometry as it animates;
+    ///  - M163: its mesh belongs to a render region (v18 renderRegionHash != 0) — region geometry is
+    ///    swapped in and out per game mode, so a single baked atlas cannot be correct for it.</summary>
     public static IReadOnlyList<bool> BuildGroupFlags(
-        MapGeoAsset map, IReadOnlyDictionary<string, MaterialProfile>? profiles)
+        MapGeoAsset map, IReadOnlyDictionary<string, MaterialProfile>? profiles,
+        bool skipVertexDeform = true, bool skipRenderRegions = true)
     {
+        var regionOf = map.Meshes.ToDictionary(m => m.Index, m => m.RegionHash);
         var flags = new bool[map.Groups.Count];
         for (int i = 0; i < map.Groups.Count; i++)
         {
-            var mat = map.Groups[i].Material;
-            flags[i] = string.IsNullOrEmpty(mat)
-                       || profiles is null
-                       || !profiles.TryGetValue(mat, out var p)
-                       || !p.NoBakedLighting;
+            var g = map.Groups[i];
+            bool ok = true;
+            if (!string.IsNullOrEmpty(g.Material) && profiles is not null
+                && profiles.TryGetValue(g.Material, out var p))
+            {
+                if (p.NoBakedLighting) ok = false;
+                if (skipVertexDeform && p.IsVertexDeform) ok = false;
+            }
+            if (ok && skipRenderRegions && regionOf.TryGetValue(g.MeshIndex, out var region) && region != 0)
+                ok = false;
+            flags[i] = ok;
         }
         return flags;
     }
