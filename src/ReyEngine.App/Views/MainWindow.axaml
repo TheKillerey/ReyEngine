@@ -95,6 +95,19 @@
         <MenuItem Header="Open in Audio Editor" Command="{Binding OpenInAudioEditorCommand}"
                   ToolTip.Tip="Edit the selected .bnk/.wpk directly: play, replace, add, rename, delete and copy/paste its embedded sounds" />
         <Separator />
+        <MenuItem Header="Light">
+          <MenuItem Header="Lighting…" Command="{Binding OpenLightingCommand}"
+                    ToolTip.Tip="Sun, sky, lightmap brightness, point-light placement and the light table — everything that drives how the map is lit in the viewport, and what a bake reproduces" />
+          <MenuItem Header="Bake Lighting…" Command="{Binding OpenLightBakeCommand}"
+                    ToolTip.Tip="Bake the current lighting into the map's lightmap atlases; offers to generate a lightmap layout first for maps that have none" />
+          <Separator />
+          <MenuItem Header="Load Light.dat…" Command="{Binding LoadLightDatCommand}"
+                    ToolTip.Tip="Load a legacy Riot LEVELS/MapN/Light.dat point-light table and preview it as dynamic lights" />
+          <MenuItem Header="Save Light.dat" Command="{Binding SaveLightDatCommand}"
+                    ToolTip.Tip="Write the point-light table back in Riot's Light.dat format" />
+          <MenuItem Header="Save Light.dat As…" Command="{Binding SaveLightDatAsCommand}" />
+        </MenuItem>
+        <Separator />
         <MenuItem Header="Assign Skeleton…" Command="{Binding AssignSkeletonCommand}" />
         <MenuItem Header="Assign Animation…" Command="{Binding AssignAnimationCommand}" />
         <Separator />
@@ -403,104 +416,6 @@
 
             <!-- row 2: map lighting + tools -->
             <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
-              <!-- M158: lighting-mode preset — Dynamic (live editable lighting) / Baked (how it ships
-                   after a bake) / Combined (both, debug). Drives the Lightmap + Lights toggles below. -->
-              <Border IsVisible="{Binding HasMapGeo}"
-                      Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="2">
-                <StackPanel Orientation="Horizontal" Spacing="1">
-                  <ToggleButton Classes="vp" Content="Dynamic" IsChecked="{Binding IsLightingDynamic}"
-                                ToolTip.Tip="Sun/sky fallback + editable point lights, no baked atlas — the live authoring view you bake from." />
-                  <ToggleButton Classes="vp" Content="Baked" IsChecked="{Binding IsLightingBaked}"
-                                ToolTip.Tip="Baked lightmap only, point lights off — how the map looks in game after a bake." />
-                  <ToggleButton Classes="vp" Content="Combined" IsChecked="{Binding IsLightingCombined}"
-                                ToolTip.Tip="Baked lightmap AND dynamic lights together — a debug overlay to compare the two." />
-                </StackPanel>
-              </Border>
-              <ToggleButton Classes="vp" Content="☀ Lightmap" IsChecked="{Binding ShowLightmaps}"
-                            ToolTip.Tip="Baked lightmaps on/off. Off = the map is lit by the sun/sky fallback term only (useful for seeing raw textures or previewing dynamic lights)." />
-              <ToggleButton Classes="vp" Content="💡 Lights" IsChecked="{Binding ShowDynamicLights}"
-                            IsVisible="{Binding HasDynamicLights}"
-                            ToolTip.Tip="Render the loaded Riot Light.dat point lights (additive, radial). Load a Light.dat first via the ⏻ button." />
-              <ToggleButton Classes="vp" Content="🌫 Fog" IsChecked="{Binding ShowFog}"
-                            IsVisible="{Binding HasMapFog}"
-                            ToolTip.Tip="Apply the map's own distance fog (MapSunProperties fogColor + fogStartAndEnd) — the haze the game blends distant terrain into. Only shown for maps that author a fog range." />
-              <Button Classes="tool" Content="⏻ Light.dat" Command="{Binding LoadLightDatCommand}" FontSize="11" Padding="8,3" Margin="0"
-                      ToolTip.Tip="Load a legacy Riot LEVELS/MapN/Light.dat point-light table and preview it as dynamic lights (lines up when the loaded map matches the file)." />
-              <Button Classes="tool" Content="☼ Lighting" FontSize="11" Padding="8,3" Margin="0"
-                      ToolTip.Tip="Adjust lightmap / sun / sky / dynamic-light brightness and colour. Turn the sky and lightmap down to make dynamic lights stand out.">
-                <Button.Flyout>
-                  <Flyout Placement="Bottom">
-                    <StackPanel Width="240" Spacing="4">
-                      <TextBlock Text="LIGHTMAP" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
-                      <TextBlock Text="{Binding CurrentLightmapScale, StringFormat='Baked brightness: {0:0.00}'}" FontSize="10" />
-                      <Slider Minimum="0" Maximum="4" Value="{Binding CurrentLightmapScale}" />
-
-                      <TextBlock Text="SUN" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,6,0,0" />
-                      <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Grid.Column="0" Text="{Binding SunIntensity, StringFormat='Intensity: {0:0.00}'}" FontSize="10" />
-                        <Border Grid.Column="1" Width="22" Height="12" CornerRadius="2" Background="{Binding SunSwatch}" BorderBrush="#555" BorderThickness="1" />
-                      </Grid>
-                      <Slider Minimum="0" Maximum="3" Value="{Binding SunIntensity}" />
-                      <ColorPicker Color="{Binding SunColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
-                                   IsAlphaVisible="False" IsAlphaEnabled="False"
-                                   ToolTip.Tip="Sun hue. Brightness stays on the Intensity slider above." />
-
-                      <TextBlock Text="SKY / AMBIENT" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,6,0,0" />
-                      <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Grid.Column="0" Text="{Binding SkyIntensity, StringFormat='Intensity: {0:0.00}'}" FontSize="10" />
-                        <Border Grid.Column="1" Width="22" Height="12" CornerRadius="2" Background="{Binding SkySwatch}" BorderBrush="#555" BorderThickness="1" />
-                      </Grid>
-                      <Slider Minimum="0" Maximum="3" Value="{Binding SkyIntensity}" />
-                      <ColorPicker Color="{Binding SkyColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
-                                   IsAlphaVisible="False" IsAlphaEnabled="False"
-                                   ToolTip.Tip="Sky/ambient hue. Brightness stays on the Intensity slider above." />
-
-                      <TextBlock Text="DYNAMIC LIGHTS (Light.dat)" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,6,0,0" />
-                      <TextBlock Text="{Binding DynamicLightIntensity, StringFormat='Strength: {0:0.00}'}" FontSize="10" />
-                      <Slider Minimum="0" Maximum="5" Value="{Binding DynamicLightIntensity}" />
-                      <TextBlock Text="{Binding DynamicLightRadiusScale, StringFormat='Radius scale: {0:0.00}x'}" FontSize="10" />
-                      <Slider Minimum="0.05" Maximum="5" Value="{Binding DynamicLightRadiusScale}" />
-                      <TextBlock Text="{Binding DynamicLightPositionScale, StringFormat='Position scale (spread): {0:0.00}x'}" FontSize="10" />
-                      <Slider Minimum="0.1" Maximum="6" Value="{Binding DynamicLightPositionScale}" />
-                      <TextBlock Text="{Binding DynamicLightScaleX, StringFormat='Scale X: {0:0.00}x'}" FontSize="10" />
-                      <Slider Minimum="0.1" Maximum="6" Value="{Binding DynamicLightScaleX}" />
-                      <TextBlock Text="{Binding DynamicLightScaleZ, StringFormat='Scale Z: {0:0.00}x'}" FontSize="10" />
-                      <Slider Minimum="0.1" Maximum="6" Value="{Binding DynamicLightScaleZ}" />
-                      <TextBlock Text="{Binding DynamicLightOffsetX, StringFormat='Offset X: {0:0}'}" FontSize="10" />
-                      <Slider Minimum="-20000" Maximum="20000" Value="{Binding DynamicLightOffsetX}" />
-                      <TextBlock Text="{Binding DynamicLightOffsetZ, StringFormat='Offset Z: {0:0}'}" FontSize="10" />
-                      <Slider Minimum="-20000" Maximum="20000" Value="{Binding DynamicLightOffsetZ}" />
-                      <CheckBox Content="Show light position icons" IsChecked="{Binding ShowLightMarkers}" FontSize="10" Margin="0,4,0,0" />
-
-                      <!-- M153: per-light editing lives in Map Content + the Inspector now; only the
-                           overall settings and the add/save actions stay here. -->
-                      <TextBlock Text="LIGHTS" FontSize="10" FontWeight="Bold" Margin="0,8,0,0"
-                                 Foreground="{DynamicResource ReyTextDimBrush}" />
-                      <TextBlock Text="{Binding DynamicLightsStatus}" FontSize="9" TextWrapping="Wrap"
-                                 Foreground="{DynamicResource ReyAccent2Brush}" />
-                      <TextBlock Text="Select a light under Map Content ▸ Lights to edit it."
-                                 FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
-                      <StackPanel Orientation="Horizontal" Spacing="4">
-                        <Button Classes="tool" Content="+ Add light" Command="{Binding AddLightCommand}" FontSize="10" Padding="7,2"
-                                ToolTip.Tip="Add a point light at the gizmo (or the origin) — then drag it into place." />
-                        <Button Classes="tool" Content="💾 Save" Command="{Binding SaveLightDatCommand}" FontSize="10" Padding="7,2"
-                                ToolTip.Tip="Write the table back in Riot's Light.dat format." />
-                        <Button Classes="tool" Content="Save as…" Command="{Binding SaveLightDatAsCommand}" FontSize="10" Padding="7,2" />
-                      </StackPanel>
-
-                      <Button Content="Reset to map" Command="{Binding ResetLightingCommand}" HorizontalAlignment="Stretch" Margin="0,8,0,0" FontSize="10" />
-
-                      <!-- M158: bake the current lighting into the map's lightmap atlases -->
-                      <Separator Margin="0,8,0,2" />
-                      <TextBlock Text="BAKE" FontSize="10" FontWeight="Bold"
-                                 Foreground="{DynamicResource ReyTextDimBrush}" />
-                      <Button Classes="primary" Content="🔦 Bake Lighting…" Command="{Binding OpenLightBakeCommand}"
-                              IsEnabled="{Binding HasMapForLayout}" HorizontalAlignment="Stretch" FontSize="10" Padding="8,4"
-                              ToolTip.Tip="Bake lighting into this map's lightmap atlases. If the map has no lightmap layout yet, the window offers to generate one first (UV2 + atlas regions)." />
-                    </StackPanel>
-                  </Flyout>
-                </Button.Flyout>
-              </Button>
               <ToggleButton Classes="vp" Content="✧ Particles" IsChecked="{Binding ShowParticles}"
                             IsVisible="{Binding HasParticles}"
                             ToolTip.Tip="Show placed particle-system markers (MapParticle)" />

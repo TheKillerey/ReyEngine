@@ -128,6 +128,7 @@ public partial class MainWindow : Window
             vm.ShowMeshPreviewWindow = () => ShowMeshPreview(vm);         // M50
             vm.ShowAddMeshWindow = ShowAddMesh;                           // M123
             vm.ShowLightBakeWindow = () => ShowLightBake(vm);             // M158
+            vm.ShowLightingWindow = () => ShowLighting(vm);               // M169
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop
@@ -354,6 +355,20 @@ public partial class MainWindow : Window
             _mapBinEditorWindow.Show(this);
         }
         else _mapBinEditorWindow.Activate();
+    }
+
+    // M169: the Lighting window is non-modal and edits live viewport state, so it stays open while you
+    // fly the camera around. Reuse one instance; its DataContext IS the main view model.
+    private LightingWindow? _lightingWindow;
+    private void ShowLighting(MainWindowViewModel vm)
+    {
+        if (_lightingWindow is null)
+        {
+            _lightingWindow = new LightingWindow { DataContext = vm };
+            _lightingWindow.Closed += (_, _) => _lightingWindow = null;
+            _lightingWindow.Show(this);
+        }
+        else _lightingWindow.Activate();
     }
 
     // M158: the Light Baking window is non-modal (a bake can take minutes) — reuse one instance.

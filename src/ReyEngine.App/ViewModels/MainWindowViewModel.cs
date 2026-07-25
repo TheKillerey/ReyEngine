@@ -1490,6 +1490,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Set by the view so the ViewModel can open the (non-modal) Light Baking window.</summary>
     public Action? ShowLightBakeWindow { get; set; }
 
+    /// <summary>M169: opens the Lighting window (was a 240px flyout on the viewport toolbar).</summary>
+    public Action? ShowLightingWindow { get; set; }
+
+    [RelayCommand]
+    private void OpenLighting() => ShowLightingWindow?.Invoke();
+
     /// <summary>True when the loaded map actually has a lightmap layout to bake into. A lightmap-less
     /// mapgeo, or a legacy NVR map (which loads into MeshPreview, never into _currentMap), has nothing to
     /// re-light, so the command stays disabled.</summary>

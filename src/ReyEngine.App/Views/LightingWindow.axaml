@@ -1,0 +1,190 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.LightingWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="ReyEngine — Lighting" Width="960" Height="540"
+        MinWidth="820" MinHeight="480"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- footer: the actions that apply to the whole panel -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="14,10">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Classes="primary" Content="🔦 Bake Lighting…"
+                Command="{Binding OpenLightBakeCommand}" IsEnabled="{Binding HasMapForLayout}"
+                Padding="16,5" FontSize="11"
+                ToolTip.Tip="Bake this lighting into the map's lightmap atlases. If the map has no lightmap layout yet, that window offers to generate one first." />
+        <Button DockPanel.Dock="Right" Classes="tool" Content="↺ Reset to map" Margin="0,0,8,0"
+                Command="{Binding ResetLightingCommand}" Padding="14,5" FontSize="11"
+                ToolTip.Tip="Discard these tweaks and go back to the values the map itself authored." />
+        <TextBlock VerticalAlignment="Center" FontSize="10" TextWrapping="Wrap"
+                   Foreground="{DynamicResource ReyTextDimBrush}"
+                   Text="These are viewport values — they drive the preview and are what a bake reproduces." />
+      </DockPanel>
+    </Border>
+
+    <!-- 16:9 body: three columns, so nothing needs scrolling at the default size -->
+    <Grid Margin="14" ColumnDefinitions="*,*,*" RowDefinitions="Auto,*">
+
+      <!-- ================= column 1 : the map's own light ================= -->
+      <StackPanel Grid.Column="0" Grid.Row="0" Grid.RowSpan="2" Margin="0,0,7,0" Spacing="10">
+
+        <Border Classes="card" Padding="12" CornerRadius="6">
+          <StackPanel Spacing="6">
+            <TextBlock Text="MODE" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="2">
+              <UniformGrid Columns="3">
+                <ToggleButton Classes="vp" Content="Dynamic" IsChecked="{Binding IsLightingDynamic}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                              ToolTip.Tip="Sun/sky + editable point lights, no baked atlas — the live authoring view you bake from." />
+                <ToggleButton Classes="vp" Content="Baked" IsChecked="{Binding IsLightingBaked}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                              ToolTip.Tip="Baked lightmap only, point lights off — how the map looks in game after a bake." />
+                <ToggleButton Classes="vp" Content="Combined" IsChecked="{Binding IsLightingCombined}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                              ToolTip.Tip="Baked lightmap AND dynamic lights together — a debug overlay to compare the two." />
+              </UniformGrid>
+            </Border>
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <ToggleButton Classes="vp" Content="☀ Lightmap" IsChecked="{Binding ShowLightmaps}" />
+              <ToggleButton Classes="vp" Content="💡 Lights" IsChecked="{Binding ShowDynamicLights}"
+                            IsVisible="{Binding HasDynamicLights}" />
+              <ToggleButton Classes="vp" Content="🌫 Fog" IsChecked="{Binding ShowFog}"
+                            IsVisible="{Binding HasMapFog}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card" Padding="12" CornerRadius="6">
+          <StackPanel Spacing="4">
+            <TextBlock Text="LIGHTMAP" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Text="{Binding CurrentLightmapScale, StringFormat='Baked brightness  {0:0.00}'}"
+                       FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+            <Slider Minimum="0" Maximum="4" Value="{Binding CurrentLightmapScale}"
+                    ToolTip.Tip="MapSunProperties.lightMapColorScale — the multiplier the game applies to the baked atlas." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card" Padding="12" CornerRadius="6">
+          <StackPanel Spacing="4">
+            <DockPanel>
+              <Border DockPanel.Dock="Right" Width="26" Height="13" CornerRadius="2"
+                      Background="{Binding SunSwatch}" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" />
+              <TextBlock Text="SUN" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+            </DockPanel>
+            <TextBlock Text="{Binding SunIntensity, StringFormat='Intensity  {0:0.00}'}" FontSize="11"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <Slider Minimum="0" Maximum="3" Value="{Binding SunIntensity}" />
+            <ColorPicker Color="{Binding SunColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                         IsAlphaVisible="False" IsAlphaEnabled="False"
+                         ToolTip.Tip="Sun hue. Brightness stays on the Intensity slider above." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card" Padding="12" CornerRadius="6">
+          <StackPanel Spacing="4">
+            <DockPanel>
+              <Border DockPanel.Dock="Right" Width="26" Height="13" CornerRadius="2"
+                      Background="{Binding SkySwatch}" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" />
+              <TextBlock Text="SKY / AMBIENT" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+            </DockPanel>
+            <TextBlock Text="{Binding SkyIntensity, StringFormat='Intensity  {0:0.00}'}" FontSize="11"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <Slider Minimum="0" Maximum="3" Value="{Binding SkyIntensity}" />
+            <ColorPicker Color="{Binding SkyColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                         IsAlphaVisible="False" IsAlphaEnabled="False"
+                         ToolTip.Tip="Sky/ambient hue. Brightness stays on the Intensity slider above." />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+
+      <!-- ================= column 2 : point lights ================= -->
+      <ScrollViewer Grid.Column="1" Grid.Row="0" Grid.RowSpan="2" Margin="7,0" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="10">
+          <Border Classes="card" Padding="12" CornerRadius="6">
+            <StackPanel Spacing="4">
+              <TextBlock Text="POINT LIGHTS" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBlock Text="{Binding DynamicLightIntensity, StringFormat='Strength  {0:0.00}'}" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0" Maximum="5" Value="{Binding DynamicLightIntensity}"
+                      ToolTip.Tip="Global multiplier on every point light. Each light also has its own strength in the Inspector." />
+              <TextBlock Text="{Binding DynamicLightRadiusScale, StringFormat='Radius scale  {0:0.00}x'}" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0.05" Maximum="5" Value="{Binding DynamicLightRadiusScale}" />
+              <TextBlock Text="{Binding LightFalloffSoftness, StringFormat='Falloff softness  {0:0.00}'}" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0" Maximum="1" Value="{Binding LightFalloffSoftness}"
+                      ToolTip.Tip="0 = tight pool that ends in a visible rim; 1 = wider pool that fades out gently. The bake uses the same curve." />
+              <CheckBox Content="Show light position icons" IsChecked="{Binding ShowLightMarkers}" FontSize="11" Margin="0,4,0,0" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card" Padding="12" CornerRadius="6">
+            <StackPanel Spacing="4">
+              <TextBlock Text="FIT A LIGHT.DAT TO THIS MAP" FontSize="10" FontWeight="Bold"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                         Text="A Light.dat authored for another map lands in the wrong place. These spread and shift the whole table; height is never touched." />
+              <TextBlock Text="{Binding DynamicLightPositionScale, StringFormat='Spread  {0:0.00}x'}" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0.1" Maximum="6" Value="{Binding DynamicLightPositionScale}" />
+              <TextBlock Text="{Binding DynamicLightScaleX, StringFormat='Scale X  {0:0.00}x'}" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0.1" Maximum="6" Value="{Binding DynamicLightScaleX}" />
+              <TextBlock Text="{Binding DynamicLightScaleZ, StringFormat='Scale Z  {0:0.00}x'}" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0.1" Maximum="6" Value="{Binding DynamicLightScaleZ}" />
+              <TextBlock Text="{Binding DynamicLightOffsetX, StringFormat='Offset X  {0:0}'}" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="-20000" Maximum="20000" Value="{Binding DynamicLightOffsetX}" />
+              <TextBlock Text="{Binding DynamicLightOffsetZ, StringFormat='Offset Z  {0:0}'}" FontSize="11"
+                         Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="-20000" Maximum="20000" Value="{Binding DynamicLightOffsetZ}" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ================= column 3 : the light table ================= -->
+      <StackPanel Grid.Column="2" Grid.Row="0" Grid.RowSpan="2" Margin="7,0,0,0" Spacing="10">
+        <Border Classes="card" Padding="12" CornerRadius="6">
+          <StackPanel Spacing="6">
+            <TextBlock Text="LIGHT TABLE" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Text="{Binding DynamicLightsStatus}" FontSize="11" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ReyAccentBrush}" />
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="Select a light under Map Content ▸ Lights to edit its position, colour, radius and strength — or drag it in the viewport." />
+
+            <Button Classes="tool" Content="⏻ Load Light.dat…" Command="{Binding LoadLightDatCommand}"
+                    HorizontalAlignment="Stretch" FontSize="11" Padding="8,4" Margin="0,4,0,0"
+                    ToolTip.Tip="Load a legacy Riot LEVELS/MapN/Light.dat point-light table and preview it as dynamic lights." />
+            <Button Classes="tool" Content="+ Add light" Command="{Binding AddLightCommand}"
+                    HorizontalAlignment="Stretch" FontSize="11" Padding="8,4"
+                    ToolTip.Tip="Add a point light at the gizmo (or the origin) — then drag it into place." />
+            <Grid ColumnDefinitions="*,*" Margin="0,4,0,0">
+              <Button Grid.Column="0" Classes="tool" Content="💾 Save" Command="{Binding SaveLightDatCommand}"
+                      HorizontalAlignment="Stretch" Margin="0,0,3,0" FontSize="11" Padding="8,4"
+                      ToolTip.Tip="Write the table back in Riot's Light.dat format." />
+              <Button Grid.Column="1" Classes="tool" Content="Save as…" Command="{Binding SaveLightDatAsCommand}"
+                      HorizontalAlignment="Stretch" Margin="3,0,0,0" FontSize="11" Padding="8,4" />
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card" Padding="12" CornerRadius="6" IsVisible="{Binding HasMapFog}">
+          <StackPanel Spacing="4">
+            <TextBlock Text="FOG" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="This map authors a distance-fog range (MapSunProperties). Toggle it under MODE." />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </Grid>
+  </DockPanel>
+</Window>
