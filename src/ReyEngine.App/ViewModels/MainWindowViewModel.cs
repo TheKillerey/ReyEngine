@@ -1801,6 +1801,76 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // ==================================================================== M171: recolour textures
 
+    // ============================================================ M172a: closest-hit ray index
+
+    private Rendering.MeshRayIndex? _rayIndex;
+    private MapGeoAsset? _rayIndexMap;
+    private int _rayIndexRevision = -1;
+    private readonly object _rayIndexLock = new();
+
+    /// <summary>A BVH over the open map's triangles, built on demand and rebuilt whenever the geometry
+    /// moves. Replaces the brute-force picker, which scanned all 909,993 Summoner's Rift triangles per
+    /// ray: measured 11.13 ms against 1.28 µs here, over 3,000 rays returning bit-identical hits.
+    ///
+    /// The build costs ~1.15 s on that map, so <see cref="PrebuildRayIndex"/> starts it in the background
+    /// as soon as a map loads; this accessor only ever pays it if something asks before that finishes.
+    /// Invalidated by <c>MeshVerticesRevision</c> because transform edits mutate MapGeoAsset.Positions in
+    /// place — a stale tree would silently pick the geometry's old location.</summary>
+    private Rendering.MeshRayIndex? RayIndex
+    {
+        get
+        {
+            if (_currentMap is not { } map || map.Groups.Count == 0) return null;
+            lock (_rayIndexLock)
+            {
+                if (_rayIndex is not null && ReferenceEquals(_rayIndexMap, map) && _rayIndexRevision == MeshVerticesRevision)
+                    return _rayIndex;
+                _rayIndex = BuildRayIndex(map, out _);
+                _rayIndexMap = map;
+                _rayIndexRevision = MeshVerticesRevision;
+                return _rayIndex;
+            }
+        }
+    }
+
+    private static Rendering.MeshRayIndex BuildRayIndex(MapGeoAsset map, out long ms)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var subs = map.Groups.Select(g => (g.StartIndex, g.IndexCount)).ToList();
+        var index = new Rendering.MeshRayIndex(map.Positions, map.Uvs, map.Indices, subs);
+        sw.Stop();
+        ms = sw.ElapsedMilliseconds;
+        return index;
+    }
+
+    /// <summary>Warm the ray index off the UI thread right after a map loads, so the first click doesn't
+    /// wear the build cost.</summary>
+    private void PrebuildRayIndex(MapGeoAsset map, int revision)
+    {
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var index = BuildRayIndex(map, out long ms);
+                lock (_rayIndexLock)
+                {
+                    // Only publish if nothing changed underneath us while we were building.
+                    if (!ReferenceEquals(_currentMap, map) || MeshVerticesRevision != revision) return;
+                    _rayIndex = index;
+                    _rayIndexMap = map;
+                    _rayIndexRevision = revision;
+                }
+                _log.Info("Viewport", $"Ray index: {index.TriangleCount:n0} triangles in {ms:n0} ms.");
+            }
+            catch (Exception ex) { _log.Warn("Viewport", $"Ray index build failed ({ex.Message}) — picking falls back to a rebuild on first click."); }
+        });
+    }
+
+    private void InvalidateRayIndex()
+    {
+        lock (_rayIndexLock) { _rayIndex = null; _rayIndexMap = null; _rayIndexRevision = -1; }
+    }
+
     public Action? ShowTextureRecolorWindow { get; set; }
 
     [RelayCommand]
@@ -2389,6 +2459,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         CurrentSkeleton = null; ShowBones = false;
         _currentMap = s.Map; _currentMapBytes = s.MapBytes; _currentMapEntry = s.Entry;
+        InvalidateRayIndex();
+        PrebuildRayIndex(s.Map, MeshVerticesRevision);   // M172a
         HasMapGeo = true;   // M79
         _mapControllers = s.Controllers;
         _visibilityResolver = new MapVisibilityResolver(s.Controllers);
@@ -3140,6 +3212,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentSkeleton = null;
         if (_currentMap is { } clearedMap) UndoService.PurgeContext(clearedMap);
         _currentMap = null;
+        InvalidateRayIndex();
         _currentMapProfiles = null;
         _mapControllers = null;
         _visibilityResolver = null;
@@ -3686,13 +3759,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         rayDir = System.Numerics.Vector3.Normalize(rayDir);   // same t units for mesh + marker tests
         // mesh hit distance (float.MaxValue when none)
         float meshT = float.MaxValue;
-        if (_currentMap is { } map0 && map0.Groups.Count > 0)
-        {
-            var subs = map0.Groups.Select(g => (g.StartIndex, g.IndexCount)).ToList();
-            if (ViewportMeshPicker.PickSubmesh(map0.Positions, map0.Indices, subs,
-                    CurrentModelSubmeshVisible, rayOrigin, rayDir, out var t) >= 0)
-                meshT = t;
-        }
+        if (_currentMap is { } map0 && map0.Groups.Count > 0
+            && RayIndex?.ClosestHit(rayOrigin, rayDir, CurrentModelSubmeshVisible) is { } meshHit)
+            meshT = meshHit.Distance;
 
         // placeable markers: same size formula the viewport uses for the icons (Mesh.Radius-scaled)
         float radius = CurrentMesh is { } cm ? Math.Clamp(cm.Radius * 0.004f, 4f, 90f) * 1.6f : 40f;
@@ -3730,9 +3799,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public void SelectMeshFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir, bool additive = false)
     {
         if (_currentMap is not { } map || map.Groups.Count == 0) return;
-        var submeshes = map.Groups.Select(g => (g.StartIndex, g.IndexCount)).ToList();
-        int hit = ViewportMeshPicker.PickSubmesh(map.Positions, map.Indices, submeshes,
-            CurrentModelSubmeshVisible, rayOrigin, rayDir, out _);
+        int hit = RayIndex?.ClosestHit(rayOrigin, rayDir, CurrentModelSubmeshVisible)?.Submesh ?? -1;
         if (hit < 0)
         {
             if (!additive)
@@ -4684,6 +4751,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 CurrentMesh = mesh;
                 if (_currentMap is { } replacedMap) UndoService.PurgeContext(replacedMap); // stale transform commands
                 _currentMap = map;
+                InvalidateRayIndex();
+                PrebuildRayIndex(map, MeshVerticesRevision);   // M172a: warm it so the first click is instant
                 _currentMapBytes = rawMapBytes;
                 _currentMapEntry = entry;
                 HasMapGeo = true;   // M79
