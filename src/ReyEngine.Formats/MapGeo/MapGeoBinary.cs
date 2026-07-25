@@ -177,6 +177,53 @@ public sealed class MapGeoBinary
         mesh.VertexBufferIds.Add(uv7BufferId);
     }
 
+    /// <summary>Drop vertex/index buffers and declarations no mesh references any more, remapping the
+    /// ids that survive. Rebuilding geometry (see MapGeoLightmapBuilder) leaves the originals orphaned —
+    /// without this the file roughly DOUBLES, since the old buffers are still serialised.</summary>
+    public void Compact()
+    {
+        var usedVb = new HashSet<int>();
+        var usedIb = new HashSet<int>();
+        var usedDecl = new HashSet<int>();
+        foreach (var m in Meshes)
+        {
+            foreach (var v in m.VertexBufferIds) usedVb.Add(v);
+            usedIb.Add(m.IndexBufferId);
+            for (int i = 0; i < m.VertexBufferIds.Count; i++) usedDecl.Add(m.VertexDeclarationBase + i);
+        }
+
+        // A mesh resolves buffer i through declarations[base + i], so a declaration run must stay
+        // CONTIGUOUS. Keep whole runs, and remap each mesh's base to where its run lands.
+        var declKeep = new List<int>();
+        var declNewBase = new Dictionary<int, int>();
+        foreach (var m in Meshes.OrderBy(m => m.VertexDeclarationBase))
+        {
+            if (declNewBase.ContainsKey(m.VertexDeclarationBase)) continue;
+            declNewBase[m.VertexDeclarationBase] = declKeep.Count;
+            for (int i = 0; i < m.VertexBufferIds.Count; i++) declKeep.Add(m.VertexDeclarationBase + i);
+        }
+
+        var vbKeep = usedVb.OrderBy(i => i).ToList();
+        var ibKeep = usedIb.OrderBy(i => i).ToList();
+        var vbMap = vbKeep.Select((old, n) => (old, n)).ToDictionary(t => t.old, t => t.n);
+        var ibMap = ibKeep.Select((old, n) => (old, n)).ToDictionary(t => t.old, t => t.n);
+
+        var newVb = vbKeep.Select(i => VertexBuffers[i]).ToList();
+        var newIb = ibKeep.Select(i => IndexBuffers[i]).ToList();
+        var newDecl = declKeep.Select(i => Declarations[i]).ToList();
+
+        foreach (var m in Meshes)
+        {
+            for (int i = 0; i < m.VertexBufferIds.Count; i++) m.VertexBufferIds[i] = vbMap[m.VertexBufferIds[i]];
+            m.IndexBufferId = ibMap[m.IndexBufferId];
+            m.VertexDeclarationBase = declNewBase[m.VertexDeclarationBase];
+        }
+
+        VertexBuffers = newVb;
+        IndexBuffers = newIb;
+        Declarations = newDecl;
+    }
+
     // ---- read ----
 
     public static MapGeoBinary Read(byte[] data)
