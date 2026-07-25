@@ -19,25 +19,29 @@ public sealed partial class LightBakeViewModel : ObservableObject
     private readonly Func<LightBakeService?> _service;
     private readonly Action<LightBakeResult> _onBaked;
     private readonly Func<BakeSettings, Task<LightmapLayoutResult?>>? _generateLayout;
-    private readonly Func<bool>? _needsLayout;
+    private readonly Func<(bool MapOpen, int Missing, int Total)>? _layoutState;
     private CancellationTokenSource? _cts;
 
     public LightBakeViewModel(Func<LightBakeInputs?> gatherInputs, Func<LightBakeService?> service,
         Action<LightBakeResult> onBaked,
         Func<BakeSettings, Task<LightmapLayoutResult?>>? generateLayout = null,
-        Func<bool>? needsLayout = null)
+        Func<(bool MapOpen, int Missing, int Total)>? layoutState = null)
     {
         _gatherInputs = gatherInputs;
         _service = service;
         _onBaked = onBaked;
         _generateLayout = generateLayout;
-        _needsLayout = needsLayout;
+        _layoutState = layoutState;
         RecomputeEstimate();
     }
 
-    /// <summary>M147: the open map has no lightmap layout, so one has to be generated before baking.</summary>
+    /// <summary>M147: show the layout panel whenever a map is open — hiding it entirely when the map
+    /// happens to already have a layout just made the feature undiscoverable.</summary>
+    [ObservableProperty] private bool _showLayoutPanel;
+    /// <summary>There is actually something to generate (some meshes lack lightmap UVs).</summary>
     [ObservableProperty] private bool _canGenerateLayout;
     [ObservableProperty] private bool _isGeneratingLayout;
+    [ObservableProperty] private string _layoutSummary = "";
 
     /// <summary>M147: unwrap UV2, pack atlas regions and rewrite the mapgeo, so a map Riot never
     /// lightmapped can be baked. This edits GEOMETRY, unlike baking which only writes images.</summary>
@@ -136,12 +140,22 @@ public sealed partial class LightBakeViewModel : ObservableObject
     {
         var s = ToSettings();
         long perAtlas = s.EstimateAtlasBytes();
+
+        // Layout panel state — shown whenever a map is open, so the feature stays discoverable even on a
+        // map that already has a full layout (it just reports that nothing needs generating).
+        var layout = _layoutState?.Invoke() ?? (MapOpen: false, Missing: 0, Total: 0);
+        ShowLayoutPanel = _generateLayout is not null && layout.MapOpen;
+        CanGenerateLayout = ShowLayoutPanel && layout.Missing > 0;
+        LayoutSummary = !layout.MapOpen ? ""
+            : layout.Missing == 0
+                ? $"All {layout.Total} mesh(es) already have lightmap UVs — nothing to generate."
+                : $"{layout.Missing} of {layout.Total} mesh(es) have no lightmap UVs.";
+
         var inputs = SafeGatherForEstimate();
         if (inputs is null)
         {
             Estimate = $"{Mb(perAtlas)} per atlas.";
             CanBake = false;
-            CanGenerateLayout = _generateLayout is not null && (_needsLayout?.Invoke() ?? false);
             BlockReason = CanGenerateLayout
                 ? "This map has no lightmap layout. Generate one below — it unwraps UV2s, packs atlas regions and REWRITES the mapgeo, then you can bake."
                 : "Load a map with a lightmap layout, and save the project, before baking.";
@@ -156,7 +170,6 @@ public sealed partial class LightBakeViewModel : ObservableObject
             : $"{atlasCount} atlas(es) × {Mb(perAtlas)} = {Mb(perAtlas * atlasCount)}" +
               (grid > 0 ? $" + {Mb(grid)} lightgrid" : "") + $"  →  {Mb(total)} total.";
         CanBake = atlasCount > 0;
-        CanGenerateLayout = _generateLayout is not null && (_needsLayout?.Invoke() ?? false);
         BlockReason = atlasCount > 0 ? ""
             : CanGenerateLayout
                 ? "This map has no lightmap layout. Generate one below — it unwraps UV2s, packs atlas regions and REWRITES the mapgeo, then you can bake."

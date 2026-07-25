@@ -1541,9 +1541,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         };
     }
 
-    /// <summary>M147: true when a map is open that has NO lightmap layout — the case where a layout has
-    /// to be generated (UV2 + atlas regions) before anything can be baked into it.</summary>
-    public bool NeedsLightmapLayout => _currentMap is not null && _currentMapEntry is not null && !CanBakeLighting;
+    /// <summary>M147: how many of the open map's meshes still lack a lightmap UV channel. Drives the
+    /// layout panel: >0 means a layout can be generated for them, 0 means the map is fully covered.
+    /// (HasLightmapUv reads Texcoord7 — see the M158 fix; it used to read the wrong channel.)</summary>
+    public int MeshesWithoutLightmapUv => _currentMap?.Meshes.Count(m => !m.HasLightmapUv) ?? 0;
+
+    /// <summary>M147: is a mapgeo open at all (the layout panel is meaningful only then).</summary>
+    public bool HasMapForLayout => _currentMap is not null && _currentMapEntry is not null;
+
+    /// <summary>M147: the open map's mesh count, for the layout panel's "N of M" summary.</summary>
+    public int MapMeshCountForLayout => _currentMap?.Meshes.Count ?? 0;
+
+    /// <summary>M147: a map is open and some of it has no lightmap UVs — a layout can be generated.</summary>
+    public bool NeedsLightmapLayout => HasMapForLayout && MeshesWithoutLightmapUv > 0;
 
     /// <summary>M147: give the open map a lightmap layout — unwrap UV2, pack atlas regions, assign each
     /// mesh its BakedLight reference — then save the REWRITTEN mapgeo and reload it. Unlike baking, this
@@ -1600,6 +1610,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         await LoadMapGeoAsync(entry);
         OnPropertyChanged(nameof(CanBakeLighting));
         OnPropertyChanged(nameof(NeedsLightmapLayout));
+        OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
         return result;
     }
 

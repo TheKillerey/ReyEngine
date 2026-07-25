@@ -48,20 +48,24 @@
         <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
                    Text="Traces the sun, sky, ambient occlusion and every dynamic point light into the atlases the map already references — using the exact light model the viewport shows. Defaults match Riot's shipped Map12 lightmaps." />
 
-        <!-- M147: LAYOUT — only for maps Riot never lightmapped -->
-        <Border Classes="card" Padding="14" CornerRadius="6" IsVisible="{Binding CanGenerateLayout}"
+        <!-- M147: LAYOUT — generate UV2 + atlas regions for meshes that have none -->
+        <Border Classes="card" Padding="14" CornerRadius="6" IsVisible="{Binding ShowLayoutPanel}"
                 BorderBrush="{DynamicResource ReyAccentBrush}" BorderThickness="1">
           <StackPanel Spacing="10">
             <TextBlock Text="LIGHTMAP LAYOUT" FontSize="10" FontWeight="Bold"
                        Foreground="{DynamicResource ReyAccentBrush}" />
-            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}"
-                       Text="This map has no lightmap layout, so there is nothing to bake into yet. Generating one unwraps a second UV set, packs every mesh into atlas regions and assigns each its atlas reference." />
+            <TextBlock Text="{Binding LayoutSummary}" FontSize="11" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="Generating a layout unwraps a second UV set, packs every uncovered mesh into atlas regions and assigns each its atlas reference — which is what makes a map bakeable at all." />
             <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyWarningBrush}"
-                       Text="This REWRITES the .mapgeo — unlike baking, which only writes textures. The rewrite is verified to decode and carry a usable layout before it is saved, and the original stays untouched in the Riot reference. Test in-game before relying on it." />
+                       IsVisible="{Binding CanGenerateLayout}"
+                       Text="This REWRITES the .mapgeo — unlike baking, which only writes textures. The rewrite is verified to decode and carry a usable layout before it is saved, and Riot's original stays untouched in the reference WAD. Test in-game before relying on it." />
             <Button Classes="primary" Content="⚙ Generate Lightmap Layout"
-                    Command="{Binding GenerateLayoutCommand}" IsEnabled="{Binding !IsGeneratingLayout}"
+                    Command="{Binding GenerateLayoutCommand}"
+                    IsVisible="{Binding CanGenerateLayout}" IsEnabled="{Binding !IsGeneratingLayout}"
                     HorizontalAlignment="Stretch" FontSize="11" Padding="10,5"
-                    ToolTip.Tip="Unwrap UV2, pack atlas regions and rewrite the mapgeo so this map can be baked. Uses the Resolution / Texel density / Padding set below." />
+                    ToolTip.Tip="Unwrap UV2, pack atlas regions and rewrite the mapgeo so the uncovered meshes can be baked. Uses the Resolution / Texel density / Padding set below." />
             <TextBlock Text="Working…" FontSize="10" IsVisible="{Binding IsGeneratingLayout}"
                        Foreground="{DynamicResource ReyAccentBrush}" />
           </StackPanel>

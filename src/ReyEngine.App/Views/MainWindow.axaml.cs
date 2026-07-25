@@ -363,7 +363,8 @@ public partial class MainWindow : Window
         if (_lightBakeWindow is null)
         {
             var bakeVm = new LightBakeViewModel(vm.GatherBakeInputs, vm.MakeBakeService, vm.OnLightBakeFinished,
-                vm.GenerateLightmapLayoutAsync, () => vm.NeedsLightmapLayout);
+                vm.GenerateLightmapLayoutAsync,
+                () => (vm.HasMapForLayout, vm.MeshesWithoutLightmapUv, vm.MapMeshCountForLayout));
             _lightBakeWindow = new LightBakeWindow { DataContext = bakeVm };
             _lightBakeWindow.Closed += (_, _) => _lightBakeWindow = null;
             _lightBakeWindow.Show(this);
