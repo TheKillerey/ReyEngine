@@ -1,0 +1,194 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.TextureRecolorWindow"
+        x:DataType="vm:TextureRecolorViewModel"
+        Title="ReyEngine — Recolor Textures" Width="1120" Height="630"
+        MinWidth="940" MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- footer: the run controls -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="14,10">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Classes="primary" Content="🎨 Apply to selected"
+                Command="{Binding ApplyCommand}" Padding="16,5" FontSize="11"
+                ToolTip.Tip="Write the recoloured textures into the project. Each one is re-derived from Riot's original, so this never stacks compression loss." />
+        <Button DockPanel.Dock="Right" Classes="tool" Content="⏹ Cancel" Margin="0,0,8,0"
+                Command="{Binding CancelCommand}" IsVisible="{Binding IsRunning}"
+                Padding="14,5" FontSize="11" />
+        <Button DockPanel.Dock="Right" Classes="tool" Content="↺ Restore originals" Margin="0,0,8,0"
+                Command="{Binding RevertCommand}" Padding="14,5" FontSize="11"
+                ToolTip.Tip="Delete the project's recoloured copies of the selected textures, so the game loads Riot's again." />
+        <StackPanel Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Status}" FontSize="11" TextWrapping="Wrap"
+                     Foreground="{DynamicResource ReyTextBrush}" IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          <TextBlock Text="{Binding Stage}" FontSize="10" IsVisible="{Binding IsRunning}"
+                     Foreground="{DynamicResource ReyTextDimBrush}" />
+          <ProgressBar Value="{Binding Progress}" Maximum="100" Height="3" Margin="0,2,12,0"
+                       IsVisible="{Binding IsRunning}" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <Grid Margin="14" ColumnDefinitions="300,*,268">
+
+      <!-- ================= column 1 : which textures ================= -->
+      <Border Grid.Column="0" Classes="card" Padding="12" CornerRadius="6" Margin="0,0,7,0">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="TEXTURES IN THIS MAP" FontSize="10" FontWeight="Bold"
+                     Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,0,8" />
+
+          <TextBox DockPanel.Dock="Top" Text="{Binding Filter}" Watermark="Filter by name or folder…"
+                   FontSize="11" Margin="0,0,0,6" />
+
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
+            <Button Classes="tool" Content="All" Command="{Binding SelectAllCommand}" Padding="10,3" FontSize="10"
+                    ToolTip.Tip="Select every texture currently shown (the filter applies)." />
+            <Button Classes="tool" Content="None" Command="{Binding SelectNoneCommand}" Padding="10,3" FontSize="10" />
+            <Button Classes="tool" Content="↻" Command="{Binding RefreshCommand}" Padding="10,3" FontSize="10"
+                    ToolTip.Tip="Re-read the texture list from the open map." />
+          </StackPanel>
+
+          <TextBlock DockPanel.Dock="Bottom" Text="{Binding ListSummary}" FontSize="10" Margin="0,6,0,0"
+                     TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+          <ProgressBar DockPanel.Dock="Bottom" IsIndeterminate="True" Height="3" Margin="0,6,0,0"
+                       IsVisible="{Binding IsLoading}" />
+
+          <ListBox ItemsSource="{Binding Targets}" SelectedItem="{Binding Selected}"
+                   Background="Transparent" BorderThickness="0">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:RecolorTargetViewModel">
+                <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,1">
+                  <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected}" Margin="0,0,6,0" />
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource ReyTextBrush}" />
+                    <TextBlock Text="{Binding Subtitle}" FontSize="9" TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                  </StackPanel>
+                  <TextBlock Grid.Column="2" Text="●" FontSize="10" VerticalAlignment="Center"
+                             Foreground="{DynamicResource ReyAccentBrush}" IsVisible="{Binding IsRecolored}"
+                             ToolTip.Tip="This texture already has a saved recolour." />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+
+      <!-- ================= column 2 : before / after ================= -->
+      <Border Grid.Column="1" Classes="card" Padding="12" CornerRadius="6" Margin="0,0,7,0">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="PREVIEW" FontSize="10" FontWeight="Bold"
+                     Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,0,8" />
+          <TextBlock DockPanel.Dock="Bottom" Margin="0,8,0,0" FontSize="10" TextWrapping="Wrap"
+                     Foreground="{DynamicResource ReyTextDimBrush}"
+                     Text="Preview is a downscaled copy — the written file keeps its full resolution, its original pixel format and its mip chain." />
+
+          <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,*">
+            <TextBlock Grid.Column="0" Grid.Row="0" Text="Original" FontSize="10" HorizontalAlignment="Center"
+                       Margin="0,0,0,4" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Grid.Column="1" Grid.Row="0" Text="Recoloured" FontSize="10" HorizontalAlignment="Center"
+                       Margin="0,0,0,4" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+            <Border Grid.Column="0" Grid.Row="1" Margin="0,0,4,0" CornerRadius="4"
+                    Background="{DynamicResource ReyPanelAltBrush}"
+                    BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
+              <Image Source="{Binding BeforeImage}" Stretch="Uniform" Margin="6" />
+            </Border>
+            <Border Grid.Column="1" Grid.Row="1" Margin="4,0,0,0" CornerRadius="4"
+                    Background="{DynamicResource ReyPanelAltBrush}"
+                    BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
+              <Image Source="{Binding AfterImage}" Stretch="Uniform" Margin="6" />
+            </Border>
+          </Grid>
+        </DockPanel>
+      </Border>
+
+      <!-- ================= column 3 : the adjustment ================= -->
+      <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="10">
+
+          <Border Classes="card" Padding="12" CornerRadius="6">
+            <StackPanel Spacing="6">
+              <TextBlock Text="PRESET" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <UniformGrid Columns="3" Margin="0,0,0,-4">
+                <Button Classes="tool" Content="Night" Command="{Binding ApplyPresetCommand}" CommandParameter="Night" Margin="0,0,4,4" FontSize="10" Padding="6,3" />
+                <Button Classes="tool" Content="Sunset" Command="{Binding ApplyPresetCommand}" CommandParameter="Sunset" Margin="0,0,4,4" FontSize="10" Padding="6,3" />
+                <Button Classes="tool" Content="Frozen" Command="{Binding ApplyPresetCommand}" CommandParameter="Frozen" Margin="0,0,0,4" FontSize="10" Padding="6,3" />
+                <Button Classes="tool" Content="Infernal" Command="{Binding ApplyPresetCommand}" CommandParameter="Infernal" Margin="0,0,4,0" FontSize="10" Padding="6,3" />
+                <Button Classes="tool" Content="Faded" Command="{Binding ApplyPresetCommand}" CommandParameter="Desaturate" Margin="0,0,4,0" FontSize="10" Padding="6,3" />
+                <Button Classes="tool" Content="Punchy" Command="{Binding ApplyPresetCommand}" CommandParameter="Contrast" FontSize="10" Padding="6,3" />
+              </UniformGrid>
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card" Padding="12" CornerRadius="6">
+            <StackPanel Spacing="4">
+              <TextBlock Text="COLOUR" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+              <TextBlock Text="{Binding HueDegrees, StringFormat='Hue  {0:0}°'}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="-180" Maximum="180" Value="{Binding HueDegrees}"
+                      ToolTip.Tip="Rotate every colour around the wheel. This is what turns a green map blue." />
+
+              <TextBlock Text="{Binding Saturation, StringFormat='Saturation  {0:0.00}'}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0" Maximum="3" Value="{Binding Saturation}"
+                      ToolTip.Tip="0 is grey, 1 leaves it alone." />
+
+              <TextBlock Text="{Binding Brightness, StringFormat='Brightness  {0:0.00}'}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0" Maximum="2" Value="{Binding Brightness}" />
+
+              <TextBlock Text="{Binding Contrast, StringFormat='Contrast  {0:0.00}'}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0" Maximum="2" Value="{Binding Contrast}" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card" Padding="12" CornerRadius="6">
+            <StackPanel Spacing="4">
+              <TextBlock Text="LEVELS" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+              <TextBlock Text="{Binding InputBlack, StringFormat='Black point  {0:0.00}'}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0" Maximum="0.9" Value="{Binding InputBlack}" />
+
+              <TextBlock Text="{Binding InputWhite, StringFormat='White point  {0:0.00}'}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0.1" Maximum="1" Value="{Binding InputWhite}" />
+
+              <TextBlock Text="{Binding Gamma, StringFormat='Gamma  {0:0.00}'}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0.2" Maximum="3" Value="{Binding Gamma}" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card" Padding="12" CornerRadius="6">
+            <StackPanel Spacing="4">
+              <TextBlock Text="TINT" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+              <TextBlock Text="{Binding TintR, StringFormat='Red  {0:0.00}'}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0" Maximum="2" Value="{Binding TintR}" />
+              <TextBlock Text="{Binding TintG, StringFormat='Green  {0:0.00}'}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0" Maximum="2" Value="{Binding TintG}" />
+              <TextBlock Text="{Binding TintB, StringFormat='Blue  {0:0.00}'}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0" Maximum="2" Value="{Binding TintB}" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card" Padding="12" CornerRadius="6">
+            <StackPanel Spacing="4">
+              <TextBlock Text="{Binding Strength, StringFormat='Overall strength  {0:0.00}'}" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource ReyTextBrush}" />
+              <Slider Minimum="0" Maximum="1" Value="{Binding Strength}"
+                      ToolTip.Tip="Blends the whole adjustment back toward the original — dial a strong recolour down without re-deriving every slider." />
+              <Button Classes="tool" Content="↺ Reset all sliders" Command="{Binding ResetAdjustmentCommand}"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" FontSize="10" Padding="6,4" Margin="0,4,0,0" />
+            </StackPanel>
+          </Border>
+
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </DockPanel>
+</Window>

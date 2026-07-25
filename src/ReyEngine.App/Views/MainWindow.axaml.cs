@@ -129,6 +129,7 @@ public partial class MainWindow : Window
             vm.ShowAddMeshWindow = ShowAddMesh;                           // M123
             vm.ShowLightBakeWindow = () => ShowLightBake(vm);             // M158
             vm.ShowLightingWindow = () => ShowLighting(vm);               // M169
+            vm.ShowTextureRecolorWindow = () => ShowTextureRecolor(vm);   // M171
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop
@@ -369,6 +370,27 @@ public partial class MainWindow : Window
             _lightingWindow.Show(this);
         }
         else _lightingWindow.Activate();
+    }
+
+    // M171: Recolor Textures — non-modal, one instance, and the list is re-read on each open so it
+    // always reflects whatever map is currently loaded.
+    private TextureRecolorWindow? _recolorWindow;
+    private void ShowTextureRecolor(MainWindowViewModel vm)
+    {
+        if (_recolorWindow is null)
+        {
+            var recolorVm = new TextureRecolorViewModel(
+                vm.GatherRecolorTargets, vm.ReadRecolorBase, vm.MakeRecolorService,
+                vm.PersistRecolors, vm.RevertRecolors, r => vm.OnRecolorFinished(r));
+            _recolorWindow = new TextureRecolorWindow { DataContext = recolorVm };
+            _recolorWindow.Closed += (_, _) => _recolorWindow = null;
+            _recolorWindow.Show(this);
+        }
+        else
+        {
+            if (_recolorWindow.DataContext is TextureRecolorViewModel rvm) _ = rvm.RefreshAsync();
+            _recolorWindow.Activate();
+        }
     }
 
     // M158: the Light Baking window is non-modal (a bake can take minutes) — reuse one instance.

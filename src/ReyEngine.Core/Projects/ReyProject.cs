@@ -27,6 +27,11 @@ public sealed class ReyProject
     public List<string> ReferenceWads { get; set; } = new();
     public List<string> RecentAssets { get; set; } = new();
 
+    /// <summary>M171: texture recolours, stored as DESCRIPTIONS of the edit rather than as the edited
+    /// files. Every one is re-derived from the pristine source, so re-opening a project and nudging a
+    /// slider costs exactly one BC generation instead of one more each time.</summary>
+    public List<TextureRecolorRecord> TextureRecolors { get; set; } = new();
+
     /// <summary>M132: pack only known game file types into wads — editor leftovers, notes, PSDs and
     /// other unknown extensions are skipped (each skip is logged). Default on.</summary>
     public bool PackKnownTypesOnly { get; set; } = true;
@@ -71,6 +76,32 @@ public sealed class ReyProject
             if (Directory.Exists(c)) return c;
         return "";
     }
+}
+
+/// <summary>M171: one texture's recolour. The sliders are stored, NOT the recoloured pixels — the file
+/// on disk is only ever a rendering of these numbers applied to the original texture.
+///
+/// <see cref="BaseSnapshot"/> matters when the project has no Riot reference WAD mounted to read the
+/// original from: without a pristine base, re-editing would compound BC loss, so the first recolour
+/// stashes a copy. When the reference IS available (the normal case) this stays null and costs nothing.</summary>
+public sealed class TextureRecolorRecord
+{
+    public ulong PathHash { get; set; }
+    public string AssetPath { get; set; } = "";
+    /// <summary>Workspace-relative file holding the original bytes, when we had to keep our own copy.</summary>
+    public string? BaseSnapshot { get; set; }
+
+    public float HueDegrees { get; set; }
+    public float Saturation { get; set; } = 1f;
+    public float Brightness { get; set; } = 1f;
+    public float Contrast { get; set; } = 1f;
+    public float InputBlack { get; set; }
+    public float InputWhite { get; set; } = 1f;
+    public float Gamma { get; set; } = 1f;
+    public float TintR { get; set; } = 1f;
+    public float TintG { get; set; } = 1f;
+    public float TintB { get; set; } = 1f;
+    public float Strength { get; set; } = 1f;
 }
 
 /// <summary>One overridden chunk: its path hash + the on-disk replacement file.</summary>

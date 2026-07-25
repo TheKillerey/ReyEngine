@@ -1798,6 +1798,239 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // Re-read the map so the viewport samples the freshly baked atlases instead of Riot's.
         if (_currentMapEntry is { } e) _ = LoadMapGeoAsync(e);
     }
+
+    // ==================================================================== M171: recolour textures
+
+    public Action? ShowTextureRecolorWindow { get; set; }
+
+    [RelayCommand]
+    private void OpenTextureRecolor()
+    {
+        if (_currentMap is null) { _log.Warn("Recolor", "Open a map (.mapgeo) first — the tool recolours the textures that map paints with."); return; }
+        ShowTextureRecolorWindow?.Invoke();
+    }
+
+    /// <summary>Every texture the open map actually paints with, ranked by how much of the map each one
+    /// covers. Deliberately the DIFFUSE set only: normal maps, masks and gradients are data rather than
+    /// colour, and hue-shifting them would corrupt the lighting instead of recolouring the map.</summary>
+    public IReadOnlyList<RecolorTargetViewModel> GatherRecolorTargets()
+    {
+        var empty = Array.Empty<RecolorTargetViewModel>();
+        if (_currentMap is not { } map || _currentMapEntry is not { } mapEntry) return empty;
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) return empty;
+
+        var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
+        var (materialToTexture, _, _) = ResolveMapMaterials(binEntry, names);
+        if (materialToTexture.Count == 0) return empty;
+
+        var recolored = Project.TextureRecolors.Select(r => r.PathHash).ToHashSet();
+        var byPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tex in materialToTexture.Values)
+            if (!string.IsNullOrEmpty(tex)) byPath[tex] = byPath.GetValueOrDefault(tex) + 1;
+
+        var list = new List<RecolorTargetViewModel>(byPath.Count);
+        foreach (var (path, uses) in byPath)
+        {
+            ulong hash = HashAlgorithms.WadPath(path);
+            // Triage on the header alone — a map's texture list is long and decoding all of it just to
+            // populate a list would stall the window for seconds. Anything we cannot write back is left
+            // out entirely rather than offered and then silently skipped.
+            var bytes = TryReadAssetBytes(hash);
+            if (bytes is null || !TextureRecolor.IsSupported(bytes)) continue;
+
+            list.Add(new RecolorTargetViewModel
+            {
+                Target = new RecolorTarget(hash, path),
+                Name = Path.GetFileName(path),
+                Folder = Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "",
+                UsedBy = uses,
+                IsRecolored = recolored.Contains(hash),
+            });
+        }
+        return list.OrderByDescending(t => t.UsedBy).ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private byte[]? TryReadAssetBytes(ulong hash)
+    {
+        try { return ReadAsset(hash); } catch { return null; }
+    }
+
+    /// <summary>The PRISTINE bytes to recolour from — Riot's original, never the project's own recoloured
+    /// copy. This is the whole reason the tool is safe to re-run: BC compression is lossy, so recolouring
+    /// an already-recoloured texture would add a generation of loss on every pass.
+    ///
+    /// Riot's reference WAD is the normal source and costs nothing. When a project has no reference
+    /// mounted (so <see cref="AssetMountService.ReadFallback"/> has nothing to give) the first recolour
+    /// stashed a snapshot instead; that snapshot is used from then on.</summary>
+    public byte[]? ReadRecolorBase(RecolorTarget target)
+    {
+        var record = Project.TextureRecolors.FirstOrDefault(r => r.PathHash == target.PathHash);
+        if (record?.BaseSnapshot is { } snap && ResolveSnapshotPath(snap) is { } snapPath && File.Exists(snapPath))
+            return File.ReadAllBytes(snapPath);
+
+        if (_mounts?.ReadFallback(target.PathHash) is { } riot) return riot;
+
+        // No reference and no snapshot: the project's own copy is the closest thing to an original we
+        // have. Valid as a base only until we recolour over it — see CheckOutRecolorBase.
+        return record is null ? TryReadAssetBytes(target.PathHash) : null;
+    }
+
+    /// <summary>What the RUN reads from — the same bytes as <see cref="ReadRecolorBase"/>, except that in
+    /// the no-Riot-reference case it also stashes them before handing them over.
+    ///
+    /// That has to happen HERE and not after the run: once the recoloured file is written, the project's
+    /// copy is no longer an original, so a snapshot taken afterwards would preserve the edit instead of
+    /// the source and every later re-tune would compound BC loss.</summary>
+    private byte[]? CheckOutRecolorBase(RecolorTarget target)
+    {
+        var bytes = ReadRecolorBase(target);
+        if (bytes is null) return null;
+
+        bool needsSnapshot = _mounts?.ReadFallback(target.PathHash) is null
+                             && !Project.TextureRecolors.Any(r => r.PathHash == target.PathHash);
+        if (needsSnapshot) _pendingSnapshots[target.PathHash] = SnapshotOriginal(target, bytes);
+        return bytes;
+    }
+
+    /// <summary>Snapshots taken during the current run, keyed by hash — folded into the project records
+    /// by <see cref="PersistRecolors"/> once the run succeeds.</summary>
+    private readonly Dictionary<ulong, string?> _pendingSnapshots = new();
+
+    private string? ResolveSnapshotPath(string relative) =>
+        Project.WorkspaceDirectory is { } ws ? Path.Combine(ws, relative) : null;
+
+    public Services.TextureRecolorService? MakeRecolorService()
+    {
+        bool canWrite = (Project.IsFolderProject && Project.RootPath is not null)
+                        || Project.OverridesDirectory is not null;
+        return canWrite ? new Services.TextureRecolorService(CheckOutRecolorBase, WriteRecoloredAsset) : null;
+    }
+
+    /// <summary>Write a recoloured texture where it belongs. Unlike a baked lightmap — a brand-new file
+    /// with no home of its own — a recoloured texture already exists in a Riot WAD, so it is staged under
+    /// THAT wad's folder and replaces the chunk the game actually reads.</summary>
+    private string WriteRecoloredAsset(string assetPath, byte[] bytes, string ext)
+    {
+        ulong hash = HashAlgorithms.WadPath(assetPath);
+        if (Project.IsFolderProject && Project.RootPath is { } root)
+        {
+            string folderName = RiotWadFolderNameForHash(hash);
+            string dest = Path.Combine(root, folderName, assetPath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.WriteAllBytes(dest, bytes);
+            if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase))
+                Project.ProjectFolders.Add(folderName);
+            ClearShadowOverride(hash, ext);   // a stale hashed override would outrank the folder file
+            return dest;
+        }
+
+        var overrideFile = ProjectWorkspace.StoreOverrideBytes(Project, hash, bytes, ext);
+        _overrides.Set(new ProjectAssetOverride
+        {
+            PathHash = hash,
+            ResolvedPath = assetPath,
+            OverrideFile = overrideFile,
+            AddedUtc = DateTime.UtcNow.ToString("o"),
+        });
+        return overrideFile;
+    }
+
+    /// <summary>Remember the sliders (not the pixels) for each recoloured texture, so re-opening the tool
+    /// shows what was done and a later edit re-derives from the original instead of stacking on top.</summary>
+    public void PersistRecolors(TextureAdjustment adjustment, IReadOnlyList<RecolorTarget> targets)
+    {
+        foreach (var t in targets)
+        {
+            var record = Project.TextureRecolors.FirstOrDefault(r => r.PathHash == t.PathHash);
+            if (record is null)
+            {
+                record = new TextureRecolorRecord { PathHash = t.PathHash, AssetPath = t.AssetPath };
+                // Only set when the run actually had to keep its own copy (no Riot reference mounted);
+                // in the normal case this stays null and the project stays small.
+                record.BaseSnapshot = _pendingSnapshots.GetValueOrDefault(t.PathHash);
+                Project.TextureRecolors.Add(record);
+            }
+            record.AssetPath = t.AssetPath;
+            record.HueDegrees = adjustment.HueDegrees;
+            record.Saturation = adjustment.Saturation;
+            record.Brightness = adjustment.Brightness;
+            record.Contrast = adjustment.Contrast;
+            record.InputBlack = adjustment.InputBlack;
+            record.InputWhite = adjustment.InputWhite;
+            record.Gamma = adjustment.Gamma;
+            record.TintR = adjustment.TintR;
+            record.TintG = adjustment.TintG;
+            record.TintB = adjustment.TintB;
+            record.Strength = adjustment.Strength;
+        }
+        _pendingSnapshots.Clear();
+    }
+
+    /// <summary>Stash the untouched original under the workspace, returning its workspace-relative path.
+    /// Only used when nothing else can supply a pristine base.</summary>
+    private string? SnapshotOriginal(RecolorTarget target, byte[] bytes)
+    {
+        try
+        {
+            if (Project.WorkspaceDirectory is not { } ws) return null;
+            string rel = Path.Combine("recolor-base", $"{target.PathHash:x16}.tex");
+            string full = Path.Combine(ws, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllBytes(full, bytes);
+            return rel;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Recolor", $"Could not snapshot the original of {target.AssetPath} ({ex.Message}) — re-editing it will re-compress.");
+            return null;
+        }
+    }
+
+    /// <summary>Undo recolours: delete the project's copies so Riot's originals win again, and forget the
+    /// saved sliders. Returns how many were restored.</summary>
+    public int RevertRecolors(IReadOnlyList<RecolorTarget> targets)
+    {
+        int n = 0;
+        foreach (var t in targets)
+        {
+            var record = Project.TextureRecolors.FirstOrDefault(r => r.PathHash == t.PathHash);
+            try
+            {
+                if (Project.IsFolderProject && Project.RootPath is { } root)
+                {
+                    string dest = Path.Combine(root, RiotWadFolderNameForHash(t.PathHash),
+                        t.AssetPath.Replace('/', Path.DirectorySeparatorChar));
+                    if (File.Exists(dest)) { File.Delete(dest); n++; }
+                }
+                ClearShadowOverride(t.PathHash, ".tex");
+                if (record?.BaseSnapshot is { } snap && ResolveSnapshotPath(snap) is { } p && File.Exists(p))
+                    File.Delete(p);
+            }
+            catch (Exception ex) { _log.Warn("Recolor", $"Could not restore {t.AssetPath}: {ex.Message}"); }
+            if (record is not null) Project.TextureRecolors.Remove(record);
+        }
+        OnRecolorFinished(null);
+        return n;
+    }
+
+    public void OnRecolorFinished(Services.RecolorRunResult? result)
+    {
+        if (result is not null)
+        {
+            _log.Success("Recolor", $"{result.Written:n0} texture(s) recoloured"
+                + (result.Skipped > 0 ? $", {result.Skipped:n0} skipped" : "")
+                + (result.Failed > 0 ? $", {result.Failed:n0} failed" : "")
+                + $" ({result.BytesWritten / 1048576.0:F1} MB).");
+            foreach (var note in result.Notes) _log.Warn("Recolor", note);
+        }
+
+        Project.IsDirty = true;
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        if (Project.IsFolderProject) { BuildMounts(); BuildProjectTree(); }
+        UpdateTitle();
+        // Re-read the map so the viewport paints with the new textures rather than the ones it cached.
+        if (_currentMapEntry is { } e) _ = LoadMapGeoAsync(e);
+    }
     [ObservableProperty] private bool _showLightMarkers = true;   // M71: show a glow icon at each light position
     // M71: manual lighting controls. Sun + sky feed the fallback lighting term (visible with lightmaps off or
     // on geometry without baked light); lightmap brightness scales the baked atlas. All initialise from the
@@ -6841,9 +7074,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M98c/d: the project-folder name a Riot asset should be staged under — the source WAD's
     /// base name (Map12.wad.client → "Map12"), or "Overrides" when the source WAD can't be determined.</summary>
-    private string RiotWadFolderName(WadAssetEntry entry)
+    private string RiotWadFolderName(WadAssetEntry entry) => RiotWadFolderNameForHash(entry.PathHash);
+
+    /// <summary>Which project folder does an asset belong in? The name of the Riot WAD it comes from
+    /// (Map11.wad.client → "Map11"), so the packer puts it back into the same wad the game reads it from.
+    /// "Overrides" when the asset has no Riot home at all.</summary>
+    private string RiotWadFolderNameForHash(ulong pathHash)
     {
-        if (_mounts is not null && _mounts.TryGet(entry.PathHash, out var mounted))
+        if (_mounts is not null && _mounts.TryGet(pathHash, out var mounted))
         {
             var riotSrc = mounted.Source.Kind == AssetSourceKind.RiotReference ? mounted.Source
                 : mounted.AllSources.FirstOrDefault(s => s.Kind == AssetSourceKind.RiotReference);

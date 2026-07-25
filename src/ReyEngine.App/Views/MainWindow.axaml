@@ -108,6 +108,9 @@
           <MenuItem Header="Save Light.dat As…" Command="{Binding SaveLightDatAsCommand}" />
         </MenuItem>
         <Separator />
+        <MenuItem Header="Recolor Textures…" Command="{Binding OpenTextureRecolorCommand}"
+                  ToolTip.Tip="Recolour the textures the open map paints with — hue, saturation, levels and tint, applied across as many of them as you like. Every texture is re-derived from Riot's original, so re-tuning never stacks compression loss, and each one keeps its own pixel format and mip chain" />
+        <Separator />
         <MenuItem Header="Assign Skeleton…" Command="{Binding AssignSkeletonCommand}" />
         <MenuItem Header="Assign Animation…" Command="{Binding AssignAnimationCommand}" />
         <Separator />
