@@ -495,8 +495,8 @@
                       <TextBlock Text="BAKE" FontSize="10" FontWeight="Bold"
                                  Foreground="{DynamicResource ReyTextDimBrush}" />
                       <Button Classes="primary" Content="🔦 Bake Lighting…" Command="{Binding OpenLightBakeCommand}"
-                              IsEnabled="{Binding CanBakeLighting}" HorizontalAlignment="Stretch" FontSize="10" Padding="8,4"
-                              ToolTip.Tip="Trace the sun, sky, AO and every point light into this map's lightmap atlases (Map12-style). Needs a map with a lightmap layout and a saved project." />
+                              IsEnabled="{Binding HasMapForLayout}" HorizontalAlignment="Stretch" FontSize="10" Padding="8,4"
+                              ToolTip.Tip="Bake lighting into this map's lightmap atlases. If the map has no lightmap layout yet, the window offers to generate one first (UV2 + atlas regions)." />
                     </StackPanel>
                   </Flyout>
                 </Button.Flyout>

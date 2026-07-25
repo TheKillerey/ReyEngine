@@ -1499,9 +1499,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void OpenLightBake()
     {
-        if (!CanBakeLighting)
+        // Deliberately NOT gated on CanBakeLighting: a map with no lightmap layout is exactly the case
+        // where the window is most needed, because that is where a layout gets generated. Gating this on
+        // "can already bake" made the layout generator unreachable on the maps that need it.
+        if (!HasMapForLayout)
         {
-            _log.Warn("Bake", "This map has no lightmap layout to bake into.");
+            _log.Warn("Bake", "Open a mapgeo first.");
             return;
         }
         ShowLightBakeWindow?.Invoke();
@@ -2811,6 +2814,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _currentMapBytes = null;
         _currentMapEntry = null;
         OnPropertyChanged(nameof(CanBakeLighting));   // M158
+        OnPropertyChanged(nameof(HasMapForLayout));  // M147
+        OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
         _selection.Clear();
         HasMapMoves = false;
         CurrentModelTextures = null;
@@ -4326,6 +4331,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _currentMapEntry = entry;
                 HasMapGeo = true;   // M79
                 OnPropertyChanged(nameof(CanBakeLighting));   // M158
+                OnPropertyChanged(nameof(HasMapForLayout));  // M147
+                OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
+        OnPropertyChanged(nameof(HasMapForLayout));  // M147
+        OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
                 _selection.Clear();
                 CurrentModelTextures = textures;
                 ApplySunProperties(sunProperties);
