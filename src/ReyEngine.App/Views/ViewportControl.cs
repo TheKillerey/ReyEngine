@@ -1235,6 +1235,19 @@ public sealed class ViewportControl : OpenGlControlBase
                     }
                     es.DistortionTexture = distortionTex;
                 }
+                // M174 (2.1): the alpha-erosion dissolve map. Sampled in the fragment shader with the
+                // SAME UV as the diffuse texture - decoded from quad_ps, which reuses interpolator v2.xy
+                // and does not give erosion its own UV set.
+                var erosionImg = item.EmitterErosionTextures is { } ets && idx >= 0 && idx < ets.Count ? ets[idx] : null;
+                if (erosionImg is not null)
+                {
+                    if (!_particleTextureCache.TryGetValue(erosionImg, out var erosionTex))
+                    {
+                        erosionTex = _particleRenderer.UploadTexture(erosionImg.Rgba, erosionImg.Width, erosionImg.Height);
+                        _particleTextureCache[erosionImg] = erosionTex;
+                    }
+                    es.ErosionTexture = erosionTex;
+                }
                 // M68: particleColorTexture is sampled on the CPU (in the simulator), so hand the emitter the
                 // decoded RGBA gradient directly rather than uploading it to GL.
                 var colorImg = item.EmitterColorTextures is { } cts && idx >= 0 && idx < cts.Count ? cts[idx] : null;

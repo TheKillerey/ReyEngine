@@ -107,6 +107,14 @@ public static class VfxSystemResolver
     private static readonly uint F_chanceNotExist  = HashAlgorithms.Fnv1a("ChanceToNotExist");
     private static readonly uint F_variableStart   = HashAlgorithms.Fnv1a("HasVariableStartTime");
     private static readonly uint F_emitterLinger   = HashAlgorithms.Fnv1a("emitterLinger");
+    // M174 (2.1) alpha erosion. Field 0xc4663005 on the emitter; struct class 0x5e842b9b.
+    private static readonly uint F_alphaErosion    = HashAlgorithms.Fnv1a("alphaErosionDefinition");
+    private static readonly uint F_erosionMap      = HashAlgorithms.Fnv1a("erosionMapName");
+    private static readonly uint F_erosionMixer    = HashAlgorithms.Fnv1a("erosionMapChannelMixer");
+    private static readonly uint F_erosionDrive    = HashAlgorithms.Fnv1a("erosionDriveCurve");
+    private static readonly uint F_erosionSlice    = HashAlgorithms.Fnv1a("erosionSliceWidth");
+    private static readonly uint F_erosionFeatherIn  = HashAlgorithms.Fnv1a("erosionFeatherIn");
+    private static readonly uint F_erosionFeatherOut = HashAlgorithms.Fnv1a("erosionFeatherOut");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -343,7 +351,8 @@ public static class VfxSystemResolver
             TimeActiveDuringPeriod: GetOptionalF32(p, F_timeActive),
             ChanceToNotExist: GetF32(p, F_chanceNotExist) ?? 0f,
             HasVariableStartTime: GetBool(p, F_variableStart),
-            EmitterLinger: GetOptionalF32(p, F_emitterLinger));
+            EmitterLinger: GetOptionalF32(p, F_emitterLinger),
+            AlphaErosion: ReadAlphaErosion(p));
     }
 
     /// <summary>M174 (1.1): dispatch on the shape CLASS, not just on emitOffset.
@@ -383,6 +392,29 @@ public static class VfxSystemResolver
         }
 
         return new VfxSpawnShape(offset, axes, angles, kind, radius, height, size);
+    }
+
+    /// <summary>M174 (2.1): the dissolve stage. See VfxAlphaErosion for the decoded shader maths.</summary>
+    private static VfxAlphaErosion? ReadAlphaErosion(IReadOnlyDictionary<uint, BinTreeProperty> p)
+    {
+        if (Get(p, F_alphaErosion) is not BinTreeStruct e) return null;
+        var ep = e.Properties;
+
+        // The mixer is a ValueColor; its constant is what the shader dots against. Default to the red
+        // channel, which is what ~74% of the corpus authors explicitly.
+        var mixer = ReadCurve4(ep, F_erosionMixer)?.Constant ?? new Vector4(1f, 0f, 0f, 0f);
+        var drive = ReadCurveF(ep, F_erosionDrive);
+        var mapPath = GetString(ep, F_erosionMap);
+
+        // No map and no drive means the struct carries nothing usable - skip rather than bind a null
+        // sampler and multiply the sprite away.
+        if (string.IsNullOrEmpty(mapPath) || drive is null) return null;
+
+        return new VfxAlphaErosion(
+            mapPath, mixer, drive.Value,
+            ReadScalar(ep, F_erosionSlice),
+            ReadScalar(ep, F_erosionFeatherIn),
+            ReadScalar(ep, F_erosionFeatherOut));
     }
 
     /// <summary>A shape dimension, which may be authored either as a bare F32 or wrapped in a Value* struct.</summary>

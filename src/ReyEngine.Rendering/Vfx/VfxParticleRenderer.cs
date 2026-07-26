@@ -19,6 +19,7 @@ public sealed class VfxParticleRenderer
     private int _uIsDistortion, _uDistortionTex, _uSceneTex, _uViewportSize, _uDistortionStrength;
     private int _uAlphaRef;   // M174 (1.4)
     // M174 (2.3): the UV transform stack.
+    private int _uErosionTex, _uErosionParams, _uErosionMixer, _uHasErosion;   // M174 (2.1)
     private int _uUvOffset, _uUvScale, _uUvScrollInt, _uUvRotation, _uUvClamp;
     private int _uEmitterUvScroll, _uUvFlip, _uUvRotInt, _uUvRotRate, _uUvCenter, _uEmitterAge;
     private int _uDirectionOriented, _uArbitraryQuad;
@@ -32,7 +33,9 @@ public sealed class VfxParticleRenderer
     private uint _sceneTexture;
     private int _sceneWidth, _sceneHeight;
 
-    private const int Stride = 18;
+    // M174 (2.1): the 19th float is the per-particle alpha-erosion drive. Riot's own quad path passes
+    // it the same way - quad_vs reads vertex attribute TEXCOORD0.w into TEXCOORD3.z.
+    private const int Stride = 19;
 
     private bool _gles;
 
@@ -58,6 +61,10 @@ public sealed class VfxParticleRenderer
         _uViewportSize = gl.GetUniformLocation(_program, "uViewportSize");
         _uDistortionStrength = gl.GetUniformLocation(_program, "uDistortionStrength");
         _uAlphaRef = gl.GetUniformLocation(_program, "uAlphaRef");
+        _uErosionTex = gl.GetUniformLocation(_program, "uErosionTex");
+        _uErosionParams = gl.GetUniformLocation(_program, "uErosionParams");
+        _uErosionMixer = gl.GetUniformLocation(_program, "uErosionMixer");
+        _uHasErosion = gl.GetUniformLocation(_program, "uHasErosion");
         _uUvOffset = gl.GetUniformLocation(_program, "uUvOffset");
         _uUvScale = gl.GetUniformLocation(_program, "uUvScale");
         _uUvScrollInt = gl.GetUniformLocation(_program, "uUvScrollInt");
@@ -97,12 +104,14 @@ public sealed class VfxParticleRenderer
         gl.EnableVertexAttribArray(4); gl.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, bstride, (void*)(9 * sizeof(float)));
         gl.EnableVertexAttribArray(5); gl.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, bstride, (void*)(11 * sizeof(float)));
         gl.EnableVertexAttribArray(6); gl.VertexAttribPointer(6, 3, VertexAttribPointerType.Float, false, bstride, (void*)(15 * sizeof(float)));
+        gl.EnableVertexAttribArray(7); gl.VertexAttribPointer(7, 1, VertexAttribPointerType.Float, false, bstride, (void*)(18 * sizeof(float)));
         gl.VertexAttribDivisor(1, 1);
         gl.VertexAttribDivisor(2, 1);
         gl.VertexAttribDivisor(3, 1);
         gl.VertexAttribDivisor(4, 1);
         gl.VertexAttribDivisor(5, 1);
         gl.VertexAttribDivisor(6, 1);
+        gl.VertexAttribDivisor(7, 1);
 
         gl.BindVertexArray(0);
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
@@ -243,6 +252,25 @@ public sealed class VfxParticleRenderer
             // and AlphaTestReferenceValue). 34,788 emitters author a non-zero one.
             _gl.Uniform1(_uAlphaRef, es.Def.AlphaRef / 255f);
             var d2 = es.Def;
+            // M174 (2.1): alpha erosion, bound to texture unit 5.
+            // The IsDegenerate check is the guard described on VfxAlphaErosion: under the INFERRED
+            // parameter packing, 16% of erosion emitters evaluate to a mask of zero everywhere, which
+            // would erase them. Skipping those keeps them looking exactly as they did before M174.
+            bool hasErosion = es.ErosionTexture != 0 && d2.AlphaErosion is { IsDegenerate: false };
+            _gl.Uniform1(_uHasErosion, hasErosion ? 1 : 0);
+            if (hasErosion)
+            {
+                var ero = d2.AlphaErosion!;
+                var yzw = ero.PackYzw();
+                _gl.ActiveTexture(TextureUnit.Texture5);
+                _gl.BindTexture(TextureTarget.Texture2D, es.ErosionTexture);
+                _gl.Uniform1(_uErosionTex, 5);
+                // .x is unused: the drive arrives per particle through the instance attribute, exactly
+                // as Riot's quad path does it.
+                _gl.Uniform4(_uErosionParams, 0f, yzw.X, yzw.Y, yzw.Z);
+                _gl.Uniform4(_uErosionMixer, ero.ChannelMixer.X, ero.ChannelMixer.Y, ero.ChannelMixer.Z, ero.ChannelMixer.W);
+                _gl.ActiveTexture(TextureUnit.Texture0);
+            }
             _gl.Uniform2(_uUvOffset, d2.UvOffset.X, d2.UvOffset.Y);
             _gl.Uniform2(_uUvScale, d2.UvScale.X == 0 ? 1f : d2.UvScale.X, d2.UvScale.Y == 0 ? 1f : d2.UvScale.Y);
             _gl.Uniform2(_uUvScrollInt, d2.UvScrollIntegrated.X, d2.UvScrollIntegrated.Y);
@@ -522,6 +550,7 @@ uniform vec3 uPlacementRight;
 uniform vec3 uPlacementUp;
 uniform vec3 uPlacementForward;
 out vec2 vUv;
+out float vErosionDrive;
 out vec2 vUvMult;
 void main(){
     float s = sin(uRot); float c = cos(uRot);
@@ -557,6 +586,7 @@ layout(location=3) in vec4 aColor;     // per-instance rgba
 layout(location=4) in vec2 aRotFrame;  // per-instance rotation (rad), flipbook frame
 layout(location=5) in vec4 aAgeVelX;   // age, velocity xyz
 layout(location=6) in vec3 aRotation;  // Euler xyz in radians
+layout(location=7) in float aErosionDrive;  // M174 (2.1): per-particle erosion drive
 uniform mat4 uViewProj;
 uniform vec3 uCamRight;
 uniform vec3 uCamUp;
@@ -661,12 +691,18 @@ void main(){
     vUvMult = vec2(cell.x, 1.0 - cell.y) / multDiv
         + uUvScrollRateMult * aAgeVelX.x;
     vColor = aColor;
+    vErosionDrive = aErosionDrive;
 }";
 
     private const string Frag = @"
 in vec2 vUv;
 in vec2 vUvMult;
 in vec4 vColor;
+in float vErosionDrive;
+uniform sampler2D uErosionTex;
+uniform vec4 uErosionParams;   // (unused, sliceWidth, 1/featherIn, 1/featherOut)
+uniform vec4 uErosionMixer;
+uniform int uHasErosion;
 uniform sampler2D uTex;
 uniform sampler2D uTexMult;
 uniform int uHasTexMult;
@@ -680,7 +716,20 @@ out vec4 fragColor;
 void main(){
     vec4 t = texture(uTex, vUv);
     if (uHasTexMult != 0) t *= texture(uTexMult, vUvMult);
-    // M174 (1.4): alpha test, before anything else consumes the sample.
+    // M174 (2.1): alpha erosion (dissolve). DECODED from the SHEX instruction streams of
+    // particlesystem/quad_ps, particlesystem/mesh_ps and skinnedmesh/particle_ps, which agree exactly:
+    // a difference of two SATURATED LINEAR ramps, giving a trapezoidal band. Deliberately NOT a
+    // smoothstep - Riot uses a real smoothstep for soft particles in the very same shader and a linear
+    // ramp here. Riot does not re-clamp the difference, so neither do we.
+    if (uHasErosion != 0) {
+        float E  = clamp(dot(texture(uErosionTex, vUv), uErosionMixer), 0.0, 1.0);
+        float te = vErosionDrive - E;
+        float ea = clamp((te + uErosionParams.y) * uErosionParams.z, 0.0, 1.0);
+        float eb = clamp( te                    * uErosionParams.w, 0.0, 1.0);
+        t.a *= (ea - eb);
+    }
+
+    // M174 (1.4): alpha test. Riot tests the ERODED alpha, so this must follow the stage above.
     if (uAlphaRef > 0.0 && t.a * vColor.a < uAlphaRef) discard;
     if (uIsDistortion != 0) {
         vec4 normalSample = texture(uDistortionTex, vUv);

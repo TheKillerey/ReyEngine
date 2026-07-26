@@ -132,12 +132,89 @@ public sealed record VfxEmitterDefinition(
     bool HasVariableStartTime = false,
     /// <summary>emitterLinger - how long the emitter survives after it stops emitting. 95,954 emitters;
     /// without it an effect cuts off instead of trailing away.</summary>
-    float? EmitterLinger = null)
+    float? EmitterLinger = null,
+
+    /// <summary>M174 (2.1) alphaErosionDefinition - the dissolve stage. 307,050 emitters (22%), the
+    /// largest single visual feature ReyEngine did not implement; without it they all fade by uniform
+    /// alpha instead of eroding away through a noise map.</summary>
+    VfxAlphaErosion? AlphaErosion = null)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
         !string.IsNullOrEmpty(TextureMultPath) || !string.IsNullOrEmpty(MeshPath) ||
         Distortion is { NormalMapTexturePath.Length: > 0 });
+}
+
+/// <summary>M174 (2.1): Riot's alpha-erosion (dissolve) stage.
+///
+/// The maths here is DECODED from the shipped DXBC, not inferred from field names - the SHEX instruction
+/// stream of particlesystem/quad_ps, particlesystem/mesh_ps and skinnedmesh/particle_ps all agree:
+///
+///   E    = saturate(dot(erosionTexel.rgba, mixer.rgba))     // full dp4, saturated
+///   t    = drive - E
+///   a    = saturate((t + P.y) * P.z)                        // leading edge
+///   b    = saturate( t        * P.w)                        // trailing edge
+///   mask = a - b                                            // NOT re-clamped by Riot
+///   alpha *= mask                                           // pure multiply, applied last
+///
+/// Note it is a difference of two LINEAR ramps - a trapezoid - not a smoothstep. Riot uses a real
+/// smoothstep for soft particles in the very same shader, so the linear ramp here is deliberate.
+///
+/// WHAT IS NOT KNOWN: which authored field lands in which of P.y/P.z/P.w. The verifier established that
+/// this is UNDECIDABLE from the bytecode, because the CPU packs the vector before upload. The mapping
+/// below (slice width -> P.y, 1/featherIn -> P.z, 1/featherOut -> P.w) is the plausible reading; if
+/// erosion looks inverted in practice, swapping FeatherIn and FeatherOut is the one-line fix.</summary>
+public sealed record VfxAlphaErosion(
+    string? MapPath,
+    /// <summary>erosionMapChannelMixer, dotted against the texel's RGBA. Overwhelmingly (1,0,0,0) - the
+    /// red channel - at ~74% of the corpus.</summary>
+    Vector4 ChannelMixer,
+    /// <summary>erosionDriveCurve over particle life. The shader takes ONE scalar per particle, so
+    /// UseLingerErosionDriveCurve can only be a CPU-side choice of which curve feeds it.</summary>
+    VfxCurveF Drive,
+    float SliceWidth,
+    float FeatherIn,
+    float FeatherOut)
+{
+    /// <summary>Pack into the shader's cAlphaErosionParams.yzw. Absent feathers must degrade to a no-op
+    /// edge rather than to zero: a missing leading edge becomes a hard step (large slope), and a missing
+    /// trailing edge becomes slope 0 so nothing is subtracted. Getting that backwards erases the sprite
+    /// entirely, since mask = a - b.</summary>
+    public Vector3 PackYzw() => new(
+        SliceWidth,
+        FeatherIn > 1e-6f ? 1f / FeatherIn : 1000f,
+        FeatherOut > 1e-6f ? 1f / FeatherOut : 0f);
+
+    /// <summary>Would this configuration erase the sprite outright, at every point of the drive curve
+    /// and for every possible erosion-map value? Measured on the live corpus, 13,965 of 87,573 erosion
+    /// emitters (16%) evaluate that way under the inferred parameter packing.
+    ///
+    /// This is a GUARD, not League behaviour. The formula itself is decoded from Riot's bytecode and is
+    /// certain; which authored field lands in which of P.y/P.z/P.w is NOT — the verifier established it
+    /// is undecidable from the shaders because the CPU packs the vector before upload. If that mapping is
+    /// wrong, the visible symptom is exactly this: particles vanishing. Skipping the stage in that case
+    /// can only ever restore the pre-M174 appearance, never make something worse, so it is the safe way
+    /// to ship an inferred mapping. If erosion ever looks absent where it should dissolve, this guard and
+    /// the FeatherIn/FeatherOut assignment are the two things to revisit together.</summary>
+    public bool IsDegenerate
+    {
+        get
+        {
+            var yzw = PackYzw();
+            for (int di = 0; di <= 8; di++)
+            {
+                float drive = Drive.Sample(di / 8f);
+                for (int ei = 0; ei <= 8; ei++)
+                {
+                    float t = drive - ei / 8f;
+                    float a = Math.Clamp((t + yzw.X) * yzw.Y, 0f, 1f);
+                    float b = Math.Clamp(t * yzw.Z, 0f, 1f);
+                    if (a - b > 0.01f) return false;
+                }
+            }
+            return true;
+        }
+    }
 }
 
 /// <summary>Riot's screen-space particle distortion stage (heat haze/refraction).</summary>

@@ -18,7 +18,8 @@ public sealed record VfxPlaybackItem(
     IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>? EmitterMeshes = null,
     IReadOnlyList<TextureImage?>? EmitterMultTextures = null,   // Riot TEXTUREMULT stage
     IReadOnlyList<TextureImage?>? EmitterDistortionTextures = null,
-    IReadOnlyList<TextureImage?>? EmitterColorTextures = null)  // M68: particleColorTexture colour-over-life gradient
+    IReadOnlyList<TextureImage?>? EmitterColorTextures = null,   // M68: particleColorTexture colour-over-life gradient
+    IReadOnlyList<TextureImage?>? EmitterErosionTextures = null) // M174 (2.1): alpha-erosion dissolve map
 {
     /// <summary>Convenience for champion/editor previews authored at a translated root.</summary>
     public VfxPlaybackItem(VfxSystemDefinition system, Vector3 worldPos,
@@ -26,9 +27,10 @@ public sealed record VfxPlaybackItem(
         IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>? emitterMeshes = null,
         IReadOnlyList<TextureImage?>? emitterMultTextures = null,
         IReadOnlyList<TextureImage?>? emitterDistortionTextures = null,
-        IReadOnlyList<TextureImage?>? emitterColorTextures = null)
+        IReadOnlyList<TextureImage?>? emitterColorTextures = null,
+        IReadOnlyList<TextureImage?>? emitterErosionTextures = null)
         : this(system, Matrix4x4.CreateTranslation(worldPos), emitterTextures, emitterMeshes, emitterMultTextures,
-            emitterDistortionTextures, emitterColorTextures) { }
+            emitterDistortionTextures, emitterColorTextures, emitterErosionTextures) { }
 
     public Vector3 WorldPos => Transform.Translation;
 

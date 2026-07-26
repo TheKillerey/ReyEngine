@@ -20,6 +20,7 @@ public sealed class VfxParticleSimulator
         public uint Texture;                    // GL handle for this emitter's sprite (0 = not uploaded/skip)
         public uint TextureMult;                // optional Riot multiplier/noise texture stage
         public uint DistortionTexture;          // normal map for screen-space heat haze/refraction
+        public uint ErosionTexture;             // M174 (2.1): alpha-erosion dissolve map
         // M68: CPU copy of particleColorTexture (RGBA8, top-left origin). When present, each particle's colour
         // is looked up from this 2-D colour-over-life gradient (U = age, V = per-particle variant) instead of
         // rendering white. Null = emitter has no colour texture (keeps its birthColor/color curve colour).
@@ -344,6 +345,10 @@ public sealed class VfxParticleSimulator
             buf[k++] = p.Age;
             buf[k++] = p.Vel.X; buf[k++] = p.Vel.Y; buf[k++] = p.Vel.Z;
             buf[k++] = p.Rot; buf[k++] = p.BirthRotation.Y; buf[k++] = p.BirthRotation.Z;
+            // M174 (2.1): the erosion drive is ONE scalar per particle - Riot's quad path feeds it
+            // through a vertex attribute (quad_vs: mov o3.z, v2.w), which is why the curve is
+            // evaluated here on the CPU rather than in the shader.
+            buf[k++] = d.AlphaErosion is { } ero ? ero.Drive.Sample(t) : 0f;
         }
         s.InstanceCount = n;
     }

@@ -775,6 +775,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return texs;
     }
 
+    /// <summary>M174 (2.1): each emitter's alpha-erosion dissolve map, aligned to Emitters.</summary>
+    private readonly Dictionary<uint, IReadOnlyList<TextureImage?>> _vfxErosionTextureCache = new();
+
+    private IReadOnlyList<TextureImage?> ResolveSystemErosionTextures(VfxSystemDefinition sys)
+    {
+        if (_vfxErosionTextureCache.TryGetValue(sys.PathHash, out var cached)) return cached;
+        var texs = new List<TextureImage?>(sys.Emitters.Count);
+        foreach (var e in sys.Emitters)
+            texs.Add(e.AlphaErosion?.MapPath is { } p ? LoadTextureByPath(p) : null);
+        _vfxErosionTextureCache[sys.PathHash] = texs;
+        return texs;
+    }
+
     private IReadOnlyList<TextureImage?> ResolveSystemDistortionTextures(VfxSystemDefinition sys)
     {
         if (_vfxDistortionTextureCache.TryGetValue(sys.PathHash, out var cached)) return cached;
@@ -862,7 +875,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void SetChampionVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems)
     {
         _vfxSystems = systems;
-        _vfxTextureCache.Clear(); _vfxTextureMultCache.Clear(); _vfxDistortionTextureCache.Clear(); _vfxColorTextureCache.Clear(); _vfxMeshCache.Clear();
+        _vfxTextureCache.Clear(); _vfxTextureMultCache.Clear(); _vfxDistortionTextureCache.Clear(); _vfxColorTextureCache.Clear(); _vfxMeshCache.Clear(); _vfxErosionTextureCache.Clear();
         ChampionVfxSystems.Clear();
         foreach (var s in systems.Values
                      .Where(s => s.Emitters.Any(e => e.IsVisual))
@@ -882,7 +895,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // champion VFX are authored around the character root (origin); play one system there.
         CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, System.Numerics.Vector3.Zero,
             ResolveSystemTextures(sys), ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys), ResolveSystemDistortionTextures(sys),
-            ResolveSystemColorTextures(sys)) });
+            ResolveSystemColorTextures(sys), ResolveSystemErosionTextures(sys)) });
         _log.Info("VFX", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {ResolveSystemTextures(sys).Count(t => t is not null)} sprite(s) resolved.");
     }
 
