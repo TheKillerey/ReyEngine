@@ -132,6 +132,23 @@ public static class VfxSystemResolver
     private static readonly uint F_paletteVAnim    = HashAlgorithms.Fnv1a("PaletteVAnimationCurve");
     // M175 (2.8) depth offset. Name recovered by brute force in M174: FNV-1a("depthPushPull") == 0xcb13aff1.
     private static readonly uint F_depthPushPull   = HashAlgorithms.Fnv1a("depthPushPull");
+    // M176 (2.4) force fields. Class hashes measured on 6,134 live collections:
+    //   noise 0x634db850 · drag 0xe750fae2 · acceleration 0x0a94f3d4 · attraction 0x1a7617fd · orbital 0xb67aee6f
+    private static readonly uint F_fieldCollection = HashAlgorithms.Fnv1a("fieldCollectionDefinition");
+    private static readonly uint F_fieldNoise      = HashAlgorithms.Fnv1a("fieldNoiseDefinitions");
+    private static readonly uint F_fieldDrag       = HashAlgorithms.Fnv1a("fieldDragDefinitions");
+    private static readonly uint F_fieldAccel      = HashAlgorithms.Fnv1a("fieldAccelerationDefinitions");
+    private static readonly uint F_fieldAttract    = HashAlgorithms.Fnv1a("fieldAttractionDefinitions");
+    private static readonly uint F_fieldOrbital    = HashAlgorithms.Fnv1a("fieldOrbitalDefinitions");
+    private static readonly uint F_fldAxisFraction = HashAlgorithms.Fnv1a("axisFraction");
+    private static readonly uint F_fldRadius       = HashAlgorithms.Fnv1a("radius");
+    private static readonly uint F_fldFrequency    = HashAlgorithms.Fnv1a("frequency");
+    private static readonly uint F_fldVelocityDelta= HashAlgorithms.Fnv1a("velocityDelta");
+    private static readonly uint F_fldPosition     = HashAlgorithms.Fnv1a("Position");
+    private static readonly uint F_fldStrength     = HashAlgorithms.Fnv1a("strength");
+    private static readonly uint F_fldAcceleration = HashAlgorithms.Fnv1a("acceleration");
+    private static readonly uint F_fldDirection    = HashAlgorithms.Fnv1a("direction");
+    private static readonly uint F_fldIsLocalSpace = HashAlgorithms.Fnv1a("isLocalSpace");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -372,8 +389,99 @@ public static class VfxSystemResolver
             AlphaErosion: ReadAlphaErosion(p),
             SoftParticle: ReadSoftParticle(p),
             Palette: ReadPalette(p),
-            DepthPushPull: ReadScalar(p, F_depthPushPull));
+            DepthPushPull: ReadScalar(p, F_depthPushPull),
+            ForceFields: ReadForceFields(p));
     }
+
+    /// <summary>M176 (2.4): the force-field collection. See VfxForceFields for what is measured and what
+    /// is inferred. Each of the five lists is a container of structs; an absent container is simply an
+    /// empty list, and a collection with nothing in it at all resolves to null so the simulator can skip
+    /// the whole stage with one null check.</summary>
+    private static VfxForceFields? ReadForceFields(IReadOnlyDictionary<uint, BinTreeProperty> p)
+    {
+        if (Get(p, F_fieldCollection) is not BinTreeStruct coll) return null;
+        var cp = coll.Properties;
+
+        var noise = new List<VfxNoiseField>();
+        var drag = new List<VfxDragField>();
+        var accel = new List<VfxAccelerationField>();
+        var attract = new List<VfxAttractionField>();
+        var orbital = new List<VfxOrbitalField>();
+
+        foreach (var f in Structs(cp, F_fieldNoise))
+            noise.Add(new VfxNoiseField(
+                // axisFraction is a RAW Vector3 here, not a Value* wrapper - measured on 4,635 fields.
+                // Absent means "affect all axes", not "affect none": defaulting it to zero would disable
+                // the commonest field type in the game.
+                GetVec3(f, F_fldAxisFraction) ?? Vector3.One,
+                ReadFieldScalar(f, F_fldRadius),
+                ReadFieldScalar(f, F_fldFrequency),
+                ReadFieldScalar(f, F_fldVelocityDelta),
+                ReadFieldVec3(Get(f, F_fldPosition))));
+
+        foreach (var f in Structs(cp, F_fieldDrag))
+            drag.Add(new VfxDragField(
+                ReadFieldScalar(f, F_fldRadius),
+                ReadFieldScalar(f, F_fldStrength),
+                ReadFieldVec3(Get(f, F_fldPosition))));
+
+        foreach (var f in Structs(cp, F_fieldAccel))
+            accel.Add(new VfxAccelerationField(
+                ReadFieldVec3(Get(f, F_fldAcceleration)),
+                GetBool(f, F_fldIsLocalSpace)));
+
+        foreach (var f in Structs(cp, F_fieldAttract))
+            attract.Add(new VfxAttractionField(
+                ReadFieldScalar(f, F_fldRadius),
+                // SIGNED - negative is a repulsor, and 10,000-magnitude negatives are authored. Do not
+                // clamp this to positive.
+                ReadFieldScalar(f, F_fldAcceleration),
+                ReadFieldVec3(Get(f, F_fldPosition))));
+
+        foreach (var f in Structs(cp, F_fieldOrbital))
+            orbital.Add(new VfxOrbitalField(
+                ReadFieldVec3(Get(f, F_fldDirection)),
+                GetBool(f, F_fldIsLocalSpace)));
+
+        var fields = new VfxForceFields(noise, drag, accel, attract, orbital);
+        return fields.IsEmpty ? null : fields;
+    }
+
+    /// <summary>M176: a force-field scalar. Prefers the authored constant, and falls back to the first key
+    /// of the curve when there is no constant at all.
+    ///
+    /// That fallback is not cosmetic. Some fields are authored purely as animated curves - measured on the
+    /// live corpus, 65 of 191 orbital `direction` values carry `dynamics` while only 56 carry a
+    /// `constantValue` - and taking the constant alone resolved those to zero, which silently switched the
+    /// field off entirely. Reading the first key gives the authored magnitude instead of nothing.
+    ///
+    /// UNKNOWN: what a field curve is parameterised over - particle age, emitter age, or something else.
+    /// That is why this reads one key rather than sampling over life: for the majority of fields, which
+    /// are constant, the question does not arise, and for the rest a fixed authored value is closer than
+    /// zero without inventing a time base.</summary>
+    private static float ReadFieldScalar(IReadOnlyDictionary<uint, BinTreeProperty> props, uint field)
+    {
+        if (ReadCurveF(props, field) is not { } curve) return GetF32(props, field) ?? 0f;
+        return curve.Constant != 0f ? curve.Constant : curve.Sample(0f);
+    }
+
+    /// <summary>M176: a force-field vector, with the same constant-then-first-key rule as
+    /// <see cref="ReadFieldScalar"/>.</summary>
+    private static Vector3 ReadFieldVec3(BinTreeProperty? p)
+    {
+        if (p is not BinTreeStruct value) return AsVec3(p) ?? Vector3.Zero;
+        if (AsVec3(Get(value.Properties, F_constantValue)) is { } c && c != Vector3.Zero) return c;
+        return ReadCurve3Property(p)?.Sample(0f) ?? Vector3.Zero;
+    }
+
+    private static IEnumerable<IReadOnlyDictionary<uint, BinTreeProperty>> Structs(
+        IReadOnlyDictionary<uint, BinTreeProperty> props, uint field)
+    {
+        if (Get(props, field) is not BinTreeContainer c) yield break;
+        foreach (var el in c.Elements)
+            if (el is BinTreeStruct s) yield return s.Properties;
+    }
+
 
     /// <summary>M174 (1.1): dispatch on the shape CLASS, not just on emitOffset.
     ///

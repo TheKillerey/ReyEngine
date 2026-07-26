@@ -156,7 +156,12 @@ public sealed record VfxEmitterDefinition(
     /// values are negative (median -5, range -2000..9999) - i.e. the overwhelmingly common use is pulling
     /// a sprite toward the camera so it survives the depth test against terrain, which is exactly what the
     /// decoded sign predicts.</summary>
-    float DepthPushPull = 0f)
+    float DepthPushPull = 0f,
+
+    /// <summary>M176 (2.4) fieldCollectionDefinition - noise / drag / acceleration / attraction / orbital
+    /// force fields. 39,904 emitters. Without these, particles travel in straight lines where League
+    /// swirls them.</summary>
+    VfxForceFields? ForceFields = null)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
@@ -551,3 +556,64 @@ public sealed record VfxPalette(
     /// <summary>A palette with no texture, or a row count that cannot be divided by, does nothing.</summary>
     public bool IsUsable => !string.IsNullOrEmpty(TexturePath) && Count > 0;
 }
+
+/// <summary>M176 (2.4): Riot's <c>VfxFieldCollectionDefinitionData</c> - the force fields applied to a
+/// particle each step. 39,904 emitters carry one.
+///
+/// Every field's SHAPE here is measured, not guessed: the class hashes, the inner property names and
+/// their BinTree types were read off 6,134 live collections across 28 WADs. Two measurements are worth
+/// recording because they close questions the support report left open:
+///
+///  - <c>isLocalSpace</c> is <b>false in every one</b> of the 616 acceleration and orbital fields
+///    sampled. World space is therefore not an assumption here, it is the only case that ships.
+///  - attraction's <c>acceleration</c> is <b>signed</b> (min -10000), so the same field type does both
+///    attraction and repulsion. Clamping it positive would have silently dropped every repulsor.
+///
+/// What is NOT measurable is the MATHS - these fields are integrated on the CPU, so unlike the erosion,
+/// soft-particle and palette stages there is no shader bytecode to decode and no way to validate against
+/// Riot's own implementation. The per-field remarks say exactly which part is inferred.</summary>
+public sealed record VfxForceFields(
+    IReadOnlyList<VfxNoiseField> Noise,
+    IReadOnlyList<VfxDragField> Drag,
+    IReadOnlyList<VfxAccelerationField> Acceleration,
+    IReadOnlyList<VfxAttractionField> Attraction,
+    IReadOnlyList<VfxOrbitalField> Orbital)
+{
+    public bool IsEmpty => Noise.Count == 0 && Drag.Count == 0 && Acceleration.Count == 0
+                           && Attraction.Count == 0 && Orbital.Count == 0;
+}
+
+/// <summary>Turbulence. The commonest field by a wide margin - 4,654 of 6,134 collections.
+///
+/// INFERRED: that <c>frequency</c> is a spatial WAVELENGTH (noise sampled at <c>pos / frequency</c>)
+/// rather than a multiplier. Measured median is 25 with a range of 0.005..5000; read as a wavelength that
+/// is a 25-unit swirl, which is a sensible scale for smoke next to a ~100-unit champion. Read as a
+/// multiplier it would be 25 cycles per world unit - white noise at any distance a particle travels -
+/// so the wavelength reading is the only one that produces motion at all. Neither reading is tidy at the
+/// extremes of the range.
+///
+/// INFERRED: that <c>velocityDelta</c> is an acceleration in units/second rather than an absolute
+/// velocity offset. The field-shaped reading is the one consistent with the other four field types
+/// (attraction's equivalent knob is literally named <c>acceleration</c>), and an absolute offset applied
+/// per frame would make the motion frame-rate dependent.</summary>
+public sealed record VfxNoiseField(Vector3 AxisFraction, float Radius, float Frequency, float VelocityDelta, Vector3 Position);
+
+/// <summary>Slows particles within <see cref="Radius"/> of <see cref="Position"/>. Uses the same
+/// exponential form the simulator already applies to birthDrag, so a particle inside a drag field decays
+/// its velocity by <c>exp(-strength*dt)</c>. INFERRED: the radial falloff (see VfxForceFields).</summary>
+public sealed record VfxDragField(float Radius, float Strength, Vector3 Position);
+
+/// <summary>A uniform directional push - gravity, wind, updraft. No radius and no position, so it applies
+/// everywhere. This is the one field type with essentially nothing inferred: the value is added to
+/// velocity per second, in world space.</summary>
+public sealed record VfxAccelerationField(Vector3 Acceleration, bool IsLocalSpace);
+
+/// <summary>Pulls particles toward <see cref="Position"/> - or pushes them away, since
+/// <see cref="Acceleration"/> is signed. INFERRED: the radial falloff (see VfxForceFields).</summary>
+public sealed record VfxAttractionField(float Radius, float Acceleration, Vector3 Position);
+
+/// <summary>Spins particles about the emitter origin. <see cref="Direction"/> is read as an angular
+/// velocity vector - axis times radians per second - which is how the simulator already treats the
+/// per-particle <c>birthOrbitalVelocity</c>, so the two compose consistently. Authored values like
+/// (0.1, 0.3, 0.1) and (0, 2, 0) are the right magnitude for radians/second.</summary>
+public sealed record VfxOrbitalField(Vector3 Direction, bool IsLocalSpace);

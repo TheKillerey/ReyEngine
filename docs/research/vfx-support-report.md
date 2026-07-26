@@ -489,7 +489,7 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | 2.1 | **Alpha erosion / dissolve.** Second texture + drive curve + feather/slice in the fragment shader | `VfxParticleRenderer.cs` (Frag + a third sampler), `VfxSystemResolver.cs` | **307,050 (22.0%)** | Largest single visual win. Medium difficulty; engine-confirmed feature (`ALPHA_EROSION`, `sAlphaErosionTexture`, `cAlphaErosionParams`). The exact channel-mixer and feather math is inferred — start from the field names and iterate visually |
 | 2.2 | ~~**Soft particles**~~ **DONE (M175)** | `VfxParticleRenderer.CaptureDepth` + Frag | 95,671 (6.8%) | Formula decoded, then validated twice: against Riot's own `quad_ps` blob#128 on D3D11 (worst 0.0021), and against `smoothstep` at five distances through the real GL path (worst 0.002). Depth arrives via a depth-only `BlitFramebuffer` into a texture, because the viewport's depth attachment is a renderbuffer. `cSoftParticleControl` is still **UNKNOWN** and hardcoded to (1,0,0,1) |
 | 2.3 | **UV transform stack.** Rotation, scale, offset, clamp, flip, integrated scroll | `VfxParticleRenderer.cs:558-569`, `VfxSystemResolver.cs` | ~150k emitters across 12 fields | Medium. Note `particleUVScrollRate`/`particleUVRotateRate` are `IntegratedValue*` and accumulate — do not sample them like ordinary curves |
-| 2.4 | **Force fields.** Noise / drag / attraction / orbital / acceleration in the integrator | `VfxParticleSimulator.cs:182-205`, `VfxSystemResolver.cs` | 39,904 (2.9%) | Medium-high. This is what makes League's smoke and embers swirl; without it particles travel in straight lines. Field math (curl noise parameters) is inferred from names |
+| 2.4 | ~~**Force fields**~~ **DONE (M176)** - all five kinds | `VfxParticleSimulator.ApplyForceFields`, `VfxSystemResolver.ReadForceFields` | 39,904 (2.9%) | Data shapes measured off 6,134 live collections, not inferred from names. The MATHS is still inferred and cannot be validated the way M175's shader stages were - these integrate on the CPU, so there is no bytecode to decode. See 2.4b below for exactly which parts |
 | 2.5 | **Trails and beams.** Ribbon geometry from successive particle positions | new renderer path, `VfxParticleRenderer.cs` | 92,721 emitters with `mTrail`/`mBeam` | High difficulty — a new geometry generator. Note `VfxPrimitiveRay` (58,434) has **no** data, so do not lump it in |
 | 2.6 | ~~**Palette recolour**~~ **DONE (M175)** | `VfxSystemResolver.ReadPalette`, `VfxParticleRenderer.cs` Frag | 43,621, of which 13,823 have no colour texture at all | Decoded and validated against Riot's `quad_ps` blob#12 (worst 0.0096). `paletteSelector` measured as a ValueVector3 row index against `paletteCount` (median 16). The U/V animation curves are deliberately **NOT** applied - see 'What was deliberately left out' below |
 | 2.7 | **Child particle systems** | new; reuse `VfxSystemResolver.ExtractResourceMap` (`:109`) for `effectKey` | 35,510 (2.5%) | High — needs recursive system instantiation and per-particle spawn hooks. 30.7% of child keys resolve only through dependency bins |
@@ -549,6 +549,54 @@ a plain add. 372 of 8,866 palette structs author a U curve and 99 a V curve.
 `VfxPlaybackItem`, exactly one - the champion-VFX list - passed erosion maps. The Particle Editor, the
 model preview and both map-particle paths did not, so the dissolve stage shipped in M174 was inert on
 the surfaces built for looking at VFX. M175 wires erosion and palette through all seven.
+
+### 2.4b M176 force-field findings
+
+**Measured, not inferred** - class hashes, inner property names and BinTree types read off 6,134 live
+collections across 28 WADs:
+
+| kind | class | fields |
+|---|---|---|
+| noise | `0x634db850` | `axisFraction` (raw Vector3), `radius`, `frequency`, `velocityDelta` (ValueFloat), `Position` (ValueVector3) |
+| drag | `0xe750fae2` | `radius`, `strength`, `Position` |
+| acceleration | `0x0a94f3d4` | `acceleration` (ValueVector3), `isLocalSpace` |
+| attraction | `0x1a7617fd` | `radius`, `acceleration`, `Position` |
+| orbital | `0xb67aee6f` | `direction` (ValueVector3), `isLocalSpace` |
+
+Two measurements close questions the census left open:
+
+- **`isLocalSpace` is false on every one of the 690** acceleration and orbital fields that resolve. World
+  space is not an assumption, it is the only case that ships.
+- **Attraction's `acceleration` is signed** (min −10000). 20 repulsors appear in 25 WADs. Clamping it
+  positive — the obvious defensive move — would have silently deleted every one of them.
+
+**Still inferred, and unvalidatable by the M175 method.** These fields are integrated on the CPU, so
+unlike alpha erosion, soft particles and palette there is no shader bytecode to decode and nothing of
+Riot's to compare against:
+
+- that `frequency` is a spatial **wavelength** (noise sampled at `pos / frequency`) rather than a
+  multiplier. Measured median 25, range 0.005–5000. As a wavelength that is a 25-unit swirl next to a
+  ~100-unit champion; as a multiplier it is 25 cycles per world unit, which is white noise at any
+  distance a particle travels — so the wavelength reading is the only one that produces motion at all.
+  Neither reading is tidy at the extremes.
+- that `velocityDelta` is an acceleration in units/second rather than an absolute velocity offset.
+- the **radial falloff shape** for the three positioned field types. Linear-to-zero is used; a hard cut
+  makes particles jerk visibly as they cross the boundary.
+
+**A bug the obvious test would have missed.** The orbital field was first written to contribute
+`omega x r` to velocity, so that it would compose with drag and attraction. But velocity persists across
+frames, so the term accumulates every step and the particle spirals away under runaway acceleration. It
+still *bent the trajectory*, so the natural test — "does an orbital field curve an otherwise straight
+path?" — passed while the behaviour was badly wrong. Replaced with a rotation of position and heading
+together (matching the existing `birthOrbitalVelocity` path), and the test replaced with one that
+asserts a **constant orbit radius**: measured 100.00 at t = 0.25, 0.5, 1 and 2 s, with the swept angle
+matching `|omega|*t`.
+
+**Fields authored purely as curves.** Some values carry `dynamics` with no `constantValue` — 65 of 191
+orbital `direction` values, against only 56 with a constant. Reading the constant alone resolved those to
+zero and switched the field off. Reading the first curve key instead lifted active orbital fields from
+51/184 to 86/184. What a field curve is parameterised over (particle age, emitter age, something else)
+is **UNKNOWN**, which is why one key is read rather than sampling over life.
 
 ### 3. Missing editor controls
 

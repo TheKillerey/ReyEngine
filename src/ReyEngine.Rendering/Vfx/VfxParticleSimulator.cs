@@ -221,6 +221,10 @@ public sealed class VfxParticleSimulator
             var dragOverLife = d.DragOverLife?.Sample(particleT) ?? Vector3.Zero;
             var drag = Vector3.Max(Vector3.Zero, p.BirthDrag + dragOverLife);
             p.Vel *= new Vector3(MathF.Exp(-drag.X * dt), MathF.Exp(-drag.Y * dt), MathF.Exp(-drag.Z * dt));
+            // M176 (2.4): force fields, before the position step so a field acts on this frame's movement
+            // rather than a frame late. Four of the five adjust velocity; the orbital field rotates the
+            // particle's position and heading directly - see ApplyForceFields for why.
+            if (d.ForceFields is { } fields) ApplyForceFields(s, fields, ref p, dt);
             p.Pos += p.Vel * dt;
             if (p.BirthOrbitalVelocity.LengthSquared() > 1e-8f)
             {
@@ -242,6 +246,128 @@ public sealed class VfxParticleSimulator
         // Infinite emitter with no live particles and a finished burst -> allow looping single particles.
         if (d.IsSingleParticle && s.BurstDone && s.Particles.Count == 0 && d.EmitterLifetime is null)
             s.BurstDone = false;
+    }
+
+    /// <summary>M176 (2.4): integrate Riot's five force-field types into a particle's velocity.
+    ///
+    /// Field positions are authored in the system's local space (the corpus is full of offsets like
+    /// (0, 150, 0) - "a bit above the emitter"), so they are transformed by the placement the same way
+    /// <see cref="EmitterState.BasePos"/> is.
+    ///
+    /// See <see cref="VfxForceFields"/> for what is measured and what is inferred. The short version:
+    /// the data shapes are all measured off live bins, but the MATHS cannot be validated the way M175's
+    /// shader stages were, because these are integrated on the CPU and leave no bytecode to decode.</summary>
+    private void ApplyForceFields(EmitterState s, VfxForceFields f, ref Particle p, float dt)
+    {
+        // ---- uniform acceleration: gravity, wind, updraft ----
+        // Nothing inferred here beyond world space, and isLocalSpace measured false on all 472 samples.
+        foreach (var a in f.Acceleration)
+            p.Vel += Vector3.TransformNormal(a.Acceleration, _worldTransform) * dt;
+
+        // ---- attraction / repulsion ----
+        foreach (var at in f.Attraction)
+        {
+            if (MathF.Abs(at.Acceleration) < 1e-6f) continue;
+            var centre = Vector3.Transform(at.Position, _worldTransform);
+            var toCentre = centre - p.Pos;
+            float dist = toCentre.Length();
+            if (dist < 1e-4f) continue;
+            float falloff = Falloff(dist, at.Radius);
+            if (falloff <= 0f) continue;
+            // Acceleration is SIGNED: negative values push away instead of pulling in.
+            p.Vel += (toCentre / dist) * at.Acceleration * falloff * dt;
+        }
+
+        // ---- localised drag ----
+        foreach (var dr in f.Drag)
+        {
+            if (dr.Strength <= 0f) continue;
+            float falloff = Falloff(Vector3.Distance(Vector3.Transform(dr.Position, _worldTransform), p.Pos), dr.Radius);
+            if (falloff <= 0f) continue;
+            // Same exponential form the birthDrag path above uses, so the two compose rather than fight.
+            p.Vel *= MathF.Exp(-dr.Strength * falloff * dt);
+        }
+
+        // ---- orbital: spin about the emitter origin ----
+        //
+        // This ROTATES the particle rather than pushing it, which is the one thing an orbital field must
+        // not get wrong. Converting the rotation into a velocity contribution (v += omega x r) looks
+        // tempting because it would compose with the other fields, but velocity PERSISTS across frames:
+        // adding the orbital term every step accumulates it, and the particle spirals away under runaway
+        // acceleration instead of going round. It still "curves the path", so a test that only asks
+        // whether the trajectory bent would pass while the behaviour was badly wrong.
+        //
+        // Position and velocity are rotated together, so a particle that also has linear motion keeps its
+        // heading relative to the orbit instead of being torn out of it. This matches how the existing
+        // per-particle birthOrbitalVelocity path works.
+        foreach (var o in f.Orbital)
+        {
+            var step = o.Direction * dt;
+            if (step.LengthSquared() < 1e-12f) continue;
+            var orbit = Quaternion.CreateFromYawPitchRoll(step.Y, step.X, step.Z);
+            var localRelative = Vector3.TransformNormal(p.Pos - s.BasePos, _inverseWorldTransform);
+            p.Pos = s.BasePos + Vector3.TransformNormal(Vector3.Transform(localRelative, orbit), _worldTransform);
+            var localVel = Vector3.TransformNormal(p.Vel, _inverseWorldTransform);
+            p.Vel = Vector3.TransformNormal(Vector3.Transform(localVel, orbit), _worldTransform);
+        }
+
+        // ---- noise / turbulence ----
+        foreach (var n in f.Noise)
+        {
+            if (n.VelocityDelta <= 0f) continue;
+            float falloff = Falloff(Vector3.Distance(Vector3.Transform(n.Position, _worldTransform), p.Pos), n.Radius);
+            if (falloff <= 0f) continue;
+            // frequency read as a spatial WAVELENGTH in world units - see VfxNoiseField for why the
+            // multiplier reading cannot be right. The time term makes the field evolve instead of being a
+            // fixed pattern a particle simply flies through.
+            float wavelength = MathF.Max(MathF.Abs(n.Frequency), 1e-3f);
+            var q = p.Pos / wavelength + new Vector3(s.Age * 0.5f, 0f, 0f);
+            var turbulence = new Vector3(Noise3(q, 0), Noise3(q, 1), Noise3(q, 2));
+            p.Vel += turbulence * n.AxisFraction * n.VelocityDelta * falloff * dt;
+        }
+
+        if (!float.IsFinite(p.Vel.X) || !float.IsFinite(p.Vel.Y) || !float.IsFinite(p.Vel.Z))
+            p.Vel = Vector3.Zero;
+    }
+
+    /// <summary>Radial weight for a field with a finite radius. INFERRED - the falloff SHAPE is not
+    /// recoverable from the data. Linear-to-zero is used because a hard cut at the radius makes particles
+    /// visibly jerk as they cross the boundary, and every authored radius would then be a seam. A radius
+    /// of zero or less is treated as unbounded, which is what the acceleration field (no radius at all)
+    /// already does.</summary>
+    private static float Falloff(float distance, float radius)
+    {
+        if (radius <= 0f) return 1f;
+        return distance >= radius ? 0f : 1f - distance / radius;
+    }
+
+    /// <summary>Deterministic 3-D value noise in [-1, 1]. Small and seeded rather than a library import:
+    /// the simulator is meant to stay GL-free and headlessly testable, and identical input must give
+    /// identical output so a preview does not shimmer differently on every replay.</summary>
+    private static float Noise3(Vector3 p, int seed)
+    {
+        int xi = (int)MathF.Floor(p.X), yi = (int)MathF.Floor(p.Y), zi = (int)MathF.Floor(p.Z);
+        float xf = p.X - xi, yf = p.Y - yi, zf = p.Z - zi;
+        // smoothstep the fractional part, so the field is continuous in its first derivative and the
+        // motion reads as a swirl rather than a grid of kinks.
+        float u = xf * xf * (3f - 2f * xf), v = yf * yf * (3f - 2f * yf), w = zf * zf * (3f - 2f * zf);
+        float Lerp(float a, float b, float t) => a + (b - a) * t;
+        float c00 = Lerp(Hash(xi, yi, zi, seed), Hash(xi + 1, yi, zi, seed), u);
+        float c10 = Lerp(Hash(xi, yi + 1, zi, seed), Hash(xi + 1, yi + 1, zi, seed), u);
+        float c01 = Lerp(Hash(xi, yi, zi + 1, seed), Hash(xi + 1, yi, zi + 1, seed), u);
+        float c11 = Lerp(Hash(xi, yi + 1, zi + 1, seed), Hash(xi + 1, yi + 1, zi + 1, seed), u);
+        return Lerp(Lerp(c00, c10, v), Lerp(c01, c11, v), w);
+    }
+
+    private static float Hash(int x, int y, int z, int seed)
+    {
+        unchecked
+        {
+            int h = x * 374761393 + y * 668265263 + z * 1274126177 + seed * 982451653;
+            h = (h ^ (h >> 13)) * 1274126177;
+            h ^= h >> 16;
+            return (h & 0xFFFFFF) / 8388607.5f - 1f;   // [-1, 1]
+        }
     }
 
     private void Spawn(EmitterState s)
