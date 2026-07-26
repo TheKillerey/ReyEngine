@@ -501,7 +501,7 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | 2.13 | **Bloom pass** | new post-process in `ViewportControl.cs` | 22% of emitters are "glow"-named | High effort, high perceptual payoff. Frame-level, not per-emitter |
 | 2.14 | **Duty-cycle and rate-by-velocity emission** (`period`, `timeActiveDuringPeriod`, `rateByVelocityFunction`, `ChanceToNotExist`, `HasVariableStartTime`) | `VfxParticleSimulator.cs:157-178` | ~30k combined | Low individually, visible on map beacons and dash trails |
 | 2.15 | **`Linger` shutdown stage** | `VfxParticleSimulator.cs` | 22,274 + 95,954 `emitterLinger` | Medium; effects currently cut off instead of fading |
-| 2.16 | **Flex bound-object scaling** | `VfxParticleSimulator.cs` | 159,880 (11.4%) | Needs a bound-object size to scale against — depends on what the preview has loaded |
+| 2.16 | **Flex bound-object scaling — RETIRED (M179), not implemented** | — | 159,880 (11.4%) | Measured to be a **no-op at the reference size**, so today's behaviour is already the reference case. Implementing it against a guessed bound-object metric would move effects away from that, not toward it. See 2.16b |
 
 ### 2b. M175 findings worth recording
 
@@ -698,6 +698,43 @@ a map to scale — they only ever multiply the cubemap sample.
 
 Negative `fresnel` values occur (min −1) and are dropped: `pow(f, -1)` is `1/f`, which diverges as the
 surface turns edge-on and would subtract unbounded colour rather than add a rim.
+
+### 2.16b M179: why flex scaling is retired rather than implemented
+
+This was the largest single unimplemented item left in tier 2 (159,880 emitters, 11.4%). Measuring it
+before writing code turned it from a missing feature into a non-issue, and the measurement is worth
+recording because the naive implementation would have been a visible regression.
+
+**The coefficients are not blend weights.** `scaleBirthScaleByBoundObjectSize` has a median of **0.005**
+across 25,447 authored values — not 1.0, and not a 0..1 weight. 0.005 is 1/200, which reads as a
+per-unit coefficient: `multiplier = boundObjectSize * factor`, calibrated so a character of roughly 200
+world units produces a multiplier of exactly 1.
+
+**The authored sizes confirm that calibration independently.** If the multiplier were anything other
+than ~1 by default, emitters opting into flex would have to author compensating birth sizes. They do not
+— the distributions are the same to within noise:
+
+| | p10 | p25 | median | p75 | p90 |
+|---|---|---|---|---|---|
+| with `FlexShapeDefinition` (n=31,134) | 3.05 | 17 | **50** | 110 | 200 |
+| without (n=202,910) | 1.2 | 10 | **50** | 120 | 300 |
+
+**So the consequence is the useful part: not applying flex is equivalent to previewing on a
+reference-sized character.** That is a correct-looking default, not a bug. Applying it with a
+bound-object metric guessed wrong — bounding-box diagonal vs height vs gameplay radius, all of which the
+struct has *separate* fields for — would move 11.4% of emitters away from the reference in an unknown
+direction and by an unknown factor. There is no shader to decode here (the scaling is CPU-side) and no
+safe failure mode: the symptom of getting it wrong is "everything is the wrong size".
+
+Two further practical points. Most editor contexts have **no bound object at all** — map particles and
+the Particle Editor are not attached to a character — so there would be nothing to scale by in the
+majority of previews. And the struct's own field set shows Riot distinguishes at least three different
+size metrics (`...ByBoundObjectSize` 25,447, `...ByBoundObjectHeight` 308, `...ByBoundObjectRadius` 65),
+so "the bound object's size" is not one quantity that could simply be measured off a loaded model.
+
+**What would unblock it:** a definition of the plain `Size` metric, and a decision about what the editor
+binds to when previewing a champion whose size differs from the reference. Both are choices, not
+findings — which is why this is recorded here rather than guessed at in code.
 
 ### 3. Missing editor controls
 
