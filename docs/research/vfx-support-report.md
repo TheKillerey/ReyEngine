@@ -490,7 +490,7 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | 2.2 | ~~**Soft particles**~~ **DONE (M175)** | `VfxParticleRenderer.CaptureDepth` + Frag | 95,671 (6.8%) | Formula decoded, then validated twice: against Riot's own `quad_ps` blob#128 on D3D11 (worst 0.0021), and against `smoothstep` at five distances through the real GL path (worst 0.002). Depth arrives via a depth-only `BlitFramebuffer` into a texture, because the viewport's depth attachment is a renderbuffer. `cSoftParticleControl` is still **UNKNOWN** and hardcoded to (1,0,0,1) |
 | 2.3 | **UV transform stack.** Rotation, scale, offset, clamp, flip, integrated scroll | `VfxParticleRenderer.cs:558-569`, `VfxSystemResolver.cs` | ~150k emitters across 12 fields | Medium. Note `particleUVScrollRate`/`particleUVRotateRate` are `IntegratedValue*` and accumulate — do not sample them like ordinary curves |
 | 2.4 | ~~**Force fields**~~ **DONE (M176)** - all five kinds | `VfxParticleSimulator.ApplyForceFields`, `VfxSystemResolver.ReadForceFields` | 39,904 (2.9%) | Data shapes measured off 6,134 live collections, not inferred from names. The MATHS is still inferred and cannot be validated the way M175's shader stages were - these integrate on the CPU, so there is no bytecode to decode. See 2.4b below for exactly which parts |
-| 2.5 | **Trails and beams.** Ribbon geometry from successive particle positions | new renderer path, `VfxParticleRenderer.cs` | 92,721 emitters with `mTrail`/`mBeam` | High difficulty — a new geometry generator. Note `VfxPrimitiveRay` (58,434) has **no** data, so do not lump it in |
+| 2.5 | **Trails DONE (M177)**; beams still open | `VfxParticleSimulator` history + `VfxParticleRenderer.RenderTrailEmitter` | 78,852 trail emitters done; 10,088 beam emitters remain | The ribbon reading is now MEASURED, not inferred from class names - see 2.5b. Beams are deferred for a stated reason, not overlooked |
 | 2.6 | ~~**Palette recolour**~~ **DONE (M175)** | `VfxSystemResolver.ReadPalette`, `VfxParticleRenderer.cs` Frag | 43,621, of which 13,823 have no colour texture at all | Decoded and validated against Riot's `quad_ps` blob#12 (worst 0.0096). `paletteSelector` measured as a ValueVector3 row index against `paletteCount` (median 16). The U/V animation curves are deliberately **NOT** applied - see 'What was deliberately left out' below |
 | 2.7 | **Child particle systems** | new; reuse `VfxSystemResolver.ExtractResourceMap` (`:109`) for `effectKey` | 35,510 (2.5%) | High — needs recursive system instantiation and per-particle spawn hooks. 30.7% of child keys resolve only through dependency bins |
 | 2.8 | ~~**Depth offset**~~ **DONE (M175)**; `depthBiasFactors` still deferred | `VfxParticleRenderer.cs` vertex shader | 61,588 / 201,926 | No longer inferred. **DECODED** from `quad_vs` instructions 12-16: `world += normalize(world - vCamera) * depthPushPull`, per vertex, before projection - so positive pushes AWAY and negative pulls toward. Cross-checked against `defaultparticlequadunlit.vs` (same form for `EMITTER_DEPTH_PUSH_PULL`) and confirmed by rendering against a depth-writing wall. 74.6% of authored values are negative, which the decoded sign explains |
@@ -597,6 +597,55 @@ orbital `direction` values, against only 56 with a constant. Reading the constan
 zero and switched the field off. Reading the first curve key instead lifted active orbital fields from
 51/184 to 86/184. What a field curve is parameterised over (particle age, emitter age, something else)
 is **UNKNOWN**, which is why one key is read rather than sampling over life.
+
+### 2.5b M177 trail findings
+
+**The ribbon reading is no longer an inference.** The census flagged "trails and beams are ribbon
+geometry" as a reading of the class names. Reading the payload settles it - `mTrail` is
+`VfxTrailDefinitionData` (class `0x00c2a390`), measured on 14,755 live instances:
+
+| field | n | what it is |
+|---|---|---|
+| `mBirthTilingSize` | 14,596 | ValueVector3, but X-only in practice — (500,0,0) is the commonest at 4,375, then (300,0,0), (600,0,0), (400,0,0). A texture repeat LENGTH along the ribbon |
+| `mMode` | 14,133 | U8, **always 1**. No mode branch exists to get wrong |
+| `mCutoff` | 12,264 | F32, median 1,000. Maximum ribbon length |
+| `mSmoothingMode` | 12,183 | U8 {1,2}. Meaning **UNKNOWN** — parsed and surfaced, but the geometry builder does not branch on it |
+| `mMaxAddedPerFrame` | 9,505 | I32, median 50. Points appendable per frame |
+
+A texture repeat length, a maximum length, a smoothing mode and a per-frame point budget is the parameter
+set of a ribbon generator and of nothing else. The geometry itself is not in the bin at all — it is built
+from where the particle has been, and these values only say how.
+
+**`mCutoff` carries junk that must not reach the geometry builder.** −1 occurs, and the maximum observed
+is 68,719,476,736 (2^36). 2,499 of 14,755 resolved trails fall outside a usable range and fall back to
+the corpus median; without that guard a single authored value would produce a ribbon spanning the map.
+
+**A speed-dependence bug the natural implementation has.** The obvious way to sample a ribbon is "append
+the particle's position once it has moved far enough". That overshoots by however far the particle
+travelled during the frame that crossed the threshold — so the ribbon's length depends on its SPEED.
+Measured on a 1,000-unit cutoff: 1,018 units at 50 u/s but **1,567 units at 2,000 u/s**, and every
+authored cutoff overshot (a 250-unit cutoff produced 313). Walking the segment and inserting points at
+the exact interval removes both the frame rate and the speed: now 1,000.0 and 999.9 across that same 40x
+speed range, and 250.0 for the 250 cutoff.
+
+That fix is also what gives `mMaxAddedPerFrame` a job — the field only makes sense if the engine can
+append more than one point per frame, which is a small independent confirmation of the shape.
+
+**Two orientation cases, INFERRED.** `VfxPrimitiveCameraTrail` twists the ribbon to face the viewer;
+`VfxPrimitiveArbitraryTrail` holds the placement's up axis. The payloads are identical, so this comes
+from the class names alone — but it is the only distinction those names draw, and it is the reason Riot
+ships two classes. Measured split: 5,718 camera, 9,037 arbitrary.
+
+**Not implemented, and why.** Colour is applied uniformly along the ribbon. Real trails usually taper or
+fade toward the tail, but nothing in the payload says so, and the tiling field means the texture REPEATS
+along the length rather than providing an inherent fade. Inventing a taper would be exactly the kind of
+silent guess this report exists to prevent.
+
+**Beams deferred.** `mBeam` (`VfxBeamDefinitionData`, 1,044 instances measured) carries
+`mLocalSpaceSourceOffset` and `mLocalSpaceTargetOffset` — offsets relative to a source and a TARGET
+entity. A beam needs both endpoints, and the editor preview has no target to bind to except the M114
+practice dummy. `mSegments` (14 instances, {1,10,20,50}) and `mIsColorBindedWithDistance` (68, always
+true) confirm the shape. This is a binding problem, not a geometry problem.
 
 ### 3. Missing editor controls
 

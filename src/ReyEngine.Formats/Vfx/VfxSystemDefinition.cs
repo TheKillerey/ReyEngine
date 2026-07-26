@@ -161,7 +161,14 @@ public sealed record VfxEmitterDefinition(
     /// <summary>M176 (2.4) fieldCollectionDefinition - noise / drag / acceleration / attraction / orbital
     /// force fields. 39,904 emitters. Without these, particles travel in straight lines where League
     /// swirls them.</summary>
-    VfxForceFields? ForceFields = null)
+    VfxForceFields? ForceFields = null,
+
+    /// <summary>M177 (2.5) mTrail - ribbon geometry trailing behind each particle. 78,852 emitters across
+    /// VfxPrimitiveCameraTrail and VfxPrimitiveArbitraryTrail, all of which billboarded before.</summary>
+    VfxTrailDefinition? Trail = null,
+    /// <summary>M177: true for VfxPrimitiveArbitraryTrail, false for VfxPrimitiveCameraTrail. Decides
+    /// whether the ribbon twists to face the camera or holds the placement's orientation.</summary>
+    bool IsArbitraryTrail = false)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
@@ -617,3 +624,43 @@ public sealed record VfxAttractionField(float Radius, float Acceleration, Vector
 /// per-particle <c>birthOrbitalVelocity</c>, so the two compose consistently. Authored values like
 /// (0.1, 0.3, 0.1) and (0, 2, 0) are the right magnitude for radians/second.</summary>
 public sealed record VfxOrbitalField(Vector3 Direction, bool IsLocalSpace);
+
+/// <summary>M177 (2.5): Riot's <c>VfxTrailDefinitionData</c> (class 0x00c2a390) - the ribbon that follows
+/// a particle. Carried by 78,852 emitters, every one of which billboarded before.
+///
+/// The support report flagged "trails and beams are ribbon geometry" as a reading of the CLASS NAMES,
+/// explicitly not a measurement. Reading the payload settles it: across 14,755 live trail definitions the
+/// fields are a texture tiling LENGTH, a maximum length, a smoothing mode and a per-frame point budget -
+/// which is the parameter set of a ribbon generator and of nothing else. The geometry itself is not in
+/// the data at all; it is built at runtime from where the particle has been, and these values only say
+/// how.
+///
+/// <c>mMode</c> is 1 on all 14,133 that author it, so there is no mode branch to get wrong.</summary>
+public sealed record VfxTrailDefinition(
+    /// <summary>mBirthTilingSize - how far along the ribbon one repeat of the texture spans, in world
+    /// units. Authored as a Vector3 but overwhelmingly X-only: (500,0,0) is the single commonest value at
+    /// 4,375 of 14,596, followed by (300,0,0), (600,0,0) and (400,0,0). Only X is used here; what a
+    /// non-zero Y or Z would mean is UNKNOWN and does not occur often enough to guess at.</summary>
+    float TilingLength,
+    /// <summary>mCutoff - how long the ribbon is allowed to get, in world units. Median 1,000.
+    ///
+    /// The authored range includes junk that must not reach the geometry builder: -1 appears, and the
+    /// maximum observed is 68,719,476,736 (2^36). <see cref="EffectiveCutoff"/> is what callers should
+    /// use.</summary>
+    float Cutoff,
+    /// <summary>mSmoothingMode, {1, 2}. Meaning UNKNOWN - both values occur (12,183 samples) and nothing
+    /// in the data distinguishes them. Parsed and carried so the editor can show it; the geometry builder
+    /// does not branch on it, which is the honest thing to do with an unresolved enum.</summary>
+    int SmoothingMode,
+    /// <summary>mMaxAddedPerFrame - how many ribbon points may be appended per frame. Median 50.</summary>
+    int MaxAddedPerFrame)
+{
+    /// <summary>The ribbon length to actually use. Rejects the -1 and 2^36 outliers and falls back to the
+    /// corpus median, so a single junk value cannot produce a trail that stretches across the map or one
+    /// that never appears.</summary>
+    public float EffectiveCutoff => Cutoff > 1f && Cutoff < 100000f ? Cutoff : 1000f;
+
+    /// <summary>One repeat of the texture per this many world units. Guards a zero so the UV generator
+    /// cannot divide by it.</summary>
+    public float EffectiveTiling => TilingLength > 1e-3f ? TilingLength : 500f;
+}

@@ -149,6 +149,14 @@ public static class VfxSystemResolver
     private static readonly uint F_fldAcceleration = HashAlgorithms.Fnv1a("acceleration");
     private static readonly uint F_fldDirection    = HashAlgorithms.Fnv1a("direction");
     private static readonly uint F_fldIsLocalSpace = HashAlgorithms.Fnv1a("isLocalSpace");
+    // M177 (2.5) trails. Payload class VfxTrailDefinitionData = 0x00c2a390, measured on 14,755 instances.
+    private static readonly uint C_primCameraTrail   = HashAlgorithms.Fnv1a("VfxPrimitiveCameraTrail");
+    private static readonly uint C_primArbitraryTrail= HashAlgorithms.Fnv1a("VfxPrimitiveArbitraryTrail");
+    private static readonly uint F_mTrail            = HashAlgorithms.Fnv1a("mTrail");
+    private static readonly uint F_mBirthTilingSize  = HashAlgorithms.Fnv1a("mBirthTilingSize");
+    private static readonly uint F_mCutoff           = HashAlgorithms.Fnv1a("mCutoff");
+    private static readonly uint F_mSmoothingMode    = HashAlgorithms.Fnv1a("mSmoothingMode");
+    private static readonly uint F_mMaxAddedPerFrame = HashAlgorithms.Fnv1a("mMaxAddedPerFrame");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -390,8 +398,33 @@ public static class VfxSystemResolver
             SoftParticle: ReadSoftParticle(p),
             Palette: ReadPalette(p),
             DepthPushPull: ReadScalar(p, F_depthPushPull),
-            ForceFields: ReadForceFields(p));
+            ForceFields: ReadForceFields(p),
+            Trail: ReadTrail(prim),
+            IsArbitraryTrail: primClass == C_primArbitraryTrail);
     }
+
+    /// <summary>M177 (2.5): the trail ribbon's parameters. See VfxTrailDefinition for what the payload
+    /// turned out to contain and why that settles the "is it really a ribbon" question.</summary>
+    private static VfxTrailDefinition? ReadTrail(BinTreeProperty? primitive)
+    {
+        if (primitive is not BinTreeStruct prim) return null;
+        if (prim.ClassHash != C_primCameraTrail && prim.ClassHash != C_primArbitraryTrail) return null;
+        if (Get(prim.Properties, F_mTrail) is not BinTreeStruct t) return null;
+        var tp = t.Properties;
+        // mBirthTilingSize is a ValueVector3 but only X carries a length in the corpus.
+        float tiling = (ReadValueVec3OrZero(Get(tp, F_mBirthTilingSize))).X;
+        return new VfxTrailDefinition(
+            tiling,
+            GetF32(tp, F_mCutoff) ?? 0f,
+            GetU8(tp, F_mSmoothingMode) ?? 1,
+            GetI32(tp, F_mMaxAddedPerFrame) ?? 0);
+    }
+
+    private static Vector3 ReadValueVec3OrZero(BinTreeProperty? p) => p switch
+    {
+        BinTreeStruct value => AsVec3(Get(value.Properties, F_constantValue)) ?? Vector3.Zero,
+        _ => AsVec3(p) ?? Vector3.Zero,
+    };
 
     /// <summary>M176 (2.4): the force-field collection. See VfxForceFields for what is measured and what
     /// is inferred. Each of the five lists is a container of structs; an absent container is simply an

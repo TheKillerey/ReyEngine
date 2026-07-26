@@ -36,6 +36,19 @@ public sealed class VfxParticleSimulator
         internal bool BurstDone;                // for isSingleParticle
         internal readonly List<Particle> Particles = new();
 
+        /// <summary>How many particles this emitter currently has alive.</summary>
+        public int ParticleCount => Particles.Count;
+
+        /// <summary>M177 (2.5): the ribbon points behind particle <paramref name="index"/>, oldest first.
+        /// Empty for every non-trail emitter. Exposed because the ribbon is generated rather than
+        /// authored, so it is the only way to inspect what a trail actually became.</summary>
+        public ReadOnlySpan<Vector3> GetTrail(int index)
+        {
+            if (index < 0 || index >= Particles.Count) return default;
+            var p = Particles[index];
+            return p.History is { } h ? h.AsSpan(0, Math.Min(p.HistoryCount, h.Length)) : default;
+        }
+
         /// <summary>Packed instance data for the renderer: 18 floats per particle:
         /// position, size, color, rotation/frame, age/velocity, and Euler rotation.</summary>
         public float[] Instances = System.Array.Empty<float>();
@@ -60,7 +73,21 @@ public sealed class VfxParticleSimulator
         public float Rot, RotVel;
         public float StartFrame, FrameRate;
         public float ColorRandom;   // M68: stable per-particle 0..1 roll for the colour-gradient variant axis
+
+        /// <summary>M177 (2.5): where this particle has been, oldest first, for trail emitters only. Null
+        /// on every other particle, so nothing is allocated for the 94% of emitters that have no ribbon.
+        ///
+        /// A reference field inside a struct looks odd, but it is what makes this work: Particle is copied
+        /// in and out of the list by value on every update, and a reference member survives that copy
+        /// while a growable collection per particle would not.</summary>
+        public Vector3[]? History;
+        public int HistoryCount;
     }
+
+    /// <summary>M177: ribbon points per particle. Fixed rather than growable so a long-lived particle
+    /// cannot creep upward in memory, and because the sampling below spaces points to span the authored
+    /// cutoff length whatever the particle's speed - so more points would buy smoothness, not reach.</summary>
+    internal const int TrailPoints = 48;
 
     public IReadOnlyList<EmitterState> Emitters => _emitters;
     private readonly List<EmitterState> _emitters = new();
@@ -202,6 +229,14 @@ public sealed class VfxParticleSimulator
             }
         }
 
+        // M177: spacing between ribbon points, so TrailPoints of them cover the authored cutoff, and the
+        // per-frame budget of new points. An unauthored budget fills the whole ribbon in one frame, which
+        // is the behaviour a teleporting particle needs; a budget of 0 would freeze the trail entirely.
+        float trailStep = d.Trail is { } tr ? tr.EffectiveCutoff / (TrailPoints - 1) : 0f;
+        int trailBudget = d.Trail is { } tb && tb.MaxAddedPerFrame > 0
+            ? Math.Min(tb.MaxAddedPerFrame, TrailPoints)
+            : TrailPoints;
+
         // integrate + cull
         for (int i = s.Particles.Count - 1; i >= 0; i--)
         {
@@ -232,6 +267,46 @@ public sealed class VfxParticleSimulator
                 var angularStep = p.BirthOrbitalVelocity * dt;
                 var orbit = Quaternion.CreateFromYawPitchRoll(angularStep.Y, angularStep.X, angularStep.Z);
                 p.Pos = s.BasePos + Vector3.TransformNormal(Vector3.Transform(localRelative, orbit), _worldTransform);
+            }
+            // M177 (2.5): record where the ribbon has been, at EXACTLY trailStep spacing so that
+            // TrailPoints of them span the authored cutoff.
+            //
+            // The spacing has to be exact, not "append the current position once the particle has moved
+            // far enough". That cheaper version overshoots by however far the particle travelled in the
+            // frame that crossed the threshold, which makes the ribbon's length depend on its SPEED:
+            // measured, a 1,000-unit cutoff produced 1,018 units at 50 u/s and 1,567 at 2,000 u/s, and
+            // every authored cutoff overshot. Walking the segment and inserting points at the exact
+            // interval removes the frame rate and the speed from the result entirely.
+            //
+            // Inserting several points in one frame is also what mMaxAddedPerFrame is for - the field only
+            // makes sense if the engine can add more than one, which is a small confirmation that this is
+            // the right shape.
+            if (p.History is { } hist && trailStep > 0f)
+            {
+                if (p.HistoryCount == 0)
+                {
+                    hist[0] = p.Pos;
+                    p.HistoryCount = 1;
+                }
+                else
+                {
+                    for (int added = 0; added < trailBudget; added++)
+                    {
+                        var last = hist[p.HistoryCount - 1];
+                        var delta = p.Pos - last;
+                        float dist = delta.Length();
+                        if (dist < trailStep) break;
+                        var next = last + delta * (trailStep / dist);
+                        if (p.HistoryCount < hist.Length) hist[p.HistoryCount++] = next;
+                        else
+                        {
+                            // Full: drop the oldest point and slide the rest down. TrailPoints is small
+                            // and this only runs once the ribbon is at full length, so the copy is cheap.
+                            Array.Copy(hist, 1, hist, 0, hist.Length - 1);
+                            hist[^1] = next;
+                        }
+                    }
+                }
             }
             p.Rot += p.RotVel * dt;
             // M174 (1.9): rotation0 is an IntegratedValueVector3 - it accumulates rather than setting an
@@ -420,6 +495,8 @@ public sealed class VfxParticleSimulator
                 : Math.Clamp(d.StartFrame, 0f, Math.Max(0, d.NumFrames - 1)),
             FrameRate = d.BirthFrameRate?.SampleBirth(_rng) ?? d.FrameRate ?? 0f,
             ColorRandom = (float)_rng.NextDouble(),
+            // M177 (2.5): only trail emitters carry a ribbon buffer.
+            History = d.Trail is not null ? new Vector3[TrailPoints] : null,
         });
     }
 

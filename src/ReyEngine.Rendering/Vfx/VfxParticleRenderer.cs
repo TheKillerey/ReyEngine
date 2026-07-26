@@ -290,7 +290,8 @@ public sealed class VfxParticleRenderer
         _gl.Uniform2(_uViewportSize,
             _depthWidth > 0 ? _depthWidth : _sceneWidth,
             _depthHeight > 0 ? _depthHeight : _sceneHeight);
-        _gl.Uniform3(_uCamPos, inv.M41, inv.M42, inv.M43);
+        var camPos = new Vector3(inv.M41, inv.M42, inv.M43);
+        _gl.Uniform3(_uCamPos, camPos.X, camPos.Y, camPos.Z);
 
         // M175 (2.2): window depth -> view distance, in Riot's `1 / (z * dc.y + dc.x)` form.
         //
@@ -340,6 +341,8 @@ public sealed class VfxParticleRenderer
             if (es.InstanceCount == 0) continue;
             // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
             if (es.MeshVao != 0) { if (_meshProgram != 0) RenderMeshEmitter(es, viewProj); continue; }
+            // M177 (2.5): trail emitters draw a ribbon through the particle's own motion history.
+            if (es.Def.Trail is not null) { RenderTrailEmitter(es, viewProj, camPos); continue; }
             if (es.Texture == 0) continue;
             bool isDistortion = es.Def.Distortion is not null;
             if (isDistortion && (es.DistortionTexture == 0 || _sceneTexture == 0)) continue;
@@ -541,6 +544,11 @@ public sealed class VfxParticleRenderer
         _depthTexture = _depthFbo = 0;
         _depthWidth = _depthHeight = 0;
         _depthOk = false;
+        if (_trailProgram != 0) _gl.DeleteProgram(_trailProgram);
+        if (_trailVbo != 0) _gl.DeleteBuffer(_trailVbo);
+        if (_trailVao != 0) _gl.DeleteVertexArray(_trailVao);
+        _trailProgram = _trailVbo = _trailVao = 0;
+        _trailVboCapacity = 0;
         _ready = false;
     }
 
@@ -702,6 +710,183 @@ public sealed class VfxParticleRenderer
         _gl.UseProgram(_program);   // back to the billboard program for the next emitter
         _gl.BindVertexArray(_vao);
     }
+
+    // ---- M177 (2.5) trail ribbons ----
+    private uint _trailProgram, _trailVao, _trailVbo;
+    private int _tuViewProj, _tuTex, _tuAlphaRef;
+    private float[] _trailVerts = Array.Empty<float>();
+    private int _trailVboCapacity;
+    private bool _trailProgramFailed;
+
+    /// <summary>pos3 + uv2 + rgba4 per ribbon vertex.</summary>
+    private const int TrailStride = 9;
+
+    private unsafe void EnsureTrailProgram()
+    {
+        if (_trailProgramFailed || _trailProgram != 0) return;
+        try { _trailProgram = ShaderUtil.CreateProgram(_gl, _gles, TrailVert, TrailFrag); }
+        catch (Exception ex)
+        {
+            // Same rule as the mesh path (M117b): a shader failure on the render thread must not take the
+            // app down. Trails simply do not draw.
+            _trailProgramFailed = true;
+            System.Diagnostics.Debug.WriteLine($"VFX trail shader failed to compile - trails disabled: {ex.Message}");
+            return;
+        }
+        _tuViewProj = _gl.GetUniformLocation(_trailProgram, "uViewProj");
+        _tuTex = _gl.GetUniformLocation(_trailProgram, "uTex");
+        _tuAlphaRef = _gl.GetUniformLocation(_trailProgram, "uAlphaRef");
+        _trailVao = _gl.GenVertexArray();
+        _trailVbo = _gl.GenBuffer();
+        _gl.BindVertexArray(_trailVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _trailVbo);
+        uint stride = TrailStride * sizeof(float);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
+        _gl.EnableVertexAttribArray(1);
+        _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
+        _gl.EnableVertexAttribArray(2);
+        _gl.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, stride, (void*)(5 * sizeof(float)));
+        _gl.BindVertexArray(0);
+    }
+
+    /// <summary>M177 (2.5): build and draw one emitter's trail ribbons.
+    ///
+    /// The geometry is generated here, from where each particle has been - it is not in the bin. Riot's
+    /// trail payload only says how long the ribbon may get, how often its texture repeats along that
+    /// length, and how many points may be appended per frame.
+    ///
+    /// Two segment-orientation cases, matching the two primitive classes: a CameraTrail twists so the
+    /// ribbon always faces the viewer, an ArbitraryTrail holds the placement's own up axis. That split is
+    /// INFERRED from the class names - it is the only distinction the names draw and the payloads are
+    /// identical - but it is the whole reason Riot ships two classes.</summary>
+    private unsafe void RenderTrailEmitter(VfxParticleSimulator.EmitterState es, Matrix4x4 viewProj, Vector3 camPos)
+    {
+        EnsureTrailProgram();
+        if (_trailProgramFailed || es.Texture == 0) return;
+        var trail = es.Def.Trail!;
+        float tiling = trail.EffectiveTiling;
+
+        int quadCount = 0;
+        foreach (var p in es.Particles) if (p.HistoryCount >= 2) quadCount += p.HistoryCount - 1;
+        if (quadCount == 0) return;
+
+        int needed = quadCount * 6 * TrailStride;
+        if (_trailVerts.Length < needed) _trailVerts = new float[Math.Max(needed, 4096)];
+        var buf = _trailVerts;
+        int k = 0;
+
+        for (int pi = 0; pi < es.Particles.Count; pi++)
+        {
+            var p = es.Particles[pi];
+            if (p.HistoryCount < 2 || p.History is not { } hist) continue;
+
+            // Colour and width come from the same per-particle values the billboard path uses, so a trail
+            // emitter's colour-over-life curve drives the ribbon exactly as it would drive a sprite.
+            int o = pi * Stride;
+            float r = 1f, g = 1f, b = 1f, a = 1f, halfWidth = 8f;
+            if (o + 8 < es.Instances.Length && pi < es.InstanceCount)
+            {
+                halfWidth = MathF.Abs(es.Instances[o + 3]) * 0.5f;
+                r = es.Instances[o + 5]; g = es.Instances[o + 6]; b = es.Instances[o + 7]; a = es.Instances[o + 8];
+            }
+            if (halfWidth < 1e-3f) halfWidth = 1e-3f;
+
+            float travelled = 0f;
+            for (int i = 0; i < p.HistoryCount - 1; i++)
+            {
+                var p0 = hist[i];
+                var p1 = hist[i + 1];
+                var seg = p1 - p0;
+                float segLen = seg.Length();
+                if (segLen < 1e-5f) continue;
+                var dir = seg / segLen;
+
+                Vector3 side;
+                if (es.Def.IsArbitraryTrail)
+                {
+                    side = Vector3.Cross(dir, es.PlacementUp);
+                    // A segment travelling straight along the placement's up axis has no width under that
+                    // cross product; fall back to another axis rather than collapsing the ribbon.
+                    if (side.LengthSquared() < 1e-8f) side = Vector3.Cross(dir, es.PlacementForward);
+                }
+                else
+                {
+                    var toEye = camPos - p0;
+                    side = Vector3.Cross(dir, toEye);
+                    if (side.LengthSquared() < 1e-8f) side = Vector3.Cross(dir, Vector3.UnitY);
+                }
+                if (side.LengthSquared() < 1e-8f) continue;
+                side = Vector3.Normalize(side) * halfWidth;
+
+                float u0 = travelled / tiling;
+                travelled += segLen;
+                float u1 = travelled / tiling;
+
+                var a0 = p0 - side; var b0 = p0 + side;
+                var a1 = p1 - side; var b1 = p1 + side;
+
+                void Vert(Vector3 pos, float u, float v)
+                {
+                    buf[k++] = pos.X; buf[k++] = pos.Y; buf[k++] = pos.Z;
+                    buf[k++] = u; buf[k++] = v;
+                    buf[k++] = r; buf[k++] = g; buf[k++] = b; buf[k++] = a;
+                }
+                Vert(a0, u0, 0f); Vert(b0, u0, 1f); Vert(b1, u1, 1f);
+                Vert(a0, u0, 0f); Vert(b1, u1, 1f); Vert(a1, u1, 0f);
+            }
+        }
+        if (k == 0) return;
+
+        _gl.UseProgram(_trailProgram);
+        _gl.BindVertexArray(_trailVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _trailVbo);
+        fixed (float* d = buf)
+        {
+            if (k > _trailVboCapacity)
+            {
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(k * sizeof(float)), d, BufferUsageARB.DynamicDraw);
+                _trailVboCapacity = k;
+            }
+            else _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(k * sizeof(float)), d);
+        }
+        _gl.UniformMatrix4(_tuViewProj, 1, false, in viewProj.M11);
+        _gl.Uniform1(_tuTex, 0);
+        _gl.Uniform1(_tuAlphaRef, es.Def.AlphaRef / 255f);
+        if (IsAdditiveFor(es.Def.BlendMode, es.Texture)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
+        else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, es.Texture);
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(k / TrailStride));
+
+        _gl.UseProgram(_program);       // back to the billboard program for the next emitter
+        _gl.BindVertexArray(_vao);
+    }
+
+    private const string TrailVert = @"
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec2 aUv;
+layout(location=2) in vec4 aColor;
+uniform mat4 uViewProj;
+out vec2 vUv;
+out vec4 vColor;
+void main(){
+    gl_Position = uViewProj * vec4(aPos, 1.0);
+    vUv = aUv;
+    vColor = aColor;
+}";
+
+    private const string TrailFrag = @"
+in vec2 vUv;
+in vec4 vColor;
+uniform sampler2D uTex;
+uniform float uAlphaRef;
+out vec4 fragColor;
+void main(){
+    vec4 t = texture(uTex, vUv);
+    if (uAlphaRef > 0.0 && t.a * vColor.a < uAlphaRef) discard;
+    fragColor = t * vColor;
+}";
 
     private const string MeshVert = @"
 layout(location=0) in vec3 aPos;
