@@ -91,6 +91,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveColorTextures;   // M68
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveErosionTextures;   // M174 (2.1)
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolvePaletteTextures;   // M175 (2.6)
+    public Func<VfxSystemDefinition, IReadOnlyList<CubemapImage?>>? ResolveReflectionCubemaps;   // M181 (2.12)
     public Func<VfxSystemDefinition, IReadOnlyList<StaticMeshData?>?>? ResolveMeshes;
 
     private double _lastAnimTime;
@@ -714,7 +715,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             emitterColorTextures: ResolveColorTextures?.Invoke(def),
             emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
             emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
-            emitterChildren: ResolveChildren(def, depth));
+            emitterChildren: ResolveChildren(def, depth),
+            emitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def));
 
     public void SetVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems,
         IReadOnlyDictionary<uint, uint>? resourceMap = null)
@@ -743,7 +745,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             emitterColorTextures: ResolveColorTextures?.Invoke(def),
             emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
             emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
-            emitterChildren: ResolveChildren(def, 0)) });
+            emitterChildren: ResolveChildren(def, 0),
+            emitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def)) });
     }
 
     [RelayCommand] private void StopVfx() => SelectedVfx = null;

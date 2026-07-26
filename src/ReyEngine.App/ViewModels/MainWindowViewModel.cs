@@ -801,6 +801,33 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return texs;
     }
 
+    /// <summary>M181 (2.12): each emitter's reflection cubemap, aligned to Emitters. These are real DDS
+    /// cubemaps (e.g. ASSETS/Shared/Particles/MissFortune_Bullet_CubeMap.dds) and go through the same
+    /// decoder the M122 skybox uses, so face ordering is shared rather than reinvented.</summary>
+    private readonly Dictionary<uint, IReadOnlyList<CubemapImage?>> _vfxReflectionCubeCache = new();
+
+    private IReadOnlyList<CubemapImage?> ResolveSystemReflectionCubemaps(VfxSystemDefinition sys)
+    {
+        if (_vfxReflectionCubeCache.TryGetValue(sys.PathHash, out var cached)) return cached;
+        var cubes = new List<CubemapImage?>(sys.Emitters.Count);
+        foreach (var e in sys.Emitters)
+        {
+            CubemapImage? cm = null;
+            if (e.Reflection?.MapPath is { Length: > 0 } path)
+            {
+                try
+                {
+                    var bytes = ReadAssetByPath(path);
+                    if (bytes is not null) cm = CubemapDecoder.TryDecodeDds(bytes);
+                }
+                catch { cm = null; }   // subchunked/corrupt chunks throw inside the mount read
+            }
+            cubes.Add(cm);
+        }
+        _vfxReflectionCubeCache[sys.PathHash] = cubes;
+        return cubes;
+    }
+
     private IReadOnlyList<TextureImage?> ResolveSystemDistortionTextures(VfxSystemDefinition sys)
     {
         if (_vfxDistortionTextureCache.TryGetValue(sys.PathHash, out var cached)) return cached;
@@ -889,6 +916,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         _vfxSystems = systems;
         _vfxTextureCache.Clear(); _vfxTextureMultCache.Clear(); _vfxDistortionTextureCache.Clear(); _vfxColorTextureCache.Clear(); _vfxMeshCache.Clear(); _vfxErosionTextureCache.Clear();
+        _vfxPaletteTextureCache.Clear(); _vfxReflectionCubeCache.Clear();
         ChampionVfxSystems.Clear();
         foreach (var s in systems.Values
                      .Where(s => s.Emitters.Any(e => e.IsVisual))
@@ -909,7 +937,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, System.Numerics.Vector3.Zero,
             ResolveSystemTextures(sys), ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys), ResolveSystemDistortionTextures(sys),
             ResolveSystemColorTextures(sys), ResolveSystemErosionTextures(sys),
-            ResolveSystemPaletteTextures(sys)) });
+            ResolveSystemPaletteTextures(sys),
+            emitterReflectionCubemaps: ResolveSystemReflectionCubemaps(sys)) });
         _log.Info("VFX", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {ResolveSystemTextures(sys).Count(t => t is not null)} sprite(s) resolved.");
     }
 
@@ -945,7 +974,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, node.CurrentTransform, texs,
             ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys), ResolveSystemDistortionTextures(sys),
             ResolveSystemColorTextures(sys), ResolveSystemErosionTextures(sys),
-            ResolveSystemPaletteTextures(sys)) });
+            ResolveSystemPaletteTextures(sys),
+            EmitterReflectionCubemaps: ResolveSystemReflectionCubemaps(sys)) });
         _log.Info("Particles", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {texs.Count(t => t is not null)} sprite(s) resolved.");
     }
 
@@ -2524,6 +2554,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // path, so the Particle Editor - the one surface built for looking at VFX - never applied it.
         ParticleEditor.ResolveErosionTextures = ResolveSystemErosionTextures;
         ParticleEditor.ResolvePaletteTextures = ResolveSystemPaletteTextures;
+        ParticleEditor.ResolveReflectionCubemaps = ResolveSystemReflectionCubemaps;   // M181 (2.12)
         ParticleEditor.ResolveMeshes = ResolveSystemMeshes;   // M47: .scb/.sco mesh primitives
 
         // M55: model-preview window — its own animation clock (AnimationInspectorViewModel) + VFX resolvers
@@ -2536,6 +2567,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.ResolveColorTextures = ResolveSystemColorTextures;   // M68
         MeshPreview.ResolveErosionTextures = ResolveSystemErosionTextures;   // M175 (see above)
         MeshPreview.ResolvePaletteTextures = ResolveSystemPaletteTextures;
+        MeshPreview.ResolveReflectionCubemaps = ResolveSystemReflectionCubemaps;   // M181 (2.12)
         MeshPreview.ResolveMeshes = ResolveSystemMeshes;
         MeshPreview.PlaySoundEvent = PlayPreviewSoundEvent;              // M90: clip SFX
         MeshPreview.StopSounds = () => Sound.StopTag("previewsfx");

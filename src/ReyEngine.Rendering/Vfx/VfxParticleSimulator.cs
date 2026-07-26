@@ -22,6 +22,7 @@ public sealed class VfxParticleSimulator
         public uint DistortionTexture;          // normal map for screen-space heat haze/refraction
         public uint ErosionTexture;             // M174 (2.1): alpha-erosion dissolve map
         public uint PaletteTexture;             // M175 (2.6): gradient strip the sprite's RGB is remapped through
+        public uint ReflectionCubemap;          // M181 (2.12): reflectionMapTexture, a real DDS cubemap
         // M68: CPU copy of particleColorTexture (RGBA8, top-left origin). When present, each particle's colour
         // is looked up from this 2-D colour-over-life gradient (U = age, V = per-particle variant) instead of
         // rendering white. Null = emitter has no colour texture (keeps its birthColor/color curve colour).

@@ -142,6 +142,28 @@ public sealed class VfxParticleRenderer
         _ready = true;
     }
 
+    /// <summary>M181 (2.12): upload a reflection cubemap. Six RGBA8 faces in the DDS order that
+    /// <c>CubemapDecoder</c> already produces for the M122 skybox, so the two paths agree about face
+    /// ordering rather than each having their own convention.</summary>
+    public unsafe uint UploadCubemap(byte[][] faces, int faceSize)
+    {
+        if (!_ready || faces.Length < 6 || faceSize <= 0) return 0;
+        uint tex = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.TextureCubeMap, tex);
+        for (int f = 0; f < 6; f++)
+            fixed (byte* p = faces[f])
+                _gl.TexImage2D(TextureTarget.TextureCubeMapPositiveX + f, 0, InternalFormat.Rgba8,
+                    (uint)faceSize, (uint)faceSize, 0, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        _gl.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        _gl.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        _gl.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
+        _gl.BindTexture(TextureTarget.TextureCubeMap, 0);
+        _ownedTextures.Add(tex);
+        return tex;
+    }
+
     public unsafe uint UploadTexture(byte[] rgba, int width, int height)
     {
         // M117c: does this texture use its alpha channel at all? (>1% of pixels below ~opaque)
@@ -524,6 +546,7 @@ public sealed class VfxParticleRenderer
         foreach (var (vao, vbo, ebo) in _ownedMeshes) { _gl.DeleteVertexArray(vao); _gl.DeleteBuffer(vbo); if (ebo != 0) _gl.DeleteBuffer(ebo); }
         _ownedMeshes.Clear();
         _whiteTex = 0; // owned-texture list held it; EnsureMeshProgram re-creates on demand
+        _whiteCube = 0; // same: EnsureWhiteCube re-creates on demand
     }
 
     public void Dispose()
@@ -559,6 +582,7 @@ public sealed class VfxParticleRenderer
     private int _muMeshTexDiv, _muMeshTexDivMult;   // M117
     private int _muPlacementRight, _muPlacementUp, _muPlacementForward;
     private int _muCamPosMesh, _muFresnelColor, _muFresnelPower, _muHasFresnel;   // M178 (2.12)
+    private int _muReflCube, _muReflFresnel, _muReflDirect, _muReflGlancing, _muReflTint, _muHasRefl;   // M181
     private uint _whiteTex;
 
     /// <summary>M117b: a mesh-shader compile failure must NOT throw on the render thread — that
@@ -614,6 +638,20 @@ public sealed class VfxParticleRenderer
         return n;
     }
 
+    /// <summary>A 1x1 white cubemap bound to the reflection unit when an emitter has no map, so the cube
+    /// sampler never shares a texture unit with a 2-D sampler. See RenderMeshEmitter for why that
+    /// matters.</summary>
+    private uint _whiteCube;
+
+    private uint EnsureWhiteCube()
+    {
+        if (_whiteCube != 0) return _whiteCube;
+        var faces = new byte[6][];
+        for (int f = 0; f < 6; f++) faces[f] = new byte[] { 255, 255, 255, 255 };
+        _whiteCube = UploadCubemap(faces, 1);
+        return _whiteCube;
+    }
+
     private unsafe void EnsureMeshProgram()
     {
         if (_meshProgramFailed) return;
@@ -623,7 +661,10 @@ public sealed class VfxParticleRenderer
             catch (Exception ex)
             {
                 _meshProgramFailed = true;
-                System.Diagnostics.Debug.WriteLine($"VFX mesh shader failed to compile - mesh particles disabled: {ex.Message}");
+                // Console, not Debug: a mesh-shader failure silently disables every mesh particle, and
+                // Debug.WriteLine is invisible in a release run and in the offscreen probes - which is
+                // exactly how M174 shipped a blank viewport twice.
+                Console.Error.WriteLine("[VFX] mesh shader failed to compile - mesh particles disabled: " + ex.Message);
                 return;
             }
             _muViewProj = _gl.GetUniformLocation(_meshProgram, "uViewProj");
@@ -645,6 +686,12 @@ public sealed class VfxParticleRenderer
             _muFresnelColor = _gl.GetUniformLocation(_meshProgram, "uFresnelColor");
             _muFresnelPower = _gl.GetUniformLocation(_meshProgram, "uFresnelPower");
             _muHasFresnel = _gl.GetUniformLocation(_meshProgram, "uHasFresnel");
+            _muReflCube = _gl.GetUniformLocation(_meshProgram, "uReflCube");
+            _muReflFresnel = _gl.GetUniformLocation(_meshProgram, "uReflFresnel");
+            _muReflDirect = _gl.GetUniformLocation(_meshProgram, "uReflDirect");
+            _muReflGlancing = _gl.GetUniformLocation(_meshProgram, "uReflGlancing");
+            _muReflTint = _gl.GetUniformLocation(_meshProgram, "uReflTint");
+            _muHasRefl = _gl.GetUniformLocation(_meshProgram, "uHasRefl");
         }
         if (_whiteTex == 0) _whiteTex = UploadTexture(new byte[] { 255, 255, 255, 255 }, 1, 1);
     }
@@ -741,6 +788,30 @@ public sealed class VfxParticleRenderer
         {
             _gl.Uniform4(_muFresnelColor, refl!.FresnelColor.X, refl.FresnelColor.Y, refl.FresnelColor.Z, refl.FresnelColor.W);
             _gl.Uniform1(_muFresnelPower, refl.Fresnel);
+        }
+        // M181 (2.12): the cubemap half. Only 13% of reflection emitters name a map, so the rim above and
+        // this stage are independent - an emitter can have either, both or neither.
+        bool hasRefl = es.ReflectionCubemap != 0 && refl is not null;
+        _gl.Uniform1(_muHasRefl, hasRefl ? 1 : 0);
+        // The cube sampler is bound to its own unit and given a real texture EVEN WHEN UNUSED.
+        // Leaving it at the default 0 points it at the same unit as uTex's sampler2D, and a samplerCube
+        // and a sampler2D on one texture unit is a type conflict that makes the whole draw invalid - so
+        // every mesh particle WITHOUT a reflection map silently stopped rendering. The branch in the
+        // shader is not enough; the binding has to be valid whether the branch runs or not.
+        _gl.ActiveTexture(TextureUnit.Texture7);
+        _gl.BindTexture(TextureTarget.TextureCubeMap, hasRefl ? es.ReflectionCubemap : EnsureWhiteCube());
+        _gl.Uniform1(_muReflCube, 7);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        if (hasRefl)
+        {
+            // A negative exponent would make pow(f, n) = 1/f^|n| diverge as the surface turns edge-on;
+            // 0 is well defined (pow(f,0)=1, so the term is 0 and the opacity is the direct value).
+            _gl.Uniform1(_muReflFresnel, MathF.Max(0f, refl!.ReflectionFresnel));
+            _gl.Uniform1(_muReflDirect, refl.OpacityDirect);
+            _gl.Uniform1(_muReflGlancing, refl.OpacityGlancing);
+            _gl.Uniform4(_muReflTint, refl.ReflectionFresnelColor.X, refl.ReflectionFresnelColor.Y,
+                refl.ReflectionFresnelColor.Z, refl.ReflectionFresnelColor.W);
+            _gl.ActiveTexture(TextureUnit.Texture0);
         }
         _gl.Uniform1(_muTex, 0);
         _gl.Uniform1(_muTexMult, 1);
@@ -976,6 +1047,11 @@ uniform vec3 uCamPosMesh;
 uniform vec4 uFresnelColor;
 uniform float uFresnelPower;
 uniform int uHasFresnel;
+uniform float uReflFresnel;
+uniform float uReflDirect;
+uniform float uReflGlancing;
+uniform highp int uHasRefl;   // explicit: ES defaults int to highp in VS but mediump in FS, and a
+                              // uniform shared by both stages must agree or the program will not link
 uniform vec3 uWorldPos;
 uniform float uScale;
 uniform float uRot;
@@ -989,6 +1065,7 @@ uniform vec3 uPlacementForward;
 out vec2 vUv;
 out vec2 vUvMult;
 out vec3 vFresnel;
+out vec4 vReflect;   // M181: xyz = reflection vector, w = reflection opacity
 void main(){
     float s = sin(uRot); float c = cos(uRot);
     vec3 local = vec3(aPos.x * c - aPos.z * s, aPos.y, aPos.x * s + aPos.z * c) * uScale;
@@ -999,7 +1076,8 @@ void main(){
     // The normal is rotated through the same spin and placement basis as the position, so the rim stays
     // put on the surface instead of sliding as the particle turns.
     vFresnel = vec3(0.0);
-    if (uHasFresnel != 0) {
+    vReflect = vec4(0.0, 1.0, 0.0, 0.0);
+    if (uHasFresnel != 0 || uHasRefl != 0) {
         vec3 nLocal = vec3(aNormal.x * c - aNormal.z * s, aNormal.y, aNormal.x * s + aNormal.z * c);
         vec3 nWorld = uPlacementRight * nLocal.x + uPlacementUp * nLocal.y + uPlacementForward * nLocal.z;
         float len = length(nWorld);
@@ -1007,7 +1085,18 @@ void main(){
             nWorld /= len;
             vec3 view = normalize(p - uCamPosMesh);
             float f = clamp(dot(-view, nWorld), 0.0, 1.0);
-            vFresnel = (1.0 - pow(f, uFresnelPower)) * uFresnelColor.rgb;
+            if (uHasFresnel != 0)
+                vFresnel = (1.0 - pow(f, uFresnelPower)) * uFresnelColor.rgb;
+            // M181 (2.12): DECODED from mesh_vs perm #7 -
+            //     o4.xyz = V - 2*dot(V,N)*N              (instructions 44-46)
+            //     o4.w   = lerp(vReflection.y, vReflection.z, 1 - pow(f, vReflection.x))   (54-57)
+            // The lerp endpoints are what pin .y to reflectionOpacityDirect: at a head-on view f = 1, so
+            // the term is 0 and the opacity is exactly .y.
+            if (uHasRefl != 0) {
+                vec3 r = view - 2.0 * dot(view, nWorld) * nWorld;
+                float t = 1.0 - pow(f, uReflFresnel);
+                vReflect = vec4(r, mix(uReflDirect, uReflGlancing, t));
+            }
         }
     }
     // M117c: on mesh emitters texDiv is a TILING factor (uv * texDiv) - Kayn skin02's R pillar
@@ -1021,6 +1110,10 @@ void main(){
 in vec2 vUv;
 in vec2 vUvMult;
 in vec3 vFresnel;
+in vec4 vReflect;
+uniform samplerCube uReflCube;
+uniform vec4 uReflTint;
+uniform highp int uHasRefl;   // see MeshVert - the precision must match the vertex declaration
 uniform sampler2D uTex;
 uniform sampler2D uTexMult;
 uniform int uHasTexMult;
@@ -1030,6 +1123,18 @@ void main(){
     vec4 texel = texture(uTex, vUv);
     if (uHasTexMult != 0) texel *= texture(uTexMult, vUvMult);
     vec4 outColor = texel * uColor;
+    // M181 (2.12): DECODED from mesh_ps REFLECTIVE, instructions 28-32 -
+    //     r1.xyz = cubemap.Sample(R).rgb;   r1.xyz *= reflOpacity
+    //     r2.xyz = lerp(1, vReflectionFColor.rgb, reflOpacity)
+    //     rgb   += r1.xyz * r2.xyz
+    // Note the tint LERPS FROM WHITE by the same opacity, so a weak reflection is barely tinted and a
+    // strong one takes the authored colour fully. Multiplying by the tint directly would darken every
+    // faint reflection instead.
+    if (uHasRefl != 0) {
+        vec3 refl = texture(uReflCube, normalize(vReflect.xyz)).rgb * vReflect.w;
+        vec3 tint = mix(vec3(1.0), uReflTint.rgb, vReflect.w);
+        outColor.rgb += refl * tint;
+    }
     // M178 (2.12): mesh_ps adds the rim scaled by the particle's ALPHA, not by its colour:
     //     mad r0.xyz, v5.xyzx, r1.wwww, r0.xyzx
     // where r1.w is the alpha computed before the cubemap sample overwrote r1.xyz. So a fading particle

@@ -28,7 +28,10 @@ public sealed record VfxPlaybackItem(
     /// Resolved AHEAD of playback rather than on demand, because a spawn happens on the GL thread mid
     /// frame and resolving a system there would mean WAD reads and texture decodes inside the render
     /// loop.</summary>
-    IReadOnlyList<IReadOnlyList<VfxPlaybackItem>?>? EmitterChildren = null)
+    IReadOnlyList<IReadOnlyList<VfxPlaybackItem>?>? EmitterChildren = null,
+    /// <summary>M181 (2.12): per emitter, the decoded reflectionMapTexture cubemap. Only ~13% of
+    /// reflection emitters name one.</summary>
+    IReadOnlyList<CubemapImage?>? EmitterReflectionCubemaps = null)
 {
     /// <summary>Convenience for champion/editor previews authored at a translated root.</summary>
     public VfxPlaybackItem(VfxSystemDefinition system, Vector3 worldPos,
@@ -39,10 +42,11 @@ public sealed record VfxPlaybackItem(
         IReadOnlyList<TextureImage?>? emitterColorTextures = null,
         IReadOnlyList<TextureImage?>? emitterErosionTextures = null,
         IReadOnlyList<TextureImage?>? emitterPaletteTextures = null,
-        IReadOnlyList<IReadOnlyList<VfxPlaybackItem>?>? emitterChildren = null)
+        IReadOnlyList<IReadOnlyList<VfxPlaybackItem>?>? emitterChildren = null,
+        IReadOnlyList<CubemapImage?>? emitterReflectionCubemaps = null)
         : this(system, Matrix4x4.CreateTranslation(worldPos), emitterTextures, emitterMeshes, emitterMultTextures,
             emitterDistortionTextures, emitterColorTextures, emitterErosionTextures, emitterPaletteTextures,
-            emitterChildren) { }
+            emitterChildren, emitterReflectionCubemaps) { }
 
     public Vector3 WorldPos => Transform.Translation;
 

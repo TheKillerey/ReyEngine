@@ -324,6 +324,9 @@ public sealed class ViewportControl : OpenGlControlBase
     // M36: live VFX particle playback (one simulator per played placement)
     private VfxParticleRenderer? _particleRenderer;
     private readonly List<VfxParticleSimulator> _particleSims = new();
+    /// <summary>M181 (2.12): uploaded reflection cubemaps, keyed by the decoded image so one shared
+    /// cubemap costs a single GL texture however many emitters reference it.</summary>
+    private readonly Dictionary<CubemapImage, uint> _particleCubemapCache = new(ReferenceEqualityComparer.Instance);
     /// <summary>M180 (2.7): child systems spawned by parent particles this session, with the item they
     /// came from so their textures can be bound, and the age at which they are retired.</summary>
     private readonly List<(VfxParticleSimulator Sim, VfxPlaybackItem Item, float Age)> _childSims = new();
@@ -1286,6 +1289,18 @@ public sealed class ViewportControl : OpenGlControlBase
                 }
                 es.PaletteTexture = paletteTex;
             }
+            // M181 (2.12): the reflection cubemap, cached by decoded image like the 2-D stages so one
+            // cubemap shared across emitters costs a single GL texture.
+            var cubeImg = item.EmitterReflectionCubemaps is { } rcs && idx >= 0 && idx < rcs.Count ? rcs[idx] : null;
+            if (cubeImg is not null)
+            {
+                if (!_particleCubemapCache.TryGetValue(cubeImg, out var cubeTex))
+                {
+                    cubeTex = _particleRenderer.UploadCubemap(cubeImg.Faces, cubeImg.FaceSize);
+                    _particleCubemapCache[cubeImg] = cubeTex;
+                }
+                es.ReflectionCubemap = cubeTex;
+            }
             // M68: particleColorTexture is sampled on the CPU (in the simulator), so hand the emitter the
             // decoded RGBA gradient directly rather than uploading it to GL.
             var colorImg = item.EmitterColorTextures is { } cts && idx >= 0 && idx < cts.Count ? cts[idx] : null;
@@ -1344,6 +1359,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _particleSimCache.Clear();
         _travelElapsed.Clear();
         _particleTextureCache.Clear();
+        _particleCubemapCache.Clear();
         _particleMeshAnimations.Clear();
         _animatedMeshEmitters.Clear();   // M48: rebuilt with the sims
 

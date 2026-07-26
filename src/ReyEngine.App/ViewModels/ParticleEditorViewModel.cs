@@ -26,6 +26,7 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveColorTextures;   // M68
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveErosionTextures;   // M174 (2.1)
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolvePaletteTextures;   // M175 (2.6)
+    public Func<VfxSystemDefinition, IReadOnlyList<CubemapImage?>>? ResolveReflectionCubemaps;   // M181 (2.12)
     public Func<VfxSystemDefinition, IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>?>? ResolveMeshes; // M47
     public Func<string, Avalonia.Media.Imaging.Bitmap?>? LoadThumbnail;   // particle sprite preview on cards
     public Action<string>? Info;
@@ -123,7 +124,8 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         var paletteTexs = ResolvePaletteTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var meshes = ResolveMeshes?.Invoke(def);
         Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs, meshes,
-            multTexs, distortionTexs, colorTexs, erosionTexs, paletteTexs) });
+            multTexs, distortionTexs, colorTexs, erosionTexs, paletteTexs,
+            emitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def)) });
     }
 
     [RelayCommand] private void Restart() => RebuildPlayback();
