@@ -35,7 +35,12 @@ public sealed class VfxParticleRenderer
 
     // M174 (2.1): the 19th float is the per-particle alpha-erosion drive. Riot's own quad path passes
     // it the same way - quad_vs reads vertex attribute TEXCOORD0.w into TEXCOORD3.z.
-    private const int Stride = 19;
+    //
+    // INTERNAL, and the ONLY definition of the instance stride. VfxParticleSimulator sizes and fills the
+    // buffer this describes, and until M174 it carried its own hardcoded copy of the number - so bumping
+    // the stride here left the simulator allocating one float per particle too few and overrunning the
+    // array on the first spawn. One constant, referenced from both sides, is what prevents that.
+    internal const int Stride = 19;
 
     private bool _gles;
 
@@ -104,7 +109,7 @@ public sealed class VfxParticleRenderer
         gl.EnableVertexAttribArray(4); gl.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, bstride, (void*)(9 * sizeof(float)));
         gl.EnableVertexAttribArray(5); gl.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, bstride, (void*)(11 * sizeof(float)));
         gl.EnableVertexAttribArray(6); gl.VertexAttribPointer(6, 3, VertexAttribPointerType.Float, false, bstride, (void*)(15 * sizeof(float)));
-        gl.EnableVertexAttribArray(7); gl.VertexAttribPointer(7, 1, VertexAttribPointerType.Float, false, bstride, (void*)(18 * sizeof(float)));
+        gl.EnableVertexAttribArray(7); gl.VertexAttribPointer(7, 1, VertexAttribPointerType.Float, false, bstride, (void*)((Stride - 1) * sizeof(float)));
         gl.VertexAttribDivisor(1, 1);
         gl.VertexAttribDivisor(2, 1);
         gl.VertexAttribDivisor(3, 1);

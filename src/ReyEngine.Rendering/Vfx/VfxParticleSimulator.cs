@@ -300,7 +300,9 @@ public sealed class VfxParticleSimulator
     {
         var d = s.Def;
         int n = s.Particles.Count;
-        if (s.Instances.Length < n * 18) s.Instances = new float[Math.Max(n * 18, 72)];
+        // Sized from the renderer's stride, never a literal - see the comment on VfxParticleRenderer.Stride.
+        int stride = VfxParticleRenderer.Stride;
+        if (s.Instances.Length < n * stride) s.Instances = new float[Math.Max(n * stride, stride * 4)];
         var buf = s.Instances;
         int k = 0;
         for (int i = 0; i < n; i++)
