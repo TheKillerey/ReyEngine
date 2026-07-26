@@ -533,12 +533,28 @@ public sealed class ViewportControl : OpenGlControlBase
         _bgRenderer = new ViewportMeshRenderer();   // M88: NVR map backdrop
         _bgRenderer.Initialize(_gl, _gles);
 
-        _particleRenderer = new VfxParticleRenderer();
         _skyboxRenderer = new SkyboxRenderer();
         _skyboxRenderer.Initialize(_gl);
         _skyboxDirty = true;   // re-apply the spec on a fresh context
-        _particleRenderer.Initialize(_gl);
-        _softDotTex = _particleRenderer.UploadTexture(SoftDot(64), 64, 64);
+
+        // The particle renderer is isolated because it is the most volatile of the four: it compiles the
+        // largest shaders and gains features most often. Letting its Initialize throw out of OnOpenGlInit
+        // skipped the two lines below, so the MAP never rendered either and the whole viewport went black
+        // with nothing in the log — Avalonia swallows exceptions thrown from GL init. A broken particle
+        // shader must cost particles, not the entire viewport.
+        try
+        {
+            var particles = new VfxParticleRenderer();
+            particles.Initialize(_gl);
+            _softDotTex = particles.UploadTexture(SoftDot(64), 64, 64);
+            _particleRenderer = particles;
+        }
+        catch (Exception ex)
+        {
+            _particleRenderer = null;   // every use site already null-checks
+            Console.Error.WriteLine("[Viewport] particle renderer disabled: " + ex.Message);
+            System.Diagnostics.Debug.WriteLine("[Viewport] particle renderer disabled: " + ex);
+        }
 
         if (Mesh is not null) { _meshDirty = true; }
         if (Skeleton is not null) _bonesDirty = true;

@@ -555,7 +555,6 @@ uniform vec3 uPlacementRight;
 uniform vec3 uPlacementUp;
 uniform vec3 uPlacementForward;
 out vec2 vUv;
-out float vErosionDrive;
 out vec2 vUvMult;
 void main(){
     float s = sin(uRot); float c = cos(uRot);
@@ -615,6 +614,7 @@ uniform int uArbitraryQuad;
 uniform vec3 uPlacementRight;
 uniform vec3 uPlacementUp;
 uniform vec3 uPlacementForward;
+out float vErosionDrive;   // M174 (2.1): per-particle erosion drive -> fragment stage
 out vec2 vUv;
 out vec2 vUvMult;
 out vec4 vColor;
@@ -665,29 +665,31 @@ void main(){
     // flip, then scale and rotate about the pivot, then translate. Sub-terms whose semantics the census
     // could confirm individually are each marked at their use below.
     float age = aAgeVelX.x;
-    vec2 c = vec2(cell.x, 1.0 - cell.y);
+    // NB: named uvc, not c - this function already has a `float c = cos(rotation)` for the billboard
+    // spin, and shadowing it here made every line below a type error.
+    vec2 uvc = vec2(cell.x, 1.0 - cell.y);
 
-    if (uUvFlip.x > 0.5) c.x = 1.0 - c.x;
-    if (uUvFlip.y > 0.5) c.y = 1.0 - c.y;
+    if (uUvFlip.x > 0.5) uvc.x = 1.0 - uvc.x;
+    if (uUvFlip.y > 0.5) uvc.y = 1.0 - uvc.y;
 
     // uvRotation is a fixed angle; birthUvRotateRate advances with particle age; particleUVRotateRate is
     // an INTEGRATED value, which for a constant rate is also rate*age - the distinction only matters once
     // its curve is animated, which this does not yet support.
     float uvAngle = uUvRotation + uUvRotRate * age + uUvRotInt * age;
-    c -= uUvCenter;
-    c *= uUvScale;
+    uvc -= uUvCenter;
+    uvc *= uUvScale;
     if (abs(uvAngle) > 0.0001) {
         float cs = cos(uvAngle), sn = sin(uvAngle);
-        c = vec2(c.x * cs - c.y * sn, c.x * sn + c.y * cs);
+        uvc = vec2(uvc.x * cs - uvc.y * sn, uvc.x * sn + uvc.y * cs);
     }
-    c += uUvCenter;
+    uvc += uUvCenter;
 
     // birthUVOffset is a fixed shift; the scroll terms advance with particle age, except
     // emitterUvScrollRate which advances with EMITTER age.
-    c += uUvOffset + uUvScrollInt * age + uEmitterUvScroll * uEmitterAge;
-    if (uUvClamp != 0) c = clamp(c, vec2(0.0), vec2(1.0));
+    uvc += uUvOffset + uUvScrollInt * age + uEmitterUvScroll * uEmitterAge;
+    if (uUvClamp != 0) uvc = clamp(uvc, vec2(0.0), vec2(1.0));
 
-    vUv = (vec2(fx, fy) + c) / vec2(cols, rows)
+    vUv = (vec2(fx, fy) + uvc) / vec2(cols, rows)
         + uUvScrollRate * age;
     // M174: the multiply stage gets the same treatment. It still does NOT advance with the flipbook frame
     // - a multi-cell multiplier atlas stays on cell 0 - which is a separate known defect (tier 2.3).
