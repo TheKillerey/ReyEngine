@@ -168,7 +168,11 @@ public sealed record VfxEmitterDefinition(
     VfxTrailDefinition? Trail = null,
     /// <summary>M177: true for VfxPrimitiveArbitraryTrail, false for VfxPrimitiveCameraTrail. Decides
     /// whether the ribbon twists to face the camera or holds the placement's orientation.</summary>
-    bool IsArbitraryTrail = false)
+    bool IsArbitraryTrail = false,
+
+    /// <summary>M178 (2.12) reflectionDefinition - the fresnel rim and cubemap reflection stage.
+    /// 59,149 emitters.</summary>
+    VfxReflection? Reflection = null)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
@@ -663,4 +667,58 @@ public sealed record VfxTrailDefinition(
     /// <summary>One repeat of the texture per this many world units. Guards a zero so the UV generator
     /// cannot divide by it.</summary>
     public float EffectiveTiling => TilingLength > 1e-3f ? TilingLength : 500f;
+}
+
+/// <summary>M178 (2.12): Riot's <c>VfxReflectionDefinitionData</c> - a fresnel rim light, and a cubemap
+/// reflection on top of it.
+///
+/// DECODED from `particlesystem/mesh_vs` and `mesh_ps`, permutation REFLECTIVE. The vertex stage:
+///
+///   N  = normalize(mul(normal, mWorld))
+///   R  = V - 2*dot(V, N)*N                            // reflect(), -> cubemap lookup direction
+///   f  = saturate(dot(-V, N))                         // NdotV
+///   fresnelTerm    = 1 - pow(f, vFresnel.w)
+///   o.fresnelColor = fresnelTerm * vFresnel.rgb
+///   reflTerm       = 1 - pow(f, vReflection.x)
+///   o.reflOpacity  = lerp(vReflection.y, vReflection.z, reflTerm)
+///
+/// and the pixel stage:
+///
+///   refl  = cubemap.Sample(R).rgb * reflOpacity
+///   tint  = lerp(1, vReflectionFColor.rgb, reflOpacity)
+///   rgb  += refl * tint
+///   rgb  += fresnelColor * alpha                      // alpha = texel.a * colorTex.a * vertexColor.a
+///
+/// THE FIELD MAPPING IS PINNED BY THE MATHS, not guessed. This is the opposite situation to alpha
+/// erosion, where which authored value landed in which cbuffer slot was undecidable: here the lerp
+/// endpoints determine it. At a direct view NdotV = 1, so reflTerm = 0 and the opacity is exactly
+/// <c>vReflection.y</c> - which the authored name calls <c>reflectionOpacityDirect</c>. The glancing end
+/// is <c>.z</c>, named <c>reflectionOpacityGlancing</c>. Names and maths agree independently.
+///
+/// SCOPE, measured rather than assumed: REFLECTIVE is a define on `mesh_vs`/`mesh_ps` and does not exist
+/// in `quad_ps`'s define pool at all, so Riot never compiles reflection into the billboard path. The
+/// authored data agrees - 95.9% of emitters carrying this struct use a mesh-capable primitive. Putting
+/// fresnel on a camera-facing quad would be inventing behaviour, not restoring it.</summary>
+public sealed record VfxReflection(
+    /// <summary>fresnelColor - the rim colour, added to RGB scaled by the fresnel term. 7,281 of 8,058
+    /// measured instances author it.</summary>
+    Vector4 FresnelColor,
+    /// <summary>fresnel - the rim exponent, vFresnel.w. Median 0.1, range -1..20.</summary>
+    float Fresnel,
+    /// <summary>reflectionFresnelColor - tints the cubemap sample. Only meaningful with a map.</summary>
+    Vector4 ReflectionFresnelColor,
+    /// <summary>reflectionFresnel - the reflection ramp exponent, vReflection.x. Median 0.3.</summary>
+    float ReflectionFresnel,
+    /// <summary>reflectionOpacityDirect - reflection strength looking straight on (vReflection.y).</summary>
+    float OpacityDirect,
+    /// <summary>reflectionOpacityGlancing - reflection strength at grazing angles (vReflection.z).</summary>
+    float OpacityGlancing,
+    /// <summary>reflectionMapTexture - a real cubemap .dds. Only 1,062 of 8,058 measured instances have
+    /// one, which is why the fresnel rim and the cubemap are separable and the rim ships first.</summary>
+    string? MapPath)
+{
+    /// <summary>Does the rim actually do anything? A zero colour adds nothing however the exponent is
+    /// set, and pow() needs a positive exponent to be a ramp rather than a constant.</summary>
+    public bool HasFresnel =>
+        (FresnelColor.X != 0f || FresnelColor.Y != 0f || FresnelColor.Z != 0f) && Fresnel > 0f;
 }

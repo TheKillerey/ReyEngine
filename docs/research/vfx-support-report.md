@@ -497,7 +497,7 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | 2.9 | **Stencil masking** | `VfxParticleRenderer.cs` | 26,393 | Medium; needs a stencil buffer in the viewport FBO |
 | 2.10 | **Sampler state per emitter.** `texAddressModeBase` and `isTexturePixelated` instead of hardcoded Repeat/Linear | `VfxParticleRenderer.cs:108-112` | 80,342 / 1,298 | Trivial code change, but the enum ordering is UNKNOWN — needs one visual A/B to pin |
 | 2.11 | **Backface culling per emitter** | `VfxParticleRenderer.cs:174` | The 1,101,289 emitters that omit `disableBackfaceCull` | Blocked on the unknown default; only matters for mesh and arbitrary-quad primitives |
-| 2.12 | **Reflection / fresnel** | `VfxParticleRenderer.cs` | 59,149 (4.2%) | Medium; needs cubemap sampling on the particle path |
+| 2.12 | **Fresnel rim DONE (M178)**; cubemap half deferred | `VfxParticleRenderer.cs` mesh path | 59,149 (4.2%), of which ~87% are fresnel-only | Fully DECODED from `mesh_vs`/`mesh_ps` REFLECTIVE, and the field mapping is pinned by the maths rather than inferred - see 2.12b. Cubemap sampling still needs cubemap loading on the particle path |
 | 2.13 | **Bloom pass** | new post-process in `ViewportControl.cs` | 22% of emitters are "glow"-named | High effort, high perceptual payoff. Frame-level, not per-emitter |
 | 2.14 | **Duty-cycle and rate-by-velocity emission** (`period`, `timeActiveDuringPeriod`, `rateByVelocityFunction`, `ChanceToNotExist`, `HasVariableStartTime`) | `VfxParticleSimulator.cs:157-178` | ~30k combined | Low individually, visible on map beacons and dash trails |
 | 2.15 | **`Linger` shutdown stage** | `VfxParticleSimulator.cs` | 22,274 + 95,954 `emitterLinger` | Medium; effects currently cut off instead of fading |
@@ -646,6 +646,58 @@ silent guess this report exists to prevent.
 entity. A beam needs both endpoints, and the editor preview has no target to bind to except the M114
 practice dummy. `mSegments` (14 instances, {1,10,20,50}) and `mIsColorBindedWithDistance` (68, always
 true) confirm the shape. This is a binding problem, not a geometry problem.
+
+### 2.12b M178 reflection findings
+
+**Reflection belongs to the MESH path only, confirmed twice independently.** `REFLECTIVE` is a define on
+`mesh_vs` and `mesh_ps`; it does not appear in `quad_ps`'s define pool at all, so Riot never compiles
+reflection into the billboard path. The authored data agrees without being asked to: of 8,058 emitters
+carrying a `reflectionDefinition`, **95.9% use a mesh-capable primitive** (52.9% `VfxPrimitiveAttachedMesh`,
+43.0% `VfxPrimitiveMesh`), against 1.1% quads and 0.1% rays. Putting fresnel on a camera-facing quad would
+have been inventing behaviour, not restoring it.
+
+**Decoded, from `mesh_vs` perm #7 and `mesh_ps` REFLECTIVE:**
+
+```
+VS:  N = normalize(mul(normal, mWorld));  R = V - 2*dot(V,N)*N;  f = saturate(dot(-V,N))
+     fresnelOut  = (1 - pow(f, vFresnel.w)) * vFresnel.rgb
+     reflOpacity = lerp(vReflection.y, vReflection.z, 1 - pow(f, vReflection.x))
+PS:  rgb += cubemap.Sample(R).rgb * reflOpacity * lerp(1, vReflectionFColor.rgb, reflOpacity)
+     rgb += fresnelOut * alpha            // alpha = texel.a * colorTex.a * vertexColor.a
+```
+
+**The field mapping is pinned by the maths, not guessed** — the opposite of alpha erosion, where which
+authored value landed in which cbuffer slot was undecidable. Here the lerp endpoints determine it: at a
+direct view `NdotV = 1`, so the term is 0 and the opacity is exactly `vReflection.y`, which the authored
+name calls `reflectionOpacityDirect`. `.z` is the glancing end, named `reflectionOpacityGlancing`. Names
+and maths agree independently.
+
+**A correction to an M175 finding.** M175 recorded `PIXEL_COLOR_REMAP_RAMP` as replacing RGB
+*unconditionally*. In `mesh_ps` it is **gated**: `lt r0.w, (0), r0.w` then `movc` selects the remapped RGB
+only when the ramp texel's own alpha is greater than zero. The M175 measurement was taken with a white
+stub whose alpha was 1, which is why it looked unconditional. A ramp with alpha 0 therefore makes the
+stage a no-op — which resolves the open worry from M175 in the reassuring direction.
+
+**A test that encoded a wrong intuition.** The first exponent check asserted that a *higher* `fresnel`
+value tightens the rim. It failed, and the implementation was right: `term = 1 - pow(f, n)` with
+`f` in [0,1] means a larger exponent makes `pow` smaller and the rim **wider**. Measured at mid-radius:
+0.449 at n=0.3, 0.636 at n=2, 0.909 at n=8. That also explains the authored distribution — the median
+`fresnel` is 0.1, i.e. artists overwhelmingly want the tight, subtle rim.
+
+**Normals had to be generated.** `StaticMeshData` (.scb/.sco) carries positions, UVs and indices and no
+normals at all, while Riot's `mesh_vs` declares a `NORMAL0` input — so the fresnel term had nothing to
+work from. They are now accumulated from face cross-products (area-weighted) and normalised, with a +Y
+fallback for degenerate vertices. Re-skinned frames (M48's butterflies) deliberately keep their bind-pose
+normals rather than regenerating per frame.
+
+**Deferred, with a reason.** Only 1,062 of 8,058 measured instances name a `reflectionMapTexture`, so the
+cubemap half is 13% of an already-4% feature and is separable from the rim. It needs cubemap loading on
+the particle path (the M122 skybox work loads cubemaps, but not through this route). `reflectionFresnel`,
+`reflectionOpacityDirect` and `reflectionOpacityGlancing` are parsed and carried, but do nothing without
+a map to scale — they only ever multiply the cubemap sample.
+
+Negative `fresnel` values occur (min −1) and are dropped: `pow(f, -1)` is `1/f`, which diverges as the
+surface turns edge-on and would subtract unbounded colour rather than add a rim.
 
 ### 3. Missing editor controls
 

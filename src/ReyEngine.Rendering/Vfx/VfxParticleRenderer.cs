@@ -340,7 +340,7 @@ public sealed class VfxParticleRenderer
         {
             if (es.InstanceCount == 0) continue;
             // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
-            if (es.MeshVao != 0) { if (_meshProgram != 0) RenderMeshEmitter(es, viewProj); continue; }
+            if (es.MeshVao != 0) { if (_meshProgram != 0) RenderMeshEmitter(es, viewProj, camPos); continue; }
             // M177 (2.5): trail emitters draw a ribbon through the particle's own motion history.
             if (es.Def.Trail is not null) { RenderTrailEmitter(es, viewProj, camPos); continue; }
             if (es.Texture == 0) continue;
@@ -558,11 +558,61 @@ public sealed class VfxParticleRenderer
     private int _muTexMult, _muHasTexMult, _muUvOffsetMult;
     private int _muMeshTexDiv, _muMeshTexDivMult;   // M117
     private int _muPlacementRight, _muPlacementUp, _muPlacementForward;
+    private int _muCamPosMesh, _muFresnelColor, _muFresnelPower, _muHasFresnel;   // M178 (2.12)
     private uint _whiteTex;
 
     /// <summary>M117b: a mesh-shader compile failure must NOT throw on the render thread — that
     /// killed the whole app the moment any mesh emitter uploaded. Mesh particles just stay invisible.</summary>
     private bool _meshProgramFailed;
+
+    /// <summary>M178: pos3 + uv2 + normal3 per mesh-particle vertex.</summary>
+    private const int MeshStride = 8;
+
+    /// <summary>M178 (2.12): per-vertex normals for a VFX mesh, accumulated from face normals and
+    /// normalised. .scb/.sco carry none, so without this the fresnel stage has no surface to work from.
+    ///
+    /// Faces are weighted by their own cross-product magnitude rather than normalised first, which is the
+    /// usual area weighting: it keeps a big face from being outvoted by a sliver sharing the same vertex.
+    /// A vertex whose faces cancel out falls back to +Y rather than a zero vector, so a degenerate mesh
+    /// produces a flat rim instead of NaNs.</summary>
+    private static float[] ComputeNormals(float[] positions, uint[]? indices)
+    {
+        int verts = positions.Length / 3;
+        var n = new float[verts * 3];
+        Vector3 P(int i) => new(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+        void Add(int i, Vector3 v)
+        {
+            n[i * 3 + 0] += v.X; n[i * 3 + 1] += v.Y; n[i * 3 + 2] += v.Z;
+        }
+
+        if (indices is { Length: > 0 })
+        {
+            for (int t = 0; t + 2 < indices.Length; t += 3)
+            {
+                int i0 = (int)indices[t], i1 = (int)indices[t + 1], i2 = (int)indices[t + 2];
+                if (i0 >= verts || i1 >= verts || i2 >= verts) continue;
+                var face = Vector3.Cross(P(i1) - P(i0), P(i2) - P(i0));
+                Add(i0, face); Add(i1, face); Add(i2, face);
+            }
+        }
+        else
+        {
+            // triangle soup: three consecutive vertices per face
+            for (int i = 0; i + 2 < verts; i += 3)
+            {
+                var face = Vector3.Cross(P(i + 1) - P(i), P(i + 2) - P(i));
+                Add(i, face); Add(i + 1, face); Add(i + 2, face);
+            }
+        }
+
+        for (int i = 0; i < verts; i++)
+        {
+            var v = new Vector3(n[i * 3], n[i * 3 + 1], n[i * 3 + 2]);
+            v = v.LengthSquared() > 1e-12f ? Vector3.Normalize(v) : Vector3.UnitY;
+            n[i * 3 + 0] = v.X; n[i * 3 + 1] = v.Y; n[i * 3 + 2] = v.Z;
+        }
+        return n;
+    }
 
     private unsafe void EnsureMeshProgram()
     {
@@ -591,6 +641,10 @@ public sealed class VfxParticleRenderer
             _muPlacementRight = _gl.GetUniformLocation(_meshProgram, "uPlacementRight");
             _muPlacementUp = _gl.GetUniformLocation(_meshProgram, "uPlacementUp");
             _muPlacementForward = _gl.GetUniformLocation(_meshProgram, "uPlacementForward");
+            _muCamPosMesh = _gl.GetUniformLocation(_meshProgram, "uCamPosMesh");
+            _muFresnelColor = _gl.GetUniformLocation(_meshProgram, "uFresnelColor");
+            _muFresnelPower = _gl.GetUniformLocation(_meshProgram, "uFresnelPower");
+            _muHasFresnel = _gl.GetUniformLocation(_meshProgram, "uHasFresnel");
         }
         if (_whiteTex == 0) _whiteTex = UploadTexture(new byte[] { 255, 255, 255, 255 }, 1, 1);
     }
@@ -603,14 +657,22 @@ public sealed class VfxParticleRenderer
         EnsureMeshProgram();
         if (_meshProgramFailed) return;   // M117b: no program - the emitter falls back to billboards upstream
         int verts = positions.Length / 3;
-        var inter = new float[verts * 5];
+        // M178 (2.12): pos3 + uv2 + normal3. StaticMeshData (.scb/.sco) carries no normals at all, so
+        // they are derived from the faces here - the fresnel stage needs a surface direction and there is
+        // nowhere else to get one.
+        var normals = ComputeNormals(positions, indices);
+        var inter = new float[verts * MeshStride];
         for (int i = 0; i < verts; i++)
         {
-            inter[i * 5 + 0] = positions[i * 3 + 0];
-            inter[i * 5 + 1] = positions[i * 3 + 1];
-            inter[i * 5 + 2] = positions[i * 3 + 2];
-            inter[i * 5 + 3] = i * 2 + 0 < uvs.Length ? uvs[i * 2 + 0] : 0f;
-            inter[i * 5 + 4] = i * 2 + 1 < uvs.Length ? uvs[i * 2 + 1] : 0f;
+            int o = i * MeshStride;
+            inter[o + 0] = positions[i * 3 + 0];
+            inter[o + 1] = positions[i * 3 + 1];
+            inter[o + 2] = positions[i * 3 + 2];
+            inter[o + 3] = i * 2 + 0 < uvs.Length ? uvs[i * 2 + 0] : 0f;
+            inter[o + 4] = i * 2 + 1 < uvs.Length ? uvs[i * 2 + 1] : 0f;
+            inter[o + 5] = normals[i * 3 + 0];
+            inter[o + 6] = normals[i * 3 + 1];
+            inter[o + 7] = normals[i * 3 + 2];
         }
         var vao = _gl.GenVertexArray();
         var vbo = _gl.GenBuffer();
@@ -619,9 +681,11 @@ public sealed class VfxParticleRenderer
         fixed (float* p = inter)
             _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(inter.Length * sizeof(float)), p, BufferUsageARB.DynamicDraw);
         _gl.EnableVertexAttribArray(0);
-        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 5 * sizeof(float), (void*)0);
+        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, MeshStride * sizeof(float), (void*)0);
         _gl.EnableVertexAttribArray(1);
-        _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+        _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, MeshStride * sizeof(float), (void*)(3 * sizeof(float)));
+        _gl.EnableVertexAttribArray(2);
+        _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, MeshStride * sizeof(float), (void*)(5 * sizeof(float)));
         uint ebo = 0;
         if (indices is { Length: > 0 })
         {
@@ -646,23 +710,38 @@ public sealed class VfxParticleRenderer
         int verts = Math.Min(es.MeshVertexCount, positions.Length / 3);
         for (int i = 0; i < verts; i++)
         {
-            inter[i * 5 + 0] = positions[i * 3 + 0];
-            inter[i * 5 + 1] = positions[i * 3 + 1];
-            inter[i * 5 + 2] = positions[i * 3 + 2];
+            inter[i * MeshStride + 0] = positions[i * 3 + 0];
+            inter[i * MeshStride + 1] = positions[i * 3 + 1];
+            inter[i * MeshStride + 2] = positions[i * 3 + 2];
         }
+        // NB: normals are deliberately NOT recomputed for the re-skinned frame. M48 re-skins a ~100-vertex
+        // butterfly every frame, and per-frame normal regeneration would cost more than the fresnel rim is
+        // worth on a mesh that small; the bind-pose normals stay close enough through a wing flap.
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, es.MeshVbo);
         fixed (float* p = inter)
-            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(verts * 5 * sizeof(float)), p);
+            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(verts * MeshStride * sizeof(float)), p);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
     }
 
     /// <summary>Draw a mesh-primitive emitter: one textured draw per live particle (counts are small).</summary>
-    private void RenderMeshEmitter(VfxParticleSimulator.EmitterState es, Matrix4x4 viewProj)
+    private void RenderMeshEmitter(VfxParticleSimulator.EmitterState es, Matrix4x4 viewProj, Vector3 camPos)
     {
         EnsureMeshProgram();
         _gl.UseProgram(_meshProgram);
         _gl.BindVertexArray(es.MeshVao);
         _gl.UniformMatrix4(_muViewProj, 1, false, in viewProj.M11);
+        // M178 (2.12): the fresnel rim. Riot only compiles REFLECTIVE into the mesh path - the define does
+        // not exist in quad_ps at all - and 95.9% of emitters carrying a reflection struct use a
+        // mesh-capable primitive, so this is the only place it belongs.
+        var refl = es.Def.Reflection;
+        bool hasFresnel = refl is { HasFresnel: true };
+        _gl.Uniform1(_muHasFresnel, hasFresnel ? 1 : 0);
+        _gl.Uniform3(_muCamPosMesh, camPos.X, camPos.Y, camPos.Z);
+        if (hasFresnel)
+        {
+            _gl.Uniform4(_muFresnelColor, refl!.FresnelColor.X, refl.FresnelColor.Y, refl.FresnelColor.Z, refl.FresnelColor.W);
+            _gl.Uniform1(_muFresnelPower, refl.Fresnel);
+        }
         _gl.Uniform1(_muTex, 0);
         _gl.Uniform1(_muTexMult, 1);
         _gl.Uniform1(_muHasTexMult, es.TextureMult != 0 ? 1 : 0);
@@ -891,7 +970,12 @@ void main(){
     private const string MeshVert = @"
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec2 aUv;
+layout(location=2) in vec3 aNormal;
 uniform mat4 uViewProj;
+uniform vec3 uCamPosMesh;
+uniform vec4 uFresnelColor;
+uniform float uFresnelPower;
+uniform int uHasFresnel;
 uniform vec3 uWorldPos;
 uniform float uScale;
 uniform float uRot;
@@ -904,11 +988,28 @@ uniform vec3 uPlacementUp;
 uniform vec3 uPlacementForward;
 out vec2 vUv;
 out vec2 vUvMult;
+out vec3 vFresnel;
 void main(){
     float s = sin(uRot); float c = cos(uRot);
     vec3 local = vec3(aPos.x * c - aPos.z * s, aPos.y, aPos.x * s + aPos.z * c) * uScale;
     vec3 p = uPlacementRight * local.x + uPlacementUp * local.y + uPlacementForward * local.z + uWorldPos;
     gl_Position = uViewProj * vec4(p, 1.0);
+    // M178 (2.12): the fresnel rim. DECODED from particlesystem/mesh_vs permutation REFLECTIVE:
+    //     f    = saturate(dot(-V, N));  term = 1 - pow(f, vFresnel.w);  out = term * vFresnel.rgb
+    // The normal is rotated through the same spin and placement basis as the position, so the rim stays
+    // put on the surface instead of sliding as the particle turns.
+    vFresnel = vec3(0.0);
+    if (uHasFresnel != 0) {
+        vec3 nLocal = vec3(aNormal.x * c - aNormal.z * s, aNormal.y, aNormal.x * s + aNormal.z * c);
+        vec3 nWorld = uPlacementRight * nLocal.x + uPlacementUp * nLocal.y + uPlacementForward * nLocal.z;
+        float len = length(nWorld);
+        if (len > 1e-5) {
+            nWorld /= len;
+            vec3 view = normalize(p - uCamPosMesh);
+            float f = clamp(dot(-view, nWorld), 0.0, 1.0);
+            vFresnel = (1.0 - pow(f, uFresnelPower)) * uFresnelColor.rgb;
+        }
+    }
     // M117c: on mesh emitters texDiv is a TILING factor (uv * texDiv) - Kayn skin02's R pillar
     // cylinders (1x2 / 1x3 erode textures repeating up the pillar) pinned the direction; 0.25 on
     // the base ring swirl stretches the texture 4x along the ring, which also fits.
@@ -919,6 +1020,7 @@ void main(){
     private const string MeshFrag = @"
 in vec2 vUv;
 in vec2 vUvMult;
+in vec3 vFresnel;
 uniform sampler2D uTex;
 uniform sampler2D uTexMult;
 uniform int uHasTexMult;
@@ -927,7 +1029,13 @@ out vec4 fragColor;
 void main(){
     vec4 texel = texture(uTex, vUv);
     if (uHasTexMult != 0) texel *= texture(uTexMult, vUvMult);
-    fragColor = texel * uColor;
+    vec4 outColor = texel * uColor;
+    // M178 (2.12): mesh_ps adds the rim scaled by the particle's ALPHA, not by its colour:
+    //     mad r0.xyz, v5.xyzx, r1.wwww, r0.xyzx
+    // where r1.w is the alpha computed before the cubemap sample overwrote r1.xyz. So a fading particle
+    // loses its rim at the same rate it fades, which is what stops the rim outliving the sprite.
+    outColor.rgb += vFresnel * outColor.a;
+    fragColor = outColor;
 }";
 
     private const string Vert = @"

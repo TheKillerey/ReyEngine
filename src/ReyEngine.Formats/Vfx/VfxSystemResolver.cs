@@ -157,6 +157,15 @@ public static class VfxSystemResolver
     private static readonly uint F_mCutoff           = HashAlgorithms.Fnv1a("mCutoff");
     private static readonly uint F_mSmoothingMode    = HashAlgorithms.Fnv1a("mSmoothingMode");
     private static readonly uint F_mMaxAddedPerFrame = HashAlgorithms.Fnv1a("mMaxAddedPerFrame");
+    // M178 (2.12) reflection. Struct class 0x4112ea83, measured on 8,058 live instances.
+    private static readonly uint F_reflectionDef     = HashAlgorithms.Fnv1a("reflectionDefinition");
+    private static readonly uint F_fresnelColor      = HashAlgorithms.Fnv1a("fresnelColor");
+    private static readonly uint F_fresnel           = HashAlgorithms.Fnv1a("fresnel");
+    private static readonly uint F_reflFresnelColor  = HashAlgorithms.Fnv1a("reflectionFresnelColor");
+    private static readonly uint F_reflFresnel       = HashAlgorithms.Fnv1a("reflectionFresnel");
+    private static readonly uint F_reflOpacityDirect = HashAlgorithms.Fnv1a("reflectionOpacityDirect");
+    private static readonly uint F_reflOpacityGlance = HashAlgorithms.Fnv1a("reflectionOpacityGlancing");
+    private static readonly uint F_reflMapTexture    = HashAlgorithms.Fnv1a("reflectionMapTexture");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -400,7 +409,8 @@ public static class VfxSystemResolver
             DepthPushPull: ReadScalar(p, F_depthPushPull),
             ForceFields: ReadForceFields(p),
             Trail: ReadTrail(prim),
-            IsArbitraryTrail: primClass == C_primArbitraryTrail);
+            IsArbitraryTrail: primClass == C_primArbitraryTrail,
+            Reflection: ReadReflection(p));
     }
 
     /// <summary>M177 (2.5): the trail ribbon's parameters. See VfxTrailDefinition for what the payload
@@ -418,6 +428,28 @@ public static class VfxSystemResolver
             GetF32(tp, F_mCutoff) ?? 0f,
             GetU8(tp, F_mSmoothingMode) ?? 1,
             GetI32(tp, F_mMaxAddedPerFrame) ?? 0);
+    }
+
+    /// <summary>M178 (2.12): the fresnel/reflection stage. See VfxReflection for the decoded shader maths
+    /// and for why the field mapping here is pinned rather than inferred.
+    ///
+    /// Every member is a plain F32 or Vector4 in the live data - no Value* wrappers - but the readers used
+    /// here tolerate both.</summary>
+    private static VfxReflection? ReadReflection(IReadOnlyDictionary<uint, BinTreeProperty> p)
+    {
+        if (Get(p, F_reflectionDef) is not BinTreeStruct r) return null;
+        var rp = r.Properties;
+        var refl = new VfxReflection(
+            ReadCurve4(rp, F_fresnelColor)?.Constant ?? AsVec4(Get(rp, F_fresnelColor)) ?? Vector4.Zero,
+            ReadScalar(rp, F_fresnel),
+            ReadCurve4(rp, F_reflFresnelColor)?.Constant ?? AsVec4(Get(rp, F_reflFresnelColor)) ?? Vector4.One,
+            ReadScalar(rp, F_reflFresnel),
+            ReadScalar(rp, F_reflOpacityDirect),
+            ReadScalar(rp, F_reflOpacityGlance),
+            GetString(rp, F_reflMapTexture));
+        // A struct that neither tints a rim nor names a cubemap has nothing to contribute; dropping it
+        // here keeps the renderer from binding uniforms for a stage that cannot draw anything.
+        return refl.HasFresnel || !string.IsNullOrEmpty(refl.MapPath) ? refl : null;
     }
 
     private static Vector3 ReadValueVec3OrZero(BinTreeProperty? p) => p switch
