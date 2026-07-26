@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Numerics;
 using Silk.NET.OpenGL;
 
@@ -16,6 +17,7 @@ public sealed class VfxParticleRenderer
     private int _uViewProj, _uCamRight, _uCamUp, _uTexDiv, _uTex, _uUvScrollRate;
     private int _uTexMult, _uHasTexMult, _uTexDivMult, _uUvScrollRateMult;
     private int _uIsDistortion, _uDistortionTex, _uSceneTex, _uViewportSize, _uDistortionStrength;
+    private int _uAlphaRef;   // M174 (1.4)
     private int _uDirectionOriented, _uArbitraryQuad;
     private int _uPlacementRight, _uPlacementUp, _uPlacementForward;
     private int _instCapFloats;
@@ -52,6 +54,7 @@ public sealed class VfxParticleRenderer
         _uSceneTex = gl.GetUniformLocation(_program, "uSceneTex");
         _uViewportSize = gl.GetUniformLocation(_program, "uViewportSize");
         _uDistortionStrength = gl.GetUniformLocation(_program, "uDistortionStrength");
+        _uAlphaRef = gl.GetUniformLocation(_program, "uAlphaRef");
         _uDirectionOriented = gl.GetUniformLocation(_program, "uDirectionOriented");
         _uArbitraryQuad = gl.GetUniformLocation(_program, "uArbitraryQuad");
         _uPlacementRight = gl.GetUniformLocation(_program, "uPlacementRight");
@@ -175,7 +178,14 @@ public sealed class VfxParticleRenderer
         _gl.Enable(EnableCap.Blend);
         _gl.BlendEquation(GLEnum.FuncAdd);
 
-        foreach (var es in sim.Emitters)
+        // M174 (1.3): draw in authored `pass` order. 1,114,110 emitters (79.7%) carry `pass`, with 2,913
+        // distinct values across the full I16 range, and until now it was discarded entirely - so layered
+        // effects composited in container order and additive glows landed under the sprites they belong
+        // over. OrderBy is a STABLE sort, which gives container order as the tiebreak for free.
+        //
+        // Whether Riot sorts globally or per-system is UNKNOWN; this sorts within the whole frame's emitter
+        // list, which matches per-system ordering whenever one system is previewed at a time.
+        foreach (var es in sim.Emitters.OrderBy(static e => e.Def.Pass))
         {
             if (es.InstanceCount == 0) continue;
             // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
@@ -205,12 +215,19 @@ public sealed class VfxParticleRenderer
             else if (IsAdditiveFor(es.Def.BlendMode, es.Texture)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
             else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
-            _gl.Uniform2(_uTexDiv, es.Def.TexDiv.X <= 0 ? 1f : es.Def.TexDiv.X, es.Def.TexDiv.Y <= 0 ? 1f : es.Def.TexDiv.Y);
+            // M174 (1.6): only a ZERO divisor is nonsense (95 emitters). Negative components (2,293 quad
+            // emitters) and sub-1 components (390) are authored deliberately and were being clamped to 1,
+            // which silently discarded them. What negative/fractional means in League is UNKNOWN - the
+            // shader now divides by the value as authored, which for a negative component mirrors the axis.
+            _gl.Uniform2(_uTexDiv, es.Def.TexDiv.X == 0 ? 1f : es.Def.TexDiv.X, es.Def.TexDiv.Y == 0 ? 1f : es.Def.TexDiv.Y);
             _gl.Uniform2(_uUvScrollRate, es.Def.UvScrollRate.X, es.Def.UvScrollRate.Y);
             _gl.Uniform1(_uHasTexMult, es.TextureMult != 0 ? 1 : 0);
             var multDiv = es.Def.TextureMultTexDiv;
-            _gl.Uniform2(_uTexDivMult, multDiv.X <= 0 ? 1f : multDiv.X, multDiv.Y <= 0 ? 1f : multDiv.Y);
+            _gl.Uniform2(_uTexDivMult, multDiv.X == 0 ? 1f : multDiv.X, multDiv.Y == 0 ? 1f : multDiv.Y);
             _gl.Uniform2(_uUvScrollRateMult, es.Def.TextureMultUvScrollRate.X, es.Def.TextureMultUvScrollRate.Y);
+            // M174 (1.4): alphaRef is an 0..255 cutoff; the engine confirms it (quad_ps declares ALPHA_TEST
+            // and AlphaTestReferenceValue). 34,788 emitters author a non-zero one.
+            _gl.Uniform1(_uAlphaRef, es.Def.AlphaRef / 255f);
             _gl.Uniform1(_uDirectionOriented, es.Def.IsDirectionOriented ? 1 : 0);
             _gl.Uniform1(_uArbitraryQuad, es.Def.IsArbitraryQuad ? 1 : 0);
             _gl.Uniform1(_uIsDistortion, isDistortion ? 1 : 0);
@@ -556,16 +573,24 @@ void main(){
     vec3 world = aCenter + right * (rc.x * aSize.x) + up * (rc.y * aSize.y);
     gl_Position = uViewProj * vec4(world, 1.0);
     vec2 cell = aCorner + vec2(0.5, 0.5);      // [0,1] within the frame cell
-    float cols = max(uTexDiv.x, 1.0);
-    float rows = max(uTexDiv.y, 1.0);
+    // M174: sign is preserved so a negative divisor mirrors the axis, but the flipbook GRID has to be
+    // counted with the magnitude - a -2 divisor is still a 2-cell axis.
+    float cols = uTexDiv.x == 0.0 ? 1.0 : uTexDiv.x;
+    float rows = uTexDiv.y == 0.0 ? 1.0 : uTexDiv.y;
+    float gridCols = max(abs(cols), 1.0);
+    float gridRows = max(abs(rows), 1.0);
     // Flipbooks select complete atlas cells. Fractional frame coordinates slide the UV window
     // across adjacent cells and visibly slice sprites whose pixels reach the cell boundary.
     float frame = floor(aRotFrame.y + 0.0001);
-    float fx = mod(frame, cols);
-    float fy = floor(frame / cols);
+    float fx = mod(frame, gridCols);
+    float fy = floor(frame / gridCols);
     vUv = (vec2(fx, fy) + vec2(cell.x, 1.0 - cell.y)) / vec2(cols, rows)
         + uUvScrollRate * aAgeVelX.x;
-    vUvMult = vec2(cell.x, 1.0 - cell.y) / max(uTexDivMult, vec2(1.0))
+    // M174: the multiply stage gets the same treatment. It still does NOT advance with the flipbook frame
+    // - a multi-cell multiplier atlas stays on cell 0 - which is a separate known defect (tier 2.3).
+    vec2 multDiv = vec2(uTexDivMult.x == 0.0 ? 1.0 : uTexDivMult.x,
+                        uTexDivMult.y == 0.0 ? 1.0 : uTexDivMult.y);
+    vUvMult = vec2(cell.x, 1.0 - cell.y) / multDiv
         + uUvScrollRateMult * aAgeVelX.x;
     vColor = aColor;
 }";
@@ -582,10 +607,13 @@ uniform sampler2D uDistortionTex;
 uniform sampler2D uSceneTex;
 uniform vec2 uViewportSize;
 uniform float uDistortionStrength;
+uniform float uAlphaRef;
 out vec4 fragColor;
 void main(){
     vec4 t = texture(uTex, vUv);
     if (uHasTexMult != 0) t *= texture(uTexMult, vUvMult);
+    // M174 (1.4): alpha test, before anything else consumes the sample.
+    if (uAlphaRef > 0.0 && t.a * vColor.a < uAlphaRef) discard;
     if (uIsDistortion != 0) {
         vec4 normalSample = texture(uDistortionTex, vUv);
         float mask = normalSample.a * t.a * vColor.a;

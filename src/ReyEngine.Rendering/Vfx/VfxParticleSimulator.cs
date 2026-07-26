@@ -86,7 +86,7 @@ public sealed class VfxParticleSimulator
             _emitters.Add(new EmitterState
             {
                 Def = e,
-                BasePos = Vector3.Transform(e.EmitterPosition, worldTransform),
+                BasePos = Vector3.Transform(e.EmitterPosition.Constant, worldTransform),
                 PlacementRight = SafeNormal(Vector3.TransformNormal(Vector3.UnitX, worldTransform), Vector3.UnitX),
                 PlacementUp = SafeNormal(Vector3.TransformNormal(Vector3.UnitY, worldTransform), Vector3.UnitY),
                 PlacementForward = SafeNormal(Vector3.TransformNormal(Vector3.UnitZ, worldTransform), Vector3.UnitZ),
@@ -107,7 +107,7 @@ public sealed class VfxParticleSimulator
             _inverseWorldTransform = Matrix4x4.Identity;
         foreach (var s in _emitters)
         {
-            s.BasePos = Vector3.Transform(s.Def.EmitterPosition, worldTransform);
+            s.BasePos = Vector3.Transform(s.Def.EmitterPosition.Constant, worldTransform);
             s.PlacementRight = SafeNormal(Vector3.TransformNormal(Vector3.UnitX, worldTransform), Vector3.UnitX);
             s.PlacementUp = SafeNormal(Vector3.TransformNormal(Vector3.UnitY, worldTransform), Vector3.UnitY);
             s.PlacementForward = SafeNormal(Vector3.TransformNormal(Vector3.UnitZ, worldTransform), Vector3.UnitZ);
@@ -189,6 +189,11 @@ public sealed class VfxParticleSimulator
             var worldAccel = d.Acceleration?.Sample(particleT) ?? Vector3.Zero;
             worldAccel = Vector3.TransformNormal(worldAccel, _worldTransform);
             p.Vel += (p.BirthAccel + worldAccel) * dt;
+            // M174 (1.9): `velocity` is a separate over-life curve from birthVelocity - 23,112 emitters
+            // author it and it was being ignored entirely. Added rather than replacing, so an emitter
+            // carrying both keeps its launch speed and gains the authored drift.
+            if (d.VelocityOverLife is { } velCurve)
+                p.Vel += Vector3.TransformNormal(velCurve.Sample(particleT), _worldTransform) * dt;
             var dragOverLife = d.DragOverLife?.Sample(particleT) ?? Vector3.Zero;
             var drag = Vector3.Max(Vector3.Zero, p.BirthDrag + dragOverLife);
             p.Vel *= new Vector3(MathF.Exp(-drag.X * dt), MathF.Exp(-drag.Y * dt), MathF.Exp(-drag.Z * dt));
@@ -201,6 +206,12 @@ public sealed class VfxParticleSimulator
                 p.Pos = s.BasePos + Vector3.TransformNormal(Vector3.Transform(localRelative, orbit), _worldTransform);
             }
             p.Rot += p.RotVel * dt;
+            // M174 (1.9): rotation0 is an IntegratedValueVector3 - it accumulates rather than setting an
+            // absolute angle, so it is integrated here alongside RotVel rather than sampled into Rot.
+            // 52,647 emitters. Only Z drives the billboard spin; X/Y matter for mesh primitives, which
+            // read BirthRotation, so they are left alone until that path grows over-life support.
+            if (d.RotationOverLife is { } rotCurve)
+                p.Rot += rotCurve.Sample(particleT).Z * (MathF.PI / 180f) * dt;
             s.Particles[i] = p;
         }
 
@@ -227,6 +238,12 @@ public sealed class VfxParticleSimulator
         // Riot spawn-shape and probability-table values are sampled independently for every particle.
         // Mesh primitives keep their authored orientation; their movement comes from the same data path.
         var localOffset = d.SpawnShape?.SampleOffset(_rng) ?? Vector3.Zero;
+        // M174: emitterPosition carries probability tables on 37,220 of the 186,374 emitters that author
+        // it (60-WAD sample), and its curve keys are all (0,0,0) on exactly those - so the scatter IS the
+        // value. Rolled per particle here; the constant part is already baked into BasePos, so only the
+        // per-particle deviation from it is added.
+        var posSample = d.EmitterPosition.SampleBirth(_rng);
+        localOffset += posSample - d.EmitterPosition.Constant;
         var worldOffset = Vector3.TransformNormal(localOffset, _worldTransform);
         vel = Vector3.TransformNormal(vel, _worldTransform);
         birthAccel = Vector3.TransformNormal(birthAccel, _worldTransform);
@@ -274,10 +291,14 @@ public sealed class VfxParticleSimulator
             if (s.ColorGradient is { } grad && s.ColorGradientW > 0 && s.ColorGradientH > 0)
             {
                 float speed = p.Vel.Length();
-                float u = LookupCoord(d.ColorLookUpTypeX ?? 0, t, speed, p.ColorRandom);
+                float u = ApplyLookupTransform(LookupCoord(d.ColorLookUpTypeX ?? 0, t, speed, p.ColorRandom),
+                    d.ColorLookUpScale.X == 0f ? 1f : d.ColorLookUpScale.X, d.ColorLookUpOffset.X);
                 // V: an explicit lookup type drives the variant axis; an absent field samples a stable centre
                 // row (a complete valid gradient) rather than sweeping V diagonally with age.
-                float v = d.ColorLookUpTypeY is { } ty ? LookupCoord(ty, t, speed, p.ColorRandom) : 0.5f;
+                float v = d.ColorLookUpTypeY is { } ty
+                    ? ApplyLookupTransform(LookupCoord(ty, t, speed, p.ColorRandom),
+                        d.ColorLookUpScale.Y == 0f ? 1f : d.ColorLookUpScale.Y, d.ColorLookUpOffset.Y)
+                    : 0.5f;
                 col *= SampleGradient(grad, s.ColorGradientW, s.ColorGradientH, u, v);
             }
 
@@ -312,6 +333,14 @@ public sealed class VfxParticleSimulator
         2 or 3 => random,                        // per-particle random variant
         _ => age,                                // 0 (Life) and anything else: colour over life
     };
+
+    /// <summary>M174 (1.7): apply the authored affine transform to a colour-lookup coordinate.
+    /// colorLookUpScales (36,423 emitters) and colorLookUpOffsets (23,920) were both being ignored, so
+    /// every gradient was sampled across its full width regardless of the sub-range the artist selected.
+    /// Clamped after transform because the gradient sampler clamps anyway - doing it here keeps the two
+    /// axes independent.</summary>
+    private static float ApplyLookupTransform(float coord, float scale, float offset)
+        => Math.Clamp(coord * scale + offset, 0f, 1f);
 
     /// <summary>Bilinear RGBA sample of a tightly-packed RGBA8 image (top-left origin), UV clamped to [0,1].</summary>
     private static Vector4 SampleGradient(byte[] rgba, int w, int h, float u, float v)

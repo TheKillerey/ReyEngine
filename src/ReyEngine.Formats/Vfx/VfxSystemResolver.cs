@@ -72,7 +72,23 @@ public static class VfxSystemResolver
     private static readonly uint F_legacyScale = HashAlgorithms.Fnv1a("scale");
     private static readonly uint F_legacyBirthRotation = HashAlgorithms.Fnv1a("birthRotation");
     private static readonly uint F_legacyBirthRotVel = HashAlgorithms.Fnv1a("birthRotationalVelocity");
-    private static readonly uint F_shape = HashAlgorithms.Fnv1a("shape");
+    // M174: `shape` (0x9dc3d926) was dead - 0 occurrences in 1,398,802 emitters. Removed.
+    // Spawn-volume classes and their parameters.
+    private static readonly uint C_shapeSphere   = HashAlgorithms.Fnv1a("VfxShapeSphere");
+    private static readonly uint C_shapeBox      = HashAlgorithms.Fnv1a("VfxShapeBox");
+    private static readonly uint C_shapeCylinder = HashAlgorithms.Fnv1a("VfxShapeCylinder");
+    private static readonly uint F_shapeRadius   = HashAlgorithms.Fnv1a("radius");
+    private static readonly uint F_shapeHeight   = HashAlgorithms.Fnv1a("height");
+    private static readonly uint F_shapeSize     = HashAlgorithms.Fnv1a("Size");
+    // M174 tier 1: fields the census found we were discarding.
+    private static readonly uint F_pass          = HashAlgorithms.Fnv1a("pass");
+    private static readonly uint F_alphaRef      = HashAlgorithms.Fnv1a("alphaRef");
+    private static readonly uint F_colorLookUpScales  = HashAlgorithms.Fnv1a("colorLookUpScales");
+    private static readonly uint F_colorLookUpOffsets = HashAlgorithms.Fnv1a("colorLookUpOffsets");
+    private static readonly uint F_velocity      = HashAlgorithms.Fnv1a("velocity");
+    private static readonly uint F_rotation0     = HashAlgorithms.Fnv1a("rotation0");
+    private static readonly uint C_primAttachedMesh = HashAlgorithms.Fnv1a("VfxPrimitiveAttachedMesh");
+    private static readonly uint C_primBeam         = HashAlgorithms.Fnv1a("VfxPrimitiveBeam");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -200,17 +216,25 @@ public static class VfxSystemResolver
             birthRotationalVelocity = ScalarRotationCurve(legacyRotVel);
         var birthColor = ReadCurve4(p, F_birthColor) ?? VfxCurve4.Const(Vector4.One);
 
-        bool isMesh = p.TryGetValue(F_primitive, out var prim) && prim is BinTreeStruct ps && ps.ClassHash == PrimMesh;
-        bool isArbitraryQuad = prim is BinTreeStruct aq && aq.ClassHash == PrimArbitraryQuad;
+        // M174 (1.5): VfxPrimitiveAttachedMesh and VfxPrimitiveBeam also carry a VfxMeshDefinitionData.
+        // Most AttachedMesh instances (54,690 of 56,309) hold a host-model submesh MASK rather than a mesh
+        // file and stay billboards; only the ~6,382 that actually name a file gain geometry here.
+        p.TryGetValue(F_primitive, out var prim);
+        uint primClass = prim is BinTreeStruct pc ? pc.ClassHash : 0u;
+        bool meshCapablePrim = primClass == PrimMesh || primClass == C_primAttachedMesh || primClass == C_primBeam;
+        bool isArbitraryQuad = primClass == PrimArbitraryQuad;
         // M47: the mesh primitive carries its .scb/.sco path (VfxMeshDefinitionData.mSimpleMeshName) or,
         // for skinned primitives (butterflies), mMeshName (.skn) + skeleton (.skl) + mAnimationName (.anm).
         string? meshPath = null, meshSkl = null, meshAnm = null;
-        if (isMesh && prim is BinTreeStruct ps2 && Get(ps2.Properties, F_meshDef) is BinTreeStruct md)
+        if (meshCapablePrim && prim is BinTreeStruct ps2 && Get(ps2.Properties, F_meshDef) is BinTreeStruct md)
         {
             meshPath = GetString(md.Properties, F_simpleMesh) ?? GetString(md.Properties, F_meshName);
             meshSkl = GetString(md.Properties, F_meshSkeleton);
             meshAnm = GetString(md.Properties, F_meshAnim);
         }
+        // Only claim the mesh path when a file was actually named - an AttachedMesh carrying just a
+        // submesh mask must keep billboarding rather than render nothing.
+        bool isMesh = primClass == PrimMesh || !string.IsNullOrEmpty(meshPath);
 
         string? textureMultPath = null;
         Vector2 textureMultTexDiv = Vector2.One, textureMultUvScroll = Vector2.Zero;
@@ -248,7 +272,10 @@ public static class VfxSystemResolver
             BirthVelocity: ReadCurve3(p, F_birthVelocity),
             Acceleration: ReadCurve3(p, F_worldAccel),
             BirthRotationalVelocity: birthRotationalVelocity,
-            EmitterPosition: (ReadCurve3(p, F_emitterPos) ?? VfxCurve3.Const(Vector3.Zero)).Constant,
+            // M174 (1.8, corrected): keep the whole value. It was reduced to `.Constant`, which threw away
+            // the probability tables that are the entire point of the field on 37,220 of the 186,374
+            // emitters that author it.
+            EmitterPosition: ReadCurve3(p, F_emitterPos) ?? VfxCurve3.Const(Vector3.Zero),
             TexturePath: GetString(p, F_texture),
             TexDiv: GetVec2(p, F_texDiv) ?? Vector2.One,
             NumFrames: GetU16(p, F_numFrames) ?? 1,
@@ -276,18 +303,57 @@ public static class VfxSystemResolver
             Distortion: distortion,
             ParticleColorTexturePath: GetString(p, F_particleColorTex),
             ColorLookUpTypeX: GetU8(p, F_colorLookUpX),
-            ColorLookUpTypeY: GetU8(p, F_colorLookUpY));
+            ColorLookUpTypeY: GetU8(p, F_colorLookUpY),
+            Pass: GetI16(p, F_pass) ?? 0,
+            AlphaRef: GetU8(p, F_alphaRef) ?? 0,
+            ColorLookUpScale: GetVec2(p, F_colorLookUpScales) ?? Vector2.One,
+            ColorLookUpOffset: GetVec2(p, F_colorLookUpOffsets) ?? Vector2.Zero,
+            VelocityOverLife: ReadCurve3(p, F_velocity),
+            RotationOverLife: ReadCurve3(p, F_rotation0));
     }
 
+    /// <summary>M174 (1.1): dispatch on the shape CLASS, not just on emitOffset.
+    ///
+    /// Measured over the live corpus: VfxShapeCylinder (83,984), VfxShapeBox (83,530) and VfxShapeSphere
+    /// (49,305) never carry an emitOffset, so reading only that field collapsed all 216,819 of them to a
+    /// single point. The other two classes - VfxShapeLegacy and the unresolved 0xee39916f, 69.4% of shapes
+    /// between them - genuinely are offset-only and keep working exactly as before.</summary>
     private static VfxSpawnShape? ReadSpawnShape(IReadOnlyDictionary<uint, BinTreeProperty> emitterProps)
     {
-        if ((Get(emitterProps, F_spawnShape) ?? Get(emitterProps, F_shape)) is not BinTreeStruct shape) return null;
+        if (Get(emitterProps, F_spawnShape) is not BinTreeStruct shape) return null;
 
-        var offset = ReadCurve3Property(Get(shape.Properties, F_emitOffset)) ?? VfxCurve3.Const(Vector3.Zero);
-        var axes = ReadVector3Container(Get(shape.Properties, F_emitRotAxes));
-        var angles = ReadCurveFContainer(Get(shape.Properties, F_emitRotAngles));
-        return new VfxSpawnShape(offset, axes, angles);
+        var sp = shape.Properties;
+        var offset = ReadCurve3Property(Get(sp, F_emitOffset)) ?? VfxCurve3.Const(Vector3.Zero);
+        var axes = ReadVector3Container(Get(sp, F_emitRotAxes));
+        var angles = ReadCurveFContainer(Get(sp, F_emitRotAngles));
+
+        var kind = VfxShapeKind.Offset;
+        float radius = 0f, height = 0f;
+        var size = Vector3.Zero;
+
+        if (shape.ClassHash == C_shapeSphere)
+        {
+            kind = VfxShapeKind.Sphere;
+            radius = ReadScalar(sp, F_shapeRadius);
+        }
+        else if (shape.ClassHash == C_shapeCylinder)
+        {
+            kind = VfxShapeKind.Cylinder;
+            radius = ReadScalar(sp, F_shapeRadius);
+            height = ReadScalar(sp, F_shapeHeight);
+        }
+        else if (shape.ClassHash == C_shapeBox)
+        {
+            kind = VfxShapeKind.Box;
+            size = ReadCurve3Property(Get(sp, F_shapeSize))?.Constant ?? GetVec3(sp, F_shapeSize) ?? Vector3.Zero;
+        }
+
+        return new VfxSpawnShape(offset, axes, angles, kind, radius, height, size);
     }
+
+    /// <summary>A shape dimension, which may be authored either as a bare F32 or wrapped in a Value* struct.</summary>
+    private static float ReadScalar(IReadOnlyDictionary<uint, BinTreeProperty> props, uint field)
+        => ReadCurveF(props, field)?.Constant ?? GetF32(props, field) ?? 0f;
 
     private static VfxCurve3 ScalarSizeCurve(VfxCurveF curve) => new(
         new Vector3(curve.Constant, curve.Constant, 0f), curve.Times,
@@ -442,6 +508,14 @@ public static class VfxSystemResolver
 
     private static Vector2? GetVec2(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash)
         => Get(p, hash) is BinTreeVector2 v ? v.Value : null;
+
+    private static Vector3? GetVec3(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash)
+        => Get(p, hash) is BinTreeVector3 v ? v.Value : null;
+
+    /// <summary>M174: `pass` is I16, the only signed-16 field the resolver reads. 37,697 emitters author
+    /// it as -1, so the sign matters.</summary>
+    private static int? GetI16(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash)
+        => Get(p, hash) is BinTreeI16 v ? v.Value : null;
 
     /// <summary>Read either a plain Vector2 or a ValueVector2's authored constant.</summary>
     private static Vector2? ReadValueVec2(BinTreeProperty? p) => p switch

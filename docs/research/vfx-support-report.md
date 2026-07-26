@@ -467,9 +467,20 @@ Ordered by emitters affected × confidence that the fix is correct.
 | 1.5 | **`AttachedMesh` mesh path.** Widen the `isMesh` gate to include `VfxPrimitiveAttachedMesh` and `VfxPrimitiveBeam` where `mMesh` names a file | `VfxSystemResolver.cs:203,208`, `MainWindowViewModel.cs:810` | 6,382 emitters gain a mesh | Low. The other 54,690 AttachedMesh cases need host-model submesh masking — a separate, larger job |
 | 1.6 | **`texDiv` clamp on the quad path.** Honour negative (flip) and sub-1 values; the mesh path already does | `VfxParticleRenderer.cs:207-208,559-560` | 2,293 + 390 quad emitters | Small, but the *meaning* of negative/fractional is unverified — implement flip/zoom behind a note, or align the quad path with the mesh path's existing tiling reading |
 | 1.7 | **Colour-lookup scale/offset.** Apply `colorLookUpScales`/`Offsets` to `LookupCoord` | `VfxParticleSimulator.cs:305-314` | 36,423 / 23,920 | Low risk, straightforward affine. Does not fix the unknown meaning of type 3 |
-| 1.8 | **`emitterPosition` curve-only collapse.** When there is no `constantValue`, sample the curve instead of falling back to zero | `VfxSystemResolver.cs:251` | 130,259 emitters currently at (0,0,0) | Very low risk — pure bug fix |
+| 1.8 | ~~**`emitterPosition` curve-only collapse.**~~ **REFUTED during implementation — see note below.** The real defect is that the field was stored as a bare `Vector3`, discarding its probability tables | `VfxSystemResolver.cs`, `VfxSystemDefinition.cs`, `VfxParticleSimulator.cs:240` | 3,350 emitters actually scatter | Done in M174 |
 | 1.9 | **`velocity` and `rotation0` over-life curves.** Add the two field hashes and drive them in the integrator | `VfxSystemResolver.cs`, `VfxParticleSimulator.cs` | 23,112 / 52,647 | Low, except `rotation0` is `IntegratedValueVector3` — integrate, do not sample |
 | 1.10 | **`isUniformScale`** | `VfxParticleSimulator.cs:243` | ≤634,368 | **Do not implement yet.** Highest-value unresolved semantic; needs one live A/B |
+
+
+**Correction to 1.8, found while implementing it (2026-07-26).** The claim was that 130,259 emitters lack a
+`constantValue` and so "collapse to (0,0,0)", implying the curve's first key should be used instead. Measured
+over 60 champion WADs: 37,327 emitters do lack `constantValue`, and **every one of their curve keys is exactly
+(0,0,0)** — there is nothing to recover, and the proposed fix is a no-op. What those structs actually carry is
+`probabilityTables` (37,220 of 37,327). The authored intent is a per-particle SCATTER around the origin, and the
+real defect was that `VfxEmitterDefinition.EmitterPosition` was a bare `Vector3`, which threw the tables away.
+Fixed by making it a `VfxCurve3` sampled per particle at birth. Behavioural check: 3,350 emitters now produce a
+non-zero spread (max 1,500 world units, e.g. `data/characters/jinx/skins/skin60.bin`); the other ~34,000 carry
+degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/aatrox/skins/skin26.bin`.
 
 ### 2. Missing renderer behaviour
 

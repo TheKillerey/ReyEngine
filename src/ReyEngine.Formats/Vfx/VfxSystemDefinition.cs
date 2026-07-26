@@ -34,7 +34,14 @@ public sealed record VfxEmitterDefinition(
     VfxCurve3? BirthVelocity,       // initial velocity
     VfxCurve3? Acceleration,        // worldAcceleration (gravity/wind)
     VfxCurve3? BirthRotationalVelocity,
-    Vector3 EmitterPosition,        // offset of this emitter within the system
+    /// <summary>Offset of this emitter within the system.
+    ///
+    /// A CURVE, not a bare Vector3, because it carries per-particle probability tables. Measured over 60
+    /// champion WADs: of 186,374 emitters that author this field, 37,327 have no constantValue at all and
+    /// every one of their curve keys is exactly (0,0,0) - but 37,220 of those carry probabilityTables.
+    /// The authored intent is a per-particle SCATTER around the origin, not a fixed offset, so collapsing
+    /// this to a single Vector3 made every particle emit from the same point.</summary>
+    VfxCurve3 EmitterPosition,
     string? TexturePath,            // particle sprite (.dds/.tex)
     Vector2 TexDiv,                 // flipbook grid (cols, rows); (1,1) = single frame
     int NumFrames,
@@ -65,7 +72,23 @@ public sealed record VfxEmitterDefinition(
     // colorLookUpTypeX/Y pick what drives the U/V lookup axes; null = the field was absent (Riot default 0).
     string? ParticleColorTexturePath = null,
     int? ColorLookUpTypeX = null,
-    int? ColorLookUpTypeY = null)
+    int? ColorLookUpTypeY = null,
+    // ---- M174 tier 1 ----
+    /// <summary>Draw order within a system. Present on 79.7% of League's emitters with 2,913 distinct
+    /// values across the full I16 range; until M174 it was discarded entirely, so additive glows drew in
+    /// container order and layered effects stacked wrongly.</summary>
+    int Pass = 0,
+    /// <summary>Alpha-test cutoff, 0..255 as authored. The engine confirms this one — `quad_ps` declares
+    /// ALPHA_TEST / AlphaTestReferenceValue. 34,788 emitters author a non-zero cutoff.</summary>
+    int AlphaRef = 0,
+    /// <summary>Affine transform applied to the particleColorTexture lookup coordinate before sampling.</summary>
+    Vector2 ColorLookUpScale = default,
+    Vector2 ColorLookUpOffset = default,
+    /// <summary>velocity over particle life (distinct from birthVelocity), 23,112 emitters.</summary>
+    VfxCurve3? VelocityOverLife = null,
+    /// <summary>rotation0 — an INTEGRATED value: accumulate it, do not sample it as an absolute angle.
+    /// 52,647 emitters.</summary>
+    VfxCurve3? RotationOverLife = null)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
@@ -76,18 +99,48 @@ public sealed record VfxEmitterDefinition(
 /// <summary>Riot's screen-space particle distortion stage (heat haze/refraction).</summary>
 public sealed record VfxDistortionDefinition(float Strength, int Mode, string? NormalMapTexturePath);
 
+/// <summary>Which volume an emitter spawns particles in.</summary>
+public enum VfxShapeKind
+{
+    /// <summary>No volume — the emitOffset (possibly randomised by its probability tables) IS the position.
+    /// This covers VfxShapeLegacy and the unresolved 0xee39916f, which together are 69.4% of shapes.</summary>
+    Offset,
+    Sphere,
+    Box,
+    Cylinder,
+}
+
 /// <summary>
 /// Authored particle spawn volume. <see cref="EmitOffset"/> is randomized by its ValueVector3
 /// probability tables, then the authored axis/angle rotations are applied in order.
+///
+/// M174: before this, every shape collapsed to a point. Measured over the live corpus, 216,819 emitters
+/// (15.5%) are a sphere, box or cylinder and NOT ONE of them carries an emitOffset — so every particle
+/// spawned at the emitter origin where League fills a volume. That is one of the largest single reasons
+/// an effect looks wrong in the editor.
 /// </summary>
 public sealed record VfxSpawnShape(
     VfxCurve3 EmitOffset,
     IReadOnlyList<Vector3> RotationAxes,
-    IReadOnlyList<VfxCurveF> RotationAngles)
+    IReadOnlyList<VfxCurveF> RotationAngles,
+    VfxShapeKind Kind = VfxShapeKind.Offset,
+    /// <summary>Sphere/cylinder radius, world units.</summary>
+    float Radius = 0f,
+    /// <summary>Cylinder height, world units.</summary>
+    float Height = 0f,
+    /// <summary>Box half-extents... or full extents. UNKNOWN which — see SampleOffset.</summary>
+    Vector3 Size = default)
 {
+    /// <summary>Ranges in the live data are extreme — sphere radius up to 3.02e8, cylinder height 250,100.
+    /// A particle spawned that far out is invisible and only costs simulation, so the volume is clamped for
+    /// preview. Not a correctness claim about the game, just a guard against a runaway buffer.</summary>
+    private const float MaxExtent = 100_000f;
+
     public Vector3 SampleOffset(Random rng)
     {
         var offset = EmitOffset.SampleBirth(rng);
+        offset += SampleVolume(rng);
+
         int count = Math.Min(RotationAxes.Count, RotationAngles.Count);
         for (int i = 0; i < count; i++)
         {
@@ -98,6 +151,58 @@ public sealed record VfxSpawnShape(
                 Quaternion.CreateFromAxisAngle(Vector3.Normalize(axis), radians));
         }
         return offset;
+    }
+
+    /// <summary>A point inside the authored volume.
+    ///
+    /// UNIFORM THROUGHOUT THE VOLUME is an assumption, not a measurement. League may well emit from the
+    /// surface instead, and the `flags` byte present on 95.2% of boxes (domain unmeasured) is the obvious
+    /// candidate for selecting between them. Uniform-solid is the choice that looks right for the smoke
+    /// and dust these shapes mostly drive; revisit if a shell-emitting effect looks wrong.
+    ///
+    /// Box `Size` is likewise treated as HALF-extents. Full-extents would make every box twice as large.
+    /// Neither reading is confirmed.</summary>
+    private Vector3 SampleVolume(Random rng)
+    {
+        float Sym(float half) => (float)(rng.NextDouble() * 2.0 - 1.0) * half;
+
+        switch (Kind)
+        {
+            case VfxShapeKind.Sphere:
+            {
+                float r = MathF.Min(MathF.Abs(Radius), MaxExtent);
+                if (r <= 0f) return Vector3.Zero;
+                // Rejection sampling: the cube-to-sphere hit rate is pi/6 ~= 52%, so this terminates fast,
+                // and it avoids the clustering that naive spherical coordinates produce at the poles.
+                for (int i = 0; i < 8; i++)
+                {
+                    var v = new Vector3(Sym(1f), Sym(1f), Sym(1f));
+                    if (v.LengthSquared() <= 1f) return v * r;
+                }
+                return Vector3.Zero;
+            }
+            case VfxShapeKind.Box:
+            {
+                var h = new Vector3(
+                    MathF.Min(MathF.Abs(Size.X), MaxExtent),
+                    MathF.Min(MathF.Abs(Size.Y), MaxExtent),
+                    MathF.Min(MathF.Abs(Size.Z), MaxExtent));
+                return new Vector3(Sym(h.X), Sym(h.Y), Sym(h.Z));
+            }
+            case VfxShapeKind.Cylinder:
+            {
+                float r = MathF.Min(MathF.Abs(Radius), MaxExtent);
+                float hh = MathF.Min(MathF.Abs(Height), MaxExtent) * 0.5f;
+                if (r <= 0f && hh <= 0f) return Vector3.Zero;
+                // sqrt on the radius keeps the disc uniform by AREA; without it particles bunch at the axis.
+                double ang = rng.NextDouble() * Math.PI * 2.0;
+                float rr = r * MathF.Sqrt((float)rng.NextDouble());
+                // Y is the axis — consistent with League's Y-up world. UNVERIFIED against the game.
+                return new Vector3(rr * MathF.Cos((float)ang), Sym(hh), rr * MathF.Sin((float)ang));
+            }
+            default:
+                return Vector3.Zero;
+        }
     }
 }
 
