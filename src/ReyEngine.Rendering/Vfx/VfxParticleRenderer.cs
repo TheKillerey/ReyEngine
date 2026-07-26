@@ -246,12 +246,14 @@ public sealed class VfxParticleRenderer
         if (_depthWidth != (int)width || _depthHeight != (int)height)
         {
             _gl.BindTexture(TextureTarget.Texture2D, _depthTexture);
-            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.DepthComponent24, width, height, 0,
-                PixelFormat.DepthComponent, PixelType.UnsignedInt, null);
+            // Must match the scene buffer's format: M182 made that DEPTH24_STENCIL8, and glBlitFramebuffer
+            // rejects a depth blit between differing depth formats.
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Depth24Stencil8, width, height, 0,
+                PixelFormat.DepthStencil, PixelType.UnsignedInt248, null);
             _depthWidth = (int)width;
             _depthHeight = (int)height;
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _depthFbo);
-            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
+            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthStencilAttachment,
                 TextureTarget.Texture2D, _depthTexture, 0);
             // If this FBO is not complete the blit below silently does nothing, and the texture keeps
             // whatever it was allocated with - which would read as depth 0, i.e. "solid geometry directly
@@ -487,10 +489,12 @@ public sealed class VfxParticleRenderer
                 _gl.BindTexture(TextureTarget.Texture2D, es.DistortionTexture);
                 _gl.ActiveTexture(TextureUnit.Texture0);
             }
+            ApplyStencil(es.Def);
             _gl.DrawArraysInstanced(PrimitiveType.TriangleFan, 0, 4, (uint)es.InstanceCount);
         }
 
         // restore reasonable defaults for the next pass
+        ClearStencil();
         _gl.DepthMask(true);
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         if (!depthTest) _gl.Disable(EnableCap.DepthTest);
@@ -509,6 +513,48 @@ public sealed class VfxParticleRenderer
         _gl.ActiveTexture(TextureUnit.Texture6);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _gl.ActiveTexture(TextureUnit.Texture0);
+    }
+
+    /// <summary>M182 (2.9): per-emitter stencil state.
+    ///
+    /// ONLY MODE 1 IS DEFINED - a normal write: draw as usual, and replace the stencil value with the
+    /// emitter's stencilRef wherever the fragment passes. That is 15.0% of the 3,891 authored modes
+    /// measured across 25 WADs.
+    ///
+    /// Modes 2 (58.9%), 3 (25.9%) and 4 (0.2%) are UNRESOLVED and deliberately left alone rather than
+    /// given a guessed test function. The masking almost certainly lives in them - 254 of 1,016 objects
+    /// that use stencil at all contain both a mode-1 emitter and a non-1 one, which is the shape of
+    /// "one writes, another tests" - but which comparison each performs is not in the data, and a wrong
+    /// guess would make 85% of stencil emitters vanish behind a test that never passes.
+    ///
+    /// Until a test mode is defined, the write has nothing reading it, so this changes nothing visible.
+    /// It is the buffer, the plumbing and the one defined mode, not the masking.</summary>
+    private void ApplyStencil(ReyEngine.Formats.Vfx.VfxEmitterDefinition def)
+    {
+        if (def.StencilMode == 1)
+        {
+            _gl.Enable(EnableCap.StencilTest);
+            _gl.StencilMask(0xFF);
+            _gl.StencilFunc(StencilFunction.Always, def.StencilRef, 0xFF);
+            _gl.StencilOp(StencilOp.Keep, StencilOp.Keep, StencilOp.Replace);
+            _stencilActive = true;
+        }
+        else if (_stencilActive)
+        {
+            // Leave the buffer untouched for every undefined mode, and make sure the previous emitter's
+            // write state does not leak into this draw.
+            ClearStencil();
+        }
+    }
+
+    private bool _stencilActive;
+
+    private void ClearStencil()
+    {
+        if (!_stencilActive) return;
+        _gl.StencilMask(0x00);
+        _gl.Disable(EnableCap.StencilTest);
+        _stencilActive = false;
     }
 
     /// <summary>

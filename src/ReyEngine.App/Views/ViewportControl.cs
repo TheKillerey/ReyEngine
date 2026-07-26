@@ -1041,10 +1041,14 @@ public sealed class ViewportControl : OpenGlControlBase
         _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
             RenderbufferTarget.Renderbuffer, _colorRb);
 
+        // M182 (2.9): DEPTH24_STENCIL8 rather than DEPTH_COMPONENT24 - the particle pass needs a stencil
+        // plane. The M175 soft-particle capture blits depth out of this buffer, and a depth blit requires
+        // matching formats, so the capture texture is the same combined format (sampling one returns the
+        // depth component, which is all that path reads).
         _depthRb = _gl.GenRenderbuffer();
         _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _depthRb);
-        _gl.RenderbufferStorage(RenderbufferTarget.Renderbuffer, InternalFormat.DepthComponent24, w, h);
-        _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
+        _gl.RenderbufferStorage(RenderbufferTarget.Renderbuffer, InternalFormat.Depth24Stencil8, w, h);
+        _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthStencilAttachment,
             RenderbufferTarget.Renderbuffer, _depthRb);
 
         _fboW = (int)w;

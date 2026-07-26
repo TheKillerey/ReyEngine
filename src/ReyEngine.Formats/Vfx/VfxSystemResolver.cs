@@ -174,6 +174,9 @@ public static class VfxSystemResolver
     private static readonly uint F_childOnDeath      = HashAlgorithms.Fnv1a("childEmitOnDeath");
     private static readonly uint F_childProbability  = HashAlgorithms.Fnv1a("childrenProbability");
     private static readonly uint F_childBone         = HashAlgorithms.Fnv1a("boneToSpawnAt");
+    // M182 (2.9) stencil. Both U8 in the live data.
+    private static readonly uint F_stencilMode       = HashAlgorithms.Fnv1a("stencilMode");
+    private static readonly uint F_stencilRef        = HashAlgorithms.Fnv1a("stencilRef");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -419,7 +422,9 @@ public static class VfxSystemResolver
             Trail: ReadTrail(prim),
             IsArbitraryTrail: primClass == C_primArbitraryTrail,
             Reflection: ReadReflection(p),
-            Children: ReadChildren(p));
+            Children: ReadChildren(p),
+            StencilMode: GetU8(p, F_stencilMode) ?? 0,
+            StencilRef: GetU8(p, F_stencilRef) ?? 0);
     }
 
     /// <summary>M177 (2.5): the trail ribbon's parameters. See VfxTrailDefinition for what the payload

@@ -176,7 +176,19 @@ public sealed record VfxEmitterDefinition(
 
     /// <summary>M180 (2.7) childParticleSetDefinition - other VFX systems spawned by this emitter's
     /// particles. 35,510 emitters.</summary>
-    VfxChildParticleSet? Children = null)
+    VfxChildParticleSet? Children = null,
+
+    /// <summary>M182 (2.9) stencilMode. U8, measured {2: 58.9%, 3: 25.9%, 1: 15.0%, 4: 0.2%}.
+    ///
+    /// Only mode 1 has a defined meaning - a normal stencil WRITE, i.e. draw as usual and replace the
+    /// stencil value with <see cref="StencilRef"/> where the fragment passes. Modes 2, 3 and 4 are
+    /// UNRESOLVED: nothing in the data distinguishes them, and between them they are 85% of the
+    /// authored total. Emitters carrying them are drawn with the stencil untouched, exactly as before,
+    /// rather than being given a guessed test function.</summary>
+    int StencilMode = 0,
+    /// <summary>M182 (2.9) stencilRef. U8, commonest values 1-7 with a tail to 48. The value written to
+    /// the stencil buffer under mode 1.</summary>
+    int StencilRef = 0)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
