@@ -89,6 +89,24 @@ public static class VfxSystemResolver
     private static readonly uint F_rotation0     = HashAlgorithms.Fnv1a("rotation0");
     private static readonly uint C_primAttachedMesh = HashAlgorithms.Fnv1a("VfxPrimitiveAttachedMesh");
     private static readonly uint C_primBeam         = HashAlgorithms.Fnv1a("VfxPrimitiveBeam");
+    // M174 tier 2.3: UV transform stack.
+    private static readonly uint F_birthUVOffset   = HashAlgorithms.Fnv1a("birthUVOffset");
+    private static readonly uint F_uvScale         = HashAlgorithms.Fnv1a("uvScale");
+    private static readonly uint F_particleUVScroll= HashAlgorithms.Fnv1a("particleUVScrollRate");
+    private static readonly uint F_uvRotation      = HashAlgorithms.Fnv1a("uvRotation");
+    private static readonly uint F_uvScrollClamp   = HashAlgorithms.Fnv1a("uvScrollClamp");
+    private static readonly uint F_emitterUvScroll = HashAlgorithms.Fnv1a("emitterUvScrollRate");
+    private static readonly uint F_texFlipU        = HashAlgorithms.Fnv1a("TextureFlipU");
+    private static readonly uint F_texFlipV        = HashAlgorithms.Fnv1a("TextureFlipV");
+    private static readonly uint F_particleUVRotate= HashAlgorithms.Fnv1a("particleUVRotateRate");
+    private static readonly uint F_birthUvRotate   = HashAlgorithms.Fnv1a("birthUvRotateRate");
+    private static readonly uint F_uvTransformCenter = HashAlgorithms.Fnv1a("uvTransformCenter");
+    // M174 tier 2.14/2.15
+    private static readonly uint F_period          = HashAlgorithms.Fnv1a("period");
+    private static readonly uint F_timeActive      = HashAlgorithms.Fnv1a("timeActiveDuringPeriod");
+    private static readonly uint F_chanceNotExist  = HashAlgorithms.Fnv1a("ChanceToNotExist");
+    private static readonly uint F_variableStart   = HashAlgorithms.Fnv1a("HasVariableStartTime");
+    private static readonly uint F_emitterLinger   = HashAlgorithms.Fnv1a("emitterLinger");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -309,7 +327,23 @@ public static class VfxSystemResolver
             ColorLookUpScale: GetVec2(p, F_colorLookUpScales) ?? Vector2.One,
             ColorLookUpOffset: GetVec2(p, F_colorLookUpOffsets) ?? Vector2.Zero,
             VelocityOverLife: ReadCurve3(p, F_velocity),
-            RotationOverLife: ReadCurve3(p, F_rotation0));
+            RotationOverLife: ReadCurve3(p, F_rotation0),
+            UvOffset: ReadValueVec2(Get(p, F_birthUVOffset)) ?? Vector2.Zero,
+            UvScale: ReadValueVec2(Get(p, F_uvScale)) ?? Vector2.One,
+            UvScrollIntegrated: ReadValueVec2(Get(p, F_particleUVScroll)) ?? Vector2.Zero,
+            UvRotation: ReadCurveF(p, F_uvRotation)?.Constant ?? 0f,
+            UvScrollClamp: GetBool(p, F_uvScrollClamp),
+            EmitterUvScrollRate: GetVec2(p, F_emitterUvScroll) ?? Vector2.Zero,
+            UvFlipU: GetBool(p, F_texFlipU),
+            UvFlipV: GetBool(p, F_texFlipV),
+            UvRotateIntegrated: ReadCurveF(p, F_particleUVRotate)?.Constant ?? 0f,
+            UvRotateRate: ReadCurveF(p, F_birthUvRotate)?.Constant ?? 0f,
+            UvTransformCenter: GetVec2(p, F_uvTransformCenter) ?? new Vector2(0.5f, 0.5f),
+            Period: GetOptionalF32(p, F_period),
+            TimeActiveDuringPeriod: GetOptionalF32(p, F_timeActive),
+            ChanceToNotExist: GetF32(p, F_chanceNotExist) ?? 0f,
+            HasVariableStartTime: GetBool(p, F_variableStart),
+            EmitterLinger: GetOptionalF32(p, F_emitterLinger));
     }
 
     /// <summary>M174 (1.1): dispatch on the shape CLASS, not just on emitOffset.

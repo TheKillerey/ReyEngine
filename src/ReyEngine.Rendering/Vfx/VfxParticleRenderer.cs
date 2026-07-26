@@ -18,6 +18,9 @@ public sealed class VfxParticleRenderer
     private int _uTexMult, _uHasTexMult, _uTexDivMult, _uUvScrollRateMult;
     private int _uIsDistortion, _uDistortionTex, _uSceneTex, _uViewportSize, _uDistortionStrength;
     private int _uAlphaRef;   // M174 (1.4)
+    // M174 (2.3): the UV transform stack.
+    private int _uUvOffset, _uUvScale, _uUvScrollInt, _uUvRotation, _uUvClamp;
+    private int _uEmitterUvScroll, _uUvFlip, _uUvRotInt, _uUvRotRate, _uUvCenter, _uEmitterAge;
     private int _uDirectionOriented, _uArbitraryQuad;
     private int _uPlacementRight, _uPlacementUp, _uPlacementForward;
     private int _instCapFloats;
@@ -55,6 +58,17 @@ public sealed class VfxParticleRenderer
         _uViewportSize = gl.GetUniformLocation(_program, "uViewportSize");
         _uDistortionStrength = gl.GetUniformLocation(_program, "uDistortionStrength");
         _uAlphaRef = gl.GetUniformLocation(_program, "uAlphaRef");
+        _uUvOffset = gl.GetUniformLocation(_program, "uUvOffset");
+        _uUvScale = gl.GetUniformLocation(_program, "uUvScale");
+        _uUvScrollInt = gl.GetUniformLocation(_program, "uUvScrollInt");
+        _uUvRotation = gl.GetUniformLocation(_program, "uUvRotation");
+        _uUvClamp = gl.GetUniformLocation(_program, "uUvClamp");
+        _uEmitterUvScroll = gl.GetUniformLocation(_program, "uEmitterUvScroll");
+        _uUvFlip = gl.GetUniformLocation(_program, "uUvFlip");
+        _uUvRotInt = gl.GetUniformLocation(_program, "uUvRotInt");
+        _uUvRotRate = gl.GetUniformLocation(_program, "uUvRotRate");
+        _uUvCenter = gl.GetUniformLocation(_program, "uUvCenter");
+        _uEmitterAge = gl.GetUniformLocation(_program, "uEmitterAge");
         _uDirectionOriented = gl.GetUniformLocation(_program, "uDirectionOriented");
         _uArbitraryQuad = gl.GetUniformLocation(_program, "uArbitraryQuad");
         _uPlacementRight = gl.GetUniformLocation(_program, "uPlacementRight");
@@ -228,6 +242,18 @@ public sealed class VfxParticleRenderer
             // M174 (1.4): alphaRef is an 0..255 cutoff; the engine confirms it (quad_ps declares ALPHA_TEST
             // and AlphaTestReferenceValue). 34,788 emitters author a non-zero one.
             _gl.Uniform1(_uAlphaRef, es.Def.AlphaRef / 255f);
+            var d2 = es.Def;
+            _gl.Uniform2(_uUvOffset, d2.UvOffset.X, d2.UvOffset.Y);
+            _gl.Uniform2(_uUvScale, d2.UvScale.X == 0 ? 1f : d2.UvScale.X, d2.UvScale.Y == 0 ? 1f : d2.UvScale.Y);
+            _gl.Uniform2(_uUvScrollInt, d2.UvScrollIntegrated.X, d2.UvScrollIntegrated.Y);
+            _gl.Uniform1(_uUvRotation, d2.UvRotation * (MathF.PI / 180f));
+            _gl.Uniform1(_uUvClamp, d2.UvScrollClamp ? 1 : 0);
+            _gl.Uniform2(_uEmitterUvScroll, d2.EmitterUvScrollRate.X, d2.EmitterUvScrollRate.Y);
+            _gl.Uniform2(_uUvFlip, d2.UvFlipU ? 1f : 0f, d2.UvFlipV ? 1f : 0f);
+            _gl.Uniform1(_uUvRotInt, d2.UvRotateIntegrated * (MathF.PI / 180f));
+            _gl.Uniform1(_uUvRotRate, d2.UvRotateRate * (MathF.PI / 180f));
+            _gl.Uniform2(_uUvCenter, d2.UvTransformCenter.X, d2.UvTransformCenter.Y);
+            _gl.Uniform1(_uEmitterAge, es.Age);
             _gl.Uniform1(_uDirectionOriented, es.Def.IsDirectionOriented ? 1 : 0);
             _gl.Uniform1(_uArbitraryQuad, es.Def.IsArbitraryQuad ? 1 : 0);
             _gl.Uniform1(_uIsDistortion, isDistortion ? 1 : 0);
@@ -536,6 +562,17 @@ uniform vec3 uCamRight;
 uniform vec3 uCamUp;
 uniform vec2 uTexDiv;                   // flipbook grid columns, rows
 uniform vec2 uUvScrollRate;
+uniform vec2 uUvOffset;
+uniform vec2 uUvScale;
+uniform vec2 uUvScrollInt;
+uniform float uUvRotation;
+uniform int uUvClamp;
+uniform vec2 uEmitterUvScroll;
+uniform vec2 uUvFlip;
+uniform float uUvRotInt;
+uniform float uUvRotRate;
+uniform vec2 uUvCenter;
+uniform float uEmitterAge;
 uniform vec2 uTexDivMult;
 uniform vec2 uUvScrollRateMult;
 uniform int uDirectionOriented;
@@ -584,8 +621,39 @@ void main(){
     float frame = floor(aRotFrame.y + 0.0001);
     float fx = mod(frame, gridCols);
     float fy = floor(frame / gridCols);
-    vUv = (vec2(fx, fy) + vec2(cell.x, 1.0 - cell.y)) / vec2(cols, rows)
-        + uUvScrollRate * aAgeVelX.x;
+
+    // ---- M174 (2.3): the UV transform stack ----
+    // Applied to the CELL coordinate, before the atlas frame is added, so rotating or zooming a flipbook
+    // sprite stays inside its own cell instead of sliding into the neighbouring frame.
+    //
+    // ORDER IS INFERRED. Riot's own order is not established, so this uses the conventional one:
+    // flip, then scale and rotate about the pivot, then translate. Sub-terms whose semantics the census
+    // could confirm individually are each marked at their use below.
+    float age = aAgeVelX.x;
+    vec2 c = vec2(cell.x, 1.0 - cell.y);
+
+    if (uUvFlip.x > 0.5) c.x = 1.0 - c.x;
+    if (uUvFlip.y > 0.5) c.y = 1.0 - c.y;
+
+    // uvRotation is a fixed angle; birthUvRotateRate advances with particle age; particleUVRotateRate is
+    // an INTEGRATED value, which for a constant rate is also rate*age - the distinction only matters once
+    // its curve is animated, which this does not yet support.
+    float uvAngle = uUvRotation + uUvRotRate * age + uUvRotInt * age;
+    c -= uUvCenter;
+    c *= uUvScale;
+    if (abs(uvAngle) > 0.0001) {
+        float cs = cos(uvAngle), sn = sin(uvAngle);
+        c = vec2(c.x * cs - c.y * sn, c.x * sn + c.y * cs);
+    }
+    c += uUvCenter;
+
+    // birthUVOffset is a fixed shift; the scroll terms advance with particle age, except
+    // emitterUvScrollRate which advances with EMITTER age.
+    c += uUvOffset + uUvScrollInt * age + uEmitterUvScroll * uEmitterAge;
+    if (uUvClamp != 0) c = clamp(c, vec2(0.0), vec2(1.0));
+
+    vUv = (vec2(fx, fy) + c) / vec2(cols, rows)
+        + uUvScrollRate * age;
     // M174: the multiply stage gets the same treatment. It still does NOT advance with the flipbook frame
     // - a multi-cell multiplier atlas stays on cell 0 - which is a separate known defect (tier 2.3).
     vec2 multDiv = vec2(uTexDivMult.x == 0.0 ? 1.0 : uTexDivMult.x,

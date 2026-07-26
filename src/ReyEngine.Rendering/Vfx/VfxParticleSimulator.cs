@@ -27,6 +27,9 @@ public sealed class VfxParticleSimulator
         public int ColorGradientW, ColorGradientH;
         public float SpriteAspect = 1f;         // legacy scalar quads preserve one atlas cell's width/height
         internal float SpawnAccum;
+        /// <summary>M174 (2.14): per-instance start jitter from HasVariableStartTime (3,973 emitters).
+        /// Without it, every repeat of an effect fires in lockstep and reads as mechanical.</summary>
+        internal float StartOffset;
         internal float Age;                     // emitter age (seconds)
         internal bool BurstDone;                // for isSingleParticle
         internal readonly List<Particle> Particles = new();
@@ -86,6 +89,12 @@ public sealed class VfxParticleSimulator
             _emitters.Add(new EmitterState
             {
                 Def = e,
+                // M174 (2.14): jitter the start when HasVariableStartTime is set. Spread over the
+                // emitter's own period when it has one, otherwise over a second - the exact distribution
+                // Riot uses is UNKNOWN, so this only has to break the lockstep, not match it.
+                StartOffset = e.HasVariableStartTime
+                    ? (float)_rng.NextDouble() * MathF.Max(0.1f, e.Period ?? 1f)
+                    : 0f,
                 BasePos = Vector3.Transform(e.EmitterPosition.Constant, worldTransform),
                 PlacementRight = SafeNormal(Vector3.TransformNormal(Vector3.UnitX, worldTransform), Vector3.UnitX),
                 PlacementUp = SafeNormal(Vector3.TransformNormal(Vector3.UnitY, worldTransform), Vector3.UnitY),
@@ -154,8 +163,21 @@ public sealed class VfxParticleSimulator
         s.Age += dt;
 
         // spawn
-        bool emitting = s.Age >= d.TimeBeforeFirstEmission
-                        && (d.EmitterLifetime is not { } life || s.Age <= d.TimeBeforeFirstEmission + life);
+        // M174: emitterLinger (95,954 emitters) is PARSED but has no effect yet. It governs how long an
+        // emitter survives after it stops emitting, and this simulator never hard-stops one - live
+        // particles keep integrating until they age out regardless - so there is nothing for it to
+        // extend. It becomes meaningful alongside the Linger shutdown stage (report 2.15), which needs a
+        // second colour/scale/velocity curve set this model does not carry.
+        bool emitting = s.Age >= s.StartOffset + d.TimeBeforeFirstEmission
+                        && (d.EmitterLifetime is not { } life || s.Age <= s.StartOffset + d.TimeBeforeFirstEmission + life);
+
+        // M174 (2.14): duty cycle. The emitter is active for TimeActiveDuringPeriod out of every Period
+        // seconds. Phase is measured from first emission, so the first pulse starts immediately.
+        if (emitting && d.Period is > 0f && d.TimeActiveDuringPeriod is { } active)
+        {
+            float phase = (s.Age - s.StartOffset - d.TimeBeforeFirstEmission) % d.Period.Value;
+            if (phase >= active) emitting = false;
+        }
         if (emitting)
         {
             if (d.IsSingleParticle)
@@ -223,6 +245,9 @@ public sealed class VfxParticleSimulator
     private void Spawn(EmitterState s)
     {
         var d = s.Def;
+        // M174 (2.14): per-spawn skip. 14 emitters author 1.0, which means "emit nothing at all" - they
+        // currently render at full rate.
+        if (d.ChanceToNotExist > 0f && _rng.NextDouble() < d.ChanceToNotExist) return;
         // M47: exact per-particle randomisation — Value* probability tables (VfxProbabilityTableData)
         // are rolled per particle when the data carries them; SampleBirth falls back to the constant.
         float sampledLife = d.ParticleLifetime.SampleBirth(_rng);

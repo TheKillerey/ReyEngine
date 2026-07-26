@@ -86,9 +86,53 @@ public sealed record VfxEmitterDefinition(
     Vector2 ColorLookUpOffset = default,
     /// <summary>velocity over particle life (distinct from birthVelocity), 23,112 emitters.</summary>
     VfxCurve3? VelocityOverLife = null,
-    /// <summary>rotation0 — an INTEGRATED value: accumulate it, do not sample it as an absolute angle.
+    /// <summary>rotation0 - an INTEGRATED value: accumulate it, do not sample it as an absolute angle.
     /// 52,647 emitters.</summary>
-    VfxCurve3? RotationOverLife = null)
+    VfxCurve3? RotationOverLife = null,
+
+    // ---- M174 tier 2.3: the UV transform stack ----
+    // ReyEngine implemented exactly one term of this (birthUvScrollRate * age). These are the rest, in
+    // descending order of how many emitters author them.
+    /// <summary>birthUVOffset - a fixed shift of the sampled UV. 146,833 emitters.</summary>
+    Vector2 UvOffset = default,
+    /// <summary>uvScale - zoom about UvTransformCenter. 135,073 emitters.</summary>
+    Vector2 UvScale = default,
+    /// <summary>particleUVScrollRate - an INTEGRATED value: it accumulates, so it must not be treated as
+    /// an ordinary per-age curve. 86,904 emitters.</summary>
+    Vector2 UvScrollIntegrated = default,
+    /// <summary>uvRotation, degrees, about UvTransformCenter. 50,439 emitters.</summary>
+    float UvRotation = 0f,
+    /// <summary>uvScrollClamp - clamp the final coordinate to [0,1] instead of wrapping. 29,820.</summary>
+    bool UvScrollClamp = false,
+    /// <summary>emitterUvScrollRate - scrolls with EMITTER age rather than particle age. 23,890.</summary>
+    Vector2 EmitterUvScrollRate = default,
+    /// <summary>TextureFlipV / TextureFlipU. 7,443 / 6,747.</summary>
+    bool UvFlipU = false,
+    bool UvFlipV = false,
+    /// <summary>particleUVRotateRate - INTEGRATED, degrees per second. 8,676.</summary>
+    float UvRotateIntegrated = 0f,
+    /// <summary>birthUvRotateRate - degrees per second, from birth. 8,203.</summary>
+    float UvRotateRate = 0f,
+    /// <summary>uvTransformCenter - the pivot rotation and scale act about. 3,977; defaults to the
+    /// texel-space centre (0.5, 0.5) when absent, which is the only pivot that leaves a centred sprite
+    /// in place.</summary>
+    Vector2 UvTransformCenter = default,
+
+    // ---- M174 tier 2.14/2.15: emission control and shutdown ----
+    /// <summary>period / timeActiveDuringPeriod - a duty cycle. The emitter emits for
+    /// TimeActiveDuringPeriod seconds out of every Period seconds. 8,132 / 8,240 emitters; without it a
+    /// pulsed emitter runs continuously, which is very visible on map beacons and braziers.</summary>
+    float? Period = null,
+    float? TimeActiveDuringPeriod = null,
+    /// <summary>ChanceToNotExist - per-spawn skip probability. 1,164 emitters; 14 of them author 1.0 and
+    /// should therefore emit NOTHING.</summary>
+    float ChanceToNotExist = 0f,
+    /// <summary>HasVariableStartTime - randomise the emitter's start offset so repeats of the same effect
+    /// do not look mechanically synchronised. 3,973 emitters.</summary>
+    bool HasVariableStartTime = false,
+    /// <summary>emitterLinger - how long the emitter survives after it stops emitting. 95,954 emitters;
+    /// without it an effect cuts off instead of trailing away.</summary>
+    float? EmitterLinger = null)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
