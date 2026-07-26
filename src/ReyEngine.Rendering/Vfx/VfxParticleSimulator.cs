@@ -39,6 +39,20 @@ public sealed class VfxParticleSimulator
         /// <summary>How many particles this emitter currently has alive.</summary>
         public int ParticleCount => Particles.Count;
 
+        /// <summary>M180 (2.7): child systems this emitter's particles asked to spawn since the last
+        /// drain. The simulator SCHEDULES these; it deliberately does not instantiate them, because a
+        /// child system needs textures and meshes resolved and this class is GL-free by design.</summary>
+        internal readonly List<ChildSpawn> PendingChildSpawns = new();
+
+        /// <summary>Take and clear the child spawns queued since the last call.</summary>
+        public IReadOnlyList<ChildSpawn> TakeChildSpawns()
+        {
+            if (PendingChildSpawns.Count == 0) return Array.Empty<ChildSpawn>();
+            var copy = PendingChildSpawns.ToArray();
+            PendingChildSpawns.Clear();
+            return copy;
+        }
+
         /// <summary>M177 (2.5): the ribbon points behind particle <paramref name="index"/>, oldest first.
         /// Empty for every non-trail emitter. Exposed because the ribbon is generated rather than
         /// authored, so it is the only way to inspect what a trail actually became.</summary>
@@ -83,6 +97,18 @@ public sealed class VfxParticleSimulator
         public Vector3[]? History;
         public int HistoryCount;
     }
+
+    /// <summary>M180 (2.7): one request to instantiate a child system, at a world position, from entry
+    /// <see cref="ChildIndex"/> of the emitter's child set.</summary>
+    public readonly record struct ChildSpawn(Vector3 Position, int ChildIndex, bool OnDeath);
+
+    /// <summary>M180: a hard ceiling on child spawns queued per emitter per frame.
+    ///
+    /// A child set turns every parent particle into a whole VFX system, so an emitter running at a few
+    /// hundred particles per second multiplies into hundreds of systems per second without one. This is a
+    /// frame-rate guard, not a Riot behaviour, and it is applied at SCHEDULING time so a consumer that
+    /// never drains the queue cannot grow it without bound either.</summary>
+    private const int MaxChildSpawnsPerFrame = 16;
 
     /// <summary>M177: ribbon points per particle. Fixed rather than growable so a long-lived particle
     /// cannot creep upward in memory, and because the sampling below spaces points to span the authored
@@ -243,7 +269,13 @@ public sealed class VfxParticleSimulator
             var p = s.Particles[i];
             p.Age += dt;
             // particleLinger controls shutdown retention in Riot; it does not extend every live particle.
-            if (p.Age >= p.Life) { s.Particles.RemoveAt(i); continue; }
+            if (p.Age >= p.Life)
+            {
+                if (d.Children is { EmitOnDeath: true } deathSet)
+                    QueueChildSpawns(s, deathSet, p.Pos, onDeath: true);
+                s.Particles.RemoveAt(i);
+                continue;
+            }
             float particleT = float.IsPositiveInfinity(p.Life) ? 0f : Math.Clamp(p.Age / p.Life, 0f, 1f);
             var worldAccel = d.Acceleration?.Sample(particleT) ?? Vector3.Zero;
             worldAccel = Vector3.TransformNormal(worldAccel, _worldTransform);
@@ -321,6 +353,28 @@ public sealed class VfxParticleSimulator
         // Infinite emitter with no live particles and a finished burst -> allow looping single particles.
         if (d.IsSingleParticle && s.BurstDone && s.Particles.Count == 0 && d.EmitterLifetime is null)
             s.BurstDone = false;
+    }
+
+    /// <summary>M180 (2.7): queue the child systems one parent event asks for.
+    ///
+    /// COUNT: childrenProbability is read as an expected count - floor(p) children plus one more with
+    /// probability frac(p). See VfxChildParticleSet for why that reading, and not a 0..1 probability, is
+    /// the one consistent with the measured value set.
+    ///
+    /// WHICH child: when a set names more than one identifier (255 of 10,608 measured sets do) one is
+    /// chosen at random per spawn. That is INFERRED - the data gives a list and a count and says nothing
+    /// about how they pair up - but a set of alternatives with a roll count is what the two fields
+    /// together suggest, and 97.6% of sets name exactly one child so it rarely bites.</summary>
+    private void QueueChildSpawns(EmitterState s, VfxChildParticleSet set, Vector3 pos, bool onDeath)
+    {
+        if (set.Children.Count == 0) return;
+        int n = set.RollCount(_rng);
+        for (int i = 0; i < n; i++)
+        {
+            if (s.PendingChildSpawns.Count >= MaxChildSpawnsPerFrame) return;
+            int which = set.Children.Count == 1 ? 0 : _rng.Next(set.Children.Count);
+            s.PendingChildSpawns.Add(new ChildSpawn(pos, which, onDeath));
+        }
     }
 
     /// <summary>M176 (2.4): integrate Riot's five force-field types into a particle's velocity.
@@ -498,6 +552,12 @@ public sealed class VfxParticleSimulator
             // M177 (2.5): only trail emitters carry a ribbon buffer.
             History = d.Trail is not null ? new Vector3[TrailPoints] : null,
         });
+
+        // M180 (2.7): children spawn at particle BIRTH unless childEmitOnDeath says otherwise. That
+        // default is measured rather than assumed - the flag is Bool and true in all 178 instances that
+        // carry it, so its ABSENCE is what means "at birth".
+        if (d.Children is { EmitOnDeath: false } birthSet)
+            QueueChildSpawns(s, birthSet, s.BasePos + worldOffset, onDeath: false);
     }
 
     private static void BuildInstances(EmitterState s)

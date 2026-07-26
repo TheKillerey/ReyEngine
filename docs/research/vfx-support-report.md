@@ -492,7 +492,7 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | 2.4 | ~~**Force fields**~~ **DONE (M176)** - all five kinds | `VfxParticleSimulator.ApplyForceFields`, `VfxSystemResolver.ReadForceFields` | 39,904 (2.9%) | Data shapes measured off 6,134 live collections, not inferred from names. The MATHS is still inferred and cannot be validated the way M175's shader stages were - these integrate on the CPU, so there is no bytecode to decode. See 2.4b below for exactly which parts |
 | 2.5 | **Trails DONE (M177)**; beams still open | `VfxParticleSimulator` history + `VfxParticleRenderer.RenderTrailEmitter` | 78,852 trail emitters done; 10,088 beam emitters remain | The ribbon reading is now MEASURED, not inferred from class names - see 2.5b. Beams are deferred for a stated reason, not overlooked |
 | 2.6 | ~~**Palette recolour**~~ **DONE (M175)** | `VfxSystemResolver.ReadPalette`, `VfxParticleRenderer.cs` Frag | 43,621, of which 13,823 have no colour texture at all | Decoded and validated against Riot's `quad_ps` blob#12 (worst 0.0096). `paletteSelector` measured as a ValueVector3 row index against `paletteCount` (median 16). The U/V animation curves are deliberately **NOT** applied - see 'What was deliberately left out' below |
-| 2.7 | **Child particle systems** | new; reuse `VfxSystemResolver.ExtractResourceMap` (`:109`) for `effectKey` | 35,510 (2.5%) | High — needs recursive system instantiation and per-particle spawn hooks. 30.7% of child keys resolve only through dependency bins |
+| 2.7 | ~~**Child particle systems**~~ **DONE (M180)** in the model preview | `VfxSystemResolver.ReadChildren`, `VfxParticleSimulator.QueueChildSpawns`, `ViewportControl.SpawnQueuedChildren` | 35,510 (2.5%) | Spawn scheduling is in the simulator, instantiation in the viewport, resolution in the preview VM (which owns the resource map). Depth-capped because cycles are NOT ruled out — see 2.7b |
 | 2.8 | ~~**Depth offset**~~ **DONE (M175)**; `depthBiasFactors` still deferred | `VfxParticleRenderer.cs` vertex shader | 61,588 / 201,926 | No longer inferred. **DECODED** from `quad_vs` instructions 12-16: `world += normalize(world - vCamera) * depthPushPull`, per vertex, before projection - so positive pushes AWAY and negative pulls toward. Cross-checked against `defaultparticlequadunlit.vs` (same form for `EMITTER_DEPTH_PUSH_PULL`) and confirmed by rendering against a depth-writing wall. 74.6% of authored values are negative, which the decoded sign explains |
 | 2.9 | **Stencil masking** | `VfxParticleRenderer.cs` | 26,393 | Medium; needs a stencil buffer in the viewport FBO |
 | 2.10 | **Sampler state per emitter.** `texAddressModeBase` and `isTexturePixelated` instead of hardcoded Repeat/Linear | `VfxParticleRenderer.cs:108-112` | 80,342 / 1,298 | Trivial code change, but the enum ordering is UNKNOWN — needs one visual A/B to pin |
@@ -735,6 +735,47 @@ so "the bound object's size" is not one quantity that could simply be measured o
 **What would unblock it:** a definition of the plain `Size` metric, and a decision about what the editor
 binds to when previewing a champion whose size differs from the reference. Both are choices, not
 findings — which is why this is recorded here rather than guessed at in code.
+
+### 2.7b M180 child-system findings
+
+**`childrenProbability` is an expected COUNT, not a probability.** The census already flagged that values
+exceed 1.0; measuring the whole set settles what it is instead. Across 136 authoring sets the values are
+{0.005, 0.1, 0.2, 0.35, 0.4, 0.5, 0.55, 1, 2, 3, 8, 10}, **108 of 131 are whole numbers**, and the median
+is exactly 1. Read as an expected count — `floor(p)` children plus one more with probability `frac(p)` —
+every observed value makes sense with no special cases: 1 means "always one" (the overwhelming default,
+since only 136 of 11,308 sets author the field at all), 0.5 means "half the time", 8 means "eight".
+
+**`childEmitOnDeath` is Bool and `true` in all 178 instances that carry it**, so its ABSENCE is what
+means "spawn at birth". That is a measured default rather than an assumed one.
+
+**A probe of mine that measured nothing, and the correction.** An early run appeared to show zero cycles,
+zero self-references and a maximum child-chain depth of 1 — which would have made recursion a non-issue.
+It was wrong: it compared `effectKey` values against system OBJECT path-hashes, and those are different
+keyspaces (`effectKey` indexes `ResourceResolver.resourceMap`). Every key looked unresolvable, so the
+graph looked empty and acyclic for the same reason. **Nothing in the data establishes that child chains
+terminate**, so the implementation caps depth at 2 rather than trusting them to.
+
+**Where each piece lives, and why.** The simulator only SCHEDULES spawns — it is GL-free by design and a
+child system needs textures — so it queues `ChildSpawn` records that the viewport drains and turns into
+real simulators. Child systems are resolved ahead of playback, not on demand, because a spawn happens on
+the GL thread mid-frame and resolving there would mean WAD reads and texture decodes inside the render
+loop. Resolution lives in the model-preview view-model because that is what already holds both the system
+table and the resource map.
+
+Two ceilings exist that are frame-rate guards rather than Riot behaviour, and are marked as such in code:
+16 queued spawns per emitter per frame, and 48 live child systems. A child set turns *every parent
+particle* into a whole VFX system, so an emitter at a few hundred particles per second would otherwise
+accumulate simulators until the frame rate collapses. Child systems retire on a 6-second timer rather
+than when they run dry, because a looping child would otherwise live forever, one per parent particle.
+
+**INFERRED:** when a set names more than one identifier (255 of 10,608 measured sets), one is picked at
+random per spawn. The data gives a list and a count and says nothing about how they pair up; a set of
+alternatives with a roll count is what the two fields together suggest. 97.6% of sets name exactly one
+child, so it rarely bites.
+
+**Not wired:** `boneToSpawnAt` (931 sets) is parsed and carried but not acted on — child spawns are not
+bone-bound. Map-particle and Particle-Editor playback paths do not resolve children either, because
+neither holds a resource map; only the model preview does.
 
 ### 3. Missing editor controls
 

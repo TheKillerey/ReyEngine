@@ -20,7 +20,15 @@ public sealed record VfxPlaybackItem(
     IReadOnlyList<TextureImage?>? EmitterDistortionTextures = null,
     IReadOnlyList<TextureImage?>? EmitterColorTextures = null,   // M68: particleColorTexture colour-over-life gradient
     IReadOnlyList<TextureImage?>? EmitterErosionTextures = null, // M174 (2.1): alpha-erosion dissolve map
-    IReadOnlyList<TextureImage?>? EmitterPaletteTextures = null) // M175 (2.6): gradient strip for the palette stage
+    IReadOnlyList<TextureImage?>? EmitterPaletteTextures = null, // M175 (2.6): gradient strip for the palette stage
+    /// <summary>M180 (2.7): per emitter, the child systems its particles can spawn, already resolved and
+    /// with their own textures - aligned to that emitter's <c>Children.Children</c> list. Null where the
+    /// emitter has no child set or none of its children resolved.
+    ///
+    /// Resolved AHEAD of playback rather than on demand, because a spawn happens on the GL thread mid
+    /// frame and resolving a system there would mean WAD reads and texture decodes inside the render
+    /// loop.</summary>
+    IReadOnlyList<IReadOnlyList<VfxPlaybackItem>?>? EmitterChildren = null)
 {
     /// <summary>Convenience for champion/editor previews authored at a translated root.</summary>
     public VfxPlaybackItem(VfxSystemDefinition system, Vector3 worldPos,
@@ -30,9 +38,11 @@ public sealed record VfxPlaybackItem(
         IReadOnlyList<TextureImage?>? emitterDistortionTextures = null,
         IReadOnlyList<TextureImage?>? emitterColorTextures = null,
         IReadOnlyList<TextureImage?>? emitterErosionTextures = null,
-        IReadOnlyList<TextureImage?>? emitterPaletteTextures = null)
+        IReadOnlyList<TextureImage?>? emitterPaletteTextures = null,
+        IReadOnlyList<IReadOnlyList<VfxPlaybackItem>?>? emitterChildren = null)
         : this(system, Matrix4x4.CreateTranslation(worldPos), emitterTextures, emitterMeshes, emitterMultTextures,
-            emitterDistortionTextures, emitterColorTextures, emitterErosionTextures, emitterPaletteTextures) { }
+            emitterDistortionTextures, emitterColorTextures, emitterErosionTextures, emitterPaletteTextures,
+            emitterChildren) { }
 
     public Vector3 WorldPos => Transform.Translation;
 

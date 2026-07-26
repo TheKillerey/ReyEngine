@@ -324,6 +324,13 @@ public sealed class ViewportControl : OpenGlControlBase
     // M36: live VFX particle playback (one simulator per played placement)
     private VfxParticleRenderer? _particleRenderer;
     private readonly List<VfxParticleSimulator> _particleSims = new();
+    /// <summary>M180 (2.7): child systems spawned by parent particles this session, with the item they
+    /// came from so their textures can be bound, and the age at which they are retired.</summary>
+    private readonly List<(VfxParticleSimulator Sim, VfxPlaybackItem Item, float Age)> _childSims = new();
+    /// <summary>Ceiling on live child systems. Every parent particle can ask for one, so an emitter at a
+    /// few hundred particles a second would otherwise accumulate simulators until the frame rate dies.</summary>
+    private const int MaxLiveChildSims = 48;
+    private const float ChildSimMaxAge = 6f;
     private readonly Dictionary<VfxPlaybackItem, VfxParticleSimulator> _particleSimCache = new(ReferenceEqualityComparer.Instance);
     /// <summary>M116: per travelling item, seconds since its playback started (drives caster→target flight).</summary>
     private readonly Dictionary<VfxPlaybackItem, float> _travelElapsed = new(ReferenceEqualityComparer.Instance);
@@ -987,6 +994,24 @@ public sealed class ViewportControl : OpenGlControlBase
                 psim.Update(dt);
                 prend.Render(psim, viewProj, view, _camera.Near, _camera.Far);
             }
+
+            // M180 (2.7): child systems. The simulator only SCHEDULES these - it is GL-free by design and
+            // a child needs textures - so the spawn requests are drained here and turned into real
+            // simulators against the child items resolved ahead of playback.
+            foreach (var (item, sim) in _particleSimCache)
+                SpawnQueuedChildren(item, sim);
+
+            for (int i = _childSims.Count - 1; i >= 0; i--)
+            {
+                var (csim, citem, age) = _childSims[i];
+                age += dt;
+                // Child systems are retired on a timer rather than when they run dry: a looping child
+                // would otherwise live forever, one per parent particle, and never be collected.
+                if (age > ChildSimMaxAge) { _childSims.RemoveAt(i); continue; }
+                _childSims[i] = (csim, citem, age);
+                csim.Update(dt);
+                prend.Render(csim, viewProj, view, _camera.Near, _camera.Far);
+            }
             RequestNextFrameRendering();
         }
 
@@ -1182,12 +1207,140 @@ public sealed class ViewportControl : OpenGlControlBase
         }
     }
 
+    /// <summary>M180 (2.7): bind an item's resolved textures and meshes onto a simulator's emitters.
+    ///
+    /// Extracted from RebuildParticleSim so CHILD systems get the identical treatment - a child that
+    /// silently skipped, say, the erosion map or the mesh-fallback guard would look different from the
+    /// same system played on its own, which is exactly the class of inconsistency M175 found when
+    /// erosion reached only one of seven playback paths.</summary>
+    private void BindEmitterAssets(VfxParticleSimulator sim, VfxPlaybackItem item)
+    {
+        if (_particleRenderer is null) return;
+        foreach (var es in sim.Emitters)
+        {
+            // match the state back to its emitter index (by reference — SetSystem keeps the instances)
+            int idx = -1;
+            for (int i = 0; i < item.System.Emitters.Count; i++)
+                if (ReferenceEquals(item.System.Emitters[i], es.Def)) { idx = i; break; }
+            var img = idx >= 0 && idx < item.EmitterTextures.Count ? item.EmitterTextures[idx] : null;
+            if (img is null) es.Texture = _softDotTex;
+            else
+            {
+                if (!_particleTextureCache.TryGetValue(img, out var tex))
+                {
+                    tex = _particleRenderer.UploadTexture(img.Rgba, img.Width, img.Height);
+                    _particleTextureCache[img] = tex;
+                }
+                es.Texture = tex;
+                if (es.Def.UseTextureAspect)
+                {
+                    float cellWidth = img.Width / Math.Max(1f, es.Def.TexDiv.X);
+                    float cellHeight = img.Height / Math.Max(1f, es.Def.TexDiv.Y);
+                    if (cellHeight > 0f) es.SpriteAspect = Math.Clamp(cellWidth / cellHeight, 0.05f, 20f);
+                }
+            }
+            var multImg = item.EmitterMultTextures is { } mts && idx >= 0 && idx < mts.Count ? mts[idx] : null;
+            if (multImg is not null)
+            {
+                if (!_particleTextureCache.TryGetValue(multImg, out var multTex))
+                {
+                    multTex = _particleRenderer.UploadTexture(multImg.Rgba, multImg.Width, multImg.Height);
+                    _particleTextureCache[multImg] = multTex;
+                }
+                es.TextureMult = multTex;
+            }
+            var distortionImg = item.EmitterDistortionTextures is { } dts && idx >= 0 && idx < dts.Count ? dts[idx] : null;
+            if (distortionImg is not null)
+            {
+                if (!_particleTextureCache.TryGetValue(distortionImg, out var distortionTex))
+                {
+                    distortionTex = _particleRenderer.UploadTexture(distortionImg.Rgba, distortionImg.Width, distortionImg.Height);
+                    _particleTextureCache[distortionImg] = distortionTex;
+                }
+                es.DistortionTexture = distortionTex;
+            }
+            // M174 (2.1): the alpha-erosion dissolve map. Sampled in the fragment shader with the
+            // SAME UV as the diffuse texture - decoded from quad_ps, which reuses interpolator v2.xy
+            // and does not give erosion its own UV set.
+            var erosionImg = item.EmitterErosionTextures is { } ets && idx >= 0 && idx < ets.Count ? ets[idx] : null;
+            if (erosionImg is not null)
+            {
+                if (!_particleTextureCache.TryGetValue(erosionImg, out var erosionTex))
+                {
+                    erosionTex = _particleRenderer.UploadTexture(erosionImg.Rgba, erosionImg.Width, erosionImg.Height);
+                    _particleTextureCache[erosionImg] = erosionTex;
+                }
+                es.ErosionTexture = erosionTex;
+            }
+            // M175 (2.6): the palette gradient strip. Unlike particleColorTexture below (which the
+            // simulator samples on the CPU per particle), this one is sampled per FRAGMENT - the
+            // lookup coordinate is the source texel's own channel mix, which only exists in the
+            // fragment stage - so it has to be a real GL texture.
+            var paletteImg = item.EmitterPaletteTextures is { } pts && idx >= 0 && idx < pts.Count ? pts[idx] : null;
+            if (paletteImg is not null)
+            {
+                if (!_particleTextureCache.TryGetValue(paletteImg, out var paletteTex))
+                {
+                    paletteTex = _particleRenderer.UploadTexture(paletteImg.Rgba, paletteImg.Width, paletteImg.Height);
+                    _particleTextureCache[paletteImg] = paletteTex;
+                }
+                es.PaletteTexture = paletteTex;
+            }
+            // M68: particleColorTexture is sampled on the CPU (in the simulator), so hand the emitter the
+            // decoded RGBA gradient directly rather than uploading it to GL.
+            var colorImg = item.EmitterColorTextures is { } cts && idx >= 0 && idx < cts.Count ? cts[idx] : null;
+            if (colorImg is not null)
+            {
+                es.ColorGradient = colorImg.Rgba;
+                es.ColorGradientW = colorImg.Width;
+                es.ColorGradientH = colorImg.Height;
+            }
+            // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
+            var mesh = item.EmitterMeshes is { } ms && idx >= 0 && idx < ms.Count ? ms[idx] : null;
+            if (mesh is not null && img is not null)
+            {
+                _particleRenderer.UploadEmitterMesh(es, mesh.Positions, mesh.Uvs,
+                    mesh.Animation is not null ? mesh.Indices : null);   // skn = indexed; scb = triangle soup
+                if (mesh.Animation is { } anim) _particleMeshAnimations[es] = anim;   // M48 wing flap
+            }
+            else if (mesh is not null)
+            {
+                // Solid-white mesh fallbacks become huge opaque blocks in a full-map preview.
+                // Keep the emitter dormant until its authored mesh texture can be resolved.
+                es.Texture = 0;
+            }
+        }
+    }
+
     /// <summary>(Re)build the particle simulator from <see cref="ParticlePlayback"/> and upload each emitter's
+    /// <summary>M180 (2.7): turn one parent sim's queued child requests into live child simulators.</summary>
+    private void SpawnQueuedChildren(VfxPlaybackItem item, VfxParticleSimulator sim)
+    {
+        if (item.EmitterChildren is not { } perEmitter) return;
+        for (int e = 0; e < sim.Emitters.Count; e++)
+        {
+            var spawns = sim.Emitters[e].TakeChildSpawns();
+            if (spawns.Count == 0) continue;
+            if (e >= perEmitter.Count || perEmitter[e] is not { } childItems || childItems.Count == 0) continue;
+            foreach (var sp in spawns)
+            {
+                if (_childSims.Count >= MaxLiveChildSims) return;
+                if (sp.ChildIndex < 0 || sp.ChildIndex >= childItems.Count) continue;
+                var childItem = childItems[sp.ChildIndex];
+                var csim = new VfxParticleSimulator(HashCode.Combine(childItem.System.PathHash, _childSims.Count));
+                csim.SetSystem(childItem.System, Matrix4x4.CreateTranslation(sp.Position));
+                BindEmitterAssets(csim, childItem);
+                _childSims.Add((csim, childItem, 0f));
+            }
+        }
+    }
+
     /// sprite (procedural soft-dot fallback when unresolved). Runs on the GL thread. M36.</summary>
     private void RebuildParticleSim()
     {
         if (_particleRenderer is null) return;
         _particleSims.Clear();
+        _childSims.Clear();
         _particleSimCache.Clear();
         _travelElapsed.Clear();
         _particleTextureCache.Clear();
@@ -1212,100 +1365,7 @@ public sealed class ViewportControl : OpenGlControlBase
             var sim = new VfxParticleSimulator(seed);
             sim.SetSystem(item.System, item.Transform);
             if (item.StartDelay > 0f) sim.SetStartDelay(item.StartDelay);   // M91: frame-accurate clip events
-            foreach (var es in sim.Emitters)
-            {
-                // match the state back to its emitter index (by reference — SetSystem keeps the instances)
-                int idx = -1;
-                for (int i = 0; i < item.System.Emitters.Count; i++)
-                    if (ReferenceEquals(item.System.Emitters[i], es.Def)) { idx = i; break; }
-                var img = idx >= 0 && idx < item.EmitterTextures.Count ? item.EmitterTextures[idx] : null;
-                if (img is null) es.Texture = _softDotTex;
-                else
-                {
-                    if (!_particleTextureCache.TryGetValue(img, out var tex))
-                    {
-                        tex = _particleRenderer.UploadTexture(img.Rgba, img.Width, img.Height);
-                        _particleTextureCache[img] = tex;
-                    }
-                    es.Texture = tex;
-                    if (es.Def.UseTextureAspect)
-                    {
-                        float cellWidth = img.Width / Math.Max(1f, es.Def.TexDiv.X);
-                        float cellHeight = img.Height / Math.Max(1f, es.Def.TexDiv.Y);
-                        if (cellHeight > 0f) es.SpriteAspect = Math.Clamp(cellWidth / cellHeight, 0.05f, 20f);
-                    }
-                }
-                var multImg = item.EmitterMultTextures is { } mts && idx >= 0 && idx < mts.Count ? mts[idx] : null;
-                if (multImg is not null)
-                {
-                    if (!_particleTextureCache.TryGetValue(multImg, out var multTex))
-                    {
-                        multTex = _particleRenderer.UploadTexture(multImg.Rgba, multImg.Width, multImg.Height);
-                        _particleTextureCache[multImg] = multTex;
-                    }
-                    es.TextureMult = multTex;
-                }
-                var distortionImg = item.EmitterDistortionTextures is { } dts && idx >= 0 && idx < dts.Count ? dts[idx] : null;
-                if (distortionImg is not null)
-                {
-                    if (!_particleTextureCache.TryGetValue(distortionImg, out var distortionTex))
-                    {
-                        distortionTex = _particleRenderer.UploadTexture(distortionImg.Rgba, distortionImg.Width, distortionImg.Height);
-                        _particleTextureCache[distortionImg] = distortionTex;
-                    }
-                    es.DistortionTexture = distortionTex;
-                }
-                // M174 (2.1): the alpha-erosion dissolve map. Sampled in the fragment shader with the
-                // SAME UV as the diffuse texture - decoded from quad_ps, which reuses interpolator v2.xy
-                // and does not give erosion its own UV set.
-                var erosionImg = item.EmitterErosionTextures is { } ets && idx >= 0 && idx < ets.Count ? ets[idx] : null;
-                if (erosionImg is not null)
-                {
-                    if (!_particleTextureCache.TryGetValue(erosionImg, out var erosionTex))
-                    {
-                        erosionTex = _particleRenderer.UploadTexture(erosionImg.Rgba, erosionImg.Width, erosionImg.Height);
-                        _particleTextureCache[erosionImg] = erosionTex;
-                    }
-                    es.ErosionTexture = erosionTex;
-                }
-                // M175 (2.6): the palette gradient strip. Unlike particleColorTexture below (which the
-                // simulator samples on the CPU per particle), this one is sampled per FRAGMENT - the
-                // lookup coordinate is the source texel's own channel mix, which only exists in the
-                // fragment stage - so it has to be a real GL texture.
-                var paletteImg = item.EmitterPaletteTextures is { } pts && idx >= 0 && idx < pts.Count ? pts[idx] : null;
-                if (paletteImg is not null)
-                {
-                    if (!_particleTextureCache.TryGetValue(paletteImg, out var paletteTex))
-                    {
-                        paletteTex = _particleRenderer.UploadTexture(paletteImg.Rgba, paletteImg.Width, paletteImg.Height);
-                        _particleTextureCache[paletteImg] = paletteTex;
-                    }
-                    es.PaletteTexture = paletteTex;
-                }
-                // M68: particleColorTexture is sampled on the CPU (in the simulator), so hand the emitter the
-                // decoded RGBA gradient directly rather than uploading it to GL.
-                var colorImg = item.EmitterColorTextures is { } cts && idx >= 0 && idx < cts.Count ? cts[idx] : null;
-                if (colorImg is not null)
-                {
-                    es.ColorGradient = colorImg.Rgba;
-                    es.ColorGradientW = colorImg.Width;
-                    es.ColorGradientH = colorImg.Height;
-                }
-                // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
-                var mesh = item.EmitterMeshes is { } ms && idx >= 0 && idx < ms.Count ? ms[idx] : null;
-                if (mesh is not null && img is not null)
-                {
-                    _particleRenderer.UploadEmitterMesh(es, mesh.Positions, mesh.Uvs,
-                        mesh.Animation is not null ? mesh.Indices : null);   // skn = indexed; scb = triangle soup
-                    if (mesh.Animation is { } anim) _particleMeshAnimations[es] = anim;   // M48 wing flap
-                }
-                else if (mesh is not null)
-                {
-                    // Solid-white mesh fallbacks become huge opaque blocks in a full-map preview.
-                    // Keep the emitter dormant until its authored mesh texture can be resolved.
-                    es.Texture = 0;
-                }
-            }
+            BindEmitterAssets(sim, item);
             _particleSimCache[item] = sim;
             _particleSims.Add(sim);
         }

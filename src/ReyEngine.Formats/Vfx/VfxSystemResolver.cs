@@ -166,6 +166,14 @@ public static class VfxSystemResolver
     private static readonly uint F_reflOpacityDirect = HashAlgorithms.Fnv1a("reflectionOpacityDirect");
     private static readonly uint F_reflOpacityGlance = HashAlgorithms.Fnv1a("reflectionOpacityGlancing");
     private static readonly uint F_reflMapTexture    = HashAlgorithms.Fnv1a("reflectionMapTexture");
+    // M180 (2.7) child particle sets. Struct class 0xb520045a, measured on 11,308 live sets.
+    private static readonly uint F_childSet          = HashAlgorithms.Fnv1a("childParticleSetDefinition");
+    private static readonly uint F_childrenIds       = HashAlgorithms.Fnv1a("childrenIdentifiers");
+    private static readonly uint F_childEffectKey    = HashAlgorithms.Fnv1a("effectKey");
+    private static readonly uint F_childEffect       = HashAlgorithms.Fnv1a("effect");
+    private static readonly uint F_childOnDeath      = HashAlgorithms.Fnv1a("childEmitOnDeath");
+    private static readonly uint F_childProbability  = HashAlgorithms.Fnv1a("childrenProbability");
+    private static readonly uint F_childBone         = HashAlgorithms.Fnv1a("boneToSpawnAt");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -410,7 +418,8 @@ public static class VfxSystemResolver
             ForceFields: ReadForceFields(p),
             Trail: ReadTrail(prim),
             IsArbitraryTrail: primClass == C_primArbitraryTrail,
-            Reflection: ReadReflection(p));
+            Reflection: ReadReflection(p),
+            Children: ReadChildren(p));
     }
 
     /// <summary>M177 (2.5): the trail ribbon's parameters. See VfxTrailDefinition for what the payload
@@ -450,6 +459,38 @@ public static class VfxSystemResolver
         // A struct that neither tints a rim nor names a cubemap has nothing to contribute; dropping it
         // here keeps the renderer from binding uniforms for a stage that cannot draw anything.
         return refl.HasFresnel || !string.IsNullOrEmpty(refl.MapPath) ? refl : null;
+    }
+
+    /// <summary>M180 (2.7): the child particle set. See VfxChildParticleSet for what the payload contains
+    /// and, importantly, for why nothing here establishes that child chains terminate.</summary>
+    private static VfxChildParticleSet? ReadChildren(IReadOnlyDictionary<uint, BinTreeProperty> p)
+    {
+        if (Get(p, F_childSet) is not BinTreeStruct set) return null;
+        var sp = set.Properties;
+
+        var ids = new List<VfxChildIdentifier>();
+        if (Get(sp, F_childrenIds) is BinTreeContainer c)
+            foreach (var el in c.Elements)
+            {
+                if (el is not BinTreeStruct ident) continue;
+                uint key = Get(ident.Properties, F_childEffectKey) is BinTreeHash h ? h.Value : 0u;
+                uint link = Get(ident.Properties, F_childEffect) is BinTreeObjectLink o ? o.Value : 0u;
+                var id = new VfxChildIdentifier(key, link);
+                if (!id.IsEmpty) ids.Add(id);
+            }
+        if (ids.Count == 0) return null;
+
+        var bones = new List<string>();
+        if (Get(sp, F_childBone) is BinTreeContainer bc)
+            foreach (var el in bc.Elements)
+                if (el is BinTreeString bs && !string.IsNullOrEmpty(bs.Value)) bones.Add(bs.Value);
+
+        // childrenProbability is a ValueFloat wrapper; absent means one child per event, which is what
+        // 11,172 of the 11,308 measured sets rely on.
+        float count = Get(sp, F_childProbability) is not null ? ReadScalar(sp, F_childProbability) : 1f;
+        if (count <= 0f) count = 1f;
+
+        return new VfxChildParticleSet(ids, GetBool(sp, F_childOnDeath), count, bones);
     }
 
     private static Vector3 ReadValueVec3OrZero(BinTreeProperty? p) => p switch

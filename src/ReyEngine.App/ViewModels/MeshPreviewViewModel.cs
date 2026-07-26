@@ -659,6 +659,63 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         HasEvents = ChampionEvents.Count > 0;
     }
 
+    /// <summary>M180 (2.7): resolve one emitter's child set into playable items.
+    ///
+    /// A child is named either by <c>effectKey</c> - a key in the same namespace as
+    /// <c>ResourceResolver.resourceMap</c>, hence the indirection - or by <c>effect</c>, a direct object
+    /// link. Both are tried; unresolved children are simply dropped, which is the common case for the
+    /// ~30% of keys that live only in bins this skin does not pull in.
+    ///
+    /// <paramref name="depth"/> exists because NOTHING in the data rules out a child chain reaching back
+    /// to its own parent. An early probe appeared to show no cycles, but it compared child keys against
+    /// system object-hashes - different keyspaces - so it established nothing. The cap is what guarantees
+    /// termination, not the data.</summary>
+    private IReadOnlyList<IReadOnlyList<VfxPlaybackItem>?>? ResolveChildren(VfxSystemDefinition sys, int depth)
+    {
+        if (depth >= MaxChildDepth) return null;
+        List<IReadOnlyList<VfxPlaybackItem>?>? perEmitter = null;
+        for (int i = 0; i < sys.Emitters.Count; i++)
+        {
+            var set = sys.Emitters[i].Children;
+            List<VfxPlaybackItem>? items = null;
+            if (set is not null)
+                foreach (var id in set.Children)
+                {
+                    VfxSystemDefinition? child = null;
+                    if (id.EffectKey != 0 && _vfxResourceMap.TryGetValue(id.EffectKey, out var mapped))
+                        _vfxDefs.TryGetValue(mapped, out child);
+                    if (child is null && id.EffectLink != 0) _vfxDefs.TryGetValue(id.EffectLink, out child);
+                    if (child is null && id.EffectKey != 0) _vfxDefs.TryGetValue(id.EffectKey, out child);
+                    if (child is null) continue;
+                    (items ??= new()).Add(BuildItem(child, System.Numerics.Vector3.Zero, depth + 1));
+                }
+            if (items is not null) (perEmitter ??= NullList(sys.Emitters.Count))[i] = items;
+        }
+        return perEmitter;
+    }
+
+    private static List<IReadOnlyList<VfxPlaybackItem>?> NullList(int n)
+    {
+        var l = new List<IReadOnlyList<VfxPlaybackItem>?>(n);
+        for (int i = 0; i < n; i++) l.Add(null);
+        return l;
+    }
+
+    /// <summary>Children of children are resolved one level deep and no further. Deeper chains are rare,
+    /// and the cost of getting recursion wrong here is an editor that hangs on preview.</summary>
+    private const int MaxChildDepth = 2;
+
+    /// <summary>M180: build a playback item with all its texture stages and its resolved children.</summary>
+    private VfxPlaybackItem BuildItem(VfxSystemDefinition def, System.Numerics.Vector3 at, int depth = 0)
+        => new(def, at,
+            ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count],
+            ResolveMeshes?.Invoke(def),
+            emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
+            emitterColorTextures: ResolveColorTextures?.Invoke(def),
+            emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
+            emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
+            emitterChildren: ResolveChildren(def, depth));
+
     public void SetVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems,
         IReadOnlyDictionary<uint, uint>? resourceMap = null)
     {
@@ -685,7 +742,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             ResolveMeshes?.Invoke(def), emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
             emitterColorTextures: ResolveColorTextures?.Invoke(def),
             emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
-            emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def)) });
+            emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
+            emitterChildren: ResolveChildren(def, 0)) });
     }
 
     [RelayCommand] private void StopVfx() => SelectedVfx = null;

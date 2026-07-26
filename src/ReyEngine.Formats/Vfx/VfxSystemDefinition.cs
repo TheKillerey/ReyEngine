@@ -172,7 +172,11 @@ public sealed record VfxEmitterDefinition(
 
     /// <summary>M178 (2.12) reflectionDefinition - the fresnel rim and cubemap reflection stage.
     /// 59,149 emitters.</summary>
-    VfxReflection? Reflection = null)
+    VfxReflection? Reflection = null,
+
+    /// <summary>M180 (2.7) childParticleSetDefinition - other VFX systems spawned by this emitter's
+    /// particles. 35,510 emitters.</summary>
+    VfxChildParticleSet? Children = null)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
@@ -721,4 +725,55 @@ public sealed record VfxReflection(
     /// set, and pow() needs a positive exponent to be a ramp rather than a constant.</summary>
     public bool HasFresnel =>
         (FresnelColor.X != 0f || FresnelColor.Y != 0f || FresnelColor.Z != 0f) && Fresnel > 0f;
+}
+
+/// <summary>M180 (2.7): Riot's <c>VfxChildParticleSetDefinitionData</c> (class 0xb520045a) - whole VFX
+/// systems spawned by this emitter's particles. 35,510 emitters carry one.
+///
+/// Measured on 11,308 live sets. <c>childrenIdentifiers</c> is a container, almost always of one entry
+/// (10,353 of 10,608) but up to four, and each entry references a system either by <c>effectKey</c> (a
+/// Hash, 6,348) or by <c>effect</c> (an ObjectLink, 4,978).
+///
+/// <c>effectKey</c> is NOT a system's object path-hash. It lives in the same namespace as
+/// <c>ResourceResolver.resourceMap</c>, so resolving one means going through that map - and per the
+/// census only 4,392 of 6,334 sampled keys resolve within the same bin, the rest needing the skin's
+/// dependency bins.
+///
+/// RECURSION IS NOT RULED OUT. An early probe appeared to show no cycles and a maximum chain depth of 1,
+/// but it was comparing child keys against system object-hashes - two different keyspaces - so it was
+/// measuring nothing and every key looked unresolvable. Nothing here establishes that a child chain
+/// cannot reach back to its own parent, which is why callers must impose a hard depth cap rather than
+/// trusting the data to terminate.</summary>
+public sealed record VfxChildParticleSet(
+    IReadOnlyList<VfxChildIdentifier> Children,
+    /// <summary>childEmitOnDeath - spawn when the parent particle DIES rather than when it is born.
+    /// Bool, and <c>true</c> in all 178 instances that author it, so absence means birth.</summary>
+    bool EmitOnDeath,
+    /// <summary>childrenProbability - despite the name, NOT a 0..1 probability: the census flagged that
+    /// values exceed 1.0, and the measured set is {0.005, 0.1, 0.2, 0.35, 0.4, 0.5, 0.55, 1, 2, 3, 8, 10}
+    /// with 108 of 131 whole numbers and a median of exactly 1.
+    ///
+    /// Read here as an EXPECTED COUNT, which is the one reading that covers the whole range coherently:
+    /// spawn <c>floor(p)</c> children, plus one more with probability <c>frac(p)</c>. That makes 1 mean
+    /// "always exactly one" (the overwhelming default), 0.5 mean "half the time", and 8 mean "eight" -
+    /// all without a special case. Only 136 of 11,308 sets author it at all.</summary>
+    float ExpectedCount,
+    /// <summary>boneToSpawnAt - a container of bone names, present on 931 sets. Parsed and carried; the
+    /// simulator has no skeleton binding for child spawns, so it is not acted on yet.</summary>
+    IReadOnlyList<string> BonesToSpawnAt)
+{
+    /// <summary>How many children to spawn for one parent event, rolling the fractional part.</summary>
+    public int RollCount(Random rng)
+    {
+        float p = ExpectedCount <= 0f ? 1f : ExpectedCount;
+        int whole = (int)MathF.Floor(p);
+        return whole + (rng.NextDouble() < p - whole ? 1 : 0);
+    }
+}
+
+/// <summary>One entry of a child set. A system is named either by <see cref="EffectKey"/> (resolved
+/// through the resource map) or by <see cref="EffectLink"/> (a direct object link).</summary>
+public sealed record VfxChildIdentifier(uint EffectKey, uint EffectLink)
+{
+    public bool IsEmpty => EffectKey == 0 && EffectLink == 0;
 }
