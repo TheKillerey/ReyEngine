@@ -4,8 +4,11 @@
 enough fidelity to be worth a second render backend?
 
 **Both halves answered, and they point in opposite directions.** Riot's compiled shaders *do* load and
-run on a Silk.NET D3D11 device — but our existing GLSL reimplementation already matches one of them to
-within a third of an 8-bit step, so the fidelity argument for the port is much weaker than assumed.
+run on a Silk.NET D3D11 device — but our existing GLSL reimplementation matches all **three** shaders
+tested to within 8-bit quantisation, so the fidelity argument for the port does not survive.
+
+> Round 1 validated alpha erosion. Round 2 added soft particles and palette, and turned up a genuine
+> unrelated gap: the unconditional `PIXEL_COLOR_REMAP_RAMP` stage that ReyEngine does not implement.
 
 ---
 
@@ -81,14 +84,72 @@ step. The comparison is not vacuous: alpha spans the full 0–1 range in every c
 varies 39–128, and the shapes differ per configuration. `slice + both` renders the trapezoid the decode
 predicted, and the band sweeps toward higher E as the drive rises.
 
+## Round 2 - soft particles, palette, UV modes
+
+Same harness, same method. Permutations located by scanning the 300 locally extracted `quad_ps` blobs
+and reading each RDEF.
+
+### Soft particles - `quad_ps` blob#128 (4,288 bytes) - **MATCH**
+
+`$Globals` holds `cSoftParticleParams` @+0 and `cSoftParticleControl` @+16; `cDepthConversionParams`
+sits at `PerFramePixelCB`+80, exactly where the decode placed it. Depth is `Load()`ed from
+`sDepthTexture_SharedTexture` with integer coordinates, so the test bound an R32_FLOAT ramp as the scene
+depth and held the particle at z = 0.5.
+
+| case | max abs diff | alpha range | profile |
+|---|---|---|---|
+| fade in only | 0.0019 | 0.00-1.00 | `####    ` |
+| band in+out | 0.0021 | 0.00-1.00 | ` ##     ` |
+| base + fade alpha | 0.0021 | 0.25-1.00 | `####....` |
+
+**Worst 0.0021.** The decoded formula - `lin(z) = 1/(z*dc.y + dc.x)`, `diff = lin(scene) - lin(self)`,
+`t = saturate((diff - P.xy)*P.zw)`, smoothstep each, `fade = s.x - s.y`, `a *= C.z + C.w*fade` -
+reproduces Riot's shader, including the `.x`-pairs-with-`.z` swizzle and the genuine smoothstep, in
+contrast to erosion's linear ramps in the same shader family. The `base + fade` case correctly floors
+at 0.25.
+
+### Palette - `quad_ps` blob#12 (1,852 bytes) - **MATCH**
+
+| case | max abs diff | sample at x=128 |
+|---|---|---|
+| mixer = red, no offset | 0.0027 | riot L=0.502, ours L=0.501 (palette[128]) |
+| mixer = red, U+0.25 | 0.0027 | riot L=0.286, ours L=0.286 (palette[192]) |
+| mixer = luma-ish | 0.0096 | riot L=0.510, ours L=0.511 (palette[38]) |
+
+**Worst 0.0096.** The `U+0.25` row is decisive: the offset moved the lookup from `palette[128]` to
+`palette[192]`, exactly `+0.25 x 255`, confirming `U = saturate(dot(src, mixer)) + cPaletteSelectMain.z`.
+
+> **A separate finding, and the more useful one.** The first palette run returned pure white for every
+> case. That was a flaw in the test, not the decode - `PIXEL_COLOR_REMAP_RAMP` **replaces** RGB with
+> `ramp.Sample(luma(rgb), 0.5)` rather than multiplying it, so the white stub forced white output and hid
+> the palette completely. Re-running with a greyscale-identity ramp made the lookup observable.
+>
+> **ReyEngine does not implement this remap at all.** It is unconditional in every colour-output particle
+> pixel shader, so our particle RGB skips a stage the game always applies. What the game puts in that
+> shared texture is UNKNOWN - it is engine-supplied and plausibly identity under normal conditions, which
+> would make this harmless - but that is an assumption, not a measurement, and it is worth settling
+> before chasing any other particle-colour discrepancy. Nothing to do with D3D11; the same gap exists on
+> either backend.
+
+### UV modes - not decidable this way, and not attempted
+
+`uvMode` is a CPU-side enum. The shader-side switches are `LOCAL_SPACE_UV` / `SCREEN_SPACE_UV` in
+`mesh_vs`, and nothing in the bytecode records which authored `uvMode` value selects which - the same
+structural wall as the erosion parameter packing, because the CPU resolves it before anything reaches the
+GPU. Running `mesh_vs` could validate the planar-projection maths for `LOCAL_SPACE_UV`, but that needs
+its full cbuffer set plus a stand-in pixel shader to read the interpolant back, and it would still leave
+the enum mapping unanswered. ReyEngine implements no `uvMode` behaviour today, so there is nothing to
+compare against either. Deliberately skipped rather than half-done.
+
 ## What this means for the backend decision
 
 **For a port:** it works. Riot's shaders are loadable and runnable, which would in principle remove the
 whole class of "our GLSL approximates their HLSL" bugs.
 
-**Against:** the specific bug class it would remove appears to be empty, at least here. The GLSL written
-from the disassembly reproduces the real shader to within quantisation. That was the strongest argument
-for the port and this spike substantially weakens it.
+**Against:** the specific bug class it would remove is empty on everything measured. **Three of three**
+decoded formulas reproduce Riot's real shaders to within 8-bit quantisation - erosion 0.0013, soft
+particles 0.0021, palette 0.0096 - covering 307,050 + 95,671 + 43,621 emitters between them. That was the
+strongest argument for the port, and it no longer stands.
 
 Unchanged, and still the deciding cost: Avalonia offers `OpenGlControlBase` and no D3D11 equivalent.
 Presenting a D3D11 swapchain means either a `NativeControlHost` child HWND — which sits above the
@@ -99,19 +160,21 @@ regresses the UI.
 Also worth keeping in view: on Windows the app already runs on D3D11 underneath, via ANGLE. A native port
 removes a translation layer rather than adding a capability.
 
-**Recommendation.** Do not port for fidelity on this evidence. The remaining honest arguments are (a)
-shaders whose behaviour we have *not* validated — soft particles, palette and the UV modes are decoded
-but unverified against the real thing, and the same harness would settle each in about an hour, and (b)
-reasons unrelated to fidelity, such as a hard requirement to run Riot's pipeline verbatim. If more
-shaders are validated this way and they also match, the port has no fidelity case left at all.
+**Recommendation: do not port for fidelity.** Every formula tested reproduces Riot's shader within
+quantisation, so translating rather than running their bytecode costs nothing measurable in accuracy. The
+arguments that remain are unrelated to fidelity - a hard requirement to run Riot's pipeline verbatim, or
+wanting new permutations to work without hand-porting each one.
+
+Where effort actually pays is the **gaps this exposed**, all of which exist on either backend: soft
+particles and palette are now validated but still unimplemented in ReyEngine, and the unconditional
+`PIXEL_COLOR_REMAP_RAMP` stage is not implemented at all.
 
 ## Caveats
 
-- One shader, one permutation. It is the largest single VFX feature (22% of emitters) but it is not proof
-  about the others.
-- The comparison covers the **alpha** channel, which is what erosion drives. RGB additionally passes
-  through an unconditional `PIXEL_COLOR_REMAP_RAMP` luminance lookup that this harness stubbed with a
-  white texture, so RGB was not compared.
+- Three shaders, one permutation each, covering the three largest decoded VFX features. Not proof about
+  the rest of the schema.
+- Erosion and soft particles were compared on the **alpha** channel, which is what both drive. Palette
+  was compared through the remap ramp as luminance, which is what that stage leaves observable.
 - Riot's *authored* parameter packing — which field lands in `cAlphaErosionParams.y/.z/.w` — remains
   undecidable from the shader, because the CPU packs that vector before upload. Running the real shader
   cannot resolve it, and did not.
