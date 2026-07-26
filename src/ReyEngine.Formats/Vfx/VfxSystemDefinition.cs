@@ -137,7 +137,26 @@ public sealed record VfxEmitterDefinition(
     /// <summary>M174 (2.1) alphaErosionDefinition - the dissolve stage. 307,050 emitters (22%), the
     /// largest single visual feature ReyEngine did not implement; without it they all fade by uniform
     /// alpha instead of eroding away through a noise map.</summary>
-    VfxAlphaErosion? AlphaErosion = null)
+    VfxAlphaErosion? AlphaErosion = null,
+
+    // ---- M175 tier 2.2 / 2.6 / 2.8 ----
+    /// <summary>M175 (2.2) softParticleParams - fade the sprite out as it approaches the geometry behind
+    /// it, instead of hard-clipping against it. 95,671 emitters.</summary>
+    VfxSoftParticle? SoftParticle = null,
+    /// <summary>M175 (2.6) paletteDefinition - replace the sprite's RGB with a lookup into a gradient
+    /// strip. 43,621 emitters, 13,823 of which have no colour texture at all and so currently render as
+    /// flat birthColor.</summary>
+    VfxPalette? Palette = null,
+    /// <summary>M175 (2.8) depthPushPull - move the sprite along the camera->vertex ray before projecting,
+    /// which changes only its depth and never its screen position. 61,588 emitters.
+    ///
+    /// DECODED from quad_vs (see <see cref="VfxEmitterDef"/> callers): the shader computes
+    /// <c>pos += normalize(pos - vCamera) * PARTICLE_DEPTH_PUSH_PULL</c>, so POSITIVE pushes the sprite
+    /// AWAY from the camera and negative pulls it toward. Measured on the live corpus, 74.6% of authored
+    /// values are negative (median -5, range -2000..9999) - i.e. the overwhelmingly common use is pulling
+    /// a sprite toward the camera so it survives the depth test against terrain, which is exactly what the
+    /// decoded sign predicts.</summary>
+    float DepthPushPull = 0f)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
@@ -417,4 +436,118 @@ internal static class VfxCurve
         }
         return values[n - 1];
     }
+}
+
+/// <summary>M175 (2.2): Riot's soft-particle stage - fade the sprite as it nears the geometry behind it.
+///
+/// The maths is DECODED from the shipped DXBC and then VALIDATED by running Riot's own
+/// `particlesystem/quad_ps` permutation #128 on a D3D11 device and comparing against this formula over
+/// three configurations x 256 depth values. Worst disagreement 0.0021, under one 8-bit step
+/// (docs/research/d3d11-spike.md):
+///
+///   lin(z) = 1 / (z * dc.y + dc.x)          // window depth -> view distance
+///   diff   = lin(sceneDepth) - lin(selfDepth)
+///   t      = saturate((diff - P.xy) * P.zw)  // .x pairs with .z, .y with .w
+///   s      = t * t * (3 - 2t)                // a REAL smoothstep, unlike alpha erosion's linear ramps
+///   fade   = s.x - s.y
+///   rgb   *= C.x + C.y * fade
+///   alpha *= C.z + C.w * fade
+///
+/// Two things about that are worth stating plainly, because both were open questions the validation
+/// closed: the smoothstep is genuine (alpha erosion, in the very same shader family, uses linear ramps -
+/// so the two stages really do differ), and the `.x`-pairs-with-`.z` swizzle is Riot's, not a guess.
+///
+/// WHAT IS NOT KNOWN: what feeds `cSoftParticleControl` (C). The CPU packs it before upload, so the
+/// bytecode cannot say. This uses (1, 0, 0, 1) - leave RGB alone, multiply alpha by the fade - which is
+/// the standard soft-particle behaviour and the only reading consistent with the feature's name. The
+/// unresolved U8 field 0x3bf176bc {1:2, 2:239} inside this struct is the likeliest place a "fade colour
+/// instead of alpha" mode would live; 74 emitters author it and none of them are handled specially.</summary>
+public sealed record VfxSoftParticle(float BeginIn, float DeltaIn, float BeginOut, float DeltaOut)
+{
+    /// <summary>Pack into the shader's cSoftParticleParams. Absent widths must degrade to a no-op edge,
+    /// exactly as in <see cref="VfxAlphaErosion.PackYzw"/>: a missing fade-in becomes a hard step, and a
+    /// missing fade-out slope 0 so nothing is subtracted. Getting that backwards erases the sprite,
+    /// since fade = s.x - s.y.
+    ///
+    /// The sign of the delta is PRESERVED rather than clamped. 1,500-odd emitters author a negative
+    /// deltaIn (-1000 through -15 all occur), which under this formula inverts the ramp so the sprite is
+    /// visible only NEAR geometry rather than away from it. That is a coherent authoring choice for
+    /// ground-hugging mist, and clamping it to positive would silently discard it - the same mistake
+    /// M174 (1.6) found in the texDiv handling.</summary>
+    public Vector4 PackParams() => new(
+        BeginIn, BeginOut,
+        MathF.Abs(DeltaIn) > 1e-6f ? 1f / DeltaIn : 1000f,
+        MathF.Abs(DeltaOut) > 1e-6f ? 1f / DeltaOut : 0f);
+
+    /// <summary>Would this configuration erase the sprite at every distance from the geometry behind it?
+    /// The same class of guard as <see cref="VfxAlphaErosion.IsDegenerate"/>, and for the same reason: if
+    /// the parameter packing is wrong the symptom is particles vanishing, and skipping the stage can only
+    /// restore the pre-M175 appearance, never make anything worse.
+    ///
+    /// Note this stage is far less dangerous than erosion to begin with: a particle in open air has no
+    /// geometry behind it, so `diff` is enormous and the fade saturates to fully visible. Only fragments
+    /// close to a surface are affected at all.</summary>
+    public bool IsDegenerate
+    {
+        get
+        {
+            // 0 .. 4000 world units covers point-blank to well beyond any authored begin/delta (max 5000
+            // appears once); the last sample stands in for "nothing behind this particle at all".
+            foreach (float diff in new[] { 0f, 1f, 5f, 20f, 50f, 100f, 250f, 1000f, 4000f, 1e6f })
+            {
+                var p = PackParams();
+                float tx = Math.Clamp((diff - p.X) * p.Z, 0f, 1f);
+                float ty = Math.Clamp((diff - p.Y) * p.W, 0f, 1f);
+                float fade = tx * tx * (3f - 2f * tx) - ty * ty * (3f - 2f * ty);
+                if (fade > 0.01f) return false;
+            }
+            return true;
+        }
+    }
+}
+
+/// <summary>M175 (2.6): Riot's palette stage - replace the sprite's RGB with a lookup into a gradient
+/// strip, keeping the source alpha.
+///
+/// DECODED from `particlesystem/quad_ps` and VALIDATED against Riot's own permutation #12 on a D3D11
+/// device; worst disagreement 0.0096 across three configurations (docs/research/d3d11-spike.md):
+///
+///   m   = saturate(dot(sourceTexel.rgba, cPaletteSrcMixerMain))
+///   U   = m + cPaletteSelectMain.z
+///   V   = cPaletteSelectMain.x + cPaletteSelectMain.w
+///   rgb = paletteTexture.Sample(U, V).rgb          // alpha comes from the source, untouched
+///
+/// The U offset was pinned rather than merely fitted: adding 0.25 moved the sampled texel from
+/// palette[128] to palette[192] on a 256-wide strip, exactly +0.25 x 255.
+///
+/// The measured data matches that shape. `paletteSelector` is a ValueVector3 whose .x is a small integer
+/// (1, 2, 4, 6, 9 ... ) and `paletteCount` is typically 16 - so the texture is a vertical stack of
+/// gradients, U walks along one and V picks which. `palleteSrcMixColor` (Riot's typo, hash-confirmed) is
+/// dominated by (1,0,0,0) and (0.3,0.59,0.11,0) - the red channel and Rec.601 luma weights - which is
+/// exactly what a "which channel drives the gradient" mixer should look like.
+///
+/// WHAT IS INFERRED, because the CPU packs cPaletteSelectMain before upload:
+///  - that V is row-centred as (selector + 0.5) / count. Centring is the only choice that reliably lands
+///    on ONE row under the bilinear sampler Riot binds; sampling at selector/count straddles two.
+///  - that PaletteU/VAnimationCurve feed the .z and .w offsets. They are the only per-emitter animated
+///    scalars in the struct and the shader adds exactly two such offsets, but the pairing is by name.
+///  - the DEFAULT mixer when `palleteSrcMixColor` is absent (70% of the corpus). Luma is used here. On a
+///    greyscale source texture - the common case for a palettised sprite - luma and red-only agree
+///    exactly, so this choice only changes anything for colour source art.</summary>
+public sealed record VfxPalette(
+    string? TexturePath,
+    /// <summary>paletteCount - how many gradient rows the strip holds. -1 and 0 both occur and are
+    /// nonsense as a divisor; <see cref="IsUsable"/> rejects them.</summary>
+    int Count,
+    /// <summary>paletteSelector.x - which row. Authored as a ValueVector3 with y/z always zero.</summary>
+    float Selector,
+    Vector4 SrcMixer,
+    VfxCurveF? UAnim,
+    VfxCurveF? VAnim)
+{
+    /// <summary>The row's V coordinate, centred. See the class remarks - the +0.5 is inferred.</summary>
+    public float RowV => Count > 0 ? (Selector + 0.5f) / Count : 0.5f;
+
+    /// <summary>A palette with no texture, or a row count that cannot be divided by, does nothing.</summary>
+    public bool IsUsable => !string.IsNullOrEmpty(TexturePath) && Count > 0;
 }

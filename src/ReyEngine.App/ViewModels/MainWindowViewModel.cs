@@ -788,6 +788,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return texs;
     }
 
+    /// <summary>M175 (2.6): each emitter's palette gradient strip, aligned to Emitters.</summary>
+    private readonly Dictionary<uint, IReadOnlyList<TextureImage?>> _vfxPaletteTextureCache = new();
+
+    private IReadOnlyList<TextureImage?> ResolveSystemPaletteTextures(VfxSystemDefinition sys)
+    {
+        if (_vfxPaletteTextureCache.TryGetValue(sys.PathHash, out var cached)) return cached;
+        var texs = new List<TextureImage?>(sys.Emitters.Count);
+        foreach (var e in sys.Emitters)
+            texs.Add(e.Palette?.TexturePath is { } p ? LoadTextureByPath(p) : null);
+        _vfxPaletteTextureCache[sys.PathHash] = texs;
+        return texs;
+    }
+
     private IReadOnlyList<TextureImage?> ResolveSystemDistortionTextures(VfxSystemDefinition sys)
     {
         if (_vfxDistortionTextureCache.TryGetValue(sys.PathHash, out var cached)) return cached;
@@ -895,7 +908,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // champion VFX are authored around the character root (origin); play one system there.
         CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, System.Numerics.Vector3.Zero,
             ResolveSystemTextures(sys), ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys), ResolveSystemDistortionTextures(sys),
-            ResolveSystemColorTextures(sys), ResolveSystemErosionTextures(sys)) });
+            ResolveSystemColorTextures(sys), ResolveSystemErosionTextures(sys),
+            ResolveSystemPaletteTextures(sys)) });
         _log.Info("VFX", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {ResolveSystemTextures(sys).Count(t => t is not null)} sprite(s) resolved.");
     }
 
@@ -913,7 +927,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (!IsParticleVisible(v.Placement)) continue;
                 if (!_vfxSystems.TryGetValue(v.Placement.SystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
                 items.Add(new VfxPlaybackItem(s, v.CurrentTransform, ResolveSystemTextures(s), ResolveSystemMeshes(s),
-                    ResolveSystemMultTextures(s), ResolveSystemDistortionTextures(s), ResolveSystemColorTextures(s)));
+                    ResolveSystemMultTextures(s), ResolveSystemDistortionTextures(s), ResolveSystemColorTextures(s),
+                    ResolveSystemErosionTextures(s), ResolveSystemPaletteTextures(s)));
             }
             CurrentParticlePlayback = items.Count > 0 ? new VfxPlayback(items, CullByCamera: true) : null;
             _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.");
@@ -929,7 +944,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var texs = ResolveSystemTextures(sys);
         CurrentParticlePlayback = new VfxPlayback(new[] { new VfxPlaybackItem(sys, node.CurrentTransform, texs,
             ResolveSystemMeshes(sys), ResolveSystemMultTextures(sys), ResolveSystemDistortionTextures(sys),
-            ResolveSystemColorTextures(sys)) });
+            ResolveSystemColorTextures(sys), ResolveSystemErosionTextures(sys),
+            ResolveSystemPaletteTextures(sys)) });
         _log.Info("Particles", $"Playing '{sys.Name}' — {sys.Emitters.Count} emitter(s), {texs.Count(t => t is not null)} sprite(s) resolved.");
     }
 
@@ -2504,6 +2520,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.ResolveMultTextures = ResolveSystemMultTextures;
         ParticleEditor.ResolveDistortionTextures = ResolveSystemDistortionTextures;
         ParticleEditor.ResolveColorTextures = ResolveSystemColorTextures;   // M68: particleColorTexture gradient
+        // M175: erosion and palette. Erosion shipped in M174 but was only ever handed to the champion-VFX
+        // path, so the Particle Editor - the one surface built for looking at VFX - never applied it.
+        ParticleEditor.ResolveErosionTextures = ResolveSystemErosionTextures;
+        ParticleEditor.ResolvePaletteTextures = ResolveSystemPaletteTextures;
         ParticleEditor.ResolveMeshes = ResolveSystemMeshes;   // M47: .scb/.sco mesh primitives
 
         // M55: model-preview window — its own animation clock (AnimationInspectorViewModel) + VFX resolvers
@@ -2514,6 +2534,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.ResolveTextures = ResolveSystemTextures;
         MeshPreview.ResolveDistortionTextures = ResolveSystemDistortionTextures;
         MeshPreview.ResolveColorTextures = ResolveSystemColorTextures;   // M68
+        MeshPreview.ResolveErosionTextures = ResolveSystemErosionTextures;   // M175 (see above)
+        MeshPreview.ResolvePaletteTextures = ResolveSystemPaletteTextures;
         MeshPreview.ResolveMeshes = ResolveSystemMeshes;
         MeshPreview.PlaySoundEvent = PlayPreviewSoundEvent;              // M90: clip SFX
         MeshPreview.StopSounds = () => Sound.StopTag("previewsfx");

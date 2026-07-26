@@ -24,6 +24,10 @@ public sealed class VfxParticleRenderer
     private int _uEmitterUvScroll, _uUvFlip, _uUvRotInt, _uUvRotRate, _uUvCenter, _uEmitterAge;
     private int _uDirectionOriented, _uArbitraryQuad;
     private int _uPlacementRight, _uPlacementUp, _uPlacementForward;
+    // M175: soft particles (2.2), palette (2.6), depth push/pull (2.8)
+    private int _uDepthTex, _uDepthConv, _uSoftParams, _uSoftControl, _uHasSoft;
+    private int _uPaletteTex, _uPaletteMixer, _uPaletteV, _uHasPalette;
+    private int _uDepthPushPull, _uCamPos;
     private int _instCapFloats;
     private bool _ready;
     private readonly List<uint> _ownedTextures = new();
@@ -32,6 +36,10 @@ public sealed class VfxParticleRenderer
     private readonly Dictionary<uint, bool> _texHasAlpha = new();
     private uint _sceneTexture;
     private int _sceneWidth, _sceneHeight;
+    // M175 (2.2): the scene depth, blitted out of the viewport's depth renderbuffer so it can be sampled.
+    private uint _depthTexture, _depthFbo;
+    private int _depthWidth, _depthHeight;
+    private bool _depthOk;
 
     // M174 (2.1): the 19th float is the per-particle alpha-erosion drive. Riot's own quad path passes
     // it the same way - quad_vs reads vertex attribute TEXCOORD0.w into TEXCOORD3.z.
@@ -86,6 +94,17 @@ public sealed class VfxParticleRenderer
         _uPlacementRight = gl.GetUniformLocation(_program, "uPlacementRight");
         _uPlacementUp = gl.GetUniformLocation(_program, "uPlacementUp");
         _uPlacementForward = gl.GetUniformLocation(_program, "uPlacementForward");
+        _uDepthTex = gl.GetUniformLocation(_program, "uDepthTex");
+        _uDepthConv = gl.GetUniformLocation(_program, "uDepthConv");
+        _uSoftParams = gl.GetUniformLocation(_program, "uSoftParams");
+        _uSoftControl = gl.GetUniformLocation(_program, "uSoftControl");
+        _uHasSoft = gl.GetUniformLocation(_program, "uHasSoft");
+        _uPaletteTex = gl.GetUniformLocation(_program, "uPaletteTex");
+        _uPaletteMixer = gl.GetUniformLocation(_program, "uPaletteMixer");
+        _uPaletteV = gl.GetUniformLocation(_program, "uPaletteV");
+        _uHasPalette = gl.GetUniformLocation(_program, "uHasPalette");
+        _uDepthPushPull = gl.GetUniformLocation(_program, "uDepthPushPull");
+        _uCamPos = gl.GetUniformLocation(_program, "uCamPos");
 
         _vao = gl.GenVertexArray();
         gl.BindVertexArray(_vao);
@@ -174,9 +193,80 @@ public sealed class VfxParticleRenderer
         _gl.BindTexture(TextureTarget.Texture2D, 0);
     }
 
+    /// <summary>M175 (2.2): blit the scene's depth into a texture the particle pass can sample.
+    ///
+    /// The viewport draws into an FBO whose depth attachment is a RENDERBUFFER, which cannot be sampled
+    /// and which <c>CopyTexSubImage2D</c> cannot read (that path only ever reads colour). A depth-only
+    /// <c>BlitFramebuffer</c> into a second FBO backed by a depth TEXTURE is the one route GLES 3.0
+    /// offers, so that is what this does.
+    ///
+    /// Call with the scene FBO bound as the read target, BEFORE any particle draws.</summary>
+    public unsafe void CaptureDepth(uint width, uint height)
+    {
+        if (!_ready || width == 0 || height == 0) return;
+        _gl.GetInteger(GetPName.ReadFramebufferBinding, out int prevRead);
+        _gl.GetInteger(GetPName.DrawFramebufferBinding, out int prevDraw);
+
+        if (_depthTexture == 0)
+        {
+            _depthTexture = _gl.GenTexture();
+            _depthFbo = _gl.GenFramebuffer();
+            _gl.BindTexture(TextureTarget.Texture2D, _depthTexture);
+            // NEAREST, deliberately. Interpolating two depth samples produces a distance at which no
+            // geometry exists - halfway between a near wall and the far plane is a surface that is not
+            // there - and the fade would halo around every silhouette edge.
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        }
+
+        if (_depthWidth != (int)width || _depthHeight != (int)height)
+        {
+            _gl.BindTexture(TextureTarget.Texture2D, _depthTexture);
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.DepthComponent24, width, height, 0,
+                PixelFormat.DepthComponent, PixelType.UnsignedInt, null);
+            _depthWidth = (int)width;
+            _depthHeight = (int)height;
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _depthFbo);
+            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
+                TextureTarget.Texture2D, _depthTexture, 0);
+            // If this FBO is not complete the blit below silently does nothing, and the texture keeps
+            // whatever it was allocated with - which would read as depth 0, i.e. "solid geometry directly
+            // on the lens", and would fade every soft particle to nothing. Checking once and refusing to
+            // bind is the difference between the feature being unavailable and the effects disappearing.
+            _depthOk = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer) == GLEnum.FramebufferComplete;
+            if (_depthOk)
+            {
+                // No ClearDepth call here: `glClearDepth` is desktop-GL only and does not exist in GLES 3.0
+                // (ANGLE throws SymbolLoadingException for it), and the GL default clear-depth is already
+                // 1.0 - the far plane - which is exactly the value this wants. Nothing else in the codebase
+                // changes it.
+                _gl.DepthMask(true);
+                _gl.Clear((uint)ClearBufferMask.DepthBufferBit);
+            }
+        }
+
+        if (_depthOk)
+        {
+            _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, (uint)prevRead);
+            _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _depthFbo);
+            // Depth blits must use NEAREST; GL rejects LINEAR outright for depth.
+            _gl.BlitFramebuffer(0, 0, (int)width, (int)height, 0, 0, (int)width, (int)height,
+                (uint)ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
+        }
+
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, (uint)prevRead);
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, (uint)prevDraw);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+    }
+
     /// <summary>Draw all emitters of the simulator. <paramref name="viewProj"/> and <paramref name="view"/>
-    /// are the app's mirror-inclusive matrices (same ones passed to the mesh renderer).</summary>
-    public unsafe void Render(VfxParticleSimulator sim, Matrix4x4 viewProj, Matrix4x4 view)
+    /// are the app's mirror-inclusive matrices (same ones passed to the mesh renderer).
+    /// <paramref name="near"/>/<paramref name="far"/> are the camera's clip planes, needed to turn the
+    /// sampled window depth back into a view distance for M175 (2.2).</summary>
+    public unsafe void Render(VfxParticleSimulator sim, Matrix4x4 viewProj, Matrix4x4 view,
+        float near = 1f, float far = 200000f)
     {
         if (!_ready || sim.LiveParticleCount == 0) return;
 
@@ -194,7 +284,39 @@ public sealed class VfxParticleRenderer
         _gl.Uniform1(_uTexMult, 1);
         _gl.Uniform1(_uSceneTex, 2);
         _gl.Uniform1(_uDistortionTex, 3);
-        _gl.Uniform2(_uViewportSize, (float)_sceneWidth, (float)_sceneHeight);
+        // Both captures are the framebuffer size, but CaptureScene only runs when a distortion emitter is
+        // present - so the depth dimensions are the ones that exist in the ordinary case, and the soft
+        // stage needs a correct size to address gl_FragCoord against.
+        _gl.Uniform2(_uViewportSize,
+            _depthWidth > 0 ? _depthWidth : _sceneWidth,
+            _depthHeight > 0 ? _depthHeight : _sceneHeight);
+        _gl.Uniform3(_uCamPos, inv.M41, inv.M42, inv.M43);
+
+        // M175 (2.2): window depth -> view distance, in Riot's `1 / (z * dc.y + dc.x)` form.
+        //
+        // The constants are NOT the textbook GL ones. ReyEngine builds its projection with
+        // Matrix4x4.CreatePerspectiveFieldOfView, and System.Numerics follows the DIRECT3D convention:
+        // clip-space z maps near->0, far->+1, not near->-1. GL then applies its own viewport transform
+        // d = (z_ndc + 1) / 2, so window depth actually occupies [0.5, 1.0] - only half the range.
+        //
+        // Substituting that back gives 1/dist = d * (2/f - 2/n) + (2/n - 1/f), i.e.:
+        //     dc.x = 2/near - 1/far,   dc.y = 2*(1/far - 1/near)
+        // The textbook GL pair (1/near, 1/far - 1/near) is exactly half that slope, which made every
+        // measured distance ~1.9x too large and silently halved the width of every authored fade band.
+        // The offscreen probe caught it by comparing measured alpha against smoothstep at five distances;
+        // it is invisible to inspection because the effect still looks like a plausible soft particle.
+        float invN = 1f / MathF.Max(near, 1e-4f), invF = 1f / MathF.Max(far, 1e-4f);
+        _gl.Uniform2(_uDepthConv, 2f * invN - invF, 2f * (invF - invN));
+        // The depth pass uses the SAME viewport dimensions as the colour capture, so gl_FragCoord/size
+        // addresses it correctly; if the depth blit never ran, no emitter enables the stage below.
+        bool depthReady = _depthOk && _depthTexture != 0 && _depthWidth > 0;
+        if (depthReady)
+        {
+            _gl.ActiveTexture(TextureUnit.Texture4);
+            _gl.BindTexture(TextureTarget.Texture2D, _depthTexture);
+            _gl.Uniform1(_uDepthTex, 4);
+            _gl.ActiveTexture(TextureUnit.Texture0);
+        }
 
         _gl.BindVertexArray(_vao);
         _gl.ActiveTexture(TextureUnit.Texture0);
@@ -276,6 +398,36 @@ public sealed class VfxParticleRenderer
                 _gl.Uniform4(_uErosionMixer, ero.ChannelMixer.X, ero.ChannelMixer.Y, ero.ChannelMixer.Z, ero.ChannelMixer.W);
                 _gl.ActiveTexture(TextureUnit.Texture0);
             }
+            // M175 (2.2): soft particles. The resolver has already dropped configurations that would fade
+            // to nothing at every distance, so reaching here means the stage does something visible.
+            bool hasSoft = depthReady && d2.SoftParticle is not null;
+            _gl.Uniform1(_uHasSoft, hasSoft ? 1 : 0);
+            if (hasSoft)
+            {
+                var sp = d2.SoftParticle!.PackParams();
+                _gl.Uniform4(_uSoftParams, sp.X, sp.Y, sp.Z, sp.W);
+                // cSoftParticleControl: leave RGB alone, scale alpha by the fade. What Riot actually feeds
+                // this is not recoverable from the bytecode - see VfxSoftParticle's remarks.
+                _gl.Uniform4(_uSoftControl, 1f, 0f, 0f, 1f);
+            }
+
+            // M175 (2.6): palette recolour, bound to texture unit 6.
+            bool hasPalette = es.PaletteTexture != 0 && d2.Palette is not null;
+            _gl.Uniform1(_uHasPalette, hasPalette ? 1 : 0);
+            if (hasPalette)
+            {
+                var pal = d2.Palette!;
+                _gl.ActiveTexture(TextureUnit.Texture6);
+                _gl.BindTexture(TextureTarget.Texture2D, es.PaletteTexture);
+                _gl.Uniform1(_uPaletteTex, 6);
+                _gl.Uniform4(_uPaletteMixer, pal.SrcMixer.X, pal.SrcMixer.Y, pal.SrcMixer.Z, pal.SrcMixer.W);
+                _gl.Uniform1(_uPaletteV, pal.RowV);
+                _gl.ActiveTexture(TextureUnit.Texture0);
+            }
+
+            // M175 (2.8): depth push/pull. DECODED from quad_vs instructions 12-16, cross-checked against
+            // defaultparticlequadunlit.vs (which applies the same form to EMITTER_DEPTH_PUSH_PULL).
+            _gl.Uniform1(_uDepthPushPull, d2.DepthPushPull);
             _gl.Uniform2(_uUvOffset, d2.UvOffset.X, d2.UvOffset.Y);
             _gl.Uniform2(_uUvScale, d2.UvScale.X == 0 ? 1f : d2.UvScale.X, d2.UvScale.Y == 0 ? 1f : d2.UvScale.Y);
             _gl.Uniform2(_uUvScrollInt, d2.UvScrollIntegrated.X, d2.UvScrollIntegrated.Y);
@@ -324,6 +476,12 @@ public sealed class VfxParticleRenderer
         _gl.ActiveTexture(TextureUnit.Texture2);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _gl.ActiveTexture(TextureUnit.Texture3);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _gl.ActiveTexture(TextureUnit.Texture4);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _gl.ActiveTexture(TextureUnit.Texture5);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _gl.ActiveTexture(TextureUnit.Texture6);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _gl.ActiveTexture(TextureUnit.Texture0);
     }
@@ -378,6 +536,11 @@ public sealed class VfxParticleRenderer
         if (_sceneTexture != 0) _gl.DeleteTexture(_sceneTexture);
         _sceneTexture = 0;
         _sceneWidth = _sceneHeight = 0;
+        if (_depthTexture != 0) _gl.DeleteTexture(_depthTexture);
+        if (_depthFbo != 0) _gl.DeleteFramebuffer(_depthFbo);
+        _depthTexture = _depthFbo = 0;
+        _depthWidth = _depthHeight = 0;
+        _depthOk = false;
         _ready = false;
     }
 
@@ -614,6 +777,8 @@ uniform int uArbitraryQuad;
 uniform vec3 uPlacementRight;
 uniform vec3 uPlacementUp;
 uniform vec3 uPlacementForward;
+uniform float uDepthPushPull;   // M175 (2.8)
+uniform vec3 uCamPos;
 out float vErosionDrive;   // M174 (2.1): per-particle erosion drive -> fragment stage
 out vec2 vUv;
 out vec2 vUvMult;
@@ -643,6 +808,19 @@ void main(){
     vec3 right = uArbitraryQuad != 0 ? placedRight : uCamRight;
     vec3 up = uArbitraryQuad != 0 ? placedUp : uCamUp;
     vec3 world = aCenter + right * (rc.x * aSize.x) + up * (rc.y * aSize.y);
+    // M175 (2.8): depthPushPull. DECODED from particlesystem/quad_vs, which does exactly this:
+    //     12: add r0.xyz, v0.xyz, -cb2[4].xyz     // vCamera
+    //     13-15: normalize
+    //     16: mad r0.xyz, r0.xyz, cb1[1].xxxx, v0.xyz
+    // i.e. world += normalize(world - camera) * depthPushPull, per VERTEX and before projection, so
+    // POSITIVE pushes away from the camera. Because every corner slides along its own camera ray, the
+    // sprite's screen position and size are untouched and only its depth changes - which is why this can
+    // be applied unconditionally without any risk of moving artwork.
+    if (uDepthPushPull != 0.0) {
+        vec3 away = world - uCamPos;
+        float len = length(away);
+        if (len > 1e-4) world += (away / len) * uDepthPushPull;
+    }
     gl_Position = uViewProj * vec4(world, 1.0);
     vec2 cell = aCorner + vec2(0.5, 0.5);      // [0,1] within the frame cell
     // M174: sign is preserved so a negative divisor mirrors the axis, but the flipbook GRID has to be
@@ -719,10 +897,32 @@ uniform sampler2D uSceneTex;
 uniform vec2 uViewportSize;
 uniform float uDistortionStrength;
 uniform float uAlphaRef;
+uniform sampler2D uDepthTex;     // M175 (2.2)
+uniform vec2 uDepthConv;
+uniform vec4 uSoftParams;
+uniform vec4 uSoftControl;
+uniform int uHasSoft;
+uniform sampler2D uPaletteTex;   // M175 (2.6)
+uniform vec4 uPaletteMixer;
+uniform float uPaletteV;
+uniform int uHasPalette;
 out vec4 fragColor;
 void main(){
     vec4 t = texture(uTex, vUv);
     if (uHasTexMult != 0) t *= texture(uTexMult, vUvMult);
+
+    // M175 (2.6): palette recolour. DECODED from particlesystem/quad_ps and VALIDATED against Riot's own
+    // permutation on a D3D11 device (worst 0.0096 - docs/research/d3d11-spike.md):
+    //     m   = saturate(dot(sourceTexel, mixer));  U = m + select.z;  V = select.x + select.w
+    //     rgb = palette.Sample(U, V).rgb            // REPLACES rgb; alpha stays the source's
+    // The U/V animation curves that would feed those two offsets are deliberately NOT applied - see the
+    // remarks on VfxPalette. Their authored median is 1.0, and a constant +1 on U would drive every
+    // lookup off the right-hand end of the gradient, so the naive curve-value-is-the-offset reading is
+    // refuted by the data itself. Better to sample the authored row than to sample confidently wrong.
+    if (uHasPalette != 0) {
+        float m = clamp(dot(t, uPaletteMixer), 0.0, 1.0);
+        t.rgb = texture(uPaletteTex, vec2(m, uPaletteV)).rgb;
+    }
     // M174 (2.1): alpha erosion (dissolve). DECODED from the SHEX instruction streams of
     // particlesystem/quad_ps, particlesystem/mesh_ps and skinnedmesh/particle_ps, which agree exactly:
     // a difference of two SATURATED LINEAR ramps, giving a trapezoidal band. Deliberately NOT a
@@ -738,6 +938,29 @@ void main(){
 
     // M174 (1.4): alpha test. Riot tests the ERODED alpha, so this must follow the stage above.
     if (uAlphaRef > 0.0 && t.a * vColor.a < uAlphaRef) discard;
+
+    // M175 (2.2): soft particles. DECODED from quad_ps and VALIDATED against Riot's own permutation
+    // (worst 0.0021 - docs/research/d3d11-spike.md). Note the genuine smoothstep: alpha erosion above
+    // uses LINEAR ramps in the very same shader family, and running both confirmed they really differ.
+    //
+    // Placed AFTER the alpha test on purpose. Riot's ordering here is not recoverable, but testing the
+    // faded alpha would re-introduce exactly the hard cutoff against geometry that this stage exists to
+    // remove - the fade would be quantised back into a hard edge at the cutoff.
+    if (uHasSoft != 0) {
+        vec2 duv = gl_FragCoord.xy / max(uViewportSize, vec2(1.0));
+        float sceneZ = texture(uDepthTex, duv).r;
+        // 1/(z*dc.y + dc.x): window depth back to view distance. A fragment with nothing behind it reads
+        // the far plane, so diff is enormous and the fade saturates open - particles in open air are
+        // untouched by this stage, which is what makes it safe to apply broadly.
+        float lscene = 1.0 / (sceneZ * uDepthConv.y + uDepthConv.x);
+        float lself  = 1.0 / (gl_FragCoord.z * uDepthConv.y + uDepthConv.x);
+        float diff = lscene - lself;
+        vec2 st = clamp((vec2(diff) - uSoftParams.xy) * uSoftParams.zw, 0.0, 1.0);
+        vec2 sm = st * st * (3.0 - 2.0 * st);
+        float fade = sm.x - sm.y;
+        t.rgb *= uSoftControl.x + uSoftControl.y * fade;
+        t.a   *= uSoftControl.z + uSoftControl.w * fade;
+    }
     if (uIsDistortion != 0) {
         vec4 normalSample = texture(uDistortionTex, vUv);
         float mask = normalSample.a * t.a * vColor.a;

@@ -115,6 +115,23 @@ public static class VfxSystemResolver
     private static readonly uint F_erosionSlice    = HashAlgorithms.Fnv1a("erosionSliceWidth");
     private static readonly uint F_erosionFeatherIn  = HashAlgorithms.Fnv1a("erosionFeatherIn");
     private static readonly uint F_erosionFeatherOut = HashAlgorithms.Fnv1a("erosionFeatherOut");
+    // M175 (2.2) soft particles. Struct class 0x1daa3fb0, measured on 14,765 live structs.
+    private static readonly uint F_softParticle    = HashAlgorithms.Fnv1a("softParticleParams");
+    private static readonly uint F_softBeginIn     = HashAlgorithms.Fnv1a("beginIn");
+    private static readonly uint F_softDeltaIn     = HashAlgorithms.Fnv1a("deltaIn");
+    private static readonly uint F_softBeginOut    = HashAlgorithms.Fnv1a("beginOut");
+    private static readonly uint F_softDeltaOut    = HashAlgorithms.Fnv1a("deltaOut");
+    // M175 (2.6) palette. Struct class 0xa8ad8317, measured on 8,866 live structs.
+    private static readonly uint F_paletteDef      = HashAlgorithms.Fnv1a("paletteDefinition");
+    private static readonly uint F_paletteTexture  = HashAlgorithms.Fnv1a("paletteTexture");
+    private static readonly uint F_paletteCount    = HashAlgorithms.Fnv1a("paletteCount");
+    private static readonly uint F_paletteSelector = HashAlgorithms.Fnv1a("paletteSelector");
+    /// <summary>Riot's own typo, kept verbatim because the hash is what matches - "pallete", one L.</summary>
+    private static readonly uint F_paletteSrcMix   = HashAlgorithms.Fnv1a("palleteSrcMixColor");
+    private static readonly uint F_paletteUAnim    = HashAlgorithms.Fnv1a("PaletteUAnimationCurve");
+    private static readonly uint F_paletteVAnim    = HashAlgorithms.Fnv1a("PaletteVAnimationCurve");
+    // M175 (2.8) depth offset. Name recovered by brute force in M174: FNV-1a("depthPushPull") == 0xcb13aff1.
+    private static readonly uint F_depthPushPull   = HashAlgorithms.Fnv1a("depthPushPull");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -352,7 +369,10 @@ public static class VfxSystemResolver
             ChanceToNotExist: GetF32(p, F_chanceNotExist) ?? 0f,
             HasVariableStartTime: GetBool(p, F_variableStart),
             EmitterLinger: GetOptionalF32(p, F_emitterLinger),
-            AlphaErosion: ReadAlphaErosion(p));
+            AlphaErosion: ReadAlphaErosion(p),
+            SoftParticle: ReadSoftParticle(p),
+            Palette: ReadPalette(p),
+            DepthPushPull: ReadScalar(p, F_depthPushPull));
     }
 
     /// <summary>M174 (1.1): dispatch on the shape CLASS, not just on emitOffset.
@@ -415,6 +435,46 @@ public static class VfxSystemResolver
             ReadScalar(ep, F_erosionSlice),
             ReadScalar(ep, F_erosionFeatherIn),
             ReadScalar(ep, F_erosionFeatherOut));
+    }
+
+    /// <summary>M175 (2.2): the soft-particle fade. See VfxSoftParticle for the decoded and validated
+    /// shader maths. All four components are plain F32 in the live data (no Value* wrappers), but
+    /// ReadScalar handles both, so a wrapped variant elsewhere in the corpus still parses.</summary>
+    private static VfxSoftParticle? ReadSoftParticle(IReadOnlyDictionary<uint, BinTreeProperty> p)
+    {
+        if (Get(p, F_softParticle) is not BinTreeStruct s) return null;
+        var sp = s.Properties;
+        var soft = new VfxSoftParticle(
+            ReadScalar(sp, F_softBeginIn),
+            ReadScalar(sp, F_softDeltaIn),
+            ReadScalar(sp, F_softBeginOut),
+            ReadScalar(sp, F_softDeltaOut));
+        // An all-zero struct packs to a fade of 0 everywhere, which would erase the sprite. 888 of the
+        // 14,765 live structs author no deltaIn at all, so this is not a hypothetical.
+        return soft.IsDegenerate ? null : soft;
+    }
+
+    /// <summary>M175 (2.6): the palette lookup. See VfxPalette for the decoded and validated shader maths
+    /// and for which parts of the packing remain inferred.</summary>
+    private static VfxPalette? ReadPalette(IReadOnlyDictionary<uint, BinTreeProperty> p)
+    {
+        if (Get(p, F_paletteDef) is not BinTreeStruct s) return null;
+        var sp = s.Properties;
+
+        var texture = GetString(sp, F_paletteTexture);
+        int count = GetI32(sp, F_paletteCount) ?? 0;
+
+        // paletteSelector is a ValueVector3 whose .x is the row index; y/z are always zero in the corpus.
+        float selector = ReadCurve3Property(Get(sp, F_paletteSelector))?.Constant.X
+                         ?? GetVec3(sp, F_paletteSelector)?.X ?? 0f;
+
+        // Absent in ~70% of the corpus. Luma is the default here - see VfxPalette's remarks; on the
+        // greyscale source art these emitters usually use, luma and red-only are identical anyway.
+        var mixer = ReadCurve4(sp, F_paletteSrcMix)?.Constant ?? new Vector4(0.3f, 0.59f, 0.11f, 0f);
+
+        var palette = new VfxPalette(texture, count, selector, mixer,
+            ReadCurveF(sp, F_paletteUAnim), ReadCurveF(sp, F_paletteVAnim));
+        return palette.IsUsable ? palette : null;
     }
 
     /// <summary>A shape dimension, which may be authored either as a bare F32 or wrapped in a Value* struct.</summary>
@@ -571,6 +631,11 @@ public static class VfxSystemResolver
 
     private static int? GetU16(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash)
         => Get(p, hash) is BinTreeU16 u ? u.Value : null;
+
+    /// <summary>M175: `paletteCount` is I32 in the live data - and authors -1 and 0, which is why the
+    /// caller has to treat it as "cannot divide by this" rather than trusting it.</summary>
+    private static int? GetI32(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash)
+        => Get(p, hash) is BinTreeI32 v ? v.Value : null;
 
     private static Vector2? GetVec2(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash)
         => Get(p, hash) is BinTreeVector2 v ? v.Value : null;

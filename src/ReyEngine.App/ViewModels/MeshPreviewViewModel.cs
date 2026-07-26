@@ -89,6 +89,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveDistortionTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveColorTextures;   // M68
+    public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveErosionTextures;   // M174 (2.1)
+    public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolvePaletteTextures;   // M175 (2.6)
     public Func<VfxSystemDefinition, IReadOnlyList<StaticMeshData?>?>? ResolveMeshes;
 
     private double _lastAnimTime;
@@ -287,7 +289,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             items.Add(new VfxPlaybackItem(def, anchor, texs,
                 ResolveMeshes?.Invoke(def),
                 emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
-                emitterColorTextures: ResolveColorTextures?.Invoke(def))
+                emitterColorTextures: ResolveColorTextures?.Invoke(def),
+                emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
+                emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def))
             {
                 AttachBone = atDummy ? null : ResolveBoneName(ev),
                 StartDelay = MathF.Max(0f, ev.StartFrame) / ClipFps(),   // M91: fire at the authored frame
@@ -454,7 +458,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             return new VfxPlaybackItem(def, at, texs,
                 ResolveMeshes?.Invoke(def),
                 emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
-                emitterColorTextures: ResolveColorTextures?.Invoke(def))
+                emitterColorTextures: ResolveColorTextures?.Invoke(def),
+                emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
+                emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def))
             {
                 TravelTo = travelTo,
                 TravelSeconds = dist > 1f ? dist / 1800f : 0f,
@@ -677,7 +683,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // R_tar_enemy lands on the dummy instead of stacking on the caster.
         Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, AnchorFor(def, PlaySelectedAtDummy), texs,
             ResolveMeshes?.Invoke(def), emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
-            emitterColorTextures: ResolveColorTextures?.Invoke(def)) });
+            emitterColorTextures: ResolveColorTextures?.Invoke(def),
+            emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
+            emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def)) });
     }
 
     [RelayCommand] private void StopVfx() => SelectedVfx = null;

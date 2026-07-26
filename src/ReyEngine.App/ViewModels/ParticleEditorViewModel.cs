@@ -24,6 +24,8 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveMultTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveDistortionTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveColorTextures;   // M68
+    public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveErosionTextures;   // M174 (2.1)
+    public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolvePaletteTextures;   // M175 (2.6)
     public Func<VfxSystemDefinition, IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>?>? ResolveMeshes; // M47
     public Func<string, Avalonia.Media.Imaging.Bitmap?>? LoadThumbnail;   // particle sprite preview on cards
     public Action<string>? Info;
@@ -115,9 +117,13 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         var multTexs = ResolveMultTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var distortionTexs = ResolveDistortionTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var colorTexs = ResolveColorTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
+        // M175: erosion and palette maps. Live-editing a dissolve or a gradient with the stage switched
+        // off in the preview would show the user an effect that does not match what the game draws.
+        var erosionTexs = ResolveErosionTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
+        var paletteTexs = ResolvePaletteTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var meshes = ResolveMeshes?.Invoke(def);
         Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs, meshes,
-            multTexs, distortionTexs, colorTexs) });
+            multTexs, distortionTexs, colorTexs, erosionTexs, paletteTexs) });
     }
 
     [RelayCommand] private void Restart() => RebuildPlayback();

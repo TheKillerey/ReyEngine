@@ -954,6 +954,10 @@ public sealed class ViewportControl : OpenGlControlBase
             // Avoid the framebuffer copy entirely for the common case where no active system uses distortion.
             if (_particleSims.Any(static s => s.Emitters.Any(static e => e.Def.Distortion is not null)))
                 prend.CaptureScene(w, h);
+            // M175 (2.2): soft particles need the scene depth. Same conditional shape as the colour copy -
+            // a depth blit per frame is not free, and 93% of emitters never ask for it.
+            if (_particleSims.Any(static s => s.Emitters.Any(static e => e.Def.SoftParticle is not null)))
+                prend.CaptureDepth(w, h);
             float dt = _particleClock.IsRunning ? (float)_particleClock.Elapsed.TotalSeconds : 1f / 60f;
             _particleClock.Restart();
             dt = ParticlePaused ? 0f : dt * (float)ParticleSpeed;   // M46: editor speed/pause controls
@@ -981,7 +985,7 @@ public sealed class ViewportControl : OpenGlControlBase
             foreach (var psim in _particleSims)
             {
                 psim.Update(dt);
-                prend.Render(psim, viewProj, view);
+                prend.Render(psim, viewProj, view, _camera.Near, _camera.Far);
             }
             RequestNextFrameRendering();
         }
@@ -1263,6 +1267,20 @@ public sealed class ViewportControl : OpenGlControlBase
                         _particleTextureCache[erosionImg] = erosionTex;
                     }
                     es.ErosionTexture = erosionTex;
+                }
+                // M175 (2.6): the palette gradient strip. Unlike particleColorTexture below (which the
+                // simulator samples on the CPU per particle), this one is sampled per FRAGMENT - the
+                // lookup coordinate is the source texel's own channel mix, which only exists in the
+                // fragment stage - so it has to be a real GL texture.
+                var paletteImg = item.EmitterPaletteTextures is { } pts && idx >= 0 && idx < pts.Count ? pts[idx] : null;
+                if (paletteImg is not null)
+                {
+                    if (!_particleTextureCache.TryGetValue(paletteImg, out var paletteTex))
+                    {
+                        paletteTex = _particleRenderer.UploadTexture(paletteImg.Rgba, paletteImg.Width, paletteImg.Height);
+                        _particleTextureCache[paletteImg] = paletteTex;
+                    }
+                    es.PaletteTexture = paletteTex;
                 }
                 // M68: particleColorTexture is sampled on the CPU (in the simulator), so hand the emitter the
                 // decoded RGBA gradient directly rather than uploading it to GL.

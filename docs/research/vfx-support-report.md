@@ -487,13 +487,13 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | # | Work | Files | Affected | Risk / difficulty |
 |---|---|---|---|---|
 | 2.1 | **Alpha erosion / dissolve.** Second texture + drive curve + feather/slice in the fragment shader | `VfxParticleRenderer.cs` (Frag + a third sampler), `VfxSystemResolver.cs` | **307,050 (22.0%)** | Largest single visual win. Medium difficulty; engine-confirmed feature (`ALPHA_EROSION`, `sAlphaErosionTexture`, `cAlphaErosionParams`). The exact channel-mixer and feather math is inferred — start from the field names and iterate visually |
-| 2.2 | **Soft particles.** Bind a depth texture to the particle pass and fade on depth delta | `VfxParticleRenderer.cs:121-144` (extend `CaptureScene`), Frag | 95,671 (6.8%) | Medium. Requires a depth copy the pass does not currently take. Engine-confirmed (`SOFT_PARTICLES`, `sDepthTexture_SharedTexture`) |
+| 2.2 | ~~**Soft particles**~~ **DONE (M175)** | `VfxParticleRenderer.CaptureDepth` + Frag | 95,671 (6.8%) | Formula decoded, then validated twice: against Riot's own `quad_ps` blob#128 on D3D11 (worst 0.0021), and against `smoothstep` at five distances through the real GL path (worst 0.002). Depth arrives via a depth-only `BlitFramebuffer` into a texture, because the viewport's depth attachment is a renderbuffer. `cSoftParticleControl` is still **UNKNOWN** and hardcoded to (1,0,0,1) |
 | 2.3 | **UV transform stack.** Rotation, scale, offset, clamp, flip, integrated scroll | `VfxParticleRenderer.cs:558-569`, `VfxSystemResolver.cs` | ~150k emitters across 12 fields | Medium. Note `particleUVScrollRate`/`particleUVRotateRate` are `IntegratedValue*` and accumulate — do not sample them like ordinary curves |
 | 2.4 | **Force fields.** Noise / drag / attraction / orbital / acceleration in the integrator | `VfxParticleSimulator.cs:182-205`, `VfxSystemResolver.cs` | 39,904 (2.9%) | Medium-high. This is what makes League's smoke and embers swirl; without it particles travel in straight lines. Field math (curl noise parameters) is inferred from names |
 | 2.5 | **Trails and beams.** Ribbon geometry from successive particle positions | new renderer path, `VfxParticleRenderer.cs` | 92,721 emitters with `mTrail`/`mBeam` | High difficulty — a new geometry generator. Note `VfxPrimitiveRay` (58,434) has **no** data, so do not lump it in |
-| 2.6 | **Palette recolour** | `VfxParticleSimulator.cs` colour path, `VfxParticleRenderer.cs` | 43,621, of which 13,823 have no colour texture at all | Medium; engine-confirmed (`PALETTIZE_TEXTURES`, `cPaletteSelectMain`) |
+| 2.6 | ~~**Palette recolour**~~ **DONE (M175)** | `VfxSystemResolver.ReadPalette`, `VfxParticleRenderer.cs` Frag | 43,621, of which 13,823 have no colour texture at all | Decoded and validated against Riot's `quad_ps` blob#12 (worst 0.0096). `paletteSelector` measured as a ValueVector3 row index against `paletteCount` (median 16). The U/V animation curves are deliberately **NOT** applied - see 'What was deliberately left out' below |
 | 2.7 | **Child particle systems** | new; reuse `VfxSystemResolver.ExtractResourceMap` (`:109`) for `effectKey` | 35,510 (2.5%) | High — needs recursive system instantiation and per-particle spawn hooks. 30.7% of child keys resolve only through dependency bins |
-| 2.8 | **Depth offset.** `depthPushPull` as a vertex-stage view-space offset; `depthBiasFactors` deferred until its components are understood | `VfxParticleRenderer.cs` vertex shader | 61,588 / 201,926 | `depthPushPull` is well-evidenced (cbuffer member `EMITTER_DEPTH_PUSH_PULL` / `PARTICLE_DEPTH_PUSH_PULL`); direction and units still need a sign check against the game |
+| 2.8 | ~~**Depth offset**~~ **DONE (M175)**; `depthBiasFactors` still deferred | `VfxParticleRenderer.cs` vertex shader | 61,588 / 201,926 | No longer inferred. **DECODED** from `quad_vs` instructions 12-16: `world += normalize(world - vCamera) * depthPushPull`, per vertex, before projection - so positive pushes AWAY and negative pulls toward. Cross-checked against `defaultparticlequadunlit.vs` (same form for `EMITTER_DEPTH_PUSH_PULL`) and confirmed by rendering against a depth-writing wall. 74.6% of authored values are negative, which the decoded sign explains |
 | 2.9 | **Stencil masking** | `VfxParticleRenderer.cs` | 26,393 | Medium; needs a stencil buffer in the viewport FBO |
 | 2.10 | **Sampler state per emitter.** `texAddressModeBase` and `isTexturePixelated` instead of hardcoded Repeat/Linear | `VfxParticleRenderer.cs:108-112` | 80,342 / 1,298 | Trivial code change, but the enum ordering is UNKNOWN — needs one visual A/B to pin |
 | 2.11 | **Backface culling per emitter** | `VfxParticleRenderer.cs:174` | The 1,101,289 emitters that omit `disableBackfaceCull` | Blocked on the unknown default; only matters for mesh and arbitrary-quad primitives |
@@ -502,6 +502,53 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | 2.14 | **Duty-cycle and rate-by-velocity emission** (`period`, `timeActiveDuringPeriod`, `rateByVelocityFunction`, `ChanceToNotExist`, `HasVariableStartTime`) | `VfxParticleSimulator.cs:157-178` | ~30k combined | Low individually, visible on map beacons and dash trails |
 | 2.15 | **`Linger` shutdown stage** | `VfxParticleSimulator.cs` | 22,274 + 95,954 `emitterLinger` | Medium; effects currently cut off instead of fading |
 | 2.16 | **Flex bound-object scaling** | `VfxParticleSimulator.cs` | 159,880 (11.4%) | Needs a bound-object size to scale against — depends on what the preview has loaded |
+
+### 2b. M175 findings worth recording
+
+**`depthPushPull` is fully decoded, not inferred.** `quad_vs` blob#0:
+
+```
+12: add r0.xyz, v0.xyz, -cb2[4].xyz      // vCamera -> vector camera->vertex
+13-15: dp3 / rsq / mul                   // normalize
+16: mad r0.xyz, r0.xyz, cb1[1].xxxx, v0.xyz   // PARTICLE_DEPTH_PUSH_PULL
+```
+
+Because every quad corner slides along its own camera ray, screen position and size are **exactly**
+preserved and only depth changes - so this can be applied unconditionally with no risk of moving artwork.
+The near-identical `defaultparticlequadunlit.vs` applies the same form to `EMITTER_DEPTH_PUSH_PULL` at
+cb3[2].z. That shader's *other* offset, at cb1[0].x, uses the opposite direction vector - but it is
+`CameraOffset`, a different global, so there is no contradiction between the two shaders.
+
+**The same disassembly independently confirms M174's flipbook fix.** Instructions 23-28 decompose the
+frame index exactly as ReyEngine does - `round_ni` (floor) on the frame, `col = frame - floor(frame/cols)
+* cols`, then scale by `TEXTURE_INFO.yz` = (1/cols, 1/rows). That was implemented from reasoning in M174
+and is now evidenced.
+
+**A depth-linearisation bug that no amount of code review would have found.** ReyEngine builds its
+projection with `Matrix4x4.CreatePerspectiveFieldOfView`, and System.Numerics follows the **Direct3D**
+convention (clip z maps near->0, far->+1). GL then applies `d = (z_ndc + 1) / 2`, so window depth only
+ever occupies **[0.5, 1.0]**. The textbook GL linearisation constants `(1/near, 1/far - 1/near)` are
+therefore exactly half the correct slope; using them made every measured distance ~1.9x too large and
+silently halved the width of every authored fade band. It still *looked* like a plausible soft particle.
+Caught only by comparing measured alpha against `smoothstep` at five distances in an offscreen probe.
+
+> Side note, not acted on: the same convention mismatch means the app discards half of its depth-buffer
+> precision everywhere, not just for particles. Fixing it would change existing depth behaviour across
+> the whole renderer, so it is recorded here rather than changed as a side effect of a VFX milestone.
+
+**`glClearDepth` does not exist in GLES 3.0.** ANGLE raises `SymbolLoadingException` for it. Nothing
+else in the codebase called it; the GL default clear-depth is already 1.0, so `glClear` alone is right.
+
+**What was deliberately left out.** `PaletteUAnimationCurve` / `PaletteVAnimationCurve` would naturally
+feed the two offsets the decoded shader adds (`U + select.z`, `V + select.w`). They are **not** applied,
+because the data refutes the naive reading: their authored median is 1.0, and a constant +1 on U drives
+every lookup off the right-hand end of the gradient. Whatever the CPU does with those curves, it is not
+a plain add. 372 of 8,866 palette structs author a U curve and 99 a V curve.
+
+**Erosion (M174) was only ever reaching one code path.** Of the seven places that build a
+`VfxPlaybackItem`, exactly one - the champion-VFX list - passed erosion maps. The Particle Editor, the
+model preview and both map-particle paths did not, so the dissolve stage shipped in M174 was inert on
+the surfaces built for looking at VFX. M175 wires erosion and palette through all seven.
 
 ### 3. Missing editor controls
 
