@@ -11,6 +11,7 @@ using ReyEngine.App.Services;
 using ReyEngine.Core.Assets;
 using ReyEngine.Core.Build;
 using ReyEngine.Core.Decoding;
+using ReyEngine.Core.Painting;
 using ReyEngine.Core.Diagnostics;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Projects;
@@ -1891,6 +1892,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private double _paintHardness = 0.5;
     [ObservableProperty] private double _paintOpacity = 1.0;
     [ObservableProperty] private double _paintSeamBleed = 3;
+    /// <summary>M173: mask rotation in DEGREES (radians in the brush itself — degrees is what a slider
+    /// should show).</summary>
+    [ObservableProperty] private double _paintMaskAngle;
+    [ObservableProperty] private PaintBlendMode _paintBlendMode = PaintBlendMode.Normal;
+    [ObservableProperty] private BrushMaskOption? _paintMask;
     [ObservableProperty] private string _paintStatus = "";
     [ObservableProperty] private string _paintHover = "";
     [ObservableProperty] private bool _paintHoverIsWarning;
@@ -1900,6 +1906,41 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// unrelated places. Periph_Vista is the whole distant backdrop — 33.7% of the map's world area with
     /// its texture covered 5.04x over — so a single dab would appear five times across the horizon.</summary>
     private static readonly string[] PaintBlockedTextures = { "periph_vista" };
+
+    /// <summary>M173: every blend mode, for the dropdown.</summary>
+    public Array PaintBlendModes { get; } = Enum.GetValues<PaintBlendMode>();
+
+    /// <summary>M173: the stencil library — "None" plus the generated built-ins, plus anything the user
+    /// imports. Built-ins are procedural rather than bundled images: nothing to download, crisp at any
+    /// size, and no third-party licence attached.</summary>
+    public ObservableCollection<BrushMaskOption> BrushMasks { get; } = new(
+        new[] { BrushMaskOption.None }.Concat(BrushMask.BuiltIn.Select(m => new BrushMaskOption(m))));
+
+    /// <summary>Import any image as a brush stencil — PNG, TGA, DDS or a Riot .tex. Colour is folded to
+    /// luminance and multiplied by alpha, so both a black-on-white stamp and an RGBA sprite work.</summary>
+    [RelayCommand]
+    private async Task LoadBrushMaskAsync()
+    {
+        var path = await Dialogs.OpenFileAsync("Load a brush mask",
+            new Avalonia.Platform.Storage.FilePickerFileType("Image")
+            { Patterns = new[] { "*.png", "*.tga", "*.dds", "*.tex", "*.jpg", "*.jpeg", "*.bmp" } });
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            var bytes = await File.ReadAllBytesAsync(path);
+            var img = await Task.Run(() => TextureDecoder.Decode(bytes));
+            var mask = BrushMask.FromImage(Path.GetFileNameWithoutExtension(path), img);
+            var option = new BrushMaskOption(mask);
+            BrushMasks.Add(option);
+            PaintMask = option;
+            _log.Success("Paint", $"Brush mask '{mask.Name}' loaded ({mask.Width}x{mask.Height}).");
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Paint", $"Could not load that image as a mask: {ex.Message}");
+            PaintStatus = "Could not load that image as a brush mask — see the console.";
+        }
+    }
 
     private MapPaintSession? _paintSession;
     private bool _paintStrokeActive;
@@ -2019,14 +2060,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (session.Pick(origin, d) is not { } hit) return;
         ShowBrushRing?.Invoke(hit.Position, hit.Normal, (float)PaintRadius, (float)PaintHardness);
 
-        var brush = new ReyEngine.Core.Painting.PaintBrush
-        {
-            Color = new System.Numerics.Vector3(PaintColor.R / 255f, PaintColor.G / 255f, PaintColor.B / 255f),
-            Radius = (float)PaintRadius,
-            Hardness = (float)PaintHardness,
-            Opacity = (float)PaintOpacity,
-            SeamBleedTexels = (float)PaintSeamBleed,
-        };
+        var brush = CurrentBrush;
 
         foreach (var painted in session.StrokeTo(hit.Position, d, brush))
         {
@@ -2035,6 +2069,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 painted.Rect.MinX, painted.Rect.MinY, painted.Rect.Width, painted.Rect.Height));
         }
     }
+
+    /// <summary>The brush the next dab will use, assembled from the palette.</summary>
+    private ReyEngine.Core.Painting.PaintBrush CurrentBrush => new()
+    {
+        Color = new System.Numerics.Vector3(PaintColor.R / 255f, PaintColor.G / 255f, PaintColor.B / 255f),
+        Radius = (float)PaintRadius,
+        Hardness = (float)PaintHardness,
+        Opacity = (float)PaintOpacity,
+        SeamBleedTexels = (float)PaintSeamBleed,
+        BlendMode = PaintBlendMode,
+        Mask = PaintMask?.Mask,
+        MaskAngle = (float)(PaintMaskAngle * Math.PI / 180.0),
+    };
 
     public void EndPaintStroke()
     {

@@ -10,6 +10,7 @@ using Avalonia.Platform;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.App.Services;
+using System.IO;
 using ReyEngine.Core.Decoding;
 
 namespace ReyEngine.App.ViewModels;
@@ -45,6 +46,7 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
     private readonly Action<TextureAdjustment, IReadOnlyList<RecolorTarget>> _persist;
     private readonly Func<IReadOnlyList<RecolorTarget>, int> _revert;
     private readonly Action<RecolorRunResult> _onDone;
+    private readonly Func<Task<string?>>? _pickLutFile;
 
     private CancellationTokenSource? _cts;
     /// <summary>Decoded, downscaled ORIGINAL of the previewed texture. Kept so slider moves re-shade a
@@ -57,8 +59,10 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
         Func<TextureRecolorService?> service,
         Action<TextureAdjustment, IReadOnlyList<RecolorTarget>> persist,
         Func<IReadOnlyList<RecolorTarget>, int> revert,
-        Action<RecolorRunResult> onDone)
+        Action<RecolorRunResult> onDone,
+        Func<Task<string?>>? pickLutFile = null)
     {
+        _pickLutFile = pickLutFile;
         _gatherTargets = gatherTargets;
         _readBase = readBase;
         _service = service;
@@ -195,10 +199,55 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
     partial void OnTintBChanged(double value) => UpdatePreview();
     partial void OnStrengthChanged(double value) => UpdatePreview();
 
-    public TextureAdjustment CurrentAdjustment => new(
+    public TextureAdjustment CurrentAdjustment => new TextureAdjustment(
         (float)HueDegrees, (float)Saturation, (float)Brightness, (float)Contrast,
         (float)InputBlack, (float)InputWhite, (float)Gamma,
-        (float)TintR, (float)TintG, (float)TintB, (float)Strength);
+        (float)TintR, (float)TintG, (float)TintB, (float)Strength)
+    { Lut = _lut, LutStrength = (float)LutStrength };
+
+    // ---------------------------------------------------------------- colour grade (.cube)
+
+    private CubeLut? _lut;
+
+    [ObservableProperty] private string _lutName = "";
+    [ObservableProperty] private bool _hasLut;
+    [ObservableProperty] private double _lutStrength = 1.0;
+
+    partial void OnLutStrengthChanged(double value) => UpdatePreview();
+
+    /// <summary>Load an Adobe/IRIDAS .cube grade. Applied AFTER the sliders, because a .cube is authored
+    /// as a final look — it expects to see the image the way it would be delivered.</summary>
+    [RelayCommand]
+    private async Task LoadLutAsync()
+    {
+        if (_pickLutFile is null) return;
+        var path = await _pickLutFile();
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            var lut = await Task.Run(() => CubeLut.Load(path));
+            _lut = lut;
+            HasLut = true;
+            LutName = $"{(lut.Title.Length > 0 ? lut.Title : Path.GetFileNameWithoutExtension(path))}"
+                      + $"  ·  {lut.Size}{(lut.Is1D ? " (1D)" : "³")}"
+                      + (lut.IsIdentity() ? "  ·  identity, no effect" : "");
+            Status = "";
+            UpdatePreview();
+        }
+        catch (Exception ex)
+        {
+            _lut = null; HasLut = false; LutName = "";
+            Status = "Could not load that .cube: " + ex.Message;
+            UpdatePreview();
+        }
+    }
+
+    [RelayCommand]
+    private void ClearLut()
+    {
+        _lut = null; HasLut = false; LutName = "";
+        UpdatePreview();
+    }
 
     [RelayCommand]
     private void ResetAdjustment()

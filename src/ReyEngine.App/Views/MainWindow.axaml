@@ -405,6 +405,50 @@
                 <Slider Minimum="0" Maximum="12" Value="{Binding PaintSeamBleed}"
                         ToolTip.Tip="How far paint carries past a UV island's edge. Without it a stroke crossing a seam leaves a hairline crack, which filtering and mipmaps widen." />
 
+                <!-- M173: blend mode -->
+                <TextBlock Text="Blend" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" Margin="0,4,0,0" />
+                <ComboBox ItemsSource="{Binding PaintBlendModes}" SelectedItem="{Binding PaintBlendMode}"
+                          HorizontalAlignment="Stretch" FontSize="11"
+                          ToolTip.Tip="How the colour combines with what is already on the texture. Multiply darkens, Screen lightens, Overlay adds contrast while keeping detail, and Color recolours a surface without flattening the detail painted into it." />
+
+                <!-- M173: brush mask / stencil -->
+                <TextBlock Text="Brush tip" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" Margin="0,4,0,0" />
+                <ListBox ItemsSource="{Binding BrushMasks}" SelectedItem="{Binding PaintMask}"
+                         MaxHeight="132" Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ToolTip.Tip="A stencil shapes the dab. With one loaded the tip is a SQUARE of the brush size and the mask defines coverage, so Hardness applies only to the plain round tip — the same model paint programs use.">
+                  <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                  </ListBox.ItemsPanel>
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:BrushMaskOption">
+                      <Border Width="52" Height="60" Margin="1" CornerRadius="4" Padding="2"
+                              Background="{DynamicResource ReyPanelAltBrush}" ToolTip.Tip="{Binding Name}">
+                        <StackPanel>
+                          <Border Height="40" CornerRadius="3" Background="#20000000">
+                            <Panel>
+                              <Ellipse Width="30" Height="30" Stroke="{DynamicResource ReyTextDimBrush}"
+                                       StrokeThickness="1" StrokeDashArray="2,2"
+                                       IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                              <Image Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                            </Panel>
+                          </Border>
+                          <TextBlock Text="{Binding Name}" FontSize="8" HorizontalAlignment="Center"
+                                     TextTrimming="CharacterEllipsis" Margin="0,2,0,0"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <Button Classes="tool" Content="📁 Add mask image…" Command="{Binding LoadBrushMaskCommand}"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" FontSize="10" Padding="6,3"
+                        ToolTip.Tip="Import any PNG, TGA, DDS or .tex as a stencil. Colour folds to luminance and multiplies by alpha, so both a black-on-white stamp and an RGBA sprite work." />
+                <TextBlock Text="{Binding PaintMaskAngle, StringFormat='Tip angle  {0:0}°'}" FontSize="11"
+                           Foreground="{DynamicResource ReyTextBrush}" />
+                <Slider Minimum="0" Maximum="360" Value="{Binding PaintMaskAngle}"
+                        ToolTip.Tip="Rotates the stencil in the surface plane." />
+
                 <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6"
                         IsVisible="{Binding PaintHover, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                   <TextBlock Text="{Binding PaintHover}" FontSize="10" TextWrapping="Wrap"

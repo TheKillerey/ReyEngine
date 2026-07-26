@@ -166,7 +166,7 @@ public sealed class MapPaintSession
         // Gather first, paint second. Splitting the two is what allows the paint to run in parallel:
         // measured, the BVH query is 0.005 ms and the painting 4.48 ms, so all the time is in the second
         // half and none of it is in the traversal.
-        _index.OverlapSphere(center, brush.Radius, _visible, t =>
+        _index.OverlapSphere(center, TexturePainter.EffectiveRadius(brush), _visible, t =>
         {
             int sm = _index.SubmeshOf(t);
             if (sm < 0 || sm >= _texturesBySubmesh.Count) return;
@@ -216,7 +216,7 @@ public sealed class MapPaintSession
             _index.GetTriangleUv(t, out var uv0, out var uv1, out var uv2);
             // Derived once, used twice — the snapshot must cover exactly what the paint will write.
             if (!TexturePainter.TryGetDabBounds(img.Width, img.Height, p0, p1, p2, uv0, uv1, uv2,
-                    center, brush.Radius, brush.SeamBleedTexels,
+                    center, TexturePainter.EffectiveRadius(brush), brush.SeamBleedTexels,
                     out int bx0, out int by0, out int bx1, out int by1)) continue;
             var bounds = new DabBounds(bx0, by0, bx1, by1);
             // Snapshot BEFORE the first write into each tile, or undo would restore painted pixels.

@@ -38,6 +38,34 @@ public struct PaintDirtyRect
 /// derive it once and share it between the undo snapshot and the paint.</summary>
 public readonly record struct DabBounds(int MinX, int MinY, int MaxX, int MaxY);
 
+/// <summary>M173: how a dab's colour combines with what is already on the texture. Each one is the
+/// standard compositing formula, computed per channel in 0..1 and then mixed by the brush's coverage —
+/// so Strength still fades any mode smoothly, rather than every mode being all-or-nothing.</summary>
+public enum PaintBlendMode
+{
+    /// <summary>Replace. What a paint program calls Normal.</summary>
+    Normal,
+    /// <summary>a*b — only ever darkens. Good for shadowing and grime.</summary>
+    Multiply,
+    /// <summary>1-(1-a)(1-b) — only ever lightens. Good for dust, snow, bleaching.</summary>
+    Screen,
+    /// <summary>Multiply the darks, screen the lights, keyed off the EXISTING pixel. Adds contrast while
+    /// keeping the underlying detail, which is why it is the usual choice for tinting terrain.</summary>
+    Overlay,
+    /// <summary>Like Overlay but keyed off the BRUSH colour, so a mid-grey brush leaves the image alone
+    /// and the result never clips as hard.</summary>
+    SoftLight,
+    Add,
+    Subtract,
+    Darken,
+    Lighten,
+    /// <summary>Take the brush's hue and saturation, keep the texture's brightness. Recolours a surface
+    /// without flattening the detail painted into it — the mode you want for restyling stone or foliage.</summary>
+    Color,
+    /// <summary>The complement: keep the texture's colour, take the brush's brightness.</summary>
+    Luminosity,
+}
+
 /// <summary>Brush settings for one dab.</summary>
 public sealed record PaintBrush
 {
@@ -61,6 +89,15 @@ public sealed record PaintBrush
     /// <summary>Skip triangles facing away from the camera. Without it a dab near a wall paints its far
     /// side too, because the brush is a sphere in world space and does not know what the user can see.</summary>
     public bool CullBackfaces { get; init; } = true;
+
+    /// <summary>M173: how the colour combines with what is already there.</summary>
+    public PaintBlendMode BlendMode { get; init; } = PaintBlendMode.Normal;
+
+    /// <summary>M173: optional stencil shaping the dab. Null = plain radial falloff.</summary>
+    public BrushMask? Mask { get; init; }
+
+    /// <summary>Mask rotation in radians, about the dab centre in the surface plane.</summary>
+    public float MaskAngle { get; init; }
 }
 
 /// <summary>M172: paints a brush dab into a texture.
@@ -76,6 +113,16 @@ public sealed record PaintBrush
 /// in foliage or fill them in solid.</summary>
 public static class TexturePainter
 {
+    /// <summary>How far a dab actually reaches, which is NOT always the brush radius.
+    ///
+    /// An unmasked brush is a disc of exactly Radius. A masked one is a SQUARE stencil of half-width
+    /// Radius — Photoshop's model, and the only one under which a square or ring stencil means anything —
+    /// so once rotated its corners reach Radius * sqrt(2). Clipping a mask to the disc was a real bug:
+    /// every stencil came out circular, and rotating a square one changed 17 texels out of 30,000.</summary>
+    public static float EffectiveRadius(PaintBrush brush)
+        => brush.Mask is null ? brush.Radius : brush.Radius * 1.41421356f;
+
+
     /// <summary>The texel rectangle a dab on this triangle could touch — the same bound
     /// <see cref="DabTriangle"/> scans. Exposed so undo can snapshot exactly the tiles that are about to
     /// change: bounding it by the whole TRIANGLE instead would mean either capturing a 2048² texture per
@@ -193,12 +240,13 @@ public static class TexturePainter
         float a1x = uv1.X * w, a1y = uv1.Y * h;
         float a2x = uv2.X * w, a2y = uv2.Y * h;
 
+        float reach = EffectiveRadius(brush);
         float bleed = MathF.Max(0f, brush.SeamBleedTexels);
         // Bounds may be supplied by the caller. The undo snapshot needs the same rectangle, and deriving
         // it twice per triangle was pure duplicated setup on the hot path.
         int minX, minY, maxX, maxY;
         if (bounds is { } b) { minX = b.MinX; minY = b.MinY; maxX = b.MaxX; maxY = b.MaxY; }
-        else if (!TryGetDabBounds(w, h, p0, p1, p2, uv0, uv1, uv2, center, brush.Radius, bleed,
+        else if (!TryGetDabBounds(w, h, p0, p1, p2, uv0, uv1, uv2, center, reach, bleed,
                 out minX, out minY, out maxX, out maxY)) return false;
 
         // Barycentric setup in texel space (constant per triangle).
@@ -209,11 +257,14 @@ public static class TexturePainter
         float invDenom = 1f / denom;
 
         float r2 = brush.Radius * brush.Radius;
+        float reach2 = reach * reach;
         float inner = Math.Clamp(brush.Hardness, 0f, 0.999f);
         float opacity = Math.Clamp(brush.Opacity, 0f, 1f);
-        float cr = Math.Clamp(brush.Color.X, 0f, 1f) * 255f;
-        float cg = Math.Clamp(brush.Color.Y, 0f, 1f) * 255f;
-        float cb = Math.Clamp(brush.Color.Z, 0f, 1f) * 255f;
+        float nr = Math.Clamp(brush.Color.X, 0f, 1f);
+        float ng = Math.Clamp(brush.Color.Y, 0f, 1f);
+        float nb = Math.Clamp(brush.Color.Z, 0f, 1f);
+        float cr = nr * 255f, cg = ng * 255f, cb = nb * 255f;
+        var blend = brush.BlendMode;
 
         var px = image.Rgba;
 
@@ -230,6 +281,23 @@ public static class TexturePainter
         float buDx = d01y * invDenom, buDy = -d01x * invDenom;
         float bvDx = -d00y * invDenom, bvDy = d00x * invDenom;
         var wDx = e1 * buDx + e2 * bvDx;
+
+        // A mask needs an orientation in the surface plane. Built per triangle from its own normal so
+        // the stencil lies flat on the geometry instead of being projected from a fixed world axis, which
+        // would smear it into a streak on anything that is not a floor.
+        var mask = brush.Mask;
+        Vector3 maskU = default, maskV = default;
+        if (mask is not null)
+        {
+            var mn = Vector3.Cross(e1, e2);
+            mn = mn.LengthSquared() > 1e-12f ? Vector3.Normalize(mn) : Vector3.UnitY;
+            var seed = MathF.Abs(mn.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitX;
+            var bu = Vector3.Normalize(Vector3.Cross(seed, mn));
+            var bv = Vector3.Cross(mn, bu);
+            float ca = MathF.Cos(brush.MaskAngle), sa = MathF.Sin(brush.MaskAngle);
+            maskU = (bu * ca + bv * sa) / brush.Radius;   // fold the -1..1 normalisation into the basis
+            maskV = (bv * ca - bu * sa) / brush.Radius;
+        }
 
         float startX = minX + 0.5f;
         float bleed2 = bleed * bleed;
@@ -308,7 +376,7 @@ public static class TexturePainter
 
                     float dx = sample.X - ctr.X, dy = sample.Y - ctr.Y, dz = sample.Z - ctr.Z;
                     float dist2 = dx * dx + dy * dy + dz * dz;
-                    if (dist2 > r2) continue;
+                    if (dist2 > reach2) continue;
 
                     int o = (rowBase + tx) * 4;
 
@@ -320,19 +388,43 @@ public static class TexturePainter
                     // cut-away texel costs one byte compare, not a square root.
                     if (px[o + 3] < 8) continue;
 
-                    // Inside the hard core the falloff is flat, so the square root is only paid on the rim.
+                    // Coverage. A stencil REPLACES the radial falloff rather than scaling it — the mask
+                    // is the brush's shape, exactly as a brush tip is in a paint program, and multiplying
+                    // a disc into it would round off every stencil's corners. Hardness therefore applies
+                    // only to the plain round brush, which is also how Photoshop behaves.
                     float alpha;
-                    if (dist2 <= innerR2) alpha = opacity;
+                    if (mask is not null)
+                    {
+                        float rel = dx * maskU.X + dy * maskU.Y + dz * maskU.Z;
+                        float rev = dx * maskV.X + dy * maskV.Y + dz * maskV.Z;
+                        float cov = mask.Sample(rel, rev);   // zero outside its own square
+                        if (cov <= 0.002f) continue;
+                        alpha = cov * opacity;
+                    }
+                    else if (dist2 <= innerR2) alpha = opacity;
                     else
                     {
+                        // Inside the hard core the falloff is flat, so the root is only paid on the rim.
                         float f = 1f - (MathF.Sqrt(dist2) * invRadius - inner) * invSoft;
                         alpha = f * f * (3f - 2f * f) * opacity;   // smoothstep, so the edge isn't a ring
-                        if (alpha <= 0.0005f) continue;
+                    }
+                    if (alpha <= 0.0005f) continue;
+
+                    if (blend == PaintBlendMode.Normal)
+                    {
+                        px[o] = (byte)(px[o] + (cr - px[o]) * alpha + 0.5f);
+                        px[o + 1] = (byte)(px[o + 1] + (cg - px[o + 1]) * alpha + 0.5f);
+                        px[o + 2] = (byte)(px[o + 2] + (cb - px[o + 2]) * alpha + 0.5f);
+                        rect.Add(tx, ty);
+                        touched = true;
+                        continue;
                     }
 
-                    px[o] = (byte)(px[o] + (cr - px[o]) * alpha + 0.5f);
-                    px[o + 1] = (byte)(px[o + 1] + (cg - px[o + 1]) * alpha + 0.5f);
-                    px[o + 2] = (byte)(px[o + 2] + (cb - px[o + 2]) * alpha + 0.5f);
+                    Blend(blend, px[o] * Inv255, px[o + 1] * Inv255, px[o + 2] * Inv255,
+                          nr, ng, nb, out float br2, out float bg2, out float bb2);
+                    px[o] = (byte)(px[o] + (br2 * 255f - px[o]) * alpha + 0.5f);
+                    px[o + 1] = (byte)(px[o + 1] + (bg2 * 255f - px[o + 1]) * alpha + 0.5f);
+                    px[o + 2] = (byte)(px[o + 2] + (bb2 * 255f - px[o + 2]) * alpha + 0.5f);
                     // px[o + 3] deliberately untouched — see the type remarks.
                     rect.Add(tx, ty);
                     touched = true;
@@ -344,6 +436,78 @@ public static class TexturePainter
 
     /// <summary>Below this many texels a dab is not worth splitting across threads.</summary>
     private const long ParallelTexelThreshold = 24_000;
+
+    private const float Inv255 = 1f / 255f;
+
+    /// <summary>The compositing formulas, per channel in 0..1. <paramref name="d"/> is what is already on
+    /// the texture (destination), <paramref name="s"/> is the brush colour (source).
+    ///
+    /// Color and Luminosity are the two that are not per-channel: they decompose into luma and chroma, so
+    /// they get their own branch. Luma uses the Rec.601 weights, which is what Photoshop's equivalents
+    /// use — swapping in Rec.709 would shift every recolour slightly against what an artist expects.</summary>
+    private static void Blend(PaintBlendMode mode,
+        float dr, float dg, float dbl, float sr, float sg, float sb,
+        out float r, out float g, out float b)
+    {
+        switch (mode)
+        {
+            case PaintBlendMode.Multiply: r = dr * sr; g = dg * sg; b = dbl * sb; break;
+            case PaintBlendMode.Screen:   r = Scr(dr, sr); g = Scr(dg, sg); b = Scr(dbl, sb); break;
+            case PaintBlendMode.Overlay:  r = Ovl(dr, sr); g = Ovl(dg, sg); b = Ovl(dbl, sb); break;
+            case PaintBlendMode.SoftLight: r = Soft(dr, sr); g = Soft(dg, sg); b = Soft(dbl, sb); break;
+            case PaintBlendMode.Add:      r = dr + sr; g = dg + sg; b = dbl + sb; break;
+            case PaintBlendMode.Subtract: r = dr - sr; g = dg - sg; b = dbl - sb; break;
+            case PaintBlendMode.Darken:   r = MathF.Min(dr, sr); g = MathF.Min(dg, sg); b = MathF.Min(dbl, sb); break;
+            case PaintBlendMode.Lighten:  r = MathF.Max(dr, sr); g = MathF.Max(dg, sg); b = MathF.Max(dbl, sb); break;
+
+            case PaintBlendMode.Color:
+            {
+                // Brush chroma, texture luma: keeps every scratch and crack in the surface while changing
+                // what colour it is.
+                float dl = Luma(dr, dg, dbl), sl = Luma(sr, sg, sb);
+                float k = dl - sl;
+                r = sr + k; g = sg + k; b = sb + k;
+                ClipToGamut(dl, ref r, ref g, ref b);
+                break;
+            }
+            case PaintBlendMode.Luminosity:
+            {
+                float dl = Luma(dr, dg, dbl), sl = Luma(sr, sg, sb);
+                float k = sl - dl;
+                r = dr + k; g = dg + k; b = dbl + k;
+                ClipToGamut(sl, ref r, ref g, ref b);
+                break;
+            }
+            default: r = sr; g = sg; b = sb; break;
+        }
+        r = Math.Clamp(r, 0f, 1f); g = Math.Clamp(g, 0f, 1f); b = Math.Clamp(b, 0f, 1f);
+    }
+
+    private static float Scr(float d, float s) => 1f - (1f - d) * (1f - s);
+    private static float Ovl(float d, float s) => d < 0.5f ? 2f * d * s : 1f - 2f * (1f - d) * (1f - s);
+    private static float Soft(float d, float s) => s < 0.5f
+        ? 2f * d * s + d * d * (1f - 2f * s)
+        : 2f * d * (1f - s) + MathF.Sqrt(d) * (2f * s - 1f);
+
+    private static float Luma(float r, float g, float b) => 0.299f * r + 0.587f * g + 0.114f * b;
+
+    /// <summary>Pull a luma-shifted colour back inside 0..1 WITHOUT changing its luma. Plain clamping
+    /// would shift the brightness the mode just set, which is the whole point of Color/Luminosity.</summary>
+    private static void ClipToGamut(float lum, ref float r, ref float g, ref float b)
+    {
+        float lo = MathF.Min(r, MathF.Min(g, b));
+        float hi = MathF.Max(r, MathF.Max(g, b));
+        if (lo < 0f && lum - lo > 1e-6f)
+        {
+            float t = lum / (lum - lo);
+            r = lum + (r - lum) * t; g = lum + (g - lum) * t; b = lum + (b - lum) * t;
+        }
+        if (hi > 1f && hi - lum > 1e-6f)
+        {
+            float t = (1f - lum) / (hi - lum);
+            r = lum + (r - lum) * t; g = lum + (g - lum) * t; b = lum + (b - lum) * t;
+        }
+    }
 
     /// <summary>Nearest point of the triangle, in barycentric form. Used only for seam bleed, where a
     /// texel just outside the island still needs a world position to distance-test against.</summary>

@@ -35,6 +35,15 @@ public sealed record TextureAdjustment(
     /// dialled back without re-deriving every slider.</summary>
     float Strength = 1f)
 {
+    /// <summary>M173: an optional .cube colour grade applied after the slider stack. Not a positional
+    /// parameter because a LUT is a loaded object, not a number the UI scrubs — and because adding it to
+    /// the record's primary constructor would silently change every existing call site's argument order.</summary>
+    public CubeLut? Lut { get; init; }
+
+    /// <summary>How much of the LUT to mix in, 0..1. Separate from <see cref="Strength"/> so a grade can
+    /// be dialled back without also weakening the hue/levels work underneath it.</summary>
+    public float LutStrength { get; init; } = 1f;
+
     public static TextureAdjustment Identity { get; } = new();
 
     /// <summary>True when this would leave every pixel untouched — lets a caller skip the re-encode
@@ -42,7 +51,8 @@ public sealed record TextureAdjustment(
     public bool IsIdentity =>
         HueDegrees == 0f && Saturation == 1f && Brightness == 1f && Contrast == 1f
         && InputBlack == 0f && InputWhite == 1f && Gamma == 1f
-        && TintR == 1f && TintG == 1f && TintB == 1f;
+        && TintR == 1f && TintG == 1f && TintB == 1f
+        && (Lut is null || LutStrength <= 0f);
 
     /// <summary>Apply to a decoded image, returning a new image. The source is never modified, so the
     /// caller can keep it as the pristine base for the next adjustment.</summary>
@@ -95,7 +105,20 @@ public sealed record TextureAdjustment(
             // 4. tint
             r *= TintR; g *= TintG; b *= TintB;
 
-            // 5. blend the whole stack back toward the original
+            // 5. colour grade. Last, because a .cube is authored as a FINAL look — it expects to see the
+            // image as it would be delivered, so running it before the levels/hue work would grade
+            // something the colourist never saw.
+            if (Lut is { } lut && LutStrength > 0f)
+            {
+                var graded = lut.Sample(new System.Numerics.Vector3(
+                    Math.Clamp(r, 0f, 1f), Math.Clamp(g, 0f, 1f), Math.Clamp(b, 0f, 1f)));
+                float lm = Math.Clamp(LutStrength, 0f, 1f);
+                r += (graded.X - r) * lm;
+                g += (graded.Y - g) * lm;
+                b += (graded.Z - b) * lm;
+            }
+
+            // 6. blend the whole stack back toward the original
             if (strength < 1f)
             {
                 r = or_ + (r - or_) * strength;
