@@ -1960,7 +1960,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Hover feedback: what would a stroke here change?</summary>
     public void PaintHoverAt(System.Numerics.Vector3 origin, System.Numerics.Vector3 dir)
     {
-        if (!IsPaintMode || EnsurePaintSession() is not { } session) { PaintHover = ""; return; }
+        if (!IsPaintMode || EnsurePaintSession() is not { } session)
+        {
+            PaintHover = "";
+            ShowBrushRing?.Invoke(null, System.Numerics.Vector3.UnitY, 0f, 0f);
+            return;
+        }
         var d = System.Numerics.Vector3.Normalize(dir);
 
         // The ring follows the cursor every move — it is the cheap part (one BVH ray, ~1.3 us) and the

@@ -2092,18 +2092,25 @@ void main(){
                 _gl.BindVertexArray(_highlightVao);
                 _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_highlightVerts);
             }
-            // M172e: the brush ring. Drawn with depth testing OFF so it stays visible where the surface
-            // curves away from the cursor — a ring that disappears into the terrain is worse than useless
-            // for judging where a stroke will land.
-            if (_brushRingVerts > 0)
-            {
-                _gl.Disable(EnableCap.DepthTest);
-                _gl.Uniform4(_lColor, 1.0f, 1.0f, 1.0f, 1f);
-                _gl.BindVertexArray(_brushRingVao);
-                _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_brushRingVerts);
-                _gl.Enable(EnableCap.DepthTest);
-            }
             _gl.BindVertexArray(0);
+        }
+
+        // M172e: the brush ring. Its OWN block on purpose — it lived inside the selection highlight above,
+        // which is gated on something being selected, so in paint mode (where usually nothing is) the
+        // whole block was skipped and the ring never drew at all.
+        //
+        // Depth testing off so it stays visible where the surface curves away from the cursor; a ring that
+        // disappears into the terrain is worse than useless for judging where a stroke will land.
+        if (_brushRingVerts > 0)
+        {
+            _gl.UseProgram(_lineProgram);
+            _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+            _gl.Disable(EnableCap.DepthTest);
+            _gl.Uniform4(_lColor, 1.0f, 1.0f, 1.0f, 1f);
+            _gl.BindVertexArray(_brushRingVao);
+            _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_brushRingVerts);
+            _gl.BindVertexArray(0);
+            _gl.Enable(EnableCap.DepthTest);
         }
 
         // M114: target dummy — a solid depth-tested cube so it sits IN the scene like a unit would;
