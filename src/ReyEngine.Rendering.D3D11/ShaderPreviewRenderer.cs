@@ -130,12 +130,15 @@ public sealed unsafe class PreviewMaterial : IDisposable
         PsRefl.Textures.Concat(VsRefl.Textures).Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase)
             .Where(n => !Textures.ContainsKey(n));
 
+    /// <summary>M226: the texture views are NOT owned here. They live in the renderer's pool, shared by
+    /// every material that binds the same asset - a Map12 load binds 1,841 slots from 138 distinct files,
+    /// and one lightmap atlas is shared by 282 of them. Disposing per material would release a view other
+    /// materials are still using, which blanks textures or crashes.</summary>
     public void Dispose()
     {
         Vs.Dispose(); Ps.Dispose(); Layout.Dispose();
         foreach (var b in VsCbs.Values) b.Dispose();
         foreach (var b in PsCbs.Values) b.Dispose();
-        foreach (var t in Textures.Values) t.Dispose();
         VsCbs.Clear(); PsCbs.Clear(); Textures.Clear();
     }
 }
@@ -253,7 +256,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         // an opaque white 1x1 stands in for every texture the material does not supply, so a missing
         // binding shows as "unlit but present" rather than as a black or undefined surface
         var px = new byte[] { 255, 255, 255, 255 };
-        _white = MakeTexture(px, 1, 1);
+        _white = MakeTexture(px, 1, 1) ?? default;
 
         // M221: the colour-remap ramp stand-in must be TRANSPARENT, and the shader says so itself.
         //
@@ -272,7 +275,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         // Alpha zero and the shader skips the stage on its own, keeping the lit diffuse. That is a real
         // no-op rather than an approximation of one, and it is almost certainly what the engine binds when
         // no colour grading is active. The rgb is irrelevant; only the alpha is read.
-        _identityRamp = MakeTexture(new byte[] { 0, 0, 0, 0 }, 1, 1);
+        _identityRamp = MakeTexture(new byte[] { 0, 0, 0, 0 }, 1, 1) ?? default;
     }
 
     // ---------------------------------------------------------------- shaders
@@ -292,6 +295,11 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         _materials.Clear();
         foreach (var b in _sharedCbs.Values) b.Dispose();
         _sharedCbs.Clear();
+        // M226: the pool outlives individual materials but not the scene
+        foreach (var t in _texPool.Values) t.Dispose();
+        foreach (var t in _retired) t.Dispose();
+        _texPool.Clear();
+        _retired.Clear();
         _comparePs.Dispose();
         _comparePs = default;
     }
@@ -598,31 +606,81 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         Log($"mesh '{mesh.Name}': {mesh.Vertices.Length:n0} verts, {mesh.TriangleCount:n0} tris");
     }
 
-    /// <summary>Bind RGBA8 pixels to a reflected texture name (e.g. <c>DiffuseTexture__TX</c>) on EVERY
-    /// material that declares it. That is what the bench wants; a scene binds per material instead.</summary>
+    /// <summary>M226: decoded textures, keyed by the asset path they came from and shared by every
+    /// material that wants them. The renderer owns these; <see cref="PreviewMaterial"/> only references
+    /// them.</summary>
+    private readonly Dictionary<string, ComPtr<ID3D11ShaderResourceView>> _texPool = new(StringComparer.Ordinal);
+
+    /// <summary>Bind an already-decoded asset from the pool. Returns false when it has not been decoded yet,
+    /// which is the caller's cue to read and decode it - and the point of the whole thing, because on a hit
+    /// neither the WAD read nor the decode happens. A Map12 load decoded one 2048 lightmap 282 times at
+    /// 35.8 ms each before this existed.</summary>
+    public bool TryBindCached(PreviewMaterial m, string reflectedName, string key)
+    {
+        if (!_texPool.TryGetValue(key, out var srv) || srv.Handle is null) return false;
+        m.Textures[reflectedName] = srv;
+        return true;
+    }
+
+    public bool IsCached(string key) => _texPool.TryGetValue(key, out var v) && v.Handle is not null;
+
+    /// <summary>Bind RGBA8 pixels to a reflected texture name on EVERY material that declares it. That is
+    /// what the bench wants; a scene binds per material instead.</summary>
     public void SetTexture(string reflectedName, byte[] rgba, int width, int height)
     {
         foreach (var m in _materials) SetTexture(m, reflectedName, rgba, width, height);
         if (_materials.Count > 0) Log($"bound texture '{reflectedName}' ({width}x{height})");
     }
 
+    /// <summary>Bench path: no asset identity, so it gets a private pool entry per slot.</summary>
     public void SetTexture(PreviewMaterial m, string reflectedName, byte[] rgba, int width, int height)
+        => SetTexture(m, reflectedName, "\u0000bench:" + reflectedName, rgba, width, height);
+
+    /// <summary>Scene path: <paramref name="key"/> is the asset path, so the view is created once and
+    /// shared.</summary>
+    public void SetTexture(PreviewMaterial m, string reflectedName, string key, byte[] rgba, int width, int height)
     {
-        if (m.Textures.TryGetValue(reflectedName, out var old)) old.Dispose();
-        m.Textures[reflectedName] = MakeTexture(rgba, width, height);
+        // ALWAYS create. Skipping the work on a cache hit is the CALLER's job, via TryBindCached - if this
+        // reused the pooled view whenever the key existed, re-binding a different image to the same slot
+        // from the Textures tab would silently keep showing the old one.
+        var made = MakeTexture(rgba, width, height);
+        if (made is null) return;                           // creation failed and was reported
+
+        // A view already under this key may still be referenced by materials bound earlier, so it is
+        // retired rather than disposed here; the whole set goes at ClearTextures.
+        if (_texPool.TryGetValue(key, out var previous) && previous.Handle is not null) _retired.Add(previous);
+
+        _texPool[key] = made.Value;
+        m.Textures[reflectedName] = made.Value;
     }
+
+    /// <summary>Views replaced while something might still hold them. Freed with the rest of the pool.</summary>
+    private readonly List<ComPtr<ID3D11ShaderResourceView>> _retired = new();
 
     public void ClearTextures()
     {
-        foreach (var m in _materials)
-        {
-            foreach (var t in m.Textures.Values) t.Dispose();
-            m.Textures.Clear();
-        }
+        foreach (var m in _materials) m.Textures.Clear();
+        foreach (var t in _texPool.Values) t.Dispose();
+        foreach (var t in _retired) t.Dispose();
+        _texPool.Clear();
+        _retired.Clear();
     }
 
-    private ComPtr<ID3D11ShaderResourceView> MakeTexture(byte[] rgba, int w, int h)
+    /// <summary>How many distinct assets are resident, for the scene report.</summary>
+    public int CachedTextureCount => _texPool.Count;
+
+    /// <summary>M226: returns null on failure instead of a null-handle view. Neither HRESULT was checked
+    /// before, so a failed creation still got stored under its key and then bound as a null resource -
+    /// which samples BLACK rather than falling through to the white stand-in. BuildMaterial already checks
+    /// its shader HRESULTs; this was the one place that did not.</summary>
+    private ComPtr<ID3D11ShaderResourceView>? MakeTexture(byte[] rgba, int w, int h)
     {
+        if (w <= 0 || h <= 0 || rgba.Length < w * h * 4)
+        {
+            Log($"texture rejected: {w}x{h} needs {(long)w * h * 4} bytes, got {rgba.Length}");
+            return null;
+        }
+
         var desc = new Texture2DDesc
         {
             Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1,
@@ -630,14 +688,18 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             Usage = Usage.Immutable, BindFlags = (uint)BindFlag.ShaderResource,
         };
         ComPtr<ID3D11Texture2D> tex = default;
+        int hr;
         fixed (byte* p = rgba)
         {
             var sub = new SubresourceData { PSysMem = p, SysMemPitch = (uint)(w * 4) };
-            _device.CreateTexture2D(in desc, in sub, ref tex);
+            hr = _device.CreateTexture2D(in desc, in sub, ref tex);
         }
+        if (hr < 0) { Log($"CreateTexture2D failed 0x{hr:X8} for {w}x{h}"); return null; }
+
         ComPtr<ID3D11ShaderResourceView> srv = default;
-        _device.CreateShaderResourceView(tex, null, ref srv);
+        hr = _device.CreateShaderResourceView(tex, null, ref srv);
         tex.Dispose();
+        if (hr < 0) { Log($"CreateShaderResourceView failed 0x{hr:X8} for {w}x{h}"); return null; }
         return srv;
     }
 
@@ -1188,6 +1250,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     public void Dispose()
     {
         ClearMaterials();
+        ClearTextures();
         _white.Dispose();
         _identityRamp.Dispose();
         _vb.Dispose(); _ib.Dispose(); _compareCb.Dispose();

@@ -170,7 +170,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
     /// <summary>M224: the per-material lightmap texture a mapgeo group names, so BAKED_LIGHT__TX can be
     /// bound from the map itself rather than left on the white stand-in.</summary>
-    private Dictionary<string, string> _lightmapByGroup = new(StringComparer.OrdinalIgnoreCase);
+    private int _slicesMerged;
+    private int _lightmapsBound;
+    private readonly HashSet<string> _lightmapPages = new(StringComparer.Ordinal);
 
     /// <summary>Axis name -> how many of the scene's shaders declare it. Rebuilt on every load so the debug
     /// list always reflects what is actually loaded.</summary>
@@ -667,7 +669,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         SceneSubmeshes.Clear();
 
         PreviewMesh mesh;
-        List<(string Material, int Start, int Count)> parts;
+        List<(string Material, int Start, int Count, string Lightmap)> parts;
         try
         {
             var bytes = _readAsset(asset.Hash);
@@ -678,11 +680,13 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 var map = MapGeoDecoder.Decode(bytes);
                 mesh = PreviewGeometry.FromLeagueArrays(asset.Display, map.Positions.Length / 3,
                     map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices);
-                parts = map.Groups.Select(g => (g.Material, g.StartIndex, g.IndexCount)).ToList();
-                _lightmapByGroup = map.Groups
-                    .Where(g => g.LightmapTexture.Length > 0)
-                    .GroupBy(g => g.Material, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(g => g.Key, g => g.First().LightmapTexture, StringComparer.OrdinalIgnoreCase);
+                // M226: the lightmap atlas travels WITH THE GROUP. It is a per-mesh property, and keying
+                // it by material name (taking the first group's) handed 71.5% of Map12's lit groups another
+                // mesh's atlas page - 3,171 of 4,434 groups, 59.4% of triangles. The UVs were always right;
+                // the page under them was not.
+                parts = map.Groups
+                    .Select(g => (g.Material, g.StartIndex, g.IndexCount, Lightmap: g.LightmapTexture))
+                    .ToList();
             }
             else
             {
@@ -690,7 +694,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 mesh = PreviewGeometry.FromLeagueArrays(asset.Display, m.VertexCount,
                     m.Positions, m.Normals, m.Uvs, m.Colors, m.LightmapUvs, m.Indices,
                     m.BlendIndices, m.BlendWeights);
-                parts = m.SubMeshes.Select(x => (x.Material, x.StartIndex, x.IndexCount)).ToList();
+                parts = m.SubMeshes.Select(x => (x.Material, x.StartIndex, x.IndexCount, Lightmap: "")).ToList();
             }
         }
         catch (Exception ex) { Fail($"{asset.Display}: {ex.Message}"); return; }
@@ -701,7 +705,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         sb.AppendLine($"        recentred on its own bounds, radius {mesh.Radius:n0}");
         sb.AppendLine();
 
-        if (!asset.IsMap) _lightmapByGroup.Clear();
+        _slicesMerged = 0;
+        _lightmapsBound = 0;
+        _lightmapPages.Clear();
         _axisCounts.Clear();
         _renderer.ClearMaterials();
         _renderer.SetMesh(mesh);
@@ -769,6 +775,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             sb.AppendLine();
             sb.Append(DescribeSkinMesh(_skinMesh));
         }
+        sb.AppendLine();
+        sb.AppendLine($"lightmaps: {_lightmapsBound} slice(s) bound across {_lightmapPages.Count} distinct atlas page(s)");
+        sb.AppendLine($"slices merged away: {_slicesMerged}   ·   distinct textures resident: {_renderer.CachedTextureCount}");
         sb.AppendLine();
         sb.AppendLine($"{ok} material(s) live, {failed} unresolved, {texBound} texture(s) bound"
                       + (texMissing > 0 ? $", {texMissing} missing" : ""));
@@ -923,7 +932,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
     /// <summary>Resolve one material to a live pipeline covering its submesh slices.</summary>
     private PreviewMaterial? BuildSceneMaterial(MaterialBinding b,
-        List<(string Material, int Start, int Count)> slices, StringBuilder sb,
+        List<(string Material, int Start, int Count, string Lightmap)> slices, StringBuilder sb,
         ref int texBound, ref int texMissing, out string why, out bool usedFallback)
     {
         why = "";
@@ -996,10 +1005,29 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         var ps = _cache.LoadShader(psPath, psPerm.BlobIndex, out _);
         if (vs is null || ps is null) { why = "bytecode would not load"; sb.AppendLine($"   !  {b.Name,-34} bytecode load failed"); return null; }
 
-        // One pipeline per material; the FIRST slice is its draw range. Extra slices get their own
-        // pipeline object sharing the same shaders, because a draw call covers one contiguous range.
+        // M226 (C4): coalesce slices that are already adjacent in the index buffer AND want the same
+        // lightmap page. Each surviving slice costs its own pipeline - shaders, input layout, constant
+        // buffers - and its own draw call, and Map12 was building 921 of them for 120 material names.
+        // The lightmap has to be part of the key or merging would re-introduce the very bug C1 fixes.
+        var merged = new List<(string Material, int Start, int Count, string Lightmap)>();
+        foreach (var sl in slices.OrderBy(x => x.Start))
+        {
+            if (merged.Count > 0)
+            {
+                var prev = merged[^1];
+                if (prev.Start + prev.Count == sl.Start
+                    && string.Equals(prev.Lightmap, sl.Lightmap, StringComparison.OrdinalIgnoreCase))
+                {
+                    merged[^1] = prev with { Count = prev.Count + sl.Count };
+                    continue;
+                }
+            }
+            merged.Add(sl);
+        }
+        if (merged.Count < slices.Count) _slicesMerged += slices.Count - merged.Count;
+
         PreviewMaterial? first = null;
-        foreach (var slice in slices)
+        foreach (var slice in merged)
         {
             var mat = _renderer.BuildMaterial(b.Name, vs, ps, slice.Start, slice.Count, out var rep);
             if (mat is null) { why = rep.Error ?? "pipeline creation failed"; sb.AppendLine($"   !  {b.Name,-34} {why}"); return null; }
@@ -1009,13 +1037,16 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 if (string.IsNullOrWhiteSpace(slot.Path)) continue;
                 string? target = ResolveTextureTarget(slot.SamplerName, ps, vs);
                 if (target is null) continue;
+                // M226: on a cache hit neither the WAD read nor the decode happens
+                string key = slot.Path.ToLowerInvariant();
+                if (_renderer.TryBindCached(mat, target, key)) { texBound++; continue; }
                 try
                 {
-                    var data = _readAsset!(HashAlgorithms.WadPath(slot.Path.ToLowerInvariant()));
+                    var data = _readAsset!(HashAlgorithms.WadPath(key));
                     if (data is null || data.Length == 0)
                     { sb.AppendLine($"      texture NOT FOUND  {slot.Path}"); texMissing++; continue; }
                     var img = TextureDecoder.Decode(data);
-                    _renderer.SetTexture(mat, target, img.Rgba, img.Width, img.Height);
+                    _renderer.SetTexture(mat, target, key, img.Rgba, img.Width, img.Height);
                     if (!target.Equals(slot.SamplerName + "__TX", StringComparison.OrdinalIgnoreCase))
                         sb.AppendLine($"      '{slot.SamplerName}' -> {target}  ({img.Width}x{img.Height})");
                     texBound++;
@@ -1023,24 +1054,32 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 catch (Exception ex) { sb.AppendLine($"      texture FAILED  {slot.Path}: {ex.Message}"); texMissing++; }
             }
 
-            // M224: the mapgeo group names a lightmap texture the material itself does not
-            if (_lightmapByGroup.TryGetValue(b.Name, out var lmPath)
-                && ps.Textures.Any(t => t.Name.Contains("BAKED_LIGHT", StringComparison.OrdinalIgnoreCase)))
+            // M226: THIS slice's lightmap page, not "the first page of any group sharing this material
+            // name". The old lookup also used b.Name - the resolved binding's name - against a dictionary
+            // keyed by the group's submesh material name, so where those differ it bound nothing at all.
+            if (slice.Lightmap.Length > 0
+                && ps.Textures.FirstOrDefault(t => t.Name.Contains("BAKED_LIGHT", StringComparison.OrdinalIgnoreCase)) is { } lmSlot)
             {
-                var target = ps.Textures.First(t => t.Name.Contains("BAKED_LIGHT", StringComparison.OrdinalIgnoreCase)).Name;
-                try
+                string lmKey = slice.Lightmap.ToLowerInvariant();
+                if (_renderer.TryBindCached(mat, lmSlot.Name, lmKey)) { texBound++; _lightmapsBound++; }
+                else
                 {
-                    var lmData = _readAsset!(HashAlgorithms.WadPath(lmPath.ToLowerInvariant()));
-                    if (lmData is { Length: > 0 })
+                    try
                     {
-                        var lmImg = TextureDecoder.Decode(lmData);
-                        _renderer.SetTexture(mat, target, lmImg.Rgba, lmImg.Width, lmImg.Height);
-                        sb.AppendLine($"      lightmap -> {target}  {lmImg.Width}x{lmImg.Height}  {System.IO.Path.GetFileName(lmPath)}");
-                        texBound++;
+                        var lmData = _readAsset!(HashAlgorithms.WadPath(lmKey));
+                        if (lmData is { Length: > 0 })
+                        {
+                            var lmImg = TextureDecoder.Decode(lmData);
+                            _renderer.SetTexture(mat, lmSlot.Name, lmKey, lmImg.Rgba, lmImg.Width, lmImg.Height);
+                            texBound++;
+                            _lightmapsBound++;
+                            _lightmapPages.Add(lmKey);
+                        }
+                        else { sb.AppendLine($"      lightmap NOT FOUND  {slice.Lightmap}"); texMissing++; }
                     }
-                    else { sb.AppendLine($"      lightmap NOT FOUND  {lmPath}"); texMissing++; }
+                    catch (Exception ex)
+                    { sb.AppendLine($"      lightmap FAILED  {slice.Lightmap}: {ex.Message}"); texMissing++; }
                 }
-                catch (Exception ex) { sb.AppendLine($"      lightmap FAILED  {lmPath}: {ex.Message}"); texMissing++; }
             }
 
             foreach (var prm in b.Parameters)
