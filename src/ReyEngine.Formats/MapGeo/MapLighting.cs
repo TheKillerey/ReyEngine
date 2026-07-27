@@ -83,6 +83,34 @@ public static class MapLighting
         return (volumes, lights);
     }
 
+    /// <summary>
+    /// M207: the lighting a scene should actually render with - the bin's global sun, unless the bin has
+    /// exactly ONE <see cref="MapLightingVolume"/>, in which case that volume's lighting is used for the
+    /// whole scene.
+    ///
+    /// <para><b>Why "exactly one", and why no box test.</b> Whether a volume's transform basis is a
+    /// half-extent or a full extent is NOT resolvable from the bins: the struct carries no bound of any
+    /// kind (its 22 fields are transform, name, mVisibilityFlags and 19 lighting parameters), and a
+    /// containment test cannot discriminate either, because the larger reading contains more points by
+    /// construction. Rather than pick a factor on a coin-flip, this sidesteps the question - with one
+    /// volume there is nothing to choose BETWEEN, so the only thing a box could decide is whether to fall
+    /// back to a global sun that, for 146 of 172 volumes, is dimmer than the volume by up to 2x.</para>
+    ///
+    /// <para>Measured: 128 of the 150 bins carrying volumes have exactly one. The other 22 are left on the
+    /// global sun until the extent convention is settled, because there a wrong box picks the wrong
+    /// VOLUME, which is a different and worse error than a wrong boundary.</para>
+    ///
+    /// <para>The residual assumption, stated plainly: a lone volume covers wherever the camera goes. That
+    /// is not proven. It is preferred to the status quo only because the status quo is already known to be
+    /// wrong for those scenes.</para>
+    /// </summary>
+    public static MapSunProperties? EffectiveSun(byte[] materialsBin)
+    {
+        var global = MapSunProperties.Extract(materialsBin);
+        var (volumes, _) = Extract(materialsBin, global);
+        return volumes.Count == 1 ? volumes[0].Lighting : global;
+    }
+
     private static MapSunProperties ReadVolumeLighting(BinTreeStruct s, MapSunProperties? global)
     {
         var b = global ?? new MapSunProperties();

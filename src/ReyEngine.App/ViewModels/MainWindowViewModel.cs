@@ -5360,7 +5360,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (r.Count > 0)
             {
                 return (r, MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName),
-                    Formats.MapGeo.MapSunProperties.Extract(bytes));
+                    Formats.MapGeo.MapLighting.EffectiveSun(bytes));
             }
         }
         catch (Exception ex) { _log.Warn("MapGeo", $"project materials.bin parse failed: {ex.Message}"); }
@@ -5375,7 +5375,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 {
                     _log.Info("MapGeo", "Used the original game materials.bin (the project's copy was broken/empty).");
                     return (r, MaterialProfiles.ForMapMaterials(fb, names, ResolveBinName),
-                        Formats.MapGeo.MapSunProperties.Extract(fb));
+                        Formats.MapGeo.MapLighting.EffectiveSun(fb));
                 }
             }
             catch (Exception ex) { _log.Warn("MapGeo", $"game materials.bin parse failed: {ex.Message}"); }

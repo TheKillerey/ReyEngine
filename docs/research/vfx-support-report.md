@@ -1399,11 +1399,21 @@ census is `doesCastShadow`, which nothing consumes; these affect map *geometry* 
 zero lighting volumes**, so the row's baron-pit/base/brush example cannot be about them — the affected maps
 are Map22 (159), Map30 (9) and Map33 (4).
 
-**Neither is wired into the viewport, and that is on scope**: tier 4 is *parsing* support. Applying the
-volumes is a visible up-to-2x brightness change that first needs the extent convention settled (whether
-the transform's basis vectors are half- or full-extents rests on one sample's arithmetic; full extents
-would make every box twice its true size) and the boundary behaviour decided (nothing in the 22-field
-schema plausibly encodes a blend width, and 22 bins carry two volumes, so a hard switch would pop).
+**M207 applied the volumes, by removing the question rather than answering it.** The extent convention is
+**not resolvable from the bins** — two attempts failed and both are recorded here so nobody repeats them.
+A containment test (does the box hold the bin's placements?) cannot discriminate, because the larger
+reading contains more points *by construction*. And the struct carries **no bound at all**: its 22 fields
+are `transform`, `name`, `mVisibilityFlags` and 19 lighting parameters, so M196's "centre (2000,2000) vs
+boundsMax (4000,4000)" cannot have come from it.
+
+So `MapLighting.EffectiveSun` uses a volume's lighting for the whole scene when a bin has **exactly one**,
+and leaves multi-volume bins on the global sun. With one volume there is nothing to choose *between*, so
+the box could only decide whether to fall back to a global sun that is dimmer than the volume — which is
+the error already shipping. Measured: **128 of 150** volume-bearing bins have exactly one, **110** of them
+now render brighter (largest **3.00×**), and all **22** multi-volume bins are verifiably untouched.
+
+The residual assumption is stated in the source: a lone volume covers wherever the camera goes. That is
+not proven — it is preferred only because the status quo is *known* wrong for those scenes.
 
 VERIFIED: 7 checks for 4.4 and 6 for 4.6, all against the real shipping map WADs. For 4.6: both classes
 parse; 146 of 172 volumes are brighter than their global; omitted fields inherit the global sun; and Map11
