@@ -110,7 +110,6 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         Document = doc;
         AssetName = entry.DisplayName;
         IsEditable = editable;
-        Document = doc;
         _defs = defs;
 
         _allSystems.Clear();
@@ -204,6 +203,34 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     /// play every cycle without the user pressing Stop. On by default: an effect whose only fade lives in
     /// its Linger curves otherwise looks like it never ends.</summary>
     [ObservableProperty] private bool _autoStop = true;
+
+    /// <summary>M208: the mesh-winding A/B. 0 = off (today), 1 = front is CCW, 2 = front is CW. Cycled by
+    /// a toolbar button so the three pictures can be compared without leaving the preview.
+    ///
+    /// This is a DIAGNOSTIC. Two probes disagreed about the winding of Riot's mesh primitives, and applying
+    /// culling on the wrong one deletes the geometry of the 21,142 mesh emitters that do not set
+    /// disableBackfaceCull - so it defaults off and nothing reads it but the preview.</summary>
+    [ObservableProperty] private int _meshCullMode;
+
+    public string MeshCullLabel => MeshCullMode switch
+    {
+        1 => "\u25e7 Cull: front=CCW",
+        2 => "\u25e8 Cull: front=CW",
+        _ => "\u25a1 Cull: off",
+    };
+
+    partial void OnMeshCullModeChanged(int value)
+    {
+        OnPropertyChanged(nameof(MeshCullLabel));
+        Info?.Invoke(value switch
+        {
+            1 => "Mesh culling: front face = counter-clockwise. If this matches 'off', CCW is the winding.",
+            2 => "Mesh culling: front face = clockwise. If this matches 'off', CW is the winding.",
+            _ => "Mesh culling off - every face drawn. This is the reference picture.",
+        });
+    }
+
+    [RelayCommand] private void CycleMeshCull() => MeshCullMode = (MeshCullMode + 1) % 3;
 
     [RelayCommand] private void Restart() { Stopped = false; RebuildPlayback(); }
     [RelayCommand] private void TogglePause() => Paused = !Paused;

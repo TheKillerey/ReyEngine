@@ -10,8 +10,25 @@ namespace ReyEngine.Rendering.Vfx;
 /// against the scene but not depth-writing, so glows read through geometry without sorting artefacts.
 /// GLSL is ASCII-only (non-ASCII bytes break the GL driver's lexer -> blank output).
 /// </summary>
+/// <summary>M208: which winding counts as a front face when culling mesh particles. A DIAGNOSTIC for
+/// settling the question against real Riot geometry - two probes disagreed, and getting it backwards
+/// inverts 21,142 mesh emitters that do not set <c>disableBackfaceCull</c>.</summary>
+public enum VfxMeshCullMode
+{
+    /// <summary>No culling - every face drawn. Today's behaviour and the reference picture.</summary>
+    Off,
+    /// <summary>Counter-clockwise is the front face.</summary>
+    FrontCcw,
+    /// <summary>Clockwise is the front face.</summary>
+    FrontCw,
+}
+
 public sealed class VfxParticleRenderer
 {
+    /// <summary>M208: mesh-particle backface culling, for the winding A/B. Off by default - this is a
+    /// diagnostic, and shipping it enabled on the wrong winding would delete geometry.</summary>
+    public VfxMeshCullMode MeshCullMode { get; set; } = VfxMeshCullMode.Off;
+
     private GL _gl = null!;
     private uint _program, _vao, _quadVbo, _instVbo;
     private int _uViewProj, _uCamRight, _uCamUp, _uTexDiv, _uTex, _uUvScrollRate;
@@ -977,7 +994,27 @@ public sealed class VfxParticleRenderer
         // Getting it backwards inverts 171k emitters, so this stays off until a real Riot .scb is checked
         // in the app rather than a probe-generated sphere. The field is parsed and carried so the editor
         // can surface it and so the decision is a one-line change when the winding is known.
-        const bool cull = false;
+        // M208: the A/B. `MeshCullMode` is a DIAGNOSTIC, not a setting anyone should ship enabled - it
+        // exists so the winding can be decided by looking at a real Riot .scb in the app instead of at a
+        // probe-generated sphere. Off is today's behaviour and stays the default.
+        //
+        // What to look for, on a CLOSED mesh (Aatrox_Skin37_Emote_Joke_Jet_Turbines_1 uses
+        // Aatrox_Skin33_Back_Turbine_mesh.scb, which does NOT set disableBackfaceCull):
+        //   Off        - every face drawn; the reference picture.
+        //   FrontCcw   - if this looks like Off, CCW is the front-face winding.
+        //   FrontCw    - if this looks like Off, CW is.
+        // The WRONG one looks hollow or inside-out - you see the far side of the mesh through the near
+        // side - or, on a thin/open mesh like Aatrox_Skin33_W_RekSai_Fin1.scb, the geometry disappears
+        // from one viewing side. Orbit the camera; the wrong setting changes what vanishes as you go round.
+        bool cull = MeshCullMode != VfxMeshCullMode.Off;
+        if (cull)
+        {
+            _gl.Enable(EnableCap.CullFace);
+            _gl.CullFace(TriangleFace.Back);
+            _gl.FrontFace(MeshCullMode == VfxMeshCullMode.FrontCcw
+                ? FrontFaceDirection.Ccw
+                : FrontFaceDirection.CW);
+        }
 
         for (int i = 0; i < es.InstanceCount; i++)
         {
@@ -995,6 +1032,9 @@ public sealed class VfxParticleRenderer
                 else _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)es.MeshVertexCount);
             }
         }
+        // M208: culling is scoped to the mesh draw. Billboards and ribbons are two-sided quads, so leaving
+        // it on would cull half of them depending on which way the camera faces.
+        if (cull) _gl.Disable(EnableCap.CullFace);
         _gl.UseProgram(_program);   // back to the billboard program for the next emitter
         _gl.BindVertexArray(_vao);
     }

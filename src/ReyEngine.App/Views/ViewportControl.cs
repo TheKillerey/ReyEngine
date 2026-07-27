@@ -311,6 +311,13 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool ParticlePaused { get => GetValue(ParticlePausedProperty); set => SetValue(ParticlePausedProperty, value); }
     public bool ParticleStopped { get => GetValue(ParticleStoppedProperty); set => SetValue(ParticleStoppedProperty, value); }
     public bool ParticleAutoStop { get => GetValue(ParticleAutoStopProperty); set => SetValue(ParticleAutoStopProperty, value); }
+
+    /// <summary>M208: mesh-particle backface culling, as an A/B. 0 = off (default, today's behaviour),
+    /// 1 = counter-clockwise is the front face, 2 = clockwise is. A diagnostic for settling the winding
+    /// against real Riot geometry, not a setting to ship enabled.</summary>
+    public static readonly StyledProperty<int> MeshCullModeProperty =
+        AvaloniaProperty.Register<ViewportControl, int>(nameof(MeshCullMode));
+    public int MeshCullMode { get => GetValue(MeshCullModeProperty); set => SetValue(MeshCullModeProperty, value); }
     /// <summary>M186: seconds since this auto-stop cycle began. Reset when the cycle restarts.</summary>
     private float _autoStopElapsed;
     public bool ShowBones { get => GetValue(ShowBonesProperty); set => SetValue(ShowBonesProperty, value); }
@@ -1010,6 +1017,15 @@ public sealed class ViewportControl : OpenGlControlBase
 
             // M185 (2.15): the Stop action. Applied here rather than at build time so the linger phase
             // plays out live, and idempotently so holding the toggle does not re-trigger it.
+            // M208: push the A/B setting to the renderer each frame - it is a diagnostic toggle, so it must
+            // take effect while the user is watching rather than on the next rebuild.
+            _particleRenderer.MeshCullMode = MeshCullMode switch
+            {
+                1 => ReyEngine.Rendering.Vfx.VfxMeshCullMode.FrontCcw,
+                2 => ReyEngine.Rendering.Vfx.VfxMeshCullMode.FrontCw,
+                _ => ReyEngine.Rendering.Vfx.VfxMeshCullMode.Off,
+            };
+
             if (ParticleStopped)
             {
                 foreach (var psim in _particleSims) psim.Stop();

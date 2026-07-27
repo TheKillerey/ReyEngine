@@ -34,6 +34,9 @@
                     ToolTip.Tip="Stop emitting and play the Linger shutdown curves (Restart to run again)" />
             <ToggleButton Classes="vp" Content="↻ Auto-stop" IsChecked="{Binding AutoStop}"
                           ToolTip.Tip="Loop as run → stop → linger → restart, so the shutdown curves play every cycle" />
+            <!-- M208: the mesh-winding A/B. Cycles off → front=CCW → front=CW. -->
+            <Button Classes="tool" Content="{Binding MeshCullLabel}" Command="{Binding CycleMeshCullCommand}"
+                    ToolTip.Tip="DIAGNOSTIC: cycle mesh-particle backface culling. On a closed mesh the CORRECT winding looks like 'off'; the wrong one looks hollow or inside-out. Orbit the camera to tell them apart." />
             <TextBlock Text="Speed" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
             <Slider Minimum="0.1" Maximum="3" Value="{Binding Speed}" Width="110" VerticalAlignment="Center" />
             <TextBlock Text="{Binding Speed, StringFormat={}{0:0.0}x}" FontSize="10" Width="30" VerticalAlignment="Center" />
@@ -199,7 +202,8 @@
                                      ParticleSpeed="{Binding Speed}"
                                      ParticlePaused="{Binding Paused}"
                                      ParticleStopped="{Binding Stopped}"
-                                     ParticleAutoStop="{Binding AutoStop}" />
+                                     ParticleAutoStop="{Binding AutoStop}"
+                                     MeshCullMode="{Binding MeshCullMode}" />
               <Border x:Name="PreviewInput" Background="Transparent" />
               <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
                          Margin="6,4" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />
