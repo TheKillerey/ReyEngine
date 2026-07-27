@@ -250,23 +250,24 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         var px = new byte[] { 255, 255, 255, 255 };
         _white = MakeTexture(px, 1, 1);
 
-        // M218: except for the colour-remap ramp, where white is actively destructive.
+        // M221: the colour-remap ramp stand-in must be TRANSPARENT, and the shader says so itself.
         //
-        // PIXEL_COLOR_REMAP_RAMP REPLACES rgb with ramp.Sample(luma(rgb), 0.5) rather than multiplying by
-        // it - a finding from the D3D11 spike, which hit exactly this and reported pure white for every
-        // case until it swapped in a greyscale ramp. It is declared by essentially every colour-output
-        // shader, so binding white there flattens the entire image to white while leaving the silhouette
-        // intact: Kayn drew with a correct outline in two colours and no surface detail at all.
+        // Disassembling skinnedmesh/diffuse_alpha ps blob 5 settles what two rounds of guessing could not:
         //
-        // A greyscale identity ramp makes the stage a no-op, which is the neutral stand-in. What the game
-        // actually puts in that texture is still UNKNOWN and is recorded as such in the spike write-up.
-        var ramp = new byte[256 * 4];
-        for (int i = 0; i < 256; i++)
-        {
-            ramp[i * 4] = ramp[i * 4 + 1] = ramp[i * 4 + 2] = (byte)i;
-            ramp[i * 4 + 3] = 255;
-        }
-        _identityRamp = MakeTexture(ramp, 256, 1);
+        //     dp3  r1.x, r0.yzwy, l(0.2126, 0.7152, 0.0722)   // luma, Rec.709
+        //     mov  r1.y, l(0.5)
+        //     sample r1.xyzw, r1.xyxx, t1.xyzw, s15           // ramp.Sample(luma, 0.5)
+        //     lt   r1.w, l(0.000000), r1.w                    // is the sampled ALPHA > 0 ?
+        //     movc r0.yzw, r1.wwww, r1.xxyz, r0.yyzw          // yes -> replace rgb; no -> keep it
+        //
+        // The remap is GATED ON THE RAMP'S ALPHA. It is not unconditional, which is what the D3D11 spike
+        // assumed and what M218/M219 inherited. Any opaque ramp forces the replacement - white gave a white
+        // model, a greyscale identity gave a black-and-white one - because alpha was 255 in both.
+        //
+        // Alpha zero and the shader skips the stage on its own, keeping the lit diffuse. That is a real
+        // no-op rather than an approximation of one, and it is almost certainly what the engine binds when
+        // no colour grading is active. The rgb is irrelevant; only the alpha is read.
+        _identityRamp = MakeTexture(new byte[] { 0, 0, 0, 0 }, 1, 1);
     }
 
     // ---------------------------------------------------------------- shaders
@@ -1132,17 +1133,8 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     /// <summary>The stand-in for a texture nothing supplied. White for almost everything; an identity
     /// ramp for the colour remap, where white would replace the whole image.</summary>
     private ComPtr<ID3D11ShaderResourceView> StandIn(string name) =>
-        name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase) && !RemapRampWhite
-            ? _identityRamp : _white;
+        name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase) ? _identityRamp : _white;
 
-    /// <summary>M219: use a flat white ramp instead of the greyscale identity.
-    ///
-    /// <para>Neither is right and neither can be. The stage REPLACES rgb with a lookup into an
-    /// engine-supplied ramp, measured directly: a red ramp turns a blue diffuse red, so the output carries
-    /// no information about the diffuse hue at all. White gives a flat white surface; the greyscale identity
-    /// gives a black-and-white one that at least preserves the texture's detail. The greyscale is the
-    /// default for that reason, and this switches back for anyone who prefers the old look.</para></summary>
-    public bool RemapRampWhite { get; set; }
 
     /// <summary>Which reflected textures currently have nothing bound (they sample a stand-in).</summary>
     public IEnumerable<string> UnboundTextureNames() =>

@@ -256,8 +256,6 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     [ObservableProperty] private bool _useComparisonShader;
     [ObservableProperty] private bool _animateTime = true;
 
-    /// <summary>M219: fall back to the old flat-white remap stand-in instead of the greyscale identity.</summary>
-    [ObservableProperty] private bool _remapRampWhite;
     [ObservableProperty] private double _sunAzimuth = 2.2, _sunElevation = 0.9;
 
     public bool CacheAvailable => _cache is not null;
@@ -1058,7 +1056,6 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         _lastTick = now0;
         ApplyCameraInput(dt);
 
-        _renderer.RemapRampWhite = RemapRampWhite;
         _settings.SuppliedView = Camera.View;
         _settings.SuppliedProjection = Camera.Projection((float)_renderWidth / _renderHeight);
         _settings.SuppliedCameraPosition = Camera.Position;

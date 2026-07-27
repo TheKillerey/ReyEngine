@@ -280,8 +280,43 @@ because only the sum is observable in a `DISABLE_SHADOWS` permutation.
 A knock-on: the built-in checker was 235/130/70, above the half-scale range the shader is built for, so it
 flattened to a solid block and read as a renderer bug. It is now authored under 0.5.
 
+## The colour-remap stage, settled by disassembly (M221)
+
+Champion shaders declare `PIXEL_COLOR_REMAP_RAMP_SharedTexture`; map shaders never do (0 of
+`defaultenv_flat`'s 238 blobs, against 88 of `diffuse_alpha`'s 90). Bound wrongly it destroys the image, and
+it took three attempts to get right because the first two were reasoning from behaviour instead of code.
+
+| stand-in | result on a champion |
+|---|---|
+| opaque white (M210) | flat white model, silhouette only, **2 colours** |
+| opaque greyscale identity (M218) | black-and-white with detail, **107 colours** |
+| **transparent, alpha 0 (M221)** | **full colour, 800 colours** |
+
+The disassembly is what settled it — the stage is **gated on the sampled ramp's alpha**, not unconditional:
+
+```
+dp3  r1.x, r0.yzwy, l(0.2126, 0.7152, 0.0722)   // luma, Rec.709
+mov  r1.y, l(0.5)
+sample r1.xyzw, r1.xyxx, t1.xyzw, s15           // ramp.Sample(luma, 0.5)
+lt   r1.w, l(0.000000), r1.w                    // sampled ALPHA > 0 ?
+movc r0.yzw, r1.wwww, r1.xxyz, r0.yyzw          // yes -> replace rgb; no -> keep it
+```
+
+Only the alpha is read for the decision; the rgb is irrelevant when alpha is 0. So the stage is opt-in per
+pixel and a transparent texture disables it exactly the way the engine must when no grading is active.
+
+The same disassembly independently confirms the M218 `Alpha` finding — `mov_sat r0.x, cb0[0].x` /
+`eq r0.y, r0.x, l(0)` / `discard_nz r0.y` discards the pixel outright when the material's `Alpha` is zero —
+and shows the FOW stage is `lerp(fowRgb, lit, fow.a)`, for which the opaque-white stand-in is correct.
+
+**What this cost, and the lesson.** M218 and M219 both reasoned from observed output ("white in, white out,
+therefore it replaces") and both shipped something wrong: a greyscale ramp that turned every champion
+black-and-white, and a permutation swap that drew an outline pass across Xayah's wings. Eighteen
+instructions of disassembly answered in one step what two rounds of black-box probing got backwards.
+`D3DCompiler.Disassemble` was available the whole time.
+
 ## Harnesses
 
 `scratchpad/vfxcensus` modes: `shaders` (TOC + reflection dump), `dxpreview` (end-to-end render with an ASCII
-preview and the comparison A/B), `matshader` (the material↔shader mapping census). Tests live in
+preview and the comparison A/B), `matshader` (the material↔shader mapping census), `disasm` (D3DCompiler disassembly of any cooked blob), `slotscan`, `rampprobe`, `remapscan`. Tests live in
 `tests/ReyEngine.Formats.Tests/ShaderCacheTests.cs` and need no game install.

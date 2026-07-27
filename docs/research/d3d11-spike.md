@@ -124,12 +124,28 @@ at 0.25.
 > `ramp.Sample(luma(rgb), 0.5)` rather than multiplying it, so the white stub forced white output and hid
 > the palette completely. Re-running with a greyscale-identity ramp made the lookup observable.
 >
-> **ReyEngine does not implement this remap at all.** It is unconditional in every colour-output particle
-> pixel shader, so our particle RGB skips a stage the game always applies. What the game puts in that
-> shared texture is UNKNOWN - it is engine-supplied and plausibly identity under normal conditions, which
-> would make this harmless - but that is an assumption, not a measurement, and it is worth settling
-> before chasing any other particle-colour discrepancy. Nothing to do with D3D11; the same gap exists on
+> **ReyEngine does not implement this remap at all.** It is declared by every colour-output particle pixel
+> shader, so our particle RGB skips a stage the game can apply. What the game puts in that shared texture
+> is UNKNOWN - it is engine-supplied and plausibly identity under normal conditions, which would make this
+> harmless - but that is an assumption, not a measurement. Nothing to do with D3D11; the same gap exists on
 > either backend.
+>
+> **CORRECTED at M221.** "Unconditional" was wrong, and it cost two milestones of wrong guesses downstream.
+> Disassembling `skinnedmesh/diffuse_alpha` ps blob 5 shows the stage is **gated on the sampled ramp's
+> alpha**:
+>
+> ```
+> dp3  r1.x, r0.yzwy, l(0.2126, 0.7152, 0.0722)   // luma, Rec.709
+> mov  r1.y, l(0.5)
+> sample r1.xyzw, r1.xyxx, t1.xyzw, s15           // ramp.Sample(luma, 0.5)
+> lt   r1.w, l(0.000000), r1.w                    // sampled ALPHA > 0 ?
+> movc r0.yzw, r1.wwww, r1.xxyz, r0.yyzw          // yes -> replace rgb; no -> keep it
+> ```
+>
+> With alpha 0 the shader keeps the lit diffuse untouched, so "identity under normal conditions" was right
+> for the wrong reason - the engine does not need an identity *ramp*, it needs a *transparent* one. Any
+> opaque stand-in forces the replacement: white produces a white model, a greyscale ramp a black-and-white
+> one. Both were shipped and both were wrong before the disassembly settled it.
 
 ### UV modes - not decidable this way, and not attempted
 
