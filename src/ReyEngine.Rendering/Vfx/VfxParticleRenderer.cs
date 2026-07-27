@@ -515,45 +515,71 @@ public sealed class VfxParticleRenderer
         _gl.ActiveTexture(TextureUnit.Texture0);
     }
 
-    /// <summary>M182 (2.9): per-emitter stencil state.
+    /// <summary>M182 (2.9): per-emitter stencil state. Modes measured over 3,891 authored values:
     ///
-    /// ONLY MODE 1 IS DEFINED - a normal write: draw as usual, and replace the stencil value with the
-    /// emitter's stencilRef wherever the fragment passes. That is 15.0% of the 3,891 authored modes
-    /// measured across 25 WADs.
+    ///   1 (15.0%)  WRITE      - draw as usual, replacing the stencil value with stencilRef
+    ///   2 (58.9%)  TEST EQUAL - draw only where the stencil already equals stencilRef
+    ///   3 (25.9%)  TEST NOT-EQUAL - draw only where it does not
+    ///   4 (0.2%)   UNRESOLVED - nothing in the data distinguishes it; left alone, 6 instances
     ///
-    /// Modes 2 (58.9%), 3 (25.9%) and 4 (0.2%) are UNRESOLVED and deliberately left alone rather than
-    /// given a guessed test function. The masking almost certainly lives in them - 254 of 1,016 objects
-    /// that use stencil at all contain both a mode-1 emitter and a non-1 one, which is the shape of
-    /// "one writes, another tests" - but which comparison each performs is not in the data, and a wrong
-    /// guess would make 85% of stencil emitters vanish behind a test that never passes.
+    /// The mode meanings are a project decision, recorded as such rather than as a measurement. The
+    /// corpus is consistent with them: of 1,016 objects using stencil at all, 254 contain both a mode-1
+    /// emitter and a non-1 one, which is the shape of "one writes, another tests".
     ///
-    /// Until a test mode is defined, the write has nothing reading it, so this changes nothing visible.
-    /// It is the buffer, the plumbing and the one defined mode, not the masking.</summary>
+    /// The test modes do NOT write (StencilMask 0). A mask that also rewrote the buffer would change what
+    /// later emitters in the same frame see, and nothing suggests the tests are meant to be destructive.
+    ///
+    /// ORDERING: this only works because M174 (1.3) draws emitters in authored `pass` order, so a writer
+    /// with a lower pass has already run by the time a tester reads. Emitters that share a pass fall back
+    /// to container order, which is the authored order in the bin.</summary>
     private void ApplyStencil(ReyEngine.Formats.Vfx.VfxEmitterDefinition def)
     {
-        if (def.StencilMode == 1)
+        switch (def.StencilMode)
         {
-            _gl.Enable(EnableCap.StencilTest);
-            _gl.StencilMask(0xFF);
-            _gl.StencilFunc(StencilFunction.Always, def.StencilRef, 0xFF);
-            _gl.StencilOp(StencilOp.Keep, StencilOp.Keep, StencilOp.Replace);
-            _stencilActive = true;
-        }
-        else if (_stencilActive)
-        {
-            // Leave the buffer untouched for every undefined mode, and make sure the previous emitter's
-            // write state does not leak into this draw.
-            ClearStencil();
+            case 1:
+                // A writer with no authored ref writes 0, which is what the buffer already holds - i.e. a
+                // no-op rather than a hazard, so it is allowed through.
+                _gl.Enable(EnableCap.StencilTest);
+                _gl.StencilMask(0xFF);
+                _gl.StencilFunc(StencilFunction.Always, Math.Max(0, def.StencilRef), 0xFF);
+                _gl.StencilOp(StencilOp.Keep, StencilOp.Keep, StencilOp.Replace);
+                _stencilActive = true;
+                break;
+            case 2:
+            case 3:
+                // No numeric ref means the emitter names a symbolic StencilReferenceId this code does not
+                // resolve. Testing against a defaulted 0 would be actively harmful for mode 3 - "draw
+                // where the stencil is not 0" fails everywhere on a cleared buffer and the emitter
+                // disappears - so an unresolved reference draws unmasked instead. 726 of 3,891 emitters
+                // with a stencilMode are in this position.
+                if (def.StencilRef < 0) { if (_stencilActive) ClearStencil(); break; }
+                _gl.Enable(EnableCap.StencilTest);
+                _gl.StencilMask(0x00);   // test only - see the remarks above
+                _gl.StencilFunc(def.StencilMode == 2 ? StencilFunction.Equal : StencilFunction.Notequal,
+                    def.StencilRef, 0xFF);
+                _gl.StencilOp(StencilOp.Keep, StencilOp.Keep, StencilOp.Keep);
+                _stencilActive = true;
+                break;
+            default:
+                // Mode 4 and anything unrecognised: draw with the stencil untouched, and make sure the
+                // previous emitter's state does not leak into this draw.
+                if (_stencilActive) ClearStencil();
+                break;
         }
     }
 
     private bool _stencilActive;
 
+    /// <summary>Return to the GL defaults. The write mask goes back to 0xFF, not 0: leaving it at 0 would
+    /// silently prevent the NEXT FRAME'S glClear from clearing the stencil plane, and stale stencil under
+    /// an active mask is garbage that only shows up a frame later.</summary>
     private void ClearStencil()
     {
         if (!_stencilActive) return;
-        _gl.StencilMask(0x00);
         _gl.Disable(EnableCap.StencilTest);
+        _gl.StencilMask(0xFF);
+        _gl.StencilFunc(StencilFunction.Always, 0, 0xFF);
+        _gl.StencilOp(StencilOp.Keep, StencilOp.Keep, StencilOp.Keep);
         _stencilActive = false;
     }
 

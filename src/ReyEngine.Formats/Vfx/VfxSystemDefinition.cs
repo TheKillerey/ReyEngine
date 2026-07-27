@@ -187,8 +187,14 @@ public sealed record VfxEmitterDefinition(
     /// rather than being given a guessed test function.</summary>
     int StencilMode = 0,
     /// <summary>M182 (2.9) stencilRef. U8, commonest values 1-7 with a tail to 48. The value written to
-    /// the stencil buffer under mode 1.</summary>
-    int StencilRef = 0)
+    /// the stencil buffer under mode 1, or compared against under modes 2 and 3.
+    ///
+    /// -1 means ABSENT, and that distinction matters rather than being tidiness: 726 of 3,891 emitters
+    /// with a stencilMode author no numeric ref, most of them naming a symbolic `StencilReferenceId`
+    /// instead (86 distinct hashes, not resolved here). Collapsing absent to 0 would make every one of
+    /// those a test against 0 - harmless for mode 2, but mode 3 would then be "draw where the stencil is
+    /// not 0", which on a freshly cleared buffer fails everywhere and deletes the emitter outright.</summary>
+    int StencilRef = -1)
 {
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||

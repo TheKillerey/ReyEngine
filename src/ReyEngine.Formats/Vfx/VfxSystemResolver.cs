@@ -424,7 +424,7 @@ public static class VfxSystemResolver
             Reflection: ReadReflection(p),
             Children: ReadChildren(p),
             StencilMode: GetU8(p, F_stencilMode) ?? 0,
-            StencilRef: GetU8(p, F_stencilRef) ?? 0);
+            StencilRef: GetU8(p, F_stencilRef) ?? -1);
     }
 
     /// <summary>M177 (2.5): the trail ribbon's parameters. See VfxTrailDefinition for what the payload

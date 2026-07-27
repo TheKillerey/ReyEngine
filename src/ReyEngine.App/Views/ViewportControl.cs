@@ -764,7 +764,11 @@ public sealed class ViewportControl : OpenGlControlBase
 
         _gl.Viewport(0, 0, w, h);
         _gl.ClearColor(0.039f, 0.051f, 0.075f, 1f);
-        _gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
+        // M182 (2.9): the stencil plane must be cleared too. Without this, last frame's mask persists and
+        // a mode-2/3 emitter tests against stale values - which reads as particles flickering in and out
+        // rather than as an obviously wrong buffer.
+        _gl.StencilMask(0xFF);
+        _gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit | ClearBufferMask.StencilBufferBit));
         _gl.Enable(EnableCap.DepthTest);
         _gl.DepthFunc(DepthFunction.Lequal);
         _gl.Enable(EnableCap.Blend);

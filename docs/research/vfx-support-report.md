@@ -494,7 +494,7 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | 2.6 | ~~**Palette recolour**~~ **DONE (M175)** | `VfxSystemResolver.ReadPalette`, `VfxParticleRenderer.cs` Frag | 43,621, of which 13,823 have no colour texture at all | Decoded and validated against Riot's `quad_ps` blob#12 (worst 0.0096). `paletteSelector` measured as a ValueVector3 row index against `paletteCount` (median 16). The U/V animation curves are deliberately **NOT** applied - see 'What was deliberately left out' below |
 | 2.7 | ~~**Child particle systems**~~ **DONE (M180)** in the model preview | `VfxSystemResolver.ReadChildren`, `VfxParticleSimulator.QueueChildSpawns`, `ViewportControl.SpawnQueuedChildren` | 35,510 (2.5%) | Spawn scheduling is in the simulator, instantiation in the viewport, resolution in the preview VM (which owns the resource map). Depth-capped because cycles are NOT ruled out — see 2.7b |
 | 2.8 | ~~**Depth offset**~~ **DONE (M175)**; `depthBiasFactors` still deferred | `VfxParticleRenderer.cs` vertex shader | 61,588 / 201,926 | No longer inferred. **DECODED** from `quad_vs` instructions 12-16: `world += normalize(world - vCamera) * depthPushPull`, per vertex, before projection - so positive pushes AWAY and negative pulls toward. Cross-checked against `defaultparticlequadunlit.vs` (same form for `EMITTER_DEPTH_PUSH_PULL`) and confirmed by rendering against a depth-writing wall. 74.6% of authored values are negative, which the decoded sign explains |
-| 2.9 | **Stencil: buffer + mode 1 DONE (M182)**; modes 2/3/4 unresolved | `VfxParticleRenderer.ApplyStencil` | 26,393, of which mode 1 is ~15% | The stencil plane and the one defined mode are in. The MASKING lives in modes 2 and 3 (85% between them) and nothing in the data distinguishes them - see 2.9b |
+| 2.9 | ~~**Stencil masking**~~ **DONE (M182)** - modes 1/2/3; mode 4 (0.2%) unresolved | `VfxParticleRenderer.ApplyStencil` | 26,393 | Mode meanings are a project decision, recorded as such. Masking verified end to end: equal + not-equal tile the tester's area exactly once - see 2.9b |
 | 2.10 | **Sampler state per emitter.** `texAddressModeBase` and `isTexturePixelated` instead of hardcoded Repeat/Linear | `VfxParticleRenderer.cs:108-112` | 80,342 / 1,298 | Trivial code change, but the enum ordering is UNKNOWN — needs one visual A/B to pin |
 | 2.11 | **Backface culling per emitter** | `VfxParticleRenderer.cs:174` | The 1,101,289 emitters that omit `disableBackfaceCull` | Blocked on the unknown default; only matters for mesh and arbitrary-quad primitives |
 | 2.12 | ~~**Reflection / fresnel**~~ **DONE (M181)** - rim and cubemap both | `VfxParticleRenderer.cs` mesh path | 59,149 (4.2%), of which ~87% are fresnel-only | Fully DECODED from `mesh_vs`/`mesh_ps` REFLECTIVE, and the field mapping is pinned by the maths rather than inferred - see 2.12b. Cubemap sampling still needs cubemap loading on the particle path |
@@ -817,13 +817,41 @@ as usual and replace the stencil value with `stencilRef` where the fragment pass
 both a mode-1 emitter and a non-1 one** - the shape you would expect from "one writes, another tests".
 125 contain only mode 1.
 
-**Modes 2, 3 and 4 are left alone, deliberately.** They are 85% of the authored total and nothing in the
-data distinguishes them; a guessed comparison function would make those emitters vanish behind a test
-that never passes. They draw with the stencil untouched, exactly as before.
+**Mode 2 = test equal, mode 3 = test not-equal** (also project decisions). Implemented as
+`StencilFunc(Equal|Notequal, ref, 0xFF)` with `StencilMask(0)` - the tests do NOT write, since a mask that
+rewrote the buffer would change what later emitters in the same frame see. Mode 4 (6 instances, 0.2%) is
+still unresolved and draws with the stencil untouched.
 
-**Consequence worth stating plainly: this changes nothing visible yet.** A write with nothing reading it
-has no effect on the image. What M182 delivers is the stencil plane in the viewport FBO, the parsing, the
-per-emitter state machine and the one defined mode - the masking arrives when a test mode is defined.
+Verified end to end with a two-emitter system - a small mode-1 writer at pass 0, a large tester at
+pass 10:
+
+| tester | pixels drawn |
+|---|---|
+| mode 2 (`== ref`) | 3,136 - **exactly** the writer's footprint |
+| mode 3 (`!= ref`) | 14,288 |
+| no stencil | 17,424 |
+
+3,136 + 14,288 = 17,424, so equal and not-equal tile the tester's area precisely once with no overlap and
+no gap.
+
+**An absent `stencilRef` is NOT zero, and conflating them would have deleted emitters.** 726 of 3,891
+emitters with a `stencilMode` author no numeric ref - most name a symbolic `StencilReferenceId` instead
+(86 distinct hashes, not resolved here). Defaulting those to 0 is harmless for mode 2 but actively
+destructive for mode 3: "draw where the stencil is not 0" fails everywhere on a freshly cleared buffer,
+so the emitter vanishes outright. `StencilRef` therefore uses -1 for absent, and a test mode with an
+unresolved reference draws unmasked. The corpus has real examples - `Flash_Around` is `mode=3 ref=-
+refId=0x422f0a3f`.
+
+**ORDERING is a live dependency.** A tester only sees a mask if its writer already drew, and draw order
+is authored `pass` (M174 1.3). The mechanism is verified, but that Riot's authored passes always place
+writers first is NOT verified - the sampled mode-3 emitters sit at passes from -5,000 to +15, so a system
+whose writer sits later than its tester would mask against an empty buffer. If a stencil effect looks
+wrong in practice, relative `pass` is the first thing to check.
+
+**The FBO clear needed fixing too.** The viewport cleared colour and depth but not stencil, so last
+frame's mask would persist - which with masking live reads as particles flickering rather than as an
+obviously wrong buffer. `ClearStencil` also restores the write mask to 0xFF rather than 0, because a zero
+write mask silently prevents the NEXT frame's `glClear` from clearing the plane at all.
 
 **The FBO change rippled.** The viewport depth attachment moved from `DEPTH_COMPONENT24` to
 `DEPTH24_STENCIL8`, and `glBlitFramebuffer` requires matching depth formats - so M175's soft-particle
