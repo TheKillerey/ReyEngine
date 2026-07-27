@@ -1438,6 +1438,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 BitConverter.SingleToInt32Bits(item.Transform.M43));
             var sim = new VfxParticleSimulator(seed);
             sim.SetSystem(item.System, item.Transform);
+            if (item.ColorModulate is { } tint) sim.PlacementTint = tint;   // M203
             if (item.StartDelay > 0f) sim.SetStartDelay(item.StartDelay);   // M91: frame-accurate clip events
             BindEmitterAssets(sim, item);
             _particleSimCache[item] = sim;

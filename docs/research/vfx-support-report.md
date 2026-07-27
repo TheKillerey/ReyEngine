@@ -1409,6 +1409,29 @@ VERIFIED: 7 checks for 4.4 and 6 for 4.6, all against the real shipping map WADs
 parse; 146 of 172 volumes are brighter than their global; omitted fields inherit the global sun; and Map11
 has zero volumes.
 
+#### 4.4c — M203: colorModulate is applied
+
+M195 parsed the placement tint but did not render it. It does now, and the symptom it fixes is measurable:
+of the 172 placements carrying a `colorModulate`, **none is identity**, and **16 of the 29 (bin, system)
+pairs** that use one carried several visibly distinct tints that all drew the same.
+`TFT_Set6_ZaunCity_GlowIdle` alone ships **14** distinct tints.
+
+**A multiply is the safe reading, and it is measured rather than assumed.** All 172 values lie in [0, 1]
+with **no component above 1.0**, so the field can only darken or fade - which is what a modulate does. A
+value above 1 would have argued for a scale instead; none exists. The operator is still an inference from
+the name plus that range, not proof against the game, and the source says so.
+
+**One insertion point covers everything.** The tint is applied where the instance buffer is filled, because
+the billboard, ribbon (trail/beam) and mesh-particle paths all read their colour back out of that same
+buffer - so a single multiply tints all three. It is applied before the `particleColorTexture` gradient, so
+the gradient modulates the tinted colour rather than overwriting it.
+
+VERIFIED: 5 tests. An untinted placement is unchanged; a real shipped tint (`Srs_Ray_Light_Maps_Bloom1`,
+`(1, 0.97, 0.84, 0.6)`) multiplies every channel; an alpha-only tint - the most common shape, 72 of 172 -
+leaves RGB alone; two placements of the same system with different tints now render differently; and an
+identity tint is indistinguishable from none. Checked for bite: disabling the multiply turns 62 pass into
+59 pass / 3 fail.
+
 #### 4.5b — M197 result
 
 A map document parses VFX from exactly one bin: the mapgeo's sibling `<name>.materials.bin`. Everything

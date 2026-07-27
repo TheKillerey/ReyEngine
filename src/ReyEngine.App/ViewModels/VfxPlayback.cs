@@ -31,7 +31,11 @@ public sealed record VfxPlaybackItem(
     IReadOnlyList<IReadOnlyList<VfxPlaybackItem>?>? EmitterChildren = null,
     /// <summary>M181 (2.12): per emitter, the decoded reflectionMapTexture cubemap. Only ~13% of
     /// reflection emitters name one.</summary>
-    IReadOnlyList<CubemapImage?>? EmitterReflectionCubemaps = null)
+    IReadOnlyList<CubemapImage?>? EmitterReflectionCubemaps = null,
+    /// <summary>M203: the map placement's <c>colorModulate</c> tint, or null when it authored none. 172 of
+    /// the 29,811 shipped placements carry one and NONE of them is identity, so ignoring it rendered 16 of
+    /// the 29 (bin, system) pairs that use it with several visibly distinct tints drawn identically.</summary>
+    Vector4? ColorModulate = null)
 {
     /// <summary>Convenience for champion/editor previews authored at a translated root.</summary>
     public VfxPlaybackItem(VfxSystemDefinition system, Vector3 worldPos,

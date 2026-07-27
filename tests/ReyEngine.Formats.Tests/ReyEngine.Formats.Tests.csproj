@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ReyEngine.Formats\ReyEngine.Formats.csproj" />
     <ProjectReference Include="..\..\src\ReyEngine.Core\ReyEngine.Core.csproj" />
+    <ProjectReference Include="..\..\src\ReyEngine.Rendering\ReyEngine.Rendering.csproj" />
   </ItemGroup>
 
 </Project>

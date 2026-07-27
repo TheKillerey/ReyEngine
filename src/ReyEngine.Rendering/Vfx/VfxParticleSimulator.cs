@@ -138,6 +138,16 @@ public sealed class VfxParticleSimulator
     private Matrix4x4 _inverseWorldTransform = Matrix4x4.Identity;
     public int LiveParticleCount { get; private set; }
 
+    /// <summary>M203: the placement's <c>colorModulate</c> - a per-PLACEMENT tint the map author set on this
+    /// instance of the system, distinct from anything the system itself authors. Identity when the placement
+    /// has none, so a system previewed outside a map is unaffected.
+    ///
+    /// Applied as a MULTIPLY. That reading is inferred from the field name and from the measured range: all
+    /// 172 shipped values lie in [0, 1] with no component above 1.0, so it can only darken or fade, which is
+    /// what a modulate does. Nothing measured proves the operator - a value above 1 would have argued for a
+    /// scale instead, and none exists.</summary>
+    public Vector4 PlacementTint { get; set; } = Vector4.One;
+
     /// <summary>M186 (2.15): how long one pass of this system takes, in seconds - the delay before it
     /// starts, plus how long it emits, plus how long its last particle then lives.
     ///
@@ -366,7 +376,7 @@ public sealed class VfxParticleSimulator
         foreach (var s in _emitters)
         {
             UpdateEmitter(s, dt);
-            BuildInstances(s);
+            BuildInstances(s, PlacementTint);
             live += s.InstanceCount;
         }
         LiveParticleCount = live;
@@ -736,7 +746,7 @@ public sealed class VfxParticleSimulator
             QueueChildSpawns(s, birthSet, s.BasePos + worldOffset, onDeath: false);
     }
 
-    private static void BuildInstances(EmitterState s)
+    private static void BuildInstances(EmitterState s, Vector4 placementTint)
     {
         var d = s.Def;
         int n = s.Particles.Count;
@@ -759,6 +769,11 @@ public sealed class VfxParticleSimulator
             var scaleMul = lg?.Scale?.Sample(lt) ?? d.ScaleOverLife?.Sample(t) ?? Vector3.One;
             var colMul = lg?.SeparateColor?.Sample(lt) ?? d.ColorOverLife?.Sample(t) ?? Vector4.One;
             var col = p.BirthColor * colMul;
+            // M203: applied HERE, not per primitive type, because the billboard, ribbon (trail/beam) and
+            // mesh paths all read their colour back out of the instance buffer this fills - so one multiply
+            // tints all three. Placed before the gradient so the gradient still modulates the tinted colour
+            // rather than overwriting it.
+            if (placementTint != Vector4.One) col *= placementTint;
 
             // M68: modulate by the particleColorTexture gradient. U is the colour-over-life axis (age); V is a
             // per-particle variant selector. This is what colours emitters that leave birthColor/color unset

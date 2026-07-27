@@ -965,7 +965,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (!_vfxSystems.TryGetValue(v.Placement.SystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
                 items.Add(new VfxPlaybackItem(s, v.CurrentTransform, ResolveSystemTextures(s), ResolveSystemMeshes(s),
                     ResolveSystemMultTextures(s), ResolveSystemDistortionTextures(s), ResolveSystemColorTextures(s),
-                    ResolveSystemErosionTextures(s), ResolveSystemPaletteTextures(s)));
+                    ResolveSystemErosionTextures(s), ResolveSystemPaletteTextures(s),
+                    ColorModulate: v.Placement.ColorModulate));   // M203: the placement's own tint
             }
             CurrentParticlePlayback = items.Count > 0 ? new VfxPlayback(items, CullByCamera: true) : null;
             _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.");
