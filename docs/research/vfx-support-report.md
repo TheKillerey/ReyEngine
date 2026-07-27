@@ -976,9 +976,9 @@ so their polarity is unreadable, and 6,851 `SeparateLingerColor` curves ship wit
 **Auto-stop (M186).** The preview now loops as run -> stop -> linger -> restart, on by default with a
 toggle. The restart waits on the LAST PARTICLE having gone rather than on a timer, so a long linger window
 is never cut off mid-fade; manual Stop takes precedence so auto-stop cannot restart underneath the user.
-The cycle length () is start + emit + the last particle life, and is
-an EDITOR measure - Riot systems are stopped by gameplay, so an endless emitter gets a 3-second stand-in
-purely so it has a visible cycle. Nothing in the renderer or the data path reads it.
+The cycle length (`VfxParticleSimulator.NaturalDuration`) is start + emit + the last particle's life, and
+is an EDITOR measure — Riot systems are stopped by gameplay, so an endless emitter gets a 3-second
+stand-in purely so it has a visible cycle. Nothing in the renderer or the data path reads it.
 
 ### 3. Missing editor controls
 
