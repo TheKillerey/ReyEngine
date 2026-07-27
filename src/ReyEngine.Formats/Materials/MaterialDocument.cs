@@ -24,6 +24,11 @@ public sealed class MaterialDocument
 
     public MaterialSourceKind Kind { get; }
     public IReadOnlyList<MaterialBinding> Materials { get; }
+
+    /// <summary>M222: the champion skin's own material layer, when this bin has one. Separate from
+    /// <see cref="Materials"/> because these are properties of the SKIN rather than of any one material -
+    /// they apply across every submesh that does not override them.</summary>
+    public SkinMeshProperties? SkinMesh { get; private set; }
     public bool IsDirty => Materials.Any(m => m.IsDirty);
 
     private MaterialDocument(BinTree tree, MaterialSourceKind kind, IReadOnlyList<MaterialBinding> materials)
@@ -97,6 +102,46 @@ public sealed class MaterialDocument
         ?? MaterialProfile.Default;
 
     /// <summary>Map (or any): material name → diffuse texture path (live).</summary>
+    /// <summary>M222: read the SkinMeshDataProperties block. Every field is optional; anything absent
+    /// stays null so a caller can tell "not authored" from "authored as zero".</summary>
+    private static void ReadSkinMeshProperties(BinTreeStruct smp, out SkinMeshProperties info)
+    {
+        float? F(string name) => Field(smp.Properties, name) is BinTreeF32 f ? f.Value : null;
+        string? S(string name) => Field(smp.Properties, name) is BinTreeString t && t.Value.Length > 0 ? t.Value : null;
+        System.Numerics.Vector4? C(string name) => Field(smp.Properties, name) switch
+        {
+            BinTreeColor c => c.Value,
+            BinTreeVector4 v => v.Value,
+            _ => null,
+        };
+
+        var hide = new List<string>();
+        foreach (var n in new[] { "initialSubmeshToHide", "initialSubmeshShadowsToHide" })
+            if (S(n) is { } raw)
+                foreach (var part in raw.Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+                    if (n == "initialSubmeshToHide" && !hide.Contains(part, StringComparer.OrdinalIgnoreCase))
+                        hide.Add(part);
+
+        info = new SkinMeshProperties
+        {
+            Skeleton = S("skeleton"),
+            SimpleSkin = S("simpleSkin"),
+            Texture = S("texture"),
+            GlossTexture = S("glossTexture"),
+            ReflectionMap = S("reflectionMap"),
+            SkinScale = F("skinScale"),
+            SelfIllumination = F("selfIllumination"),
+            BrushAlphaOverride = F("brushAlphaOverride"),
+            Fresnel = F("fresnel"),
+            FresnelColor = C("fresnelColor"),
+            ReflectionOpacityDirect = F("reflectionOpacityDirect"),
+            ReflectionOpacityGlancing = F("reflectionOpacityGlancing"),
+            ReflectionFresnel = F("reflectionFresnel"),
+            ReflectionFresnelColor = C("reflectionFresnelColor"),
+            InitialSubmeshesToHide = hide,
+        };
+    }
+
     public Dictionary<string, string> MaterialDiffuse()
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -114,11 +159,15 @@ public sealed class MaterialDocument
         // Champion: default diffuse + reverse map material-object -> submesh(es) from materialOverride.
         var assignment = new Dictionary<uint, List<string>>();
         uint? defaultMaterialHash = null;
+        SkinMeshProperties? pendingSkinMesh = null;
         if (champion)
         {
             foreach (var o in tree.Objects.Values)
             {
                 if (Field(o.Properties, "skinMeshProperties") is not BinTreeStruct smp) continue;
+
+                ReadSkinMeshProperties(smp, out var skinInfo);
+                pendingSkinMesh = skinInfo;
 
                 if (Field(smp.Properties, "texture") is BinTreeString defTex)
                     materials.Add(new MaterialBinding(
@@ -152,6 +201,7 @@ public sealed class MaterialDocument
         }
 
         // Every StaticMaterialDef (shared by champions and maps).
+        // (pendingSkinMesh is attached to the document at the end.)
         foreach (var (pathHash, o) in tree.Objects)
         {
             var samplers = Field(o.Properties, "samplerValues") as BinTreeContainer;
@@ -312,7 +362,7 @@ public sealed class MaterialDocument
         foreach (var b in materials) b.Profile = MaterialProfiles.Classify(b, kind);
 
         // (see Reclassify below — the profile is re-derived when the render state is edited)
-        return new MaterialDocument(tree, kind, materials) { Issues = issues };
+        return new MaterialDocument(tree, kind, materials) { Issues = issues, SkinMesh = pendingSkinMesh };
     }
 
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> props, string name)
@@ -340,6 +390,35 @@ public sealed class MaterialDocument
         }
         return 0;
     }
+}
+
+/// <summary>M222: a champion skin's own material layer, from SkinMeshDataProperties. These sit beside the
+/// StaticMaterialDefs and apply to every submesh that does not override them - selfIllumination in
+/// particular is declared by ALL 90 skinnedmesh pixel shaders sampled, so leaving it unset renders every
+/// champion with its emissive term at zero.
+///
+/// <para>Every field is nullable on purpose: absent and "authored as zero" are different, and the preview
+/// reports which of these it could actually apply.</para></summary>
+public sealed class SkinMeshProperties
+{
+    public string? Skeleton { get; init; }
+    public string? SimpleSkin { get; init; }
+    public string? Texture { get; init; }
+    public string? GlossTexture { get; init; }
+    public string? ReflectionMap { get; init; }
+
+    public float? SkinScale { get; init; }
+    public float? SelfIllumination { get; init; }
+    public float? BrushAlphaOverride { get; init; }
+    public float? Fresnel { get; init; }
+    public System.Numerics.Vector4? FresnelColor { get; init; }
+    public float? ReflectionOpacityDirect { get; init; }
+    public float? ReflectionOpacityGlancing { get; init; }
+    public float? ReflectionFresnel { get; init; }
+    public System.Numerics.Vector4? ReflectionFresnelColor { get; init; }
+
+    /// <summary>Submeshes the skin hides by default — Kalista hides Altar_Spear, which otherwise draws.</summary>
+    public IReadOnlyList<string> InitialSubmeshesToHide { get; init; } = Array.Empty<string>();
 }
 
 public sealed class MaterialBinding

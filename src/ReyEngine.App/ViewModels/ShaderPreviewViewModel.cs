@@ -144,6 +144,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     private readonly ShaderPermutationIndex? _perms;
     private readonly List<MaterialBinRow> _allBins = new();
     private readonly List<SceneAssetRow> _allScenes = new();
+    private SkinMeshProperties? _skinMesh;
     private DxbcShader? _vs, _ps;
     // double-buffered: an Image only repaints when its Source REFERENCE changes, so writing into the
     // same WriteableBitmap every frame shows nothing. Alternating two avoids the null-then-set flicker.
@@ -371,6 +372,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             // do, and the same BFS is how the app already finds champion VFX (M84-M86). Reading only the
             // selected bin found nothing for Kayn but a "(skin default texture)" placeholder with no
             // renderShader, so every submesh fell through to it and nothing drew.
+            _skinMesh = null;
             var seen = new HashSet<ulong> { value.Hash };
             var queue = new Queue<(string Path, ulong Hash)>();
             queue.Enqueue((value.Path, value.Hash));
@@ -389,6 +391,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 try
                 {
                     var doc = MaterialDocument.Parse(bytes, _resolveBinName);
+                    _skinMesh ??= doc.SkinMesh;
                     foreach (var m in doc.Materials)
                     {
                         var row = new MaterialRow { Binding = m, SourceBin = path };
@@ -410,6 +413,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 Materials.Add(row);
 
             int withShader = Materials.Count(r => r.HasShader);
+            if (_skinMesh is not null)
+                MaterialReport = DescribeSkinMesh(_skinMesh);
             Status = Materials.Count == 0
                 ? $"{value.Display} and its {binsRead - 1} dependency bin(s) hold no materials."
                 : $"{value.Display}: {Materials.Count} material(s) ({withShader} with a shader) "
@@ -657,6 +662,17 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             }
 
             firstVs ??= built.VsRefl;
+
+            // M222: the skin hides some submeshes by default - Kalista's Altar_Spear draws through her
+            // otherwise. Hidden rather than skipped, so it can be switched back on from the list.
+            bool hidden = _skinMesh?.InitialSubmeshesToHide
+                .Any(h => h.Equals(matName, StringComparison.OrdinalIgnoreCase)) == true;
+            if (hidden)
+            {
+                built.Visible = false;
+                sb.AppendLine($"      '{matName}' hidden by initialSubmeshToHide");
+            }
+
             SceneSubmeshes.Add(new SceneSubmeshRow
             {
                 Material = matName, Triangles = tris, Ok = true, Status = "ok",
@@ -665,10 +681,16 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                     : $"{binding.Name} · {binding.RenderShader ?? SelectedShader?.Display}",
                 UsedFallbackShader = usedFallback,
                 Pipeline = built,
+                Visible = !hidden,
             });
             ok++;
         }
 
+        if (_skinMesh is not null)
+        {
+            sb.AppendLine();
+            sb.Append(DescribeSkinMesh(_skinMesh));
+        }
         sb.AppendLine();
         sb.AppendLine($"{ok} material(s) live, {failed} unresolved, {texBound} texture(s) bound"
                       + (texMissing > 0 ? $", {texMissing} missing" : ""));
@@ -778,6 +800,48 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         return candidates[0].Name;
     }
 
+    /// <summary>M222: what the skin's own material layer holds, and what of it the preview can use.</summary>
+    private static string DescribeSkinMesh(SkinMeshProperties p)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("SKIN MESH PROPERTIES  (the skin's own material layer, beside its StaticMaterialDefs)");
+        sb.AppendLine();
+        void Row(string name, string? value, string note)
+            => sb.AppendLine($"   {name,-26} {value ?? "(not authored)",-34} {note}");
+
+        Row("selfIllumination", p.SelfIllumination?.ToString("0.###"),
+            "-> SELF_ILLUMINATION, declared by all 90 skinnedmesh shaders sampled");
+        Row("fresnel", p.Fresnel?.ToString("0.###"), "-> Fresnel_Size where declared (name match, UNVERIFIED)");
+        Row("fresnelColor", p.FresnelColor?.ToString(), "-> Fresnel_Color where declared (name match, UNVERIFIED)");
+        Row("initialSubmeshToHide", p.InitialSubmeshesToHide.Count > 0
+            ? string.Join(", ", p.InitialSubmeshesToHide) : null, "-> hidden on load");
+        sb.AppendLine();
+        Row("skinScale", p.SkinScale?.ToString("0.###"),
+            "NOT applied: the preview recentres and auto-frames, so a uniform scale is invisible");
+        Row("glossTexture", p.GlossTexture is null ? null : System.IO.Path.GetFileName(p.GlossTexture),
+            "NOT applied: no matching texture slot found in the sampled shaders");
+        Row("reflectionMap", p.ReflectionMap is null ? null : System.IO.Path.GetFileName(p.ReflectionMap),
+            "NOT applied: a cubemap; the renderer creates 2D textures only");
+        Row("reflectionOpacityDirect", p.ReflectionOpacityDirect?.ToString("0.###"), "NOT applied: no matching constant");
+        Row("reflectionOpacityGlancing", p.ReflectionOpacityGlancing?.ToString("0.###"), "NOT applied: no matching constant");
+        Row("brushAlphaOverride", p.BrushAlphaOverride?.ToString("0.###"), "NOT applied: brush/grass fade is not simulated");
+        return sb.ToString();
+    }
+
+    /// <summary>Write the skin-level values a shader can actually read into this material's parameters.
+    /// A material's OWN authored parameter still wins - these only fill what it leaves unset.</summary>
+    private void ApplySkinMeshParams(PreviewMaterial mat)
+    {
+        if (_skinMesh is null) return;
+
+        void Put(string name, params float[] v)
+        { if (!mat.Params.ContainsKey(name)) mat.Params[name] = v; }
+
+        if (_skinMesh.SelfIllumination is { } si) Put("SELF_ILLUMINATION", si, si, si, si);
+        if (_skinMesh.Fresnel is { } fr) Put("Fresnel_Size", fr, fr, fr, fr);
+        if (_skinMesh.FresnelColor is { } fc) Put("Fresnel_Color", fc.X, fc.Y, fc.Z, fc.W);
+    }
+
     /// <summary>Resolve one material to a live pipeline covering its submesh slices.</summary>
     private PreviewMaterial? BuildSceneMaterial(MaterialBinding b,
         List<(string Material, int Start, int Count)> slices, StringBuilder sb,
@@ -869,6 +933,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             foreach (var prm in b.Parameters)
                 if (prm.TryGetVector4(out var v))
                     mat.Params[prm.Name] = new[] { v.X, v.Y, v.Z, v.W };
+            ApplySkinMeshParams(mat);
 
             _renderer.AddMaterial(mat);
             first ??= mat;
