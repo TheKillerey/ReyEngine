@@ -186,6 +186,9 @@ public static class VfxSystemResolver
     // M182 (2.9) stencil. Both U8 in the live data.
     private static readonly uint F_stencilMode       = HashAlgorithms.Fnv1a("stencilMode");
     private static readonly uint F_stencilRef        = HashAlgorithms.Fnv1a("stencilRef");
+    // M184 (2.11 / 2.10)
+    private static readonly uint F_disableBackfaceCull = HashAlgorithms.Fnv1a("disableBackfaceCull");
+    private static readonly uint F_paletteAddressMode  = HashAlgorithms.Fnv1a("PaletteTextureAddressMode");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -434,7 +437,9 @@ public static class VfxSystemResolver
             Reflection: ReadReflection(p),
             Children: ReadChildren(p),
             StencilMode: GetU8(p, F_stencilMode) ?? 0,
-            StencilRef: GetU8(p, F_stencilRef) ?? -1);
+            StencilRef: GetU8(p, F_stencilRef) ?? -1,
+            DisableBackfaceCull: GetBool(p, F_disableBackfaceCull),
+            PaletteAddressMode: ReadPaletteAddressMode(p));
     }
 
     /// <summary>M177 (2.5): the trail ribbon's parameters. See VfxTrailDefinition for what the payload
@@ -528,6 +533,11 @@ public static class VfxSystemResolver
             GetU8(bp, F_mBeamMode) ?? -1,
             GetU8(bp, F_mTrailMode) ?? -1);
     }
+
+    /// <summary>M184 (2.10): PaletteTextureAddressMode lives inside the paletteDefinition struct, not on
+    /// the emitter, so it needs its own reach-in rather than a plain emitter-level read.</summary>
+    private static int ReadPaletteAddressMode(IReadOnlyDictionary<uint, BinTreeProperty> p)
+        => Get(p, F_paletteDef) is BinTreeStruct pd ? GetU8(pd.Properties, F_paletteAddressMode) ?? -1 : -1;
 
     private static Vector3 ReadValueVec3OrZero(BinTreeProperty? p) => p switch
     {

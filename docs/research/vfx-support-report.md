@@ -903,6 +903,52 @@ since setup runs inside the emitter loop, every early return in a ribbon path le
 NEXT emitter drew with no attribute arrays. And neither the trail nor the mesh path called
 `ApplyStencil`, so a mode-2/3 emitter earlier in pass order silently masked them.
 
+### 2.x M184: the four remaining blockers, attacked with measurement
+
+**The cross-cutting result: Riot's bin writer omits default-valued properties.** Corpus-wide there are
+**970 distinct (class, bool-field) pairs and not one ships both polarities**, while six Vfx bools ship
+*only* `false`. Both polarities are representable, so a field written only as `true` must default to
+`false`. This retroactively fixes the reading of every "true in 100%" row in this document.
+
+**2.10 sampler state - RESOLVED.** The enum came off Riot's own NAMED shared samplers in
+`assets/shaders/shareddata.bin`: `Wrap_No_Mip` / `CharacterWrap` / `EnvironmentWrap` write `0`, and the
+sampler called `Mirror` writes `2`. So **0 = Wrap, 2 = Mirror** (measured), **1 = Clamp** (elimination
+plus usage). It is Unity's `TextureWrapMode` ordering, **not** `D3D11_TEXTURE_ADDRESS_MODE` - `0` is not
+legal in the D3D enum and is authored 75,451 times, which falsifies that hypothesis outright. Line 237's
+"ordering UNKNOWN" is now stale. Shipped: the palette clamp (7,266 of 9,969 palette structs author no
+mode), via a **sampler object** because `ViewportControl` shares one GL texture per decoded image across
+five slots and 268 textures are used under more than one mode - per-texture state cannot express it.
+Remaining: full per-emitter sampler binding across all units.
+
+**2.11 backface culling - data settled, winding NOT; culling stays off.** `disableBackfaceCull` is true in
+all 358,113 occurrences, so by the omit-defaults rule absent means culling ENABLED (171,153 mesh
+emitters). Parsed and carried, but **not applied**: enabling it with `FrontFace=CW` made the M178 fresnel
+sphere read a full rim at every radius - the signature of keeping faces whose normals point away - and
+regressed four passing checks, while a second probe using an occluding wall disagreed. Two contradictory
+measurements mean the question is open, and getting it backwards inverts 171k emitters. Needs a real Riot
+`.scb` checked in the app rather than a probe-generated sphere.
+
+**2.13 bloom - the VFX half is RETIRED (measured non-issue).** All 11 pixel shaders under
+`particlesystem/` declare exactly **one** `SV_Target`, and `quad_ps`'s define pool has no BLOOM. Riot
+extracts bloom at material-write time into MRT slot 1; the default particle shader never writes it, and
+no `Vfx*DefinitionData` field carries bloom data. The "22% of emitters are glow-named" rationale is
+measured false - League VFX brightness comes from additive/screen blending, not a post-process. The
+map-side bloom is real but is an HDR + MRT + blur-chain architecture milestone with four unsourced
+quantities (`BLOOM_INTENSITY_SCALE`, the screen-vs-additive composite choice, buffer resolution/`UVStep`,
+mip depth), so it is re-scoped out of tier 2 rather than left open. Banked for whoever does it: the 7-tap
+sigma~1.0 Gaussian (0.383103 / 0.241843 / 0.060626 / 0.00598), the 15-tap sigma~1.63, the CoD-AW 13-tap
+downsample, the 3x3 tent upsample, the screen composite `out = 1 - (1-scene)*(1-bloom)`, and
+`MapSunProperties.useBloom` (169 occurrences, always true, therefore default false).
+
+**2.15 Linger - reduces to one product question.** The finite-lifetime hypothesis is **refuted**: across
+1,490,205 emitters the Linger group shows zero enrichment for a finite `lifetime`, and 19.9% have no
+`lifetime` at all. The trigger is an **external stop**, proved by construction -
+`AurelionSol_Skin*_W_Buff` emitter `Body` has `particleLifetime = -1`, no `lifetime`, `isSingleParticle`
+and a constant opaque colour, so nothing in the data can ever end it; its only fade is the Linger curve,
+because Astral Flight is a gameplay-toggled buff. **The question:** should the Particle Editor preview
+gain a Stop action (and should a looping preview auto-stop each cycle so the linger phase is visible)?
+Until a stop event exists the stage is unobservable in the editor, so everything else about it is moot.
+
 ### 3. Missing editor controls
 
 | # | Work | Files | Affected | Risk |

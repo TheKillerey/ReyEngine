@@ -454,6 +454,15 @@ public sealed class VfxParticleRenderer
                 _gl.ActiveTexture(TextureUnit.Texture6);
                 _gl.BindTexture(TextureTarget.Texture2D, es.PaletteTexture);
                 _gl.Uniform1(_uPaletteTex, 6);
+                // M184 (2.10): a palette is a gradient LUT, and UploadTexture sets GL_REPEAT on every
+                // texture object it creates - so a lookup that lands even slightly outside [0,1] wraps
+                // round to the far end of the gradient instead of holding the last colour.
+                //
+                // A SAMPLER OBJECT rather than texture state, because ViewportControl caches one GL
+                // texture per decoded image and shares it across all five particle slots; 268 textures in
+                // the corpus are authored under more than one address mode, so per-texture state cannot
+                // express this. 7,266 of 9,969 palette structs author no mode at all and take the clamp.
+                _gl.BindSampler(6, PaletteSampler(d2.PaletteAddressMode));
                 _gl.Uniform4(_uPaletteMixer, pal.SrcMixer.X, pal.SrcMixer.Y, pal.SrcMixer.Z, pal.SrcMixer.W);
                 _gl.Uniform1(_uPaletteV, pal.RowV);
                 _gl.ActiveTexture(TextureUnit.Texture0);
@@ -519,6 +528,7 @@ public sealed class VfxParticleRenderer
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _gl.ActiveTexture(TextureUnit.Texture6);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _gl.BindSampler(6, 0);
         _gl.ActiveTexture(TextureUnit.Texture0);
     }
 
@@ -614,6 +624,35 @@ public sealed class VfxParticleRenderer
         blendMode == 3
             ? !(_texHasAlpha.TryGetValue(texture, out var hasAlpha) && hasAlpha)
             : IsAdditive(blendMode);
+
+    /// <summary>M184 (2.10): Riot's texture-address enum, read off their OWN named shared samplers in
+    /// assets/shaders/shareddata.bin - Wrap_No_Mip / CharacterWrap / EnvironmentWrap write 0, and the
+    /// sampler named `Mirror` writes 2. It is Unity's TextureWrapMode ordering, not D3D11's.
+    ///
+    /// -1 (absent) maps to CLAMP for the palette specifically: a gradient LUT that wraps shows the far end
+    /// of the ramp at both extremes, which is the visible bug this fixes. Mode 3 has no core GLES 3.0
+    /// equivalent under either candidate reading (Border or MirrorOnce), so it falls back to mirrored
+    /// repeat - the identity is unresolved but has no implementation consequence.</summary>
+    private uint PaletteSampler(int addressMode)
+    {
+        int idx = addressMode switch { 0 => 0, 1 => 1, 2 => 2, 3 => 2, _ => 1 };   // absent -> clamp
+        if (_addressSamplers[idx] != 0) return _addressSamplers[idx];
+        uint s = _gl.GenSampler();
+        int wrap = idx switch
+        {
+            0 => (int)TextureWrapMode.Repeat,
+            2 => (int)GLEnum.MirroredRepeat,
+            _ => (int)TextureWrapMode.ClampToEdge,
+        };
+        _gl.SamplerParameter(s, SamplerParameterI.WrapS, wrap);
+        _gl.SamplerParameter(s, SamplerParameterI.WrapT, wrap);
+        _gl.SamplerParameter(s, SamplerParameterI.MinFilter, (int)TextureMinFilter.LinearMipmapLinear);
+        _gl.SamplerParameter(s, SamplerParameterI.MagFilter, (int)TextureMagFilter.Linear);
+        _addressSamplers[idx] = s;
+        return s;
+    }
+
+    private readonly uint[] _addressSamplers = new uint[3];
 
     /// <summary>Delete all sprite textures + emitter meshes uploaded so far (before a new system uploads).</summary>
     public void ClearTextures()
@@ -920,6 +959,26 @@ public sealed class VfxParticleRenderer
         _gl.Uniform2(_muMeshTexDiv, mdiv.X > 0 ? mdiv.X : 1f, mdiv.Y > 0 ? mdiv.Y : 1f);
         var mdivMult = es.Def.TextureMultTexDiv;
         _gl.Uniform2(_muMeshTexDivMult, mdivMult.X > 0 ? mdivMult.X : 1f, mdivMult.Y > 0 ? mdivMult.Y : 1f);
+        // M184 (2.11): backface culling is PARSED BUT NOT APPLIED. The data side is settled; the winding
+        // is not, and the winding is the whole risk.
+        //
+        // Settled: `disableBackfaceCull` is Bool and true in all 358,113 occurrences, and Riot's writer
+        // omits default-valued properties (970 class/bool pairs corpus-wide, not one shipping both
+        // polarities, while six Vfx bools ship only `false`). A field written only as true therefore
+        // defaults to false, so ABSENT means culling ENABLED - affecting 171,153 mesh emitters.
+        //
+        // NOT settled: which winding is the front face here. Enabling culling with FrontFace=CW (the
+        // convention ViewportMeshRenderer verified for the mirrored map pipeline) made the M178 fresnel
+        // sphere read a full rim at every radius - the signature of keeping the faces whose normals point
+        // AWAY from the camera - and regressed four previously-passing probe checks. A second probe using
+        // an occluding wall disagreed with that reading, so the two measurements are inconsistent and the
+        // question is genuinely open rather than nearly settled.
+        //
+        // Getting it backwards inverts 171k emitters, so this stays off until a real Riot .scb is checked
+        // in the app rather than a probe-generated sphere. The field is parsed and carried so the editor
+        // can surface it and so the decision is a one-line change when the winding is known.
+        const bool cull = false;
+
         for (int i = 0; i < es.InstanceCount; i++)
         {
             int o = i * Stride;   // [cx,cy,cz, sx,sy, r,g,b,a, rot, frame]

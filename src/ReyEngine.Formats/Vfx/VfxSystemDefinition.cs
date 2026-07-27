@@ -191,6 +191,24 @@ public sealed record VfxEmitterDefinition(
     /// authored total. Emitters carrying them are drawn with the stencil untouched, exactly as before,
     /// rather than being given a guessed test function.</summary>
     int StencilMode = 0,
+    /// <summary>M184 (2.11) disableBackfaceCull. Bool, and TRUE in all 358,113 occurrences - no `false`
+    /// exists anywhere in the corpus.
+    ///
+    /// That is not "the field is redundant", it is what tells us the DEFAULT. Riot's bin writer omits any
+    /// property equal to its class default: measured corpus-wide there are 970 distinct (class, bool
+    /// field) pairs and NOT ONE ships both polarities, while six Vfx bools ship only `false`. Both
+    /// polarities are therefore representable, so a field written only as `true` must default to `false`.
+    /// Absent means **culling enabled**. Independently corroborated by StaticMaterialPassDef.cullEnable,
+    /// which is authored 3,641 times and is always `false`.</summary>
+    bool DisableBackfaceCull = false,
+    /// <summary>M184 (2.10) PaletteTextureAddressMode. Riot's address enum, read off their own NAMED
+    /// shared samplers in assets/shaders/shareddata.bin: Wrap_No_Mip / CharacterWrap / EnvironmentWrap all
+    /// write 0, and the sampler literally called `Mirror` writes 2. So 0 = Wrap and 2 = Mirror, measured;
+    /// 1 = Clamp by elimination plus usage evidence. This is Unity's TextureWrapMode ordering, NOT
+    /// D3D11_TEXTURE_ADDRESS_MODE - 0 is not even a legal value in the D3D enum, and it is authored 75,451
+    /// times. -1 = absent.</summary>
+    int PaletteAddressMode = -1,
+
     /// <summary>M182 (2.9) stencilRef. U8, commonest values 1-7 with a tail to 48. The value written to
     /// the stencil buffer under mode 1, or compared against under modes 2 and 3.
     ///
