@@ -159,3 +159,86 @@ public static class VfxParkedEmitterFields
     public static readonly IReadOnlySet<uint> Hashes =
         Names.Select(HashAlgorithms.Fnv1a).ToHashSet();
 }
+
+
+/// <summary>
+/// M194 (tier 4.3): system-level fields ReyEngine now PARSES but does not RENDER.
+///
+/// <para><b>transform is deliberately not applied to the preview, and that is the main finding of this
+/// item.</b> The report scheduled it as "67.7% pure scale, so it is a sizing fix". Re-derived from the raw
+/// file bytes over all 4,440 authored matrices, pure scale is 29.2-29.5% - the 67.7% was the complement of
+/// (rotation OR translation), which silently counts the 912 identity matrices as scale. And the engine
+/// cannot express a size change through this channel at all:</para>
+/// <list type="bullet">
+///   <item>Sprite size is <c>BirthSize * scaleMul</c> (VfxParticleSimulator) with no world-transform term,
+///     and the placement basis is re-normalised, which strips scale.</item>
+///   <item><c>VfxParticleSimulator.SetWorldTransform</c> REPLACES the matrix and is re-issued every frame
+///     from ViewportControl for bone-attached systems and for travelling missiles, so anything composed in
+///     at build time survives until the first animated frame - and missiles are exactly the cohort the
+///     report's own example (<c>Aatrox_Skin37_W_mis</c>) belongs to.</item>
+/// </list>
+/// <para>Applying it would therefore be a no-op that looks like a feature. The value is parsed and kept
+/// here so a later milestone that fixes the re-anchor path has it available.</para>
+///
+/// <para>Matrix convention, proven rather than assumed: for 520/520 translation-bearing systems the 16 raw
+/// floats on disk match <c>M11..M44</c> in sequential order (0/520 match the transposed order), with
+/// floats 3/7/11 zero and float 15 one - so floats 12/13/14 are the translation, which is what
+/// <c>System.Numerics.Matrix4x4.Translation</c> returns. Independently, 29,805 of 29,809 map particle
+/// placements have a 4th ROW magnitude &gt; 1 and 0 of 29,809 have a 4th COLUMN one.</para>
+/// </summary>
+public sealed record VfxSystemExtras
+{
+    /// <summary>2,400 champion systems (2,040 more map-side). Authored TRS; see the class remarks for why
+    /// the preview does not consume it. Measured decomposition of the champion set: 912 identity, 702-708
+    /// pure scale (the 6-case spread is pure-mirror matrices, which one method calls scale and another
+    /// rotation), 520 with translation, 345 with rotation.</summary>
+    public Matrix4x4? Transform { get; init; }
+    /// <summary>74,589 - the most frequent unread system field. A U16 bitfield of UNKNOWN meaning.</summary>
+    public int? Flags { get; init; }
+    /// <summary>6,361. Caps how far the system may be scaled up; the preview does not scale systems.</summary>
+    public float? OverrideScaleCap { get; init; }
+    /// <summary>1,147. Seconds; meaning inferred from the name only.</summary>
+    public float? BuildUpTime { get; init; }
+    /// <summary>1,139.</summary>
+    public bool? ScaleDynamicallyWithAttachedBone { get; init; }
+    /// <summary>410 / 104. Voice-over events; the preview has no audio.</summary>
+    public string? VoiceOverOnCreateDefault { get; init; }
+    public string? VoiceOverPersistentDefault { get; init; }
+    /// <summary>303.</summary>
+    public bool? IsPoseAfterimage { get; init; }
+    /// <summary>176. The system-level twin of the map placement's eyeCandy flag.</summary>
+    public bool? EyeCandy { get; init; }
+    /// <summary>74 / 10. HUD anchoring; ReyEngine's HUD editor is a separate surface.</summary>
+    public bool? HudAnchorPositionFromWorldProjection { get; init; }
+    public float? HudLayerDimension { get; init; }
+    /// <summary>43. Meaning UNKNOWN.</summary>
+    public int? DrawingLayer { get; init; }
+    /// <summary>42 / 41. Audio parameter plumbing; the preview has no audio.</summary>
+    public int? AudioParameterFlexId { get; init; }
+    public float? AudioParameterTimeScaledDuration { get; init; }
+    /// <summary>7. Meaning UNKNOWN.</summary>
+    public int? ClockToUse { get; init; }
+    /// <summary>1.</summary>
+    public float? SelfIllumination { get; init; }
+    /// <summary>983 systems carry an assetRemappingTable and 336 a materialOverrideDefinitions container.
+    /// Only their PRESENCE is recorded: modelling their contents is a separate item, and a count is honest
+    /// where an empty list would imply we had read them.</summary>
+    public int AssetRemapCount { get; init; }
+    public int MaterialOverrideCount { get; init; }
+}
+
+/// <summary>System-level counterpart of <see cref="VfxParkedEmitterFields"/>; same contract - being in this
+/// table is what makes <see cref="VfxPreviewCoverage"/> badge the field.</summary>
+public static class VfxParkedSystemFields
+{
+    public static readonly IReadOnlyList<string> Names = new[]
+    {
+        "transform", "flags", "overrideScaleCap", "buildUpTime", "scaleDynamicallyWithAttachedBone",
+        "voiceOverOnCreateDefault", "voiceOverPersistentDefault", "mIsPoseAfterimage", "mEyeCandy",
+        "hudAnchorPositionFromWorldProjection", "hudLayerDimension", "drawingLayer",
+        "audioParameterFlexID", "audioParameterTimeScaledDuration", "ClockToUse", "selfIllumination",
+        "assetRemappingTable", "materialOverrideDefinitions",
+    };
+
+    public static readonly IReadOnlySet<uint> Hashes = Names.Select(HashAlgorithms.Fnv1a).ToHashSet();
+}

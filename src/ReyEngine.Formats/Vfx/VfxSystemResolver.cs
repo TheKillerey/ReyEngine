@@ -308,10 +308,11 @@ public static class VfxSystemResolver
                 if (el is BinTreeStruct s && s.ClassHash == EmitterClass)
                     emitters.Add(ParseEmitter(s));
         }
+        var sysExtras = ReadSystemExtras(o.Properties);
         string? persistentSound = GetString(o.Properties, F_soundPersistent);
         string? onCreateSound = GetString(o.Properties, F_soundOnCreate);
         float radius = GetF32(o.Properties, F_visibilityRadius) ?? 0f;
-        return new VfxSystemDefinition(o.PathHash, name, path, emitters, persistentSound, onCreateSound, radius);
+        return new VfxSystemDefinition(o.PathHash, name, path, emitters, persistentSound, onCreateSound, radius, sysExtras);
     }
 
     private static VfxEmitterDefinition ParseEmitter(BinTreeStruct s)
@@ -927,6 +928,36 @@ public static class VfxSystemResolver
     // when it is not - exactly the defect M192 had to fix. Keeping the parked set in its own table means
     // parking a field badges it automatically.
     private static uint PF(string name) => HashAlgorithms.Fnv1a(name);
+
+    /// <summary>M194 (4.3): the system's own unread fields. Same discipline as the emitter side - hashes
+    /// come from VfxParkedSystemFields rather than from constants here, so the preview badge stays honest.</summary>
+    private static VfxSystemExtras? ReadSystemExtras(IReadOnlyDictionary<uint, BinTreeProperty> p)
+    {
+        var e = new VfxSystemExtras
+        {
+            Transform                       = Get(p, PF("transform")) is BinTreeMatrix44 m ? m.Value : null,
+            Flags                           = Get(p, PF("flags")) is BinTreeU16 u ? u.Value : null,
+            OverrideScaleCap                = GetOptionalF32(p, PF("overrideScaleCap")),
+            BuildUpTime                     = GetF32(p, PF("buildUpTime")),
+            ScaleDynamicallyWithAttachedBone= GetBoolOrNull(p, PF("scaleDynamicallyWithAttachedBone")),
+            VoiceOverOnCreateDefault        = GetString(p, PF("voiceOverOnCreateDefault")),
+            VoiceOverPersistentDefault      = GetString(p, PF("voiceOverPersistentDefault")),
+            IsPoseAfterimage                = GetBoolOrNull(p, PF("mIsPoseAfterimage")),
+            EyeCandy                        = GetBoolOrNull(p, PF("mEyeCandy")),
+            HudAnchorPositionFromWorldProjection = GetBoolOrNull(p, PF("hudAnchorPositionFromWorldProjection")),
+            HudLayerDimension               = GetF32(p, PF("hudLayerDimension")),
+            DrawingLayer                    = GetU8(p, PF("drawingLayer")),
+            AudioParameterFlexId            = Get(p, PF("audioParameterFlexID")) is BinTreeI32 i ? i.Value : null,
+            AudioParameterTimeScaledDuration= GetF32(p, PF("audioParameterTimeScaledDuration")),
+            ClockToUse                      = GetU8(p, PF("ClockToUse")),
+            SelfIllumination                = GetF32(p, PF("selfIllumination")),
+            AssetRemapCount                 = Get(p, PF("assetRemappingTable")) is BinTreeContainer ar ? ar.Elements.Count : 0,
+            MaterialOverrideCount           = Get(p, PF("materialOverrideDefinitions")) is BinTreeContainer mo ? mo.Elements.Count : 0,
+        };
+        return e == EmptySystem ? null : e;
+    }
+
+    private static readonly VfxSystemExtras EmptySystem = new();
 
     private static VfxEmitterExtras? ReadExtras(IReadOnlyDictionary<uint, BinTreeProperty> p)
     {

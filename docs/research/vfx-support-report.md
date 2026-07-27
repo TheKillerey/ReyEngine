@@ -1258,7 +1258,7 @@ per-instance, so the true rate is **not measured** and no fix is attempted on a 
 |---|---|---|---|
 | 4.1 | ~~Add the unread emitter field hashes to `VfxSystemResolver`~~ | — | — | **DONE in M193** — see 4.1b. The row said ~94; it is **60** |
 | 4.2 | ~~Delete the dead `F_shape` lookup~~ | — | **ALREADY DONE in M174** (commit 2d4c9da); `VfxSystemResolver.cs:75` is now the comment recording it. Row retired, no work remained |
-| 4.3 | Parse the 21 unread system fields, starting with `transform` and `assetRemappingTable` | `VfxSystemResolver.cs:163-182` | `transform` is 67.7% pure scale, so it is a sizing fix |
+| 4.3 | ~~Parse the 21 unread system fields~~ | — | — | **DONE in M194** — see 4.3b. "67.7% pure scale, so it is a sizing fix" is **wrong twice** |
 | 4.4 | Parse the 10 unread `MapParticle` fields | `MapParticleExtractor.cs:11-17,44-57` | `eyeCandy` (13,165) and `AllDimensions` (4,990) first |
 | 4.5 | Load the two never-loaded map VFX sources | `MainWindowViewModel.cs:5111` | +5,229 systems / 47,118 emitters from `data/maps/shipping/mapXX/mapXX.bin`, +766/6,819 from `maps/modespecificdata/*.bin`. They have no placements, so they need a browse-and-preview entry point rather than automatic scene playback |
 | 4.6 | Parse `MapPointLightType` (788 lights) and `MapLightingVolume` (172) | new, beside `MapSunProperties.cs` | Affects how all lit VFX read on modern maps |
@@ -1307,6 +1307,54 @@ field's ("no renderer stage consumes it" vs "does not read this field"), because
 nothing" and "we never look at it" are different promises; 10 rendered controls stay unbadged; the parked
 values populate from real bins with counts matching the census exactly; and an emitter authoring none of
 them gets `null` rather than a record full of nulls. M192's 52 and tier 3's 38 checks still pass.
+
+#### 4.3b — M194 result, and why `transform` is not a sizing fix
+
+The count is right: exactly **21** system fields are unread. (A hash-only method says 23, but two of those
+are the emitter containers, which `ParseSystem` consumes structurally by scanning for the emitter class
+rather than by field hash.) All 18 nameable ones are now parked in `VfxSystemExtras`, led by `flags`
+(74,589), `overrideScaleCap` (6,361), `transform` (2,400) and `buildUpTime` (1,147). The two containers
+record only a COUNT — `assetRemappingTable` (983) and `materialOverrideDefinitions` (336) — because a
+count is honest where an empty list would imply we had read their contents.
+
+**The rationale on the row is wrong twice, and `transform` is parsed but deliberately NOT applied.**
+
+*First*, pure scale is not 67.7%. Independently re-derived here over the 145 authored transforms in a
+20-WAD slice: **identity 35.9%, pure scale 33.8%**, with translation 21.4% and rotation 17.2%. The
+adversarial pass measured the whole champion corpus and got the same shape — identity 38.0%, pure scale
+29.2–29.5%. Note that identity + pure scale ≈ **69.7%** here and ≈ 67.5% corpus-wide: *that* is where the
+report's number came from. It was the complement of (rotation OR translation), which silently counts every
+identity matrix as a scale.
+
+*Second, and decisively: the engine cannot express a size change through this channel at all.* Verified in
+source:
+- Sprite size is `p.BirthSize.X * scaleMul.X` / `.Y * scaleMul.Y` (`VfxParticleSimulator.cs:787-790`) with
+  **no world-transform term**, and the placement basis is re-normalised by `SafeNormal`, which strips
+  scale. A pure-scale matrix would spread the spawn cloud and speed up velocities while leaving every
+  sprite exactly the same size.
+- `VfxParticleSimulator.SetWorldTransform` **replaces** `_worldTransform` (`:322`) and is re-issued every
+  frame from `ViewportControl.cs:1598` (bone-attached) and `:1008` (travelling missiles), carrying nothing
+  forward. Anything composed in at build time survives until the first animated frame — and missiles are
+  exactly the cohort the report's own worked example, `Aatrox_Skin37_W_mis`, belongs to.
+
+So applying it would be a no-op that looks like a feature on the very cases the row cites. It is parsed
+and kept for a later milestone that fixes the re-anchor path first.
+
+**The matrix convention is proven, not assumed.** For 520/520 translation-bearing systems the 16 raw
+floats on disk match `M11..M44` in sequential order and 0/520 match the transposed order, with floats
+3/7/11 zero and float 15 one — so floats 12/13/14 are the translation, which is what
+`Matrix4x4.Translation` returns. Independently, 29,805 of 29,809 map particle placements have a 4th-row
+magnitude > 1 and **0 of 29,809** have a 4th-column one. Transposing does not manufacture the 67.7%
+either: it yields 0 translations at all, which is absurd for map placements. There is also no
+double-apply risk — `VfxSystemDefinition` had no `Transform` member at all until now, and 0 of the 424 map
+placements that link a transform-carrying system duplicate it.
+
+VERIFIED: 5 further checks on top of M193's 23. All 18 parked system fields are badged and none is a
+resolver constant; transforms parse; pure scale measures 33.8%, well under the claimed 67.7%; and the
+identity matrices that figure absorbed are real (52 of 145). One harness bug was caught and fixed rather
+than shipped: an exact `== Matrix4x4.Identity` test reported **zero** identity matrices while 40 of 145
+fell through every bucket — they were identity with float noise, so all the buckets had to agree on one
+epsilon.
 
 ### 5. Missing serialization support
 
