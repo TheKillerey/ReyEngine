@@ -47,6 +47,14 @@ public sealed class PreviewSettings
     /// <summary>Draw with ReyEngine's own shading model instead of Riot's pixel shader, for the A/B.</summary>
     public bool UseComparisonShader;
 
+    /// <summary>M216: what the bone palette should contain.
+    ///
+    /// <para>A champion vertex shader marks <c>mProj</c> as USED while <c>VIEW_PROJECTION_MATRIX</c> and
+    /// <c>mView</c> are not, which says the bones are expected to carry object-to-VIEW and the shader only
+    /// applies projection afterwards. With no animation, bone-to-object is identity, so the palette should
+    /// hold the view matrix. Identity was the first guess and it put the mesh on the near plane.</para></summary>
+    public BonePose BonePose = BonePose.ViewTransposed;
+
     /// <summary>Rows per bone matrix in <c>BonesCB</c>. League caps skeletons at 256 bones and the buffer is
     /// 12,288 bytes, which is 48 bytes each at 3 rows (a 4x3) or 64 at 4 (a full 4x4 over 192 bones). Both
     /// divide evenly, so this is measured in the app rather than assumed - a wrong stride makes the skeleton
@@ -55,6 +63,18 @@ public sealed class PreviewSettings
 }
 
 /// <summary>Result of trying to bring a shader pair up — every failure carries its own message.</summary>
+/// <summary>M216: candidate contents for the bone palette, kept switchable because the packing is not
+/// recorded anywhere in the bytecode we read.</summary>
+public enum BonePose
+{
+    /// <summary>Bind pose. Correct only if the shader applies a view matrix itself.</summary>
+    Identity,
+    /// <summary>The view matrix, rows as-is.</summary>
+    View,
+    /// <summary>The view matrix transposed - the layout a float4x3 takes under HLSL's default packing.</summary>
+    ViewTransposed,
+}
+
 public sealed class ShaderLoadReport
 {
     public bool Success;
@@ -245,6 +265,8 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     {
         foreach (var m in _materials) m.Dispose();
         _materials.Clear();
+        foreach (var b in _sharedCbs.Values) b.Dispose();
+        _sharedCbs.Clear();
         _comparePs.Dispose();
         _comparePs = default;
     }
@@ -634,8 +656,15 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         _dsv = dsv;
     }
 
+    private (bool wire, bool cull, bool depth, bool blend)? _stateKey;
+
     private void UpdateStates(PreviewSettings s)
     {
+        // M216: these were disposed and recreated every single frame. They only depend on four toggles.
+        var key = (s.Wireframe, s.CullBackFaces, s.DepthTest, s.AlphaBlend);
+        if (_stateKey == key && _raster.Handle is not null) return;
+        _stateKey = key;
+
         _raster.Dispose(); _blend.Dispose(); _depthState.Dispose();
         _raster = default; _blend = default; _depthState = default;
 
@@ -684,7 +713,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private void FillConstantBuffer(PreviewMaterial? mat, DxbcConstantBuffer cb, PreviewSettings s,
         Matrix4x4 world, Matrix4x4 view, Matrix4x4 proj, List<string>? unbound)
     {
-        var bytes = new byte[Math.Max(16, cb.AllocationSize)];
+        // M216: reused, not reallocated. At 1,600 draw calls x 2-4 cbuffers this was thousands of
+        // short-lived arrays per frame and the GC pressure showed up directly in the frame time.
+        int need = Math.Max(16, cb.AllocationSize);
+        if (_cbScratch.Length < need) _cbScratch = new byte[need];
+        var bytes = _cbScratch;
+        Array.Clear(bytes, 0, need);
         var vp = Matrix4x4.Multiply(view, proj);
         var cam = s.SuppliedCameraPosition ?? CameraPosition(s);
 
@@ -696,14 +730,26 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         {
             int rows = Math.Clamp(s.BoneMatrixRows, 3, 4);
             int stride = rows * 16;
-            for (int at = 0; at + stride <= bytes.Length; at += stride)
+
+            var m = s.BonePose switch
             {
-                BitConverter.TryWriteBytes(bytes.AsSpan(at + 0, 4), 1f);        // row0 = (1,0,0,0)
-                BitConverter.TryWriteBytes(bytes.AsSpan(at + 20, 4), 1f);       // row1 = (0,1,0,0)
-                BitConverter.TryWriteBytes(bytes.AsSpan(at + 40, 4), 1f);       // row2 = (0,0,1,0)
-                if (rows == 4) BitConverter.TryWriteBytes(bytes.AsSpan(at + 60, 4), 1f);
-            }
-            _pendingCb = bytes;
+                BonePose.View => view,
+                BonePose.ViewTransposed => Matrix4x4.Transpose(view),
+                _ => Matrix4x4.Identity,
+            };
+            var pose = new[]
+            {
+                m.M11, m.M12, m.M13, m.M14,
+                m.M21, m.M22, m.M23, m.M24,
+                m.M31, m.M32, m.M33, m.M34,
+                m.M41, m.M42, m.M43, m.M44,
+            };
+
+            for (int at = 0; at + stride <= bytes.Length; at += stride)
+                for (int i = 0; i < rows * 4; i++)
+                    BitConverter.TryWriteBytes(bytes.AsSpan(at + i * 4, 4), pose[i]);
+
+            _pendingCb = bytes; _pendingLength = need;
             return;
         }
 
@@ -796,9 +842,13 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         }
 
         _pendingCb = bytes;
+        _pendingLength = need;
     }
 
     private byte[] _pendingCb = Array.Empty<byte>();
+    private byte[] _cbScratch = new byte[1024];
+    private byte[] _readback = Array.Empty<byte>();
+    private int _pendingLength;
     private ComPtr<ID3D11Buffer> _compareCb;
 
     private void EnsureCompareCb()
@@ -833,12 +883,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         s.Distance * MathF.Sin(s.Pitch),
         s.Distance * MathF.Cos(s.Pitch) * MathF.Cos(s.Yaw));
 
-    private void Upload(ComPtr<ID3D11Buffer> buf, byte[] data)
+    private void Upload(ComPtr<ID3D11Buffer> buf, byte[] data, int length)
     {
         MappedSubresource m = default;
         if (_ctx.Map(buf, 0, Map.WriteDiscard, 0, ref m) < 0) return;
         fixed (byte* src = data)
-            System.Buffer.MemoryCopy(src, m.PData, data.Length, data.Length);
+            System.Buffer.MemoryCopy(src, m.PData, length, length);
         _ctx.Unmap(buf, 0);
     }
 
@@ -858,6 +908,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         var sw = Stopwatch.StartNew();
         try
         {
+            _sharedUploadedThisFrame.Clear();
             EnsureTargets(width, height);
             UpdateStates(s);
 
@@ -897,19 +948,24 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             _ctx.VSSetShader(mat.Vs, null, 0);
             _ctx.PSSetShader(compare ? _comparePs : mat.Ps, null, 0);
 
-            // constant buffers, filled from reflection
+            // Constant buffers, filled from reflection.
+            //
+            // M216: a buffer whose contents do not depend on the material - PerFrameVertexCB and
+            // PerFramePixelCB, which are per FRAME by name and by content - is filled and uploaded once and
+            // then shared by every material. On Howling Abyss that is 1,600 draw calls x 2 buffers of
+            // Map/fill/Unmap collapsing to two, which is where most of the frame time was going.
             foreach (var cb in mat.VsRefl.ConstantBuffers)
             {
-                if (cb.BindPoint < 0 || !mat.VsCbs.TryGetValue(cb.BindPoint, out var buf)) continue;
-                FillConstantBuffer(mat, cb, s, world, view, proj, unboundConstants);
-                Upload(buf, _pendingCb);
+                if (cb.BindPoint < 0) continue;
+                var buf = ResolveCb(mat, cb, mat.VsCbs, s, world, view, proj, unboundConstants);
+                if (buf.Handle is null) continue;
                 _ctx.VSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
             }
             foreach (var cb in mat.PsRefl.ConstantBuffers)
             {
-                if (cb.BindPoint < 0 || !mat.PsCbs.TryGetValue(cb.BindPoint, out var buf)) continue;
-                FillConstantBuffer(mat, cb, s, world, view, proj, unboundConstants);
-                Upload(buf, _pendingCb);
+                if (cb.BindPoint < 0) continue;
+                var buf = ResolveCb(mat, cb, mat.PsCbs, s, world, view, proj, unboundConstants);
+                if (buf.Handle is null) continue;
                 _ctx.PSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
             }
 
@@ -921,7 +977,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                 var vals = new[] { sd.X, sd.Y, sd.Z, 0f, s.SunColor.X, s.SunColor.Y, s.SunColor.Z, 1f };
                 for (int i = 0; i < vals.Length; i++) BitConverter.TryWriteBytes(cbBytes.AsSpan(i * 4, 4), vals[i]);
                 EnsureCompareCb();
-                Upload(_compareCb, cbBytes);
+                Upload(_compareCb, cbBytes, cbBytes.Length);
                 _ctx.PSSetConstantBuffers(0, 1, ref _compareCb);
 
                 var firstBound = mat.PsRefl.Textures.FirstOrDefault(t => mat.Textures.ContainsKey(t.Name));
@@ -949,14 +1005,18 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             int hr = _ctx.Map(_stage, 0, Map.Read, 0, ref map);
             if (hr < 0) { error = $"Map(staging) failed 0x{hr:X8}"; return null; }
 
-            var outBytes = new byte[width * height * 4];
+            int rowBytes = width * 4;
+            if (_readback.Length != rowBytes * height) _readback = new byte[rowBytes * height];
+            var outBytes = _readback;
             fixed (byte* dst = outBytes)
             {
-                for (int y = 0; y < height; y++)
-                {
-                    var srcRow = (byte*)map.PData + (nuint)y * map.RowPitch;
-                    System.Buffer.MemoryCopy(srcRow, dst + y * width * 4, width * 4, width * 4);
-                }
+                // M216: the staging pitch usually equals the row, in which case this is one copy
+                if (map.RowPitch == (uint)rowBytes)
+                    System.Buffer.MemoryCopy(map.PData, dst, outBytes.Length, outBytes.Length);
+                else
+                    for (int y = 0; y < height; y++)
+                        System.Buffer.MemoryCopy((byte*)map.PData + (nuint)y * map.RowPitch,
+                            dst + y * rowBytes, rowBytes, rowBytes);
             }
             _ctx.Unmap(_stage, 0);
 
@@ -969,6 +1029,51 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             Log(error);
             return null;
         }
+    }
+
+    private readonly Dictionary<string, ComPtr<ID3D11Buffer>> _sharedCbs = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _sharedUploadedThisFrame = new(StringComparer.Ordinal);
+
+    /// <summary>Pick the buffer for this cbuffer and make sure it holds the right bytes. Material-independent
+    /// buffers are shared and uploaded at most once per frame.</summary>
+    private ComPtr<ID3D11Buffer> ResolveCb(PreviewMaterial mat, DxbcConstantBuffer cb,
+        Dictionary<int, ComPtr<ID3D11Buffer>> own, PreviewSettings s,
+        Matrix4x4 world, Matrix4x4 view, Matrix4x4 proj, List<string>? unbound)
+    {
+        bool materialSpecific = false;
+        if (mat.Params.Count > 0)
+            foreach (var v in cb.Variables)
+                if (mat.Params.ContainsKey(v.Name)) { materialSpecific = true; break; }
+
+        if (materialSpecific)
+        {
+            if (!own.TryGetValue(cb.BindPoint, out var mine)) return default;
+            FillConstantBuffer(mat, cb, s, world, view, proj, unbound);
+            Upload(mine, _pendingCb, _pendingLength);
+            return mine;
+        }
+
+        string key = cb.Name + "#" + cb.AllocationSize;
+        if (!_sharedCbs.TryGetValue(key, out var shared))
+        {
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)Math.Max(16, cb.AllocationSize),
+                Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.ConstantBuffer,
+                CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> nb = default;
+            if (_device.CreateBuffer(in desc, null, ref nb) < 0) return default;
+            shared = nb;
+            _sharedCbs[key] = shared;
+        }
+        if (_sharedUploadedThisFrame.Add(key))
+        {
+            FillConstantBuffer(mat, cb, s, world, view, proj, unbound);
+            Upload(shared, _pendingCb, _pendingLength);
+        }
+        return shared;
     }
 
     private void BindResources(PreviewMaterial mat, DxbcShader? refl, bool pixel)

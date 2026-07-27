@@ -175,7 +175,7 @@ public static class PreviewGeometry
     public static PreviewMesh FromLeagueArrays(
         string name, int vertexCount,
         float[] positions, float[]? normals, float[]? uvs, float[]? colors, float[]? lightmapUvs,
-        uint[] indices)
+        uint[] indices, int[]? blendIndices = null, float[]? blendWeights = null)
     {
         var verts = new PreviewVertex[vertexCount];
 
@@ -207,6 +207,20 @@ public static class PreviewGeometry
                 verts[i].Uv1 = new Vector2(lightmapUvs[i * 2], lightmapUvs[i * 2 + 1]);
             if (colors is not null && colors.Length >= (i + 1) * 4)
                 verts[i].Color = new Vector4(colors[i * 4], colors[i * 4 + 1], colors[i * 4 + 2], colors[i * 4 + 3]);
+
+            // M216: skinning inputs. Without these every vertex sits on bone 0 at full weight, so the whole
+            // mesh takes one transform and the bone palette may as well be a single matrix - which is why
+            // the 3-row and 4-row strides measured identically and told us nothing.
+            if (blendIndices is not null && blendIndices.Length >= (i + 1) * 4)
+            {
+                verts[i].B0 = (uint)blendIndices[i * 4];
+                verts[i].B1 = (uint)blendIndices[i * 4 + 1];
+                verts[i].B2 = (uint)blendIndices[i * 4 + 2];
+                verts[i].B3 = (uint)blendIndices[i * 4 + 3];
+            }
+            if (blendWeights is not null && blendWeights.Length >= (i + 1) * 4)
+                verts[i].BlendWeight = new Vector4(blendWeights[i * 4], blendWeights[i * 4 + 1],
+                    blendWeights[i * 4 + 2], blendWeights[i * 4 + 3]);
         }
 
         return new PreviewMesh { Name = name, Vertices = verts, Indices = indices, Radius = radius };

@@ -152,6 +152,23 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// WASD/QE to fly, drag to look, middle-drag to pan, wheel to zoom, F to reframe.</summary>
     public OrbitCamera Camera { get; } = new();
 
+    /// <summary>M216: the size to render at, in real device pixels.
+    ///
+    /// <para>This was a hardcoded 640x480 stretched to fill a panel more than twice that wide, which is
+    /// where "everything is blurry" came from - it was not the shaders and not a LOW_QUALITY_MODE
+    /// permutation (measured: that define is never selected). Rendering at the surface's own pixel size
+    /// makes it sharp. Capped, because the cost is per pixel and a maximised 4K window would quadruple the
+    /// frame time for no visible gain at preview distances.</para></summary>
+    private int _renderWidth = 960, _renderHeight = 640;
+
+    public void SetSurfaceSize(double widthDip, double heightDip, double scaling)
+    {
+        int w = (int)Math.Round(widthDip * scaling);
+        int h = (int)Math.Round(heightDip * scaling);
+        _renderWidth = Math.Clamp(w, 160, 2560);
+        _renderHeight = Math.Clamp(h, 120, 1600);
+    }
+
     private readonly HashSet<Avalonia.Input.Key> _heldKeys = new();
 
     public void KeyDown(Avalonia.Input.Key k) => _heldKeys.Add(k);
@@ -541,7 +558,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             {
                 var m = SkinnedMeshDecoder.Decode(bytes);
                 mesh = PreviewGeometry.FromLeagueArrays(asset.Display, m.VertexCount,
-                    m.Positions, m.Normals, m.Uvs, m.Colors, m.LightmapUvs, m.Indices);
+                    m.Positions, m.Normals, m.Uvs, m.Colors, m.LightmapUvs, m.Indices,
+                    m.BlendIndices, m.BlendWeights);
                 parts = m.SubMeshes.Select(x => (x.Material, x.StartIndex, x.IndexCount)).ToList();
             }
         }
@@ -900,7 +918,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         ApplyCameraInput(dt);
 
         _settings.SuppliedView = Camera.View;
-        _settings.SuppliedProjection = Camera.Projection(640f / 480f);
+        _settings.SuppliedProjection = Camera.Projection((float)_renderWidth / _renderHeight);
         _settings.SuppliedCameraPosition = Camera.Position;
         _settings.Wireframe = Wireframe;
         _settings.CullBackFaces = CullBackFaces;
@@ -916,7 +934,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
         ApplyOverrides();
 
-        const int w = 640, h = 480;
+        int w = _renderWidth, h = _renderHeight;
         var unbound = new List<string>();
         var pixels = _renderer.RenderFrame(w, h, _settings, out var err, unbound);
         if (pixels is null)

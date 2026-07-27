@@ -26,6 +26,13 @@ public partial class ShaderPreviewWindow : Window
         // pan, alt-drag to orbit, wheel to zoom, LMB+wheel for fly speed, F to reframe.
         if (this.FindControl<Panel>("PreviewSurface") is { } surface)
         {
+            // M216: render at the surface's REAL pixel size. A fixed 640x480 stretched across a wider panel
+            // is what made everything look soft.
+            surface.PropertyChanged += (_, ev) =>
+            {
+                if (ev.Property == BoundsProperty)
+                    Vm?.SetSurfaceSize(surface.Bounds.Width, surface.Bounds.Height, RenderScaling);
+            };
             surface.PointerPressed += OnSurfacePressed;
             surface.PointerReleased += OnSurfaceReleased;
             surface.PointerMoved += OnSurfaceMoved;
@@ -34,6 +41,11 @@ public partial class ShaderPreviewWindow : Window
         AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, OnPreviewKeyUp, RoutingStrategies.Tunnel);
         Deactivated += (_, _) => Vm?.ClearKeys();
+        Opened += (_, _) =>
+        {
+            if (this.FindControl<Panel>("PreviewSurface") is { } sfc)
+                Vm?.SetSurfaceSize(sfc.Bounds.Width, sfc.Bounds.Height, RenderScaling);
+        };
     }
 
     private ShaderPreviewViewModel? Vm => DataContext as ShaderPreviewViewModel;
