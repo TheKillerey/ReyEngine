@@ -105,6 +105,11 @@ public static class VfxPreviewCoverage
     public static string? IgnoredNote(uint fieldHash)
     {
         if (NotRendered.TryGetValue(fieldHash, out var why)) return why;
+        // M193 (4.1): fields parked in VfxEmitterExtras. They are declared in their own table rather than
+        // as resolver constants precisely so this lookup cannot be forgotten - parking a field badges it.
+        if (VfxParkedEmitterFields.Hashes.Contains(fieldHash))
+            return "ReyEngine parses this field into its model, but no renderer stage consumes it yet. The "
+                 + "edit is saved to the .bin and the game will use it; the viewport will not change.";
         if (!CoverageAvailable)
             return "The editor could not determine which fields the preview reads, so it is flagging all of "
                  + "them. Edits are still saved to the .bin normally.";

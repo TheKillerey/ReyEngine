@@ -199,6 +199,10 @@ public sealed record VfxEmitterDefinition(
     /// type at all, and 11,347 type values sit on emitters with no Linger struct - so nothing in the
     /// corpus says it selects a linger behaviour.</summary>
     int ParticleLingerType = -1,
+    /// <summary>M193 (tier 4.1): 43 fields the resolver now parses but the renderer does not consume.
+    /// Null when the emitter authored none of them. See <see cref="VfxEmitterExtras"/> - every member is
+    /// nullable because Riot omits default-valued properties, so absent never means zero.</summary>
+    VfxEmitterExtras? Extras = null,
 
     /// <summary>M184 (2.11) disableBackfaceCull. Bool, and TRUE in all 358,113 occurrences - no `false`
     /// exists anywhere in the corpus.

@@ -51,7 +51,11 @@ public static class VfxSystemResolver
     private static readonly uint F_birthRotation = HashAlgorithms.Fnv1a("birthRotation0");
     private static readonly uint F_birthRotVel0  = HashAlgorithms.Fnv1a("birthRotationalVelocity0");
     private static readonly uint F_emitterPos    = HashAlgorithms.Fnv1a("emitterPosition");
-    private const uint F_spawnShape              = 0x3bf0b4ed; // SpawnShape, observed in current SR VFX
+    // M193 (4.1): was the literal 0x3bf0b4ed with an "observed" note. Verified by recomputing
+    // FNV-1a-lowercase("SpawnShape") = 0x3bf0b4ed, and independently by the census, which names that hash
+    // SpawnShape from CDTB's list. Now static readonly rather than const - the const was also the reason
+    // an IsInitOnly reflection filter could miss it (see VfxPreviewCoverage).
+    private static readonly uint F_spawnShape    = HashAlgorithms.Fnv1a("SpawnShape");
     private static readonly uint F_emitOffset    = HashAlgorithms.Fnv1a("emitOffset");
     private static readonly uint F_emitRotAxes   = HashAlgorithms.Fnv1a("emitRotationAxes");
     private static readonly uint F_emitRotAngles = HashAlgorithms.Fnv1a("emitRotationAngles");
@@ -212,11 +216,15 @@ public static class VfxSystemResolver
     private static readonly uint F_probTables    = HashAlgorithms.Fnv1a("probabilityTables");
     private static readonly uint F_keyTimes      = HashAlgorithms.Fnv1a("keyTimes");
     private static readonly uint F_keyValues     = HashAlgorithms.Fnv1a("keyValues");
-    private static readonly uint F_meshDef       = 0x0d89732d; // VfxPrimitiveMesh's VfxMeshDefinitionData field (observed)
+    // M193 (4.1): verified FNV-1a-lowercase("mMesh") = 0x0d89732d; the census names that hash mMesh on
+    // VfxPrimitiveMesh (293,457), VfxPrimitiveAttachedMesh (52,873) and VfxPrimitiveBeam (4,527).
+    private static readonly uint F_meshDef       = HashAlgorithms.Fnv1a("mMesh");
     private static readonly uint F_simpleMesh    = HashAlgorithms.Fnv1a("mSimpleMeshName");
     private static readonly uint F_meshName      = HashAlgorithms.Fnv1a("mMeshName");   // skinned (.skn) mesh primitive (butterflies)
     private static readonly uint F_birthUvScroll = HashAlgorithms.Fnv1a("birthUvScrollRate");
-    private static readonly uint F_meshSkeleton  = 0x90595a15; // VfxMeshDefinitionData skeleton (.skl) field (observed)
+    // M193 (4.1): verified FNV-1a-lowercase("mMeshSkeletonName") = 0x90595a15; the census names that hash
+    // mMeshSkeletonName on VfxMeshDefinitionData (21,574).
+    private static readonly uint F_meshSkeleton  = HashAlgorithms.Fnv1a("mMeshSkeletonName");
     private static readonly uint F_meshAnim      = HashAlgorithms.Fnv1a("mAnimationName");
 
     // primitive class hashes we treat as "mesh" (billboarded as fallback)
@@ -435,6 +443,7 @@ public static class VfxSystemResolver
             ChanceToNotExist: GetF32(p, F_chanceNotExist) ?? 0f,
             HasVariableStartTime: GetBool(p, F_variableStart),
             EmitterLinger: GetOptionalF32(p, F_emitterLinger),
+            Extras: ReadExtras(p),
             AlphaErosion: ReadAlphaErosion(p),
             SoftParticle: ReadSoftParticle(p),
             Palette: ReadPalette(p),
@@ -909,6 +918,92 @@ public static class VfxSystemResolver
     }
 
     // ---- primitive field getters ----
+
+
+    // ---- M193 (tier 4.1): fields parsed into the model but not rendered ---------------------------
+    // Hashes come from VfxParkedEmitterFields, NOT from constants declared here. That is deliberate:
+    // VfxPreviewCoverage reflects over this class's constants to decide what the preview reads, so a
+    // parked hash declared here would silently un-badge the field and tell the user an edit is visible
+    // when it is not - exactly the defect M192 had to fix. Keeping the parked set in its own table means
+    // parking a field badges it automatically.
+    private static uint PF(string name) => HashAlgorithms.Fnv1a(name);
+
+    private static VfxEmitterExtras? ReadExtras(IReadOnlyDictionary<uint, BinTreeProperty> p)
+    {
+        var e = new VfxEmitterExtras
+        {
+            MiscRenderFlags              = GetU8(p, PF("miscRenderFlags")),
+            Importance                   = GetU8(p, PF("importance")),
+            DepthBiasFactors             = GetVec2(p, PF("depthBiasFactors")),
+            RenderPhaseOverride          = GetU8(p, PF("renderPhaseOverride")),
+            SortEmittersByPos            = GetBoolOrNull(p, PF("SortEmittersByPos")),
+            WriteAlphaOnly               = GetBoolOrNull(p, PF("WriteAlphaOnly")),
+            DoesCastShadow               = GetBoolOrNull(p, PF("doesCastShadow")),
+            IsGroundLayer                = GetBoolOrNull(p, PF("isGroundLayer")),
+            ColorblindVisibility         = GetU8(p, PF("colorblindVisibility")),
+            StencilReferenceId           = GetHash(p, PF("StencilReferenceId")),
+            FalloffTexture               = GetString(p, PF("falloffTexture")),
+            ModulationFactor             = GetVec4(p, PF("modulationFactor")),
+            CensorModulateValue          = GetVec4(p, PF("censorModulateValue")),
+            SliceTechniqueRange          = GetF32(p, PF("sliceTechniqueRange")),
+            IsTexturePixelated           = GetBoolOrNull(p, PF("isTexturePixelated")),
+
+            IsUniformScale               = GetBoolOrNull(p, PF("isUniformScale")),
+            IsLocalOrientation           = GetBoolOrNull(p, PF("isLocalOrientation")),
+            ParticleIsLocalOrientation   = GetBoolOrNull(p, PF("particleIsLocalOrientation")),
+            IsEmitterSpace               = GetBoolOrNull(p, PF("IsEmitterSpace")),
+            IsRotationEnabled            = GetBoolOrNull(p, PF("isRotationEnabled")),
+            HasPostRotateOrientation     = GetBoolOrNull(p, PF("hasPostRotateOrientation")),
+            PostRotateOrientationAxis    = GetVec3(p, PF("postRotateOrientationAxis")),
+            RotationOverride             = GetVec3(p, PF("rotationOverride")),
+            TranslationOverride          = GetVec3(p, PF("translationOverride")),
+            ScaleOverride                = GetVec3(p, PF("scaleOverride")),
+            IsFollowingTerrain           = GetBoolOrNull(p, PF("isFollowingTerrain")),
+            UseNavmeshMask               = GetBoolOrNull(p, PF("useNavmeshMask")),
+            BirthRotationalAcceleration  = ReadCurve3(p, PF("birthRotationalAcceleration"))?.Constant,
+
+            BindWeight                   = ReadCurveF(p, PF("bindWeight"))?.Constant,
+            RateByVelocityFunction       = ReadValueVec2(Get(p, PF("rateByVelocityFunction"))),
+            MaximumRateByVelocity        = GetOptionalF32(p, PF("MaximumRateByVelocity")),
+            ParticlesShareRandomValue    = GetBoolOrNull(p, PF("ParticlesShareRandomValue")),
+            DirectionVelocityScale       = GetF32(p, PF("directionVelocityScale")),
+            DirectionVelocityMinScale    = GetF32(p, PF("directionVelocityMinScale")),
+            EmissionMeshName             = GetString(p, PF("emissionMeshName")),
+            EmissionMeshScale            = GetF32(p, PF("emissionMeshScale")),
+            UseEmissionMeshNormalForBirth= GetBoolOrNull(p, PF("useEmissionMeshNormalForBirth")),
+            DoesLifetimeScale            = GetBoolOrNull(p, PF("doesLifetimeScale")),
+            OffsetLifetimeScaling        = GetVec3(p, PF("offsetLifetimeScaling")),
+            OffsetLifeScalingSymmetryMode= GetU8(p, PF("offsetLifeScalingSymmetryMode")),
+
+            TexAddressModeBase           = GetU8(p, PF("texAddressModeBase")),
+            UvMode                       = GetU8(p, PF("uvMode")),
+            UvParallaxScale              = GetF32(p, PF("uvParallaxScale")),
+        };
+        // An emitter that authored none of them gets null rather than a record full of nulls, so callers
+        // can test `Extras is null` for "nothing parked here".
+        return e == Empty ? null : e;
+    }
+
+    private static readonly VfxEmitterExtras Empty = new();
+
+    /// <summary>Absent stays null. Riot omits default-valued properties, so absent is NOT false - for the
+    /// seven bools here that only ever ship 'true', the default is not readable from the corpus at all.</summary>
+    private static bool? GetBoolOrNull(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash) => Get(p, hash) switch
+    {
+        BinTreeBool b => b.Value,
+        BinTreeBitBool b => b.Value,
+        _ => null,
+    };
+
+    private static uint? GetHash(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash) =>
+        Get(p, hash) is BinTreeHash v ? v.Value : null;
+
+    private static Vector4? GetVec4(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash) => Get(p, hash) switch
+    {
+        BinTreeVector4 v => v.Value,
+        BinTreeColor c => new Vector4(c.Value.R, c.Value.G, c.Value.B, c.Value.A),
+        _ => null,
+    };
 
     private static BinTreeProperty? Get(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash)
         => p.TryGetValue(hash, out var v) ? v : null;

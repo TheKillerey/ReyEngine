@@ -1256,12 +1256,57 @@ per-instance, so the true rate is **not measured** and no fix is attempted on a 
 
 | # | Work | File | Note |
 |---|---|---|---|
-| 4.1 | Add the ~94 unread emitter field hashes to `VfxSystemResolver`, at minimum into the model so downstream code can consume them | `VfxSystemResolver.cs:20-99`, `VfxSystemDefinition.cs` | Mechanical. Replace the three magic hashes with named `Fnv1a` calls — all three verified correct: 0x3bf0b4ed = `SpawnShape`, 0x0d89732d = `mMesh`, 0x90595a15 = `mMeshSkeletonName` |
-| 4.2 | Delete the dead `F_shape` lookup | `VfxSystemResolver.cs:75,284` | 0 occurrences in 1.4M emitters |
+| 4.1 | ~~Add the unread emitter field hashes to `VfxSystemResolver`~~ | — | — | **DONE in M193** — see 4.1b. The row said ~94; it is **60** |
+| 4.2 | ~~Delete the dead `F_shape` lookup~~ | — | **ALREADY DONE in M174** (commit 2d4c9da); `VfxSystemResolver.cs:75` is now the comment recording it. Row retired, no work remained |
 | 4.3 | Parse the 21 unread system fields, starting with `transform` and `assetRemappingTable` | `VfxSystemResolver.cs:163-182` | `transform` is 67.7% pure scale, so it is a sizing fix |
 | 4.4 | Parse the 10 unread `MapParticle` fields | `MapParticleExtractor.cs:11-17,44-57` | `eyeCandy` (13,165) and `AllDimensions` (4,990) first |
 | 4.5 | Load the two never-loaded map VFX sources | `MainWindowViewModel.cs:5111` | +5,229 systems / 47,118 emitters from `data/maps/shipping/mapXX/mapXX.bin`, +766/6,819 from `maps/modespecificdata/*.bin`. They have no placements, so they need a browse-and-preview entry point rather than automatic scene playback |
 | 4.6 | Parse `MapPointLightType` (788 lights) and `MapLightingVolume` (172) | new, beside `MapSunProperties.cs` | Affects how all lit VFX read on modern maps |
+
+#### 4.1b / 4.2b — M193 result
+
+**4.2 needed no work at all.** M174 deleted `F_shape` in commit 2d4c9da and left the reason in place at
+`VfxSystemResolver.cs:75`. Re-verified: `Fnv1a("shape")` = `0x9dc3d926` occurs 0 times on emitters *and*
+0 times on any other class in the census. The removal was behaviour-neutral — it was a `??` fallback that
+could never fire. Note for anyone acting on the old row: do **not** grep for `F_shape` and delete
+`F_shapeRadius` / `F_shapeHeight` / `F_shapeSize`; those are live and parse the sphere/cylinder/box spawn
+volumes.
+
+**4.1's "~94 unread fields" is stale — the real figure is 60.** The 94 was correct when the report was
+written (the resolver knew 77 hash constants then); M174–M186 taught it 104 more, and at HEAD it knows 181
+and leaves 60 unread. The headline at the top of this report is stale the same way: **74 of 134** emitter
+fields are read, **84.0%** of property occurrences, not 40/134 and 72.5%.
+
+**All three magic hashes were correct** and are now named, each verified by recomputing FNV-1a-lowercase
+and cross-checked against the census's independent CDTB naming: `0x3bf0b4ed` = `SpawnShape`, `0x0d89732d`
+= `mMesh`, `0x90595a15` = `mMeshSkeletonName`. `F_spawnShape` also stopped being a `const`, which removes
+the `IsInitOnly` reflection trap that M191 fell into.
+
+**43 of the 60 are now parked** in `VfxEmitterExtras` — raw values, every member nullable, no
+interpretation applied to anything whose meaning is not established (`miscRenderFlags` 484,286,
+`depthBiasFactors` 183,823 and `uvMode` 35,694 are all still UNKNOWN and are stored as-is). Measured on
+20 champion WADs: 119,161 of 125,345 emitters (95.1%) carry at least one, led by `bindWeight` 71,563,
+`isUniformScale` 70,451, `miscRenderFlags` 46,273, `importance` 34,506, `depthBiasFactors` 20,215.
+
+17 were deliberately **not** parked: `meshRenderFlags` (0 in 100% of 112,727) and `colorRenderFlags`
+(1 in 100% of 7,240) carry no information; `0xcb13aff1` and `0xd1ee8634` cannot be named by CDTB or by us;
+the eight `flex*` value structs were retired in M179; and `emissionSurfaceDefinition`'s sub-field and both
+payload classes are unresolved, so there is nothing inside it to model.
+
+**The badge design that made this safe.** The parked hashes are declared in `VfxParkedEmitterFields`, *not*
+as constants on `VfxSystemResolver`. `VfxPreviewCoverage` reflects over the resolver's constants to decide
+what the preview reads, so declaring them there would have silently un-badged all 43 fields — the exact
+defect M192 had to fix. Keeping them in their own table means parking a field badges it automatically:
+there is no naming convention to remember, and no way to park a value while telling the user it renders.
+When a renderer stage starts consuming one, deleting its entry is the single required edit, and forgetting
+it produces a spurious badge — the harmless direction.
+
+VERIFIED: 23 checks. The three named hashes still equal their old literals; all 43 parked fields are
+badged and none is a resolver constant; a parked field's note is textually distinct from a never-read
+field's ("no renderer stage consumes it" vs "does not read this field"), because "we read it and do
+nothing" and "we never look at it" are different promises; 10 rendered controls stay unbadged; the parked
+values populate from real bins with counts matching the census exactly; and an emitter authoring none of
+them gets `null` rather than a record full of nulls. M192's 52 and tier 3's 38 checks still pass.
 
 ### 5. Missing serialization support
 
