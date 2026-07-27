@@ -1454,7 +1454,7 @@ have not been exercised in a running window.
 
 | # | Work | File | Note |
 |---|---|---|---|
-| 5.1 | Nothing is required for emitter definitions — `ParticleDocument.Serialize` is already structurally lossless (393 bins, 0 semantic diffs) | `ParticleDocument.cs:32-37` | Optional: preserve original property order so saved bins diff cleanly against Riot's (281 of 393 currently reorder) |
+| 5.1 | ~~Preserve original property order~~ | — | — | **RETIRED in M200** — see 5.1b. Property order **never** changes (0 of 1,599); the diff noise is *object* order, caused by the library's writer |
 | 5.2 | ~~**`MapParticleWriter` can persist only the 64-byte transform**~~ | — | — | **DONE in M199** — see 5.2b. The silent duplicate-matrix failure is real and reproduced: **84 of 99** groups |
 | 5.3 | ~~Regression test for Riot's typo fields~~ | — | — | **DONE in M198** — the repo's first test project, 53 tests |
 
@@ -1507,6 +1507,39 @@ being refused rather than silently ignored, and a partial batch reporting what i
 through the legacy byte patcher; and adding a brand-new placement is not implemented (it needs a template
 to clone, the way `MapMaterialFactory` does for materials). The UI exposes only the move verb — re-tint,
 re-link, rename and remove are reachable in the writer but have no editor surface yet.
+
+#### 5.1b — M200: the optional item was chasing the wrong thing
+
+Re-measured over **1,599** champion particle bins (the row's 393 was a smaller slice):
+
+| | |
+|---|---|
+| byte-identical after `Serialize` | 454 (28.4%) |
+| differ, same length | 1,143 |
+| differ, different length | 2 |
+| **property order differs** | **0** |
+| object order differs | 1,145 |
+
+**The row blamed property order; property order never changes.** The diff noise is entirely *object*
+order: LeagueToolkit's `BinTree.Write` emits objects sorted ascending by path hash, and Riot's files are
+unsorted. Verified directly — for every differing bin the input is unsorted, the output is sorted, and the
+object set is identical. The 28.4% that come back byte-identical are the ones Riot happened to write in
+sorted order already.
+
+The first clause of the row stands: `Serialize` **is** structurally lossless. Total corpus size moves by
+32 bytes across 178 MB, no bin fails to serialize, and the object set, properties and values all survive.
+
+**Retired rather than implemented.** Fixing it would mean replacing the library's bin writer with our own
+to control object emission order, and the benefit is purely cosmetic: nothing downstream reads that order.
+`BinThreeWayMerge` — the one consumer that compares a mod against Riot's original — keys every lookup by
+object hash (`Objects.Keys`, `TryGetValue`, `ContainsKey`), so it is order-independent by construction.
+Owning a format writer to tidy a diff is not a trade worth making.
+
+Four tests pin what actually matters instead: a round trip preserves every object and property
+semantically, property order within each object is preserved (the measured 0), writing is a fixed point so
+repeated Save Override runs do not churn the file, and the writer's hash-sorted object order is asserted
+explicitly — so a contributor who sees a large diff against Riot's original knows it is this and not
+corruption.
 
 ### 6. Rare / low priority
 
