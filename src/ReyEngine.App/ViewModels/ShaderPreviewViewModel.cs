@@ -12,6 +12,29 @@ using ReyEngine.Rendering.D3D11;
 
 namespace ReyEngine.App.ViewModels;
 
+/// <summary>M211: a shader, with a name short enough to actually read.
+///
+/// <para>Every path in the cache starts <c>assets/shaders/generated/shaders/</c>, which is 33 characters of
+/// pure noise repeated on all 462 entries and pushed the part that identifies the shader off the edge of the
+/// list. The full path stays on the row for the tooltip and for the debug panel.</para></summary>
+public sealed class ShaderRow
+{
+    public required string Full { get; init; }
+
+    /// <summary>The path with the common generated-shader prefix removed, e.g.
+    /// <c>staticmesh/defaultenv_flat</c>.</summary>
+    public string Display
+    {
+        get
+        {
+            var s = Full;
+            foreach (var prefix in new[] { "assets/shaders/generated/shaders/", "assets/shaders/generated/" })
+                if (s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return s[prefix.Length..];
+            return s;
+        }
+    }
+}
+
 /// <summary>One cooked permutation, as a row.</summary>
 public sealed class PermutationRow
 {
@@ -68,7 +91,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     private int _framesThisSecond;
     private DateTime _fpsMark = DateTime.UtcNow;
 
-    public ObservableCollection<string> ShaderNames { get; } = new();
+    public ObservableCollection<ShaderRow> ShaderNames { get; } = new();
     public ObservableCollection<PermutationRow> VertexPermutations { get; } = new();
     public ObservableCollection<PermutationRow> PixelPermutations { get; } = new();
     public ObservableCollection<TextureSlotRow> TextureSlots { get; } = new();
@@ -76,7 +99,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     public ObservableCollection<string> MeshNames { get; } = new(PreviewGeometry.BuiltInNames);
 
     [ObservableProperty] private string _filter = "";
-    [ObservableProperty] private string? _selectedShader;
+    [ObservableProperty] private ShaderRow? _selectedShader;
     [ObservableProperty] private PermutationRow? _selectedVertexPerm;
     [ObservableProperty] private PermutationRow? _selectedPixelPerm;
     [ObservableProperty] private string _selectedMesh = "Sphere";
@@ -142,17 +165,17 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         ShaderNames.Clear();
         foreach (var n in _allShaderNames)
             if (Filter.Length == 0 || n.Contains(Filter, StringComparison.OrdinalIgnoreCase))
-                ShaderNames.Add(n);
+                ShaderNames.Add(new ShaderRow { Full = n });
     }
 
-    partial void OnSelectedShaderChanged(string? value)
+    partial void OnSelectedShaderChanged(ShaderRow? value)
     {
         VertexPermutations.Clear();
         PixelPermutations.Clear();
         if (value is null || _cache is null) return;
 
-        Fill(VertexPermutations, ShaderCacheReader.TocPathFor(value, DxbcStage.Vertex));
-        Fill(PixelPermutations, ShaderCacheReader.TocPathFor(value, DxbcStage.Pixel));
+        Fill(VertexPermutations, ShaderCacheReader.TocPathFor(value.Full, DxbcStage.Vertex));
+        Fill(PixelPermutations, ShaderCacheReader.TocPathFor(value.Full, DxbcStage.Pixel));
         SelectedVertexPerm = VertexPermutations.FirstOrDefault();
         SelectedPixelPerm = PixelPermutations.FirstOrDefault();
 
@@ -183,8 +206,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             return;
         }
 
-        string vsPath = ShaderCacheReader.TocPathFor(SelectedShader, DxbcStage.Vertex);
-        string psPath = ShaderCacheReader.TocPathFor(SelectedShader, DxbcStage.Pixel);
+        string vsPath = ShaderCacheReader.TocPathFor(SelectedShader.Full, DxbcStage.Vertex);
+        string psPath = ShaderCacheReader.TocPathFor(SelectedShader.Full, DxbcStage.Pixel);
 
         _vs = _cache.LoadShader(vsPath, SelectedVertexPerm.Perm.BlobIndex, out var e1);
         if (_vs is null) { Fail($"vertex stage: {e1}"); return; }
