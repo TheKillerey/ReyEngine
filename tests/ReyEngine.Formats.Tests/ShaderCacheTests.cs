@@ -259,6 +259,33 @@ public class ShaderCacheTests
         Assert.Contains("Unable to find correct hash", why);
     }
 
+    /// <summary>M225: forcing a define ABSENT must actually remove it. Without pinning, the free-axis
+    /// enumeration would add the very define being removed back in, find the original permutation and
+    /// report success - a vacuous result, and the same trap M166 documented.</summary>
+    [Fact]
+    public void ForcingADefineAbsentSelectsThePermutationWithoutIt()
+    {
+        var pool = new[] { ("DISABLE_FOW", "1") };
+        ulong withFow = ShaderCacheReader.PermutationKey(new[] { "DISABLE_FOW=1" });
+        ulong without = ShaderCacheReader.PermutationKey(Array.Empty<string>());
+        var toc = ShaderCacheReader.ParseToc(
+            BuildToc(pool, new[] { (withFow, 7u), (without, 9u) }), "s.ps.dx11")!;
+
+        // the material asks for it...
+        var normal = ShaderCacheReader.ResolvePermutation(
+            toc, new Dictionary<string, string> { ["DISABLE_FOW"] = "1" }, NoSwitches, null, null, out _);
+        Assert.Equal(7u, normal!.BlobIndex);
+
+        // ...and the debug override takes it away
+        var forced = ShaderCacheReader.ResolvePermutation(
+            toc, new Dictionary<string, string> { ["DISABLE_FOW"] = "1" }, NoSwitches, null, null, out var why,
+            forcedAbsent: new HashSet<string> { "DISABLE_FOW" });
+
+        Assert.NotNull(forced);
+        Assert.Equal(9u, forced!.BlobIndex);
+        Assert.Contains("forced absent", why);
+    }
+
     [Theory]
     [InlineData("shaders/env/foo.vs.dx11", "shaders/env/foo")]
     [InlineData("shaders/env/foo.ps.dx11", "shaders/env/foo")]

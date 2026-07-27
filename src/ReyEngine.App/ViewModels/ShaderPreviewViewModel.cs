@@ -40,6 +40,28 @@ public sealed class ShaderRow
     }
 }
 
+/// <summary>M225: one shader define the scene can override, for debugging.
+///
+/// <para>These are the real axes the loaded shaders were cooked over, read out of their TOCs - not a
+/// hardcoded list. Forcing one picks a DIFFERENT COOKED PERMUTATION of the same shader, which is what the
+/// game itself does when it builds a define set; it is not a substitution of the kind M219 got wrong,
+/// because the resulting permutation is exactly the one the engine would use for that define set.</para>
+///
+/// <para>Where a material has no cooked permutation for the forced set, resolution fails and the scene
+/// report names it, rather than silently drawing something else.</para></summary>
+public sealed partial class SceneDefineRow : ObservableObject
+{
+    public required string Name { get; init; }
+    /// <summary>How many of the loaded materials' shaders offer this axis at all.</summary>
+    public required int ShaderCount { get; init; }
+
+    /// <summary>0 = as authored, 1 = force on, 2 = force absent.</summary>
+    [ObservableProperty] private int _mode;
+
+    public string Label => $"{Name}";
+    public string Detail => $"offered by {ShaderCount} of the scene's shaders";
+}
+
 /// <summary>A .skn or .mapgeo asset that can be loaded as a scene.</summary>
 public sealed class SceneAssetRow
 {
@@ -149,6 +171,48 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// <summary>M224: the per-material lightmap texture a mapgeo group names, so BAKED_LIGHT__TX can be
     /// bound from the map itself rather than left on the white stand-in.</summary>
     private Dictionary<string, string> _lightmapByGroup = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Axis name -> how many of the scene's shaders declare it. Rebuilt on every load so the debug
+    /// list always reflects what is actually loaded.</summary>
+    private readonly Dictionary<string, int> _axisCounts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>M225: forced ON, from the debug list.</summary>
+    private Dictionary<string, string> ForcedMacros()
+    {
+        var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in SceneDefines) if (r.Mode == 1) d[r.Name] = "1";
+        return d;
+    }
+
+    /// <summary>M225: forced ABSENT, from the debug list.</summary>
+    private HashSet<string> ForcedAbsent()
+    {
+        var h = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in SceneDefines) if (r.Mode == 2) h.Add(r.Name);
+        return h;
+    }
+
+    /// <summary>Rebuild the debug list from the axes the scene's shaders were actually cooked over,
+    /// preserving whatever the user had already set.</summary>
+    private void RebuildSceneDefines()
+    {
+        var previous = SceneDefines.ToDictionary(r => r.Name, r => r.Mode, StringComparer.OrdinalIgnoreCase);
+        SceneDefines.Clear();
+        foreach (var (name, count) in _axisCounts.OrderByDescending(x => x.Value).ThenBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+            SceneDefines.Add(new SceneDefineRow
+            {
+                Name = name,
+                ShaderCount = count,
+                Mode = previous.TryGetValue(name, out int m) ? m : 0,
+            });
+    }
+
+    [RelayCommand]
+    private void ResetSceneDefines()
+    {
+        foreach (var r in SceneDefines) r.Mode = 0;
+        Status = "Scene defines reset. Load the scene again to apply.";
+    }
     private DxbcShader? _vs, _ps;
     // double-buffered: an Image only repaints when its Source REFERENCE changes, so writing into the
     // same WriteableBitmap every frame shows nothing. Alternating two avoids the null-then-set flicker.
@@ -227,6 +291,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     public ObservableCollection<MaterialRow> Materials { get; } = new();
     public ObservableCollection<SceneAssetRow> SceneAssets { get; } = new();
     public ObservableCollection<SceneSubmeshRow> SceneSubmeshes { get; } = new();
+    public ObservableCollection<SceneDefineRow> SceneDefines { get; } = new();
 
     [ObservableProperty] private string _filter = "";
     [ObservableProperty] private ShaderRow? _selectedShader;
@@ -637,6 +702,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         sb.AppendLine();
 
         if (!asset.IsMap) _lightmapByGroup.Clear();
+        _axisCounts.Clear();
         _renderer.ClearMaterials();
         _renderer.SetMesh(mesh);
 
@@ -707,6 +773,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         sb.AppendLine($"{ok} material(s) live, {failed} unresolved, {texBound} texture(s) bound"
                       + (texMissing > 0 ? $", {texMissing} missing" : ""));
 
+        RebuildSceneDefines();
         SceneReport = sb.ToString();
         BuildSlots();
         RebuildBindings();
@@ -897,10 +964,24 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         IReadOnlyDictionary<string, bool>? swDef = null;
         if (_perms is not null && _perms.TryGetShaderDefs(shader, out var f, out var sd)) { feat = f; swDef = sd; }
 
-        var vsPerm = ShaderCacheReader.ResolvePermutation(vsToc, b.Macros, b.Switches, feat, swDef, out _);
-        var psPerm = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out var pw);
+        // M225: record which axes this shader offers, so the debug list can be built from real data
+        foreach (var (axis, _) in psToc.Axes) _axisCounts[axis] = _axisCounts.GetValueOrDefault(axis) + 1;
+        foreach (var (axis, _) in vsToc.Axes) _axisCounts.TryAdd(axis, 1);
+
+        // the debug overrides sit on top of what the material authored
+        var macros = new Dictionary<string, string>(b.Macros, StringComparer.OrdinalIgnoreCase);
+        foreach (var (k, v) in ForcedMacros()) macros[k] = v;
+        var absent = ForcedAbsent();
+        foreach (var k in absent) macros.Remove(k);
+
+        var vsPerm = ShaderCacheReader.ResolvePermutation(vsToc, macros, b.Switches, feat, swDef, out _, forcedAbsent: absent);
+        var psPerm = ShaderCacheReader.ResolvePermutation(psToc, macros, b.Switches, feat, swDef, out var pw, forcedAbsent: absent);
         if (vsPerm is null || psPerm is null)
-        { why = "no cooked permutation"; sb.AppendLine($"   !  {b.Name,-34} {pw}"); return null; }
+        {
+            why = "no cooked permutation for the forced define set";
+            sb.AppendLine($"   !  {b.Name,-34} {pw}");
+            return null;
+        }
 
         // M220: do NOT substitute a different permutation here.
         //

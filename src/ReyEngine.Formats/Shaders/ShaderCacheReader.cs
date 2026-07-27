@@ -287,7 +287,8 @@ public sealed class ShaderCacheReader : IDisposable
         IReadOnlyDictionary<string, string>? featureDefines,
         IReadOnlyDictionary<string, bool>? switchDefaults,
         out string explanation,
-        long maxCombinations = 2_000_000)
+        long maxCombinations = 2_000_000,
+        IReadOnlySet<string>? forcedAbsent = null)
     {
         var byKey = new Dictionary<ulong, ShaderPermutation>();
         foreach (var perm in toc.Permutations) byKey.TryAdd(perm.Key, perm);
@@ -298,6 +299,15 @@ public sealed class ShaderCacheReader : IDisposable
 
         foreach (var (name, values) in toc.Axes)
         {
+            // M225: pinned absent. Without this the free-axis enumeration below would happily add the very
+            // define we are trying to remove back in, find the original permutation, and report success -
+            // the same vacuous test M166 had to guard against.
+            if (forcedAbsent is not null && forcedAbsent.Contains(name))
+            {
+                pinned.Add($"{name} forced absent");
+                continue;
+            }
+
             if (macros is not null && macros.TryGetValue(name, out var mv))
             {
                 if (!values.Contains(mv))

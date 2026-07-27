@@ -203,6 +203,52 @@
             </DockPanel>
           </TabItem>
 
+          <TabItem Header="Debug">
+            <DockPanel Margin="6">
+              <TextBlock DockPanel.Dock="Top" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,0,2,6"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         Text="Override the shader defines the loaded scene was cooked over. Forcing one selects a DIFFERENT COOKED PERMUTATION of the same shader — the one the engine itself would use for that define set — so this is a real switch, not a fake. Change these, then press Load scene again." />
+
+              <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
+                      BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" CornerRadius="4"
+                      Padding="8,6" Margin="0,0,0,6">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="COMMON" FontSize="9.5" FontWeight="SemiBold" Opacity="0.6"
+                             Foreground="{DynamicResource ReyTextBrush}" />
+                  <TextBlock FontSize="10" Opacity="0.7" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyTextBrush}"
+                             Text="DISABLE_SHADOWS · DISABLE_FOW · NO_BAKED_LIGHTING (turns lightmaps off) · DISABLE_DEPTH_FOG · LOW_QUALITY_MODE · USE_DYNAMIC_LIGHTING · CLOUD_SHADOWS" />
+                </StackPanel>
+              </Border>
+
+              <Button DockPanel.Dock="Bottom" Classes="tool" Content="↺  Reset all to as-authored"
+                      Command="{Binding ResetSceneDefinesCommand}" FontSize="11" Margin="0,6,0,0"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,5" />
+
+              <ListBox ItemsSource="{Binding SceneDefines}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:SceneDefineRow">
+                    <Grid ColumnDefinitions="*,116" Margin="0,3">
+                      <StackPanel Grid.Column="0" Spacing="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Label}" FontFamily="Consolas" FontSize="10.5"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+                        <TextBlock Text="{Binding Detail}" FontSize="9" Opacity="0.5"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+                      </StackPanel>
+                      <ComboBox Grid.Column="1" SelectedIndex="{Binding Mode}" FontSize="10.5"
+                                HorizontalAlignment="Stretch" VerticalAlignment="Center">
+                        <ComboBoxItem Content="as authored" />
+                        <ComboBoxItem Content="force on" />
+                        <ComboBoxItem Content="force absent" />
+                      </ComboBox>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </DockPanel>
+          </TabItem>
+
           <TabItem Header="Material">
             <DockPanel Margin="6">
               <TextBlock DockPanel.Dock="Top" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,0,2,6"
