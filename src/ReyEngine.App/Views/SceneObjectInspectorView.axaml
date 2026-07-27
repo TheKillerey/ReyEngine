@@ -250,6 +250,12 @@
           <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveParticleMovesCommand}" FontSize="11" Padding="8,2"
                   IsEnabled="{Binding HasParticleMoves}" />
         </StackPanel>
+        <Button Classes="tool" Content="⧉ Duplicate" Command="{Binding DuplicateParticlePlacementCommand}"
+                FontSize="10" Padding="6,2" HorizontalAlignment="Left" Margin="0,2,0,0"
+                ToolTip.Tip="Create a copy of this placement, offset so you can see it. It is written to the .bin on Save to Mod." />
+        <TextBlock Text="New placement — Save to Mod will add it." FontSize="9" Foreground="#53C67A"
+                   IsVisible="{Binding SelectedParticleNode.IsNew, FallbackValue=False}" />
+
         <!-- M204: delete is a toggle, not an immediate action - it stops rendering at once but nothing
              touches the .bin until Save to Mod, so it stays undoable. -->
         <ToggleButton Classes="vp" Content="🗑 Mark for deletion" IsChecked="{Binding SelectedParticleNode.IsRemoved}"

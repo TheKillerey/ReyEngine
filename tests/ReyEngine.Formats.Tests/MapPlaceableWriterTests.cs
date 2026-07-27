@@ -177,6 +177,104 @@ public class MapPlaceableWriterTests
         Assert.Contains("1 of 2", err);
     }
 
+    // ---- M206: clone -----------------------------------------------------------------------------
+
+    [Fact]
+    public void CloningAddsANewPlacementAndLeavesTheSourceIntact()
+    {
+        var bin = BuildBin(Matrix4x4.CreateTranslation(7f, 8f, 9f));
+        var tree = new BinTree(new MemoryStream(bin, false));
+        uint newKey = MapPlaceableWriter.NewItemKey(tree, new MapPlacementId(ContainerHash, KeyA));
+
+        var outBytes = MapPlaceableWriter.WriteEdits(bin, new[]
+        {
+            new MapPlacementEdit(new MapPlacementId(ContainerHash, newKey))
+            {
+                CloneOf = new MapPlacementId(ContainerHash, KeyA),
+                Name = "copy",
+                Transform = Matrix4x4.CreateTranslation(100f, 0f, 100f),
+            },
+        }, out var err);
+
+        Assert.Null(err);
+        var clone = Read(outBytes!, newKey);
+        Assert.NotNull(clone);
+        Assert.Equal("copy", clone!.Value.Name);
+        Assert.Equal(Matrix4x4.CreateTranslation(100f, 0f, 100f), clone.Value.Transform!.Value);
+        // the clone inherited the source's system link without being told to
+        Assert.Equal(0x1111u, clone.Value.System);
+
+        // ...and the source is untouched
+        var source = Read(outBytes!, KeyA);
+        Assert.Equal("runeTimer", source!.Value.Name);
+        Assert.Equal(Matrix4x4.CreateTranslation(7f, 8f, 9f), source.Value.Transform!.Value);
+    }
+
+    [Fact]
+    public void ACloneWithNoOtherVerbsIsAFaithfulCopy()
+    {
+        var shared = Matrix4x4.CreateTranslation(1f, 2f, 3f);
+        var bin = BuildBin(shared);
+        var tree = new BinTree(new MemoryStream(bin, false));
+        uint newKey = MapPlaceableWriter.NewItemKey(tree, new MapPlacementId(ContainerHash, KeyB));
+
+        var outBytes = MapPlaceableWriter.WriteEdits(bin, new[]
+        {
+            new MapPlacementEdit(new MapPlacementId(ContainerHash, newKey))
+                { CloneOf = new MapPlacementId(ContainerHash, KeyB) },
+        }, out var err);
+
+        Assert.Null(err);
+        var a = Read(outBytes!, KeyB)!.Value;
+        var b = Read(outBytes!, newKey)!.Value;
+        Assert.Equal(a.Name, b.Name);
+        Assert.Equal(a.Transform, b.Transform);
+        Assert.Equal(a.System, b.System);
+    }
+
+    [Fact]
+    public void NewItemKeyNeverCollidesAndIsStable()
+    {
+        var tree = new BinTree(new MemoryStream(BuildBin(Matrix4x4.Identity), false));
+        var src = new MapPlacementId(ContainerHash, KeyA);
+        uint k1 = MapPlaceableWriter.NewItemKey(tree, src);
+        uint k2 = MapPlaceableWriter.NewItemKey(tree, src);
+
+        Assert.Equal(k1, k2);                 // stable: saving twice must not churn the key
+        Assert.NotEqual(0u, k1);
+        Assert.NotEqual(KeyA, k1);
+        Assert.NotEqual(KeyB, k1);
+    }
+
+    [Fact]
+    public void CloningOntoAKeyThatAlreadyExistsIsRefused()
+    {
+        var bin = BuildBin(Matrix4x4.Identity);
+        var outBytes = MapPlaceableWriter.WriteEdits(bin, new[]
+        {
+            // KeyB is taken - overwriting it would silently destroy a placement
+            new MapPlacementEdit(new MapPlacementId(ContainerHash, KeyB))
+                { CloneOf = new MapPlacementId(ContainerHash, KeyA) },
+        }, out var err);
+
+        Assert.Null(outBytes);
+        Assert.NotNull(err);
+    }
+
+    [Fact]
+    public void CloningAMissingSourceIsRefused()
+    {
+        var bin = BuildBin(Matrix4x4.Identity);
+        var outBytes = MapPlaceableWriter.WriteEdits(bin, new[]
+        {
+            new MapPlacementEdit(new MapPlacementId(ContainerHash, 0x1234u))
+                { CloneOf = new MapPlacementId(ContainerHash, 0xDEADu) },
+        }, out var err);
+
+        Assert.Null(outBytes);
+        Assert.NotNull(err);
+    }
+
     [Fact]
     public void NoEditsIsANoOpNotARewrite()
     {

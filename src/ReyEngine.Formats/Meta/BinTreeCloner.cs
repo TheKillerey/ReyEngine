@@ -29,6 +29,9 @@ public static class BinTreeCloner
         BinTreeColor v => new BinTreeColor(nameHash, v.Value),
         BinTreeString v => new BinTreeString(nameHash, v.Value),
         BinTreeHash v => new BinTreeHash(nameHash, v.Value),
+        // M206: every map placeable carries a transform, so without this NO placement could be cloned -
+        // the first clone test failed on it. Matrix4x4 is a value type, so the copy is inherently deep.
+        BinTreeMatrix44 v => new BinTreeMatrix44(nameHash, v.Value),
         BinTreeObjectLink v => new BinTreeObjectLink(nameHash, v.Value),
         BinTreeWadChunkLink v => new BinTreeWadChunkLink(nameHash, v.Value),
         // Derived types must precede their base (UnorderedContainer : Container, Embedded : Struct).

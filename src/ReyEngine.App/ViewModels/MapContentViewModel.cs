@@ -65,10 +65,16 @@ public sealed partial class ParticlePlacementViewModel : ObservableObject
     public Vector4? EffectiveTint => ParsedTint ?? Placement.ColorModulate;
 
     /// <summary>Any edit at all, not just a move - this is what gates Save to Mod.</summary>
+    /// <summary>M206: this placement does not exist in the .bin yet - it is a pending copy of
+    /// <see cref="CloneSource"/> and Save to Mod will insert it. Its Id already holds the key it will be
+    /// written under, minted when the clone was made so repeated saves land on the same key.</summary>
+    public MapPlacementId? CloneSource { get; init; }
+    public bool IsNew => CloneSource is not null;
+
     /// <summary>M205: pointed at a different VFX system than the bin authored.</summary>
     public bool IsRelinked => EditedSystemHash != 0 && EditedSystemHash != Placement.SystemHash;
 
-    public bool HasEdits => IsMoved || IsRemoved || EditedSystemHash != 0
+    public bool HasEdits => IsNew || IsMoved || IsRemoved || EditedSystemHash != 0
                             || (EditedName is not null && EditedName != Placement.Name)
                             || ParsedTint is not null;
 
@@ -346,6 +352,22 @@ public sealed partial class MapContentViewModel : ViewModelBase
     }
 
     public IEnumerable<ParticlePlacementViewModel> AllParticles => ParticleGroups.SelectMany(g => g.Placements);
+
+    /// <summary>M206: add a placement to the outliner, into the group for its VFX system (creating that
+    /// group when the system had no placements yet). Used by Duplicate; the copy appears in the tree
+    /// straight away rather than only after a reload.</summary>
+    public void AddParticlePlacement(ParticlePlacementViewModel placement)
+    {
+        var group = ParticleGroups.FirstOrDefault(g => g.SystemName == placement.SystemName);
+        if (group is null)
+        {
+            group = new ParticleSystemGroupViewModel { SystemName = placement.SystemName };
+            ParticleGroups.Add(group);
+        }
+        group.Placements.Add(placement);
+        OnPropertyChanged(nameof(ParticleCount));
+        OnPropertyChanged(nameof(HasParticles));
+    }
 
     [ObservableProperty] private string _mapName = "";
     [ObservableProperty] private bool _hasMap;

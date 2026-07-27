@@ -1076,9 +1076,39 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _log.Info("Particles", $"Moved '{node.Name}' to ({target.X:0.#}, {target.Y:0.#}, {target.Z:0.#}).");
     }
 
+    /// <summary>M206: duplicate the selected placement. The copy is created in the scene immediately -
+    /// offset so it is not hidden inside its source - and written to the .bin on Save to Mod, where the
+    /// writer deep-clones the original so the copy keeps every field ReyEngine does not model.</summary>
     [RelayCommand]
+    private void DuplicateParticlePlacement()
+    {
+        if (SelectedParticleNode is not { } node) return;
+        if (!node.Placement.Id.IsValid) { _log.Warn("Particles", "This placement has no identity in the bin and cannot be duplicated."); return; }
+        if (node.IsNew) { _log.Warn("Particles", "Save the existing copy before duplicating it again."); return; }
+        if (_currentMapEntry is null || !TryResolveMaterialsBin(_currentMapEntry.Path, out var binEntry)) return;
+
+        uint key;
+        try { key = MapPlaceableWriter.NewItemKey(SafeBinTree.Parse(GetAssetBytes(binEntry)), node.Placement.Id); }
+        catch (Exception ex) { _log.Error("Particles", $"Could not mint a key for the copy: {ex.Message}"); return; }
+
+        // Nudged so the copy is visible rather than z-fighting inside the original.
+        var copy = new ParticlePlacementViewModel
+        {
+            Placement = node.Placement with { Id = new MapPlacementId(node.Placement.Id.ContainerHash, key) },
+            CloneSource = node.Placement.Id,
+            Offset = new System.Numerics.Vector3(100f, 0f, 0f),
+        };
+        MapContent.AddParticlePlacement(copy);
+        SelectedParticleNode = copy;
+        HasParticleMoves = true;
+        UpdateParticleMarkers();
+        RebuildParticlePlayback();
+        _log.Info("Particles", $"Duplicated '{node.Placement.Name}'. Save to Mod writes it into the .bin.");
+    }
+
     /// <summary>M204: resets EVERY pending edit on the placement, not only the transform - the button sits
     /// beside rename/tint/delete now, so "Reset" clearing only the move would be a trap.</summary>
+    [RelayCommand]
     private void ResetParticleEdits()
     {
         if (SelectedParticleNode is not { } node) return;
@@ -4825,7 +4855,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .Where(v => v.Placement.Id.IsValid)
             .Select(v => new MapPlacementEdit(v.Placement.Id)
             {
-                Transform = v.IsMoved ? v.CurrentTransform : null,
+                CloneOf = v.CloneSource,   // M206: null for an existing placement
+                // A NEW placement always writes its transform - it has no authored one to preserve.
+                Transform = v.IsMoved || v.IsNew ? v.CurrentTransform : null,
                 Name = v.EditedName is { } n && n != v.Placement.Name ? n : null,
                 ColorModulate = v.ParsedTint,
                 SystemLink = v.EditedSystemHash != 0 ? v.EditedSystemHash : null,

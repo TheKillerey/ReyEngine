@@ -24,6 +24,12 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     public string? Name { get; init; }
     /// <summary>Delete the placement from its container.</summary>
     public bool Remove { get; init; }
+
+    /// <summary>M206: insert a COPY of this placement under <see cref="Id"/>, rather than editing an
+    /// existing one. The source is deep-cloned so the new placement carries every field the original had -
+    /// including the ones ReyEngine does not model - and the edit's other verbs are then applied on top.
+    /// <see cref="Id"/> must name a key that does not already exist in the container.</summary>
+    public MapPlacementId? CloneOf { get; init; }
 }
 
 /// <summary>
@@ -106,12 +112,51 @@ public static class MapPlaceableWriter
         return result;
     }
 
+    /// <summary>M206: a key no placement in this container is using. Derived from the source key so a
+    /// given clone lands on the same key every time (a save must not churn), then walked forward on the
+    /// vanishingly unlikely collision.
+    ///
+    /// <para>Any unused value is safe here: measured over 151,457 shipped items, the key is NOT derived
+    /// from the placement's name - 0 match FNV-1a of it in either casing, and 92,079 items have no name at
+    /// all - so nothing reconstructs it, and a newly added placement is by definition not referenced by
+    /// anything else yet.</para></summary>
+    public static uint NewItemKey(BinTree tree, MapPlacementId source)
+    {
+        var used = new HashSet<uint>();
+        if (tree.Objects.TryGetValue(source.ContainerHash, out var c)
+            && c.Properties.TryGetValue(F_items, out var ip) && ip is BinTreeMap m)
+            foreach (var e in m)
+                if (e.Key is BinTreeHash kh) used.Add(kh.Value);
+
+        uint candidate = source.ItemKey * 2654435761u + 0x9E3779B9u;   // Knuth mix, so clones scatter
+        while (candidate == 0 || used.Contains(candidate)) candidate++;
+        return candidate;
+    }
+
     private static bool TryApply(BinTree tree, MapPlacementEdit edit)
     {
         if (!edit.Id.IsValid) return false;
         if (!tree.Objects.TryGetValue(edit.Id.ContainerHash, out var container)) return false;
         if (container.ClassHash != ContainerClass) return false;
         if (!container.Properties.TryGetValue(F_items, out var itemsProp) || itemsProp is not BinTreeMap items) return false;
+
+        // M206: a clone inserts a deep copy of its source under this edit's (new) key first; everything
+        // below then treats it as an ordinary placement, so the other verbs apply to the copy for free.
+        if (edit.CloneOf is { } src)
+        {
+            if (items.Any(e => e.Key is BinTreeHash k && k.Value == edit.Id.ItemKey)) return false;  // key taken
+            BinTreeProperty? sourceValue = null;
+            foreach (var e in items)
+                if (e.Key is BinTreeHash sk && sk.Value == src.ItemKey) { sourceValue = e.Value; break; }
+            if (sourceValue is not BinTreeStruct sourceStruct) return false;
+
+            var copy = BinTreeCloner.Clone(sourceStruct, 0);
+            var withClone = items
+                .Select(e => new KeyValuePair<BinTreeProperty, BinTreeProperty>(e.Key, e.Value))
+                .Append(new KeyValuePair<BinTreeProperty, BinTreeProperty>(new BinTreeHash(0, edit.Id.ItemKey), copy));
+            items = new BinTreeMap(F_items, items.KeyType, items.ValueType, withClone);
+            container.Properties[F_items] = items;
+        }
 
         BinTreeProperty? key = null, value = null;
         foreach (var e in items)
@@ -140,6 +185,9 @@ public static class MapPlaceableWriter
     private static string? UnintendedChange(BinTree before, BinTree after, IReadOnlyList<MapPlacementEdit> edits)
     {
         var editedByContainer = edits.GroupBy(e => e.Id.ContainerHash)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
+        // M206: a clone's key is absent from `before` on purpose, so it must not read as an intruder.
+        var addedByContainer = edits.Where(e => e.CloneOf is not null).GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
 
         if (before.Objects.Count != after.Objects.Count)
@@ -170,6 +218,11 @@ public static class MapPlaceableWriter
 
             var afterByKey = mb.Where(e => e.Key is BinTreeHash)
                                .ToDictionary(e => ((BinTreeHash)e.Key).Value, e => e.Value);
+            var added = addedByContainer.GetValueOrDefault(hash) ?? new HashSet<uint>();
+            var beforeKeys = ma.Where(e => e.Key is BinTreeHash).Select(e => ((BinTreeHash)e.Key).Value).ToHashSet();
+            foreach (var k in afterByKey.Keys)
+                if (!beforeKeys.Contains(k) && !added.Contains(k))
+                    return $"placement 0x{k:x8} appeared without being asked for";
             foreach (var e in ma)
             {
                 if (e.Key is not BinTreeHash kh) continue;

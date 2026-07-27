@@ -1546,8 +1546,19 @@ the Particle Editor's SYSTEMS panel. Only systems with a visual emitter are offe
 to one that draws nothing would look like a broken save. Choosing the placement's *current* system clears
 the edit instead of recording a no-op re-link, which matters because the picker starts pointed at it.
 
-**Still not done:** adding a brand-new placement (it needs a template to clone, the way
-`MapMaterialFactory` does for materials).
+**M206 added the clone**, which completes the writer: a placement can now be duplicated as well as moved,
+renamed, re-tinted, re-linked and removed. The source is deep-cloned, so the copy keeps every field
+ReyEngine does not model, and the edit's other verbs then apply on top of the copy.
+
+The item key is minted rather than derived, which is safe because it is measured to be **opaque**: across
+151,457 shipped items, **0** keys match FNV-1a of the placement's name in either casing, and 92,079 items
+have no name at all — so nothing reconstructs a key from content, and a newly added placement is by
+definition not yet referenced by anything. `NewItemKey` mixes the source key and walks forward on
+collision, so it is stable (saving twice lands on the same key) and never overwrites a neighbour. Cloning
+onto an occupied key, or from a source that does not exist, is refused rather than attempted.
+
+The writer's self-check had to learn about additions: a clone's key is legitimately absent from the
+"before" tree, so it is whitelisted per container — and any *other* new key still trips the refusal.
 
 #### 5.1b — M200: the optional item was chasing the wrong thing
 
