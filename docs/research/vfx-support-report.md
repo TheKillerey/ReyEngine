@@ -1259,7 +1259,7 @@ per-instance, so the true rate is **not measured** and no fix is attempted on a 
 | 4.1 | ~~Add the unread emitter field hashes to `VfxSystemResolver`~~ | — | — | **DONE in M193** — see 4.1b. The row said ~94; it is **60** |
 | 4.2 | ~~Delete the dead `F_shape` lookup~~ | — | **ALREADY DONE in M174** (commit 2d4c9da); `VfxSystemResolver.cs:75` is now the comment recording it. Row retired, no work remained |
 | 4.3 | ~~Parse the 21 unread system fields~~ | — | — | **DONE in M194** — see 4.3b. "67.7% pure scale, so it is a sizing fix" is **wrong twice** |
-| 4.4 | Parse the 10 unread `MapParticle` fields | `MapParticleExtractor.cs:11-17,44-57` | `eyeCandy` (13,165) and `AllDimensions` (4,990) first |
+| 4.4 | ~~Parse the 10 unread `MapParticle` fields~~ | — | — | **DONE in M195** — see 4.4b. The high-value field is `VisibilityController`, not `eyeCandy` |
 | 4.5 | Load the two never-loaded map VFX sources | `MainWindowViewModel.cs:5111` | +5,229 systems / 47,118 emitters from `data/maps/shipping/mapXX/mapXX.bin`, +766/6,819 from `maps/modespecificdata/*.bin`. They have no placements, so they need a browse-and-preview entry point rather than automatic scene playback |
 | 4.6 | Parse `MapPointLightType` (788 lights) and `MapLightingVolume` (172) | new, beside `MapSunProperties.cs` | Affects how all lit VFX read on modern maps |
 

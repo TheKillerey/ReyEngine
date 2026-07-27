@@ -190,8 +190,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.AutoPreviewDiffuse(slot.Name);   // M50c: show the texture immediately
     }
 
+    /// <summary>M195 (4.4): particles now resolve through the SAME controller path meshes already use
+    /// (see UpdateSubmeshVisibility). 4,237 placements bind a VisibilityController that this ignored, so
+    /// they stayed visible under every baron/dragon selection while the meshes around them switched.
+    /// Placements with no controller fall through to the dragon-bit test exactly as before.</summary>
     private bool IsParticleVisible(MapParticlePlacement particle) =>
-        MapVisibility.VisibleForDragon(particle.VisibilityFlags, CurrentDragonBit);
+        particle.VisibilityControllerHash == 0
+            ? MapVisibility.VisibleForDragon(particle.VisibilityFlags, CurrentDragonBit)
+            : (_visibilityResolver ??= new MapVisibilityResolver(_mapControllers))
+                .IsVisible(particle.VisibilityFlags, particle.VisibilityControllerHash,
+                           CurrentDragonBit, SelectedBaronIndex <= 0 ? 0 : MapVisibility.Barons[SelectedBaronIndex - 1].Bit);
 
     private bool IsSoundVisible(MapSoundPlacement sound) =>
         MapVisibility.VisibleForDragon(sound.VisibilityFlags, CurrentDragonBit);
