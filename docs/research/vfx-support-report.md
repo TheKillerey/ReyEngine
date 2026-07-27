@@ -989,7 +989,7 @@ stand-in purely so it has a visible cycle. Nothing in the renderer or the data p
 | 3.3 | ~~**Expand nested structs into editable sub-rows**~~ | — | — | **DONE in M189** — see 3.3b |
 | 3.4 | ~~**Show systems with zero emitters**~~ | — | — | **DONE in M188** — see 3.4b |
 | 3.5 | ~~**Add a system-level property panel**~~ | — | — | **DONE in M188** — see 3.4b |
-| 3.6 | **Curve key editing** (currently display-only) | `ParticleEditorView.axaml:174-179`, `ParticleEditorViewModel.cs` | 4.8M curves | Medium-high; the biggest missing authoring capability |
+| 3.6 | ~~**Curve key editing**~~ | — | — | **DONE in M190** — see 3.6b |
 | 3.7 | **Flag fields that are editable but ignored** by the renderer, so the user is not misled | `ParticleDocument.cs` (a badge or grey-out) | 12 fields incl. `alphaRef`, `miscRenderFlags`, `depthBiasFactors` | Trivial, prevents a class of false bug reports |
 | 3.8 | **Map placement inspector** for the 10 unread `MapParticle` fields | `MapParticleExtractor.cs`, map inspector view | 29,811 placements | Depends on 5.2 for saving |
 
@@ -1119,6 +1119,42 @@ header (`childParticleSetDefinition.childrenIdentifiers`) and a struct header (`
 targets initially reported "not found in the sampled WADs" because the inner field names were guessed
 rather than read off the census; a not-found target proves nothing, so they were corrected to the real
 names rather than left in the output looking like passes.
+
+#### 3.6b — M190 result
+
+The curve panel drew a picture of the keys and nothing more: `ReadDynamics` copied them into float
+arrays, so anything the user did to them could never have reached the bin. Keys are now edited in a
+list beside the plot — time and comma-separated components per key, plus add and delete — and every
+mutation edits the live `dynamics` block.
+
+Over 8 champion WADs: 206,762 rows carry a curve (464,769 keys), **100% of them now editable**.
+By component count: 105,171 vector3, 53,460 colour/vector4, 37,700 float, 10,431 vector2.
+
+**86,212 of those rows have a read-only *value* but editable *keys*.** Those are M187's curve-only
+rows — Riot omitted `constantValue` because it was the default — and the two facts are genuinely
+different: there is no constant to edit, but the curve is right there and is the whole content of the
+field. Conflating them would have left the largest single group of curves unauthorable.
+
+**`BinTreeContainer.Elements` is read-only through LeagueToolkit's public API**, so a key edit rebuilds
+both containers and reassigns them on the `dynamics` struct, whose property dictionary *is* mutable.
+That keeps the write path on supported API rather than casting the library's backing list.
+
+Two deliberate limits: an inserted key is placed so times stay ascending (Riot's curves are read in
+order, so an out-of-order key would evaluate as a discontinuity rather than as the point the user
+placed), and the last remaining key cannot be deleted — an empty `dynamics` block is not the same
+thing as no curve, and what Riot's reader does with one is not established here.
+
+VERIFIED: 19 checks. Setting a key on a 1-component and on a 4-component curve, each asserting that
+nothing is dirty beforehand, that the edit marks the document dirty, that the key count is unchanged,
+that the new time and value survive `Serialize` → re-`Parse`, and that the component count and field
+identity are preserved; then add (key count up, times still ascending after an out-of-order insert,
+survives a round trip), delete (count down, survives a round trip), and the two guards — deleting the
+last key and an out-of-range index are both refused. M187's 5, M188's 3 and M189's 11 round trips all
+still pass.
+
+The float curve the harness happened to land on was `erosionDriveCurve` — a depth-1 row inside
+`alphaErosionDefinition` — and the colour curve was `Color`, a curve-only row. So M189's expansion and
+M187's curve-only rescue both compose with key editing rather than merely coexisting with it.
 
 ### 4. Missing parsing support
 

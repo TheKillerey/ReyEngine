@@ -138,13 +138,48 @@
           <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}">
             <DockPanel>
               <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="CURVE (over particle lifetime)" />
-              <Grid>
-                <views:CurvePreview Times="{Binding SelectedProperty.CurveTimes, FallbackValue={x:Null}}"
-                                    Channels="{Binding SelectedProperty.CurveChannels, FallbackValue={x:Null}}"
-                                    Margin="6" />
-                <TextBlock Text="Select a property with a curve (name shows '+ curve')" FontSize="10" Opacity="0.4"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                           IsVisible="{Binding SelectedProperty.HasCurve, FallbackValue=True, Converter={x:Static BoolConverters.Not}}" />
+              <!-- M190 (3.6): the keys are editable, in the list to the right of the plot -->
+              <Grid ColumnDefinitions="*,4,210">
+                <Grid Grid.Column="0">
+                  <views:CurvePreview Times="{Binding SelectedProperty.CurveTimes, FallbackValue={x:Null}}"
+                                      Channels="{Binding SelectedProperty.CurveChannels, FallbackValue={x:Null}}"
+                                      Margin="6" />
+                  <TextBlock Text="Select a property with a curve (name shows '+ curve')" FontSize="10" Opacity="0.4"
+                             HorizontalAlignment="Center" VerticalAlignment="Center"
+                             IsVisible="{Binding SelectedProperty.HasCurve, FallbackValue=True, Converter={x:Static BoolConverters.Not}}" />
+                </Grid>
+                <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
+                <DockPanel Grid.Column="2" IsVisible="{Binding SelectedProperty.HasCurve, FallbackValue=False}">
+                  <DockPanel DockPanel.Dock="Top" Margin="4,3">
+                    <Button DockPanel.Dock="Right" Classes="tool" Content="+ Key" FontSize="9" Padding="6,1"
+                            Command="{Binding SelectedProperty.AddCurveKeyCommand}"
+                            IsEnabled="{Binding SelectedProperty.CanEditCurve, FallbackValue=False}"
+                            ToolTip.Tip="Add a key halfway through the curve" />
+                    <TextBlock Text="KEYS (time / value)" FontSize="9" Opacity="0.6" VerticalAlignment="Center" />
+                  </DockPanel>
+                  <TextBlock DockPanel.Dock="Bottom" FontSize="9" Opacity="0.5" TextWrapping="Wrap" Margin="4,2"
+                             Text="Read-only bin: Copy To Project to edit keys."
+                             IsVisible="{Binding SelectedProperty.CanEditCurve, FallbackValue=False, Converter={x:Static BoolConverters.Not}}" />
+                  <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding SelectedProperty.CurveKeys}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ParticleCurveKeyViewModel">
+                          <DockPanel Margin="4,1">
+                            <Button DockPanel.Dock="Right" Classes="tool" Content="x" FontSize="9" Padding="4,0"
+                                    Command="{Binding DeleteKeyCommand}"
+                                    ToolTip.Tip="Delete this key" />
+                            <Button DockPanel.Dock="Right" Classes="tool" Content="✓" FontSize="9" Padding="4,0"
+                                    Command="{Binding ApplyKeyCommand}"
+                                    ToolTip.Tip="Apply this key" />
+                            <TextBox DockPanel.Dock="Left" Text="{Binding TimeText, Mode=TwoWay}" Width="42"
+                                     FontSize="9" Padding="3,1" Margin="0,0,3,0" />
+                            <TextBox Text="{Binding ValueText, Mode=TwoWay}" FontSize="9" Padding="3,1" Margin="0,0,3,0" />
+                          </DockPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </ScrollViewer>
+                </DockPanel>
               </Grid>
             </DockPanel>
           </Border>

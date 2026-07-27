@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -113,6 +114,26 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     }
 
     internal void SelectRow(ParticlePropertyRowViewModel row) => SelectedProperty = row;
+
+    /// <summary>M190 (3.6): run a curve mutation, then do exactly what a scalar edit does - mark the
+    /// document dirty, re-serialize, re-extract, and rebuild the preview - so an edited curve is visible
+    /// in the viewport straight away rather than only after a reload.</summary>
+    internal void EditCurve(ParticlePropertyRowViewModel row, Action mutate)
+    {
+        if (Document is null) return;
+        if (!IsEditable) { row.ErrorText = "Read-only: Copy To Project first."; return; }
+        try
+        {
+            mutate();
+            row.ErrorText = null;
+            row.RefreshCurve();
+            MarkDocumentDirty?.Invoke();
+            _defs = VfxSystemResolver.ExtractAll(Document.Serialize());
+            RebuildPlayback();
+            Info?.Invoke($"Curve of {row.Name}: {row.CurveKeys.Count} key(s).");
+        }
+        catch (Exception ex) { row.ErrorText = ex.Message; }
+    }
 
     private void RebuildPlayback()
     {
@@ -269,6 +290,33 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
     }
 }
 
+/// <summary>M190 (3.6): one editable curve key - its time and its 1..4 value components.</summary>
+public sealed partial class ParticleCurveKeyViewModel : ObservableObject
+{
+    private readonly ParticlePropertyRowViewModel _row;
+    public int Index { get; }
+    [ObservableProperty] private string _timeText;
+    [ObservableProperty] private string _valueText;
+
+    public ParticleCurveKeyViewModel(ParticlePropertyRowViewModel row, int index, float time, float[] components)
+    {
+        _row = row;
+        Index = index;
+        // InvariantCulture throughout: the app runs on a German locale, where "0,5" would round-trip as
+        // two components rather than as one half.
+        _timeText = time.ToString("0.####", CultureInfo.InvariantCulture);
+        _valueText = string.Join(", ", components.Select(c => c.ToString("0.####", CultureInfo.InvariantCulture)));
+    }
+
+    [RelayCommand] private void ApplyKey()
+    {
+        try { _row.ApplyKey(Index, TimeText, ValueText); }
+        catch (Exception ex) { _row.ErrorText = ex.Message; }
+    }
+
+    [RelayCommand] private void DeleteKey() => _row.DeleteKey(Index);
+}
+
 public sealed record ParticleModuleGroupViewModel(string Name, IReadOnlyList<ParticlePropertyRowViewModel> Rows);
 
 /// <summary>One property row: live value + edit text + validation error.</summary>
@@ -293,15 +341,72 @@ public sealed partial class ParticlePropertyRowViewModel : ObservableObject
     public float[]? CurveTimes => Prop.CurveTimes;
     public float[][]? CurveChannels => Prop.CurveChannels;
 
+    /// <summary>M190 (3.6): the curve display was a picture of the keys with no way to change them. These
+    /// rows edit the live dynamics block, so a curve edit lands in the bin exactly as a scalar edit does.</summary>
+    public bool CanEditCurve => Prop.CanEditCurve && _owner.IsEditable;
+    public ObservableCollection<ParticleCurveKeyViewModel> CurveKeys { get; } = new();
+
     public ParticlePropertyRowViewModel(ParticleProperty prop, ParticleEditorViewModel owner)
     {
         Prop = prop;
         _owner = owner;
         _currentText = prop.CurrentText;
         _editText = prop.CurrentText;
+        RebuildCurveKeys();
     }
 
     public void Refresh() { CurrentText = Prop.CurrentText; EditText = Prop.CurrentText; }
+
+    /// <summary>Re-read the keys from the property after an edit, and repaint the curve. The arrays are
+    /// replaced rather than mutated, so CurvePreview's AffectsRender picks the change up.</summary>
+    public void RefreshCurve()
+    {
+        RebuildCurveKeys();
+        OnPropertyChanged(nameof(CurveTimes));
+        OnPropertyChanged(nameof(CurveChannels));
+        OnPropertyChanged(nameof(HasCurve));
+    }
+
+    private void RebuildCurveKeys()
+    {
+        CurveKeys.Clear();
+        var t = Prop.CurveTimes;
+        var ch = Prop.CurveChannels;
+        if (t is null || ch is null) return;
+        for (int i = 0; i < t.Length; i++)
+        {
+            var comps = new float[ch.Length];
+            for (int c = 0; c < ch.Length; c++) comps[c] = ch[c][i];
+            CurveKeys.Add(new ParticleCurveKeyViewModel(this, i, t[i], comps));
+        }
+    }
+
+    /// <summary>Add a key midway through the curve's time range, copying the first key's value so the new
+    /// point starts somewhere meaningful rather than at zero.</summary>
+    [RelayCommand] private void AddCurveKey()
+    {
+        var t = Prop.CurveTimes; var ch = Prop.CurveChannels;
+        if (t is null || ch is null) return;
+        float mid = t.Length > 1 ? (t[0] + t[^1]) * 0.5f : t[0] + 0.5f;
+        var comps = new float[ch.Length];
+        for (int c = 0; c < ch.Length; c++) comps[c] = ch[c][0];
+        _owner.EditCurve(this, () => Prop.AddCurveKey(mid, comps));
+    }
+
+    internal void ApplyKey(int index, string timeText, string valueText)
+    {
+        float time = float.Parse(timeText.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture);
+        var parts = valueText.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        int want = Prop.CurveComponents;
+        if (parts.Length != want)
+            throw new FormatException($"This curve has {want} component(s); give {want} comma-separated number(s).");
+        var comps = new float[want];
+        for (int i = 0; i < want; i++)
+            comps[i] = float.Parse(parts[i].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture);
+        _owner.EditCurve(this, () => Prop.SetCurveKey(index, time, comps));
+    }
+
+    internal void DeleteKey(int index) => _owner.EditCurve(this, () => Prop.RemoveCurveKey(index));
 
     [RelayCommand] private void Select() => _owner.SelectRow(this);
 }

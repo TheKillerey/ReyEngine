@@ -300,9 +300,9 @@ public sealed class ParticleEmitterEntry
             {
                 // Value* structs: constantValue is the editable scalar; dynamics = the curve keys.
                 case BinTreeStruct vs when Field(vs.Properties, "constantValue") is { } cv:
-                    var (times, channels) = ReadDynamics(vs.Properties);
+                    var (times, channels, dyn) = ReadDynamics(vs.Properties);
                     return new ParticleProperty(module, fieldName, cv, isConstantOfCurve: true,
-                        curveTimes: times, curveChannels: channels, depth: depth);
+                        curveTimes: times, curveChannels: channels, depth: depth, curveDynamics: dyn);
                 // M187: a Value* struct with a curve but NO constantValue. Riot's writer omits default-valued
                 // properties, so this is common rather than exotic - ValueColor ships constantValue in only
                 // 63.0% of its instances and IntegratedValueFloat in 34.1%. These rows previously fell through
@@ -310,9 +310,10 @@ public sealed class ParticleEmitterEntry
                 // constant. The curve is now shown. The constant stays unwritten and unguessed: what value
                 // Riot's reader substitutes for an absent constantValue is not established here.
                 case BinTreeStruct ds when Field(ds.Properties, "dynamics") is BinTreeStruct:
-                    var (dt, dc) = ReadDynamics(ds.Properties);
+                    var (dt, dc, ddyn) = ReadDynamics(ds.Properties);
                     return new ParticleProperty(module, fieldName, ds, readOnly: true, depth: depth,
-                        curveTimes: dt, curveChannels: dc, displayText: "(curve only - no constantValue)",
+                        curveTimes: dt, curveChannels: dc, curveDynamics: ddyn,
+                        displayText: "(curve only - no constantValue)",
                         readOnlyReason: "This field ships only a curve - Riot's writer omitted its constantValue "
                                       + "because it was the default. The curve is shown; the constant has no row to edit.");
                 // M187 (3.2): Optional<T> holds the value one level down. 1,701,250 emitter occurrences are
@@ -343,36 +344,16 @@ public sealed class ParticleEmitterEntry
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> p, string name) =>
         p.TryGetValue(HashAlgorithms.Fnv1a(name), out var v) ? v : null;
 
-    /// <summary>dynamics{times[],values[]} → parallel arrays; channels = per-component float rows (up to 4).</summary>
-    private static (float[]? Times, float[][]? Channels) ReadDynamics(IReadOnlyDictionary<uint, BinTreeProperty> valueProps)
+    /// <summary>dynamics{times[],values[]} → parallel arrays plus the LIVE containers, so M190 can write
+    /// keys back into the tree rather than editing a copy.</summary>
+    private static (float[]? Times, float[][]? Channels, BinTreeStruct? Dynamics)
+        ReadDynamics(IReadOnlyDictionary<uint, BinTreeProperty> valueProps)
     {
-        if (Field(valueProps, "dynamics") is not BinTreeStruct dyn) return (null, null);
-        if (Field(dyn.Properties, "times") is not BinTreeContainer tc) return (null, null);
-        if (Field(dyn.Properties, "values") is not BinTreeContainer vc) return (null, null);
-        int n = Math.Min(tc.Elements.Count, vc.Elements.Count);
-        if (n == 0) return (null, null);
-
-        var times = new float[n];
-        for (int i = 0; i < n; i++) times[i] = tc.Elements[i] is BinTreeF32 f ? f.Value : 0f;
-
-        static float[] Comp(BinTreeProperty p) => p switch
-        {
-            BinTreeF32 f => new[] { f.Value },
-            BinTreeVector2 v => new[] { v.Value.X, v.Value.Y },
-            BinTreeVector3 v => new[] { v.Value.X, v.Value.Y, v.Value.Z },
-            BinTreeVector4 v => new[] { v.Value.X, v.Value.Y, v.Value.Z, v.Value.W },
-            BinTreeColor c => new[] { c.Value.R, c.Value.G, c.Value.B, c.Value.A },
-            _ => new[] { 0f },
-        };
-        int comps = Comp(vc.Elements[0]).Length;
-        var channels = new float[comps][];
-        for (int c = 0; c < comps; c++) channels[c] = new float[n];
-        for (int i = 0; i < n; i++)
-        {
-            var v = Comp(vc.Elements[i]);
-            for (int c = 0; c < comps; c++) channels[c][i] = c < v.Length ? v[c] : 0f;
-        }
-        return (times, channels);
+        if (Field(valueProps, "dynamics") is not BinTreeStruct dyn) return (null, null, null);
+        if (Field(dyn.Properties, "times") is not BinTreeContainer tc) return (null, null, null);
+        if (Field(dyn.Properties, "values") is not BinTreeContainer vc) return (null, null, null);
+        var (times, channels) = ParticleProperty.ReadCurve(tc, vc);
+        return times is null ? (null, null, null) : (times, channels, dyn);
     }
 
     /// <summary>Which module card a field belongs on. Case-INSENSITIVE: the bin name hash is computed over
@@ -484,8 +465,8 @@ public sealed class ParticleProperty
     /// <summary>True when this row edits the constantValue of a Value*/curve struct.</summary>
     public bool IsCurveConstant { get; }
     /// <summary>Curve keys of the owning Value* struct (null when constant-only). Times normalised 0..1.</summary>
-    public float[]? CurveTimes { get; }
-    public float[][]? CurveChannels { get; }
+    public float[]? CurveTimes { get; private set; }
+    public float[][]? CurveChannels { get; private set; }
     public bool HasCurve => CurveTimes is { Length: > 0 };
     public bool IsReadOnly { get; }
     /// <summary>M189 (3.3): how deep inside a nested struct this row sits. 0 = a field of the emitter or
@@ -502,9 +483,11 @@ public sealed class ParticleProperty
     public ParticleProperty(string module, string name, BinTreeProperty prop, bool isConstantOfCurve = false,
         float[]? curveTimes = null, float[][]? curveChannels = null, bool readOnly = false,
         string typeNote = "", string? displayText = null,
-        string readOnlyReason = "Read-only property (unsupported type or Riot reference).", int depth = 0)
+        string readOnlyReason = "Read-only property (unsupported type or Riot reference).", int depth = 0,
+        BinTreeStruct? curveDynamics = null)
     {
         Depth = depth;
+        _dynamics = curveDynamics;
         _display = displayText;
         ReadOnlyReason = readOnlyReason;
         Module = module;
@@ -519,7 +502,138 @@ public sealed class ParticleProperty
     }
 
     public string CurrentText => _display ?? SafeFormat();
-    public bool IsDirty => !string.Equals(CurrentText, _originalText, StringComparison.Ordinal);
+    public bool IsDirty => _curveEdited || !string.Equals(CurrentText, _originalText, StringComparison.Ordinal);
+
+    // ---- M190 (3.6): curve key editing ---------------------------------------------------------------
+    // The curve display was a copy of the keys, so nothing the user did to it could reach the bin. These
+    // are the LIVE dynamics containers; every mutation below edits the tree in place, exactly as the
+    // scalar rows do, and Serialize then writes the edited keys out.
+
+    // BinTreeContainer.Elements is read-only through the public API, so a key edit rebuilds both
+    // containers and puts them back on the dynamics struct, whose property dictionary IS mutable. That
+    // keeps the whole path on supported API instead of casting the library's backing list.
+    private readonly BinTreeStruct? _dynamics;
+    private bool _curveEdited;
+
+    private static readonly uint TimesHash = HashAlgorithms.Fnv1a("times");
+    private static readonly uint ValuesHash = HashAlgorithms.Fnv1a("values");
+
+    private BinTreeContainer? Times => _dynamics?.Properties.GetValueOrDefault(TimesHash) as BinTreeContainer;
+    private BinTreeContainer? Values => _dynamics?.Properties.GetValueOrDefault(ValuesHash) as BinTreeContainer;
+
+    /// <summary>True when this row's curve keys can be edited.</summary>
+    public bool CanEditCurve => Times is not null && Values is not null && HasCurve;
+
+    /// <summary>How many float components each key holds (1 = float curve, 3 = vector, 4 = colour).</summary>
+    public int CurveComponents => CurveChannels?.Length ?? 0;
+
+    /// <summary>Overwrite one key's time and value.</summary>
+    public void SetCurveKey(int index, float time, IReadOnlyList<float> components)
+    {
+        var (t, v) = RequireCurve(index);
+        var times = t.Elements.ToList();
+        var values = v.Elements.ToList();
+        times[index] = new BinTreeF32(0, time);
+        values[index] = MakeValue(values[index], components);
+        WriteCurve(times, values, t, v);
+    }
+
+    /// <summary>Add a key, placed so the times stay ascending - Riot's curves are read in order, so an
+    /// out-of-order key would evaluate as a discontinuity rather than as the point the user placed.</summary>
+    public void AddCurveKey(float time, IReadOnlyList<float> components)
+    {
+        var (t, v) = RequireCurve(0);
+        var times = t.Elements.ToList();
+        var values = v.Elements.ToList();
+        int at = 0;
+        while (at < times.Count && times[at] is BinTreeF32 f && f.Value < time) at++;
+        times.Insert(at, new BinTreeF32(0, time));
+        values.Insert(at, MakeValue(values[Math.Min(at, values.Count - 1)], components));
+        WriteCurve(times, values, t, v);
+    }
+
+    /// <summary>Remove a key. The last one cannot go: an empty dynamics block is not the same thing as no
+    /// curve, and what Riot's reader does with one is not established here.</summary>
+    public void RemoveCurveKey(int index)
+    {
+        var (t, v) = RequireCurve(index);
+        if (t.Elements.Count <= 1)
+            throw new InvalidOperationException("A curve must keep at least one key.");
+        var times = t.Elements.ToList();
+        var values = v.Elements.ToList();
+        times.RemoveAt(index);
+        values.RemoveAt(index);
+        WriteCurve(times, values, t, v);
+    }
+
+    private (BinTreeContainer Times, BinTreeContainer Values) RequireCurve(int index)
+    {
+        if (Times is not { } t || Values is not { } v || !HasCurve)
+            throw new InvalidOperationException("This row has no editable curve.");
+        if (index < 0 || index >= t.Elements.Count || index >= v.Elements.Count)
+            throw new ArgumentOutOfRangeException(nameof(index), "No such curve key.");
+        return (t, v);
+    }
+
+    private void WriteCurve(List<BinTreeProperty> times, List<BinTreeProperty> values,
+        BinTreeContainer oldTimes, BinTreeContainer oldValues)
+    {
+        var nt = new BinTreeContainer(TimesHash, oldTimes.ElementType, times);
+        var nv = new BinTreeContainer(ValuesHash, oldValues.ElementType, values);
+        _dynamics!.Properties[TimesHash] = nt;
+        _dynamics.Properties[ValuesHash] = nv;
+        _curveEdited = true;
+        var (ct, cc) = ReadCurve(nt, nv);
+        CurveTimes = ct;
+        CurveChannels = cc;
+    }
+
+    /// <summary>Build a values-container element matching the type already stored there. The type comes
+    /// from the existing element rather than from the container's declared ElementType, so a curve keeps
+    /// whatever Riot actually wrote in it.</summary>
+    private static BinTreeProperty MakeValue(BinTreeProperty like, IReadOnlyList<float> v)
+    {
+        float C(int i) => i < v.Count ? v[i] : 0f;
+        return like switch
+        {
+            BinTreeF32 => new BinTreeF32(0, C(0)),
+            BinTreeVector2 => new BinTreeVector2(0, new System.Numerics.Vector2(C(0), C(1))),
+            BinTreeVector3 => new BinTreeVector3(0, new System.Numerics.Vector3(C(0), C(1), C(2))),
+            BinTreeVector4 => new BinTreeVector4(0, new System.Numerics.Vector4(C(0), C(1), C(2), C(3))),
+            BinTreeColor => new BinTreeColor(0, new LeagueToolkit.Core.Primitives.Color(C(0), C(1), C(2), C(3))),
+            _ => throw new NotSupportedException($"Curve keys of type {like.Type} cannot be edited."),
+        };
+    }
+
+    /// <summary>times[]/values[] containers → parallel float arrays. Shared by the initial read and by
+    /// every refresh after an edit, so the display can never drift from the tree.</summary>
+    internal static (float[]? Times, float[][]? Channels) ReadCurve(BinTreeContainer tc, BinTreeContainer vc)
+    {
+        int n = Math.Min(tc.Elements.Count, vc.Elements.Count);
+        if (n == 0) return (null, null);
+
+        var times = new float[n];
+        for (int i = 0; i < n; i++) times[i] = tc.Elements[i] is BinTreeF32 f ? f.Value : 0f;
+
+        static float[] Comp(BinTreeProperty p) => p switch
+        {
+            BinTreeF32 f => new[] { f.Value },
+            BinTreeVector2 v => new[] { v.Value.X, v.Value.Y },
+            BinTreeVector3 v => new[] { v.Value.X, v.Value.Y, v.Value.Z },
+            BinTreeVector4 v => new[] { v.Value.X, v.Value.Y, v.Value.Z, v.Value.W },
+            BinTreeColor c => new[] { c.Value.R, c.Value.G, c.Value.B, c.Value.A },
+            _ => new[] { 0f },
+        };
+        int comps = Comp(vc.Elements[0]).Length;
+        var channels = new float[comps][];
+        for (int c = 0; c < comps; c++) channels[c] = new float[n];
+        for (int i = 0; i < n; i++)
+        {
+            var v = Comp(vc.Elements[i]);
+            for (int c = 0; c < comps; c++) channels[c][i] = c < v.Length ? v[c] : 0f;
+        }
+        return (times, channels);
+    }
 
     /// <summary>Apply text to the live property (throws on invalid input — caller keeps the old value).</summary>
     public void Apply(string text)
