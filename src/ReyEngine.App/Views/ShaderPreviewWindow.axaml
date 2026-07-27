@@ -90,6 +90,8 @@
             <CheckBox Content="Animate TIME" IsChecked="{Binding AnimateTime}" FontSize="11" Margin="0,0,14,0" />
             <CheckBox Content="Transpose matrices" IsChecked="{Binding TransposeMatrices}" FontSize="11" Margin="0,0,14,0"
                       ToolTip.Tip="HLSL packs cbuffer matrices column-major, so a row-major matrix is conventionally transposed before upload. Whether Riot's shaders do mul(v,M) or mul(M,v) is not recorded in the bytecode — if the mesh is inside-out, squashed or missing, flip this first." />
+            <CheckBox Content="Map sun" IsChecked="{Binding UseMapSun}" FontSize="11" Margin="0,0,14,0"
+                      ToolTip.Tip="Light the map with its OWN sun block (MapSunProperties in the materials.bin) instead of the toolbar sliders — sun colour, sun direction and lightMapColorScale. Map12 records a lightmap scale of 2, Map11 records 0.6, so this is per map and cannot be hardcoded. Untick to drive the sun from the sliders." />
             <CheckBox Content="Mirror X" IsChecked="{Binding MirrorX}" FontSize="11" Margin="0,0,14,0"
                       ToolTip.Tip="Mirror world X, which is what the map viewport does — League authors its data in the opposite handedness, so without this a map is laid out mirrored against every other view in the editor. Backface culling follows the flip automatically." />
             <CheckBox Content="Compare: ReyEngine's model" IsChecked="{Binding UseComparisonShader}" FontSize="11"

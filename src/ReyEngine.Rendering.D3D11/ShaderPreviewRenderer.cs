@@ -47,6 +47,12 @@ public sealed class PreviewSettings
     /// <summary>Draw with ReyEngine's own shading model instead of Riot's pixel shader, for the A/B.</summary>
     public bool UseComparisonShader;
 
+    /// <summary>M228: the map's own sun and lightmap values, when a map scene supplied them. Null falls
+    /// back to the UI sliders and a neutral scale.</summary>
+    public Vector4? MapSunColor;
+    public Vector3? MapSunDirection;
+    public float? MapLightMapScale;
+
     /// <summary>M223: mirror world X, which is what the rest of the editor's viewport does. League's data is
     /// authored in the opposite handedness to the renderer, so without this a map is laid out mirrored
     /// against every other view in the app.</summary>
@@ -871,8 +877,26 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     "MPROJ" => Mat(proj, s),
                     "VCAMERA" or "CAMERA_POSITION" => new[] { cam.X, cam.Y, cam.Z, 1f },
                     "TIME" => new[] { s.TimeSeconds, s.TimeSeconds * 0.5f, MathF.Sin(s.TimeSeconds), 1f },
-                    "SUN_LIGHT_DIRECTION" => new[] { s.SunDirection.X, s.SunDirection.Y, s.SunDirection.Z, 0f },
-                    "SUN_LIGHT_COLOR" => new[] { s.SunColor.X, s.SunColor.Y, s.SunColor.Z, s.SunColor.W },
+                    // M228: this points TOWARD the sun, and getting it backwards makes flat ground black.
+                    //
+                    // From staticmesh/defaultenv_flat ps blob 59:
+                    //     dp3 r0.x, normal, cb1[7].yzw      // N . SUN_LIGHT_DIRECTION
+                    //     max r0.x, r0.x, l(0.000000)
+                    //     mad r0.xyz, r0.xxxx, occl*SUN_COLOR, baked*SCALE
+                    //
+                    // So a direction pointing DOWN - which is what the UI slider naturally produces, and what
+                    // the comparison shader wants - gives max(negative, 0) = 0 on every up-facing surface.
+                    // The whole sun term vanishes and the only light left is the baked one, whose atlases
+                    // measure a mean of 6.5-50 out of 255 on Map12. That reads as black ground under lit
+                    // walls, which is exactly what was reported. MapSunProperties.SunDirection defaults to
+                    // (0,1,0) - up - which independently says the stored convention is toward-the-sun.
+                    "SUN_LIGHT_DIRECTION" => s.MapSunDirection is { } msd
+                        ? new[] { msd.X, msd.Y, msd.Z, 0f }
+                        : new[] { -s.SunDirection.X, -s.SunDirection.Y, -s.SunDirection.Z, 0f },
+
+                    "SUN_LIGHT_COLOR" => s.MapSunColor is { } msc
+                        ? new[] { msc.X, msc.Y, msc.Z, msc.W }
+                        : new[] { s.SunColor.X, s.SunColor.Y, s.SunColor.Z, s.SunColor.W },
                     // M223: the fog-of-war neutral is NOT all zeros, which is what these were.
                     //
                     // From the vertex shader (staticmesh/defaultenv_flat):
@@ -933,7 +957,13 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // so this is unverified and stays neutral rather than being set to the 2 that map data
                     // records for lightMapColorScale. Doubling on an untested guess is the exact mistake
                     // above.
-                    "LIGHT_MAP_COLOR_SCALE_AND_INTENSITY" => new[] { 1f, 1f, 1f, 1f },
+                    // M228: a SCALAR at PerFramePixelCB+128 (ENV_FOG_COLOR sits at +132, so the float4
+                    // stand-in was only ever safe because FillConstantBuffer clamps to v.Size/4 = 1 float).
+                    // The shader does baked.rgb * this. Map data records 2 for Map12 and 0.6 for Map11, so
+                    // it is per map and must come FROM the map rather than be hardcoded either way.
+                    "LIGHT_MAP_COLOR_SCALE_AND_INTENSITY" => s.MapLightMapScale is { } lms
+                        ? new[] { lms, lms, lms, lms }
+                        : new[] { 1f, 1f, 1f, 1f },
 
                     // M224: the lightmap UV transform, and the single biggest cause of black map ground -
                     // 899 materials on Map12 read it and nothing supplied it, so it uploaded as zero and

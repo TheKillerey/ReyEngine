@@ -168,9 +168,16 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     private readonly List<SceneAssetRow> _allScenes = new();
     private SkinMeshProperties? _skinMesh;
 
+    /// <summary>M228: the loaded map's sun/lightmap block, when its bin carries one.</summary>
+    private MapSunProperties? _mapSun;
+
+    /// <summary>Use the map's own sun values instead of the toolbar sliders. On when a map supplies them.</summary>
+    [ObservableProperty] private bool _useMapSun = true;
+
     /// <summary>M224: the per-material lightmap texture a mapgeo group names, so BAKED_LIGHT__TX can be
     /// bound from the map itself rather than left on the white stand-in.</summary>
     private int _slicesMerged;
+    private int _permutationsChanged;
     private int _lightmapsBound;
     private readonly HashSet<string> _lightmapPages = new(StringComparer.Ordinal);
 
@@ -380,8 +387,12 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         }
         AppendLog();
 
-        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
-        _timer.Tick += (_, _) => Tick();
+        // M227: this used to be the whole render loop at 33 ms, which is a 30 fps ceiling before the
+        // dispatcher takes its cut - measured 20 fps in the app with a 5 ms frame. The window now drives
+        // Tick() from the compositor's animation callback instead, so the rate follows the display. This
+        // timer stays only as a fallback for the case where no TopLevel is attached.
+        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(8) };
+        _timer.Tick += (_, _) => { if (!_drivenExternally) Tick(); };
         _timer.Start();
     }
 
@@ -447,6 +458,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             // selected bin found nothing for Kayn but a "(skin default texture)" placeholder with no
             // renderShader, so every submesh fell through to it and nothing drew.
             _skinMesh = null;
+            _mapSun = null;
             var seen = new HashSet<ulong> { value.Hash };
             var queue = new Queue<(string Path, ulong Hash)>();
             queue.Enqueue((value.Path, value.Hash));
@@ -466,6 +478,19 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 {
                     var doc = MaterialDocument.Parse(bytes, _resolveBinName);
                     _skinMesh ??= doc.SkinMesh;
+
+                    // M228: the map's own sun block. MapSunProperties lives in the materials.bin
+                    // MapContainer, and the preview had been lighting every map off UI sliders alone.
+                    if (_mapSun is null)
+                    {
+                        try { _mapSun = MapSunProperties.Extract(bytes); } catch { }
+                        if (_mapSun is not null)
+                            MaterialReport += $"\n\nMAP SUN (from {System.IO.Path.GetFileName(path)})\n"
+                                + $"   sunColor          {_mapSun.SunColor}\n"
+                                + $"   sunDirection      {_mapSun.SunDirection}\n"
+                                + $"   lightMapColorScale {_mapSun.LightMapColorScale}\n"
+                                + $"   skyLightColor     {_mapSun.SkyLightColor} (scale {_mapSun.SkyLightScale})\n";
+                    }
                     foreach (var m in doc.Materials)
                     {
                         var row = new MaterialRow { Binding = m, SourceBin = path };
@@ -706,6 +731,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         sb.AppendLine();
 
         _slicesMerged = 0;
+        _permutationsChanged = 0;
         _lightmapsBound = 0;
         _lightmapPages.Clear();
         _axisCounts.Clear();
@@ -778,6 +804,12 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         sb.AppendLine();
         sb.AppendLine($"lightmaps: {_lightmapsBound} slice(s) bound across {_lightmapPages.Count} distinct atlas page(s)");
         sb.AppendLine($"slices merged away: {_slicesMerged}   ·   distinct textures resident: {_renderer.CachedTextureCount}");
+        int overrides = SceneDefines.Count(d => d.Mode != 0);
+        if (overrides > 0)
+            sb.AppendLine($"define overrides active: {overrides}   ·   materials whose permutation actually changed: {_permutationsChanged}"
+                          + (_permutationsChanged == 0
+                              ? "   <- NONE. The forced set resolves to the same blob, so the picture cannot change."
+                              : ""));
         sb.AppendLine();
         sb.AppendLine($"{ok} material(s) live, {failed} unresolved, {texBound} texture(s) bound"
                       + (texMissing > 0 ? $", {texMissing} missing" : ""));
@@ -985,6 +1017,21 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
         var vsPerm = ShaderCacheReader.ResolvePermutation(vsToc, macros, b.Switches, feat, swDef, out _, forcedAbsent: absent);
         var psPerm = ShaderCacheReader.ResolvePermutation(psToc, macros, b.Switches, feat, swDef, out var pw, forcedAbsent: absent);
+
+        // M227: the Debug tab appeared to do nothing on maps. Resolve the material a second time WITHOUT the
+        // overrides and compare, so the report states plainly whether a forced define actually moved this
+        // material to a different blob. "No visible change" and "the override never reached" look identical
+        // on screen and are completely different problems.
+        if (psPerm is not null && (ForcedMacros().Count > 0 || absent.Count > 0))
+        {
+            var plain = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out _);
+            if (plain is null || plain.BlobIndex != psPerm.BlobIndex)
+            {
+                _permutationsChanged++;
+                sb.AppendLine($"      define override: ps blob {(plain is null ? "(none)" : plain.BlobIndex.ToString())}"
+                              + $" -> {psPerm.BlobIndex}");
+            }
+        }
         if (vsPerm is null || psPerm is null)
         {
             why = "no cooked permutation for the forced define set";
@@ -1264,6 +1311,16 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
     // ---------------------------------------------------------------- frame loop
 
+    private bool _drivenExternally;
+
+    /// <summary>M227: called from the window's compositor animation callback. Switches the fallback timer
+    /// off the first time it fires, so the two never both drive a frame.</summary>
+    public void ExternalTick()
+    {
+        _drivenExternally = true;
+        Tick();
+    }
+
     private void Tick()
     {
         if (!IsLoaded || !_renderer.IsReady) return;
@@ -1272,6 +1329,12 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         float dt = (float)Math.Clamp((now0 - _lastTick).TotalSeconds, 0.0, 0.25);
         _lastTick = now0;
         ApplyCameraInput(dt);
+
+        // M228: the map's measured sun beats the sliders, unless the user turns it off
+        bool useMap = UseMapSun && _mapSun is not null;
+        _settings.MapSunColor = useMap ? _mapSun!.SunColor : null;
+        _settings.MapSunDirection = useMap ? _mapSun!.SunDirection : null;
+        _settings.MapLightMapScale = useMap ? _mapSun!.LightMapColorScale : null;
 
         _settings.MirrorX = MirrorX;
         _settings.SuppliedView = Camera.View;

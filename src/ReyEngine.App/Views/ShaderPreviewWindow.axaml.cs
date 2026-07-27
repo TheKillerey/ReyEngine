@@ -20,7 +20,7 @@ public partial class ShaderPreviewWindow : Window
         if (this.FindControl<ListBox>("TextureList") is { } list)
             list.DoubleTapped += OnTextureDoubleTapped;
 
-        Closed += (_, _) => (DataContext as ShaderPreviewViewModel)?.Dispose();
+        Closed += (_, _) => { _closed = true; (DataContext as ShaderPreviewViewModel)?.Dispose(); };
 
         // M215: the same camera bindings as the map viewport - WASD/QE fly, drag to look, middle-drag to
         // pan, alt-drag to orbit, wheel to zoom, LMB+wheel for fly speed, F to reframe.
@@ -45,10 +45,27 @@ public partial class ShaderPreviewWindow : Window
         {
             if (this.FindControl<Panel>("PreviewSurface") is { } sfc)
                 Vm?.SetSurfaceSize(sfc.Bounds.Width, sfc.Bounds.Height, RenderScaling);
+            RequestNextFrame();
         };
     }
 
     private ShaderPreviewViewModel? Vm => DataContext as ShaderPreviewViewModel;
+
+    private bool _closed;
+
+    /// <summary>M227: drive the preview from the compositor rather than a 33 ms DispatcherTimer, which
+    /// capped the window at 30 fps nominal and measured 20 in practice. RequestAnimationFrame fires per
+    /// compositor frame, so the rate follows the display and the frame cost, not an arbitrary interval.</summary>
+    private void RequestNextFrame()
+    {
+        if (_closed) return;
+        TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_ =>
+        {
+            if (_closed) return;
+            Vm?.ExternalTick();
+            RequestNextFrame();
+        });
+    }
 
     private bool _lmb, _rmb, _mmb;
     private Avalonia.Point _last;
