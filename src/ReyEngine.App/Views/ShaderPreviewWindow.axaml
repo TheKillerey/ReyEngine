@@ -90,8 +90,6 @@
             <CheckBox Content="Animate TIME" IsChecked="{Binding AnimateTime}" FontSize="11" Margin="0,0,14,0" />
             <CheckBox Content="Transpose matrices" IsChecked="{Binding TransposeMatrices}" FontSize="11" Margin="0,0,14,0"
                       ToolTip.Tip="HLSL packs cbuffer matrices column-major, so a row-major matrix is conventionally transposed before upload. Whether Riot's shaders do mul(v,M) or mul(M,v) is not recorded in the bytecode — if the mesh is inside-out, squashed or missing, flip this first." />
-            <CheckBox Content="Avoid colour remap" IsChecked="{Binding AvoidColorRemap}" FontSize="11" Margin="0,0,14,0"
-                      ToolTip.Tip="Use a cooked permutation without the engine colour-remap stage, IF one exists that still outputs colour. For skinnedmesh/diffuse_alpha none does — its only remap-free permutations are shadow-map passes — so this has no effect there. Map shaders never contain the stage at all." />
             <CheckBox Content="White remap ramp" IsChecked="{Binding RemapRampWhite}" FontSize="11" Margin="0,0,14,0"
                       ToolTip.Tip="League's character shaders REPLACE colour with a lookup into an engine-supplied ramp that is not a shipped asset — measured: a red ramp turns a blue texture red, so no stand-in can recover the diffuse hue. The default greyscale ramp keeps the texture's DETAIL in black and white; this switches to flat white instead. To see a texture in colour, use 'Compare: ReyEngine's model'." />
             <CheckBox Content="Compare: ReyEngine's model" IsChecked="{Binding UseComparisonShader}" FontSize="11"
