@@ -128,7 +128,14 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
             emitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def)) });
     }
 
-    [RelayCommand] private void Restart() => RebuildPlayback();
+    /// <summary>M185 (2.15): stop emitting and let the Linger curves play out. Riot's shutdown stage is
+    /// triggered by an external stop - a buff dropping, an ult ending - which a looping preview never
+    /// produces, so without this button the stage is unobservable. Restart clears it.</summary>
+    [ObservableProperty] private bool _stopped;
+
+    [RelayCommand] private void StopEmitting() => Stopped = true;
+
+    [RelayCommand] private void Restart() { Stopped = false; RebuildPlayback(); }
     [RelayCommand] private void TogglePause() => Paused = !Paused;
 
     [RelayCommand]

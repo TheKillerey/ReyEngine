@@ -500,7 +500,7 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | 2.12 | ~~**Reflection / fresnel**~~ **DONE (M181)** - rim and cubemap both | `VfxParticleRenderer.cs` mesh path | 59,149 (4.2%), of which ~87% are fresnel-only | Fully DECODED from `mesh_vs`/`mesh_ps` REFLECTIVE, and the field mapping is pinned by the maths rather than inferred - see 2.12b. Cubemap sampling still needs cubemap loading on the particle path |
 | 2.13 | **Bloom pass** | new post-process in `ViewportControl.cs` | 22% of emitters are "glow"-named | High effort, high perceptual payoff. Frame-level, not per-emitter |
 | 2.14 | **Duty-cycle and rate-by-velocity emission** (`period`, `timeActiveDuringPeriod`, `rateByVelocityFunction`, `ChanceToNotExist`, `HasVariableStartTime`) | `VfxParticleSimulator.cs:157-178` | ~30k combined | Low individually, visible on map beacons and dash trails |
-| 2.15 | **`Linger` shutdown stage** | `VfxParticleSimulator.cs` | 22,274 + 95,954 `emitterLinger` | Medium; effects currently cut off instead of fading |
+| 2.15 | ~~**`Linger` shutdown stage**~~ **DONE (M185)** | `VfxParticleSimulator.Stop`, ParticleEditor Stop button | 22,274 | Trigger measured to be an EXTERNAL stop, not lifetime expiry. The preview gained a Stop action so the stage is observable |
 | 2.16 | **Flex bound-object scaling — RETIRED (M179), not implemented** | — | 159,880 (11.4%) | Measured to be a **no-op at the reference size**, so today's behaviour is already the reference case. Implementing it against a guessed bound-object metric would move effects away from that, not toward it. See 2.16b |
 
 ### 2b. M175 findings worth recording
@@ -948,6 +948,33 @@ and a constant opaque colour, so nothing in the data can ever end it; its only f
 because Astral Flight is a gameplay-toggled buff. **The question:** should the Particle Editor preview
 gain a Stop action (and should a looping preview auto-stop each cycle so the linger phase is visible)?
 Until a stop event exists the stage is unobservable in the editor, so everything else about it is moot.
+
+### 2.15b M185: the Linger stage ships
+
+The preview gained a **Stop** action, which is what the stage was waiting for. Riot's shutdown curves are
+triggered by an external stop - a buff dropping, an ult ending - and a looping preview never produces
+one, so the stage was unobservable and the data had nothing to hang off.
+
+**The trigger is measured.** The lifetime-expiry hypothesis is refuted: across 1,490,205 emitters the
+Linger group shows no enrichment for a finite `lifetime` (80.1% vs 82.0% corpus-wide), and 4,665 of
+23,491 Linger emitters carry no `lifetime` at all. Proof by construction: `AurelionSol_Skin*_W_Buff`
+emitter `Body` authors `particleLifetime = -1`, no `lifetime`, `isSingleParticle` and a constant opaque
+colour - nothing in the data can ever end it, and its only fade is `SeparateLingerColor` alpha 1 -> 0,
+because Astral Flight is a gameplay-toggled buff.
+
+**`particleLinger` is the window, not a tail.** The "seconds added to a particle's life" reading is
+arithmetically impossible for most of the corpus: median `particleLinger`/`particleLifetime` is 1.5, and
+among single-particle emitters carrying both, `particleLinger` exceeds `particleLifetime` 62.3% of the
+time and exceeds `lifetime + particleLifetime` 42.0% of the time.
+
+**Inferred and marked:** the `Use*` flags are not read - not one ever ships `false` anywhere in the corpus
+so their polarity is unreadable, and 6,851 `SeparateLingerColor` curves ship with no flag beside them
+(if absence meant off, those authored fades would be dead data). A curve's presence is the enable. For the
+46.4% of Linger structs with no duration, the particle's remaining natural life is the window.
+`particleLingerType` is parsed and unused - it is largely independent of the Linger struct.
+
+**Not done:** auto-stopping a looping preview each cycle. That half of the question was not answered, so
+Stop is explicit only.
 
 ### 3. Missing editor controls
 

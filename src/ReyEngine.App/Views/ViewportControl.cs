@@ -96,6 +96,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, double>(nameof(ParticleSpeed), 1.0);   // M46: sim speed multiplier
     public static readonly StyledProperty<bool> ParticlePausedProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ParticlePaused));         // M46: freeze the sim
+    /// <summary>M185 (2.15): stop emitting and run the linger teardown. Distinct from Pause, which
+    /// freezes time - a stopped system keeps advancing so its shutdown curves can actually play.</summary>
+    public static readonly StyledProperty<bool> ParticleStoppedProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(ParticleStopped));
     public static readonly StyledProperty<Vector3?> FocusPointProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(FocusPoint));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
@@ -301,6 +305,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool PlayPropAnimations { get => GetValue(PlayPropAnimationsProperty); set => SetValue(PlayPropAnimationsProperty, value); }
     public double ParticleSpeed { get => GetValue(ParticleSpeedProperty); set => SetValue(ParticleSpeedProperty, value); }
     public bool ParticlePaused { get => GetValue(ParticlePausedProperty); set => SetValue(ParticlePausedProperty, value); }
+    public bool ParticleStopped { get => GetValue(ParticleStoppedProperty); set => SetValue(ParticleStoppedProperty, value); }
     public bool ShowBones { get => GetValue(ShowBonesProperty); set => SetValue(ShowBonesProperty, value); }
     public bool ShowBounds { get => GetValue(ShowBoundsProperty); set => SetValue(ShowBoundsProperty, value); }
 
@@ -996,6 +1001,13 @@ public sealed class ViewportControl : OpenGlControlBase
                     sim.SetWorldTransform(Matrix4x4.CreateTranslation(pos));
                 }
 
+            // M185 (2.15): the Stop action. Applied here rather than at build time so the linger phase
+            // plays out live, and idempotently so holding the toggle does not re-trigger it.
+            if (ParticleStopped)
+            {
+                foreach (var psim in _particleSims) psim.Stop();
+                foreach (var (csim, _, _) in _childSims) csim.Stop();
+            }
             foreach (var psim in _particleSims)
             {
                 // M183 (2.5): beams terminate at the M114 practice dummy. Pushed every frame rather than

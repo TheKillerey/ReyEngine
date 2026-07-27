@@ -191,6 +191,15 @@ public sealed record VfxEmitterDefinition(
     /// authored total. Emitters carrying them are drawn with the stencil untouched, exactly as before,
     /// rather than being given a guessed test function.</summary>
     int StencilMode = 0,
+    /// <summary>M185 (2.15) Linger - the shutdown curve set, applied once the system is STOPPED.
+    /// 22,274 emitters.</summary>
+    VfxLinger? Linger = null,
+    /// <summary>M185 (2.15) particleLingerType, U8 {1: 13,763, 2: 1,669}; -1 = absent. PARSED, NOT ACTED
+    /// ON. Measured, it is largely independent of the Linger struct - 19,406 Linger structs carry no
+    /// type at all, and 11,347 type values sit on emitters with no Linger struct - so nothing in the
+    /// corpus says it selects a linger behaviour.</summary>
+    int ParticleLingerType = -1,
+
     /// <summary>M184 (2.11) disableBackfaceCull. Bool, and TRUE in all 358,113 occurrences - no `false`
     /// exists anywhere in the corpus.
     ///
@@ -880,4 +889,35 @@ public sealed record VfxBeamDefinition(
         if (t > 1e-3f) return beamLength / t;
         return 1f;
     }
+}
+
+/// <summary>M185 (2.15): Riot's <c>VfxLingerDefinitionData</c> (class 0x9b19f2b5) - a second, complete
+/// curve set that replaces the ordinary ones while a stopped system tears down. 22,274 emitters.
+///
+/// THE TRIGGER IS AN EXTERNAL STOP, and that is measured rather than assumed. The obvious hypothesis -
+/// that lingering happens when an emitter's own lifetime expires - is REFUTED: across 1,490,205 emitters
+/// the Linger group shows no enrichment at all for a finite lifetime (80.1% vs 82.0% for the corpus), and
+/// 4,665 of 23,491 Linger emitters carry no lifetime field whatsoever, so they never end on their own.
+///
+/// Proof by construction: AurelionSol_Skin*_W_Buff emitter "Body" authors particleLifetime = -1, no
+/// lifetime, isSingleParticle, and a constant opaque colour with no dynamics. Nothing in the data can
+/// ever end it. Its only fade is SeparateLingerColor going alpha 1 -> 0 over one second - because Astral
+/// Flight is a gameplay-toggled buff, and the mesh overlay has to persist until the buff drops and then
+/// fade. That is a stop event arriving from outside the particle system entirely.
+///
+/// The curves are normalised over the linger window exactly like the ordinary ones: across 12,457
+/// SeparateLingerColor curves the maximum key time is 1.0 from p10 to p90, identical to the main colour
+/// curve. Measured shape: start alpha median 1.0, end alpha <= 0.001 in 87.2% - it is a fade-out. The
+/// 3,865 LingerScale curves start at median 1.0 and end at median 0.01 - a shrink.</summary>
+public sealed record VfxLinger(
+    VfxCurve4? SeparateColor,
+    VfxCurve3? Scale,
+    VfxCurve3? Rotation,
+    VfxCurve3? KeyedVelocity,
+    VfxCurve3? KeyedDrag,
+    VfxCurve3? KeyedAcceleration)
+{
+    /// <summary>Is there anything to do during the linger window?</summary>
+    public bool HasAny => SeparateColor is not null || Scale is not null || Rotation is not null
+                          || KeyedVelocity is not null || KeyedDrag is not null || KeyedAcceleration is not null;
 }

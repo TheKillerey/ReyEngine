@@ -30,6 +30,8 @@
                     ToolTip.Tip="Problems were repaired while reading this bin — affected systems are marked red. Click for details and a one-click fix." />
             <Button Classes="tool" Content="⟲ Restart" Command="{Binding RestartCommand}" ToolTip.Tip="Restart the preview simulation" />
             <ToggleButton Classes="vp" Content="⏯ Pause" IsChecked="{Binding Paused}" />
+            <Button Classes="tool" Content="⏹ Stop" Command="{Binding StopEmittingCommand}"
+                    ToolTip.Tip="Stop emitting and play the Linger shutdown curves (Restart to run again)" />
             <TextBlock Text="Speed" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
             <Slider Minimum="0.1" Maximum="3" Value="{Binding Speed}" Width="110" VerticalAlignment="Center" />
             <TextBlock Text="{Binding Speed, StringFormat={}{0:0.0}x}" FontSize="10" Width="30" VerticalAlignment="Center" />
@@ -149,7 +151,8 @@
               <views:ViewportControl x:Name="PreviewViewport"
                                      ParticlePlayback="{Binding Playback}"
                                      ParticleSpeed="{Binding Speed}"
-                                     ParticlePaused="{Binding Paused}" />
+                                     ParticlePaused="{Binding Paused}"
+                                     ParticleStopped="{Binding Stopped}" />
               <Border x:Name="PreviewInput" Background="Transparent" />
               <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
                          Margin="6,4" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />

@@ -42,6 +42,12 @@ public sealed class VfxParticleSimulator
         internal bool BurstDone;                // for isSingleParticle
         internal readonly List<Particle> Particles = new();
 
+        /// <summary>M185 (2.15): mirrors the simulator's stopped flag so BuildInstances, which is static
+        /// and only receives an EmitterState, can tell whether to use the linger curves.</summary>
+        internal bool Stopped;
+
+        internal bool IsLingering(in Particle p) => Stopped && p.LingerWindow > 0f;
+
         /// <summary>How many particles this emitter currently has alive.</summary>
         public int ParticleCount => Particles.Count;
 
@@ -102,6 +108,10 @@ public sealed class VfxParticleSimulator
         /// while a growable collection per particle would not.</summary>
         public Vector3[]? History;
         public int HistoryCount;
+
+        /// <summary>M185 (2.15): the age at which this particle entered the linger phase, and how long
+        /// that phase lasts. LingerWindow &lt;= 0 means the particle is not lingering.</summary>
+        public float LingerStart, LingerWindow;
     }
 
     /// <summary>M180 (2.7): one request to instantiate a child system, at a world position, from entry
@@ -184,6 +194,60 @@ public sealed class VfxParticleSimulator
     /// An editor substitute so the emitter is visible at all - NOT a Riot value.</summary>
     private const float FallbackBeamLength = 500f;
 
+    /// <summary>M185 (2.15): set once <see cref="Stop"/> is called. The linger stage is triggered by an
+    /// EXTERNAL stop, not by an emitter running out its own lifetime - see VfxLinger for the measurement
+    /// that refutes the lifetime reading.</summary>
+    private bool _stopped;
+
+    /// <summary>M185 (2.15): stop emitting and begin the linger teardown.
+    ///
+    /// This is the event Riot's linger data has always been waiting for and that this simulator never
+    /// had: M174 correctly observed that emitterLinger had nothing to extend, precisely because nothing
+    /// ever hard-stopped an emitter. Every live particle now gets a death deadline, and while it counts
+    /// down the emitter's Linger curve set drives it instead of the ordinary ones.
+    ///
+    /// Idempotent: stopping an already-stopped system does nothing, so a UI button can be mashed.</summary>
+    public void Stop()
+    {
+        if (_stopped) return;
+        _stopped = true;
+        foreach (var s in _emitters)
+        {
+            s.Stopped = true;
+            var d = s.Def;
+            for (int i = 0; i < s.Particles.Count; i++)
+            {
+                var p = s.Particles[i];
+                p.LingerStart = p.Age;
+                p.LingerWindow = LingerWindowFor(d, p);
+                s.Particles[i] = p;
+            }
+        }
+    }
+
+    /// <summary>Is this system stopped and running out its linger phase?</summary>
+    public bool IsStopped => _stopped;
+
+    /// <summary>M185: how long a particle's linger phase lasts once the system stops.
+    ///
+    /// particleLinger is the authored window. It is NOT "seconds added to a particle's own lifetime" -
+    /// that reading is arithmetically impossible for most of the corpus: the median
+    /// particleLinger/particleLifetime ratio is 1.5, and among single-particle emitters carrying both,
+    /// particleLinger exceeds particleLifetime 62.3% of the time and exceeds lifetime+particleLifetime
+    /// 42.0% of the time. A per-particle tail would make the tail the dominant part of most effects.
+    ///
+    /// INFERRED: what to do for the 46.4% of Linger structs that ship no duration at all. The particle's
+    /// remaining natural life is used, which is a no-op for immortal particles - and immortal particles
+    /// are exactly the cohort whose authors DO always ship particleLinger, which is why the gap is
+    /// survivable. A particle with neither a window nor a finite life dies at the stop instant, matching
+    /// the 82.5% of the immortal cohort that carries no linger mechanism and is meant to pop.</summary>
+    private static float LingerWindowFor(VfxEmitterDefinition d, in Particle p)
+    {
+        if (d.ParticleLinger > 0f) return d.ParticleLinger;
+        if (float.IsPositiveInfinity(p.Life)) return 0f;
+        return MathF.Max(0f, p.Life - p.Age);
+    }
+
     public VfxParticleSimulator(int seed = 1234) => _rng = new Random(seed);
 
     /// <summary>Configure from a system placed at <paramref name="worldPos"/>. Only visual emitters are simulated.</summary>
@@ -244,8 +308,9 @@ public sealed class VfxParticleSimulator
 
     public void Reset()
     {
-        foreach (var s in _emitters) { s.Particles.Clear(); s.SpawnAccum = 0; s.Age = 0; s.BurstDone = false; s.InstanceCount = 0; }
+        foreach (var s in _emitters) { s.Particles.Clear(); s.SpawnAccum = 0; s.Age = 0; s.BurstDone = false; s.InstanceCount = 0; s.Stopped = false; }
         LiveParticleCount = 0;
+        _stopped = false;   // M185: replaying a stopped system starts it running again
     }
 
     /// <summary>Advance the whole system by <paramref name="dt"/> seconds and rebuild render instances.</summary>
@@ -287,7 +352,9 @@ public sealed class VfxParticleSimulator
         // particles keep integrating until they age out regardless - so there is nothing for it to
         // extend. It becomes meaningful alongside the Linger shutdown stage (report 2.15), which needs a
         // second colour/scale/velocity curve set this model does not carry.
-        bool emitting = s.Age >= s.StartOffset + d.TimeBeforeFirstEmission
+        // M185 (2.15): a stopped system emits nothing more; its live particles run out their linger.
+        bool emitting = !_stopped
+                        && s.Age >= s.StartOffset + d.TimeBeforeFirstEmission
                         && (d.EmitterLifetime is not { } life || s.Age <= s.StartOffset + d.TimeBeforeFirstEmission + life);
 
         // M174 (2.14): duty cycle. The emitter is active for TimeActiveDuringPeriod out of every Period
@@ -333,7 +400,12 @@ public sealed class VfxParticleSimulator
             var p = s.Particles[i];
             p.Age += dt;
             // particleLinger controls shutdown retention in Riot; it does not extend every live particle.
-            if (p.Age >= p.Life)
+            // M185 (2.15): once stopped, a particle dies at the end of its linger window rather than at
+            // its natural lifetime - which for an immortal particle is the only death it will ever get.
+            bool lingering = _stopped && p.LingerWindow > 0f;
+            float lingerT = lingering ? Math.Clamp((p.Age - p.LingerStart) / p.LingerWindow, 0f, 1f) : 0f;
+            bool lingerDone = _stopped && (p.LingerWindow <= 0f || lingerT >= 1f);
+            if (lingerDone || p.Age >= p.Life)
             {
                 if (d.Children is { EmitOnDeath: true } deathSet)
                     QueueChildSpawns(s, deathSet, p.Pos, onDeath: true);
@@ -341,15 +413,22 @@ public sealed class VfxParticleSimulator
                 continue;
             }
             float particleT = float.IsPositiveInfinity(p.Life) ? 0f : Math.Clamp(p.Age / p.Life, 0f, 1f);
-            var worldAccel = d.Acceleration?.Sample(particleT) ?? Vector3.Zero;
+            // The linger curves are normalised over the linger WINDOW, not over particle life - measured:
+            // their maximum key time is 1.0 from p10 to p90, identical to the ordinary curves.
+            var linger = lingering ? d.Linger : null;
+            var worldAccel = linger?.KeyedAcceleration?.Sample(lingerT)
+                             ?? d.Acceleration?.Sample(particleT) ?? Vector3.Zero;
             worldAccel = Vector3.TransformNormal(worldAccel, _worldTransform);
             p.Vel += (p.BirthAccel + worldAccel) * dt;
             // M174 (1.9): `velocity` is a separate over-life curve from birthVelocity - 23,112 emitters
             // author it and it was being ignored entirely. Added rather than replacing, so an emitter
             // carrying both keeps its launch speed and gains the authored drift.
-            if (d.VelocityOverLife is { } velCurve)
+            if (linger?.KeyedVelocity is { } lingerVel)
+                p.Vel += Vector3.TransformNormal(lingerVel.Sample(lingerT), _worldTransform) * dt;
+            else if (d.VelocityOverLife is { } velCurve)
                 p.Vel += Vector3.TransformNormal(velCurve.Sample(particleT), _worldTransform) * dt;
-            var dragOverLife = d.DragOverLife?.Sample(particleT) ?? Vector3.Zero;
+            var dragOverLife = linger?.KeyedDrag?.Sample(lingerT)
+                               ?? d.DragOverLife?.Sample(particleT) ?? Vector3.Zero;
             var drag = Vector3.Max(Vector3.Zero, p.BirthDrag + dragOverLife);
             p.Vel *= new Vector3(MathF.Exp(-drag.X * dt), MathF.Exp(-drag.Y * dt), MathF.Exp(-drag.Z * dt));
             // M176 (2.4): force fields, before the position step so a field acts on this frame's movement
@@ -409,7 +488,9 @@ public sealed class VfxParticleSimulator
             // absolute angle, so it is integrated here alongside RotVel rather than sampled into Rot.
             // 52,647 emitters. Only Z drives the billboard spin; X/Y matter for mesh primitives, which
             // read BirthRotation, so they are left alone until that path grows over-life support.
-            if (d.RotationOverLife is { } rotCurve)
+            if (linger?.Rotation is { } lingerRot)
+                p.Rot += lingerRot.Sample(lingerT).Z * (MathF.PI / 180f) * dt;
+            else if (d.RotationOverLife is { } rotCurve)
                 p.Rot += rotCurve.Sample(particleT).Z * (MathF.PI / 180f) * dt;
             s.Particles[i] = p;
         }
@@ -637,8 +718,15 @@ public sealed class VfxParticleSimulator
         {
             var p = s.Particles[i];
             float t = float.IsPositiveInfinity(p.Life) ? 0f : Math.Clamp(p.Age / p.Life, 0f, 1f);
-            var scaleMul = d.ScaleOverLife?.Sample(t) ?? Vector3.One;
-            var colMul = d.ColorOverLife?.Sample(t) ?? Vector4.One;
+            // M185 (2.15): during the linger window the shutdown curves REPLACE the over-life ones.
+            // Measured shape: SeparateLingerColor starts at alpha median 1.0 and ends <= 0.001 in 87.2%
+            // (a fade-out), LingerScale starts at median 1.0 and ends at median 0.01 (a shrink).
+            bool lingering = s.IsLingering(p);
+            float lt = lingering ? Math.Clamp((p.Age - p.LingerStart) / p.LingerWindow, 0f, 1f) : 0f;
+            var lg = lingering ? d.Linger : null;
+
+            var scaleMul = lg?.Scale?.Sample(lt) ?? d.ScaleOverLife?.Sample(t) ?? Vector3.One;
+            var colMul = lg?.SeparateColor?.Sample(lt) ?? d.ColorOverLife?.Sample(t) ?? Vector4.One;
             var col = p.BirthColor * colMul;
 
             // M68: modulate by the particleColorTexture gradient. U is the colour-over-life axis (age); V is a

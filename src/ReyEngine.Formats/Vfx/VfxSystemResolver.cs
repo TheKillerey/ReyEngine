@@ -189,6 +189,15 @@ public static class VfxSystemResolver
     // M184 (2.11 / 2.10)
     private static readonly uint F_disableBackfaceCull = HashAlgorithms.Fnv1a("disableBackfaceCull");
     private static readonly uint F_paletteAddressMode  = HashAlgorithms.Fnv1a("PaletteTextureAddressMode");
+    // M185 (2.15) the Linger curve set. Class VfxLingerDefinitionData = 0x9b19f2b5.
+    private static readonly uint F_linger              = HashAlgorithms.Fnv1a("Linger");
+    private static readonly uint F_lingerColor         = HashAlgorithms.Fnv1a("SeparateLingerColor");
+    private static readonly uint F_lingerScale         = HashAlgorithms.Fnv1a("LingerScale");
+    private static readonly uint F_lingerRotation      = HashAlgorithms.Fnv1a("LingerRotation");
+    private static readonly uint F_lingerVelocity      = HashAlgorithms.Fnv1a("KeyedLingerVelocity");
+    private static readonly uint F_lingerDrag          = HashAlgorithms.Fnv1a("KeyedLingerDrag");
+    private static readonly uint F_lingerAcceleration  = HashAlgorithms.Fnv1a("KeyedLingerAcceleration");
+    private static readonly uint F_particleLingerType  = HashAlgorithms.Fnv1a("particleLingerType");
     private static readonly uint F_distortionDefinition = HashAlgorithms.Fnv1a("distortionDefinition");
     private static readonly uint F_distortion = HashAlgorithms.Fnv1a("distortion");
     private static readonly uint F_distortionMode = HashAlgorithms.Fnv1a("distortionMode");
@@ -439,7 +448,9 @@ public static class VfxSystemResolver
             StencilMode: GetU8(p, F_stencilMode) ?? 0,
             StencilRef: GetU8(p, F_stencilRef) ?? -1,
             DisableBackfaceCull: GetBool(p, F_disableBackfaceCull),
-            PaletteAddressMode: ReadPaletteAddressMode(p));
+            PaletteAddressMode: ReadPaletteAddressMode(p),
+            Linger: ReadLinger(p),
+            ParticleLingerType: GetU8(p, F_particleLingerType) ?? -1);
     }
 
     /// <summary>M177 (2.5): the trail ribbon's parameters. See VfxTrailDefinition for what the payload
@@ -538,6 +549,30 @@ public static class VfxSystemResolver
     /// the emitter, so it needs its own reach-in rather than a plain emitter-level read.</summary>
     private static int ReadPaletteAddressMode(IReadOnlyDictionary<uint, BinTreeProperty> p)
         => Get(p, F_paletteDef) is BinTreeStruct pd ? GetU8(pd.Properties, F_paletteAddressMode) ?? -1 : -1;
+
+    /// <summary>M185 (2.15): the Linger curve set. See VfxLinger for why the trigger is an external stop.
+    ///
+    /// THE Use* FLAGS ARE DELIBERATELY NOT READ, and that is the one inferred call here. Measured across
+    /// the whole corpus, not one of them ever ships `false` - UseSeparateLingerColor 7,044 true / 0 false,
+    /// UseLingerScale 6,513/0, UseKeyedLingerVelocity 1,462/0, UseLingerRotation 1,279/0,
+    /// UseKeyedLingerDrag 451/0, UseKeyedLingerAcceleration 222/0 - so their polarity cannot be read from
+    /// the data at all. Worse, 6,851 SeparateLingerColor curves ship with NO flag beside them; if absence
+    /// meant "off", every one of those authored fade curves would be dead data, including Mordekaiser's
+    /// passive ring which has the curve, no flag, and visibly needs the fade. A curve's presence is
+    /// therefore treated as the enable.</summary>
+    private static VfxLinger? ReadLinger(IReadOnlyDictionary<uint, BinTreeProperty> p)
+    {
+        if (Get(p, F_linger) is not BinTreeStruct l) return null;
+        var lp = l.Properties;
+        var linger = new VfxLinger(
+            ReadCurve4(lp, F_lingerColor),
+            ReadCurve3(lp, F_lingerScale),
+            ReadCurve3(lp, F_lingerRotation),
+            ReadCurve3(lp, F_lingerVelocity),
+            ReadCurve3(lp, F_lingerDrag),
+            ReadCurve3(lp, F_lingerAcceleration));
+        return linger.HasAny ? linger : null;
+    }
 
     private static Vector3 ReadValueVec3OrZero(BinTreeProperty? p) => p switch
     {
