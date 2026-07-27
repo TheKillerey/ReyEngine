@@ -112,6 +112,11 @@
                                         <DockPanel Margin="{Binding Indent}">
                                           <TextBlock DockPanel.Dock="Right" Text="{Binding CurrentText}" FontSize="9"
                                                      Opacity="0.6" MaxWidth="80" TextTrimming="CharacterEllipsis" />
+                                          <!-- M191: the preview does not show this field's effect -->
+                                          <TextBlock DockPanel.Dock="Left" Text="○" FontSize="8" Opacity="0.45"
+                                                     Margin="0,0,3,0" VerticalAlignment="Center"
+                                                     IsVisible="{Binding IgnoredByPreview}"
+                                                     ToolTip.Tip="{Binding PreviewNote}" />
                                           <TextBlock Text="{Binding Name}" FontSize="10" />
                                         </DockPanel>
                                       </Button>
@@ -224,6 +229,16 @@
                            IsVisible="{Binding SelectedProperty.ErrorText, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}" />
                 <TextBlock Text="{Binding SelectedProperty.ReadOnlyReason, FallbackValue=''}" FontSize="10" Opacity="0.5" TextWrapping="Wrap"
                            IsVisible="{Binding SelectedProperty.IsReadOnly, FallbackValue=False}" />
+                <!-- M191 (3.7): editable, saved, but not visible in the preview -->
+                <Border Background="#221E1408" BorderBrush="#55C9A227" BorderThickness="1" CornerRadius="3"
+                        Padding="6,4" Margin="0,8,0,0"
+                        IsVisible="{Binding SelectedProperty.IgnoredByPreview, FallbackValue=False}">
+                  <StackPanel Spacing="2">
+                    <TextBlock Text="○ NOT SHOWN IN THE PREVIEW" FontSize="9" FontWeight="Bold" Foreground="#C9A227" />
+                    <TextBlock Text="{Binding SelectedProperty.PreviewNote, FallbackValue=''}" FontSize="10"
+                               Opacity="0.75" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
                 <TextBlock FontSize="10" Opacity="0.5" TextWrapping="Wrap" Margin="0,10,0,0"
                            Text="Vectors: comma-separated (x, y, z). Colours: r, g, b, a (0..1). Edits update the preview immediately; Save Override writes to the project." />
               </StackPanel>

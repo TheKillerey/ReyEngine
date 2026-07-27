@@ -335,6 +335,9 @@ public sealed partial class ParticlePropertyRowViewModel : ObservableObject
     public string TypeName => Prop.TypeName;
     public bool IsReadOnly => Prop.IsReadOnly;
     public string ReadOnlyReason => Prop.ReadOnlyReason;   // M187: rows are read-only for several reasons
+    /// <summary>M191 (3.7): the preview will not show this field's effect. The edit still reaches the .bin.</summary>
+    public bool IgnoredByPreview => Prop.IgnoredByPreview;
+    public string? PreviewNote => Prop.PreviewNote;
     /// <summary>M189 (3.3): left inset for a row nested inside a definition struct, 10px per level.</summary>
     public Avalonia.Thickness Indent => new(Prop.Depth * 10, 0, 0, 0);
     public bool HasCurve => Prop.HasCurve;

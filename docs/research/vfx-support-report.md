@@ -990,7 +990,7 @@ stand-in purely so it has a visible cycle. Nothing in the renderer or the data p
 | 3.4 | ~~**Show systems with zero emitters**~~ | — | — | **DONE in M188** — see 3.4b |
 | 3.5 | ~~**Add a system-level property panel**~~ | — | — | **DONE in M188** — see 3.4b |
 | 3.6 | ~~**Curve key editing**~~ | — | — | **DONE in M190** — see 3.6b |
-| 3.7 | **Flag fields that are editable but ignored** by the renderer, so the user is not misled | `ParticleDocument.cs` (a badge or grey-out) | 12 fields incl. `alphaRef`, `miscRenderFlags`, `depthBiasFactors` | Trivial, prevents a class of false bug reports |
+| 3.7 | ~~**Flag fields that are editable but ignored**~~ | — | — | **DONE in M191** — see 3.7b; the row's own list was stale |
 | 3.8 | **Map placement inspector** for the 10 unread `MapParticle` fields | `MapParticleExtractor.cs`, map inspector view | 29,811 placements | Depends on 5.2 for saving |
 
 #### 3.1b / 3.2b — M187 result, and three corrections to the rows above
@@ -1155,6 +1155,49 @@ still pass.
 The float curve the harness happened to land on was `erosionDriveCurve` — a depth-1 row inside
 `alphaErosionDefinition` — and the colour curve was `Color`, a curve-only row. So M189's expansion and
 M187's curve-only rescue both compose with key editing rather than merely coexisting with it.
+
+#### 3.7b — M191 result, and why the row's own list was wrong
+
+**The list in 3.7 was stale.** It named `alphaRef` as ignored; M174 implemented it. M175–M186 likewise
+implemented erosion, soft particles, palette, force fields, trails, beams, children, reflection, stencil
+and Linger. Re-implementing the row as written would have badged working fields as broken.
+
+The set is therefore **derived, not written down**: `VfxPreviewCoverage` reflects over
+`VfxSystemResolver`'s own hash constants. A second hand-maintained list would rot the first time a
+milestone taught the resolver a new field, and it would rot *silently, in the direction of telling the
+user something works when it does not*.
+
+Measured against the census: the resolver reads **84.0%** of emitter field occurrences (74 fields);
+**60 fields / 3,989,530 occurrences (16.0%)** are never read at all. In the editor that is 451,469 of
+3,082,575 rows (14.6%), of which **432,649 are editable** — those are precisely the rows that let a user
+change something and see nothing happen. The badge is inherited by a struct's sub-rows: a struct the
+preview never reads makes every field inside it equally invisible.
+
+Largest badged fields: `bindWeight`, `isUniformScale`, `miscRenderFlags`, `importance`,
+`disableBackfaceCull`, `isGroundLayer`, `particleIsLocalOrientation`, `isLocalOrientation`,
+`depthBiasFactors`, `useNavmeshMask`, `FlexShapeDefinition`, `meshRenderFlags`.
+
+A second, **hand-maintained** category covers fields the resolver *does* read but the renderer then
+does nothing with: `particleLingerType` (M185 — measured as largely independent of the Linger struct)
+and `disableBackfaceCull` (M182/M183 — parsed, not applied, because two probes disagreed on the winding
+of Riot's mesh primitives). Proving "parsed but unused" mechanically needs real dataflow analysis; an
+attempt at it here produced obvious false positives (`TexturePath`, `Disabled`), so the list is limited
+to cases verified directly in the source and deliberately under-claims.
+
+The failure direction is chosen on purpose. If reflection returns nothing the class shows no badges at
+all, and the set includes class hashes and other non-field constants, which can only ever cause a field
+to be treated as read. Both mean a *missing* badge, never a false one.
+
+VERIFIED: 41 checks. 28 fields the renderer demonstrably consumes assert as read (`rate`, `Color`,
+`SpawnShape`, `alphaErosionDefinition`, `Linger`, `stencilMode`, `primitive`, …), 8 measured-unread
+fields assert as unread, both parsed-but-unused fields assert as read-yet-badged, sub-row inheritance
+holds across 3,082,575 rows, and the badge is neither empty nor universal. M187's 5, M188's 3, M189's 11
+and M190's 19 checks all still pass.
+
+The first attempt at the coverage set filtered on `IsInitOnly` and so dropped every `const uint`,
+including `F_spawnShape` — it would have badged `SpawnShape` (632,283 rows, 51.8% of emitters) as
+ignored when the resolver reads it. Caught by spot-checking a suspicious entry against the source
+before shipping, not by the harness.
 
 ### 4. Missing parsing support
 
