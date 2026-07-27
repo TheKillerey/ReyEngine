@@ -9,6 +9,8 @@ using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.MapGeo;
+using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Shaders;
 using ReyEngine.Rendering.D3D11;
 
@@ -35,6 +37,33 @@ public sealed class ShaderRow
             return s;
         }
     }
+}
+
+/// <summary>A .skn or .mapgeo asset that can be loaded as a scene.</summary>
+public sealed class SceneAssetRow
+{
+    public required string Path { get; init; }
+    public required ulong Hash { get; init; }
+    public bool IsMap => Path.EndsWith(".mapgeo", StringComparison.OrdinalIgnoreCase);
+    public string Display => System.IO.Path.GetFileName(Path);
+    public string Kind => IsMap ? "map" : "character";
+}
+
+/// <summary>One submesh of the loaded scene and how its material resolved.</summary>
+public sealed partial class SceneSubmeshRow : ObservableObject
+{
+    public required string Material { get; init; }
+    public required int Triangles { get; init; }
+    public required string Status { get; init; }
+    public required bool Ok { get; init; }
+    public string? Shader { get; init; }
+    public PreviewMaterial? Pipeline { get; init; }
+
+    [ObservableProperty] private bool _visible = true;
+    partial void OnVisibleChanged(bool v) { if (Pipeline is not null) Pipeline.Visible = v; }
+
+    public string Label => $"{Material}   ({Triangles:n0} tris)";
+    public string Detail => Ok ? $"{Shader}" : Status;
 }
 
 /// <summary>A .bin asset that might hold materials.</summary>
@@ -106,6 +135,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     private readonly Func<uint, string?> _resolveBinName;
     private readonly ShaderPermutationIndex? _perms;
     private readonly List<MaterialBinRow> _allBins = new();
+    private readonly List<SceneAssetRow> _allScenes = new();
     private DxbcShader? _vs, _ps;
     // double-buffered: an Image only repaints when its Source REFERENCE changes, so writing into the
     // same WriteableBitmap every frame shows nothing. Alternating two avoids the null-then-set flicker.
@@ -124,6 +154,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     public ObservableCollection<string> MeshNames { get; } = new(PreviewGeometry.BuiltInNames);
     public ObservableCollection<MaterialBinRow> MaterialBins { get; } = new();
     public ObservableCollection<MaterialRow> Materials { get; } = new();
+    public ObservableCollection<SceneAssetRow> SceneAssets { get; } = new();
+    public ObservableCollection<SceneSubmeshRow> SceneSubmeshes { get; } = new();
 
     [ObservableProperty] private string _filter = "";
     [ObservableProperty] private ShaderRow? _selectedShader;
@@ -143,6 +175,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     [ObservableProperty] private MaterialBinRow? _selectedBin;
     [ObservableProperty] private MaterialRow? _selectedMaterial;
     [ObservableProperty] private string _materialReport = "";
+    [ObservableProperty] private string _sceneFilter = "";
+    [ObservableProperty] private SceneAssetRow? _selectedSceneAsset;
+    [ObservableProperty] private string _sceneReport = "";
     public bool CanBrowseMaterials => _readAsset is not null && _allBins.Count > 0;
 
     // render settings, mirrored onto PreviewSettings
@@ -161,14 +196,19 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     public ShaderPreviewViewModel(string? gameDataFinalDir, IHashResolver? resolver,
         Func<ulong, byte[]?>? readAsset = null,
         IEnumerable<(string Path, ulong Hash)>? binAssets = null,
-        Func<uint, string?>? resolveBinName = null)
+        Func<uint, string?>? resolveBinName = null,
+        IEnumerable<(string Path, ulong Hash)>? sceneAssets = null)
     {
         _readAsset = readAsset;
         _resolveBinName = resolveBinName ?? (_ => null);
         if (binAssets is not null)
             foreach (var (path, hash) in binAssets)
                 _allBins.Add(new MaterialBinRow { Path = path, Hash = hash });
+        if (sceneAssets is not null)
+            foreach (var (path, hash) in sceneAssets)
+                _allScenes.Add(new SceneAssetRow { Path = path, Hash = hash });
         ApplyBinFilter();
+        ApplySceneFilter();
 
         if (string.IsNullOrWhiteSpace(gameDataFinalDir) || !Directory.Exists(gameDataFinalDir))
         {
@@ -409,6 +449,236 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         Status = $"'{b.Name}' loaded: {bound} texture(s) bound, {applied} parameter(s) applied"
                  + (missing > 0 ? $", {missing} texture(s) missing." : ".");
         HasError = missing > 0;
+    }
+
+    partial void OnSceneFilterChanged(string value) => ApplySceneFilter();
+
+    private void ApplySceneFilter()
+    {
+        SceneAssets.Clear();
+        foreach (var a in _allScenes)
+            if (SceneFilter.Length == 0 || a.Path.Contains(SceneFilter, StringComparison.OrdinalIgnoreCase))
+                SceneAssets.Add(a);
+    }
+
+    /// <summary>M214: load a whole character or map and draw every submesh with its OWN material.
+    ///
+    /// <para>This is the step from "does this shader run" to "does this content render". One vertex and
+    /// index buffer, then one pipeline per submesh: its material's shader, the permutation its define set
+    /// resolves to, its textures, and its parameters. A submesh whose material cannot be resolved is
+    /// reported and skipped rather than drawn with someone else's shader.</para></summary>
+    [RelayCommand]
+    private void LoadScene()
+    {
+        if (SelectedSceneAsset is null || _cache is null || _readAsset is null) return;
+        if (Materials.Count == 0)
+        {
+            Fail("Pick a materials .bin first - the Material tab's bin supplies the material definitions.");
+            return;
+        }
+
+        var asset = SelectedSceneAsset;
+        var sb = new StringBuilder();
+        SceneSubmeshes.Clear();
+
+        PreviewMesh mesh;
+        List<(string Material, int Start, int Count)> parts;
+        try
+        {
+            var bytes = _readAsset(asset.Hash);
+            if (bytes is null || bytes.Length == 0) { Fail($"{asset.Display}: not readable"); return; }
+
+            if (asset.IsMap)
+            {
+                var map = MapGeoDecoder.Decode(bytes);
+                mesh = PreviewGeometry.FromLeagueArrays(asset.Display, map.Positions.Length / 3,
+                    map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices);
+                parts = map.Groups.Select(g => (g.Material, g.StartIndex, g.IndexCount)).ToList();
+            }
+            else
+            {
+                var m = SkinnedMeshDecoder.Decode(bytes);
+                mesh = PreviewGeometry.FromLeagueArrays(asset.Display, m.VertexCount,
+                    m.Positions, m.Normals, m.Uvs, m.Colors, m.LightmapUvs, m.Indices);
+                parts = m.SubMeshes.Select(x => (x.Material, x.StartIndex, x.IndexCount)).ToList();
+            }
+        }
+        catch (Exception ex) { Fail($"{asset.Display}: {ex.Message}"); return; }
+
+        sb.AppendLine($"SCENE   {asset.Display}   ({asset.Kind})");
+        sb.AppendLine($"        {mesh.Vertices.Length:n0} vertices, {mesh.TriangleCount:n0} triangles, "
+                      + $"{parts.Count} submesh(es)");
+        sb.AppendLine($"        recentred on its own bounds, radius {mesh.Radius:n0}");
+        sb.AppendLine();
+
+        _renderer.ClearMaterials();
+        _renderer.SetMesh(mesh);
+
+        int ok = 0, failed = 0, texBound = 0, texMissing = 0;
+        DxbcShader? firstVs = null;
+
+        // group submeshes by material: several submeshes commonly share one
+        foreach (var group in parts.GroupBy(x => x.Material, StringComparer.OrdinalIgnoreCase))
+        {
+            string matName = group.Key;
+            int tris = group.Sum(x => x.Count) / 3;
+
+            var binding = MaterialFor(matName);
+
+            if (binding is null)
+            {
+                sb.AppendLine($"   !  {matName,-34} no material of that name in the selected bin");
+                SceneSubmeshes.Add(new SceneSubmeshRow
+                { Material = matName, Triangles = tris, Ok = false, Status = "not in the selected bin" });
+                failed++;
+                continue;
+            }
+
+            if (!binding.Name.Equals(matName, StringComparison.OrdinalIgnoreCase))
+                sb.AppendLine($"      submesh '{matName}' -> material '{binding.Name}'");
+
+            var built = BuildSceneMaterial(binding, group.ToList(), sb, ref texBound, ref texMissing, out string why);
+            if (built is null)
+            {
+                SceneSubmeshes.Add(new SceneSubmeshRow
+                { Material = matName, Triangles = tris, Ok = false, Status = why });
+                failed++;
+                continue;
+            }
+
+            firstVs ??= built.VsRefl;
+            SceneSubmeshes.Add(new SceneSubmeshRow
+            {
+                Material = matName, Triangles = tris, Ok = true, Status = "ok",
+                Shader = binding.Name.Equals(matName, StringComparison.OrdinalIgnoreCase)
+                    ? binding.RenderShader
+                    : $"{binding.Name} · {binding.RenderShader}",
+                Pipeline = built,
+            });
+            ok++;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine($"{ok} material(s) live, {failed} unresolved, {texBound} texture(s) bound"
+                      + (texMissing > 0 ? $", {texMissing} missing" : ""));
+
+        SceneReport = sb.ToString();
+        BuildSlots();
+        RebuildBindings();
+
+        if (ok == 0)
+        {
+            IsLoaded = false;
+            Fail($"{asset.Display}: not one material resolved, so there is nothing to draw.");
+            return;
+        }
+
+        string? cerr = "no vertex shader";
+        if (firstVs is not null && _renderer.BuildComparisonShader(firstVs, out cerr))
+            ComparisonSource = _renderer.ComparisonShaderSource ?? "";
+        else
+            ComparisonSource = "// comparison unavailable for this scene: " + (cerr ?? "unknown");
+
+        Distance = 3.0;
+        IsLoaded = true;
+        HasError = failed > 0;
+        Status = $"{asset.Display}: {ok} material(s) drawing, {failed} unresolved.";
+        AppendLog();
+    }
+
+    /// <summary>M214: which material draws this submesh?
+    ///
+    /// <para>For map geometry the group carries the material's own NAME, so a name match is the link. For a
+    /// champion it is the other way round: submeshes are called <c>Body</c>, <c>Wings</c>, <c>Sword</c>, and
+    /// the material declares which submeshes it covers. Matching on the name alone finds nothing at all on a
+    /// champion - the first attempt at this resolved 0 of 5 on Aatrox.</para>
+    ///
+    /// <para>Order matters: the submesh assignment is checked first because it is the explicit statement, and
+    /// the name is the fallback. A material flagged as the default covers anything left over.</para></summary>
+    private MaterialBinding? MaterialFor(string submeshOrName)
+    {
+        // 1. a material that explicitly lists this submesh
+        foreach (var r in Materials)
+            foreach (var sub in r.Binding.Submeshes)
+                if (sub.Equals(submeshOrName, StringComparison.OrdinalIgnoreCase)) return r.Binding;
+
+        // 2. a material named after it (this is how mapgeo groups reference materials)
+        foreach (var r in Materials)
+            if (r.Binding.Name.Equals(submeshOrName, StringComparison.OrdinalIgnoreCase)) return r.Binding;
+
+        // 3. whatever the bin marks as the default
+        foreach (var r in Materials)
+            if (r.Binding.IsDefault) return r.Binding;
+
+        return null;
+    }
+
+    /// <summary>Resolve one material to a live pipeline covering its submesh slices.</summary>
+    private PreviewMaterial? BuildSceneMaterial(MaterialBinding b,
+        List<(string Material, int Start, int Count)> slices, StringBuilder sb,
+        ref int texBound, ref int texMissing, out string why)
+    {
+        why = "";
+        string? shader = b.RenderShader;
+        if (string.IsNullOrWhiteSpace(shader)) { why = "no renderShader"; sb.AppendLine($"   !  {b.Name,-34} no renderShader"); return null; }
+
+        string full = "assets/shaders/generated/" + shader.Trim('/');
+        string vsPath = ShaderCacheReader.TocPathFor(full, DxbcStage.Vertex);
+        string psPath = ShaderCacheReader.TocPathFor(full, DxbcStage.Pixel);
+        var vsToc = _cache!.ReadToc(vsPath);
+        var psToc = _cache.ReadToc(psPath);
+        if (vsToc is null || psToc is null)
+        { why = "shader not in the cache"; sb.AppendLine($"   !  {b.Name,-34} '{shader}' missing a stage"); return null; }
+
+        IReadOnlyDictionary<string, string>? feat = null;
+        IReadOnlyDictionary<string, bool>? swDef = null;
+        if (_perms is not null && _perms.TryGetShaderDefs(shader, out var f, out var sd)) { feat = f; swDef = sd; }
+
+        var vsPerm = ShaderCacheReader.ResolvePermutation(vsToc, b.Macros, b.Switches, feat, swDef, out _);
+        var psPerm = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out var pw);
+        if (vsPerm is null || psPerm is null)
+        { why = "no cooked permutation"; sb.AppendLine($"   !  {b.Name,-34} {pw}"); return null; }
+
+        var vs = _cache.LoadShader(vsPath, vsPerm.BlobIndex, out _);
+        var ps = _cache.LoadShader(psPath, psPerm.BlobIndex, out _);
+        if (vs is null || ps is null) { why = "bytecode would not load"; sb.AppendLine($"   !  {b.Name,-34} bytecode load failed"); return null; }
+
+        // One pipeline per material; the FIRST slice is its draw range. Extra slices get their own
+        // pipeline object sharing the same shaders, because a draw call covers one contiguous range.
+        PreviewMaterial? first = null;
+        foreach (var slice in slices)
+        {
+            var mat = _renderer.BuildMaterial(b.Name, vs, ps, slice.Start, slice.Count, out var rep);
+            if (mat is null) { why = rep.Error ?? "pipeline creation failed"; sb.AppendLine($"   !  {b.Name,-34} {why}"); return null; }
+
+            foreach (var slot in b.Slots)
+            {
+                string target = slot.SamplerName + "__TX";
+                if (string.IsNullOrWhiteSpace(slot.Path)) continue;
+                if (!ps.Textures.Any(t => t.Name.Equals(target, StringComparison.OrdinalIgnoreCase))
+                    && !vs.Textures.Any(t => t.Name.Equals(target, StringComparison.OrdinalIgnoreCase))) continue;
+                try
+                {
+                    var data = _readAsset!(HashAlgorithms.WadPath(slot.Path.ToLowerInvariant()));
+                    if (data is null || data.Length == 0) { texMissing++; continue; }
+                    var img = TextureDecoder.Decode(data);
+                    _renderer.SetTexture(mat, target, img.Rgba, img.Width, img.Height);
+                    texBound++;
+                }
+                catch { texMissing++; }
+            }
+
+            foreach (var prm in b.Parameters)
+                if (prm.TryGetVector4(out var v))
+                    mat.Params[prm.Name] = new[] { v.X, v.Y, v.Z, v.W };
+
+            _renderer.AddMaterial(mat);
+            first ??= mat;
+        }
+
+        sb.AppendLine($"   +  {b.Name,-34} {shader}  (vs blob {vsPerm.BlobIndex}, ps blob {psPerm.BlobIndex}, "
+                      + $"{slices.Count} slice(s))");
+        return first;
     }
 
     [RelayCommand]

@@ -8584,10 +8584,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .OrderBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        // M214: .skn and .mapgeo, so a whole character or map can be drawn with its real materials
+        var scenes = AssetEntries
+            .Where(e => e.IsResolved
+                        && (e.Path.EndsWith(".skn", StringComparison.OrdinalIgnoreCase)
+                            || e.Path.EndsWith(".mapgeo", StringComparison.OrdinalIgnoreCase)))
+            .Select(e => (e.Path, e.PathHash))
+            .OrderBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         var vm = new ShaderPreviewViewModel(dir, _resolver.Database,
             readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
             binAssets: bins,
-            resolveBinName: h => _resolver.Database.TryGetBinName(h, out var n) ? n : null);
+            resolveBinName: h => _resolver.Database.TryGetBinName(h, out var n) ? n : null,
+            sceneAssets: scenes);
 
         if (bins.Count == 0)
             _log.Info("Shader", "No .bin assets are mounted, so the Material tab will be empty. "

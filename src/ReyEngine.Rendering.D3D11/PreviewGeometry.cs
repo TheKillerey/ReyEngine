@@ -167,6 +167,51 @@ public static class PreviewGeometry
         };
     }
 
+    /// <summary>M214: wrap a decoded League mesh - a champion .skn or a .mapgeo - in the fat vertex.
+    ///
+    /// <para>The geometry is RECENTRED on its own bounds. Map geometry sits at world coordinates in the tens
+    /// of thousands, and a camera that orbits the origin would be looking at empty space several map-widths
+    /// away from it. The submesh index ranges are untouched, so material slices still line up.</para></summary>
+    public static PreviewMesh FromLeagueArrays(
+        string name, int vertexCount,
+        float[] positions, float[]? normals, float[]? uvs, float[]? colors, float[]? lightmapUvs,
+        uint[] indices)
+    {
+        var verts = new PreviewVertex[vertexCount];
+
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        for (int i = 0; i < vertexCount; i++)
+        {
+            var pv = new Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+            min = Vector3.Min(min, pv);
+            max = Vector3.Max(max, pv);
+        }
+        var centre = (min + max) * 0.5f;
+        float radius = MathF.Max((max - min).Length() * 0.5f, 1e-3f);
+
+        for (int i = 0; i < vertexCount; i++)
+        {
+            var pos = new Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]) - centre;
+            var nrm = normals is not null && normals.Length >= (i + 1) * 3
+                ? new Vector3(normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2])
+                : Vector3.UnitY;
+            if (nrm.LengthSquared() < 1e-8f) nrm = Vector3.UnitY;
+
+            var uv = uvs is not null && uvs.Length >= (i + 1) * 2
+                ? new Vector2(uvs[i * 2], uvs[i * 2 + 1]) : Vector2.Zero;
+
+            verts[i] = Make(pos, nrm, uv, Vector3.UnitX);
+
+            if (lightmapUvs is not null && lightmapUvs.Length >= (i + 1) * 2)
+                verts[i].Uv1 = new Vector2(lightmapUvs[i * 2], lightmapUvs[i * 2 + 1]);
+            if (colors is not null && colors.Length >= (i + 1) * 4)
+                verts[i].Color = new Vector4(colors[i * 4], colors[i * 4 + 1], colors[i * 4 + 2], colors[i * 4 + 3]);
+        }
+
+        return new PreviewMesh { Name = name, Vertices = verts, Indices = indices, Radius = radius };
+    }
+
     private static PreviewVertex Make(Vector3 pos, Vector3 normal, Vector2 uv, Vector3 tangent) => new()
     {
         Position = pos,

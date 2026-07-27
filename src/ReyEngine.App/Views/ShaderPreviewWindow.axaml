@@ -143,6 +143,67 @@
             </ScrollViewer>
           </TabItem>
 
+          <TabItem Header="Scene">
+            <DockPanel Margin="6">
+              <TextBlock DockPanel.Dock="Top" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,0,2,6"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         Text="Load a whole character (.skn) or map (.mapgeo) and draw every submesh with its own material. Pick the materials .bin on the Material tab first — that is where the definitions come from." />
+
+              <TextBox DockPanel.Dock="Top" Text="{Binding SceneFilter}" Watermark="filter .skn / .mapgeo…"
+                       FontSize="11" Margin="0,0,0,4" />
+
+              <Button DockPanel.Dock="Bottom" Classes="primary" Content="▶  Load scene"
+                      Command="{Binding LoadSceneCommand}" FontSize="11.5" Margin="0,6,0,0"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,7"
+                      IsEnabled="{Binding SelectedSceneAsset, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+              <Grid RowDefinitions="*,4,*,Auto">
+                <ListBox Grid.Row="0" ItemsSource="{Binding SceneAssets}" SelectedItem="{Binding SelectedSceneAsset}"
+                         FontFamily="Consolas" FontSize="10.5">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SceneAssetRow">
+                      <StackPanel Spacing="0" Margin="0,1">
+                        <TextBlock Text="{Binding Display}" TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding Path}"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+                        <TextBlock Text="{Binding Kind}" FontSize="9" Opacity="0.5"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+
+                <GridSplitter Grid.Row="1" Background="Transparent" ResizeDirection="Rows" />
+
+                <ListBox Grid.Row="2" ItemsSource="{Binding SceneSubmeshes}" FontSize="11">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SceneSubmeshRow">
+                      <Grid ColumnDefinitions="Auto,*" Margin="0,2">
+                        <CheckBox Grid.Column="0" IsChecked="{Binding Visible}" Margin="0,0,6,0"
+                                  VerticalAlignment="Center"
+                                  ToolTip.Tip="Hide this submesh, to see what is behind it or isolate one material." />
+                        <StackPanel Grid.Column="1" Spacing="1">
+                          <TextBlock Text="{Binding Label}" FontFamily="Consolas" FontSize="10.5"
+                                     TextTrimming="CharacterEllipsis"
+                                     Foreground="{DynamicResource ReyTextBrush}" />
+                          <TextBlock Text="{Binding Detail}" FontSize="9.5" Opacity="0.55"
+                                     TextTrimming="CharacterEllipsis"
+                                     Foreground="{DynamicResource ReyTextBrush}" />
+                        </StackPanel>
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+
+                <ScrollViewer Grid.Row="3" MaxHeight="200" HorizontalScrollBarVisibility="Auto" Margin="0,6,0,0">
+                  <SelectableTextBlock Text="{Binding SceneReport}" FontFamily="Consolas" FontSize="10"
+                                       TextWrapping="NoWrap"
+                                       Foreground="{DynamicResource ReyTextBrush}" />
+                </ScrollViewer>
+              </Grid>
+            </DockPanel>
+          </TabItem>
+
           <TabItem Header="Material">
             <DockPanel Margin="6">
               <TextBlock DockPanel.Dock="Top" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,0,2,6"

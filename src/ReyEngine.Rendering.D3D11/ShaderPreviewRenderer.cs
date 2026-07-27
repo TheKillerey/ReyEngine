@@ -36,6 +36,12 @@ public sealed class PreviewSettings
 
     /// <summary>Draw with ReyEngine's own shading model instead of Riot's pixel shader, for the A/B.</summary>
     public bool UseComparisonShader;
+
+    /// <summary>Rows per bone matrix in <c>BonesCB</c>. League caps skeletons at 256 bones and the buffer is
+    /// 12,288 bytes, which is 48 bytes each at 3 rows (a 4x3) or 64 at 4 (a full 4x4 over 192 bones). Both
+    /// divide evenly, so this is measured in the app rather than assumed - a wrong stride makes the skeleton
+    /// shear instead of vanishing, which is easy to mistake for a broken mesh.</summary>
+    public int BoneMatrixRows = 3;
 }
 
 /// <summary>Result of trying to bring a shader pair up — every failure carries its own message.</summary>
@@ -54,6 +60,49 @@ public sealed class ShaderLoadReport
 
     public void Step(string s) => Steps.Add(s);
     public void Warn(string s) => Warnings.Add(s);
+}
+
+/// <summary>M214: one material's whole pipeline — its two shaders, the input layout generated from them,
+/// its constant buffers, its textures, and the slice of the index buffer it draws.
+///
+/// <para>A scene is a list of these. A champion skin is one mesh whose submeshes each name a different
+/// material, so drawing it correctly means a separate shader, permutation and texture set per submesh —
+/// exactly what the single-material bench could not express.</para></summary>
+public sealed unsafe class PreviewMaterial : IDisposable
+{
+    public required string Name { get; init; }
+    public required DxbcShader VsRefl { get; init; }
+    public required DxbcShader PsRefl { get; init; }
+
+    internal ComPtr<ID3D11VertexShader> Vs;
+    internal ComPtr<ID3D11PixelShader> Ps;
+    internal ComPtr<ID3D11InputLayout> Layout;
+    internal readonly Dictionary<int, ComPtr<ID3D11Buffer>> VsCbs = new();
+    internal readonly Dictionary<int, ComPtr<ID3D11Buffer>> PsCbs = new();
+    internal readonly Dictionary<string, ComPtr<ID3D11ShaderResourceView>> Textures =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Values this material authors, e.g. its own TintColor. Beat the renderer's engine values.</summary>
+    public Dictionary<string, float[]> Params { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Which slice of the shared index buffer this material covers. IndexCount &lt; 0 means "all".</summary>
+    public int StartIndex { get; set; }
+    public int IndexCount { get; set; } = -1;
+
+    public bool Visible { get; set; } = true;
+
+    public IEnumerable<string> UnboundTextures =>
+        PsRefl.Textures.Concat(VsRefl.Textures).Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(n => !Textures.ContainsKey(n));
+
+    public void Dispose()
+    {
+        Vs.Dispose(); Ps.Dispose(); Layout.Dispose();
+        foreach (var b in VsCbs.Values) b.Dispose();
+        foreach (var b in PsCbs.Values) b.Dispose();
+        foreach (var t in Textures.Values) t.Dispose();
+        VsCbs.Clear(); PsCbs.Clear(); Textures.Clear();
+    }
 }
 
 /// <summary>M210: an isolated Direct3D 11 renderer that runs Riot's own compiled shaders.
@@ -76,10 +125,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11Device> _device;
     private ComPtr<ID3D11DeviceContext> _ctx;
 
-    private ComPtr<ID3D11VertexShader> _vs;
-    private ComPtr<ID3D11PixelShader> _ps;
     private ComPtr<ID3D11PixelShader> _comparePs;
-    private ComPtr<ID3D11InputLayout> _layout;
     private ComPtr<ID3D11Buffer> _vb, _ib;
     private int _indexCount;
 
@@ -93,17 +139,14 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11BlendState> _blend;
     private ComPtr<ID3D11DepthStencilState> _depthState;
 
-    // one D3D buffer per reflected cbuffer, per stage, keyed by bind slot
-    private readonly Dictionary<int, ComPtr<ID3D11Buffer>> _vsCbs = new();
-    private readonly Dictionary<int, ComPtr<ID3D11Buffer>> _psCbs = new();
-    private DxbcShader? _vsRefl, _psRefl;
+    /// <summary>The scene. One entry for the single-shader bench, one per submesh for a loaded model.</summary>
+    private readonly List<PreviewMaterial> _materials = new();
+    public IReadOnlyList<PreviewMaterial> Materials => _materials;
 
-    private readonly Dictionary<string, ComPtr<ID3D11ShaderResourceView>> _textures =
-        new(StringComparer.OrdinalIgnoreCase);
     private ComPtr<ID3D11ShaderResourceView> _white;
 
     public string DeviceDescription { get; private set; } = "(no device)";
-    public bool IsReady => _device.Handle is not null && _vs.Handle is not null && _ps.Handle is not null;
+    public bool IsReady => _device.Handle is not null && _materials.Count > 0;
     public int DrawCalls { get; private set; }
     public double LastFrameMs { get; private set; }
     public PreviewMesh? Mesh { get; private set; }
@@ -179,14 +222,36 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     // ---------------------------------------------------------------- shaders
 
+    /// <summary>Bench mode: replace the scene with a single material covering the whole mesh.</summary>
     public ShaderLoadReport LoadShaders(DxbcShader vsRefl, DxbcShader psRefl)
     {
-        var r = new ShaderLoadReport();
-        if (_device.Handle is null) { r.Error = "no D3D11 device"; return r; }
+        ClearMaterials();
+        var m = BuildMaterial("(single shader)", vsRefl, psRefl, 0, -1, out var r);
+        if (m is not null) _materials.Add(m);
+        return r;
+    }
 
-        ReleaseShaders();
-        _vsRefl = vsRefl;
-        _psRefl = psRefl;
+    public void ClearMaterials()
+    {
+        foreach (var m in _materials) m.Dispose();
+        _materials.Clear();
+        _comparePs.Dispose();
+        _comparePs = default;
+    }
+
+    /// <summary>M214: bring up one material's pipeline. <paramref name="indexCount"/> below zero means the
+    /// whole index buffer, which is what the bench uses.</summary>
+    public PreviewMaterial? BuildMaterial(string name, DxbcShader vsRefl, DxbcShader psRefl,
+        int startIndex, int indexCount, out ShaderLoadReport r)
+    {
+        r = new ShaderLoadReport();
+        if (_device.Handle is null) { r.Error = "no D3D11 device"; return null; }
+
+        var mat = new PreviewMaterial
+        {
+            Name = name, VsRefl = vsRefl, PsRefl = psRefl,
+            StartIndex = startIndex, IndexCount = indexCount,
+        };
 
         // ---- 1. the shader objects themselves
         ComPtr<ID3D11VertexShader> vs = default;
@@ -199,9 +264,10 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             r.Error = $"CreateVertexShader failed: 0x{hr:X8}"
                       + (vsRefl.WasTrimmed ? "" : " (bytecode was NOT trimmed to its declared size - see ShaderCacheReader)");
             Log(r.Error);
-            return r;
+            mat.Dispose();
+            return null;
         }
-        _vs = vs;
+        mat.Vs = vs;
         r.Step($"CreateVertexShader OK ({vsRefl.ByteSize:n0} bytes, {vsRefl.ShaderModel})");
 
         ComPtr<ID3D11PixelShader> ps = default;
@@ -213,24 +279,28 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             r.Error = $"CreatePixelShader failed: 0x{hr:X8}"
                       + (psRefl.WasTrimmed ? "" : " (bytecode was NOT trimmed to its declared size)");
             Log(r.Error);
-            return r;
+            mat.Dispose();
+            return null;
         }
-        _ps = ps;
+        mat.Ps = ps;
         r.Step($"CreatePixelShader OK ({psRefl.ByteSize:n0} bytes, {psRefl.ShaderModel})");
 
         // ---- 2. input layout, generated from the vertex shader's own signature
-        if (!CreateInputLayout(vsRefl, r)) return r;
+        if (!CreateInputLayout(mat, r)) { mat.Dispose(); return null; }
 
         // ---- 3. one constant buffer per reflected cbuffer, sized as the shader declares
-        CreateConstantBuffers(vsRefl, _vsCbs, r, "vs");
-        CreateConstantBuffers(psRefl, _psCbs, r, "ps");
+        CreateConstantBuffers(vsRefl, mat.VsCbs, r, "vs");
+        CreateConstantBuffers(psRefl, mat.PsCbs, r, "ps");
 
         r.Success = true;
-        return r;
+        return mat;
     }
 
-    private bool CreateInputLayout(DxbcShader vsRefl, ShaderLoadReport r)
+    public void AddMaterial(PreviewMaterial m) => _materials.Add(m);
+
+    private bool CreateInputLayout(PreviewMaterial mat, ShaderLoadReport r)
     {
+        var vsRefl = mat.VsRefl;
         // D3D validates the layout against the WHOLE input signature, so every non-system element needs an
         // entry even when the mesh has no data for it. Unknown semantics alias the zero pad.
         var elems = new List<InputElementDesc>();
@@ -279,7 +349,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                 Log(r.Error);
                 return false;
             }
-            _layout = layout;
+            mat.Layout = layout;
             r.Step($"CreateInputLayout OK ({elems.Count} elements)");
             if (r.UnmatchedInputs.Count > 0)
                 r.Warn($"the test mesh has no data for {string.Join(", ", r.UnmatchedInputs)} - those read as zero");
@@ -349,6 +419,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     /// acquire any of Riot's extra stages.</para></summary>
     public bool BuildComparisonShader(DxbcShader vsRefl, out string? error)
     {
+        // one comparison shader, generated from the FIRST material's vertex signature
         error = null;
         _comparePs.Dispose();
         _comparePs = default;
@@ -469,18 +540,27 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         Log($"mesh '{mesh.Name}': {mesh.Vertices.Length:n0} verts, {mesh.TriangleCount:n0} tris");
     }
 
-    /// <summary>Bind RGBA8 pixels to a reflected texture name (e.g. <c>DiffuseTexture__TX</c>).</summary>
+    /// <summary>Bind RGBA8 pixels to a reflected texture name (e.g. <c>DiffuseTexture__TX</c>) on EVERY
+    /// material that declares it. That is what the bench wants; a scene binds per material instead.</summary>
     public void SetTexture(string reflectedName, byte[] rgba, int width, int height)
     {
-        if (_textures.TryGetValue(reflectedName, out var old)) old.Dispose();
-        _textures[reflectedName] = MakeTexture(rgba, width, height);
-        Log($"bound texture '{reflectedName}' ({width}x{height})");
+        foreach (var m in _materials) SetTexture(m, reflectedName, rgba, width, height);
+        if (_materials.Count > 0) Log($"bound texture '{reflectedName}' ({width}x{height})");
+    }
+
+    public void SetTexture(PreviewMaterial m, string reflectedName, byte[] rgba, int width, int height)
+    {
+        if (m.Textures.TryGetValue(reflectedName, out var old)) old.Dispose();
+        m.Textures[reflectedName] = MakeTexture(rgba, width, height);
     }
 
     public void ClearTextures()
     {
-        foreach (var t in _textures.Values) t.Dispose();
-        _textures.Clear();
+        foreach (var m in _materials)
+        {
+            foreach (var t in m.Textures.Values) t.Dispose();
+            m.Textures.Clear();
+        }
     }
 
     private ComPtr<ID3D11ShaderResourceView> MakeTexture(byte[] rgba, int w, int h)
@@ -591,18 +671,40 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     /// <summary>Fill one reflected cbuffer. Values come from, in order: an explicit override, the engine
     /// value for a name we recognise, the constant's own RDEF default, then zero.</summary>
-    private void FillConstantBuffer(DxbcConstantBuffer cb, PreviewSettings s, Matrix4x4 world,
-        Matrix4x4 view, Matrix4x4 proj, List<string>? unbound)
+    private void FillConstantBuffer(PreviewMaterial? mat, DxbcConstantBuffer cb, PreviewSettings s,
+        Matrix4x4 world, Matrix4x4 view, Matrix4x4 proj, List<string>? unbound)
     {
         var bytes = new byte[Math.Max(16, cb.AllocationSize)];
         var vp = Matrix4x4.Multiply(view, proj);
         var cam = CameraPosition(s);
 
+        // M214: the bone palette. A skinned character's vertex shader transforms every vertex by the bones
+        // its BLENDINDICES name, so a zero-filled BonesCB collapses the whole mesh to the origin and draws
+        // nothing at all - which is exactly what happened first. There is no animation here, so the correct
+        // content is the identity bind pose: the mesh renders as authored.
+        if (cb.Name.Contains("Bone", StringComparison.OrdinalIgnoreCase))
+        {
+            int rows = Math.Clamp(s.BoneMatrixRows, 3, 4);
+            int stride = rows * 16;
+            for (int at = 0; at + stride <= bytes.Length; at += stride)
+            {
+                BitConverter.TryWriteBytes(bytes.AsSpan(at + 0, 4), 1f);        // row0 = (1,0,0,0)
+                BitConverter.TryWriteBytes(bytes.AsSpan(at + 20, 4), 1f);       // row1 = (0,1,0,0)
+                BitConverter.TryWriteBytes(bytes.AsSpan(at + 40, 4), 1f);       // row2 = (0,0,1,0)
+                if (rows == 4) BitConverter.TryWriteBytes(bytes.AsSpan(at + 60, 4), 1f);
+            }
+            _pendingCb = bytes;
+            return;
+        }
+
         foreach (var v in cb.Variables)
         {
             float[]? data = null;
 
-            if (Overrides.TryGetValue(v.Name, out var ov)) data = ov;
+            // a material's own authored value wins over the window's global override, which wins over
+            // the engine stand-ins below
+            if (mat is not null && mat.Params.TryGetValue(v.Name, out var pv)) data = pv;
+            else if (Overrides.TryGetValue(v.Name, out var ov)) data = ov;
             else
             {
                 data = v.Name.ToUpperInvariant() switch
@@ -611,6 +713,14 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     "VIEW_PROJECTION_MATRIX" or "MVIEWPROJ" => Mat(vp, s),
                     "MVIEW" => Mat(view, s),
                     "MVIEWINV" => Mat(Invert(view), s),
+                    "MWORLDINV" => Mat(Invert(world), s),
+                    // the ambient cube a character is lit by when it is not standing on a baked lightgrid.
+                    // Neutral rather than zero: zero renders the model black and looks like a load failure.
+                    "LIGHTGRID_COLORS" => new[]
+                    {
+                        0.5f, 0.5f, 0.5f, 1f, 0.5f, 0.5f, 0.5f, 1f, 0.5f, 0.5f, 0.5f, 1f,
+                        0.5f, 0.5f, 0.5f, 1f, 0.5f, 0.5f, 0.5f, 1f, 0.5f, 0.5f, 0.5f, 1f,
+                    },
                     "MPROJ" => Mat(proj, s),
                     "VCAMERA" or "CAMERA_POSITION" => new[] { cam.X, cam.Y, cam.Z, 1f },
                     "TIME" => new[] { s.TimeSeconds, s.TimeSeconds * 0.5f, MathF.Sin(s.TimeSeconds), 1f },
@@ -760,33 +870,37 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             _ctx.OMSetBlendState(_blend, factor, 0xFFFFFFFF);
             _ctx.OMSetDepthStencilState(_depthState, 0);
 
-            _ctx.IASetInputLayout(_layout);
             _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
             uint stride = PreviewVertex.SizeInBytes, offset = 0;
             _ctx.IASetVertexBuffers(0, 1, ref _vb, in stride, in offset);
             _ctx.IASetIndexBuffer(_ib, Format.FormatR32Uint, 0);
 
-            _ctx.VSSetShader(_vs, null, 0);
             bool compare = s.UseComparisonShader && _comparePs.Handle is not null;
-            _ctx.PSSetShader(compare ? _comparePs : _ps, null, 0);
+
+            // M214: one pass per material. A champion skin is one vertex/index buffer whose submeshes each
+            // want their own shader, permutation and textures, so the pipeline is rebound per slice.
+            foreach (var mat in _materials)
+            {
+            if (!mat.Visible) continue;
+            _ctx.IASetInputLayout(mat.Layout);
+            _ctx.VSSetShader(mat.Vs, null, 0);
+            _ctx.PSSetShader(compare ? _comparePs : mat.Ps, null, 0);
 
             // constant buffers, filled from reflection
-            if (_vsRefl is not null)
-                foreach (var cb in _vsRefl.ConstantBuffers)
-                {
-                    if (cb.BindPoint < 0 || !_vsCbs.TryGetValue(cb.BindPoint, out var buf)) continue;
-                    FillConstantBuffer(cb, s, world, view, proj, unboundConstants);
-                    Upload(buf, _pendingCb);
-                    _ctx.VSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
-                }
-            if (_psRefl is not null)
-                foreach (var cb in _psRefl.ConstantBuffers)
-                {
-                    if (cb.BindPoint < 0 || !_psCbs.TryGetValue(cb.BindPoint, out var buf)) continue;
-                    FillConstantBuffer(cb, s, world, view, proj, unboundConstants);
-                    Upload(buf, _pendingCb);
-                    _ctx.PSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
-                }
+            foreach (var cb in mat.VsRefl.ConstantBuffers)
+            {
+                if (cb.BindPoint < 0 || !mat.VsCbs.TryGetValue(cb.BindPoint, out var buf)) continue;
+                FillConstantBuffer(mat, cb, s, world, view, proj, unboundConstants);
+                Upload(buf, _pendingCb);
+                _ctx.VSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
+            }
+            foreach (var cb in mat.PsRefl.ConstantBuffers)
+            {
+                if (cb.BindPoint < 0 || !mat.PsCbs.TryGetValue(cb.BindPoint, out var buf)) continue;
+                FillConstantBuffer(mat, cb, s, world, view, proj, unboundConstants);
+                Upload(buf, _pendingCb);
+                _ctx.PSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
+            }
 
             // textures and samplers, at the registers the shader declares
             if (compare)
@@ -799,20 +913,25 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                 Upload(_compareCb, cbBytes);
                 _ctx.PSSetConstantBuffers(0, 1, ref _compareCb);
 
-                var firstBound = _psRefl?.Textures.FirstOrDefault(t => _textures.ContainsKey(t.Name));
-                var srv = firstBound is not null ? _textures[firstBound.Name] : _white;
+                var firstBound = mat.PsRefl.Textures.FirstOrDefault(t => mat.Textures.ContainsKey(t.Name));
+                var srv = firstBound is not null ? mat.Textures[firstBound.Name] : _white;
                 _ctx.PSSetShaderResources(0, 1, ref srv);
                 var samp = _linearWrap;
                 _ctx.PSSetSamplers(0, 1, ref samp);
             }
             else
             {
-                BindResources(_psRefl, pixel: true);
+                BindResources(mat, mat.PsRefl, pixel: true);
             }
-            BindResources(_vsRefl, pixel: false);
+            BindResources(mat, mat.VsRefl, pixel: false);
 
-            _ctx.DrawIndexed((uint)_indexCount, 0, 0);
-            DrawCalls++;
+            uint count = mat.IndexCount < 0 ? (uint)_indexCount : (uint)mat.IndexCount;
+            if (count > 0)
+            {
+                _ctx.DrawIndexed(count, (uint)Math.Max(0, mat.StartIndex), 0);
+                DrawCalls++;
+            }
+            }
 
             _ctx.CopyResource(_stage, _rt);
             MappedSubresource map = default;
@@ -841,12 +960,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         }
     }
 
-    private void BindResources(DxbcShader? refl, bool pixel)
+    private void BindResources(PreviewMaterial mat, DxbcShader? refl, bool pixel)
     {
         if (refl is null) return;
         foreach (var t in refl.Textures)
         {
-            var srv = _textures.TryGetValue(t.Name, out var bound) ? bound : _white;
+            var srv = mat.Textures.TryGetValue(t.Name, out var bound) ? bound : _white;
             if (pixel) _ctx.PSSetShaderResources(t.BindPoint, 1, ref srv);
             else _ctx.VSSetShaderResources(t.BindPoint, 1, ref srv);
         }
@@ -860,31 +979,14 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     }
 
     /// <summary>Which reflected textures currently have nothing bound (they sample white).</summary>
-    public IEnumerable<string> UnboundTextureNames()
-    {
-        foreach (var refl in new[] { _vsRefl, _psRefl })
-        {
-            if (refl is null) continue;
-            foreach (var t in refl.Textures)
-                if (!_textures.ContainsKey(t.Name)) yield return t.Name;
-        }
-    }
+    public IEnumerable<string> UnboundTextureNames() =>
+        _materials.SelectMany(m => m.UnboundTextures).Distinct(StringComparer.OrdinalIgnoreCase);
 
     // ---------------------------------------------------------------- teardown
 
-    private void ReleaseShaders()
-    {
-        _vs.Dispose(); _ps.Dispose(); _layout.Dispose(); _comparePs.Dispose();
-        _vs = default; _ps = default; _layout = default; _comparePs = default;
-        foreach (var b in _vsCbs.Values) b.Dispose();
-        foreach (var b in _psCbs.Values) b.Dispose();
-        _vsCbs.Clear(); _psCbs.Clear();
-    }
-
     public void Dispose()
     {
-        ReleaseShaders();
-        ClearTextures();
+        ClearMaterials();
         _white.Dispose();
         _vb.Dispose(); _ib.Dispose(); _compareCb.Dispose();
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
