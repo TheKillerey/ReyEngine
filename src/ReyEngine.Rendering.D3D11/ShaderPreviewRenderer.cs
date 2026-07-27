@@ -174,6 +174,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     public IReadOnlyList<PreviewMaterial> Materials => _materials;
 
     private ComPtr<ID3D11ShaderResourceView> _white;
+    private ComPtr<ID3D11ShaderResourceView> _identityRamp;
 
     public string DeviceDescription { get; private set; } = "(no device)";
     public bool IsReady => _device.Handle is not null && _materials.Count > 0;
@@ -248,6 +249,24 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         // binding shows as "unlit but present" rather than as a black or undefined surface
         var px = new byte[] { 255, 255, 255, 255 };
         _white = MakeTexture(px, 1, 1);
+
+        // M218: except for the colour-remap ramp, where white is actively destructive.
+        //
+        // PIXEL_COLOR_REMAP_RAMP REPLACES rgb with ramp.Sample(luma(rgb), 0.5) rather than multiplying by
+        // it - a finding from the D3D11 spike, which hit exactly this and reported pure white for every
+        // case until it swapped in a greyscale ramp. It is declared by essentially every colour-output
+        // shader, so binding white there flattens the entire image to white while leaving the silhouette
+        // intact: Kayn drew with a correct outline in two colours and no surface detail at all.
+        //
+        // A greyscale identity ramp makes the stage a no-op, which is the neutral stand-in. What the game
+        // actually puts in that texture is still UNKNOWN and is recorded as such in the spike write-up.
+        var ramp = new byte[256 * 4];
+        for (int i = 0; i < 256; i++)
+        {
+            ramp[i * 4] = ramp[i * 4 + 1] = ramp[i * 4 + 2] = (byte)i;
+            ramp[i * 4 + 3] = 255;
+        }
+        _identityRamp = MakeTexture(ramp, 256, 1);
     }
 
     // ---------------------------------------------------------------- shaders
@@ -821,6 +840,22 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // above.
                     "LIGHT_MAP_COLOR_SCALE_AND_INTENSITY" => new[] { 1f, 1f, 1f, 1f },
                     "TINTCOLOR" => new[] { 1f, 1f, 1f, 1f },
+
+                    // M218: constants that MULTIPLY must not default to zero.
+                    //
+                    // Everything unrecognised falls through to a zero-filled buffer, which is the right
+                    // conservative choice for an additive or offset term and catastrophically wrong for a
+                    // multiplicative one. `Alpha` is a champion material's opacity: with no value it came
+                    // through as 0 and Kayn rendered perfectly and completely invisibly - the geometry, the
+                    // bones and the textures were all correct and every pixel was discarded at the end.
+                    //
+                    // Measured, not assumed: sweeping every USED constant of skinnedmesh/diffuse_alpha over
+                    // the loaded model, `Alpha` was the ONLY one that changed whether anything appeared
+                    // (0 lit pixels at 0, 1,684 at 1). The others below are not proven the same way - they
+                    // are scale terms where 1 is the identity and 0 would silently erase their contribution,
+                    // so 1 is the honest neutral rather than a measurement.
+                    "ALPHA" => new[] { 1f, 1f, 1f, 1f },
+                    "LIGHTGRID_SCALE" or "KGRASSFADE" => new[] { 1f, 1f, 1f, 1f },
                     _ => null,
                 };
             }
@@ -1081,7 +1116,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         if (refl is null) return;
         foreach (var t in refl.Textures)
         {
-            var srv = mat.Textures.TryGetValue(t.Name, out var bound) ? bound : _white;
+            var srv = mat.Textures.TryGetValue(t.Name, out var bound) ? bound : StandIn(t.Name);
             if (pixel) _ctx.PSSetShaderResources(t.BindPoint, 1, ref srv);
             else _ctx.VSSetShaderResources(t.BindPoint, 1, ref srv);
         }
@@ -1094,7 +1129,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         }
     }
 
-    /// <summary>Which reflected textures currently have nothing bound (they sample white).</summary>
+    /// <summary>The stand-in for a texture nothing supplied. White for almost everything; an identity
+    /// ramp for the colour remap, where white would replace the whole image.</summary>
+    private ComPtr<ID3D11ShaderResourceView> StandIn(string name) =>
+        name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase) ? _identityRamp : _white;
+
+    /// <summary>Which reflected textures currently have nothing bound (they sample a stand-in).</summary>
     public IEnumerable<string> UnboundTextureNames() =>
         _materials.SelectMany(m => m.UnboundTextures).Distinct(StringComparer.OrdinalIgnoreCase);
 
@@ -1104,6 +1144,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     {
         ClearMaterials();
         _white.Dispose();
+        _identityRamp.Dispose();
         _vb.Dispose(); _ib.Dispose(); _compareCb.Dispose();
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClamp.Dispose();

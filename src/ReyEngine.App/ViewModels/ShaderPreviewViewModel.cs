@@ -504,7 +504,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         var declared = TextureSlots.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var slot in b.Slots)
         {
-            string target = slot.SamplerName + "__TX";
+            string target = ResolveTextureTarget(slot.SamplerName, _ps!, _vs!) ?? (slot.SamplerName + "__TX");
             bool wanted = declared.Contains(target);
             if (string.IsNullOrWhiteSpace(slot.Path))
             { sb.AppendLine($"   -  {slot.SamplerName,-28} (no path authored)"); continue; }
@@ -742,6 +742,41 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         return null;
     }
 
+    /// <summary>M218: which declared texture should this material's sampler feed?
+    ///
+    /// <para>Normally it is <c>samplerName + "__TX"</c>, measured over 16,279 pairs. Champions break that,
+    /// and it is not a corner case: a skin's default diffuse and every inline per-submesh override are
+    /// parsed as a sampler literally named <c>texture</c>, because that is the field name in
+    /// <c>skinMeshProperties</c>. There is no <c>texture__TX</c> in any shader, so Kayn bound zero textures
+    /// and every slot sampled the white stand-in.</para>
+    ///
+    /// <para>For that generic name only, the diffuse slot is picked by inspecting what the shader declares:
+    /// the first non-shared texture, preferring one whose name contains "Diffuse". Names ending
+    /// <c>_SharedTexture</c> are engine-supplied (FOW, the colour-remap ramp) and are never a material's
+    /// diffuse. This is a preview affordance and it is reported on the row, not a claim about how the engine
+    /// binds.</para></summary>
+    private static string? ResolveTextureTarget(string samplerName, DxbcShader ps, DxbcShader vs)
+    {
+        string exact = samplerName + "__TX";
+        foreach (var refl in new[] { ps, vs })
+            foreach (var t in refl.Textures)
+                if (t.Name.Equals(exact, StringComparison.OrdinalIgnoreCase)) return t.Name;
+
+        // the champion convention: an unqualified "texture" means the diffuse
+        if (!samplerName.Equals("texture", StringComparison.OrdinalIgnoreCase)) return null;
+
+        var candidates = ps.Textures.Concat(vs.Textures)
+            .Where(t => !t.Name.Contains("_Shared", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (candidates.Count == 0) return null;
+
+        foreach (var t in candidates)
+            if (t.Name.Contains("Diffuse", StringComparison.OrdinalIgnoreCase)) return t.Name;
+        foreach (var t in candidates)
+            if (t.Name.Contains("Main", StringComparison.OrdinalIgnoreCase)) return t.Name;
+        return candidates[0].Name;
+    }
+
     /// <summary>Resolve one material to a live pipeline covering its submesh slices.</summary>
     private PreviewMaterial? BuildSceneMaterial(MaterialBinding b,
         List<(string Material, int Start, int Count)> slices, StringBuilder sb,
@@ -804,19 +839,21 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
             foreach (var slot in b.Slots)
             {
-                string target = slot.SamplerName + "__TX";
                 if (string.IsNullOrWhiteSpace(slot.Path)) continue;
-                if (!ps.Textures.Any(t => t.Name.Equals(target, StringComparison.OrdinalIgnoreCase))
-                    && !vs.Textures.Any(t => t.Name.Equals(target, StringComparison.OrdinalIgnoreCase))) continue;
+                string? target = ResolveTextureTarget(slot.SamplerName, ps, vs);
+                if (target is null) continue;
                 try
                 {
                     var data = _readAsset!(HashAlgorithms.WadPath(slot.Path.ToLowerInvariant()));
-                    if (data is null || data.Length == 0) { texMissing++; continue; }
+                    if (data is null || data.Length == 0)
+                    { sb.AppendLine($"      texture NOT FOUND  {slot.Path}"); texMissing++; continue; }
                     var img = TextureDecoder.Decode(data);
                     _renderer.SetTexture(mat, target, img.Rgba, img.Width, img.Height);
+                    if (!target.Equals(slot.SamplerName + "__TX", StringComparison.OrdinalIgnoreCase))
+                        sb.AppendLine($"      '{slot.SamplerName}' -> {target}  ({img.Width}x{img.Height})");
                     texBound++;
                 }
-                catch { texMissing++; }
+                catch (Exception ex) { sb.AppendLine($"      texture FAILED  {slot.Path}: {ex.Message}"); texMissing++; }
             }
 
             foreach (var prm in b.Parameters)
