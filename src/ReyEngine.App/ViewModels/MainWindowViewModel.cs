@@ -4742,26 +4742,46 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (_currentMapEntry is not { } mapEntry) return;
         var moved = MapContent.AllParticles.Where(v => v.IsMoved).ToList();
-        // M75: sounds derived FROM a particle system share the particle's transform bytes — patching them
-        // independently would collide with the particle edit. Only standalone MapAudio placements save.
+        // M199 (5.2): sounds derived FROM a particle system are no longer skipped. They used to be, because
+        // they share the particle's transform BYTES and the old locator found placements by that signature -
+        // so saving both collided. Identity is now (container, item key), which is unique, so the collision
+        // cannot happen. A derived sound has no placement id of its own, though: it is a view of the
+        // particle, so moving the particle is still what moves it, and only standalone MapAudio saves here.
         var movedSounds = MapContent.Sounds.Where(s => s.IsMoved && !s.Sound.FromParticleSystem).ToList();
-        int skippedSounds = MapContent.Sounds.Count(s => s.IsMoved && s.Sound.FromParticleSystem);
-        if (skippedSounds > 0)
-            _log.Warn("Sounds", $"{skippedSounds} moved sound(s) come from particle systems — move the particle instead; they were skipped.");
+        int derivedSounds = MapContent.Sounds.Count(s => s.IsMoved && s.Sound.FromParticleSystem);
+        if (derivedSounds > 0)
+            _log.Info("Sounds", $"{derivedSounds} moved sound(s) follow their particle system and are saved with it.");
         if (moved.Count == 0 && movedSounds.Count == 0) { _log.Info("Particles", "No placement edits to save."); return; }
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) { _log.Error("Particles", "No materials .bin to save into."); return; }
         if (!GuardEditable(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
-        // M75: full replacement transforms — position + rotation + scale for particles; position for sounds.
-        var edits = moved.Select(v => (v.Placement.Transform, v.CurrentTransform)).ToList();
-        edits.AddRange(movedSounds.Select(s =>
+        // M199 (5.2): edits are addressed by tree identity, not by a 64-byte transform signature. 1,450 of
+        // 30,628 shipped placements share a matrix with a neighbour, so the old signature could patch the
+        // wrong one; 2 have no transform and were unaddressable entirely.
+        var placementEdits = moved
+            .Where(v => v.Placement.Id.IsValid)
+            .Select(v => new MapPlacementEdit(v.Placement.Id) { Transform = v.CurrentTransform })
+            .ToList();
+        int unaddressable = moved.Count(v => !v.Placement.Id.IsValid);
+        if (unaddressable > 0)
+            _log.Warn("Particles", $"{unaddressable} moved particle(s) have no identity in the bin and were skipped.");
+
+        // Sounds still go through the legacy transform patcher: MapSoundPlacement does not carry an id yet.
+        var soundEdits = movedSounds.Select(s =>
         {
             var t = s.Sound.Transform;
             t.Translation = s.Position;
             return (s.Sound.Transform, t);
-        }));
-        var bytes = MapParticleWriter.WriteTransforms(GetAssetBytes(binEntry), edits, out var err);
+        }).ToList();
+
+        var source = GetAssetBytes(binEntry);
+        string? err = null;
+        byte[]? bytes = placementEdits.Count > 0
+            ? MapPlaceableWriter.WriteEdits(source, placementEdits, out err)
+            : source;
+        if (bytes is not null && soundEdits.Count > 0)
+            bytes = MapParticleWriter.WriteTransforms(bytes, soundEdits, out err);
         if (bytes is null) { _log.Error("Particles", $"Could not save placement edits: {err}"); return; }
         if (err is not null) _log.Warn("Particles", err);
         try
@@ -4778,7 +4798,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project.IsDirty = true;
             UpdateTitle();
             HasParticleMoves = false;
-            _log.Success("Particles", $"Saved {moved.Count} particle edit(s) + {movedSounds.Count} sound move(s) to the materials.bin override. Build Package will include it.");
+            _log.Success("Particles", $"Saved {placementEdits.Count} particle edit(s) + {movedSounds.Count} sound move(s) to the materials.bin override. Build Package will include it.");
         }
         catch (Exception ex) { _log.Error("Particles", ex.Message); }
     }

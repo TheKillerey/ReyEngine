@@ -1455,8 +1455,58 @@ have not been exercised in a running window.
 | # | Work | File | Note |
 |---|---|---|---|
 | 5.1 | Nothing is required for emitter definitions — `ParticleDocument.Serialize` is already structurally lossless (393 bins, 0 semantic diffs) | `ParticleDocument.cs:32-37` | Optional: preserve original property order so saved bins diff cleanly against Riot's (281 of 393 currently reorder) |
-| 5.2 | **`MapParticleWriter` can persist only the 64-byte transform.** Adding, removing, re-linking or re-tinting a placement is impossible | `MapParticleWriter.cs:27-54` | Medium-high — the byte-signature locator must be replaced with a proper tree edit. Two placements have no transform and are not locatable at all today; the locator also fails silently on duplicate matrices |
-| 5.3 | Regression test that `palleteSrcMixColor` and `TextureMultFilpU/V` survive a round trip byte-for-byte | new test | Riot's typos; any writer that "fixes" them corrupts the bin |
+| 5.2 | ~~**`MapParticleWriter` can persist only the 64-byte transform**~~ | — | — | **DONE in M199** — see 5.2b. The silent duplicate-matrix failure is real and reproduced: **84 of 99** groups |
+| 5.3 | ~~Regression test for Riot's typo fields~~ | — | — | **DONE in M198** — the repo's first test project, 53 tests |
+
+#### 5.2b / 5.3b — M198 and M199 results
+
+**5.3 (M198).** There was no test project at all, so this adds one: `tests/ReyEngine.Formats.Tests`
+(xunit, in `ReyEngine.slnx`), **53 tests**, no game install needed. The typo tests are synthetic — build a
+tree, write it, read it back — so they cannot be weakened by whatever a particular install contains.
+
+The premise is asserted first, because everything else depends on it: `palleteSrcMixColor` hashes to
+`0x143f06d1` and the "corrected" `paletteSrcMixColor` to `0x8af10fa7`. They are **different keys**, so
+fixing Riot's spelling does not tidy the file, it writes a field the game never looks up. Same for
+`TextureMultFilpU/V` vs `…FlipU/V`. The tests assert the typo fields survive a round trip with their
+values intact, that the corrected spellings are *not* invented, and that a second round trip is
+byte-identical to the first (which is what makes repeated Save Override runs safe).
+
+M193's recon recorded that the coverage invariants lived only in a scratchpad harness, so those are now
+33 repo tests as well. **The suite was checked for bite:** temporarily unparking one field
+(`miscRenderFlags`) turns 45 pass into 44 pass / 1 fail.
+
+**5.2 (M199) — the silent failure is real, and worse than the row implies.**
+
+Measured over the 8 shipping map WADs: **1,450 of 30,628 placements, in 365 groups, share an identical
+transform with another placement in the same bin.** The old writer located placements by scanning the raw
+file for those exact 64 bytes, so it patched whichever occurrence came first. Exercised on 99 real
+duplicate groups, **the old writer moved the wrong placement in 84 of them.** (In the other 15 the first
+byte match happened to be the intended one — which is precisely what makes the bug silent: it is
+order-dependent, not consistent.) The app already knew something was wrong here and worked around it by
+*refusing to save* moved sounds derived from particle systems, because those share the particle's
+transform bytes.
+
+Identity is now `(container object hash, items map key)`. That pair is proven unique: across 151,457
+items every key is a `BinTreeHash` and there are **zero** duplicate keys within a container. It also
+addresses the 2 placements that carry no transform and were previously unreachable, and it is what makes
+re-tinting, re-linking, renaming and removing possible at all — none of which has a byte signature.
+
+**The rewrite is not trusted.** A tree rewrite touches the whole file where the old patcher touched 64
+bytes, so `MapPlaceableWriter` re-parses its own output and compares it object-by-object and
+property-by-property against the original, refusing to save unless the only differences are the requested
+ones. Containers holding an edited placement are compared entry-by-entry, so one edit does not excuse its
+neighbours. Across 199 real bins there were **0 refusals**.
+
+VERIFIED: 8 synthetic tests plus 4 checks against real bins. The headline synthetic case reproduces the
+duplicate-matrix shape and asserts the twin does not move; others cover the transform-less placement,
+re-tint/re-link/rename, remove-drops-only-the-target, unrelated objects surviving, an unknown placement
+being refused rather than silently ignored, and a partial batch reporting what it missed. On real data:
+199 bins round-trip with 0 self-check refusals, and 99 of 99 duplicate-matrix groups now edit correctly.
+
+**Still not done:** `MapSoundPlacement` does not carry an id yet, so standalone sound moves still go
+through the legacy byte patcher; and adding a brand-new placement is not implemented (it needs a template
+to clone, the way `MapMaterialFactory` does for materials). The UI exposes only the move verb — re-tint,
+re-link, rename and remove are reachable in the writer but have no editor surface yet.
 
 ### 6. Rare / low priority
 

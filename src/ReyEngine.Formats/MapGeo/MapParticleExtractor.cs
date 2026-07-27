@@ -43,7 +43,12 @@ public sealed record MapParticlePlacement(
     int? Quality = null,
     /// <summary>True when mVisibilityFlags was actually authored. 255 is ReyEngine's permissive substitute
     /// and is never authored (0 of 12,845), so without this the substitute is indistinguishable from data.</summary>
-    bool HasVisibilityFlags = false)
+    bool HasVisibilityFlags = false,
+    /// <summary>M199 (tier 5.2): where this placement lives in the tree. The saver used to find placements
+    /// by their 64 transform bytes, which is ambiguous for the 1,450 placements that share a matrix with a
+    /// neighbour and impossible for the 2 that have no transform. This pair is unique - measured, 0
+    /// duplicate keys across 151,457 items.</summary>
+    MapPlacementId Id = default)
 {
     /// <summary>The VFX system's short name (leaf of the resolved path) for display.</summary>
     public string SystemName => SystemPath.Contains('/') ? SystemPath[(SystemPath.LastIndexOf('/') + 1)..] : SystemPath;
@@ -70,8 +75,10 @@ public static class MapParticleExtractor
 
             foreach (var it in en)
             {
-                // items is a map (hash -> struct); each entry exposes a Value property.
+                // items is a map (hash -> struct); each entry exposes Key and Value.
                 if (it.GetType().GetProperty("Value")?.GetValue(it) is not BinTreeStruct s) continue;
+                // M199: the entry key is the placement's stable identity for saving.
+                uint itemKey = it.GetType().GetProperty("Key")?.GetValue(it) is BinTreeHash kh ? kh.Value : 0u;
                 if (!IsClass(s.ClassHash, "MapParticle", resolve)) continue;
 
                 var transform = Field(s.Properties, "transform") is BinTreeMatrix44 m ? m.Value : Matrix4x4.Identity;
@@ -111,7 +118,8 @@ public static class MapParticleExtractor
                     },
                     AttachToCamera: Flag(s.Properties, "AttachToCamera"),
                     Quality: Field(s.Properties, "quality") is BinTreeI32 q ? q.Value : null,
-                    HasVisibilityFlags: Field(s.Properties, "mVisibilityFlags") is not null));
+                    HasVisibilityFlags: Field(s.Properties, "mVisibilityFlags") is not null,
+                    Id: new MapPlacementId(o.PathHash, itemKey)));
             }
         }
         return result;
