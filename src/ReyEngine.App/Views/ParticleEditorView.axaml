@@ -186,7 +186,7 @@
                 <TextBlock Text="{Binding SelectedProperty.ErrorText, FallbackValue=''}" FontSize="10"
                            Foreground="#E5645B" TextWrapping="Wrap"
                            IsVisible="{Binding SelectedProperty.ErrorText, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}" />
-                <TextBlock Text="Read-only property (unsupported type or Riot reference)." FontSize="10" Opacity="0.5" TextWrapping="Wrap"
+                <TextBlock Text="{Binding SelectedProperty.ReadOnlyReason, FallbackValue=''}" FontSize="10" Opacity="0.5" TextWrapping="Wrap"
                            IsVisible="{Binding SelectedProperty.IsReadOnly, FallbackValue=False}" />
                 <TextBlock FontSize="10" Opacity="0.5" TextWrapping="Wrap" Margin="0,10,0,0"
                            Text="Vectors: comma-separated (x, y, z). Colours: r, g, b, a (0..1). Edits update the preview immediately; Save Override writes to the project." />

@@ -37,7 +37,10 @@ public sealed class ParticleDocument
     }
 
     /// <summary>Parse a .bin into its VFX systems; null when it contains none (not a particle bin).</summary>
-    public static ParticleDocument? Parse(byte[] data)
+    /// <param name="resolveName">M187 (3.1): the host's hash dictionary, used to name emitter fields.
+    /// Optional so the Formats layer stays standalone; when null (or when a hash is unknown to it) the
+    /// built-in <see cref="ParticleEmitterEntry"/> fallback table is used instead.</param>
+    public static ParticleDocument? Parse(byte[] data, Func<uint, string?>? resolveName = null)
     {
         BinTree tree;
         IReadOnlyList<BinRepairIssue> issues;
@@ -60,7 +63,7 @@ public sealed class ParticleDocument
                 if (prop is not BinTreeContainer c) continue;
                 foreach (var el in c.Elements)
                     if (el is BinTreeStruct s && s.ClassHash == emitterClass)
-                        emitters.Add(ParticleEmitterEntry.From(s));
+                        emitters.Add(ParticleEmitterEntry.From(s, resolveName));
             }
             if (emitters.Count > 0)
                 systems.Add(new ParticleSystemEntry(o.PathHash, name, path, emitters));
@@ -123,14 +126,18 @@ public sealed class ParticleEmitterEntry
     private static readonly string[] ModuleOrder =
         { "Emission", "Birth", "Position", "Velocity", "Scale", "Color", "Render", "Texture", "Other" };
 
-    internal static ParticleEmitterEntry From(BinTreeStruct emitter)
+    internal static ParticleEmitterEntry From(BinTreeStruct emitter, Func<uint, string?>? resolveName = null)
     {
         var props = new List<ParticleProperty>();
         string name = "(emitter)";
         foreach (var (hash, prop) in emitter.Properties)
         {
-            string fieldName = FieldNames.TryGetValue(hash, out var fn) ? fn : $"0x{hash:x8}";
-            if (fieldName == "emitterName" && prop is BinTreeString ns) name = ns.Value;
+            // M187 (3.1): the host's hash dictionary first, the built-in table only as an offline fallback.
+            // Measured over 25,008,999 emitter field occurrences: the table alone names 85.5% of them,
+            // the dictionary names 99.8%. Exactly two hashes are unknown to both - 0xcb13aff1 (51,189,
+            // F32) and 0xd1ee8634 (583, BitBool) - and those still show as hex.
+            string fieldName = resolveName?.Invoke(hash) ?? (FieldNames.TryGetValue(hash, out var fn) ? fn : $"0x{hash:x8}");
+            if (hash == EmitterNameHash && prop is BinTreeString ns) name = ns.Value;
 
             string module = ModuleOf(fieldName);
             switch (prop)
@@ -141,9 +148,38 @@ public sealed class ParticleEmitterEntry
                     props.Add(new ParticleProperty(module, fieldName, cv, isConstantOfCurve: true,
                         curveTimes: times, curveChannels: channels));
                     break;
-                // plain primitives (numbers, bools, strings/paths, vectors, colours) — directly editable
-                case BinTreeF32 or BinTreeU8 or BinTreeU16 or BinTreeU32 or BinTreeI32 or BinTreeBool
-                    or BinTreeBitBool or BinTreeString or BinTreeVector2 or BinTreeVector3 or BinTreeVector4
+                // M187: a Value* struct with a curve but NO constantValue. Riot's writer omits default-valued
+                // properties, so this is common rather than exotic - ValueColor ships constantValue in only
+                // 63.0% of its instances and IntegratedValueFloat in 34.1%. These rows previously fell through
+                // to `default:` and became one opaque "Embedded" row, which hid the CURVE as well as the
+                // constant. The curve is now shown. The constant stays unwritten and unguessed: what value
+                // Riot's reader substitutes for an absent constantValue is not established here.
+                case BinTreeStruct ds when Field(ds.Properties, "dynamics") is BinTreeStruct:
+                    var (dt, dc) = ReadDynamics(ds.Properties);
+                    props.Add(new ParticleProperty(module, fieldName, ds, readOnly: true,
+                        curveTimes: dt, curveChannels: dc, displayText: "(curve only - no constantValue)",
+                        readOnlyReason: "This field ships only a curve - Riot's writer omitted its constantValue "
+                                      + "because it was the default. The curve is shown; the constant has no row to edit."));
+                    break;
+                // M187 (3.2): Optional<T> holds the value one level down. 1,701,250 emitter occurrences are
+                // Optional<F32> - lifetime, particleLinger, emitterLinger, period, timeActiveDuringPeriod,
+                // MaximumRateByVelocity - and every one of them was read-only. Editing the inner property
+                // edits the live tree in place, exactly as a bare field does.
+                case BinTreeOptional { Value: { } inner } when BinValueEditor.KindOf(inner) != BinValueKind.ReadOnly:
+                    props.Add(new ParticleProperty(module, fieldName, inner, typeNote: " (optional)"));
+                    break;
+                // An EMPTY Optional has no value to edit; writing one would mean changing the field's
+                // presence, not its value, which the row model cannot express. Shown, not editable.
+                case BinTreeOptional:
+                    props.Add(new ParticleProperty(module, fieldName, prop, readOnly: true,
+                        readOnlyReason: "This optional field is present but empty. Giving it a value would change "
+                                      + "whether the field exists, not what it holds, which this row cannot express."));
+                    break;
+                // plain primitives (numbers, bools, strings/paths, vectors, colours) - directly editable.
+                // The signed/wide integer types were missing: `pass` alone is 976,544 I16 occurrences.
+                case BinTreeF32 or BinTreeU8 or BinTreeU16 or BinTreeU32 or BinTreeU64 or BinTreeI8
+                    or BinTreeI16 or BinTreeI32 or BinTreeI64 or BinTreeBool or BinTreeBitBool
+                    or BinTreeString or BinTreeHash or BinTreeVector2 or BinTreeVector3 or BinTreeVector4
                     or BinTreeColor:
                     props.Add(new ParticleProperty(module, fieldName, prop));
                     break;
@@ -196,24 +232,82 @@ public sealed class ParticleEmitterEntry
         return (times, channels);
     }
 
-    private static string ModuleOf(string field) => field switch
-    {
-        "rate" or "particleLifetime" or "lifetime" or "particleLinger" or "timeBeforeFirstEmission"
-            or "isSingleParticle" or "disabled" or "importance" => "Emission",
-        "birthScale0" or "birthColor" or "birthVelocity" or "birthRotation0" or "birthRotationalVelocity0"
-            or "birthUvScrollRate" or "birthFrameRate" or "birthUvRotation0" or "birthDrag" => "Birth",
-        "emitterPosition" or "isLocalOrientation" or "bindWeight" or "emitOffset" or "shape" => "Position",
-        "velocity" or "worldAcceleration" or "acceleration" or "drag" => "Velocity",
-        "scale0" or "isUniformScale" or "scaleBirthScaleByBoundObjectSize" or "scaleEmitOffsetByBoundObjectSize" => "Scale",
-        "color" or "colorLookUpTypeX" or "colorLookUpTypeY" or "lingerColor" => "Color",
-        "blendMode" or "pass" or "miscRenderFlags" or "alphaRef" or "isDirectionOriented" or "primitive"
-            or "isRandomStartFrame" or "depthBiasFactors" or "renderPhaseOverride" => "Render",
-        "texture" or "texDiv" or "numFrames" or "frameRate" or "uvScroll" or "textureMult" or "uvRotation0"
-            or "uvScale0" or "particleColorTexture" or "falloffTexture" => "Texture",
-        _ => "Other",
-    };
+    /// <summary>Which module card a field belongs on. Case-INSENSITIVE: the bin name hash is computed over
+    /// the lowercased string, so Riot's own spelling varies (<c>Color</c>, <c>EmitterPosition</c>,
+    /// <c>SpawnShape</c>, <c>TextureFlipV</c>) and an ordinal match would drop those into "Other".</summary>
+    private static string ModuleOf(string field) =>
+        ModuleByField.TryGetValue(field, out var m) ? m : "Other";
 
-    /// <summary>Known emitter field names (FNV1a-lowercase), so rows show names instead of raw hashes.</summary>
+    private static readonly Dictionary<string, string> ModuleByField = BuildModules();
+    private static Dictionary<string, string> BuildModules()
+    {
+        // M187 (3.1): every emitter field measured across the corpus, so the ~90 that the hash dictionary
+        // newly names land on a real card instead of piling up in "Other".
+        var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        void Add(string module, params string[] fields) { foreach (var f in fields) d[f] = module; }
+
+        Add("Emission",
+            "rate", "rateByVelocityFunction", "MaximumRateByVelocity", "flexRate",
+            "particleLifetime", "flexParticleLifetime", "lifetime", "doesLifetimeScale",
+            "offsetLifetimeScaling", "offsetLifeScalingSymmetryMode",
+            "particleLinger", "emitterLinger", "particleLingerType", "Linger",
+            "timeBeforeFirstEmission", "HasVariableStartTime", "period", "timeActiveDuringPeriod",
+            "isSingleParticle", "disabled", "importance", "ChanceToNotExist", "ParticlesShareRandomValue",
+            "childParticleSetDefinition",
+            "emissionSurfaceDefinition", "emissionMeshName", "emissionMeshScale", "useEmissionMeshNormalForBirth");
+
+        Add("Birth",
+            "birthScale0", "birthColor", "birthVelocity", "birthDrag", "birthAcceleration",
+            "birthOrbitalVelocity", "birthRotation0", "birthRotationalVelocity0", "birthRotationalAcceleration",
+            "birthUvScrollRate", "birthFrameRate", "birthUvRotation0", "birthUvRotateRate", "birthUVOffset",
+            "flexBirthVelocity", "flexBirthRotationalVelocity0", "flexBirthUVOffset", "flexBirthUVScrollRate");
+
+        Add("Position",
+            "EmitterPosition", "isLocalOrientation", "particleIsLocalOrientation", "IsEmitterSpace",
+            "bindWeight", "emitOffset", "shape", "SpawnShape",
+            "translationOverride", "rotationOverride", "scaleOverride",
+            "rotation0", "isRotationEnabled", "hasPostRotateOrientation", "postRotateOrientationAxis",
+            "isFollowingTerrain", "useNavmeshMask", "isGroundLayer");
+
+        Add("Velocity",
+            "velocity", "worldAcceleration", "acceleration", "drag",
+            "directionVelocityScale", "directionVelocityMinScale", "fieldCollectionDefinition");
+
+        Add("Scale",
+            "scale0", "isUniformScale", "scaleBirthScaleByBoundObjectSize", "scaleEmitOffsetByBoundObjectSize",
+            "FlexShapeDefinition", "FlexInstanceScale", "flexScaleBirthScale");
+
+        Add("Color",
+            "Color", "lingerColor", "colorLookUpTypeX", "colorLookUpTypeY", "colorLookUpScales",
+            "colorLookUpOffsets", "colorRenderFlags", "paletteDefinition", "modulationFactor",
+            "censorModifiers", "censorModulateValue", "colorblindVisibility");
+
+        Add("Render",
+            "blendMode", "pass", "miscRenderFlags", "alphaRef", "isDirectionOriented", "primitive",
+            "isRandomStartFrame", "depthBiasFactors", "renderPhaseOverride", "meshRenderFlags",
+            "stencilMode", "stencilRef", "StencilReferenceId", "disableBackfaceCull", "WriteAlphaOnly",
+            "softParticleParams", "reflectionDefinition", "distortionDefinition", "alphaErosionDefinition",
+            "doesCastShadow", "sliceTechniqueRange", "SortEmittersByPos",
+            "CustomMaterial", "materialOverrideDefinitions", "Filtering", "LegacySimple");
+
+        Add("Texture",
+            "texture", "texDiv", "numFrames", "frameRate", "startFrame", "textureMult",
+            "uvScroll", "uvScale", "uvScale0", "uvRotation", "uvRotation0", "uvMode", "uvScrollClamp",
+            "uvTransformCenter", "uvParallaxScale", "emitterUvScrollRate",
+            "particleUVScrollRate", "particleUVRotateRate", "texAddressModeBase",
+            "TextureFlipU", "TextureFlipV", "isTexturePixelated",
+            "particleColorTexture", "falloffTexture");
+
+        return d;
+    }
+
+    private static readonly uint EmitterNameHash = HashAlgorithms.Fnv1a("emitterName");
+
+    /// <summary>Offline fallback for emitter field names, used when the host has no hash dictionary loaded.
+    /// Trimmed in M187 to the 46 entries whose hashes actually occur on an emitter: the other 11 - among
+    /// them <c>emitOffset</c>, <c>shape</c>, <c>uvScroll</c>, <c>uvScale0</c> and <c>lingerColor</c> - were
+    /// guesses that never matched anything in the corpus. Spelling follows CDTB, since the hash is
+    /// case-insensitive but the displayed name should agree with the dictionary.</summary>
     private static readonly Dictionary<uint, string> FieldNames = BuildFieldNames();
     private static Dictionary<uint, string> BuildFieldNames()
     {
@@ -221,14 +315,13 @@ public sealed class ParticleEmitterEntry
         {
             "emitterName","rate","particleLifetime","lifetime","particleLinger","timeBeforeFirstEmission",
             "isSingleParticle","disabled","importance","blendMode","pass","miscRenderFlags","alphaRef",
-            "isDirectionOriented","primitive","birthScale0","scale0","isUniformScale","birthColor","color",
+            "isDirectionOriented","primitive","birthScale0","scale0","isUniformScale","birthColor","Color",
             "birthVelocity","velocity","worldAcceleration","acceleration","drag","birthDrag",
-            "birthRotation0","birthRotationalVelocity0","birthUvScrollRate","birthFrameRate","birthUvRotation0",
-            "emitterPosition","isLocalOrientation","bindWeight","emitOffset","shape","texture","texDiv",
-            "numFrames","frameRate","uvScroll","textureMult","uvRotation0","uvScale0","isRandomStartFrame",
-            "particleColorTexture","falloffTexture","colorLookUpTypeX","colorLookUpTypeY","lingerColor",
-            "scaleBirthScaleByBoundObjectSize","scaleEmitOffsetByBoundObjectSize","depthBiasFactors",
-            "renderPhaseOverride","doesLifetimeScale","censorModifiers","emitterDefinitionDataFlags",
+            "birthRotation0","birthRotationalVelocity0","birthUvScrollRate","birthFrameRate",
+            "EmitterPosition","isLocalOrientation","bindWeight","texture","texDiv",
+            "numFrames","frameRate","textureMult","isRandomStartFrame",
+            "particleColorTexture","falloffTexture","colorLookUpTypeX","colorLookUpTypeY",
+            "depthBiasFactors","renderPhaseOverride","doesLifetimeScale",
         };
         var d = new Dictionary<uint, string>(names.Length);
         foreach (var n in names) d[HashAlgorithms.Fnv1a(n)] = n;
@@ -252,10 +345,21 @@ public sealed class ParticleProperty
     public float[][]? CurveChannels { get; }
     public bool HasCurve => CurveTimes is { Length: > 0 };
     public bool IsReadOnly { get; }
+    /// <summary>Why this row cannot be edited, shown in the inspector. Read-only rows have several distinct
+    /// causes and one blanket message misattributes most of them.</summary>
+    public string ReadOnlyReason { get; }
+
+    /// <summary>Shown instead of the formatted value when the row has no editable value of its own
+    /// (a Value* struct whose constantValue Riot omitted). Constant, so such a row is never dirty.</summary>
+    private readonly string? _display;
 
     public ParticleProperty(string module, string name, BinTreeProperty prop, bool isConstantOfCurve = false,
-        float[]? curveTimes = null, float[][]? curveChannels = null, bool readOnly = false)
+        float[]? curveTimes = null, float[][]? curveChannels = null, bool readOnly = false,
+        string typeNote = "", string? displayText = null,
+        string readOnlyReason = "Read-only property (unsupported type or Riot reference).")
     {
+        _display = displayText;
+        ReadOnlyReason = readOnlyReason;
         Module = module;
         Name = name;
         _prop = prop;
@@ -263,11 +367,11 @@ public sealed class ParticleProperty
         CurveTimes = curveTimes;
         CurveChannels = curveChannels;
         IsReadOnly = readOnly || BinValueEditor.KindOf(prop) == BinValueKind.ReadOnly;
-        TypeName = prop.Type.ToString() + (HasCurve ? $" + curve({CurveTimes!.Length} keys)" : "");
-        _originalText = SafeFormat();
+        TypeName = prop.Type + typeNote + (HasCurve ? $" + curve({CurveTimes!.Length} keys)" : "");
+        _originalText = CurrentText;   // must match CurrentText's source, or a _display row reads as dirty forever
     }
 
-    public string CurrentText => SafeFormat();
+    public string CurrentText => _display ?? SafeFormat();
     public bool IsDirty => !string.Equals(CurrentText, _originalText, StringComparison.Ordinal);
 
     /// <summary>Apply text to the live property (throws on invalid input — caller keeps the old value).</summary>

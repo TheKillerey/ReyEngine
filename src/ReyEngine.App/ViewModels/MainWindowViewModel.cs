@@ -2582,6 +2582,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             DialogService.All);
         MapBinEditor.ReadRiotOriginal = ReadRiotOriginalBytes;
         MapBinEditor.SaveBytes = SaveMapBinBytesAsync;
+        ParticleEditor.ResolveBinName = ResolveBinName;   // M187 (3.1): field names instead of raw hashes
         ParticleEditor.Info = m => _log.Info("Particle", m);
         ParticleEditor.Error = m => _log.Error("Particle", m);
         ParticleEditor.MarkDocumentDirty = () => { }; // window has its own dirty state via Document.IsDirty

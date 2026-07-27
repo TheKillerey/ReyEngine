@@ -984,14 +984,64 @@ stand-in purely so it has a visible cycle. Nothing in the renderer or the data p
 
 | # | Work | Files | Affected | Risk |
 |---|---|---|---|---|
-| 3.1 | **Replace the hand-maintained name table with `HashDatabase.TryGetBinName`** and delete the 8 dead entries | `ParticleDocument.cs:217-236`; `HashDatabase.cs:25` | 4,146,580 rows currently showing raw hex | Trivial, high user-visible value |
-| 3.2 | **Add `BinTreeI16` and `Optional<T>` unwrapping to the editable-type list** | `ParticleDocument.cs:145-149`, `BinEditor.cs:155-167` | +2.6M rows editable, including `pass`, `lifetime`, `particleLinger`, `emitterLinger`, `period` | Low; `BinValueEditor.KindOf` already handles Int |
+| 3.1 | ~~**Replace the hand-maintained name table with `HashDatabase.TryGetBinName`**~~ | — | — | **DONE in M187** — see 3.1b |
+| 3.2 | ~~**Add `BinTreeI16` and `Optional<T>` unwrapping to the editable-type list**~~ | — | — | **DONE in M187** — see 3.2b |
 | 3.3 | **Expand nested structs into editable sub-rows** instead of one opaque read-only row | `ParticleDocument.cs:139-153` | Every definition struct — erosion, soft, reflection, palette, trail, beam, mesh, Linger, Filtering, field collection, child set | Medium; needs a tree-shaped row model |
 | 3.4 | **Show systems with zero emitters** | `ParticleDocument.cs:51-68` | 10,367 systems (5.5%) | Trivial |
 | 3.5 | **Add a system-level property panel** (`particleName`, `flags`, `transform`, `buildUpTime`, `visibilityRadius`, sounds) | `ParticleDocument.cs`, `ParticleEditorViewModel.cs`, `ParticleEditorView.axaml` | 189,274 systems have no editor surface | Medium |
 | 3.6 | **Curve key editing** (currently display-only) | `ParticleEditorView.axaml:174-179`, `ParticleEditorViewModel.cs` | 4.8M curves | Medium-high; the biggest missing authoring capability |
 | 3.7 | **Flag fields that are editable but ignored** by the renderer, so the user is not misled | `ParticleDocument.cs` (a badge or grey-out) | 12 fields incl. `alphaRef`, `miscRenderFlags`, `depthBiasFactors` | Trivial, prevents a class of false bug reports |
 | 3.8 | **Map placement inspector** for the 10 unread `MapParticle` fields | `MapParticleExtractor.cs`, map inspector view | 29,811 placements | Depends on 5.2 for saving |
+
+#### 3.1b / 3.2b — M187 result, and three corrections to the rows above
+
+Measured by running `ParticleDocument.Parse` itself over 40 champion WADs (2,604 particle bins,
+34,643 systems, 266,343 emitters, 5,380,294 property rows) — not by modelling the code against the
+census, which is how the original 3.1/3.2 estimates were produced and how each of them went wrong.
+
+| | built-in table | + `HashDatabase` |
+|---|---|---|
+| rows shown as a raw hex hash | 764,680 (14.2%) | **10,732 (0.2%)** |
+| rows landing on the catch-all "Other" card | 1,030,960 (19.2%) | **277,651 (5.2%)** |
+
+Exactly two field hashes are unknown to CDTB as well and still show as hex: `0xcb13aff1` (10,569 rows,
+F32) and `0xd1ee8634` (163 rows, BitBool).
+
+**Correction 1 — the dead-entry count was 11, not 8**, and the two entries the original count flagged
+as dead were not. `Fnv1a` lowercases, so the table's `color` and `emitterPosition` hash identically to
+CDTB's `Color` and `EmitterPosition`; comparing display spellings rather than hashes marked two live
+entries dead and missed five genuinely dead ones. The 11 removed (`birthUvRotation0`, `emitOffset`,
+`shape`, `uvScroll`, `uvRotation0`, `uvScale0`, `lingerColor`, `scaleBirthScaleByBoundObjectSize`,
+`scaleEmitOffsetByBoundObjectSize`, `censorModifiers`, `emitterDefinitionDataFlags`) hash to nothing
+that occurs on any emitter in the corpus. The remaining 46 stay as an offline fallback for when no
+hash dictionary is loaded.
+
+**Correction 2 — the module map had to become case-insensitive**, which item 3.1 did not anticipate.
+Riot's own spelling varies (`Color`, `EmitterPosition`, `SpawnShape`, `TextureFlipV`, `Filtering`),
+so an ordinal `switch` would have named those fields correctly and then dropped every one of them
+into "Other". Naming them without also placing them would have moved rows from one useless state to
+another.
+
+**Correction 3 — 3.2's "+2.6M rows editable" was too high.** The real figure on this slice is 566,965
+rows (10.5%): 358,327 unwrapped `Optional<T>` and 208,638 `I8`/`I16`/`I64`/`U64`/`Hash`. The estimate
+counted census *occurrences* of those types, which includes types that were already editable.
+
+**Found while measuring, and fixed in the same milestone:** a `Value*` struct that carries a curve but
+no `constantValue` was falling through to the read-only default case as one opaque `Embedded` row,
+which hid **the curve as well as the constant**. This is common rather than exotic, because Riot's
+writer omits default-valued properties — `ValueColor` ships `constantValue` in only 63.0% of its
+instances and `IntegratedValueFloat` in 34.1%. 365,806 rows were affected and 365,805 of them have
+curve keys that the editor was not drawing. `Color`, the single most-used emitter field, was one of
+them. The curve is now shown; the constant is left unwritten and unguessed, since what Riot's reader
+substitutes for an absent `constantValue` is not established here.
+
+VERIFIED: 5 round trips through `Serialize` → re-`Parse` on real champion bins — `lifetime`
+(`Optional<F32>` → 7.25), `particleLinger` (`Optional<F32>` → 3.5), `pass` (`I16` → -17, negative on
+purpose), `stencilRef` (`U8` → 5) and `EmitterPosition` (`Vector3`, editable before M187, as the
+control that shows the harness can observe a success). The `Optional` cases are the load-bearing ones:
+the row edits a property one level below the one the emitter struct holds, so a round trip is the only
+thing that proves the write reaches the tree. Also asserted: 0 of 5,380,294 rows report dirty before
+any edit.
 
 ### 4. Missing parsing support
 
