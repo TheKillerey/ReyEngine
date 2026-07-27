@@ -1199,6 +1199,59 @@ including `F_spawnShape` — it would have badged `SpawnShape` (632,283 rows, 51
 ignored when the resolver reads it. Caught by spot-checking a suspicious entry against the source
 before shipping, not by the harness.
 
+#### 3.7c — M192: three defects in the above, found by adversarially reviewing the tier-4 plan
+
+An adversarial review of item 4.1's design refuted it, and in doing so found that **M191's badge was
+already asserting the opposite of the truth on 698,251 measured occurrences** — before tier 4 added
+anything. All three defects share one root cause: *"the resolver reads it" is not "the preview renders
+it."*
+
+**A. Four fields are parsed and then consumed only by the map path — or by nothing at all.**
+`VfxSystemResolver` is shared with the map placement pipeline. `soundOnCreateDefault`,
+`soundPersistentDefault` and `visibilityRadius` are read into the model and used solely by
+`MapPlaceableExtractor.cs:149,150,157`; the particle preview has no audio and no distance culling and
+never touches them. `emitterLinger` (82,304 occurrences) is parsed at `VfxSystemResolver.cs:437` into
+`VfxSystemDefinition.cs:135` and read by **nothing anywhere in `src/`**. All four rendered unbadged,
+i.e. the editor claimed the edit was visible. They are now in the explicit `NotRendered` map.
+
+**B. The lookup never ran for nested rows.** `IgnoredNote` was called only at depth 0 and sub-rows
+inherited the parent's answer verbatim, so a field inside a struct the resolver *does* read was never
+asked about. Measured: **657,785 occurrences across 46 nested (owner, field) pairs** falsely claimed to
+be visible — including all six Linger `Use*` flags, which `VfxSystemResolver.cs:553-562` states *in
+capitals* that it deliberately does not read. Now every row with a field identity of its own gets its
+own answer. Inheritance survives but is **one-directional**: a badged parent still badges its children,
+because a struct the preview ignores makes everything inside it equally invisible; a container element
+(`[0]`) has no field identity and can only inherit. Both rules fail towards showing the badge.
+
+**C. It failed open.** `Collect()` caught reflection failures and returned an empty set, commented "no
+set means no badges, never a wrong badge". That had the safe direction exactly backwards: under this
+badge's semantics *the absence of a badge is the claim that the edit is visible*, so one reflection
+failure asserted that all 3,989,530 unread occurrences render. It now fails **closed** — unknown means
+badged, with a note saying so.
+
+Effect on the editor: badged emitter rows 451,469 → **536,697** (17.4%), of which nested 22,626 →
+**97,021**; badged system rows 0 → **12,604** on those three fields.
+
+VERIFIED: 52 checks. The four map-path/no-consumer fields assert as parsed-yet-badged; a nonsense hash
+is badged (fail-closed); 22 fields the renderer demonstrably consumes stay unbadged, including nested
+ones (`erosionMapName`, `erosionDriveCurve`, `deltaIn`, `reflectionFresnel`, `paletteCount`); the ten
+previously-unbadged nested fields are now badged on every one of their rows (`erosionMapAddressMode`
+5,621/5,621, `uvScaleMult` 9,237/9,237, `birthUVOffsetMult` 7,536/7,536, `mSubmeshesToDraw` 4,165/4,165,
+and each Linger `Use*` flag); one-directional inheritance holds across 3,082,575 rows; and
+`particleName` stays unbadged on all 17,307 of its rows. Tier 3's 38 round-trip checks still pass.
+
+**One M191 check had to be deleted rather than kept green.** It asserted "a struct's badge is inherited
+by every one of its sub-rows" — which is the bug, written down as a test. It failed immediately on the
+fix, naming the case: `textureMult` is read, its sub-row `texAddressModeMult` is not. Replaced with the
+one-directional rule.
+
+**Not fixed, and recorded as a known limit:** the badge is per *field*, but the resolver drops some
+structs per *instance* — `ReadAlphaErosion` returns null unless both `erosionMapName` and
+`erosionDriveCurve` are present (`VfxSystemResolver.cs:726`), and the same shape appears at `:492`,
+`:749`, `:772`, `:512`, `:574`, `:634`. On such an instance every sub-row still says it is visible.
+Field-coverage percentages suggest roughly 1.2% of erosion structs, but the census is per-field, not
+per-instance, so the true rate is **not measured** and no fix is attempted on a guess.
+
 ### 4. Missing parsing support
 
 | # | Work | File | Note |

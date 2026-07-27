@@ -103,8 +103,7 @@ public sealed record ParticleSystemEntry(uint PathHash, string Name, string Part
         {
             if (hash == ComplexEmittersHash || hash == SimpleEmittersHash) continue;
             string fieldName = resolveName?.Invoke(hash) ?? (SystemFieldNames.TryGetValue(hash, out var fn) ? fn : $"0x{hash:x8}");
-            ParticleEmitterEntry.AddSystemRows(props, ModuleOf(fieldName), fieldName, prop, resolveName,
-                VfxPreviewCoverage.IgnoredNote(hash));
+            ParticleEmitterEntry.AddSystemRows(props, ModuleOf(fieldName), fieldName, hash, prop, resolveName);
         }
         ParticleEmitterEntry.SortRows(props, ModuleOrder);
         return props;
@@ -203,10 +202,7 @@ public sealed class ParticleEmitterEntry
             string fieldName = resolveName?.Invoke(hash) ?? (FieldNames.TryGetValue(hash, out var fn) ? fn : $"0x{hash:x8}");
             if (hash == EmitterNameHash && prop is BinTreeString ns) name = ns.Value;
 
-            // M191 (3.7): resolved once per top-level field and inherited by its sub-rows - a struct the
-            // preview never reads makes every field inside it equally invisible in the viewport.
-            AddRows(props, ModuleOf(fieldName), fieldName, prop, 0, resolveName,
-                VfxPreviewCoverage.IgnoredNote(hash));
+            AddRows(props, ModuleOf(fieldName), fieldName, hash, prop, 0, resolveName, null);
         }
         SortRows(props, ModuleOrder);
         return new ParticleEmitterEntry { Name = name, Properties = props, EmitterStruct = emitter };
@@ -244,12 +240,24 @@ public sealed class ParticleEmitterEntry
     /// <summary>M189: the same expansion for the system panel - assetRemappingTable and
     /// materialOverrideDefinitions were read-only containers there for exactly the same reason.</summary>
     internal static void AddSystemRows(List<ParticleProperty> into, string module, string name,
-        BinTreeProperty prop, Func<uint, string?>? resolveName, string? previewNote)
-        => AddRows(into, module, name, prop, 0, resolveName, previewNote);
+        uint fieldHash, BinTreeProperty prop, Func<uint, string?>? resolveName)
+        => AddRows(into, module, name, fieldHash, prop, 0, resolveName, null);
 
-    private static void AddRows(List<ParticleProperty> into, string module, string name, BinTreeProperty prop,
-        int depth, Func<uint, string?>? resolveName, string? previewNote)
+    private static void AddRows(List<ParticleProperty> into, string module, string name, uint fieldHash,
+        BinTreeProperty prop, int depth, Func<uint, string?>? resolveName, string? inheritedNote)
     {
+        // M191 (3.7), corrected in M192: EVERY row with a field identity of its own gets its own answer.
+        // Inheriting the parent's verdict was wrong in one direction - a field inside a struct the resolver
+        // DOES read was never asked about, and 657,785 measured occurrences across 46 nested (owner, field)
+        // pairs claimed to be visible, including the six Linger Use* flags the resolver says in capitals
+        // that it deliberately skips.
+        //
+        // Inheritance is still applied FIRST, and only downwards: if the parent struct is invisible to the
+        // preview then everything inside it is too, whatever its own hash says. A container ELEMENT ("[0]")
+        // has no field identity, so it can only inherit. Both rules fail towards showing the badge.
+        string? previewNote = inheritedNote
+                           ?? (fieldHash != 0 ? VfxPreviewCoverage.IgnoredNote(fieldHash) : null);
+
         // A Value*/Integrated* struct is a LEAF, not a container: MakeRow turns it into one editable
         // constant plus its curve. Expanding it would replace that with constantValue/dynamics/times/values
         // rows and lose the curve display entirely.
@@ -265,7 +273,7 @@ public sealed class ParticleEmitterEntry
                         displayText: $"({s.Properties.Count} field(s))", previewNote: previewNote,
                         readOnlyReason: "A struct header. Its fields are the rows indented beneath it."));
                     foreach (var (h, child) in s.Properties)
-                        AddRows(into, module, resolveName?.Invoke(h) ?? $"0x{h:x8}", child, depth + 1, resolveName, previewNote);
+                        AddRows(into, module, resolveName?.Invoke(h) ?? $"0x{h:x8}", h, child, depth + 1, resolveName, previewNote);
                     return;
 
                 case BinTreeContainer c when c.Elements.Count > 0:
@@ -273,13 +281,13 @@ public sealed class ParticleEmitterEntry
                         displayText: $"({c.Elements.Count} item(s))", previewNote: previewNote,
                         readOnlyReason: "A list header. Its items are the rows indented beneath it. Adding and "
                                       + "removing items is not supported."));
-                    for (int i = 0; i < c.Elements.Count; i++)
-                        AddRows(into, module, $"[{i}]", c.Elements[i], depth + 1, resolveName, previewNote);
+                    for (int i = 0; i < c.Elements.Count; i++)   // element: no field identity, inherits
+                        AddRows(into, module, $"[{i}]", 0, c.Elements[i], depth + 1, resolveName, previewNote);
                     return;
 
                 // An Optional holding a struct: unwrap it and expand, rather than stopping at the wrapper.
                 case BinTreeOptional { Value: BinTreeStruct } o:
-                    AddRows(into, module, name, o.Value!, depth, resolveName, previewNote);
+                    AddRows(into, module, name, fieldHash, o.Value!, depth, resolveName, inheritedNote);
                     return;
             }
         }
