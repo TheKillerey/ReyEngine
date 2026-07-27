@@ -1532,9 +1532,17 @@ placement by its transform bytes any more. That mattered: `MapAudio` placements 
 30,628 of which 1,450 share a matrix, so a standalone sound move was exposed to the identical bug.
 Measured: **817 of 817** standalone sounds are addressable by identity.
 
-**Still not done:** adding a brand-new placement (it needs a template to clone, the way
-`MapMaterialFactory` does for materials); and the UI exposes only the move verb — re-tint, re-link, rename
-and remove are reachable in the writer but have no editor surface yet.
+**M204 gave the verbs an editor surface.** The PARTICLE inspector card now carries Rename, Tint
+(`colorModulate` as `r, g, b, a`) and a "Mark for deletion" toggle beside the existing position fields, and
+Save to Mod persists all of them through `MapPlaceableWriter`. Two deliberate behaviours: an edit is only
+an edit if it *differs* from what was authored (re-typing the existing name does not dirty the map), and a
+deletion stops the placement rendering immediately while touching nothing on disk until save, so it stays
+undoable. A tint that is not four numbers is flagged in red rather than silently dropped, and the render
+falls back to the authored tint rather than blanking.
+
+**Still not done:** re-link has a model and a writer path (`EditedSystemHash` / `SystemLink`) but no
+picker in the UI — it needs a searchable list of the systems in the map; and adding a brand-new placement
+is not implemented (it needs a template to clone, the way `MapMaterialFactory` does for materials).
 
 #### 5.1b — M200: the optional item was chasing the wrong thing
 

@@ -961,12 +961,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var items = new List<VfxPlaybackItem>();
             foreach (var v in MapContent.AllParticles)
             {
+                if (v.IsRemoved) continue;   // M204: deleted placements stop rendering before the save
                 if (!IsParticleVisible(v.Placement)) continue;
                 if (!_vfxSystems.TryGetValue(v.Placement.SystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
                 items.Add(new VfxPlaybackItem(s, v.CurrentTransform, ResolveSystemTextures(s), ResolveSystemMeshes(s),
                     ResolveSystemMultTextures(s), ResolveSystemDistortionTextures(s), ResolveSystemColorTextures(s),
                     ResolveSystemErosionTextures(s), ResolveSystemPaletteTextures(s),
-                    ColorModulate: v.Placement.ColorModulate));   // M203: the placement's own tint
+                    ColorModulate: v.EffectiveTint));   // M203 tint; M204 shows a pending re-tint live
             }
             CurrentParticlePlayback = items.Count > 0 ? new VfxPlayback(items, CullByCamera: true) : null;
             _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.");
@@ -1013,23 +1014,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         node.Offset = target - node.Placement.Position;
         SelectedParticleMarker = node.CurrentPosition;
         UpdateParticleMarkers();
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved);
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits);
         RebuildParticlePlayback();   // M36: follow the moved particle if it's playing
         _log.Info("Particles", $"Moved '{node.Name}' to ({target.X:0.#}, {target.Y:0.#}, {target.Z:0.#}).");
     }
 
     [RelayCommand]
-    private void ResetParticleMove()
+    /// <summary>M204: resets EVERY pending edit on the placement, not only the transform - the button sits
+    /// beside rename/tint/delete now, so "Reset" clearing only the move would be a trap.</summary>
+    private void ResetParticleEdits()
     {
         if (SelectedParticleNode is not { } node) return;
-        node.Offset = System.Numerics.Vector3.Zero;
-        node.RotationDegrees = System.Numerics.Vector3.Zero;   // M75
-        node.Scale = System.Numerics.Vector3.One;
+        node.ResetEdits();
         RefreshParticleMoveFields(node);
         SelectedParticleMarker = node.CurrentPosition;
         GizmoPivot = node.CurrentPosition;
         UpdateParticleMarkers();
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved);
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits);
         RebuildParticlePlayback();
     }
 
@@ -1087,7 +1088,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 RepublishLights();
                 break;
         }
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved) || MapContent.Sounds.Any(v => v.IsMoved);
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits) || MapContent.Sounds.Any(v => v.IsMoved);
     }
 
     public void DragSelectedPlacementTo(System.Numerics.Vector3 absoluteOffset)
@@ -1138,7 +1139,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public void EndPlacementDrag()
     {
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.IsMoved) || MapContent.Sounds.Any(s => s.IsMoved);
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits) || MapContent.Sounds.Any(s => s.IsMoved);
         // M76: push the whole drag as ONE undo step (no-op when nothing actually changed).
         if (_placementDragTarget is { } target)
         {
@@ -4742,7 +4743,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task SaveParticleMoves()
     {
         if (_currentMapEntry is not { } mapEntry) return;
-        var moved = MapContent.AllParticles.Where(v => v.IsMoved).ToList();
+        var moved = MapContent.AllParticles.Where(v => v.HasEdits).ToList();
         // M199 (5.2): sounds derived FROM a particle system are no longer skipped. They used to be, because
         // they share the particle's transform BYTES and the old locator found placements by that signature -
         // so saving both collided. Identity is now (container, item key), which is unique, so the collision
@@ -4760,9 +4761,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M199 (5.2): edits are addressed by tree identity, not by a 64-byte transform signature. 1,450 of
         // 30,628 shipped placements share a matrix with a neighbour, so the old signature could patch the
         // wrong one; 2 have no transform and were unaddressable entirely.
+        // M204: one edit per placement carrying every verb the user changed. Fields the user did not
+        // touch stay null, which the writer reads as "leave this alone" - so a rename does not also
+        // rewrite the transform.
         var placementEdits = moved
             .Where(v => v.Placement.Id.IsValid)
-            .Select(v => new MapPlacementEdit(v.Placement.Id) { Transform = v.CurrentTransform })
+            .Select(v => new MapPlacementEdit(v.Placement.Id)
+            {
+                Transform = v.IsMoved ? v.CurrentTransform : null,
+                Name = v.EditedName is { } n && n != v.Placement.Name ? n : null,
+                ColorModulate = v.ParsedTint,
+                SystemLink = v.EditedSystemHash != 0 ? v.EditedSystemHash : null,
+                Remove = v.IsRemoved,
+            })
             .ToList();
         int unaddressable = moved.Count(v => !v.Placement.Id.IsValid);
         if (unaddressable > 0)

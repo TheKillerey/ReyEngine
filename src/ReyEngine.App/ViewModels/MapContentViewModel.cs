@@ -15,6 +15,56 @@ public sealed partial class ParticlePlacementViewModel : ObservableObject
     public string SystemName => Placement.SystemName;
     [ObservableProperty] private bool _isSelected;
 
+    // ---- M204: the verbs MapPlaceableWriter has supported since M199 but nothing could reach ----------
+    // Each is null/false until the user touches it, so "edited" stays distinguishable from "same as
+    // authored" - re-typing the existing name must not mark the map dirty.
+
+    /// <summary>Renamed placement name, or null when untouched.</summary>
+    [ObservableProperty] private string? _editedName;
+    /// <summary>Replacement colorModulate as "r, g, b, a" (0..1), or null when untouched. Text rather than
+    /// four boxes so it matches how the Particle Editor already edits vectors and colours.</summary>
+    [ObservableProperty] private string? _editedTint;
+    /// <summary>Re-pointed VFX system, or 0 when untouched.</summary>
+    [ObservableProperty] private uint _editedSystemHash;
+    /// <summary>Marked for deletion. Removed placements stop rendering immediately so the change is visible
+    /// before it is saved.</summary>
+    [ObservableProperty] private bool _isRemoved;
+
+    partial void OnEditedNameChanged(string? value) => OnPropertyChanged(nameof(HasEdits));
+    partial void OnEditedTintChanged(string? value) => OnPropertyChanged(nameof(HasEdits));
+    partial void OnEditedSystemHashChanged(uint value) => OnPropertyChanged(nameof(HasEdits));
+    partial void OnIsRemovedChanged(bool value) => OnPropertyChanged(nameof(HasEdits));
+
+    /// <summary>The tint as the writer wants it, or null when untouched or unparseable. InvariantCulture:
+    /// this machine runs a German locale, where "0,5" would otherwise split into two components.</summary>
+    public Vector4? ParsedTint
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(EditedTint)) return null;
+            var parts = EditedTint.Split(',', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 4) return null;
+            var f = new float[4];
+            for (int i = 0; i < 4; i++)
+                if (!float.TryParse(parts[i].Trim(), System.Globalization.NumberStyles.Float,
+                                    System.Globalization.CultureInfo.InvariantCulture, out f[i])) return null;
+            return new Vector4(f[0], f[1], f[2], f[3]);
+        }
+    }
+
+    /// <summary>True when the tint text is present but not four numbers - so the UI can say so rather than
+    /// silently dropping the edit at save time.</summary>
+    public bool TintIsInvalid => !string.IsNullOrWhiteSpace(EditedTint) && ParsedTint is null;
+
+    /// <summary>The tint this placement should render with right now: the pending edit if it parses,
+    /// otherwise whatever the bin authored.</summary>
+    public Vector4? EffectiveTint => ParsedTint ?? Placement.ColorModulate;
+
+    /// <summary>Any edit at all, not just a move - this is what gates Save to Mod.</summary>
+    public bool HasEdits => IsMoved || IsRemoved || EditedSystemHash != 0
+                            || (EditedName is not null && EditedName != Placement.Name)
+                            || ParsedTint is not null;
+
     public Vector3 Offset;                                   // accumulated move (world space), default zero
     public Vector3 RotationDegrees;                          // M75: extra local rotation on top of the authored transform
     public Vector3 Scale = Vector3.One;                      // M75: extra local scale multiplier
@@ -38,6 +88,13 @@ public sealed partial class ParticlePlacementViewModel : ObservableObject
         }
     }
     public bool IsMoved => Offset != Vector3.Zero || RotationDegrees != Vector3.Zero || Scale != Vector3.One;
+
+    /// <summary>Reset every pending edit, including the non-transform ones.</summary>
+    public void ResetEdits()
+    {
+        Offset = Vector3.Zero; RotationDegrees = Vector3.Zero; Scale = Vector3.One;
+        EditedName = null; EditedTint = null; EditedSystemHash = 0; IsRemoved = false;
+    }
 }
 
 /// <summary>A particle-system group folder (all placements that reference the same VFX system).</summary>

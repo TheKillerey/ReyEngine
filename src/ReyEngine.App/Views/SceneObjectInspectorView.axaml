@@ -207,7 +207,22 @@
                         ToolTip.Tip="Simulate and play this particle system live in the viewport" />
         </Grid>
         <TextBlock Text="{Binding SelectedParticleNode.Name}" FontSize="11" Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
-        <TextBlock Text="Position" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+
+        <!-- M204: the placement verbs MapPlaceableWriter has supported since M199. Each field is empty
+             until touched, so leaving one blank means "leave it as authored" rather than "clear it". -->
+        <TextBlock Text="Rename" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+        <TextBox Text="{Binding SelectedParticleNode.EditedName}" FontSize="10" Padding="3,1"
+                 Watermark="{Binding SelectedParticleNode.Name}"
+                 ToolTip.Tip="Rename this placement. Leave empty to keep the authored name." />
+
+        <TextBlock Text="Tint (colorModulate — r, g, b, a)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+        <TextBox Text="{Binding SelectedParticleNode.EditedTint}" FontSize="10" Padding="3,1"
+                 Watermark="1, 1, 1, 1"
+                 ToolTip.Tip="Multiplies the particle colour. Every shipped value is between 0 and 1, so this can darken or fade but not brighten. Leave empty to keep the authored tint." />
+        <TextBlock Text="Needs four numbers, e.g. 1, 0.97, 0.84, 0.6" FontSize="9" Foreground="#E5645B"
+                   IsVisible="{Binding SelectedParticleNode.TintIsInvalid, FallbackValue=False}" />
+
+        <TextBlock Text="Position" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <Grid ColumnDefinitions="14,*,14,*,14,*">
           <TextBlock Grid.Column="0" Text="X" FontSize="10" Foreground="#E5645B" VerticalAlignment="Center" />
           <TextBox Grid.Column="1" Text="{Binding ParticleMoveX}" FontSize="10" Padding="3,1" />
@@ -219,10 +234,18 @@
         <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
           <Button Content="Apply" Command="{Binding ApplyParticleMoveCommand}" FontSize="11" Padding="8,2"
                   ToolTip.Tip="Move the particle to this position live in the viewport" />
-          <Button Content="Reset" Command="{Binding ResetParticleMoveCommand}" FontSize="11" Padding="8,2" />
+          <Button Content="Reset" Command="{Binding ResetParticleEditsCommand}" FontSize="11" Padding="8,2"
+                  ToolTip.Tip="Discard every pending edit on this placement, not just the move" />
           <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveParticleMovesCommand}" FontSize="11" Padding="8,2"
                   IsEnabled="{Binding HasParticleMoves}" />
         </StackPanel>
+        <!-- M204: delete is a toggle, not an immediate action - it stops rendering at once but nothing
+             touches the .bin until Save to Mod, so it stays undoable. -->
+        <ToggleButton Classes="vp" Content="🗑 Mark for deletion" IsChecked="{Binding SelectedParticleNode.IsRemoved}"
+                      FontSize="10" Padding="6,2" HorizontalAlignment="Left" Margin="0,2,0,0"
+                      ToolTip.Tip="Remove this placement from the map. It disappears from the viewport immediately; the .bin changes only on Save to Mod." />
+        <TextBlock Text="Marked for deletion — Save to Mod will remove it." FontSize="9" Foreground="#E5A227"
+                   IsVisible="{Binding SelectedParticleNode.IsRemoved, FallbackValue=False}" />
       </StackPanel>
     </Border>
 
