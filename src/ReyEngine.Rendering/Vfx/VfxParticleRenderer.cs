@@ -365,6 +365,13 @@ public sealed class VfxParticleRenderer
             if (es.InstanceCount == 0) continue;
             // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
             if (es.MeshVao != 0) { if (_meshProgram != 0) RenderMeshEmitter(es, viewProj, camPos); continue; }
+            // M183 (2.5): beams draw a ribbon between two fixed endpoints. Placed BEFORE the trail branch,
+            // which is safe because no primitive class sets both - ReadTrail gates on the two trail
+            // classes and ReadBeam on VfxPrimitiveBeam. It stays AFTER the mesh branch on purpose: 5,116
+            // beam primitives name a mesh, and every one of the 609 beam emitters carrying a
+            // reflectionDefinition is among them, so mesh-first preserves the M174 (1.5) behaviour those
+            // rely on. That ordering is a DECISION (no regression), not a measurement.
+            if (es.Def.Beam is not null) { RenderBeamEmitter(es, viewProj, camPos); continue; }
             // M177 (2.5): trail emitters draw a ribbon through the particle's own motion history.
             if (es.Def.Trail is not null) { RenderTrailEmitter(es, viewProj, camPos); continue; }
             if (es.Texture == 0) continue;
@@ -952,7 +959,9 @@ public sealed class VfxParticleRenderer
             // Same rule as the mesh path (M117b): a shader failure on the render thread must not take the
             // app down. Trails simply do not draw.
             _trailProgramFailed = true;
-            System.Diagnostics.Debug.WriteLine($"VFX trail shader failed to compile - trails disabled: {ex.Message}");
+            // Console, not Debug, matching the mesh path: Debug.WriteLine is invisible in a release run
+            // and in the offscreen probes, which is how M174 shipped a blank viewport twice.
+            Console.Error.WriteLine("[VFX] ribbon shader failed to compile - trails and beams disabled: " + ex.Message);
             return;
         }
         _tuViewProj = _gl.GetUniformLocation(_trailProgram, "uViewProj");
@@ -969,7 +978,11 @@ public sealed class VfxParticleRenderer
         _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
         _gl.EnableVertexAttribArray(2);
         _gl.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, stride, (void*)(5 * sizeof(float)));
-        _gl.BindVertexArray(0);
+        // Deliberately NOT BindVertexArray(0) here. Setup runs inside Render()'s emitter loop, and every
+        // early return in a ribbon path below would then leave VAO 0 bound - so the NEXT emitter in the
+        // frame would draw with no attribute arrays at all and silently vanish. Restore the billboard VAO
+        // instead, which is the state the loop expects on entry.
+        _gl.BindVertexArray(_vao);
     }
 
     /// <summary>M177 (2.5): build and draw one emitter's trail ribbons.
@@ -986,6 +999,9 @@ public sealed class VfxParticleRenderer
     {
         EnsureTrailProgram();
         if (_trailProgramFailed || es.Texture == 0) return;
+        // M183: the trail path never applied stencil state, so a mode-2/3 emitter earlier in pass order
+        // silently masked it. Same fix as the new beam path.
+        ApplyStencil(es.Def);
         var trail = es.Def.Trail!;
         float tiling = trail.EffectiveTiling;
 
@@ -1014,49 +1030,11 @@ public sealed class VfxParticleRenderer
             }
             if (halfWidth < 1e-3f) halfWidth = 1e-3f;
 
-            float travelled = 0f;
-            for (int i = 0; i < p.HistoryCount - 1; i++)
-            {
-                var p0 = hist[i];
-                var p1 = hist[i + 1];
-                var seg = p1 - p0;
-                float segLen = seg.Length();
-                if (segLen < 1e-5f) continue;
-                var dir = seg / segLen;
-
-                Vector3 side;
-                if (es.Def.IsArbitraryTrail)
-                {
-                    side = Vector3.Cross(dir, es.PlacementUp);
-                    // A segment travelling straight along the placement's up axis has no width under that
-                    // cross product; fall back to another axis rather than collapsing the ribbon.
-                    if (side.LengthSquared() < 1e-8f) side = Vector3.Cross(dir, es.PlacementForward);
-                }
-                else
-                {
-                    var toEye = camPos - p0;
-                    side = Vector3.Cross(dir, toEye);
-                    if (side.LengthSquared() < 1e-8f) side = Vector3.Cross(dir, Vector3.UnitY);
-                }
-                if (side.LengthSquared() < 1e-8f) continue;
-                side = Vector3.Normalize(side) * halfWidth;
-
-                float u0 = travelled / tiling;
-                travelled += segLen;
-                float u1 = travelled / tiling;
-
-                var a0 = p0 - side; var b0 = p0 + side;
-                var a1 = p1 - side; var b1 = p1 + side;
-
-                void Vert(Vector3 pos, float u, float v)
-                {
-                    buf[k++] = pos.X; buf[k++] = pos.Y; buf[k++] = pos.Z;
-                    buf[k++] = u; buf[k++] = v;
-                    buf[k++] = r; buf[k++] = g; buf[k++] = b; buf[k++] = a;
-                }
-                Vert(a0, u0, 0f); Vert(b0, u0, 1f); Vert(b1, u1, 1f);
-                Vert(a0, u0, 0f); Vert(b1, u1, 1f); Vert(a1, u1, 0f);
-            }
+            // M183: shared with the beam path so the two ribbons cannot drift. `null` uTotal means
+            // "derive U from accumulated arc length", which is the trail's behaviour.
+            var colour = new Vector4(r, g, b, a);
+            k = BuildRibbon(buf, k, hist.AsSpan(0, p.HistoryCount), halfWidth, colour, colour,
+                tiling, null, es.Def.IsArbitraryTrail, es.PlacementUp, es.PlacementForward, camPos);
         }
         if (k == 0) return;
 
@@ -1082,6 +1060,143 @@ public sealed class VfxParticleRenderer
         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(k / TrailStride));
 
         _gl.UseProgram(_program);       // back to the billboard program for the next emitter
+        _gl.BindVertexArray(_vao);
+    }
+
+    /// <summary>M183 (2.5): extrude a polyline into a textured ribbon; returns the new write cursor.
+    ///
+    /// Shared by trails and beams. <paramref name="uTotal"/> selects the two U conventions: null means
+    /// accumulate arc length and divide by <paramref name="tiling"/> (the trail), a value means spread
+    /// exactly that many repeats across the whole run (the beam, whose repeat count comes from
+    /// VfxBeamDefinition.UvRepeats). <paramref name="c0"/>/<paramref name="c1"/> lerp along the run; pass
+    /// the same colour twice for a uniform ribbon.</summary>
+    private static int BuildRibbon(float[] buf, int k, ReadOnlySpan<Vector3> points, float halfWidth,
+        Vector4 c0, Vector4 c1, float tiling, float? uTotal,
+        bool arbitrary, Vector3 up, Vector3 forward, Vector3 camPos)
+    {
+        if (points.Length < 2) return k;
+        float total = 0f;
+        if (uTotal is not null)
+            for (int i = 0; i < points.Length - 1; i++) total += Vector3.Distance(points[i], points[i + 1]);
+
+        float travelled = 0f;
+        for (int i = 0; i < points.Length - 1; i++)
+        {
+            var p0 = points[i];
+            var p1 = points[i + 1];
+            var seg = p1 - p0;
+            float segLen = seg.Length();
+            if (segLen < 1e-5f) continue;
+            var dir = seg / segLen;
+
+            Vector3 side;
+            if (arbitrary)
+            {
+                side = Vector3.Cross(dir, up);
+                // A segment running straight along the placement's up axis has no width under that cross
+                // product; fall back to another axis rather than collapsing the ribbon.
+                if (side.LengthSquared() < 1e-8f) side = Vector3.Cross(dir, forward);
+            }
+            else
+            {
+                side = Vector3.Cross(dir, camPos - p0);
+                if (side.LengthSquared() < 1e-8f) side = Vector3.Cross(dir, Vector3.UnitY);
+            }
+            if (side.LengthSquared() < 1e-8f) continue;
+            side = Vector3.Normalize(side) * halfWidth;
+
+            float t0 = travelled;
+            travelled += segLen;
+            float u0, u1;
+            if (uTotal is { } repeats)
+            {
+                u0 = total > 1e-5f ? t0 / total * repeats : 0f;
+                u1 = total > 1e-5f ? travelled / total * repeats : repeats;
+            }
+            else
+            {
+                u0 = t0 / tiling;
+                u1 = travelled / tiling;
+            }
+
+            // Colour lerps by ring index. Both current callers pass c0 == c1, so this is a no-op today;
+            // it exists so per-vertex distance colour can be switched on without touching the extruder.
+            float denom = points.Length - 1;
+            var col0 = Vector4.Lerp(c0, c1, i / denom);
+            var col1 = Vector4.Lerp(c0, c1, (i + 1) / denom);
+
+            var a0 = p0 - side; var b0 = p0 + side;
+            var a1 = p1 - side; var b1 = p1 + side;
+
+            void Vert(Vector3 pos, float u, float v, Vector4 c)
+            {
+                buf[k++] = pos.X; buf[k++] = pos.Y; buf[k++] = pos.Z;
+                buf[k++] = u; buf[k++] = v;
+                buf[k++] = c.X; buf[k++] = c.Y; buf[k++] = c.Z; buf[k++] = c.W;
+            }
+            Vert(a0, u0, 0f, col0); Vert(b0, u0, 1f, col0); Vert(b1, u1, 1f, col1);
+            Vert(a0, u0, 0f, col0); Vert(b1, u1, 1f, col1); Vert(a1, u1, 0f, col1);
+        }
+        return k;
+    }
+
+    /// <summary>M183 (2.5): draw an emitter's beam - a ribbon from its source to the bound target.
+    ///
+    /// ONE RIBBON PER EMITTER, not per particle. INFERRED, and the reason matters: the source and target
+    /// offsets are per-EMITTER constants, so N live particles would produce N exactly coincident ribbons.
+    /// Under this path's DepthMask(false) and the additive blend most beams author, that is an N-times
+    /// brightness multiplier - a 20-particle beam would blow out to white. Width and colour therefore come
+    /// from instance 0, which carries the emitter's authored birthScale/colour curves like any other
+    /// particle.
+    ///
+    /// Beams inherit the ribbon program's documented gaps - no flipbook/texDiv, erosion, soft particles,
+    /// palette, distortion or UV transform stack. Trails already lack all of it; this is a shared, stated
+    /// limitation rather than a beam-specific omission.</summary>
+    private unsafe void RenderBeamEmitter(VfxParticleSimulator.EmitterState es, Matrix4x4 viewProj, Vector3 camPos)
+    {
+        EnsureTrailProgram();
+        // Its own texture guard: the loop's shared `es.Texture == 0` check sits downstream of this branch.
+        if (_trailProgramFailed || es.Texture == 0 || !es.HasBeamEndpoints || es.InstanceCount == 0) return;
+        var beam = es.Def.Beam!;
+
+        float halfWidth = MathF.Abs(es.Instances[3]) * 0.5f;
+        if (halfWidth < 1e-3f) halfWidth = 1e-3f;
+        var colour = new Vector4(es.Instances[5], es.Instances[6], es.Instances[7], es.Instances[8]);
+
+        float length = Vector3.Distance(es.BeamSource, es.BeamTarget);
+        Span<Vector3> ends = stackalloc Vector3[2];
+        ends[0] = es.BeamSource;
+        ends[1] = es.BeamTarget;
+
+        int needed = 6 * TrailStride;
+        if (_trailVerts.Length < needed) _trailVerts = new float[Math.Max(needed, 4096)];
+        int k = BuildRibbon(_trailVerts, 0, ends, halfWidth, colour, colour,
+            1f, beam.UvRepeats(length), arbitrary: false, es.PlacementUp, es.PlacementForward, camPos);
+        if (k == 0) return;
+
+        ApplyStencil(es.Def);
+        _gl.UseProgram(_trailProgram);
+        _gl.BindVertexArray(_trailVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _trailVbo);
+        fixed (float* d = _trailVerts)
+        {
+            if (k > _trailVboCapacity)
+            {
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(k * sizeof(float)), d, BufferUsageARB.DynamicDraw);
+                _trailVboCapacity = k;
+            }
+            else _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(k * sizeof(float)), d);
+        }
+        _gl.UniformMatrix4(_tuViewProj, 1, false, in viewProj.M11);
+        _gl.Uniform1(_tuTex, 0);
+        _gl.Uniform1(_tuAlphaRef, es.Def.AlphaRef / 255f);
+        if (IsAdditiveFor(es.Def.BlendMode, es.Texture)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
+        else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, es.Texture);
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(k / TrailStride));
+
+        _gl.UseProgram(_program);
         _gl.BindVertexArray(_vao);
     }
 

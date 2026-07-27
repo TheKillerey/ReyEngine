@@ -157,6 +157,15 @@ public static class VfxSystemResolver
     private static readonly uint F_mCutoff           = HashAlgorithms.Fnv1a("mCutoff");
     private static readonly uint F_mSmoothingMode    = HashAlgorithms.Fnv1a("mSmoothingMode");
     private static readonly uint F_mMaxAddedPerFrame = HashAlgorithms.Fnv1a("mMaxAddedPerFrame");
+    // M183 (2.5) beams. Payload class VfxBeamDefinitionData = 0x1fb8df09.
+    private static readonly uint F_mBeam             = HashAlgorithms.Fnv1a("mBeam");
+    private static readonly uint F_mBeamSourceOffset = HashAlgorithms.Fnv1a("mLocalSpaceSourceOffset");
+    private static readonly uint F_mBeamTargetOffset = HashAlgorithms.Fnv1a("mLocalSpaceTargetOffset");
+    private static readonly uint F_mSegments         = HashAlgorithms.Fnv1a("mSegments");
+    private static readonly uint F_mAnimColorDist    = HashAlgorithms.Fnv1a("mAnimatedColorWithDistance");
+    private static readonly uint F_mColorBindDist    = HashAlgorithms.Fnv1a("mIsColorBindedWithDistance");
+    private static readonly uint F_mBeamMode         = HashAlgorithms.Fnv1a("mMode");
+    private static readonly uint F_mTrailMode        = HashAlgorithms.Fnv1a("mTrailMode");
     // M178 (2.12) reflection. Struct class 0x4112ea83, measured on 8,058 live instances.
     private static readonly uint F_reflectionDef     = HashAlgorithms.Fnv1a("reflectionDefinition");
     private static readonly uint F_fresnelColor      = HashAlgorithms.Fnv1a("fresnelColor");
@@ -421,6 +430,7 @@ public static class VfxSystemResolver
             ForceFields: ReadForceFields(p),
             Trail: ReadTrail(prim),
             IsArbitraryTrail: primClass == C_primArbitraryTrail,
+            Beam: ReadBeam(prim),
             Reflection: ReadReflection(p),
             Children: ReadChildren(p),
             StencilMode: GetU8(p, F_stencilMode) ?? 0,
@@ -496,6 +506,27 @@ public static class VfxSystemResolver
         if (count <= 0f) count = 1f;
 
         return new VfxChildParticleSet(ids, GetBool(sp, F_childOnDeath), count, bones);
+    }
+
+    /// <summary>M183 (2.5): the beam ribbon's parameters. See VfxBeamDefinition for why no beam shader
+    /// exists and why the tiling length comes from Y rather than X.
+    ///
+    /// mBirthTilingSize is a ValueVector3 while the two offsets are raw Vector3s; ReadValueVec3OrZero
+    /// accepts either, so all three go through one reader.</summary>
+    private static VfxBeamDefinition? ReadBeam(BinTreeProperty? primitive)
+    {
+        if (primitive is not BinTreeStruct prim || prim.ClassHash != C_primBeam) return null;
+        if (Get(prim.Properties, F_mBeam) is not BinTreeStruct b) return null;
+        var bp = b.Properties;
+        return new VfxBeamDefinition(
+            ReadValueVec3OrZero(Get(bp, F_mBirthTilingSize)),
+            ReadValueVec3OrZero(Get(bp, F_mBeamSourceOffset)),
+            ReadValueVec3OrZero(Get(bp, F_mBeamTargetOffset)),
+            GetI32(bp, F_mSegments) ?? -1,
+            ReadCurve4(bp, F_mAnimColorDist),
+            GetBool(bp, F_mColorBindDist),
+            GetU8(bp, F_mBeamMode) ?? -1,
+            GetU8(bp, F_mTrailMode) ?? -1);
     }
 
     private static Vector3 ReadValueVec3OrZero(BinTreeProperty? p) => p switch

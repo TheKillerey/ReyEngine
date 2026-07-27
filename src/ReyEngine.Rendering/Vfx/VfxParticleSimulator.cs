@@ -17,6 +17,11 @@ public sealed class VfxParticleSimulator
         public required VfxEmitterDefinition Def { get; init; }
         public Vector3 BasePos;                 // world spawn origin (placement + emitterPosition)
         public Vector3 PlacementRight, PlacementUp, PlacementForward;
+        /// <summary>M183 (2.5): the beam's two world-space endpoints, recomputed whenever the target or
+        /// the placement changes. HasBeamEndpoints is false when the beam would be degenerate, which the
+        /// renderer treats as "draw nothing" rather than drawing a zero-length ribbon.</summary>
+        public Vector3 BeamSource, BeamTarget;
+        public bool HasBeamEndpoints;
         public uint Texture;                    // GL handle for this emitter's sprite (0 = not uploaded/skip)
         public uint TextureMult;                // optional Riot multiplier/noise texture stage
         public uint DistortionTexture;          // normal map for screen-space heat haze/refraction
@@ -126,6 +131,59 @@ public sealed class VfxParticleSimulator
     // Emitters that never terminate loop forever; give a hard cap so a runaway rate can't explode memory.
     private const int MaxParticlesPerEmitter = 4000;
 
+    /// <summary>M183 (2.5): where beams terminate. Null means no target is bound - see ResolveBeams for
+    /// what a beam does then.</summary>
+    private Vector3? _beamTarget;
+
+    /// <summary>M183: bind the beam target (the M114 practice dummy in the model preview). Cheap and
+    /// idempotent, so callers can push it every frame without tracking changes.</summary>
+    public void SetBeamTarget(Vector3? worldTarget)
+    {
+        if (_beamTarget.HasValue == worldTarget.HasValue
+            && (!worldTarget.HasValue || _beamTarget!.Value == worldTarget.Value)) return;
+        _beamTarget = worldTarget;
+        ResolveBeams();
+    }
+
+    /// <summary>M183 (2.5): turn each beam emitter's authored offsets plus the bound target into two world
+    /// points.
+    ///
+    /// The offsets are LOCAL, so they compose through the placement basis with TransformNormal - not
+    /// Vector3.Transform, which would add the placement translation a second time on top of BasePos.
+    ///
+    /// With NO target bound, the beam still has to go somewhere. Riot's own data shows the pattern: the
+    /// `Augment_LaserEyes_Beam` family pairs a target-bound emitter carrying (0,0,20) with a sibling
+    /// literally named `_Long_FakeDir` carrying (0,0,-1250) - i.e. when there is no target, the authored
+    /// offset alone defines the far end. That is what the first branch does. Only when there is neither a
+    /// target nor an offset does this fall back to a fixed length along the placement forward axis, and
+    /// that length is an editor substitute, not a Riot value.</summary>
+    private void ResolveBeams()
+    {
+        foreach (var s in _emitters)
+        {
+            if (s.Def.Beam is not { } beam) { s.HasBeamEndpoints = false; continue; }
+            var source = s.BasePos + Vector3.TransformNormal(beam.SourceOffset, _worldTransform);
+            var targetOffset = Vector3.TransformNormal(beam.TargetOffset, _worldTransform);
+
+            Vector3 target;
+            if (_beamTarget is { } bound) target = bound + targetOffset;
+            else if (targetOffset.LengthSquared() > 1e-6f) target = source + targetOffset;
+            else target = source - s.PlacementForward * FallbackBeamLength;
+
+            float len = Vector3.Distance(source, target);
+            // A zero-length beam has no direction to extrude around, and an absurd one is junk data
+            // rather than a 100km laser - the same class of guard EffectiveCutoff applies to mCutoff's
+            // 2^36 outlier.
+            s.HasBeamEndpoints = len > 1e-3f && len < 100000f;
+            s.BeamSource = source;
+            s.BeamTarget = target;
+        }
+    }
+
+    /// <summary>M183: how long a beam runs when nothing binds its far end and it authors no target offset.
+    /// An editor substitute so the emitter is visible at all - NOT a Riot value.</summary>
+    private const float FallbackBeamLength = 500f;
+
     public VfxParticleSimulator(int seed = 1234) => _rng = new Random(seed);
 
     /// <summary>Configure from a system placed at <paramref name="worldPos"/>. Only visual emitters are simulated.</summary>
@@ -157,6 +215,7 @@ public sealed class VfxParticleSimulator
                 PlacementForward = SafeNormal(Vector3.TransformNormal(Vector3.UnitZ, worldTransform), Vector3.UnitZ),
             });
         }
+        ResolveBeams();   // M183: endpoints depend on BasePos + the placement basis just computed
         Reset();
     }
 
@@ -177,6 +236,10 @@ public sealed class VfxParticleSimulator
             s.PlacementUp = SafeNormal(Vector3.TransformNormal(Vector3.UnitY, worldTransform), Vector3.UnitY);
             s.PlacementForward = SafeNormal(Vector3.TransformNormal(Vector3.UnitZ, worldTransform), Vector3.UnitZ);
         }
+        // M183: the beam endpoints hang off BasePos and the placement basis, both of which just moved -
+        // M116 missiles re-anchor through here every frame, so a beam on a travelling system has to
+        // follow rather than stay where it was first resolved.
+        ResolveBeams();
     }
 
     public void Reset()

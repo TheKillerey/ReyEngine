@@ -490,7 +490,7 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | 2.2 | ~~**Soft particles**~~ **DONE (M175)** | `VfxParticleRenderer.CaptureDepth` + Frag | 95,671 (6.8%) | Formula decoded, then validated twice: against Riot's own `quad_ps` blob#128 on D3D11 (worst 0.0021), and against `smoothstep` at five distances through the real GL path (worst 0.002). Depth arrives via a depth-only `BlitFramebuffer` into a texture, because the viewport's depth attachment is a renderbuffer. `cSoftParticleControl` is still **UNKNOWN** and hardcoded to (1,0,0,1) |
 | 2.3 | **UV transform stack.** Rotation, scale, offset, clamp, flip, integrated scroll | `VfxParticleRenderer.cs:558-569`, `VfxSystemResolver.cs` | ~150k emitters across 12 fields | Medium. Note `particleUVScrollRate`/`particleUVRotateRate` are `IntegratedValue*` and accumulate — do not sample them like ordinary curves |
 | 2.4 | ~~**Force fields**~~ **DONE (M176)** - all five kinds | `VfxParticleSimulator.ApplyForceFields`, `VfxSystemResolver.ReadForceFields` | 39,904 (2.9%) | Data shapes measured off 6,134 live collections, not inferred from names. The MATHS is still inferred and cannot be validated the way M175's shader stages were - these integrate on the CPU, so there is no bytecode to decode. See 2.4b below for exactly which parts |
-| 2.5 | **Trails DONE (M177)**; beams still open | `VfxParticleSimulator` history + `VfxParticleRenderer.RenderTrailEmitter` | 78,852 trail emitters done; 10,088 beam emitters remain | The ribbon reading is now MEASURED, not inferred from class names - see 2.5b. Beams are deferred for a stated reason, not overlooked |
+| 2.5 | ~~**Trails and beams**~~ **DONE** (trails M177, beams M183) | `VfxParticleSimulator` history + `VfxParticleRenderer.RenderTrailEmitter` | 78,852 trail emitters done; 10,088 beam emitters remain | The ribbon reading is now MEASURED, not inferred from class names - see 2.5b. Beams are deferred for a stated reason, not overlooked |
 | 2.6 | ~~**Palette recolour**~~ **DONE (M175)** | `VfxSystemResolver.ReadPalette`, `VfxParticleRenderer.cs` Frag | 43,621, of which 13,823 have no colour texture at all | Decoded and validated against Riot's `quad_ps` blob#12 (worst 0.0096). `paletteSelector` measured as a ValueVector3 row index against `paletteCount` (median 16). The U/V animation curves are deliberately **NOT** applied - see 'What was deliberately left out' below |
 | 2.7 | ~~**Child particle systems**~~ **DONE (M180)** in the model preview | `VfxSystemResolver.ReadChildren`, `VfxParticleSimulator.QueueChildSpawns`, `ViewportControl.SpawnQueuedChildren` | 35,510 (2.5%) | Spawn scheduling is in the simulator, instantiation in the viewport, resolution in the preview VM (which owns the resource map). Depth-capped because cycles are NOT ruled out — see 2.7b |
 | 2.8 | ~~**Depth offset**~~ **DONE (M175)**; `depthBiasFactors` still deferred | `VfxParticleRenderer.cs` vertex shader | 61,588 / 201,926 | No longer inferred. **DECODED** from `quad_vs` instructions 12-16: `world += normalize(world - vCamera) * depthPushPull`, per vertex, before projection - so positive pushes AWAY and negative pulls toward. Cross-checked against `defaultparticlequadunlit.vs` (same form for `EMITTER_DEPTH_PUSH_PULL`) and confirmed by rendering against a depth-writing wall. 74.6% of authored values are negative, which the decoded sign explains |
@@ -641,11 +641,7 @@ fade toward the tail, but nothing in the payload says so, and the tiling field m
 along the length rather than providing an inherent fade. Inventing a taper would be exactly the kind of
 silent guess this report exists to prevent.
 
-**Beams deferred.** `mBeam` (`VfxBeamDefinitionData`, 1,044 instances measured) carries
-`mLocalSpaceSourceOffset` and `mLocalSpaceTargetOffset` — offsets relative to a source and a TARGET
-entity. A beam needs both endpoints, and the editor preview has no target to bind to except the M114
-practice dummy. `mSegments` (14 instances, {1,10,20,50}) and `mIsColorBindedWithDistance` (68, always
-true) confirm the shape. This is a binding problem, not a geometry problem.
+**Beams landed in M183**, once the project decided they bind to the M114 practice dummy. See 2.5c.
 
 ### 2.12b M178 reflection findings
 
@@ -858,6 +854,54 @@ write mask silently prevents the NEXT frame's `glClear` from clearing the plane 
 capture texture had to move to the same combined format. Sampling a `DEPTH24_STENCIL8` texture returns
 the depth component, which is all that path reads, and the soft-particle checks still match `smoothstep`
 to within 0.002 afterwards.
+
+### 2.5c M183 beam findings
+
+Corpus: 239 WADs, 45,931 bins, **15,416** `VfxPrimitiveBeam` emitters (the M177 figures came from a
+25-WAD sample and are superseded). Payload split: `mBeam` only 9,195 · `mMesh` only 2,859 · both 2,257 ·
+neither 1,105. `mBeam` total **11,452**, `mMesh` total **5,116**.
+
+**There is no beam shader, and that is measured.** A substring search for `beam` — and for `trail` — over
+every path in `ShaderCache.dx11.wad.client` returns **zero** hits, and the union of all 29 `#define` names
+across the 140 shipped shaders contains nothing beam, ribbon or segment related. `quad_vs` consumes an
+already-expanded **world-space** POSITION0 and performs no billboard expansion, so a CPU-tessellated
+ribbon is the same vertex stream a billboard quad produces. Riot ships no beam shader precisely because
+the beam is CPU geometry.
+
+**The tiling slot is Y for a beam, X for a trail.** Of 9,834 authored `mBirthTilingSize` vectors, Y is
+non-zero on **96.6%** and X on **7.3%** — the reverse of `VfxTrailDefinition`. Reusing the trail reader,
+which is the obvious move given the shared field name, would have zeroed 96.6% of beams and substituted a
+500-unit fallback. X is kept as a secondary (290 beams have X as their only non-zero component); Z is
+ignored, being only ever a small integer {1,2,3,30,100} and never a world length.
+
+**INFERRED — the tiling sign split.** Positive = world units per repeat, negative = a repeat COUNT over
+the whole beam. The negative cluster is {−0.5 ×21, −1 ×1275, −2 ×18, −3 ×9}; −0.5 is only meaningful as a
+count.
+
+**INFERRED — one ribbon per emitter, not per particle.** The offsets are per-emitter constants, so N live
+particles would draw N coincident ribbons; with `DepthMask(false)` and the additive blend most beams
+author, that is an N× brightness multiplier.
+
+**No target bound follows Riot's own pattern.** `Augment_LaserEyes_Beam` (target-bound, offset `(0,0,20)`)
+has a sibling literally named `_Long_FakeDir` carrying `(0,0,-1250)` — with no target, the authored offset
+alone defines the far end. Only with neither target nor offset does a fixed 500-unit fallback apply, and
+that is flagged in code as an editor substitute. The map viewport and Particle Editor bind no dummy and
+take this path automatically.
+
+**Mesh-carrying beams keep the mesh path — a DECISION, not a measurement.** All 609 beam emitters with a
+`reflectionDefinition` also carry `mMesh` (100%, zero exceptions), and REFLECTIVE is a mesh-only define,
+so mesh-before-beam preserves the M174 (1.5) behaviour those depend on.
+
+**Parsed but not acted on**, each with the reason recorded in source: `mSegments` (a straight beam with N
+segments is geometrically identical to one, and nothing in the payload bends or perturbs it);
+`mAnimatedColorWithDistance` (time axis in **world units**, not normalised life — 248 of 767 curves exceed
+1, clustering at 200/400/1400/1600/2400 — and per-vertex vs per-beam sampling is unresolved); `mMode` and
+`mTrailMode` (both 1 in 100% of instances, so there is no second value to branch to).
+
+**Two pre-existing bugs fixed in passing.** `EnsureTrailProgram` ended with `BindVertexArray(0)`, and
+since setup runs inside the emitter loop, every early return in a ribbon path left VAO 0 bound so the
+NEXT emitter drew with no attribute arrays. And neither the trail nor the mesh path called
+`ApplyStencil`, so a mode-2/3 emitter earlier in pass order silently masked them.
 
 ### 3. Missing editor controls
 

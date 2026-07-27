@@ -170,6 +170,11 @@ public sealed record VfxEmitterDefinition(
     /// whether the ribbon twists to face the camera or holds the placement's orientation.</summary>
     bool IsArbitraryTrail = false,
 
+    /// <summary>M183 (2.5) mBeam - a ribbon from a source point to a bound TARGET. 11,452 payloads across
+    /// 15,416 VfxPrimitiveBeam emitters. Unlike a trail the geometry is not motion history: it is
+    /// regenerated every frame from two endpoints.</summary>
+    VfxBeamDefinition? Beam = null,
+
     /// <summary>M178 (2.12) reflectionDefinition - the fresnel rim and cubemap reflection stage.
     /// 59,149 emitters.</summary>
     VfxReflection? Reflection = null,
@@ -794,4 +799,67 @@ public sealed record VfxChildParticleSet(
 public sealed record VfxChildIdentifier(uint EffectKey, uint EffectLink)
 {
     public bool IsEmpty => EffectKey == 0 && EffectLink == 0;
+}
+
+/// <summary>M183 (2.5): Riot's <c>VfxBeamDefinitionData</c> (class 0x1fb8df09) - a ribbon stretched from
+/// the emitter to a bound target. Measured across 239 WADs, 45,931 bins and 15,416 beam primitives.
+///
+/// THERE IS NO BEAM SHADER. A substring search for "beam" - and for "trail" - over every path in
+/// ShaderCache.dx11.wad.client returns zero hits, and the union of all 29 shader #defines across the 140
+/// shipped shaders contains nothing beam, ribbon or segment related. Riot's quad_vs consumes an
+/// already-expanded WORLD-SPACE position and performs no billboard expansion at all, so a CPU-tessellated
+/// ribbon is the same vertex stream a billboard quad produces. Beams are CPU geometry, which is exactly
+/// why there is no beam shader to find.</summary>
+public sealed record VfxBeamDefinition(
+    /// <summary>mBirthTilingSize, kept as authored so the whole vector stays inspectable. Only Y - with X
+    /// as a fallback - is used; see <see cref="TilingLength"/>.</summary>
+    Vector3 BirthTilingSize,
+    /// <summary>mLocalSpaceSourceOffset - where the beam starts, relative to the emitter. 2,846 payloads.</summary>
+    Vector3 SourceOffset,
+    /// <summary>mLocalSpaceTargetOffset - offset applied at the TARGET end. 1,791 payloads; 9,661 of
+    /// 11,452 author none at all, which is why the target itself has to come from a runtime binding.</summary>
+    Vector3 TargetOffset,
+    /// <summary>mSegments; -1 = absent (94.3%). Parsed and stored, not acted on - a straight beam with N
+    /// segments is geometrically identical to one with a single segment, and nothing in the payload bends,
+    /// sags or perturbs it. Subdivision only buys something once per-vertex distance colour is resolved.</summary>
+    int Segments,
+    /// <summary>mAnimatedColorWithDistance. Parsed and stored, NOT applied: the curve's time axis is in
+    /// WORLD UNITS rather than normalised life (248 of 767 curves have a maximum key time above 1, with
+    /// clusters at 200/400/1400/1600/2400), and whether it is sampled per vertex or once for the whole
+    /// beam is unresolved. Applying it would be a silent guess.</summary>
+    VfxCurve4? AnimatedColorWithDistance,
+    /// <summary>mIsColorBindedWithDistance. True in all 798 instances - no `false` exists in the corpus.</summary>
+    bool IsColorBoundToDistance,
+    /// <summary>mMode; -1 = absent. Only ever 1 (89 instances, all Camille R tethers). Parsed, never
+    /// branched on: there is no second value to branch to.</summary>
+    int Mode,
+    /// <summary>mTrailMode; -1 = absent. Only ever 1 (24 instances). Parsed, never branched on.</summary>
+    int TrailMode)
+{
+    /// <summary>The texture repeat parameter. Y IS THE LENGTH SLOT FOR A BEAM, not X.
+    ///
+    /// Measured on 9,834 authored vectors: Y is non-zero on 96.6%, X on only 7.3%. That is the opposite of
+    /// <see cref="VfxTrailDefinition"/>, where the length lives in X - so reusing the trail's reader here
+    /// would zero 96.6% of beams and silently substitute a fallback. X is kept as a secondary because 290
+    /// beams have X as their only non-zero component.
+    ///
+    /// Z is deliberately ignored: it is only ever a small integer {1, 2, 3, 30, 100}, never a world
+    /// length, and 53 of its instances are one unexplained Camille R emitter at Z=100.</summary>
+    public float TilingLength =>
+        MathF.Abs(BirthTilingSize.Y) > 1e-3f ? BirthTilingSize.Y : BirthTilingSize.X;
+
+    /// <summary>How many times the texture repeats along a beam of <paramref name="beamLength"/> units.
+    ///
+    /// INFERRED - the sign split. Positive is read as world-units-per-repeat, negative as a repeat COUNT
+    /// over the whole beam. The negative cluster is {-0.5 x21, -1 x1275, -2 x18, -3 x9}, and -0.5 is only
+    /// meaningful as a count: read as a length it would mean a repeat every half unit, i.e. thousands of
+    /// aliased repeats along a beam. Absent or zero gives exactly one repeat end to end, which is an
+    /// editor substitute rather than a known Riot default.</summary>
+    public float UvRepeats(float beamLength)
+    {
+        float t = TilingLength;
+        if (t < -1e-3f) return MathF.Abs(t);
+        if (t > 1e-3f) return beamLength / t;
+        return 1f;
+    }
 }

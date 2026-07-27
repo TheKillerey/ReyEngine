@@ -998,6 +998,9 @@ public sealed class ViewportControl : OpenGlControlBase
 
             foreach (var psim in _particleSims)
             {
+                // M183 (2.5): beams terminate at the M114 practice dummy. Pushed every frame rather than
+                // at build time so dragging the dummy moves live beams instead of needing a replay.
+                psim.SetBeamTarget(TargetDummyPosition);
                 psim.Update(dt);
                 prend.Render(psim, viewProj, view, _camera.Near, _camera.Far);
             }
@@ -1016,6 +1019,9 @@ public sealed class ViewportControl : OpenGlControlBase
                 // would otherwise live forever, one per parent particle, and never be collected.
                 if (age > ChildSimMaxAge) { _childSims.RemoveAt(i); continue; }
                 _childSims[i] = (csim, citem, age);
+                // Both loops, deliberately: M175 found erosion reaching one of seven playback paths, and
+                // a child system with a beam is exactly that shape of omission.
+                csim.SetBeamTarget(TargetDummyPosition);
                 csim.Update(dt);
                 prend.Render(csim, viewProj, view, _camera.Near, _camera.Far);
             }
