@@ -475,7 +475,13 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         }
     }
 
-    /// <summary>A procedural checker, so a texture slot can be exercised without hunting for a file.</summary>
+    /// <summary>A procedural checker, so a texture slot can be exercised without hunting for a file.
+    ///
+    /// <para>M212: the levels are deliberately kept UNDER half scale. Environment shaders double the
+    /// diffuse and clamp it (measured: <c>saturate(2 x texture)</c>), so League's env textures are authored
+    /// at roughly half scale and anything brighter than 0.5 flattens to a solid block. The first checker
+    /// used 235/130/70 and rendered as a white-and-lavender sphere, which looked like a renderer bug and
+    /// was really a test texture outside the range the shader is built for.</para></summary>
     [RelayCommand]
     private void BindCheckerToAll()
     {
@@ -486,15 +492,15 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             {
                 bool on = ((x / 8) + (y / 8)) % 2 == 0;
                 int i = (y * T + x) * 4;
-                tex[i] = (byte)(on ? 235 : 45);
-                tex[i + 1] = (byte)(on ? 130 : 45);
-                tex[i + 2] = (byte)(on ? 70 : 95);
+                tex[i] = (byte)(on ? 112 : 22);
+                tex[i + 1] = (byte)(on ? 62 : 22);
+                tex[i + 2] = (byte)(on ? 34 : 46);
                 tex[i + 3] = 255;
             }
         foreach (var slot in TextureSlots)
         {
             _renderer.SetTexture(slot.Name, tex, T, T);
-            slot.Source = "checker 64x64";
+            slot.Source = "checker 64x64 (half-scale)";
         }
         RebuildBindings();
         AppendLog();

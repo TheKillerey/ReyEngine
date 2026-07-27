@@ -183,9 +183,8 @@ grow into the OpenGL renderer, and so the experiment can be deleted in one step.
    conventionally transposed before upload. Whether Riot's shaders do `mul(v, M)` or `mul(M, v)` is not
    recorded anywhere in the bytecode we read. Exposed as a **toggle**, defaulting to transposed, rather than
    guessed silently — the same treatment M208 gave the mesh winding.
-2. **Engine constant values.** `FOG_OF_WAR_PARAMS`, `SHADOW_COLOR`, `LIGHT_MAP_COLOR_SCALE_AND_INTENSITY` and
-   friends are filled with preview stand-ins chosen to be visually neutral ("fully visible, unshadowed"). They
-   are *not* measured engine values, and are labelled as stand-ins in the code.
+2. **Engine constant values** are preview stand-ins, not measured engine values, and are labelled as such in
+   the code — with the exception of the shadow pair, which M212 measured (below).
 3. **The true material↔texture residue**, per the note above.
 4. **Blend / depth / stencil / raster state per material.** The preview exposes these as manual toggles. Where
    the game sources them per material is not established here.
@@ -197,6 +196,50 @@ grow into the OpenGL renderer, and so the experiment can be deleted in one step.
    accuracy claim about either renderer.
 
 ---
+
+## The light term, measured (M212)
+
+The first build rendered a garish white-and-lavender sphere. The cause was the preview setting both
+`SHADOW_COLOR` and `SHADOW_COLOR_COMPLEMENT` to 1.0, and the fix required knowing what the shader actually
+does with them, so it was measured rather than tuned.
+
+**Method.** Bind a flat texture of known level, render, average the lit pixels. Sweep one thing at a time.
+
+**The first attempt was vacuous** and is worth recording as a warning: run at texture level 128, every
+constant setting reported a mean of exactly 255.0, so the sweep "showed" that `SHADOW_COLOR` had no effect.
+The image was fully saturated and the measurement had no resolution at all. Re-run at level 32 the same
+sweep separated cleanly.
+
+**Result**, on `staticmesh/defaultenv_flat` blob#53:
+
+```
+output = saturate(2 x texture) x (SHADOW_COLOR + SHADOW_COLOR_COMPLEMENT) x TintColor
+```
+
+| evidence | observation |
+|---|---|
+| four splits summing to 1.0 (`1,0` `0,1` `0.35,0.65` `0.5,0.5`) | all exactly **2.00x** on a 0.125 texture |
+| sum 2.0 (`1,1`) | **4.00x** |
+| sum 0.0 | **0.00x** |
+| texture sweep at sum 1.0 | 64→128, 100→200, 126→252 — exactly 2.00x |
+| texture sweep, continued | 130→255, 140→255, 160→255, 200→255 — hard clamp |
+
+So the two terms **add** (the split is not observable here — `DISABLE_SHADOWS` forces the shadow term), and
+the diffuse is **doubled and clamped before** the light term is applied. Only three constants are `USED` in
+this permutation, so the ×2 is a literal in the shader, not something the preview supplies.
+
+**That ×2 is intentional** — it is the overbright-albedo convention, of a piece with the `lightMapColorScale=2`
+that map data records, and it means League's environment diffuse is authored at roughly half scale. The
+preview deliberately does **not** cancel it: a sum of 0.5 would undo the doubling and make a mid-grey test
+texture look tidy while misrepresenting what the game draws. The defect was the sum being 2.0, which
+double-brightened on top of the shader's own doubling. It is now 1.0 — the neutral value for a multiplying
+term, and what a colour plus its complement ought to add to.
+
+The **split** (0.35 / 0.65) remains a stand-in and is labelled as one. Nothing measured constrains it,
+because only the sum is observable in a `DISABLE_SHADOWS` permutation.
+
+A knock-on: the built-in checker was 235/130/70, above the half-scale range the shader is built for, so it
+flattened to a solid block and read as a renderer bug. It is now authored under 0.5.
 
 ## Harnesses
 

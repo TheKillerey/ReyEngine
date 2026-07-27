@@ -616,10 +616,43 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     "TIME" => new[] { s.TimeSeconds, s.TimeSeconds * 0.5f, MathF.Sin(s.TimeSeconds), 1f },
                     "SUN_LIGHT_DIRECTION" => new[] { s.SunDirection.X, s.SunDirection.Y, s.SunDirection.Z, 0f },
                     "SUN_LIGHT_COLOR" => new[] { s.SunColor.X, s.SunColor.Y, s.SunColor.Z, s.SunColor.W },
-                    // FOW and shadow terms default to "fully visible / unshadowed" so an unconfigured
-                    // preview is not black. These are preview stand-ins, not measured engine values.
                     "FOG_OF_WAR_PARAMS" or "FOW_HEIGHT_FADE" => new[] { 0f, 0f, 0f, 0f },
-                    "SHADOW_COLOR" or "SHADOW_COLOR_COMPLEMENT" => new[] { 1f, 1f, 1f, 1f },
+
+                    // M212: these two ADD, and the result multiplies a diffuse the shader has ALREADY
+                    // doubled and clamped. Measured on staticmesh/defaultenv_flat blob#53 by binding a flat
+                    // texture and sweeping - with headroom below clipping, because the first attempt
+                    // measured a saturated image where every setting looked identical and concluded
+                    // nothing:
+                    //
+                    //     output = saturate(2 x texture) x (SHADOW_COLOR + SHADOW_COLOR_COMPLEMENT) x TintColor
+                    //
+                    // Evidence. Four different splits summing to 1.0 all gave exactly 2.00x on a 0.125
+                    // texture, a sum of 2.0 gave 4.00x, a sum of 0 gave 0 - so it is the SUM, linearly, and
+                    // the split is not observable here (DISABLE_SHADOWS forces the shadow term). Sweeping
+                    // the texture instead held 1.00x from input 64 to 126 and then clamped hard at 127 for
+                    // 130, 140, 160 and 200 - a saturate() that reaches 1.0 at texture 0.5, i.e. the
+                    // diffuse is doubled and clamped BEFORE the light term is applied. Only three
+                    // constants are USED in that permutation, so the x2 is a literal in the shader.
+                    //
+                    // That x2 is intentional - it is the overbright-albedo convention, of a piece with the
+                    // lightMapColorScale=2 map data records - so League's environment diffuse is authored
+                    // at roughly half scale. The preview must NOT cancel it: picking a sum of 0.5 to undo
+                    // the doubling would make a synthetic mid-grey test texture look tidy while
+                    // misrepresenting what the game actually draws.
+                    //
+                    // The real defect in M210 was a sum of 2.0, which double-brightened on top of the
+                    // shader's intended doubling and clipped everything bright to white. A sum of 1.0 is
+                    // the neutral value for a term that multiplies - and is what a colour plus its
+                    // complement ought to add up to. The SPLIT is a stand-in and is labelled as one: only
+                    // the sum is observable in this permutation, so nothing measured constrains it. Both
+                    // are editable in the Constants tab.
+                    "SHADOW_COLOR" => new[] { 0.35f, 0.35f, 0.35f, 1f },
+                    "SHADOW_COLOR_COMPLEMENT" => new[] { 0.65f, 0.65f, 0.65f, 1f },
+
+                    // Not USED by the permutation the above was measured on (it carries NO_BAKED_LIGHTING),
+                    // so this is unverified and stays neutral rather than being set to the 2 that map data
+                    // records for lightMapColorScale. Doubling on an untested guess is the exact mistake
+                    // above.
                     "LIGHT_MAP_COLOR_SCALE_AND_INTENSITY" => new[] { 1f, 1f, 1f, 1f },
                     "TINTCOLOR" => new[] { 1f, 1f, 1f, 1f },
                     _ => null,
