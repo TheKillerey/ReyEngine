@@ -138,6 +138,36 @@ public sealed class VfxParticleSimulator
     private Matrix4x4 _inverseWorldTransform = Matrix4x4.Identity;
     public int LiveParticleCount { get; private set; }
 
+    /// <summary>M186 (2.15): how long one pass of this system takes, in seconds - the delay before it
+    /// starts, plus how long it emits, plus how long its last particle then lives.
+    ///
+    /// This is an EDITOR measure, not a Riot quantity. Riot systems are stopped by gameplay, so an
+    /// emitter with no lifetime genuinely runs until something ends it; <see cref="InfiniteRunSeconds"/>
+    /// stands in for that so an endless system still has a visible cycle to loop on. Nothing in the
+    /// renderer or the data path depends on this value - only the preview's auto-stop.</summary>
+    public float NaturalDuration { get; private set; }
+
+    /// <summary>How long the preview lets an endless emitter run before treating a cycle as finished.
+    /// Chosen for the editor, not read from Riot.</summary>
+    private const float InfiniteRunSeconds = 3f;
+
+    private void ComputeNaturalDuration()
+    {
+        float longest = 0f;
+        foreach (var s in _emitters)
+        {
+            var d = s.Def;
+            float start = s.StartOffset + d.TimeBeforeFirstEmission;
+            float emitFor = d.EmitterLifetime is > 0f ? d.EmitterLifetime.Value : InfiniteRunSeconds;
+            // A negative particleLifetime means "never dies on its own" - 65,937 emitters author it - so
+            // it cannot contribute a finite tail; the linger window is what ends those.
+            float pLife = d.ParticleLifetime.Constant;
+            float tail = pLife > 0f ? pLife : MathF.Max(d.ParticleLinger, 0f);
+            longest = MathF.Max(longest, start + emitFor + tail);
+        }
+        NaturalDuration = Math.Clamp(longest, 0.5f, 30f);
+    }
+
     // Emitters that never terminate loop forever; give a hard cap so a runaway rate can't explode memory.
     private const int MaxParticlesPerEmitter = 4000;
 
@@ -280,6 +310,7 @@ public sealed class VfxParticleSimulator
             });
         }
         ResolveBeams();   // M183: endpoints depend on BasePos + the placement basis just computed
+        ComputeNaturalDuration();   // M186: the preview's auto-stop cycle length
         Reset();
     }
 

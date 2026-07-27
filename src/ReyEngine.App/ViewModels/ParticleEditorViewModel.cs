@@ -135,6 +135,11 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
 
     [RelayCommand] private void StopEmitting() => Stopped = true;
 
+    /// <summary>M186 (2.15): loop the preview as run -> stop -> linger -> restart, so the shutdown curves
+    /// play every cycle without the user pressing Stop. On by default: an effect whose only fade lives in
+    /// its Linger curves otherwise looks like it never ends.</summary>
+    [ObservableProperty] private bool _autoStop = true;
+
     [RelayCommand] private void Restart() { Stopped = false; RebuildPlayback(); }
     [RelayCommand] private void TogglePause() => Paused = !Paused;
 

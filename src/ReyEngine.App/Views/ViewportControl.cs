@@ -100,6 +100,10 @@ public sealed class ViewportControl : OpenGlControlBase
     /// freezes time - a stopped system keeps advancing so its shutdown curves can actually play.</summary>
     public static readonly StyledProperty<bool> ParticleStoppedProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ParticleStopped));
+    /// <summary>M186 (2.15): stop each cycle automatically so the Linger teardown plays without the user
+    /// pressing anything, then restart once the last particle has gone.</summary>
+    public static readonly StyledProperty<bool> ParticleAutoStopProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(ParticleAutoStop));
     public static readonly StyledProperty<Vector3?> FocusPointProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(FocusPoint));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
@@ -306,6 +310,9 @@ public sealed class ViewportControl : OpenGlControlBase
     public double ParticleSpeed { get => GetValue(ParticleSpeedProperty); set => SetValue(ParticleSpeedProperty, value); }
     public bool ParticlePaused { get => GetValue(ParticlePausedProperty); set => SetValue(ParticlePausedProperty, value); }
     public bool ParticleStopped { get => GetValue(ParticleStoppedProperty); set => SetValue(ParticleStoppedProperty, value); }
+    public bool ParticleAutoStop { get => GetValue(ParticleAutoStopProperty); set => SetValue(ParticleAutoStopProperty, value); }
+    /// <summary>M186: seconds since this auto-stop cycle began. Reset when the cycle restarts.</summary>
+    private float _autoStopElapsed;
     public bool ShowBones { get => GetValue(ShowBonesProperty); set => SetValue(ShowBonesProperty, value); }
     public bool ShowBounds { get => GetValue(ShowBoundsProperty); set => SetValue(ShowBoundsProperty, value); }
 
@@ -1008,6 +1015,30 @@ public sealed class ViewportControl : OpenGlControlBase
                 foreach (var psim in _particleSims) psim.Stop();
                 foreach (var (csim, _, _) in _childSims) csim.Stop();
             }
+            // M186 (2.15): the auto-stop cycle - run, stop, let the Linger curves play, restart when the
+            // last particle has gone. Without it the shutdown stage is only visible if the user presses
+            // Stop, and a looping preview never shows it at all.
+            //
+            // The restart waits on the particle count rather than on a timer, so a long linger window is
+            // never cut off mid-fade. Manual Stop takes precedence: while the user holds it, this does not
+            // restart underneath them.
+            else if (ParticleAutoStop && _particleSims.Count > 0)
+            {
+                bool anyStopped = _particleSims.Any(static s => s.IsStopped);
+                if (!anyStopped)
+                {
+                    _autoStopElapsed += dt;
+                    float cycle = _particleSims.Max(static s => s.NaturalDuration);
+                    if (_autoStopElapsed >= cycle)
+                        foreach (var psim in _particleSims) psim.Stop();
+                }
+                else if (_particleSims.All(static s => s.LiveParticleCount == 0))
+                {
+                    foreach (var psim in _particleSims) psim.Reset();
+                    _childSims.Clear();   // children belong to the cycle that just ended
+                    _autoStopElapsed = 0f;
+                }
+            }
             foreach (var psim in _particleSims)
             {
                 // M183 (2.5): beams terminate at the M114 practice dummy. Pushed every frame rather than
@@ -1382,6 +1413,7 @@ public sealed class ViewportControl : OpenGlControlBase
         if (_particleRenderer is null) return;
         _particleSims.Clear();
         _childSims.Clear();
+        _autoStopElapsed = 0f;   // M186: a rebuilt playback starts its cycle over
         _particleSimCache.Clear();
         _travelElapsed.Clear();
         _particleTextureCache.Clear();
