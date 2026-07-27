@@ -987,8 +987,8 @@ stand-in purely so it has a visible cycle. Nothing in the renderer or the data p
 | 3.1 | ~~**Replace the hand-maintained name table with `HashDatabase.TryGetBinName`**~~ | — | — | **DONE in M187** — see 3.1b |
 | 3.2 | ~~**Add `BinTreeI16` and `Optional<T>` unwrapping to the editable-type list**~~ | — | — | **DONE in M187** — see 3.2b |
 | 3.3 | **Expand nested structs into editable sub-rows** instead of one opaque read-only row | `ParticleDocument.cs:139-153` | Every definition struct — erosion, soft, reflection, palette, trail, beam, mesh, Linger, Filtering, field collection, child set | Medium; needs a tree-shaped row model |
-| 3.4 | **Show systems with zero emitters** | `ParticleDocument.cs:51-68` | 10,367 systems (5.5%) | Trivial |
-| 3.5 | **Add a system-level property panel** (`particleName`, `flags`, `transform`, `buildUpTime`, `visibilityRadius`, sounds) | `ParticleDocument.cs`, `ParticleEditorViewModel.cs`, `ParticleEditorView.axaml` | 189,274 systems have no editor surface | Medium |
+| 3.4 | ~~**Show systems with zero emitters**~~ | — | — | **DONE in M188** — see 3.4b |
+| 3.5 | ~~**Add a system-level property panel**~~ | — | — | **DONE in M188** — see 3.4b |
 | 3.6 | **Curve key editing** (currently display-only) | `ParticleEditorView.axaml:174-179`, `ParticleEditorViewModel.cs` | 4.8M curves | Medium-high; the biggest missing authoring capability |
 | 3.7 | **Flag fields that are editable but ignored** by the renderer, so the user is not misled | `ParticleDocument.cs` (a badge or grey-out) | 12 fields incl. `alphaRef`, `miscRenderFlags`, `depthBiasFactors` | Trivial, prevents a class of false bug reports |
 | 3.8 | **Map placement inspector** for the 10 unread `MapParticle` fields | `MapParticleExtractor.cs`, map inspector view | 29,811 placements | Depends on 5.2 for saving |
@@ -1042,6 +1042,40 @@ control that shows the harness can observe a success). The `Optional` cases are 
 the row edits a property one level below the one the emitter struct holds, so a round trip is the only
 thing that proves the write reaches the tree. Also asserted: 0 of 5,380,294 rows report dirty before
 any edit.
+
+#### 3.4b / 3.5b — M188 result
+
+Same slice as 3.1b (40 champion WADs), measured through `ParticleDocument` itself.
+
+**Emitterless systems are no longer dropped.** 2,124 of 36,767 systems (5.8%) carry no emitter, and the
+editor hid every one of them; 70 bins consisted *only* of such systems and the editor refused to open
+them at all. That is worse than an empty list, because the systems are named and referenced elsewhere —
+a user searching for `Aatrox_Skin21_Recall_Beam` saw nothing and concluded the tool had failed to parse
+it. 55.4% of them carry nothing but `particleName` and `particlePath`; they are stubs, and the tree now
+says "no emitters (stub system)" rather than showing a count that reads like a failure.
+
+**Systems have their own panel.** 99,591 rows where there were previously none — 99.3% editable —
+shown as a `SYSTEM` card alongside the emitter cards, reusing the same rows and the same inspector.
+Grouped as System (89,448 rows), Transform (5,077) and Audio (5,052).
+
+| field | rows | |
+|---|---|---|
+| `particleName`, `particlePath` | 36,767 each | editable |
+| `flags` | 15,516 | editable |
+| `visibilityRadius` | 3,478 | editable |
+| `soundOnCreateDefault` / `soundPersistentDefault` | 3,418 / 1,541 | editable |
+| `overrideScaleCap` | 779 | editable (`Optional<F32>`, via M187) |
+| `transform` | 437 | read-only — `Matrix44` has no editor kind |
+| `assetRemappingTable`, `materialOverrideDefinitions` | 125, 114 | read-only containers (3.3 territory) |
+
+14 rows still show as hex: `0xf97b1289`, which CDTB cannot name either.
+
+VERIFIED: 3 system-level round trips through `Serialize` → re-`Parse` — `visibilityRadius` (500 →
+1234.5), `particleName` (→ `ReyEngineProbe`) and `flags` (197 → 7). Also asserted: the two emitter
+containers never leak into the system panel (they are the emitters, which the tree already shows), and
+0 of 99,591 rows report dirty before any edit. The UI wiring is checked by Avalonia's compiled bindings
+at build time — `x:DataType` is set on the card template, so a missing property fails the build — but
+the new card has not been exercised in a running window.
 
 ### 4. Missing parsing support
 

@@ -98,6 +98,7 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         Cards.Clear();
         SelectedProperty = null;
         if (value is null) { Playback = null; return; }
+        Cards.Add(new ParticleEmitterCardViewModel(value.Entry, this));   // M188 (3.5): the system's own fields
         foreach (var e in value.Entry.Emitters)
             Cards.Add(new ParticleEmitterCardViewModel(e, this));
         RebuildPlayback();
@@ -176,14 +177,14 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     /// the preview (the resolver skips disabled emitters, so it stops/starts immediately).</summary>
     internal void SetEmitterEnabled(ParticleEmitterCardViewModel card, bool enabled)
     {
-        if (Document is null || card.Entry.Disabled == !enabled) return;
+        if (Document is null || card.Entry is not { } entry || entry.Disabled == !enabled) return;
         if (!IsEditable)
         {
             Error?.Invoke("Read-only Riot reference: Copy To Project to toggle emitters.");
             card.IsEnabled = !card.Entry.Disabled;   // revert the checkbox
             return;
         }
-        card.Entry.SetDisabled(!enabled);
+        entry.SetDisabled(!enabled);
         MarkDocumentDirty?.Invoke();
         _defs = VfxSystemResolver.ExtractAll(Document.Serialize());
         RebuildPlayback();
@@ -196,7 +197,11 @@ public sealed partial class ParticleSystemNodeViewModel : ObservableObject
 {
     public ParticleSystemEntry Entry { get; }
     public string Name => Entry.Name;
-    public string Detail => $"{Entry.Emitters.Count} emitter(s)";
+    // M188 (3.4): emitterless systems are listed now, so the tree has to say so rather than "0 emitter(s)",
+    // which reads like a parse failure. 55.4% of them are named stubs carrying only a name and a path.
+    public string Detail => Entry.Emitters.Count == 0
+        ? "no emitters (stub system)"
+        : $"{Entry.Emitters.Count} emitter(s)";
     public IReadOnlyList<string> EmitterNames { get; }
 
     /// <summary>M125: this system's bin object needed repairs while loading (marked red in the tree).</summary>
@@ -214,9 +219,13 @@ public sealed partial class ParticleSystemNodeViewModel : ObservableObject
 public sealed partial class ParticleEmitterCardViewModel : ObservableObject
 {
     private readonly ParticleEditorViewModel _owner;
-    public ParticleEmitterEntry Entry { get; }
+    public ParticleEmitterEntry? Entry { get; }
     public string Name { get; }
     public IReadOnlyList<ParticleModuleGroupViewModel> Modules { get; }
+    /// <summary>M188 (3.5): this card holds the SYSTEM's own fields rather than an emitter's. Same rows and
+    /// the same inspector - only the enable toggle and the sprite strip do not apply.</summary>
+    public bool IsSystemCard => Entry is null;
+    public bool ShowToggle => Entry is not null;
     /// <summary>The emitter's sprite texture, decoded as a small preview (null when unresolved).</summary>
     public Avalonia.Media.Imaging.Bitmap? Thumbnail { get; }
     public bool HasThumbnail => Thumbnail is not null;
@@ -242,6 +251,21 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
         var texPath = emitter.Properties.FirstOrDefault(p => p.Name == "texture")?.CurrentText;
         if (!string.IsNullOrWhiteSpace(texPath))
             try { Thumbnail = owner.LoadThumbnail?.Invoke(texPath); } catch { Thumbnail = null; }
+    }
+
+    /// <summary>M188 (3.5): the system-level card. Its fields - particleName, particlePath, flags, transform,
+    /// visibilityRadius, the default sounds - had no editor surface at all before this.</summary>
+    public ParticleEmitterCardViewModel(ParticleSystemEntry system, ParticleEditorViewModel owner)
+    {
+        _owner = owner;
+        Entry = null;
+        Name = "SYSTEM";
+        _isEnabled = true;
+        Modules = system.Modules
+            .Select(m => new ParticleModuleGroupViewModel(m,
+                system.Properties.Where(p => p.Module == m)
+                    .Select(p => new ParticlePropertyRowViewModel(p, owner)).ToList()))
+            .ToList();
     }
 }
 

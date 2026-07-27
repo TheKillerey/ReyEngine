@@ -65,8 +65,12 @@ public sealed class ParticleDocument
                     if (el is BinTreeStruct s && s.ClassHash == emitterClass)
                         emitters.Add(ParticleEmitterEntry.From(s, resolveName));
             }
-            if (emitters.Count > 0)
-                systems.Add(new ParticleSystemEntry(o.PathHash, name, path, emitters));
+            // M188 (3.4): emitterless systems are kept. 5.8% of systems have no emitter and 55.4% of those
+            // carry nothing but particleName and particlePath - they are named stubs. Dropping them made the
+            // editor look like it had failed to parse an effect the user could see referenced by name, and
+            // it refused to open a bin whose systems were ALL emitterless (70 of 2,674 in the sample).
+            systems.Add(new ParticleSystemEntry(o.PathHash, name, path, emitters,
+                ParticleSystemEntry.ReadProperties(o, resolveName)));
         }
         return systems.Count > 0 ? new ParticleDocument(tree, systems, issues) : null;
     }
@@ -76,9 +80,71 @@ public sealed class ParticleDocument
 }
 
 /// <summary>One VfxSystemDefinitionData object (keyed by its path hash, matching the resolver output).</summary>
-public sealed record ParticleSystemEntry(uint PathHash, string Name, string ParticlePath, IReadOnlyList<ParticleEmitterEntry> Emitters)
+public sealed record ParticleSystemEntry(uint PathHash, string Name, string ParticlePath,
+    IReadOnlyList<ParticleEmitterEntry> Emitters, IReadOnlyList<ParticleProperty> Properties)
 {
-    public bool IsDirty => Emitters.Any(e => e.IsDirty);
+    public bool IsDirty => Emitters.Any(e => e.IsDirty) || Properties.Any(p => p.IsDirty);
+
+    /// <summary>Distinct module names carried by this system's own properties, in panel order.</summary>
+    public IReadOnlyList<string> Modules =>
+        ModuleOrder.Where(m => Properties.Any(p => p.Module == m)).ToList();
+
+    private static readonly string[] ModuleOrder = { "System", "Transform", "Audio", "Other" };
+
+    /// <summary>M188 (3.5): the system's OWN fields, which had no editor surface at all - the tree showed a
+    /// system only as a name, and everything on it (flags, transform, visibilityRadius, the default sounds)
+    /// was invisible and unreachable. The emitter containers are skipped: those are the emitters, which the
+    /// tree already shows.</summary>
+    internal static IReadOnlyList<ParticleProperty> ReadProperties(BinTreeObject o, Func<uint, string?>? resolveName)
+    {
+        var props = new List<ParticleProperty>();
+        foreach (var (hash, prop) in o.Properties)
+        {
+            if (hash == ComplexEmittersHash || hash == SimpleEmittersHash) continue;
+            string fieldName = resolveName?.Invoke(hash) ?? (SystemFieldNames.TryGetValue(hash, out var fn) ? fn : $"0x{hash:x8}");
+            props.Add(ParticleEmitterEntry.MakeRow(ModuleOf(fieldName), fieldName, prop));
+        }
+        props.Sort((a, b) =>
+        {
+            int m = Array.IndexOf(ModuleOrder, a.Module).CompareTo(Array.IndexOf(ModuleOrder, b.Module));
+            return m != 0 ? m : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        });
+        return props;
+    }
+
+    private static readonly uint ComplexEmittersHash = HashAlgorithms.Fnv1a("complexEmitterDefinitionData");
+    private static readonly uint SimpleEmittersHash = HashAlgorithms.Fnv1a("simpleEmitterDefinitionData");
+
+    private static string ModuleOf(string field) => field switch
+    {
+        "particleName" or "particlePath" or "flags" or "drawingLayer" or "mEyeCandy" or "mIsPoseAfterimage"
+            or "selfIllumination" or "colorblindVisibility" or "assetRemappingTable"
+            or "materialOverrideDefinitions" => "System",
+        "transform" or "overrideScaleCap" or "scaleDynamicallyWithAttachedBone" or "visibilityRadius"
+            or "buildUpTime" or "hudAnchorPositionFromWorldProjection" or "hudLayerDimension" => "Transform",
+        "soundOnCreateDefault" or "soundPersistentDefault" or "voiceOverOnCreateDefault"
+            or "voiceOverPersistentDefault" or "audioParameterFlexID" or "audioParameterTimeScaledDuration"
+            or "ClockToUse" => "Audio",
+        _ => "Other",
+    };
+
+    /// <summary>Offline fallback, same role as the emitter table: every system field measured in the corpus.</summary>
+    private static readonly Dictionary<uint, string> SystemFieldNames = BuildSystemFieldNames();
+    private static Dictionary<uint, string> BuildSystemFieldNames()
+    {
+        string[] names =
+        {
+            "particleName","particlePath","flags","visibilityRadius","soundOnCreateDefault",
+            "soundPersistentDefault","overrideScaleCap","transform","buildUpTime",
+            "scaleDynamicallyWithAttachedBone","assetRemappingTable","voiceOverOnCreateDefault",
+            "materialOverrideDefinitions","mIsPoseAfterimage","mEyeCandy","voiceOverPersistentDefault",
+            "hudAnchorPositionFromWorldProjection","drawingLayer","audioParameterFlexID",
+            "audioParameterTimeScaledDuration","hudLayerDimension","ClockToUse","selfIllumination",
+        };
+        var d = new Dictionary<uint, string>(names.Length);
+        foreach (var n in names) d[HashAlgorithms.Fnv1a(n)] = n;
+        return d;
+    }
 }
 
 /// <summary>One emitter: its editable primitive properties, grouped into Particle-Town-style modules.</summary>
@@ -139,54 +205,7 @@ public sealed class ParticleEmitterEntry
             string fieldName = resolveName?.Invoke(hash) ?? (FieldNames.TryGetValue(hash, out var fn) ? fn : $"0x{hash:x8}");
             if (hash == EmitterNameHash && prop is BinTreeString ns) name = ns.Value;
 
-            string module = ModuleOf(fieldName);
-            switch (prop)
-            {
-                // Value* structs: constantValue is the editable scalar; dynamics = the curve keys.
-                case BinTreeStruct vs when Field(vs.Properties, "constantValue") is { } cv:
-                    var (times, channels) = ReadDynamics(vs.Properties);
-                    props.Add(new ParticleProperty(module, fieldName, cv, isConstantOfCurve: true,
-                        curveTimes: times, curveChannels: channels));
-                    break;
-                // M187: a Value* struct with a curve but NO constantValue. Riot's writer omits default-valued
-                // properties, so this is common rather than exotic - ValueColor ships constantValue in only
-                // 63.0% of its instances and IntegratedValueFloat in 34.1%. These rows previously fell through
-                // to `default:` and became one opaque "Embedded" row, which hid the CURVE as well as the
-                // constant. The curve is now shown. The constant stays unwritten and unguessed: what value
-                // Riot's reader substitutes for an absent constantValue is not established here.
-                case BinTreeStruct ds when Field(ds.Properties, "dynamics") is BinTreeStruct:
-                    var (dt, dc) = ReadDynamics(ds.Properties);
-                    props.Add(new ParticleProperty(module, fieldName, ds, readOnly: true,
-                        curveTimes: dt, curveChannels: dc, displayText: "(curve only - no constantValue)",
-                        readOnlyReason: "This field ships only a curve - Riot's writer omitted its constantValue "
-                                      + "because it was the default. The curve is shown; the constant has no row to edit."));
-                    break;
-                // M187 (3.2): Optional<T> holds the value one level down. 1,701,250 emitter occurrences are
-                // Optional<F32> - lifetime, particleLinger, emitterLinger, period, timeActiveDuringPeriod,
-                // MaximumRateByVelocity - and every one of them was read-only. Editing the inner property
-                // edits the live tree in place, exactly as a bare field does.
-                case BinTreeOptional { Value: { } inner } when BinValueEditor.KindOf(inner) != BinValueKind.ReadOnly:
-                    props.Add(new ParticleProperty(module, fieldName, inner, typeNote: " (optional)"));
-                    break;
-                // An EMPTY Optional has no value to edit; writing one would mean changing the field's
-                // presence, not its value, which the row model cannot express. Shown, not editable.
-                case BinTreeOptional:
-                    props.Add(new ParticleProperty(module, fieldName, prop, readOnly: true,
-                        readOnlyReason: "This optional field is present but empty. Giving it a value would change "
-                                      + "whether the field exists, not what it holds, which this row cannot express."));
-                    break;
-                // plain primitives (numbers, bools, strings/paths, vectors, colours) - directly editable.
-                // The signed/wide integer types were missing: `pass` alone is 976,544 I16 occurrences.
-                case BinTreeF32 or BinTreeU8 or BinTreeU16 or BinTreeU32 or BinTreeU64 or BinTreeI8
-                    or BinTreeI16 or BinTreeI32 or BinTreeI64 or BinTreeBool or BinTreeBitBool
-                    or BinTreeString or BinTreeHash or BinTreeVector2 or BinTreeVector3 or BinTreeVector4
-                    or BinTreeColor:
-                    props.Add(new ParticleProperty(module, fieldName, prop));
-                    break;
-                default:
-                    props.Add(new ParticleProperty(module, fieldName, prop, readOnly: true)); // unsupported: show, don't crash
-                    break;
-            }
+            props.Add(MakeRow(ModuleOf(fieldName), fieldName, prop));
         }
         // stable, Particle-Town-ish order: module, then name
         props.Sort((a, b) =>
@@ -195,6 +214,55 @@ public sealed class ParticleEmitterEntry
             return m != 0 ? m : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
         });
         return new ParticleEmitterEntry { Name = name, Properties = props, EmitterStruct = emitter };
+    }
+
+    /// <summary>Turn one live bin property into an editor row. Shared by emitters and, since M188, by the
+    /// system-level panel - the type handling is a property of the .bin format, not of who owns the field.</summary>
+    internal static ParticleProperty MakeRow(string module, string fieldName, BinTreeProperty prop)
+    {
+        {
+            switch (prop)
+            {
+                // Value* structs: constantValue is the editable scalar; dynamics = the curve keys.
+                case BinTreeStruct vs when Field(vs.Properties, "constantValue") is { } cv:
+                    var (times, channels) = ReadDynamics(vs.Properties);
+                    return new ParticleProperty(module, fieldName, cv, isConstantOfCurve: true,
+                        curveTimes: times, curveChannels: channels);
+                // M187: a Value* struct with a curve but NO constantValue. Riot's writer omits default-valued
+                // properties, so this is common rather than exotic - ValueColor ships constantValue in only
+                // 63.0% of its instances and IntegratedValueFloat in 34.1%. These rows previously fell through
+                // to `default:` and became one opaque "Embedded" row, which hid the CURVE as well as the
+                // constant. The curve is now shown. The constant stays unwritten and unguessed: what value
+                // Riot's reader substitutes for an absent constantValue is not established here.
+                case BinTreeStruct ds when Field(ds.Properties, "dynamics") is BinTreeStruct:
+                    var (dt, dc) = ReadDynamics(ds.Properties);
+                    return new ParticleProperty(module, fieldName, ds, readOnly: true,
+                        curveTimes: dt, curveChannels: dc, displayText: "(curve only - no constantValue)",
+                        readOnlyReason: "This field ships only a curve - Riot's writer omitted its constantValue "
+                                      + "because it was the default. The curve is shown; the constant has no row to edit.");
+                // M187 (3.2): Optional<T> holds the value one level down. 1,701,250 emitter occurrences are
+                // Optional<F32> - lifetime, particleLinger, emitterLinger, period, timeActiveDuringPeriod,
+                // MaximumRateByVelocity - and every one of them was read-only. Editing the inner property
+                // edits the live tree in place, exactly as a bare field does.
+                case BinTreeOptional { Value: { } inner } when BinValueEditor.KindOf(inner) != BinValueKind.ReadOnly:
+                    return new ParticleProperty(module, fieldName, inner, typeNote: " (optional)");
+                // An EMPTY Optional has no value to edit; writing one would mean changing the field's
+                // presence, not its value, which the row model cannot express. Shown, not editable.
+                case BinTreeOptional:
+                    return new ParticleProperty(module, fieldName, prop, readOnly: true,
+                        readOnlyReason: "This optional field is present but empty. Giving it a value would change "
+                                      + "whether the field exists, not what it holds, which this row cannot express.");
+                // plain primitives (numbers, bools, strings/paths, vectors, colours) - directly editable.
+                // The signed/wide integer types were missing: `pass` alone is 976,544 I16 occurrences.
+                case BinTreeF32 or BinTreeU8 or BinTreeU16 or BinTreeU32 or BinTreeU64 or BinTreeI8
+                    or BinTreeI16 or BinTreeI32 or BinTreeI64 or BinTreeBool or BinTreeBitBool
+                    or BinTreeString or BinTreeHash or BinTreeVector2 or BinTreeVector3 or BinTreeVector4
+                    or BinTreeColor:
+                    return new ParticleProperty(module, fieldName, prop);
+                default:
+                    return new ParticleProperty(module, fieldName, prop, readOnly: true); // unsupported: show, don't crash
+            }
+        }
     }
 
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> p, string name) =>
