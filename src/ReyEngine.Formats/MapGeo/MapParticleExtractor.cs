@@ -44,6 +44,11 @@ public sealed record MapParticlePlacement(
     /// <summary>True when mVisibilityFlags was actually authored. 255 is ReyEngine's permissive substitute
     /// and is never authored (0 of 12,845), so without this the substitute is indistinguishable from data.</summary>
     bool HasVisibilityFlags = false,
+    /// <summary>M201 (tier 6): swaps one texture on the referenced system. 16 placements in the shipping
+    /// maps carry it, all in TFT/Arena, and 14 of those also carry a TacticianIndex - so it reads as a
+    /// per-tactician skin swap. That reading is INFERRED from the field names and the index values (1..4
+    /// observed); nothing measured confirms it.</summary>
+    MapParticleTextureOverride? TextureOverride = null,
     /// <summary>M199 (tier 5.2): where this placement lives in the tree. The saver used to find placements
     /// by their 64 transform bytes, which is ambiguous for the 1,450 placements that share a matrix with a
     /// neighbour and impossible for the 2 that have no transform. This pair is unique - measured, 0
@@ -53,6 +58,10 @@ public sealed record MapParticlePlacement(
     /// <summary>The VFX system's short name (leaf of the resolved path) for display.</summary>
     public string SystemName => SystemPath.Contains('/') ? SystemPath[(SystemPath.LastIndexOf('/') + 1)..] : SystemPath;
 }
+
+/// <summary>M201 (tier 6): a texture swap carried by a MapParticle placement. Measured: 16 placements in
+/// the shipping maps, all TFT/Arena; TextureToOverride is present on all 16 and TacticianIndex on 14.</summary>
+public sealed record MapParticleTextureOverride(uint TextureToOverride, uint? TacticianIndex);
 
 /// <summary>
 /// Reads the placed particle systems from a map's companion .materials.bin (they live in
@@ -118,11 +127,25 @@ public static class MapParticleExtractor
                     },
                     AttachToCamera: Flag(s.Properties, "AttachToCamera"),
                     Quality: Field(s.Properties, "quality") is BinTreeI32 q ? q.Value : null,
+                    TextureOverride: ReadTextureOverride(Field(s.Properties, "TextureOverride")),
                     HasVisibilityFlags: Field(s.Properties, "mVisibilityFlags") is not null,
                     Id: new MapPlacementId(o.PathHash, itemKey)));
             }
         }
         return result;
+    }
+
+    /// <summary>M201 (tier 6): the TextureOverride struct. Its class is 0x115b5460 and CDTB cannot name it,
+    /// so the read is guarded on FIELD PRESENCE rather than on the class hash - if a future hash list
+    /// resolves that class to something else, a hard-coded class check would silently stop matching while a
+    /// field check keeps working.</summary>
+    private static MapParticleTextureOverride? ReadTextureOverride(BinTreeProperty? p)
+    {
+        if (p is not BinTreeStruct s) return null;
+        if (Field(s.Properties, "TextureToOverride") is not BinTreeHash tex) return null;
+        return new MapParticleTextureOverride(
+            tex.Value,
+            Field(s.Properties, "TacticianIndex") is BinTreeU32 ti ? ti.Value : null);
     }
 
     /// <summary>A bool that stays null when absent. Riot omits default-valued properties, so absent is NOT

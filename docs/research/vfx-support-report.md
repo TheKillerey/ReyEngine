@@ -1543,7 +1543,48 @@ corruption.
 
 ### 6. Rare / low priority
 
-`mIsPoseAfterimage` (303) · `hudAnchorPositionFromWorldProjection` (74) / `hudLayerDimension` (10) · `ClockToUse` (7) · `selfIllumination` (1) · `colorblindVisibility` (154) · `censorModulateValue` (6,048, correct to ignore in the default filter state) · `WriteAlphaOnly` (249) · `offsetLifeScalingSymmetryMode` (54) / `offsetLifetimeScaling` (38) / `doesLifetimeScale` (7) · the whole `flex*` value family (~4,100, needs runtime IDs that live in game code) · `MapClouds` (1 map) · `MapSkinColorizationPostEffect` (3) · `MapParticle.quality` (3) / `TextureOverride` (16) · the Viktor-only 8-class modifier tree (16 systems) · `.troybin` legacy particles in `DATA.wad.client` (1,189 files, format not covered here — whether any live champion still references them is unanswered).
+**Audited in M201.** Most of this list was already shipped by the time tier 4 finished, and its one open
+question now has an answer. Nothing here was taken on faith: every row was re-counted across all 239 WADs
+(45,931 bins).
+
+| item | count | state |
+|---|---|---|
+| `mIsPoseAfterimage`, `hudAnchorPositionFromWorldProjection`, `hudLayerDimension`, `ClockToUse`, `selfIllumination` | 303 / 74 / 10 / 7 / 1 | **DONE (M194)** — parsed into `VfxSystemExtras`, all badged |
+| `colorblindVisibility`, `censorModulateValue`, `WriteAlphaOnly`, `offsetLifeScalingSymmetryMode`, `offsetLifetimeScaling`, `doesLifetimeScale` | 154 / 6,048 / 249 / 54 / 38 / 7 | **DONE (M193)** — parsed into `VfxEmitterExtras`, all badged |
+| `MapParticle.quality` | 3 | **DONE (M195)** — raw integer, no bitmask reading applied |
+| `MapParticle.TextureOverride` | 16 | **DONE (M201)** — see below |
+| the `flex*` value family | ~4,100 | **RETIRED (M179)** — measured to be a no-op at reference size; also needs runtime IDs that live in game code |
+| `.troybin` legacy particles | 1,189 files | **RETIRED (M201)** — orphaned; see below |
+| `MapClouds` | 1 | not implemented — one object in the entire install |
+| `MapSkinColorizationPostEffect` | 3 | not implemented |
+| the Viktor-only 8-class modifier tree | 16 systems | not implemented |
+
+**The `.troybin` question is answered: nothing references them.** The report left open "whether any live
+champion still references them". Measured across all 45,931 PROP bins in 239 WADs: **0 references by
+string and 0 by WAD hash link** to any of the 1,189 `.troybin` chunks. The first pass only checked strings,
+which would have been an overclaim — a bin can reference an asset by hash — so the hash route was checked
+separately against the full set of `.troybin` chunk hashes. Both are zero. The caveat that remains: this
+covers `.bin` files only, so a reference from game code or a non-bin format would not show up. On the
+evidence available the files are orphaned, and implementing a legacy format nothing points at is not worth
+doing.
+
+**`TextureOverride` (M201)** was the one genuine gap left, and it is now read. Layout verified directly
+rather than assumed: a struct of class `0x115b5460` carrying `TextureToOverride` (`Hash`, 16 of 16) and
+`TacticianIndex` (`U32`, 14 of 16, values 1–4 observed). All 16 occurrences are TFT/Arena, which with the
+index reads as a per-tactician skin swap — **inferred from the field names and index values, not
+confirmed**. Because CDTB cannot name class `0x115b5460`, the read is guarded on *field presence* rather
+than on the class hash: if a future hash list resolves that class differently, a class check would silently
+stop matching while a field check keeps working.
+
+**Not implemented, and why.** `MapClouds` is a single object in the entire install and
+`MapSkinColorizationPostEffect` is three; the Viktor modifier tree is 16 systems behind an 8-class
+structure. Each would be bespoke parsing serving a handful of objects, with no editor surface to put them
+on. They are recorded here with their real counts so the decision can be revisited, not silently dropped.
+
+One correction to the audit itself: the first pass counted `MapClouds`/`MapParticle` by walking top-level
+objects only and reported 0 for both — wrong, because placements live inside `MapPlaceableContainer.items`
+as structs. Counting nested structs too gives `MapParticle` 29,815, which agrees with M195's independent
+29,811 over the shipping maps.
 
 ---
 
