@@ -2737,13 +2737,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// the main layout stays untouched).</summary>
     public Action? ShowParticleEditorWindow; // wired by MainWindow (owns the window instance)
 
-    private void OpenParticleEditorFor(WadAssetEntry entry)
+    private async void OpenParticleEditorFor(WadAssetEntry entry)
     {
         try
         {
             var bytes = ReadAsset(entry.PathHash);
             bool editable = !entry.ReadOnly;
-            if (!ParticleEditor.Load(entry, bytes, editable))
+            // M197 (4.5): parse off the UI thread. The map VFX bins this milestone makes reachable are far
+            // larger than a champion bin - map22.bin measures around 3 seconds - and that was a hard freeze.
+            var resolveName = ParticleEditor.ResolveBinName;
+            var (doc, defs) = await System.Threading.Tasks.Task.Run(
+                () => ParticleEditorViewModel.Parse(bytes, resolveName));
+            if (doc is null || !ParticleEditor.Load(entry, doc, defs, editable))
             {
                 _log.Warn("Particle", $"{entry.DisplayName} contains no VFX systems.");
                 return;
@@ -6181,6 +6186,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>M98: right-click ▸ Open in Map Bin Editor — the fast structured editor for map*.bin.</summary>
+    /// <summary>M197 (4.5): open any bin in the Particle Editor from the Content Browser. Until this, a map
+    /// document only ever parsed VFX from the mapgeo's sibling materials.bin, so the systems in mapXX.bin and
+    /// under maps/modespecificdata were unreachable in the app - thousands of them, with no placements to
+    /// bring them into a scene.</summary>
+    [RelayCommand(CanExecute = nameof(CanOpenInParticleEditor))]
+    private void OpenInParticleEditor(AssetNodeViewModel? node)
+    {
+        var entry = node?.Entry ?? ContextNode?.Entry;
+        if (entry is null) { _log.Warn("Particle", "Select an asset first."); return; }
+        OpenParticleEditorFor(entry);
+    }
+
     [RelayCommand(CanExecute = nameof(CanOpenInMapBinEditor))]
     private void OpenInMapBinEditor(AssetNodeViewModel? node)
     {
@@ -8014,6 +8031,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool CanOpenInTextEditor(AssetNodeViewModel? node) => node?.Entry is not null;
     private bool CanOpenInMapBinEditor(AssetNodeViewModel? node) =>
         node?.Entry is { } e && e.DisplayName.EndsWith(".bin", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>M197 (4.5): deliberately NOT gated on a ".bin" suffix, unlike the Map Bin Editor's command.
+    /// 207 of the map VFX bins this exists to reach sit at extensionless paths
+    /// (maps/modespecificdata/&lt;mode&gt;/&lt;spell&gt;/loadable), so a suffix test would hide exactly the
+    /// assets the milestone is for. A non-VFX pick falls through to the existing "contains no VFX systems"
+    /// warning, which is a cheap and clear failure.</summary>
+    private bool CanOpenInParticleEditor(AssetNodeViewModel? node) => node?.Entry is not null;
 
     /// <summary>Editable folder mounts in the open project (the places we're allowed to write).</summary>
     private List<FolderMount> ProjectFolderMounts =>

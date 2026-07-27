@@ -1260,7 +1260,7 @@ per-instance, so the true rate is **not measured** and no fix is attempted on a 
 | 4.2 | ~~Delete the dead `F_shape` lookup~~ | — | **ALREADY DONE in M174** (commit 2d4c9da); `VfxSystemResolver.cs:75` is now the comment recording it. Row retired, no work remained |
 | 4.3 | ~~Parse the 21 unread system fields~~ | — | — | **DONE in M194** — see 4.3b. "67.7% pure scale, so it is a sizing fix" is **wrong twice** |
 | 4.4 | ~~Parse the 10 unread `MapParticle` fields~~ | — | — | **DONE in M195** — see 4.4b. The high-value field is `VisibilityController`, not `eyeCandy` |
-| 4.5 | Load the two never-loaded map VFX sources | `MainWindowViewModel.cs:5111` | +5,229 systems / 47,118 emitters from `data/maps/shipping/mapXX/mapXX.bin`, +766/6,819 from `maps/modespecificdata/*.bin`. They have no placements, so they need a browse-and-preview entry point rather than automatic scene playback |
+| 4.5 | ~~Load the two never-loaded map VFX sources~~ | — | — | **DONE in M197** — see 4.5b. There are **three** sources, not two, and **18,569** systems, not 5,995 |
 | 4.6 | ~~Parse `MapPointLightType` and `MapLightingVolume`~~ | — | — | **DONE in M196** — see 4.6b. "Affects how all lit VFX read" is **unsupported**, and the point lights cannot be positioned |
 
 #### 4.1b / 4.2b — M193 result
@@ -1408,6 +1408,47 @@ schema plausibly encodes a blend width, and 22 bins carry two volumes, so a hard
 VERIFIED: 7 checks for 4.4 and 6 for 4.6, all against the real shipping map WADs. For 4.6: both classes
 parse; 146 of 172 volumes are brighter than their global; omitted fields inherit the global sun; and Map11
 has zero volumes.
+
+#### 4.5b — M197 result
+
+A map document parses VFX from exactly one bin: the mapgeo's sibling `<name>.materials.bin`. Everything
+else in the map WADs was unreachable in the app. Measured over all 8 shipping map WADs:
+
+| source | bins | systems | emitters |
+|---|---|---|---|
+| `*.materials.bin` — **loaded today** | 199 | 10,023 | 49,689 |
+| other `*.bin` — never loaded | 1,858 | 15,765 | 121,179 |
+| `maps/modespecificdata/*.bin` — never loaded | 5 | 766 | 6,819 |
+| **extensionless paths** — never loaded | 207 | 2,038 | 12,238 |
+
+**The row undercounted by 3×.** It named two sources totalling ~5,995 systems; there are three and
+**18,569**. The third is the extensionless one — `maps/modespecificdata/<mode>/<spell>/loadable` and
+`maps/shipping/map30/spells/*/loadable` — which matters beyond the count, because a menu entry gated on a
+`.bin` suffix (the way `CanOpenInMapBinEditor` is) would have hidden exactly those 207 bins.
+`CanOpenInParticleEditor` therefore gates on nothing but "an asset is selected", and a non-VFX pick falls
+through to the existing *"contains no VFX systems"* warning — cheap and clear. That also avoids touching
+the extensionless type sniff in `OnSelectedNodeChanged`, whose blast radius covers the Map Bin Editor and
+the Content Browser's type filters.
+
+"They have no placements" is confirmed, so this is a browse-and-open surface rather than scene playback:
+an **Open in Particle Editor** entry on both Content Browser context menus.
+
+Two things the browse case forced, both measured rather than assumed:
+- **The parse moved off the UI thread.** `data/maps/shipping/map22/map22.bin` measures **1,991 ms** through
+  `ParticleDocument.Parse` + `VfxSystemResolver.ExtractAll`; map30 519 ms, kiwi.bin 224 ms. On the
+  dispatcher that is a hard freeze. `ParticleEditorViewModel.Parse` is now a static, off-thread half and
+  `Load` takes the pre-parsed result.
+- **A system filter.** map22.bin alone yields **2,579** systems into what was a flat, unsearchable
+  `ListBox`. The filter keeps the current selection when it survives, so typing does not reset the preview.
+
+VERIFIED: 4 checks. There really are systems the app never loads (18,569); extensionless bins carry VFX
+(207 bins / 2,038 systems), which is what makes the ungated menu predicate necessary; at least one bin is
+slow enough to justify the off-thread parse (1,991 ms); and the biggest bins are far too large for an
+unfiltered list (2,579 systems). Tier 3's 38 checks and tier 4's M192/M193/M194/M195/M196 checks all
+still pass.
+
+The UI wiring is checked by Avalonia's compiled bindings at build time; the new menu entry and filter box
+have not been exercised in a running window.
 
 ### 5. Missing serialization support
 

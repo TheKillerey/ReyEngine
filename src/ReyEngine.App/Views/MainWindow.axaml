@@ -699,6 +699,7 @@
                             <Separator />
                             <MenuItem Header="Open in Text Editor" Command="{Binding $parent[Window].DataContext.OpenInTextEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in Map Bin Editor" Command="{Binding $parent[Window].DataContext.OpenInMapBinEditorCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Open in Particle Editor" Command="{Binding $parent[Window].DataContext.OpenInParticleEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in Audio Editor" Command="{Binding $parent[Window].DataContext.OpenInAudioEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in HUD Editor" Command="{Binding $parent[Window].DataContext.OpenInHudEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
@@ -772,6 +773,7 @@
                               <Separator />
                               <MenuItem Header="Open in Text Editor" Command="{Binding $parent[Window].DataContext.OpenInTextEditorCommand}" CommandParameter="{Binding}" />
                               <MenuItem Header="Open in Map Bin Editor" Command="{Binding $parent[Window].DataContext.OpenInMapBinEditorCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Open in Particle Editor" Command="{Binding $parent[Window].DataContext.OpenInParticleEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in Audio Editor" Command="{Binding $parent[Window].DataContext.OpenInAudioEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in HUD Editor" Command="{Binding $parent[Window].DataContext.OpenInHudEditorCommand}" CommandParameter="{Binding}" />
                               <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />

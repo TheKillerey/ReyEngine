@@ -57,28 +57,67 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
 
     public WadAssetEntry? Entry { get; private set; }
     public ObservableCollection<ParticleSystemNodeViewModel> Systems { get; } = new();
+
+    /// <summary>M197 (4.5): the map VFX bins hold thousands of systems - map22.bin alone gives 2,579 - so a
+    /// flat unsearchable list is unusable for the browse case this milestone exists to serve.</summary>
+    [ObservableProperty] private string _systemFilter = "";
+    private readonly List<ParticleSystemNodeViewModel> _allSystems = new();
+
+    partial void OnSystemFilterChanged(string value) => ApplyFilter();
+
+    private void ApplyFilter()
+    {
+        var keep = SystemFilter;
+        var match = string.IsNullOrWhiteSpace(keep)
+            ? _allSystems
+            : _allSystems.Where(s => s.Name.Contains(keep, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        var previous = SelectedSystem;
+        Systems.Clear();
+        foreach (var s in match) Systems.Add(s);
+        // keep the selection when it survives the filter, so typing does not reset the preview
+        SelectedSystem = previous is not null && match.Contains(previous) ? previous : Systems.FirstOrDefault();
+    }
     public ObservableCollection<ParticleEmitterCardViewModel> Cards { get; } = new();
 
     private IReadOnlyDictionary<uint, VfxSystemDefinition> _defs =
         new Dictionary<uint, VfxSystemDefinition>();
 
-    /// <summary>Load a particle .bin into the editor. Returns false when it holds no VFX systems.</summary>
+    /// <summary>Load a particle .bin into the editor. Returns false when it holds no VFX systems.
+    /// Parses on the calling thread - use <see cref="Parse"/> + the pre-parsed overload for large bins.</summary>
     public bool Load(WadAssetEntry entry, byte[] bytes, bool editable)
     {
-        var doc = ParticleDocument.Parse(bytes, ResolveBinName);
-        if (doc is null) return false;
+        var (doc, defs) = Parse(bytes, ResolveBinName);
+        return doc is not null && Load(entry, doc, defs, editable);
+    }
 
+    /// <summary>M197 (4.5): the expensive half, safe to run off the UI thread. map22.bin measures roughly
+    /// 3 seconds through here, which is a visible freeze if it runs on the dispatcher.</summary>
+    public static (ParticleDocument? Doc, IReadOnlyDictionary<uint, VfxSystemDefinition> Defs)
+        Parse(byte[] bytes, Func<uint, string?>? resolveBinName)
+    {
+        var doc = ParticleDocument.Parse(bytes, resolveBinName);
+        return doc is null
+            ? (null, new Dictionary<uint, VfxSystemDefinition>())
+            : (doc, VfxSystemResolver.ExtractAll(bytes));
+    }
+
+    /// <summary>The UI half: everything here touches observable state and must run on the dispatcher.</summary>
+    public bool Load(WadAssetEntry entry, ParticleDocument doc,
+        IReadOnlyDictionary<uint, VfxSystemDefinition> defs, bool editable)
+    {
         Entry = entry;
         Document = doc;
         AssetName = entry.DisplayName;
         IsEditable = editable;
-        _defs = VfxSystemResolver.ExtractAll(bytes);
+        Document = doc;
+        _defs = defs;
 
-        Systems.Clear();
+        _allSystems.Clear();
         foreach (var s in doc.Systems)
         {
             var issues = doc.Issues.Where(i => i.ObjectPathHash == s.PathHash).ToList();
-            Systems.Add(new ParticleSystemNodeViewModel(s)
+            _allSystems.Add(new ParticleSystemNodeViewModel(s)
             {
                 HasIssue = issues.Count > 0,
                 IssueTip = issues.Count > 0
@@ -86,7 +125,8 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
                     : null,
             });
         }
-        SelectedSystem = Systems.FirstOrDefault();
+        SystemFilter = "";
+        ApplyFilter();
         HasBinIssues = doc.Issues.Count > 0;
         BinIssuesLabel = $"⚠ {doc.Issues.Count} issue(s)";
         Status = $"{doc.Systems.Count} system(s), {doc.Systems.Sum(s => s.Emitters.Count)} emitter(s)" +
