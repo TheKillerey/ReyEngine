@@ -90,6 +90,8 @@
             <CheckBox Content="Animate TIME" IsChecked="{Binding AnimateTime}" FontSize="11" Margin="0,0,14,0" />
             <CheckBox Content="Transpose matrices" IsChecked="{Binding TransposeMatrices}" FontSize="11" Margin="0,0,14,0"
                       ToolTip.Tip="HLSL packs cbuffer matrices column-major, so a row-major matrix is conventionally transposed before upload. Whether Riot's shaders do mul(v,M) or mul(M,v) is not recorded in the bytecode — if the mesh is inside-out, squashed or missing, flip this first." />
+            <CheckBox Content="Mirror X" IsChecked="{Binding MirrorX}" FontSize="11" Margin="0,0,14,0"
+                      ToolTip.Tip="Mirror world X, which is what the map viewport does — League authors its data in the opposite handedness, so without this a map is laid out mirrored against every other view in the editor. Backface culling follows the flip automatically." />
             <CheckBox Content="Compare: ReyEngine's model" IsChecked="{Binding UseComparisonShader}" FontSize="11"
                       Foreground="{DynamicResource ReyAccentBrush}"
                       ToolTip.Tip="Swap Riot's pixel shader for ReyEngine's own material model (diffuse × lambert + ambient), on the same mesh, camera and textures. The HLSL is generated from Riot's vertex shader output signature so it always links; see the Compare tab." />

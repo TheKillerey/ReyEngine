@@ -47,6 +47,11 @@ public sealed class PreviewSettings
     /// <summary>Draw with ReyEngine's own shading model instead of Riot's pixel shader, for the A/B.</summary>
     public bool UseComparisonShader;
 
+    /// <summary>M223: mirror world X, which is what the rest of the editor's viewport does. League's data is
+    /// authored in the opposite handedness to the renderer, so without this a map is laid out mirrored
+    /// against every other view in the app.</summary>
+    public bool MirrorX = true;
+
     /// <summary>M216: what the bone palette should contain.
     ///
     /// <para>A champion vertex shader marks <c>mProj</c> as USED while <c>VIEW_PROJECTION_MATRIX</c> and
@@ -676,12 +681,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         _dsv = dsv;
     }
 
-    private (bool wire, bool cull, bool depth, bool blend)? _stateKey;
+    private (bool wire, bool cull, bool depth, bool blend, bool mirror)? _stateKey;
 
     private void UpdateStates(PreviewSettings s)
     {
         // M216: these were disposed and recreated every single frame. They only depend on four toggles.
-        var key = (s.Wireframe, s.CullBackFaces, s.DepthTest, s.AlphaBlend);
+        var key = (s.Wireframe, s.CullBackFaces, s.DepthTest, s.AlphaBlend, s.MirrorX);
         if (_stateKey == key && _raster.Handle is not null) return;
         _stateKey = key;
 
@@ -692,7 +697,10 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         {
             FillMode = s.Wireframe ? FillMode.Wireframe : FillMode.Solid,
             CullMode = s.CullBackFaces ? CullMode.Back : CullMode.None,
-            FrontCounterClockwise = 0,
+            // M223: a mirrored view reverses triangle winding, so the front face has to swap with it or
+            // backface culling removes exactly the faces it should keep. ViewportMeshRenderer does the same
+            // thing off the model determinant.
+            FrontCounterClockwise = s.MirrorX,
             DepthClipEnable = 1,
         };
         ComPtr<ID3D11RasterizerState> rs = default;
@@ -802,7 +810,30 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     "TIME" => new[] { s.TimeSeconds, s.TimeSeconds * 0.5f, MathF.Sin(s.TimeSeconds), 1f },
                     "SUN_LIGHT_DIRECTION" => new[] { s.SunDirection.X, s.SunDirection.Y, s.SunDirection.Z, 0f },
                     "SUN_LIGHT_COLOR" => new[] { s.SunColor.X, s.SunColor.Y, s.SunColor.Z, s.SunColor.W },
-                    "FOG_OF_WAR_PARAMS" or "FOW_HEIGHT_FADE" => new[] { 0f, 0f, 0f, 0f },
+                    // M223: the fog-of-war neutral is NOT all zeros, which is what these were.
+                    //
+                    // From the vertex shader (staticmesh/defaultenv_flat):
+                    //     mad o3.xy, r0.xzxx, cb2[19].xyxx, cb2[19].zwzz   // uv   = worldXZ * FOW_PARAMS.xy + .zw
+                    //     mad_sat o3.z, r0.y, cb2[21].x, cb2[21].y         // fade = saturate(worldY * HEIGHT_FADE.x + .y)
+                    // and the pixel shader:
+                    //     blend = fade * (1 - fowMap.a) + fowMap.a
+                    //     rgb   = lerp(fowRgb, lit, blend)
+                    //
+                    // With HEIGHT_FADE all zero the fade term is saturate(0) = 0, so anything the FOW map
+                    // does not mark fully visible collapses toward the fog colour, and it does so as a
+                    // function of WORLD Y - which is exactly the reported "meshes below a certain height go
+                    // black". Setting .y = 1 makes the fade saturate to 1 at every height, so the geometry
+                    // stays lit no matter what the FOW map says. That is the honest neutral for a preview
+                    // with no fog of war, and it is read off the shader rather than guessed.
+                    "FOW_HEIGHT_FADE" => new[] { 0f, 1f, 0f, 0f },
+
+                    // uv = worldXZ * 0 + 0 samples one texel of the (white) stand-in, which is what a
+                    // fully-revealed map looks like. Left at zero deliberately.
+                    "FOG_OF_WAR_PARAMS" => new[] { 0f, 0f, 0f, 0f },
+
+                    // Below this world height the engine treats everything as permanently visible. Nothing
+                    // in the preview should ever be force-fogged, so push it above any real geometry.
+                    "FOG_OF_WAR_ALWAYS_BELOW_Y" => new[] { 1e9f, 1e9f, 1e9f, 1e9f },
 
                     // M212: these two ADD, and the result multiplies a diffuse the shader has ALREADY
                     // doubled and clamped. Measured on staticmesh/defaultenv_flat blob#53 by binding a flat
@@ -951,6 +982,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             float radius = MathF.Max(0.05f, Mesh?.Radius ?? 1f);
             var view = s.SuppliedView ?? Matrix4x4.CreateLookAt(
                 CameraPosition(s) * radius, Vector3.Zero, Vector3.UnitY);
+            if (s.MirrorX) view = Matrix4x4.CreateScale(-1f, 1f, 1f) * view;
             var proj = s.SuppliedProjection ?? Matrix4x4.CreatePerspectiveFieldOfView(
                 s.Fov, (float)width / height, radius * 0.02f, radius * 40f);
             var world = Matrix4x4.Identity;
