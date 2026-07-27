@@ -5,4 +5,7 @@
     <Project Path="src/ReyEngine.Formats/ReyEngine.Formats.csproj" />
     <Project Path="src/ReyEngine.Rendering/ReyEngine.Rendering.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ReyEngine.Formats.Tests/ReyEngine.Formats.Tests.csproj" />
+  </Folder>
 </Solution>
