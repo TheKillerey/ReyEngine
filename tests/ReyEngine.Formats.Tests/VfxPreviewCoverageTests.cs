@@ -77,6 +77,9 @@ public class VfxPreviewCoverageTests
     [InlineData("deltaIn")]
     [InlineData("reflectionFresnel")]
     [InlineData("paletteCount")]
+    // M209: applied since the winding was settled in the app (CW). It sat in the badged list from M191
+    // to M208 because it was parsed but deliberately not applied.
+    [InlineData("disableBackfaceCull")]
     public void RenderedFieldsAreNotBadged(string field) =>
         Assert.True(VfxPreviewCoverage.IgnoredNote(H(field)) is null,
             $"'{field}' IS rendered but got badged - over-badging trains the user to ignore the badge");
@@ -89,7 +92,6 @@ public class VfxPreviewCoverageTests
     [InlineData("emitterLinger")]
     // parsed by the resolver, deliberately not applied by the renderer
     [InlineData("particleLingerType")]
-    [InlineData("disableBackfaceCull")]
     public void ParsedButUnrenderedFieldsAreParsedAndStillBadged(string field)
     {
         Assert.True(VfxPreviewCoverage.IsParsed(H(field)), $"'{field}' should be parsed by the resolver");

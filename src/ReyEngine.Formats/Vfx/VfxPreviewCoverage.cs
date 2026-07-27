@@ -76,9 +76,6 @@ public static class VfxPreviewCoverage
             "Parsed but unused. M185 measured it as largely independent of the Linger struct - 19,406 Linger "
             + "structs carry no type and 11,347 type values sit on emitters with no Linger struct - so nothing "
             + "establishes that it selects a behaviour.",
-        [HashAlgorithms.Fnv1a("disableBackfaceCull")] =
-            "Parsed but not applied. Two probes gave contradictory answers about the winding of Riot's mesh "
-            + "primitives, and applying the flag on the wrong winding removes the geometry entirely.",
 
         // M192: read by the shared resolver, consumed ONLY by the MAP placement path
         // (MapPlaceableExtractor.cs:149,150,157). The particle preview has no audio and no visibility

@@ -191,7 +191,7 @@ Unread: `uvScaleMult` 111,864 · `birthUVOffsetMult` 90,627 · `ParticleIntegrat
 
 ### Editable in the editor but ignored by the renderer
 
-This is worse than a dead label — a user can change the value, watch it serialize, and see nothing happen. `U8`, `Bool`, `BitBool`, `F32`, `Vector2/3/4` and `String` are all in the editable list (`ParticleDocument.cs:145-149`), so: `alphaRef` (425,866), `miscRenderFlags` (547,010), `depthBiasFactors` (201,926), `disableBackfaceCull` (297,513), `stencilMode` (26,393) / `stencilRef` (23,743), `renderPhaseOverride` (897), `colorRenderFlags` (8,129), `meshRenderFlags` (133,900), `isGroundLayer` (301,919), `useNavmeshMask` (159,165), `importance` (397,261). Verified live on real bins: `alphaRef` → IsReadOnly=False (value 15), `miscRenderFlags` → False (1), `depthBiasFactors` → False ("-1, -60").
+This is worse than a dead label — a user can change the value, watch it serialize, and see nothing happen. `U8`, `Bool`, `BitBool`, `F32`, `Vector2/3/4` and `String` are all in the editable list (`ParticleDocument.cs:145-149`), so: `alphaRef` (425,866), `miscRenderFlags` (547,010), `depthBiasFactors` (201,926), `stencilMode` (26,393) / `stencilRef` (23,743), `renderPhaseOverride` (897), `colorRenderFlags` (8,129), `meshRenderFlags` (133,900), `isGroundLayer` (301,919), `useNavmeshMask` (159,165), `importance` (397,261). Verified live on real bins: `alphaRef` → IsReadOnly=False (value 15), `miscRenderFlags` → False (1), `depthBiasFactors` → False ("-1, -60").
 
 ### Editor gaps
 
@@ -229,7 +229,7 @@ Grouped by parent structure, ordered within each group by frequency. Every row n
 | `alphaRef` | 0xb99310f4 | U8, 34,788 non-zero (max 255) | 425,866 (30.5%) | Alpha-test cutoff. **Engine-confirmed:** `quad_ps.ps.dx11` declares `ALPHA_TEST` and `AlphaTestReferenceValue`. ReyEngine's fragment shader has no `discard` at all (`:599`) | `data/characters/sru_atakhan/...skin3.bin` @ Map11 | `VfxParticleRenderer.cs` Frag + uniform |
 | `importance` | 0xb9516a6f | U8 {3:351,908 1:38,468 5:6,456 4:239 0:190} | 397,261 (28.4%) | VFX-quality tier at which the emitter is culled | `data/characters/sru_atakhan/...skin3.bin` @ Map11 | `VfxParticleSimulator.cs` (LOD filter) |
 | `isGroundLayer` | 0x27d40903 | BitBool, true in 100% | 301,919 (21.6%) | Ground-projected decal layer. Shader side declares `FEATURE_NAVMESH_MASK`, `NAVMESH_MASK_TEXTURE`, `NAV_GRID_TYPE_MASK` | `data/characters/sru_atakhan/...skin3.bin` @ Map11 | `VfxParticleRenderer.cs` |
-| `disableBackfaceCull` | 0x3c91cebd | Bool, true in 100% | 297,513 (21.3%) | ReyEngine disables `CullFace` unconditionally (`:174`), which is *correct* for these 297,513 and wrong for the 1,101,289 that omit the flag (whose default is UNKNOWN) | `data/characters/sru_atakhan/...skin3.bin` @ Map11 | `VfxParticleRenderer.cs:174` |
+| `disableBackfaceCull` | 0x3c91cebd | Bool, true in 100% | 297,513 (21.3%) | **DONE (M209)** — applied per emitter on the mesh path once the winding was settled as CW. Of the 419,035 mesh-primitive emitters that name a mesh, 247,882 set the flag and keep both faces; **171,153 are now culled** | `data/characters/aatrox/skins/skin37.bin` @ Aatrox | `VfxParticleRenderer.cs` mesh path |
 | `particleIsLocalOrientation` | 0x37ddb774 | BitBool, true in 100% | 244,868 (17.5%) | **[inferred]** particles keep emitter orientation instead of billboarding | `data/characters/sru_atakhan/...skin3.bin` @ Map11 | `VfxParticleRenderer.cs` |
 | `depthBiasFactors` | 0x67b5d729 | Vector2. X: −1 79.0%, 0 10.7%, +1 6.9%, tail of −3/−2/−59/−0.1/−50/−5/−15/+3/−20 | 201,926 (14.4%) | **UNKNOWN.** Both components are continuous, so the "mode flag + magnitude" reading is refuted. `glPolygonOffset` mapping is a name-based guess. ReyEngine never enables `GL_POLYGON_OFFSET_FILL`; because depth writes are off, the visible effect is a depth-*test* difference against opaque geometry, not particle z-fighting | `data/characters/sru_atakhan/...skin3.bin` @ Map11 | `VfxParticleRenderer.cs` |
 | `useNavmeshMask` | 0xdddde180 | BitBool, true in 100% | 159,165 (11.4%) | Clip against the navmesh; engine shader has the mask texture | `data/characters/sru_atakhan/...skin3.bin` @ Map11 | `VfxParticleRenderer.cs` |
@@ -496,7 +496,7 @@ degenerate all-zero tables and correctly stay fixed. Evidence: `data/characters/
 | 2.8 | ~~**Depth offset**~~ **DONE (M175)**; `depthBiasFactors` still deferred | `VfxParticleRenderer.cs` vertex shader | 61,588 / 201,926 | No longer inferred. **DECODED** from `quad_vs` instructions 12-16: `world += normalize(world - vCamera) * depthPushPull`, per vertex, before projection - so positive pushes AWAY and negative pulls toward. Cross-checked against `defaultparticlequadunlit.vs` (same form for `EMITTER_DEPTH_PUSH_PULL`) and confirmed by rendering against a depth-writing wall. 74.6% of authored values are negative, which the decoded sign explains |
 | 2.9 | ~~**Stencil masking**~~ **DONE (M182)** - modes 1/2/3; mode 4 (0.2%) unresolved | `VfxParticleRenderer.ApplyStencil` | 26,393 | Mode meanings are a project decision, recorded as such. Masking verified end to end: equal + not-equal tile the tester's area exactly once - see 2.9b |
 | 2.10 | **Sampler state per emitter.** `texAddressModeBase` and `isTexturePixelated` instead of hardcoded Repeat/Linear | `VfxParticleRenderer.cs:108-112` | 80,342 / 1,298 | Trivial code change, but the enum ordering is UNKNOWN — needs one visual A/B to pin |
-| 2.11 | **Backface culling per emitter** | `VfxParticleRenderer.cs:174` | The 1,101,289 emitters that omit `disableBackfaceCull` | Blocked on the unknown default; only matters for mesh and arbitrary-quad primitives |
+| 2.11 | ~~**Backface culling per emitter**~~ **DONE (M209)** | `VfxParticleRenderer.cs` mesh path | 171,153 mesh emitters that omit `disableBackfaceCull` | The default was settled at M184, the winding at M208-M209 by an in-app A/B against real Riot `.scb` geometry: **front face is CW**. See 2.11b |
 | 2.12 | ~~**Reflection / fresnel**~~ **DONE (M181)** - rim and cubemap both | `VfxParticleRenderer.cs` mesh path | 59,149 (4.2%), of which ~87% are fresnel-only | Fully DECODED from `mesh_vs`/`mesh_ps` REFLECTIVE, and the field mapping is pinned by the maths rather than inferred - see 2.12b. Cubemap sampling still needs cubemap loading on the particle path |
 | 2.13 | **Bloom pass** | new post-process in `ViewportControl.cs` | 22% of emitters are "glow"-named | High effort, high perceptual payoff. Frame-level, not per-emitter |
 | 2.14 | **Duty-cycle and rate-by-velocity emission** (`period`, `timeActiveDuringPeriod`, `rateByVelocityFunction`, `ChanceToNotExist`, `HasVariableStartTime`) | `VfxParticleSimulator.cs:157-178` | ~30k combined | Low individually, visible on map beacons and dash trails |
@@ -920,13 +920,46 @@ mode), via a **sampler object** because `ViewportControl` shares one GL texture 
 five slots and 268 textures are used under more than one mode - per-texture state cannot express it.
 Remaining: full per-emitter sampler binding across all units.
 
-**2.11 backface culling - data settled, winding NOT; culling stays off.** `disableBackfaceCull` is true in
-all 358,113 occurrences, so by the omit-defaults rule absent means culling ENABLED (171,153 mesh
-emitters). Parsed and carried, but **not applied**: enabling it with `FrontFace=CW` made the M178 fresnel
-sphere read a full rim at every radius - the signature of keeping faces whose normals point away - and
-regressed four passing checks, while a second probe using an occluding wall disagreed. Two contradictory
-measurements mean the question is open, and getting it backwards inverts 171k emitters. Needs a real Riot
-`.scb` checked in the app rather than a probe-generated sphere.
+**2.11b backface culling - DONE (M209). The winding is CLOCKWISE; the default is an inference.** Two
+separate questions, and only one of them got measured.
+
+*The winding* was the whole risk - getting it backwards inverts the affected emitters instead of fixing
+them - and it is now settled.
+
+*The default* is not. `disableBackfaceCull` is only ever written `true` and is omitted by ~1.1M emitters,
+so absent is read as culling ENABLED. The supporting argument is that a `true` default would leave the
+field with no discriminating power anywhere in shipped data - every emitter unculled, and 297,513 writes
+of `true` pure noise - whereas a `false` default splits the corpus, and `disableX` names the non-default
+state by convention. But the **general** form of that argument is refuted elsewhere in this report
+(unknown #14, and the self-correction list): `alphaRef` is written at its own apparent default 391,078
+times, so Riot's writer does not reliably omit defaults and absence really means "the author never touched
+this". M184 recorded the default as settled; it is better described as well-motivated and untested. The
+A/B below cannot help, because a closed mesh looks the same either way - which is precisely what makes it
+a winding test.
+
+M182's probe said CCW and a second probe using an occluding wall disagreed, so M208 stopped probing and
+built an A/B into the Particle Editor: a three-way toggle (off / front=CCW / front=CW) over a real Riot
+mesh that does not set the flag (`Aatrox_Skin33_Back_Turbine_mesh.scb`, a closed turbine, in
+`data/characters/aatrox/skins/skin37.bin`). On a closed mesh the correct winding is the one that looks
+identical to no culling. **front=CW matched; front=CCW rendered hollow.** That independently agrees with
+`ViewportMeshRenderer`, which had already verified CW for the map pipeline because the viewport mirrors
+world X and so flips the handedness of Riot's source data - the M182 probe reading was the outlier, not
+the CW hypothesis.
+
+Shipped in M209: culling enabled per emitter on the mesh draw only, front face CW. Measured population
+(240 wads, mesh-primitive emitters naming a mesh file, 419,035 total): 247,882 set the flag and keep both
+faces, **171,153 are now culled**, and 1,417 name no mesh and draw nothing either way. Two scoping details
+that are easy to get wrong and are handled: culling is disabled again after the mesh loop, because
+billboards and ribbons are two-sided quads that would lose half their draws; and `FrontFace` is flipped
+per particle when the particle's scale is negative, since `uScale` is a scalar and a negative uniform
+scale mirrors the mesh (determinant `sc^3 < 0`), reversing its winding.
+
+Evidence is `.scb`. `.skn` mesh emitters take the same convention on the assumption that the engine does
+not switch winding per container format - **unverified**, but no `.skn` counter-example has been seen.
+
+Exposure if the default is backwards: the 171,153 emitters culled by M209 would want both faces, and the
+247,882 left alone would want culling. Open and thin meshes are where that would be visible; closed ones
+never would be. Settling it needs an open-mesh emitter that omits the flag, compared against the game.
 
 **2.13 bloom - the VFX half is RETIRED (measured non-issue).** All 11 pixel shaders under
 `particlesystem/` declare exactly **one** `SV_Target`, and `quad_ps`'s define pool has no BLOOM. Riot
@@ -1174,13 +1207,15 @@ change something and see nothing happen. The badge is inherited by a struct's su
 preview never reads makes every field inside it equally invisible.
 
 Largest badged fields: `bindWeight`, `isUniformScale`, `miscRenderFlags`, `importance`,
-`disableBackfaceCull`, `isGroundLayer`, `particleIsLocalOrientation`, `isLocalOrientation`,
-`depthBiasFactors`, `useNavmeshMask`, `FlexShapeDefinition`, `meshRenderFlags`.
+`isGroundLayer`, `particleIsLocalOrientation`, `isLocalOrientation`, `depthBiasFactors`, `useNavmeshMask`,
+`FlexShapeDefinition`, `meshRenderFlags`. (`disableBackfaceCull` left this list at M209, when it started
+being applied.)
 
 A second, **hand-maintained** category covers fields the resolver *does* read but the renderer then
-does nothing with: `particleLingerType` (M185 — measured as largely independent of the Linger struct)
-and `disableBackfaceCull` (M182/M183 — parsed, not applied, because two probes disagreed on the winding
-of Riot's mesh primitives). Proving "parsed but unused" mechanically needs real dataflow analysis; an
+does nothing with: `particleLingerType` (M185 — measured as largely independent of the Linger struct).
+`disableBackfaceCull` sat here from M191 until M209, when the winding was settled and it began to be
+applied — a hand-maintained list has to be able to shrink, or it drifts into lying in the reassuring
+direction. Proving "parsed but unused" mechanically needs real dataflow analysis; an
 attempt at it here produced obvious false positives (`TexturePath`, `Disabled`), so the list is limited
 to cases verified directly in the source and deliberately under-claims.
 

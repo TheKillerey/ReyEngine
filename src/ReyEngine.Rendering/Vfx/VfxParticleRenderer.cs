@@ -10,25 +10,8 @@ namespace ReyEngine.Rendering.Vfx;
 /// against the scene but not depth-writing, so glows read through geometry without sorting artefacts.
 /// GLSL is ASCII-only (non-ASCII bytes break the GL driver's lexer -> blank output).
 /// </summary>
-/// <summary>M208: which winding counts as a front face when culling mesh particles. A DIAGNOSTIC for
-/// settling the question against real Riot geometry - two probes disagreed, and getting it backwards
-/// inverts 21,142 mesh emitters that do not set <c>disableBackfaceCull</c>.</summary>
-public enum VfxMeshCullMode
-{
-    /// <summary>No culling - every face drawn. Today's behaviour and the reference picture.</summary>
-    Off,
-    /// <summary>Counter-clockwise is the front face.</summary>
-    FrontCcw,
-    /// <summary>Clockwise is the front face.</summary>
-    FrontCw,
-}
-
 public sealed class VfxParticleRenderer
 {
-    /// <summary>M208: mesh-particle backface culling, for the winding A/B. Off by default - this is a
-    /// diagnostic, and shipping it enabled on the wrong winding would delete geometry.</summary>
-    public VfxMeshCullMode MeshCullMode { get; set; } = VfxMeshCullMode.Off;
-
     private GL _gl = null!;
     private uint _program, _vao, _quadVbo, _instVbo;
     private int _uViewProj, _uCamRight, _uCamUp, _uTexDiv, _uTex, _uUvScrollRate;
@@ -976,44 +959,41 @@ public sealed class VfxParticleRenderer
         _gl.Uniform2(_muMeshTexDiv, mdiv.X > 0 ? mdiv.X : 1f, mdiv.Y > 0 ? mdiv.Y : 1f);
         var mdivMult = es.Def.TextureMultTexDiv;
         _gl.Uniform2(_muMeshTexDivMult, mdivMult.X > 0 ? mdivMult.X : 1f, mdivMult.Y > 0 ? mdivMult.Y : 1f);
-        // M184 (2.11): backface culling is PARSED BUT NOT APPLIED. The data side is settled; the winding
-        // is not, and the winding is the whole risk.
+        // M209 (2.11): backface culling is APPLIED. The winding is CLOCKWISE.
         //
-        // Settled: `disableBackfaceCull` is Bool and true in all 358,113 occurrences, and Riot's writer
-        // omits default-valued properties (970 class/bool pairs corpus-wide, not one shipping both
-        // polarities, while six Vfx bools ship only `false`). A field written only as true therefore
-        // defaults to false, so ABSENT means culling ENABLED - affecting 171,153 mesh emitters.
+        // Data side - the DEFAULT is an INFERENCE, not a measurement, and the A/B below did not test it.
+        // The A/B subject is a CLOSED mesh, where culling and not culling look identical by construction:
+        // that is exactly what lets it decide the winding, and exactly what makes it silent on the default.
         //
-        // NOT settled: which winding is the front face here. Enabling culling with FrontFace=CW (the
-        // convention ViewportMeshRenderer verified for the mirrored map pipeline) made the M178 fresnel
-        // sphere read a full rim at every radius - the signature of keeping the faces whose normals point
-        // AWAY from the camera - and regressed four previously-passing probe checks. A second probe using
-        // an occluding wall disagreed with that reading, so the two measurements are inconsistent and the
-        // question is genuinely open rather than nearly settled.
+        // The inference: the field is Bool, only ever written `true`, and omitted by ~1.1M emitters. Were
+        // the default also true, the field would have no discriminating power anywhere in shipped data -
+        // every emitter would be unculled and writing it 297,513 times would be pure noise. Under a false
+        // default it splits the corpus meaningfully, and "disableX" names the non-default state by
+        // convention. Strong, but NOT the settled fact an earlier draft of this comment claimed: the
+        // report refutes the general form of the argument (unknown #14 and the self-correction list),
+        // because `alphaRef` is written at its own apparent default 391,078 times - so Riot's writer does
+        // not reliably omit defaults, and absence means "the author never touched this".
         //
-        // Getting it backwards inverts 171k emitters, so this stays off until a real Riot .scb is checked
-        // in the app rather than a probe-generated sphere. The field is parsed and carried so the editor
-        // can surface it and so the decision is a one-line change when the winding is known.
-        // M208: the A/B. `MeshCullMode` is a DIAGNOSTIC, not a setting anyone should ship enabled - it
-        // exists so the winding can be decided by looking at a real Riot .scb in the app instead of at a
-        // probe-generated sphere. Off is today's behaviour and stays the default.
+        // Exposure if it is backwards: the 171,153 culled here would want both faces and the 247,882
+        // spared would want culling. Open/thin meshes are where that would show; closed ones never would.
         //
-        // What to look for, on a CLOSED mesh (Aatrox_Skin37_Emote_Joke_Jet_Turbines_1 uses
-        // Aatrox_Skin33_Back_Turbine_mesh.scb, which does NOT set disableBackfaceCull):
-        //   Off        - every face drawn; the reference picture.
-        //   FrontCcw   - if this looks like Off, CCW is the front-face winding.
-        //   FrontCw    - if this looks like Off, CW is.
-        // The WRONG one looks hollow or inside-out - you see the far side of the mesh through the near
-        // side - or, on a thin/open mesh like Aatrox_Skin33_W_RekSai_Fin1.scb, the geometry disappears
-        // from one viewing side. Orbit the camera; the wrong setting changes what vanishes as you go round.
-        bool cull = MeshCullMode != VfxMeshCullMode.Off;
+        // Winding, settled at M208-M209: M182's probe said CCW, a second probe disagreed, and the tie was
+        // broken in the app against real Riot geometry rather than a probe-generated sphere - front=CW
+        // renders Aatrox_Skin33_Back_Turbine_mesh.scb identically to no culling, front=CCW renders it
+        // hollow. That also agrees with ViewportMeshRenderer, which independently verified CW for the
+        // map pipeline: the viewport mirrors world X, which flips the handedness of Riot's source data.
+        // Evidence is .scb; .skn mesh emitters take the same convention on the assumption that the
+        // engine does not switch winding per container format - unverified, but no .skn counter-example
+        // has been seen.
+        //
+        // Per EMITTER, not global. Full-corpus census (240 wads, mesh-primitive emitters naming a mesh
+        // file, 419,035 of them): 247,882 set disableBackfaceCull and keep both faces; the remaining
+        // 171,153 are culled by this change. A further 1,417 name no mesh and draw nothing either way.
+        bool cull = !es.Def.DisableBackfaceCull;
         if (cull)
         {
             _gl.Enable(EnableCap.CullFace);
             _gl.CullFace(TriangleFace.Back);
-            _gl.FrontFace(MeshCullMode == VfxMeshCullMode.FrontCcw
-                ? FrontFaceDirection.Ccw
-                : FrontFaceDirection.CW);
         }
 
         for (int i = 0; i < es.InstanceCount; i++)
@@ -1024,6 +1004,9 @@ public sealed class VfxParticleRenderer
             float rawScale = es.Instances[o + 3];
             float sc = MathF.Abs(rawScale) < 0.01f ? MathF.CopySign(0.01f, rawScale == 0f ? 1f : rawScale) : rawScale;
             _gl.Uniform1(_muScale, sc);
+            // M209: a negative scale mirrors the mesh (uScale is scalar, so det = sc^3 < 0) and reverses
+            // its winding. Without this those particles cull exactly the faces they should keep.
+            if (cull) _gl.FrontFace(sc < 0f ? FrontFaceDirection.Ccw : FrontFaceDirection.CW);
             _gl.Uniform1(_muRot, es.Instances[o + 9]);
             _gl.Uniform4(_muColor, es.Instances[o + 5], es.Instances[o + 6], es.Instances[o + 7], es.Instances[o + 8]);
             unsafe
@@ -1032,8 +1015,9 @@ public sealed class VfxParticleRenderer
                 else _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)es.MeshVertexCount);
             }
         }
-        // M208: culling is scoped to the mesh draw. Billboards and ribbons are two-sided quads, so leaving
-        // it on would cull half of them depending on which way the camera faces.
+        // M209: culling is scoped to the mesh draw. Billboards and ribbons are two-sided quads, so leaving
+        // it on would cull half of them depending on which way the camera faces. FrontFace is left as-is:
+        // every other pipeline that culls (ViewportMeshRenderer) sets it per draw.
         if (cull) _gl.Disable(EnableCap.CullFace);
         _gl.UseProgram(_program);   // back to the billboard program for the next emitter
         _gl.BindVertexArray(_vao);
