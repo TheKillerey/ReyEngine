@@ -145,6 +145,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     private readonly List<MaterialBinRow> _allBins = new();
     private readonly List<SceneAssetRow> _allScenes = new();
     private SkinMeshProperties? _skinMesh;
+
+    /// <summary>M224: the per-material lightmap texture a mapgeo group names, so BAKED_LIGHT__TX can be
+    /// bound from the map itself rather than left on the white stand-in.</summary>
+    private Dictionary<string, string> _lightmapByGroup = new(StringComparer.OrdinalIgnoreCase);
     private DxbcShader? _vs, _ps;
     // double-buffered: an Image only repaints when its Source REFERENCE changes, so writing into the
     // same WriteableBitmap every frame shows nothing. Alternating two avoids the null-then-set flicker.
@@ -610,6 +614,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 mesh = PreviewGeometry.FromLeagueArrays(asset.Display, map.Positions.Length / 3,
                     map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices);
                 parts = map.Groups.Select(g => (g.Material, g.StartIndex, g.IndexCount)).ToList();
+                _lightmapByGroup = map.Groups
+                    .Where(g => g.LightmapTexture.Length > 0)
+                    .GroupBy(g => g.Material, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First().LightmapTexture, StringComparer.OrdinalIgnoreCase);
             }
             else
             {
@@ -628,6 +636,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         sb.AppendLine($"        recentred on its own bounds, radius {mesh.Radius:n0}");
         sb.AppendLine();
 
+        if (!asset.IsMap) _lightmapByGroup.Clear();
         _renderer.ClearMaterials();
         _renderer.SetMesh(mesh);
 
@@ -931,6 +940,26 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                     texBound++;
                 }
                 catch (Exception ex) { sb.AppendLine($"      texture FAILED  {slot.Path}: {ex.Message}"); texMissing++; }
+            }
+
+            // M224: the mapgeo group names a lightmap texture the material itself does not
+            if (_lightmapByGroup.TryGetValue(b.Name, out var lmPath)
+                && ps.Textures.Any(t => t.Name.Contains("BAKED_LIGHT", StringComparison.OrdinalIgnoreCase)))
+            {
+                var target = ps.Textures.First(t => t.Name.Contains("BAKED_LIGHT", StringComparison.OrdinalIgnoreCase)).Name;
+                try
+                {
+                    var lmData = _readAsset!(HashAlgorithms.WadPath(lmPath.ToLowerInvariant()));
+                    if (lmData is { Length: > 0 })
+                    {
+                        var lmImg = TextureDecoder.Decode(lmData);
+                        _renderer.SetTexture(mat, target, lmImg.Rgba, lmImg.Width, lmImg.Height);
+                        sb.AppendLine($"      lightmap -> {target}  {lmImg.Width}x{lmImg.Height}  {System.IO.Path.GetFileName(lmPath)}");
+                        texBound++;
+                    }
+                    else { sb.AppendLine($"      lightmap NOT FOUND  {lmPath}"); texMissing++; }
+                }
+                catch (Exception ex) { sb.AppendLine($"      lightmap FAILED  {lmPath}: {ex.Message}"); texMissing++; }
             }
 
             foreach (var prm in b.Parameters)

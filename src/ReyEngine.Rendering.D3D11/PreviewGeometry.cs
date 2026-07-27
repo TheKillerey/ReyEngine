@@ -22,12 +22,17 @@ public struct PreviewVertex
     public Vector2 Uv1;           // +48   TEXCOORD1
     public Vector2 Uv2;           // +56   TEXCOORD2
     public Vector2 Uv3;           // +64   TEXCOORD3
-    public Vector4 Color;         // +72   COLOR0
-    public Vector4 BlendWeight;   // +88   BLENDWEIGHT0
-    public uint B0, B1, B2, B3;   // +104  BLENDINDICES0 (uint4 - shaders declare it as an integer input)
-    public Vector4 Zero;          // +120  the pad every unmatched semantic points at
+    /// <summary>M224: the LIGHTMAP UV. League's baked-lighting vertex shaders declare TEXCOORD7 - measured
+    /// on defaultenv_flat, whose lightmapped permutation takes POSITION0 NORMAL0 TEXCOORD0 TEXCOORD7 while
+    /// the NO_BAKED_LIGHTING one takes only the first three. Without a slot for it the semantic aliased onto
+    /// the zero pad and every pixel sampled texel (0,0) of the lightmap atlas, which is black.</summary>
+    public Vector2 Uv7;           // +72   TEXCOORD7
+    public Vector4 Color;         // +80   COLOR0
+    public Vector4 BlendWeight;   // +96   BLENDWEIGHT0
+    public uint B0, B1, B2, B3;   // +112  BLENDINDICES0 (uint4 - shaders declare it as an integer input)
+    public Vector4 Zero;          // +128  the pad every unmatched semantic points at
 
-    public const int SizeInBytes = 136;
+    public const int SizeInBytes = 144;
 }
 
 /// <summary>A test mesh ready for upload.</summary>
@@ -203,8 +208,10 @@ public static class PreviewGeometry
 
             verts[i] = Make(pos, nrm, uv, Vector3.UnitX);
 
+            // M224: onto TEXCOORD7, which is what the shaders actually read. The decoder has already
+            // applied the per-mesh atlas scale/bias, so these are final atlas coordinates.
             if (lightmapUvs is not null && lightmapUvs.Length >= (i + 1) * 2)
-                verts[i].Uv1 = new Vector2(lightmapUvs[i * 2], lightmapUvs[i * 2 + 1]);
+                verts[i].Uv7 = new Vector2(lightmapUvs[i * 2], lightmapUvs[i * 2 + 1]);
             if (colors is not null && colors.Length >= (i + 1) * 4)
                 verts[i].Color = new Vector4(colors[i * 4], colors[i * 4 + 1], colors[i * 4 + 2], colors[i * 4 + 3]);
 

@@ -429,10 +429,11 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             ("TEXCOORD", 1) => (48u, 2, true),
             ("TEXCOORD", 2) => (56u, 2, true),
             ("TEXCOORD", 3) => (64u, 2, true),
-            ("COLOR", 0) => (72u, 4, true),
-            ("BLENDWEIGHT", 0) => (88u, 4, true),
-            ("BLENDINDICES", 0) => (104u, 4, true),
-            _ => (120u, Math.Max(1, declared), false),           // the zero pad
+            ("TEXCOORD", 7) => (72u, 2, true),                   // M224: the lightmap UV
+            ("COLOR", 0) => (80u, 4, true),
+            ("BLENDWEIGHT", 0) => (96u, 4, true),
+            ("BLENDINDICES", 0) => (112u, 4, true),
+            _ => (128u, Math.Max(1, declared), false),           // the zero pad
         };
 
     private static Format FormatFor(uint componentType, int comps) => componentType switch
@@ -871,6 +872,16 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // records for lightMapColorScale. Doubling on an untested guess is the exact mistake
                     // above.
                     "LIGHT_MAP_COLOR_SCALE_AND_INTENSITY" => new[] { 1f, 1f, 1f, 1f },
+
+                    // M224: the lightmap UV transform, and the single biggest cause of black map ground -
+                    // 899 materials on Map12 read it and nothing supplied it, so it uploaded as zero and
+                    // collapsed every lightmap lookup onto texel (0,0) of the atlas.
+                    //
+                    // Identity rather than the map's real values, because MapGeoDecoder has ALREADY applied
+                    // the per-mesh scale and bias when it produced the lightmap UVs (uv7 * scale + bias).
+                    // Applying it a second time here would be the error this replaces, in the other
+                    // direction.
+                    "BAKED_LIGHT_SCALE_AND_BIAS" => new[] { 1f, 1f, 0f, 0f },
                     "TINTCOLOR" => new[] { 1f, 1f, 1f, 1f },
 
                     // M218: constants that MULTIPLY must not default to zero.
