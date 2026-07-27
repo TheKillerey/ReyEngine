@@ -8565,7 +8565,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // ---- Misc commands --------------------------------------------------
 
-    [RelayCommand] private void ShaderPreview() => _log.Warn("Shader", "Shader/material preview lands in a later milestone.");
+    /// <summary>M210: the experimental DX11 shader preview. Isolated on purpose - it loads Riot's own
+    /// compiled shaders on a real Direct3D 11 device to find out whether that route is viable, and applies
+    /// nothing it learns to a map. Integration into the Material Editor is a later decision that depends on
+    /// what this turns up.</summary>
+    [RelayCommand]
+    private void ShaderPreview()
+    {
+        string? dir = string.IsNullOrEmpty(Project.GameDirectory) ? null
+            : Path.Combine(Project.GameDirectory, "DATA", "FINAL");
+
+        var vm = new ShaderPreviewViewModel(dir, _resolver.Database);
+        if (!vm.CacheAvailable)
+            _log.Warn("Shader", "No shader cache found - the window opens, but there is nothing to load. "
+                                + "Point the project at the game folder (the one containing DATA/FINAL).");
+
+        var win = new Views.ShaderPreviewWindow { DataContext = vm };
+        if (PromptOwner is not null) win.Show(PromptOwner); else win.Show();
+        _log.Info("Shader", "DX11 Shader Preview opened (experimental).");
+    }
     [RelayCommand] private void ClearConsole() => Console.Clear();
 
     [RelayCommand]

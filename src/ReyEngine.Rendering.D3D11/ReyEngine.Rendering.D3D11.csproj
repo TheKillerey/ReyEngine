@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- M210: deliberately a SEPARATE assembly from ReyEngine.Rendering. The DX11 shader preview is an
+         isolated experiment; keeping the Direct3D dependency out of the OpenGL renderer means the two
+         cannot accidentally grow into each other, and the experiment can be deleted in one step. -->
+    <RootNamespace>ReyEngine.Rendering.D3D11</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Silk.NET.Direct3D11" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Direct3D.Compilers" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.DXGI" Version="2.23.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ReyEngine.Core\ReyEngine.Core.csproj" />
+    <ProjectReference Include="..\ReyEngine.Formats\ReyEngine.Formats.csproj" />
+  </ItemGroup>
+
+</Project>

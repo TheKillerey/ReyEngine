@@ -41,6 +41,7 @@
     <ProjectReference Include="..\ReyEngine.Core\ReyEngine.Core.csproj" />
     <ProjectReference Include="..\ReyEngine.Formats\ReyEngine.Formats.csproj" />
     <ProjectReference Include="..\ReyEngine.Rendering\ReyEngine.Rendering.csproj" />
+    <ProjectReference Include="..\ReyEngine.Rendering.D3D11\ReyEngine.Rendering.D3D11.csproj" />
   </ItemGroup>
 
 </Project>

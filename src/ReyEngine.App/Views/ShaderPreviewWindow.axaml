@@ -1,0 +1,219 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.ShaderPreviewWindow"
+        x:DataType="vm:ShaderPreviewViewModel"
+        Title="ReyEngine — DX11 Shader Preview (experimental)" Width="1500" Height="900"
+        MinWidth="1180" MinHeight="720"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- status strip -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,7">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Right" Text="{Binding Perf}" FontFamily="Consolas" FontSize="11"
+                   VerticalAlignment="Center" Opacity="0.85"
+                   Foreground="{DynamicResource ReyTextBrush}" />
+        <TextBlock Text="{Binding Status}" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center"
+                   Margin="0,0,16,0"
+                   Foreground="{DynamicResource ReyTextBrush}" />
+      </DockPanel>
+    </Border>
+
+    <Grid ColumnDefinitions="330,*,430">
+
+      <!-- ============================ left: pick a shader ============================ -->
+      <Border Grid.Column="0" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,1,0">
+        <DockPanel Margin="10">
+          <TextBlock DockPanel.Dock="Top" Text="SHADER" FontSize="10" FontWeight="SemiBold"
+                     Opacity="0.6" Margin="2,0,0,6" Foreground="{DynamicResource ReyTextBrush}" />
+          <TextBox DockPanel.Dock="Top" Text="{Binding Filter}" Watermark="filter by name…"
+                   FontSize="11" Margin="0,0,0,6" />
+
+          <StackPanel DockPanel.Dock="Bottom" Spacing="6" Margin="0,8,0,0">
+            <TextBlock Text="VERTEX PERMUTATION" FontSize="10" FontWeight="SemiBold" Opacity="0.6"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <ComboBox ItemsSource="{Binding VertexPermutations}" SelectedItem="{Binding SelectedVertexPerm}"
+                      DisplayMemberBinding="{Binding Label}" HorizontalAlignment="Stretch" FontSize="11"
+                      MaxDropDownHeight="380" />
+            <TextBlock Text="PIXEL PERMUTATION" FontSize="10" FontWeight="SemiBold" Opacity="0.6"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <ComboBox ItemsSource="{Binding PixelPermutations}" SelectedItem="{Binding SelectedPixelPerm}"
+                      DisplayMemberBinding="{Binding Label}" HorizontalAlignment="Stretch" FontSize="11"
+                      MaxDropDownHeight="380" />
+
+            <TextBlock Text="TEST MESH" FontSize="10" FontWeight="SemiBold" Opacity="0.6" Margin="0,4,0,0"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <ComboBox ItemsSource="{Binding MeshNames}" SelectedItem="{Binding SelectedMesh}"
+                      HorizontalAlignment="Stretch" FontSize="11" />
+
+            <Button Classes="primary" Content="▶  Load shader" Command="{Binding LoadCommand}"
+                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                    Margin="0,6,0,0" Padding="0,7" FontSize="12"
+                    ToolTip.Tip="Create both stages on the D3D11 device, build the input layout from the vertex shader's own signature, and allocate its constant buffers." />
+            <Button Classes="tool" Content="↻  Reload from the WAD" Command="{Binding ReloadCommand}"
+                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                    Padding="0,5" FontSize="11" />
+          </StackPanel>
+
+          <ListBox ItemsSource="{Binding ShaderNames}" SelectedItem="{Binding SelectedShader}"
+                   FontFamily="Consolas" FontSize="10.5" />
+        </DockPanel>
+      </Border>
+
+      <!-- ============================ centre: the preview ============================ -->
+      <DockPanel Grid.Column="1" Margin="10">
+        <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
+                BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" CornerRadius="6"
+                Padding="10,8" Margin="0,0,0,8">
+          <WrapPanel Orientation="Horizontal">
+            <CheckBox Content="Wireframe" IsChecked="{Binding Wireframe}" FontSize="11" Margin="0,0,14,0" />
+            <CheckBox Content="Cull back faces" IsChecked="{Binding CullBackFaces}" FontSize="11" Margin="0,0,14,0" />
+            <CheckBox Content="Depth test" IsChecked="{Binding DepthTest}" FontSize="11" Margin="0,0,14,0" />
+            <CheckBox Content="Alpha blend" IsChecked="{Binding AlphaBlend}" FontSize="11" Margin="0,0,14,0" />
+            <CheckBox Content="Animate TIME" IsChecked="{Binding AnimateTime}" FontSize="11" Margin="0,0,14,0" />
+            <CheckBox Content="Transpose matrices" IsChecked="{Binding TransposeMatrices}" FontSize="11" Margin="0,0,14,0"
+                      ToolTip.Tip="HLSL packs cbuffer matrices column-major, so a row-major matrix is conventionally transposed before upload. Whether Riot's shaders do mul(v,M) or mul(M,v) is not recorded in the bytecode — if the mesh is inside-out, squashed or missing, flip this first." />
+            <CheckBox Content="Compare: ReyEngine's model" IsChecked="{Binding UseComparisonShader}" FontSize="11"
+                      Foreground="{DynamicResource ReyAccentBrush}"
+                      ToolTip.Tip="Swap Riot's pixel shader for ReyEngine's own material model (diffuse × lambert + ambient), on the same mesh, camera and textures. The HLSL is generated from Riot's vertex shader output signature so it always links; see the Compare tab." />
+          </WrapPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Margin="0,8,0,0">
+          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Yaw" FontSize="11" VerticalAlignment="Center"
+                       Margin="0,0,6,0" Foreground="{DynamicResource ReyTextBrush}" />
+            <Slider Grid.Row="0" Grid.Column="1" Minimum="-3.2" Maximum="3.2" Value="{Binding Yaw}" />
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="Pitch" FontSize="11" VerticalAlignment="Center"
+                       Margin="12,0,6,0" Foreground="{DynamicResource ReyTextBrush}" />
+            <Slider Grid.Row="0" Grid.Column="3" Minimum="-1.5" Maximum="1.5" Value="{Binding Pitch}" />
+            <TextBlock Grid.Row="0" Grid.Column="4" Text="Distance" FontSize="11" VerticalAlignment="Center"
+                       Margin="12,0,6,0" Foreground="{DynamicResource ReyTextBrush}" />
+            <Slider Grid.Row="0" Grid.Column="5" Minimum="1.2" Maximum="12" Value="{Binding Distance}" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Sun ∠" FontSize="11" VerticalAlignment="Center"
+                       Margin="0,0,6,0" Foreground="{DynamicResource ReyTextBrush}" />
+            <Slider Grid.Row="1" Grid.Column="1" Minimum="-3.2" Maximum="3.2" Value="{Binding SunAzimuth}" />
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="Sun ↕" FontSize="11" VerticalAlignment="Center"
+                       Margin="12,0,6,0" Foreground="{DynamicResource ReyTextBrush}" />
+            <Slider Grid.Row="1" Grid.Column="3" Minimum="-1.5" Maximum="1.5" Value="{Binding SunElevation}" />
+          </Grid>
+        </Border>
+
+        <Border Background="#101216" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1"
+                CornerRadius="6" ClipToBounds="True">
+          <Panel>
+            <TextBlock Text="Pick a shader on the left and press Load." FontSize="12" Opacity="0.45"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       IsVisible="{Binding !IsLoaded}"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <Image Source="{Binding Preview}" Stretch="Uniform" RenderOptions.BitmapInterpolationMode="HighQuality" />
+          </Panel>
+        </Border>
+      </DockPanel>
+
+      <!-- ============================ right: diagnostics ============================ -->
+      <Border Grid.Column="2" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1,0,0,0">
+        <TabControl Margin="6">
+
+          <TabItem Header="Shader">
+            <ScrollViewer>
+              <SelectableTextBlock Text="{Binding Metadata}" FontFamily="Consolas" FontSize="10.5"
+                                   TextWrapping="NoWrap" Margin="8"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+            </ScrollViewer>
+          </TabItem>
+
+          <TabItem Header="Bindings">
+            <ScrollViewer>
+              <SelectableTextBlock Text="{Binding Bindings}" FontFamily="Consolas" FontSize="10.5"
+                                   TextWrapping="NoWrap" Margin="8"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+            </ScrollViewer>
+          </TabItem>
+
+          <TabItem Header="Textures">
+            <DockPanel Margin="6">
+              <Button DockPanel.Dock="Top" Classes="tool" Content="Bind a checker to every slot"
+                      Command="{Binding BindCheckerToAllCommand}" FontSize="11" Margin="0,0,0,6"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,5" />
+              <TextBlock DockPanel.Dock="Bottom" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,6,2,0"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         Text="Double-click a slot to bind an image file. Slots ending in _SharedTexture are engine-supplied, not material-supplied. Anything unbound samples as opaque white." />
+              <ListBox ItemsSource="{Binding TextureSlots}" x:Name="TextureList">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:TextureSlotRow">
+                    <StackPanel Spacing="1" Margin="0,2">
+                      <TextBlock Text="{Binding Label}" FontFamily="Consolas" FontSize="11"
+                                 Foreground="{DynamicResource ReyTextBrush}" />
+                      <TextBlock FontSize="10" Opacity="0.6" Foreground="{DynamicResource ReyTextBrush}">
+                        <TextBlock.Text>
+                          <MultiBinding StringFormat="{}{0}  ·  {1}">
+                            <Binding Path="Dimension" />
+                            <Binding Path="Source" />
+                          </MultiBinding>
+                        </TextBlock.Text>
+                      </TextBlock>
+                    </StackPanel>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </DockPanel>
+          </TabItem>
+
+          <TabItem Header="Constants">
+            <DockPanel Margin="6">
+              <TextBlock DockPanel.Dock="Top" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,0,2,6"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         Text="Type space-separated floats to override a constant. Empty means the preview supplies it (camera, sun, time) or leaves the shader's own default. Values are written at the byte offset the shader declares." />
+              <ListBox ItemsSource="{Binding Constants}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ConstantRow">
+                    <Grid ColumnDefinitions="*,120" Margin="0,2">
+                      <StackPanel Grid.Column="0" Spacing="1">
+                        <TextBlock Text="{Binding Label}" FontFamily="Consolas" FontSize="10.5"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+                        <TextBlock Text="{Binding Detail}" FontSize="9.5" Opacity="0.55"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+                      </StackPanel>
+                      <TextBox Grid.Column="1" Text="{Binding Value}" FontSize="10.5" FontFamily="Consolas"
+                               Watermark="auto" VerticalAlignment="Center" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </DockPanel>
+          </TabItem>
+
+          <TabItem Header="Compare">
+            <ScrollViewer>
+              <StackPanel Margin="8" Spacing="6">
+                <TextBlock FontSize="10.5" TextWrapping="Wrap" Opacity="0.75"
+                           Foreground="{DynamicResource ReyTextBrush}"
+                           Text="ReyEngine's material model, generated as HLSL from Riot's vertex shader output signature so it links against whatever is loaded. Tick 'Compare' above to draw with this instead of Riot's pixel shader — same mesh, camera and textures." />
+                <SelectableTextBlock Text="{Binding ComparisonSource}" FontFamily="Consolas" FontSize="10"
+                                     TextWrapping="NoWrap"
+                                     Foreground="{DynamicResource ReyTextBrush}" />
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
+          <TabItem Header="Log">
+            <ScrollViewer>
+              <SelectableTextBlock Text="{Binding Log}" FontFamily="Consolas" FontSize="10.5"
+                                   TextWrapping="Wrap" Margin="8"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+            </ScrollViewer>
+          </TabItem>
+
+        </TabControl>
+      </Border>
+    </Grid>
+  </DockPanel>
+</Window>
