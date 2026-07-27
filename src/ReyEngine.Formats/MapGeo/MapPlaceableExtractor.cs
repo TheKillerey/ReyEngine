@@ -24,7 +24,11 @@ public sealed record MapCubemapProbe(string Name, Vector3 Position, Matrix4x4 Tr
 public sealed record MapSoundPlacement(
     string Name, string EventName, Vector3 Position, Matrix4x4 Transform,
     float Radius = 4000f, int VisibilityFlags = 255, bool FromParticleSystem = false,
-    bool Loop = true);
+    bool Loop = true,
+    /// <summary>M202: where this placement lives in the tree, so saving does not have to find it by its
+    /// transform bytes. Default (invalid) for sounds DERIVED from a particle system - those are a view of
+    /// the particle and have no MapAudio entry of their own, so the particle is what gets saved.</summary>
+    MapPlacementId Id = default);
 
 public sealed record MapAnimatedProp(string Name, Vector3 Position, Matrix4x4 Transform, string CharacterRecord, string Skin)
 {
@@ -94,7 +98,9 @@ public static class MapPlaceableExtractor
                     sounds.Add(new MapSoundPlacement(
                         NameOf(s),
                         (Get(s, F_eventName) as BinTreeString)?.Value ?? "",
-                        transform.Translation, transform));
+                        transform.Translation, transform,
+                        Id: new MapPlacementId(o.PathHash,
+                            it.GetType().GetProperty("Key")?.GetValue(it) is BinTreeHash kh ? kh.Value : 0u)));
                 }
                 else if (FindCharacterData(s) is ({ } cr, var skin))
                 {

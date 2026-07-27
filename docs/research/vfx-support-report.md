@@ -1503,10 +1503,15 @@ re-tint/re-link/rename, remove-drops-only-the-target, unrelated objects survivin
 being refused rather than silently ignored, and a partial batch reporting what it missed. On real data:
 199 bins round-trip with 0 self-check refusals, and 99 of 99 duplicate-matrix groups now edit correctly.
 
-**Still not done:** `MapSoundPlacement` does not carry an id yet, so standalone sound moves still go
-through the legacy byte patcher; and adding a brand-new placement is not implemented (it needs a template
-to clone, the way `MapMaterialFactory` does for materials). The UI exposes only the move verb — re-tint,
-re-link, rename and remove are reachable in the writer but have no editor surface yet.
+**Completed in M202.** `MapSoundPlacement` now carries an id too, so standalone sound moves go through
+the same identity-addressed writer and `MapParticleWriter` has been **deleted** — nothing addresses a
+placement by its transform bytes any more. That mattered: `MapAudio` placements are part of the same
+30,628 of which 1,450 share a matrix, so a standalone sound move was exposed to the identical bug.
+Measured: **817 of 817** standalone sounds are addressable by identity.
+
+**Still not done:** adding a brand-new placement (it needs a template to clone, the way
+`MapMaterialFactory` does for materials); and the UI exposes only the move verb — re-tint, re-link, rename
+and remove are reachable in the writer but have no editor surface yet.
 
 #### 5.1b — M200: the optional item was chasing the wrong thing
 
