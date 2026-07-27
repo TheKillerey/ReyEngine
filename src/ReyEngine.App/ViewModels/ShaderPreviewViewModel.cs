@@ -12,6 +12,7 @@ using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Shaders;
+using ReyEngine.Rendering;
 using ReyEngine.Rendering.D3D11;
 
 namespace ReyEngine.App.ViewModels;
@@ -145,6 +146,47 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     private readonly DateTime _start = DateTime.UtcNow;
     private int _framesThisSecond;
     private DateTime _fpsMark = DateTime.UtcNow;
+    private DateTime _lastTick = DateTime.UtcNow;
+
+    /// <summary>M215: the SAME camera class the map viewport flies, so the controls feel identical -
+    /// WASD/QE to fly, drag to look, middle-drag to pan, wheel to zoom, F to reframe.</summary>
+    public OrbitCamera Camera { get; } = new();
+
+    private readonly HashSet<Avalonia.Input.Key> _heldKeys = new();
+
+    public void KeyDown(Avalonia.Input.Key k) => _heldKeys.Add(k);
+    public void KeyUp(Avalonia.Input.Key k) => _heldKeys.Remove(k);
+    public void ClearKeys() => _heldKeys.Clear();
+
+    public void LookBy(float dx, float dy) => Camera.Look(-dx * 0.005f, dy * 0.005f);
+    public void OrbitBy(float dx, float dy) => Camera.Orbit(dx * 0.01f, dy * 0.01f);
+    public void PanBy(float dx, float dy) => Camera.Pan(-dx, dy);
+    public void ZoomBy(float wheel) => Camera.Zoom(wheel > 0 ? 0.9f : 1.111f);
+    public void AdjustFlySpeed(float wheel) => Camera.AdjustFlySpeed(wheel > 0 ? 1.15f : 0.87f);
+
+    /// <summary>Frame whatever is loaded. The scene is recentred on its own bounds at load, so the target
+    /// is always the origin and only the distance depends on how big the thing is.</summary>
+    public void FocusCamera()
+    {
+        float radius = _renderer.Mesh?.Radius ?? 1f;
+        Camera.FocusOn(System.Numerics.Vector3.Zero, radius);
+        Camera.Near = MathF.Max(0.01f, radius * 0.002f);
+        Camera.Far = MathF.Max(100f, radius * 60f);
+        Camera.FlySpeed = MathF.Max(20f, radius * 0.9f);
+    }
+
+    private void ApplyCameraInput(float dt)
+    {
+        float f = 0, r = 0, u = 0;
+        if (_heldKeys.Contains(Avalonia.Input.Key.W)) f += 1;
+        if (_heldKeys.Contains(Avalonia.Input.Key.S)) f -= 1;
+        if (_heldKeys.Contains(Avalonia.Input.Key.D)) r += 1;
+        if (_heldKeys.Contains(Avalonia.Input.Key.A)) r -= 1;
+        if (_heldKeys.Contains(Avalonia.Input.Key.E)) u += 1;
+        if (_heldKeys.Contains(Avalonia.Input.Key.Q)) u -= 1;
+        if (_heldKeys.Contains(Avalonia.Input.Key.F)) FocusCamera();
+        if (f != 0 || r != 0 || u != 0) Camera.MoveLocal(f, r, u, dt);
+    }
 
     public ObservableCollection<ShaderRow> ShaderNames { get; } = new();
     public ObservableCollection<PermutationRow> VertexPermutations { get; } = new();
@@ -579,7 +621,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         else
             ComparisonSource = "// comparison unavailable for this scene: " + (cerr ?? "unknown");
 
-        Distance = 3.0;
+        FocusCamera();
         IsLoaded = true;
         HasError = failed > 0;
         Status = $"{asset.Display}: {ok} material(s) drawing, {failed} unresolved.";
@@ -704,6 +746,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         if (!report.Success) { Fail(report.Error ?? "shader creation failed"); BuildMetadata(vsPath, psPath, report); return; }
 
         _renderer.SetMesh(PreviewGeometry.CreateBuiltIn(SelectedMesh));
+        FocusCamera();
         BuildSlots();
         BuildMetadata(vsPath, psPath, report);
 
@@ -851,9 +894,14 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     {
         if (!IsLoaded || !_renderer.IsReady) return;
 
-        _settings.Yaw = (float)Yaw;
-        _settings.Pitch = (float)Pitch;
-        _settings.Distance = (float)Distance;
+        var now0 = DateTime.UtcNow;
+        float dt = (float)Math.Clamp((now0 - _lastTick).TotalSeconds, 0.0, 0.25);
+        _lastTick = now0;
+        ApplyCameraInput(dt);
+
+        _settings.SuppliedView = Camera.View;
+        _settings.SuppliedProjection = Camera.Projection(640f / 480f);
+        _settings.SuppliedCameraPosition = Camera.Position;
         _settings.Wireframe = Wireframe;
         _settings.CullBackFaces = CullBackFaces;
         _settings.DepthTest = DepthTest;
@@ -905,8 +953,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                    + (UseComparisonShader ? "  ·  showing ReyEngine's model, not Riot's shader" : "");
             _framesThisSecond = 0;
             _fpsMark = now;
-            if (unbound.Count > 0 && !UseComparisonShader)
-                Perf += $"  ·  {unbound.Count} unbound constant(s)";
+            int distinctUnbound = unbound.Distinct(StringComparer.Ordinal).Count();
+            if (distinctUnbound > 0 && !UseComparisonShader)
+                Perf += $"  ·  {distinctUnbound} unbound constant(s)";
         }
     }
 

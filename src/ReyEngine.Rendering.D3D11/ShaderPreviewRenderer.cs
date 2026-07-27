@@ -17,6 +17,16 @@ public sealed class PreviewSettings
 {
     public float Yaw = 0.6f, Pitch = 0.4f, Distance = 3.2f;
     public float Fov = 0.9f;
+
+    /// <summary>M215: when set, the renderer uses THESE instead of its own orbit maths.
+    ///
+    /// <para>The window drives an <c>OrbitCamera</c> - the same class and the same WASD/look/pan bindings as
+    /// the map viewport - and hands the result down. The matrices are passed rather than the camera object
+    /// so this assembly keeps no reference to the OpenGL renderer that owns it; the isolation is the point
+    /// of the separate project. The built-in orbit stays as the fallback the headless harnesses use.</para></summary>
+    public Matrix4x4? SuppliedView;
+    public Matrix4x4? SuppliedProjection;
+    public Vector3? SuppliedCameraPosition;
     public Vector3 SunDirection = Vector3.Normalize(new Vector3(-0.4f, -0.8f, -0.45f));
     public Vector4 SunColor = new(1f, 0.97f, 0.9f, 1f);
     public Vector4 ClearColor = new(0.08f, 0.09f, 0.11f, 1f);
@@ -676,7 +686,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     {
         var bytes = new byte[Math.Max(16, cb.AllocationSize)];
         var vp = Matrix4x4.Multiply(view, proj);
-        var cam = CameraPosition(s);
+        var cam = s.SuppliedCameraPosition ?? CameraPosition(s);
 
         // M214: the bone palette. A skinned character's vertex shader transforms every vertex by the bones
         // its BLENDINDICES name, so a zero-filled BonesCB collapses the whole mesh to the origin and draws
@@ -852,9 +862,10 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             UpdateStates(s);
 
             float radius = MathF.Max(0.05f, Mesh?.Radius ?? 1f);
-            var eye = CameraPosition(s) * radius;
-            var view = Matrix4x4.CreateLookAt(eye, Vector3.Zero, Vector3.UnitY);
-            var proj = Matrix4x4.CreatePerspectiveFieldOfView(s.Fov, (float)width / height, radius * 0.02f, radius * 40f);
+            var view = s.SuppliedView ?? Matrix4x4.CreateLookAt(
+                CameraPosition(s) * radius, Vector3.Zero, Vector3.UnitY);
+            var proj = s.SuppliedProjection ?? Matrix4x4.CreatePerspectiveFieldOfView(
+                s.Fov, (float)width / height, radius * 0.02f, radius * 40f);
             var world = Matrix4x4.Identity;
 
             var vpRect = new Viewport(0, 0, width, height, 0, 1);

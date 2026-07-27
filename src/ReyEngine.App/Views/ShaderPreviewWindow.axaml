@@ -97,30 +97,25 @@
         </Border>
 
         <Border DockPanel.Dock="Bottom" Margin="0,8,0,0">
-          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto,Auto">
-            <TextBlock Grid.Row="0" Grid.Column="0" Text="Yaw" FontSize="11" VerticalAlignment="Center"
+          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto" RowDefinitions="Auto">
+            <TextBlock Grid.Column="0" Text="Sun ∠" FontSize="11" VerticalAlignment="Center"
                        Margin="0,0,6,0" Foreground="{DynamicResource ReyTextBrush}" />
-            <Slider Grid.Row="0" Grid.Column="1" Minimum="-3.2" Maximum="3.2" Value="{Binding Yaw}" />
-            <TextBlock Grid.Row="0" Grid.Column="2" Text="Pitch" FontSize="11" VerticalAlignment="Center"
+            <Slider Grid.Column="1" Minimum="-3.2" Maximum="3.2" Value="{Binding SunAzimuth}" />
+            <TextBlock Grid.Column="2" Text="Sun ↕" FontSize="11" VerticalAlignment="Center"
                        Margin="12,0,6,0" Foreground="{DynamicResource ReyTextBrush}" />
-            <Slider Grid.Row="0" Grid.Column="3" Minimum="-1.5" Maximum="1.5" Value="{Binding Pitch}" />
-            <TextBlock Grid.Row="0" Grid.Column="4" Text="Distance" FontSize="11" VerticalAlignment="Center"
-                       Margin="12,0,6,0" Foreground="{DynamicResource ReyTextBrush}" />
-            <Slider Grid.Row="0" Grid.Column="5" Minimum="1.2" Maximum="12" Value="{Binding Distance}" />
-
-            <TextBlock Grid.Row="1" Grid.Column="0" Text="Sun ∠" FontSize="11" VerticalAlignment="Center"
-                       Margin="0,0,6,0" Foreground="{DynamicResource ReyTextBrush}" />
-            <Slider Grid.Row="1" Grid.Column="1" Minimum="-3.2" Maximum="3.2" Value="{Binding SunAzimuth}" />
-            <TextBlock Grid.Row="1" Grid.Column="2" Text="Sun ↕" FontSize="11" VerticalAlignment="Center"
-                       Margin="12,0,6,0" Foreground="{DynamicResource ReyTextBrush}" />
-            <Slider Grid.Row="1" Grid.Column="3" Minimum="-1.5" Maximum="1.5" Value="{Binding SunElevation}" />
+            <Slider Grid.Column="3" Minimum="-1.5" Maximum="1.5" Value="{Binding SunElevation}" />
+            <TextBlock Grid.Column="4" FontSize="10" Opacity="0.55" VerticalAlignment="Center" Margin="14,0,0,0"
+                       Foreground="{DynamicResource ReyTextBrush}"
+                       Text="WASD/QE fly · drag look · alt-drag orbit · middle-drag pan · wheel zoom · F reframe" />
           </Grid>
         </Border>
 
         <Border Background="#101216" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1"
                 CornerRadius="6" ClipToBounds="True">
-          <Panel>
-            <TextBlock Text="Pick a shader on the left and press Load." FontSize="12" Opacity="0.45"
+          <Panel x:Name="PreviewSurface" Focusable="True" Background="#01000000"
+                 Cursor="Hand">
+            <TextBlock Text="Pick a shader on the left and press Load, or load a scene from the Scene tab."
+                       FontSize="12" Opacity="0.45" TextWrapping="Wrap" MaxWidth="320"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsVisible="{Binding !IsLoaded}"
                        Foreground="{DynamicResource ReyTextBrush}" />

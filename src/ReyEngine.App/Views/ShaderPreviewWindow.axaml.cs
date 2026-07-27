@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Input.Raw;
 using Avalonia.Platform.Storage;
 using ReyEngine.App.ViewModels;
 
@@ -20,7 +21,73 @@ public partial class ShaderPreviewWindow : Window
             list.DoubleTapped += OnTextureDoubleTapped;
 
         Closed += (_, _) => (DataContext as ShaderPreviewViewModel)?.Dispose();
+
+        // M215: the same camera bindings as the map viewport - WASD/QE fly, drag to look, middle-drag to
+        // pan, alt-drag to orbit, wheel to zoom, LMB+wheel for fly speed, F to reframe.
+        if (this.FindControl<Panel>("PreviewSurface") is { } surface)
+        {
+            surface.PointerPressed += OnSurfacePressed;
+            surface.PointerReleased += OnSurfaceReleased;
+            surface.PointerMoved += OnSurfaceMoved;
+            surface.PointerWheelChanged += OnSurfaceWheel;
+        }
+        AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
+        AddHandler(KeyUpEvent, OnPreviewKeyUp, RoutingStrategies.Tunnel);
+        Deactivated += (_, _) => Vm?.ClearKeys();
     }
+
+    private ShaderPreviewViewModel? Vm => DataContext as ShaderPreviewViewModel;
+
+    private bool _lmb, _rmb, _mmb;
+    private Avalonia.Point _last;
+
+    private void OnSurfacePressed(object? sender, PointerPressedEventArgs e)
+    {
+        var pt = e.GetCurrentPoint(this);
+        _lmb = pt.Properties.IsLeftButtonPressed;
+        _rmb = pt.Properties.IsRightButtonPressed;
+        _mmb = pt.Properties.IsMiddleButtonPressed;
+        _last = pt.Position;
+        // the surface must hold focus or WASD goes to whatever list was clicked last
+        (sender as Panel)?.Focus();
+        e.Pointer.Capture(sender as IInputElement);
+    }
+
+    private void OnSurfaceReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _lmb = _rmb = _mmb = false;
+        e.Pointer.Capture(null);
+    }
+
+    private void OnSurfaceMoved(object? sender, PointerEventArgs e)
+    {
+        if (Vm is null || (!_lmb && !_rmb && !_mmb)) return;
+        var p = e.GetPosition(this);
+        float dx = (float)(p.X - _last.X), dy = (float)(p.Y - _last.Y);
+        _last = p;
+
+        bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+        if (_lmb && alt) Vm.OrbitBy(dx, dy);
+        else if (_lmb || _rmb) Vm.LookBy(dx, dy);
+        else if (_mmb) Vm.PanBy(dx, dy);
+    }
+
+    private void OnSurfaceWheel(object? sender, PointerWheelEventArgs e)
+    {
+        if (Vm is null) return;
+        if (_lmb) Vm.AdjustFlySpeed((float)e.Delta.Y);
+        else Vm.ZoomBy((float)e.Delta.Y);
+        e.Handled = true;
+    }
+
+    private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
+    {
+        // never swallow typing in a filter box or a constant override
+        if (FocusManager?.GetFocusedElement() is TextBox) return;
+        Vm?.KeyDown(e.Key);
+    }
+
+    private void OnPreviewKeyUp(object? sender, KeyEventArgs e) => Vm?.KeyUp(e.Key);
 
     private async void OnTextureDoubleTapped(object? sender, TappedEventArgs e)
     {
