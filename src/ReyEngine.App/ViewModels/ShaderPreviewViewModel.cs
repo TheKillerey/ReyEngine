@@ -255,6 +255,23 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     [ObservableProperty] private bool _transposeMatrices = true;
     [ObservableProperty] private bool _useComparisonShader;
     [ObservableProperty] private bool _animateTime = true;
+
+    /// <summary>M219: avoid permutations that contain the engine colour-remap stage.
+    ///
+    /// <para>Measured: <c>PIXEL_COLOR_REMAP_RAMP</c> REPLACES rgb with a lookup into an engine-supplied 1D
+    /// ramp - binding a red ramp turns a blue diffuse red, and a greyscale ramp turns everything black and
+    /// white. No stand-in can preserve colour, and the engine's real ramp is not a shipped asset we can
+    /// find. But the stage is per PERMUTATION, not per shader: 88 of skinnedmesh/diffuse_alpha's 90 blobs
+    /// carry it and 2 do not, while 0 of staticmesh/defaultenv_flat's 238 do - which is why maps were never
+    /// affected.</para>
+    ///
+    /// <para>So when the resolved permutation carries the remap and a cooked sibling does not, the sibling
+    /// is used and the row says so. It is still a real Riot permutation, just not necessarily the one the
+    /// engine would pick - which is why this is a toggle and is reported rather than done silently.</para></summary>
+    [ObservableProperty] private bool _avoidColorRemap = true;
+
+    /// <summary>M219: fall back to the old flat-white remap stand-in instead of the greyscale identity.</summary>
+    [ObservableProperty] private bool _remapRampWhite;
     [ObservableProperty] private double _sunAzimuth = 2.2, _sunElevation = 0.9;
 
     public bool CacheAvailable => _cache is not null;
@@ -777,6 +794,35 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         return candidates[0].Name;
     }
 
+    /// <summary>Blob index of a permutation of this stage that does NOT declare the colour remap, or null
+    /// if every one of them does. Cached because answering it means reflecting every distinct blob.</summary>
+    private readonly Dictionary<string, uint?> _noRemapBlob = new(StringComparer.OrdinalIgnoreCase);
+
+    private uint? FindBlobWithoutRemap(string tocPath, ShaderStageToc toc)
+    {
+        if (_noRemapBlob.TryGetValue(tocPath, out var cached)) return cached;
+
+        uint? answer = null;
+        foreach (var blob in toc.Permutations.Select(p => p.BlobIndex).Distinct().OrderBy(x => x))
+        {
+            var sh = _cache!.LoadShader(tocPath, blob, out _);
+            if (sh is null) continue;
+            if (sh.Textures.Any(t => t.Name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase))) continue;
+
+            // M219: it must still be a COLOUR pass. The only two remap-free permutations of
+            // skinnedmesh/diffuse_alpha are GENERATE_SHADOW_MAP depth passes that declare no diffuse
+            // texture at all - swapping to one of those would trade a black-and-white model for a blank
+            // one. Checked, because the first version of this did exactly that.
+            if (!sh.Textures.Any(t => t.Name.Contains("Diffuse", StringComparison.OrdinalIgnoreCase)
+                                      || t.Name.Contains("Main", StringComparison.OrdinalIgnoreCase))) continue;
+
+            answer = blob;
+            break;
+        }
+        _noRemapBlob[tocPath] = answer;
+        return answer;
+    }
+
     /// <summary>Resolve one material to a live pipeline covering its submesh slices.</summary>
     private PreviewMaterial? BuildSceneMaterial(MaterialBinding b,
         List<(string Material, int Start, int Count)> slices, StringBuilder sb,
@@ -828,6 +874,19 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         var vs = _cache.LoadShader(vsPath, vsPerm.BlobIndex, out _);
         var ps = _cache.LoadShader(psPath, psPerm.BlobIndex, out _);
         if (vs is null || ps is null) { why = "bytecode would not load"; sb.AppendLine($"   !  {b.Name,-34} bytecode load failed"); return null; }
+
+        // M219: swap to a sibling permutation without the colour-remap stage, if one is cooked
+        if (AvoidColorRemap
+            && ps.Textures.Any(t => t.Name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase))
+            && FindBlobWithoutRemap(psPath, psToc) is { } clean)
+        {
+            var alt = _cache.LoadShader(psPath, clean, out _);
+            if (alt is not null)
+            {
+                sb.AppendLine($"      colour remap avoided: ps blob {psPerm.BlobIndex} -> {clean}");
+                ps = alt;
+            }
+        }
 
         // One pipeline per material; the FIRST slice is its draw range. Extra slices get their own
         // pipeline object sharing the same shaders, because a draw call covers one contiguous range.
@@ -1046,6 +1105,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         _lastTick = now0;
         ApplyCameraInput(dt);
 
+        _renderer.RemapRampWhite = RemapRampWhite;
         _settings.SuppliedView = Camera.View;
         _settings.SuppliedProjection = Camera.Projection((float)_renderWidth / _renderHeight);
         _settings.SuppliedCameraPosition = Camera.Position;

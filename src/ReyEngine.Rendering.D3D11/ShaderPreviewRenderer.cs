@@ -1132,7 +1132,17 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     /// <summary>The stand-in for a texture nothing supplied. White for almost everything; an identity
     /// ramp for the colour remap, where white would replace the whole image.</summary>
     private ComPtr<ID3D11ShaderResourceView> StandIn(string name) =>
-        name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase) ? _identityRamp : _white;
+        name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase) && !RemapRampWhite
+            ? _identityRamp : _white;
+
+    /// <summary>M219: use a flat white ramp instead of the greyscale identity.
+    ///
+    /// <para>Neither is right and neither can be. The stage REPLACES rgb with a lookup into an
+    /// engine-supplied ramp, measured directly: a red ramp turns a blue diffuse red, so the output carries
+    /// no information about the diffuse hue at all. White gives a flat white surface; the greyscale identity
+    /// gives a black-and-white one that at least preserves the texture's detail. The greyscale is the
+    /// default for that reason, and this switches back for anyone who prefers the old look.</para></summary>
+    public bool RemapRampWhite { get; set; }
 
     /// <summary>Which reflected textures currently have nothing bound (they sample a stand-in).</summary>
     public IEnumerable<string> UnboundTextureNames() =>
