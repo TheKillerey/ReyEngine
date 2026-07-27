@@ -1261,7 +1261,7 @@ per-instance, so the true rate is **not measured** and no fix is attempted on a 
 | 4.3 | ~~Parse the 21 unread system fields~~ | — | — | **DONE in M194** — see 4.3b. "67.7% pure scale, so it is a sizing fix" is **wrong twice** |
 | 4.4 | ~~Parse the 10 unread `MapParticle` fields~~ | — | — | **DONE in M195** — see 4.4b. The high-value field is `VisibilityController`, not `eyeCandy` |
 | 4.5 | Load the two never-loaded map VFX sources | `MainWindowViewModel.cs:5111` | +5,229 systems / 47,118 emitters from `data/maps/shipping/mapXX/mapXX.bin`, +766/6,819 from `maps/modespecificdata/*.bin`. They have no placements, so they need a browse-and-preview entry point rather than automatic scene playback |
-| 4.6 | Parse `MapPointLightType` (788 lights) and `MapLightingVolume` (172) | new, beside `MapSunProperties.cs` | Affects how all lit VFX read on modern maps |
+| 4.6 | ~~Parse `MapPointLightType` and `MapLightingVolume`~~ | — | — | **DONE in M196** — see 4.6b. "Affects how all lit VFX read" is **unsupported**, and the point lights cannot be positioned |
 
 #### 4.1b / 4.2b — M193 result
 
@@ -1355,6 +1355,59 @@ identity matrices that figure absorbed are real (52 of 145). One harness bug was
 than shipped: an exact `== Matrix4x4.Identity` test reported **zero** identity matrices while 40 of 145
 fell through every bucket — they were identity with float noise, so all the buckets had to agree on one
 epsilon.
+
+#### 4.4b / 4.6b — M195 and M196 results
+
+**4.4 (M195).** All ten dropped `MapParticle` fields are read; every count reproduces over the 8 shipping
+map WADs — 29,811 placements, `eyeCandy` 13,165, `AllDimensions` 4,990, `startDisabled` 1,370,
+`Transitional` 1,159, `colorModulate` 172, `visibilityMode` 163, `AttachToCamera` 7, `quality` 3.
+
+*The row named the wrong field first.* The one that changes the viewport is `VisibilityController` (4,237
+Map11 placements), not `eyeCandy`. ReyEngine already owns `MapVisibilityResolver` and **meshes already use
+it**; particles did not, so those placements stayed visible under every baron/dragon selection while the
+geometry around them switched. `IsParticleVisible` now takes the same path.
+
+Everything else is parsed for display and gates nothing. `eyeCandy` is believed to be a quality cull but
+nothing measured predicts which placements carry it — ~3,600 Map11 placements without it are ordinary
+decoration, so consuming it would hide 13,163 placements (61% of the base SR bins) on a guess.
+`AllDimensions` is TFT/Arena-only with no meaning in a single-instance viewport. `quality` stays a raw
+integer (a bitmask reading fits 80 of 81 samples — not enough). All five write-only-true bools are
+nullable: absent is the executable's default, not `false`. New `HasVisibilityFlags` separates authored data
+from ReyEngine's permissive 255 substitute, which is **never** authored (0 of 12,845) — measured 12,845
+authored, 16,966 substituted, and the 255 count matches the substituted count exactly.
+
+**4.6 (M196) — the item bundled two things, and only one can ever render.**
+
+`MapPointLightType` is real (788 objects in 139 bins) but has **no position field**: its whole schema is
+`lightColor`, `radius`, `Impact`, `castStaticShadows`, `HdrScale`. The placeable records that would carry
+its transform ship as **null pointers** (one bin measured 205/205 null; 85,335 of 151,457 placeable values
+game-wide, 56.3%, are stripped this way), and nothing references the 401 distinct entry hashes. It is
+therefore parsed for inspection only, and any UI showing it must say why it cannot be placed — otherwise
+it reads as a ReyEngine bug rather than a Riot build-stripping fact. Measured: 182 of 788 omit `radius`,
+10 omit `lightColor`, `Impact` appears 328 times and is only ever 1, `HdrScale` 8 times. None of those
+three meanings is established and none is interpreted.
+
+`MapLightingVolume` is implementable: 172 across 150 bins, real placeables with their own `Matrix44`. The
+valuable part is not "region override" — **146 of 172 carry a `lightMapColorScale` (usually 2.0) higher
+than their bin's global sun**, which ReyEngine renders at 1.0, i.e. up to half as bright as authored. A
+field a volume omits inherits the bin's global sun rather than a neutral default; 8 volumes rely on that,
+and defaulting to `Vector4.One` instead would render them blown-out white.
+
+Two corrections to the row: "Affects how all lit VFX read on modern maps" is **unsupported** —
+`VfxParticleRenderer` declares no lighting uniform and the only lighting-adjacent emitter field in the
+census is `doesCastShadow`, which nothing consumes; these affect map *geometry* lighting. And **Map11 has
+zero lighting volumes**, so the row's baron-pit/base/brush example cannot be about them — the affected maps
+are Map22 (159), Map30 (9) and Map33 (4).
+
+**Neither is wired into the viewport, and that is on scope**: tier 4 is *parsing* support. Applying the
+volumes is a visible up-to-2x brightness change that first needs the extent convention settled (whether
+the transform's basis vectors are half- or full-extents rests on one sample's arithmetic; full extents
+would make every box twice its true size) and the boundary behaviour decided (nothing in the 22-field
+schema plausibly encodes a blend width, and 22 bins carry two volumes, so a hard switch would pop).
+
+VERIFIED: 7 checks for 4.4 and 6 for 4.6, all against the real shipping map WADs. For 4.6: both classes
+parse; 146 of 172 volumes are brighter than their global; omitted fields inherit the global sun; and Map11
+has zero volumes.
 
 ### 5. Missing serialization support
 
