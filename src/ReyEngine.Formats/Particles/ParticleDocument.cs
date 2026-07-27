@@ -102,13 +102,9 @@ public sealed record ParticleSystemEntry(uint PathHash, string Name, string Part
         {
             if (hash == ComplexEmittersHash || hash == SimpleEmittersHash) continue;
             string fieldName = resolveName?.Invoke(hash) ?? (SystemFieldNames.TryGetValue(hash, out var fn) ? fn : $"0x{hash:x8}");
-            props.Add(ParticleEmitterEntry.MakeRow(ModuleOf(fieldName), fieldName, prop));
+            ParticleEmitterEntry.AddSystemRows(props, ModuleOf(fieldName), fieldName, prop, resolveName);
         }
-        props.Sort((a, b) =>
-        {
-            int m = Array.IndexOf(ModuleOrder, a.Module).CompareTo(Array.IndexOf(ModuleOrder, b.Module));
-            return m != 0 ? m : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
-        });
+        ParticleEmitterEntry.SortRows(props, ModuleOrder);
         return props;
     }
 
@@ -205,20 +201,99 @@ public sealed class ParticleEmitterEntry
             string fieldName = resolveName?.Invoke(hash) ?? (FieldNames.TryGetValue(hash, out var fn) ? fn : $"0x{hash:x8}");
             if (hash == EmitterNameHash && prop is BinTreeString ns) name = ns.Value;
 
-            props.Add(MakeRow(ModuleOf(fieldName), fieldName, prop));
+            AddRows(props, ModuleOf(fieldName), fieldName, prop, 0, resolveName);
         }
-        // stable, Particle-Town-ish order: module, then name
-        props.Sort((a, b) =>
-        {
-            int m = Array.IndexOf(ModuleOrder, a.Module).CompareTo(Array.IndexOf(ModuleOrder, b.Module));
-            return m != 0 ? m : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
-        });
+        SortRows(props, ModuleOrder);
         return new ParticleEmitterEntry { Name = name, Properties = props, EmitterStruct = emitter };
     }
 
+    /// <summary>Order by module, then by top-level field name - but keep each expanded struct's sub-rows
+    /// immediately under their parent, in the order M189 emitted them. Sorting rows individually would
+    /// scatter a struct's contents across the card.</summary>
+    internal static void SortRows(List<ParticleProperty> props, string[] moduleOrder)
+    {
+        var groups = new List<List<ParticleProperty>>();
+        foreach (var p in props)
+        {
+            if (p.Depth == 0 || groups.Count == 0) groups.Add(new List<ParticleProperty> { p });
+            else groups[^1].Add(p);
+        }
+        groups.Sort((a, b) =>
+        {
+            int m = Array.IndexOf(moduleOrder, a[0].Module).CompareTo(Array.IndexOf(moduleOrder, b[0].Module));
+            return m != 0 ? m : string.Compare(a[0].Name, b[0].Name, StringComparison.OrdinalIgnoreCase);
+        });
+        props.Clear();
+        foreach (var g in groups) props.AddRange(g);
+    }
+
+    /// <summary>M189 (3.3): expand a nested definition struct into sub-rows instead of showing it as one
+    /// opaque read-only row. Every Vfx*DefinitionData was previously a dead end in the editor - erosion,
+    /// soft particles, palette, reflection, trail, beam, mesh, Linger, the field collection, the child set -
+    /// and most of those the renderer now actually implements, so the user could see a stage in the preview
+    /// with no way to touch what drives it.
+    ///
+    /// The rows are FLATTENED with a depth rather than made into a real tree: the module card already
+    /// renders a flat list, and depth-indenting it keeps selection, the inspector, dirty tracking and the
+    /// curve panel working unchanged. A struct's own row stays as a read-only header.</summary>
+    /// <summary>M189: the same expansion for the system panel - assetRemappingTable and
+    /// materialOverrideDefinitions were read-only containers there for exactly the same reason.</summary>
+    internal static void AddSystemRows(List<ParticleProperty> into, string module, string name,
+        BinTreeProperty prop, Func<uint, string?>? resolveName) => AddRows(into, module, name, prop, 0, resolveName);
+
+    private static void AddRows(List<ParticleProperty> into, string module, string name, BinTreeProperty prop,
+        int depth, Func<uint, string?>? resolveName)
+    {
+        // A Value*/Integrated* struct is a LEAF, not a container: MakeRow turns it into one editable
+        // constant plus its curve. Expanding it would replace that with constantValue/dynamics/times/values
+        // rows and lose the curve display entirely.
+        bool isValueStruct = prop is BinTreeStruct vs
+            && (Field(vs.Properties, "constantValue") is not null || Field(vs.Properties, "dynamics") is BinTreeStruct);
+
+        if (depth < MaxRowDepth && !isValueStruct)
+        {
+            switch (prop)
+            {
+                case BinTreeStruct s when s.Properties.Count > 0:
+                    into.Add(new ParticleProperty(module, name, prop, readOnly: true, depth: depth,
+                        displayText: $"({s.Properties.Count} field(s))",
+                        readOnlyReason: "A struct header. Its fields are the rows indented beneath it."));
+                    foreach (var (h, child) in s.Properties)
+                        AddRows(into, module, resolveName?.Invoke(h) ?? $"0x{h:x8}", child, depth + 1, resolveName);
+                    return;
+
+                case BinTreeContainer c when c.Elements.Count > 0:
+                    into.Add(new ParticleProperty(module, name, prop, readOnly: true, depth: depth,
+                        displayText: $"({c.Elements.Count} item(s))",
+                        readOnlyReason: "A list header. Its items are the rows indented beneath it. Adding and "
+                                      + "removing items is not supported."));
+                    for (int i = 0; i < c.Elements.Count; i++)
+                        AddRows(into, module, $"[{i}]", c.Elements[i], depth + 1, resolveName);
+                    return;
+
+                // An Optional holding a struct: unwrap it and expand, rather than stopping at the wrapper.
+                case BinTreeOptional { Value: BinTreeStruct } o:
+                    AddRows(into, module, name, o.Value!, depth, resolveName);
+                    return;
+            }
+        }
+
+        var row = MakeRow(module, name, prop, depth);
+        // Depth-limited rather than silently truncated: say so on the row that stopped.
+        if (depth >= MaxRowDepth && prop is BinTreeStruct or BinTreeContainer)
+            row = new ParticleProperty(module, name, prop, readOnly: true, depth: depth,
+                displayText: "(nested too deep to expand)",
+                readOnlyReason: $"The editor expands nested structs to {MaxRowDepth} levels. This one sits deeper.");
+        into.Add(row);
+    }
+
+    /// <summary>How many levels of nested struct the editor expands. Chosen for the editor, not read from
+    /// Riot: it bounds the row count on pathological data rather than encoding anything about the format.</summary>
+    private const int MaxRowDepth = 4;
+
     /// <summary>Turn one live bin property into an editor row. Shared by emitters and, since M188, by the
     /// system-level panel - the type handling is a property of the .bin format, not of who owns the field.</summary>
-    internal static ParticleProperty MakeRow(string module, string fieldName, BinTreeProperty prop)
+    internal static ParticleProperty MakeRow(string module, string fieldName, BinTreeProperty prop, int depth = 0)
     {
         {
             switch (prop)
@@ -227,7 +302,7 @@ public sealed class ParticleEmitterEntry
                 case BinTreeStruct vs when Field(vs.Properties, "constantValue") is { } cv:
                     var (times, channels) = ReadDynamics(vs.Properties);
                     return new ParticleProperty(module, fieldName, cv, isConstantOfCurve: true,
-                        curveTimes: times, curveChannels: channels);
+                        curveTimes: times, curveChannels: channels, depth: depth);
                 // M187: a Value* struct with a curve but NO constantValue. Riot's writer omits default-valued
                 // properties, so this is common rather than exotic - ValueColor ships constantValue in only
                 // 63.0% of its instances and IntegratedValueFloat in 34.1%. These rows previously fell through
@@ -236,7 +311,7 @@ public sealed class ParticleEmitterEntry
                 // Riot's reader substitutes for an absent constantValue is not established here.
                 case BinTreeStruct ds when Field(ds.Properties, "dynamics") is BinTreeStruct:
                     var (dt, dc) = ReadDynamics(ds.Properties);
-                    return new ParticleProperty(module, fieldName, ds, readOnly: true,
+                    return new ParticleProperty(module, fieldName, ds, readOnly: true, depth: depth,
                         curveTimes: dt, curveChannels: dc, displayText: "(curve only - no constantValue)",
                         readOnlyReason: "This field ships only a curve - Riot's writer omitted its constantValue "
                                       + "because it was the default. The curve is shown; the constant has no row to edit.");
@@ -245,11 +320,11 @@ public sealed class ParticleEmitterEntry
                 // MaximumRateByVelocity - and every one of them was read-only. Editing the inner property
                 // edits the live tree in place, exactly as a bare field does.
                 case BinTreeOptional { Value: { } inner } when BinValueEditor.KindOf(inner) != BinValueKind.ReadOnly:
-                    return new ParticleProperty(module, fieldName, inner, typeNote: " (optional)");
+                    return new ParticleProperty(module, fieldName, inner, typeNote: " (optional)", depth: depth);
                 // An EMPTY Optional has no value to edit; writing one would mean changing the field's
                 // presence, not its value, which the row model cannot express. Shown, not editable.
                 case BinTreeOptional:
-                    return new ParticleProperty(module, fieldName, prop, readOnly: true,
+                    return new ParticleProperty(module, fieldName, prop, readOnly: true, depth: depth,
                         readOnlyReason: "This optional field is present but empty. Giving it a value would change "
                                       + "whether the field exists, not what it holds, which this row cannot express.");
                 // plain primitives (numbers, bools, strings/paths, vectors, colours) - directly editable.
@@ -258,9 +333,9 @@ public sealed class ParticleEmitterEntry
                     or BinTreeI16 or BinTreeI32 or BinTreeI64 or BinTreeBool or BinTreeBitBool
                     or BinTreeString or BinTreeHash or BinTreeVector2 or BinTreeVector3 or BinTreeVector4
                     or BinTreeColor:
-                    return new ParticleProperty(module, fieldName, prop);
+                    return new ParticleProperty(module, fieldName, prop, depth: depth);
                 default:
-                    return new ParticleProperty(module, fieldName, prop, readOnly: true); // unsupported: show, don't crash
+                    return new ParticleProperty(module, fieldName, prop, readOnly: true, depth: depth); // unsupported: show, don't crash
             }
         }
     }
@@ -413,6 +488,9 @@ public sealed class ParticleProperty
     public float[][]? CurveChannels { get; }
     public bool HasCurve => CurveTimes is { Length: > 0 };
     public bool IsReadOnly { get; }
+    /// <summary>M189 (3.3): how deep inside a nested struct this row sits. 0 = a field of the emitter or
+    /// system itself; the card indents by this.</summary>
+    public int Depth { get; }
     /// <summary>Why this row cannot be edited, shown in the inspector. Read-only rows have several distinct
     /// causes and one blanket message misattributes most of them.</summary>
     public string ReadOnlyReason { get; }
@@ -424,8 +502,9 @@ public sealed class ParticleProperty
     public ParticleProperty(string module, string name, BinTreeProperty prop, bool isConstantOfCurve = false,
         float[]? curveTimes = null, float[][]? curveChannels = null, bool readOnly = false,
         string typeNote = "", string? displayText = null,
-        string readOnlyReason = "Read-only property (unsupported type or Riot reference).")
+        string readOnlyReason = "Read-only property (unsupported type or Riot reference).", int depth = 0)
     {
+        Depth = depth;
         _display = displayText;
         ReadOnlyReason = readOnlyReason;
         Module = module;

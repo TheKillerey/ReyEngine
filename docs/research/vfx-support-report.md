@@ -986,7 +986,7 @@ stand-in purely so it has a visible cycle. Nothing in the renderer or the data p
 |---|---|---|---|---|
 | 3.1 | ~~**Replace the hand-maintained name table with `HashDatabase.TryGetBinName`**~~ | — | — | **DONE in M187** — see 3.1b |
 | 3.2 | ~~**Add `BinTreeI16` and `Optional<T>` unwrapping to the editable-type list**~~ | — | — | **DONE in M187** — see 3.2b |
-| 3.3 | **Expand nested structs into editable sub-rows** instead of one opaque read-only row | `ParticleDocument.cs:139-153` | Every definition struct — erosion, soft, reflection, palette, trail, beam, mesh, Linger, Filtering, field collection, child set | Medium; needs a tree-shaped row model |
+| 3.3 | ~~**Expand nested structs into editable sub-rows**~~ | — | — | **DONE in M189** — see 3.3b |
 | 3.4 | ~~**Show systems with zero emitters**~~ | — | — | **DONE in M188** — see 3.4b |
 | 3.5 | ~~**Add a system-level property panel**~~ | — | — | **DONE in M188** — see 3.4b |
 | 3.6 | **Curve key editing** (currently display-only) | `ParticleEditorView.axaml:174-179`, `ParticleEditorViewModel.cs` | 4.8M curves | Medium-high; the biggest missing authoring capability |
@@ -1076,6 +1076,49 @@ containers never leak into the system panel (they are the emitters, which the tr
 0 of 99,591 rows report dirty before any edit. The UI wiring is checked by Avalonia's compiled bindings
 at build time — `x:DataType` is set on the card template, so a missing property fails the build — but
 the new card has not been exercised in a running window.
+
+#### 3.3b — M189 result
+
+Same 40-WAD slice. Nested rows are **flattened with a depth** rather than made into a real tree: the
+module card already renders a flat list, so depth-indenting it keeps selection, the inspector, dirty
+tracking and the curve panel working unchanged, and the struct's own row stays as a read-only header.
+
+| | rows |
+|---|---|
+| top-level (all there was before) | 5,380,294 |
+| nested sub-rows | **1,141,174** (+21.2%) |
+| ...editable | 872,533 (76.5%) |
+| ...carrying a curve that was previously invisible | 135,572 |
+
+Depths observed: 830,268 at depth 1, 256,686 at depth 2, 54,220 at depth 3. The expansion limit is 4,
+and **nothing in the corpus reaches it** — the limit is a guard against pathological data, not something
+the real data exercises, and a row that did hit it would say so rather than being silently truncated.
+
+Sub-rows by definition struct (top of the list): `SpawnShape` 294,608 (77% editable), `primitive`
+269,793 (60%), `alphaErosionDefinition` 223,367 (77%), `textureMult` 152,335 (98%),
+`fieldCollectionDefinition` 43,905 (59%), `FlexShapeDefinition` 42,219 (100%), `reflectionDefinition`
+30,431 (100%), `childParticleSetDefinition` 27,505 (37%), `softParticleParams` 17,344 (100%),
+`paletteDefinition` 15,632 (100%), `distortionDefinition` 10,121 (100%), `Filtering` 7,115 (71%),
+`Linger` 3,813 (81%), `materialOverrideDefinitions` 2,309 (66%). `CustomMaterial` expands to 132
+sub-rows of which **none** are editable — its contents are all types the row model does not handle.
+
+A `Value*`/`Integrated*` struct is deliberately treated as a **leaf, not a container**. Expanding one
+would replace its single editable constant plus curve display with `constantValue`/`dynamics`/`times`/
+`values` rows and lose the curve entirely — a regression dressed as more detail.
+
+The same expansion runs on the system panel, where `assetRemappingTable` and `materialOverrideDefinitions`
+were read-only containers for the same reason; system rows went 99,591 → 100,375.
+
+VERIFIED: 11 checks. Nine round trips through `Serialize` → re-`Parse` on fields **inside** definition
+structs — `alphaErosionDefinition.erosionMapName` (a texture path), `.erosionFeatherOut`,
+`.erosionDriveCurve` (a *curve* row one level down), `softParticleParams.deltaIn`,
+`reflectionDefinition.reflectionFresnel`, `paletteDefinition.paletteCount` and `.paletteTexture`,
+`Linger.UseSeparateLingerColor`, `textureMult.texAddressModeMult` — plus two assertions that a container
+header (`childParticleSetDefinition.childrenIdentifiers`) and a struct header (`primitive.mMesh`) are
+**not** editable. Also asserted: 0 of 6,521,468 rows dirty before any edit. Four of the round-trip
+targets initially reported "not found in the sampled WADs" because the inner field names were guessed
+rather than read off the census; a not-found target proves nothing, so they were corrected to the real
+names rather than left in the output looking like passes.
 
 ### 4. Missing parsing support
 

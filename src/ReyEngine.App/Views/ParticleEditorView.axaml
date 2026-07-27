@@ -105,10 +105,11 @@
                                 <ItemsControl ItemsSource="{Binding Rows}">
                                   <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:ParticlePropertyRowViewModel">
+                                      <!-- M189: rows nested inside a definition struct are indented by depth -->
                                       <Button Background="Transparent" BorderThickness="0" Padding="6,2"
                                               HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
                                               Command="{Binding SelectCommand}">
-                                        <DockPanel>
+                                        <DockPanel Margin="{Binding Indent}">
                                           <TextBlock DockPanel.Dock="Right" Text="{Binding CurrentText}" FontSize="9"
                                                      Opacity="0.6" MaxWidth="80" TextTrimming="CharacterEllipsis" />
                                           <TextBlock Text="{Binding Name}" FontSize="10" />
