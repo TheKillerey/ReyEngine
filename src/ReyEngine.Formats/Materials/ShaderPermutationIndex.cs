@@ -273,5 +273,19 @@ public sealed class ShaderPermutationIndex
         return cooked && sawEvidence;
     }
 
+    /// <summary>M213: the shader's own featureDefines and staticSwitch defaults, from shaders.bin. The DX11
+    /// preview needs these to reconstruct a material's COMPLETE define set - a material only authors the
+    /// switches it changes, and the rest come from the shader definition.</summary>
+    public bool TryGetShaderDefs(string shader,
+        out IReadOnlyDictionary<string, string> featureDefines,
+        out IReadOnlyDictionary<string, bool> switchDefaults)
+    {
+        bool a = _featureDefines.TryGetValue(shader, out var f);
+        bool b = _switchDefaults.TryGetValue(shader, out var sd);
+        featureDefines = f ?? new Dictionary<string, string>();
+        switchDefaults = sd ?? new Dictionary<string, bool>();
+        return a || b;
+    }
+
     public void Dispose() => _cache?.Dispose();
 }

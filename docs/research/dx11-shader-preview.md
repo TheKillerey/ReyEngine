@@ -141,12 +141,26 @@ So the rule is **`shaderTextureName == materialSamplerName + "__TX"`**, and the 
 `assets/shaders/generated/{renderShader}` resolving for **100%** of materials that name one also confirms the
 material→shader path convention outright.
 
-**The 21.6% "no match" is mostly an artifact of the measurement, not a real gap.** The harness reflected
-*permutation 0* of each shader, but the declared texture set is permutation-dependent — a shader compiled
-without `FEATURE_MASKED` does not declare `Mask_Texture__TX` at all. The unmatched examples are exactly that
-shape (`Mask_Texture`, `BloomMask_Texture`, `MatCap_Tex` against a permutation that declares none of them).
-Re-running against each material's *own* resolved permutation would be the way to settle the true residue;
-that has **not** been done, so 78.4% is a floor, not the final number.
+**M210 guessed that the 21.6% was mostly a measurement artifact. M213 measured it, and that guess was
+wrong.** Re-running against each material's *own* resolved permutation — now that the resolver exists — moved
+the match rate only from **78.4% to 80.4%**. The permutation choice accounted for two percentage points, not
+twenty.
+
+What the residue actually is, classified over all 3,190 unmatched pairs:
+
+| | count | share of unmatched |
+|---|---|---|
+| shader declares something *similar* (the `__TX` rule would be wrong) | 167 | **5.2%** |
+| shader declares *nothing like it* — a surplus material slot | 3,023 | **94.8%** |
+
+So the rule is not failing: in 94.8% of the misses the shader's resolved permutation declares no texture
+resembling that sampler at all. Materials routinely carry sampler entries the permutation they resolve to
+never uses — `Outline_MatCap_RMA_VertexDeform` materials author `MatCap_Tex`, `Vertex_Deform_Tex`,
+`BloomMask_Texture` and `iridescentTex` against a permutation declaring only `OutlineMask_Texture__TX` and
+`Diffuse_Texture__TX`. That is surplus authoring data, not a mapping failure.
+
+The genuine residue is the **167 near-misses (1.0% of all pairs)**, which have *not* been examined
+individually and are the only place a second naming rule could still be hiding.
 
 ### Engine-supplied vs material-supplied
 
@@ -185,7 +199,8 @@ grow into the OpenGL renderer, and so the experiment can be deleted in one step.
    guessed silently — the same treatment M208 gave the mesh winding.
 2. **Engine constant values** are preview stand-ins, not measured engine values, and are labelled as such in
    the code — with the exception of the shadow pair, which M212 measured (below).
-3. **The true material↔texture residue**, per the note above.
+3. **The 167 near-miss sampler/texture pairs** (1.0% of all pairs) — the only place a second naming rule
+   could still be hiding. Not examined individually.
 4. **Blend / depth / stencil / raster state per material.** The preview exposes these as manual toggles. Where
    the game sources them per material is not established here.
 5. **The comparison number is not a fidelity verdict.** The window can swap Riot's pixel shader for
@@ -196,6 +211,30 @@ grow into the OpenGL renderer, and so the experiment can be deleted in one step.
    accuracy claim about either renderer.
 
 ---
+
+## Resolving a material's actual permutation (M213)
+
+Previewing a *shader* means picking a permutation by hand. Previewing a **material** means picking the one the
+engine would. A material authors only the switches it changes; the rest of the define set comes from the
+shader's own `featureDefines` and `staticSwitch` defaults in `shaders.bin`, and some macros are injected
+per-mesh and appear in neither. So resolution pins every axis it can, leaves the rest free, and enumerates
+the free ones until a combination hashes to a key the TOC contains.
+
+**Result over the 8 shipping map WADs: 10,659 of 10,659 materials resolved BOTH stages — 100%.**
+
+Failing to resolve is a real answer and is reported as one, never papered over with an arbitrary blob: it is
+exactly the condition that makes the live client fail with *"Unable to find correct hash for shader"* and
+render nothing.
+
+### One correctness bug, found by a test rather than by the corpus
+
+Almost every axis in a shipped TOC is presence/absence — the pool carries `1` and nothing else. So a switch
+that is **off** means the define is **absent**, not `NAME=0`. The first implementation emitted `=0`, which
+produces a key that exists nowhere and would report an ordinary material as unresolvable.
+
+The shipped corpus never exercised that branch: the census reported 100% resolution both before and after the
+fix. It was caught only because a unit test asserted the behaviour directly. Worth recording as a case where
+a green measurement over 10,659 real inputs was not sufficient evidence.
 
 ## The light term, measured (M212)
 

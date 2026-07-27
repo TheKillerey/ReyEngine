@@ -8575,7 +8575,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         string? dir = string.IsNullOrEmpty(Project.GameDirectory) ? null
             : Path.Combine(Project.GameDirectory, "DATA", "FINAL");
 
-        var vm = new ShaderPreviewViewModel(dir, _resolver.Database);
+        // M213: hand the window the asset mounts so a real material can be loaded end to end - its
+        // textures come out of the same VFS everything else reads, so project overrides win over Riot's
+        // originals exactly as they do in the rest of the editor.
+        var bins = AssetEntries
+            .Where(e => e.IsResolved && e.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
+            .Select(e => (e.Path, e.PathHash))
+            .OrderBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var vm = new ShaderPreviewViewModel(dir, _resolver.Database,
+            readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
+            binAssets: bins,
+            resolveBinName: h => _resolver.Database.TryGetBinName(h, out var n) ? n : null);
+
+        if (bins.Count == 0)
+            _log.Info("Shader", "No .bin assets are mounted, so the Material tab will be empty. "
+                                + "Open a project or a WAD first.");
         if (!vm.CacheAvailable)
             _log.Warn("Shader", "No shader cache found - the window opens, but there is nothing to load. "
                                 + "Point the project at the game folder (the one containing DATA/FINAL).");

@@ -238,6 +238,141 @@ public sealed class ShaderCacheReader : IDisposable
             .ToList();
     }
 
+    /// <summary>Pin a boolean axis, honouring how League actually encodes "off".
+    ///
+    /// <para>Almost every axis in a shipped TOC is presence/absence — the pool carries the value <c>1</c> and
+    /// nothing else — so a switch that is OFF means the define is simply <b>absent</b>, not <c>NAME=0</c>.
+    /// Emitting <c>=0</c> against such an axis produces a key that exists nowhere and reports a perfectly
+    /// ordinary material as unresolvable. Where <c>0</c> IS a cooked value (a handful of axes ship both
+    /// polarities) the explicit form is used instead.</para>
+    ///
+    /// <para>Found by a test, not by inspection: the shipped corpus happens not to exercise the broken
+    /// branch, so the census reported 100% resolution either way.</para></summary>
+    private static bool TryPinBool(string name, bool on, IReadOnlyList<string> values, string source,
+        List<string> fixedParts, List<string> pinned, out string explanation)
+    {
+        explanation = "";
+        string sv = on ? "1" : "0";
+        if (values.Contains(sv))
+        {
+            fixedParts.Add(name + "=" + sv);
+            pinned.Add($"{name}={sv} ({source})");
+            return true;
+        }
+        if (!on)
+        {
+            // off, and "0" was never cooked -> the define is absent. Contributes nothing to the key.
+            pinned.Add($"{name} absent ({source} = off)");
+            return true;
+        }
+        explanation = $"the {source} {name}=1 was never cooked (cooked values: {string.Join("/", values)})";
+        return false;
+    }
+
+    /// <summary>M213: which cooked permutation would the engine pick for THIS material?
+    ///
+    /// <para>This is the difference between previewing a shader and previewing a material. A material
+    /// authors only the switches it changes; the rest of the define set comes from the shader's own
+    /// featureDefines and staticSwitch defaults, and some macros are injected per-mesh by the engine and
+    /// appear in neither. So the resolution fixes every axis it can pin, leaves the rest free, and
+    /// enumerates the free ones until a combination hashes to a key the TOC actually contains.</para>
+    ///
+    /// <para>Returns null when nothing matched, which is a real and meaningful answer: it is exactly the
+    /// condition that makes the live client fail with "Unable to find correct hash for shader" and render
+    /// nothing. <paramref name="explanation"/> always describes what was tried.</para></summary>
+    public static ShaderPermutation? ResolvePermutation(
+        ShaderStageToc toc,
+        IReadOnlyDictionary<string, string>? macros,
+        IReadOnlyDictionary<string, bool>? switches,
+        IReadOnlyDictionary<string, string>? featureDefines,
+        IReadOnlyDictionary<string, bool>? switchDefaults,
+        out string explanation,
+        long maxCombinations = 2_000_000)
+    {
+        var byKey = new Dictionary<ulong, ShaderPermutation>();
+        foreach (var perm in toc.Permutations) byKey.TryAdd(perm.Key, perm);
+
+        var fixedParts = new List<string>();
+        var freeAxes = new List<(string Name, List<string?> Options)>();
+        var pinned = new List<string>();
+
+        foreach (var (name, values) in toc.Axes)
+        {
+            if (macros is not null && macros.TryGetValue(name, out var mv))
+            {
+                if (!values.Contains(mv))
+                {
+                    explanation = $"the material sets {name}={mv}, which was never cooked for this stage "
+                                  + $"(cooked values: {string.Join("/", values)})";
+                    return null;
+                }
+                fixedParts.Add(name + "=" + mv);
+                pinned.Add($"{name}={mv} (material macro)");
+            }
+            else if (switches is not null && switches.TryGetValue(name, out bool on))
+            {
+                if (!TryPinBool(name, on, values, "material switch", fixedParts, pinned, out explanation)) return null;
+            }
+            else if (featureDefines is not null && featureDefines.TryGetValue(name, out var fv))
+            {
+                if (!values.Contains(fv)) { explanation = $"the shader's featureDefine {name}={fv} was never cooked"; return null; }
+                fixedParts.Add(name + "=" + fv);
+                pinned.Add($"{name}={fv} (shader featureDefine)");
+            }
+            else if (switchDefaults is not null && switchDefaults.TryGetValue(name, out bool dv))
+            {
+                if (!TryPinBool(name, dv, values, "shader default", fixedParts, pinned, out explanation)) return null;
+            }
+            else
+            {
+                // Unset. The engine injects some of these per-mesh (NO_BAKED_LIGHTING and friends), so
+                // "absent" and each cooked value are all candidates - the same both-ways treatment M166
+                // needed to stop reporting shipping content as broken.
+                var opts = new List<string?> { null };
+                opts.AddRange(values);
+                freeAxes.Add((name, opts));
+            }
+        }
+
+        long space = 1;
+        foreach (var a in freeAxes) space *= a.Options.Count;
+        if (space > maxCombinations)
+        {
+            explanation = $"{freeAxes.Count} unconstrained axes is too large a space to search ({space:n0})";
+            return null;
+        }
+
+        var parts = new List<string>();
+        for (long c = 0; c < space; c++)
+        {
+            long rem = c;
+            parts.Clear();
+            parts.AddRange(fixedParts);
+            var chosen = new List<string>();
+            foreach (var (name, opts) in freeAxes)
+            {
+                int sel = (int)(rem % opts.Count);
+                rem /= opts.Count;
+                if (opts[sel] is { } val) { parts.Add(name + "=" + val); chosen.Add(name + "=" + val); }
+            }
+            ulong key = PermutationKey(parts);
+            if (byKey.TryGetValue(key, out var hit))
+            {
+                explanation = pinned.Count == 0 && chosen.Count == 0
+                    ? "matched the base permutation (no defines)"
+                    : "pinned: " + (pinned.Count == 0 ? "(nothing)" : string.Join(", ", pinned))
+                      + (chosen.Count > 0 ? "  ·  inferred: " + string.Join(", ", chosen) : "");
+                return hit;
+            }
+        }
+
+        explanation = $"no cooked permutation matched. Pinned {fixedParts.Count} axes "
+                      + $"({string.Join(", ", pinned)}) and searched {space:n0} combinations of "
+                      + $"{freeAxes.Count} free ones. In the live client this is the "
+                      + "\"Unable to find correct hash for shader\" failure.";
+        return null;
+    }
+
     /// <summary>Fetch one blob's DXBC, trimmed to the size its own header declares.</summary>
     /// <param name="error">Set when the blob could not be produced; the value is then null.</param>
     /// <param name="wasTrimmed">True when the container's length prefix over-reported, which is the norm.</param>

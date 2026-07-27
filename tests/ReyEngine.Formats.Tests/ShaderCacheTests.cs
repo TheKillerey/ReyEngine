@@ -140,6 +140,125 @@ public class ShaderCacheTests
         Assert.Contains("not recovered", described[0].DefineSummary);
     }
 
+    // ---------------------------------------------------------------- M213 permutation resolution
+
+    private static readonly Dictionary<string, string> NoMacros = new();
+    private static readonly Dictionary<string, bool> NoSwitches = new();
+
+    /// <summary>The point of the whole exercise: a material's define set has to land on the blob the engine
+    /// would pick, not on an arbitrary permutation.</summary>
+    [Fact]
+    public void AMaterialSwitchPinsTheAxisAndSelectsThatBlob()
+    {
+        var pool = new[] { ("FEATURE_MASKED", "1"), ("DISABLE_FOW", "1") };
+        ulong masked = ShaderCacheReader.PermutationKey(new[] { "FEATURE_MASKED=1" });
+        ulong fow = ShaderCacheReader.PermutationKey(new[] { "DISABLE_FOW=1" });
+        var toc = ShaderCacheReader.ParseToc(BuildToc(pool, new[] { (masked, 11u), (fow, 22u) }), "s.ps.dx11")!;
+
+        var hit = ShaderCacheReader.ResolvePermutation(
+            toc, NoMacros, new Dictionary<string, bool> { ["FEATURE_MASKED"] = true }, null, null, out var why);
+
+        Assert.NotNull(hit);
+        Assert.Equal(11u, hit!.BlobIndex);
+        Assert.Contains("FEATURE_MASKED=1", why);
+    }
+
+    /// <summary>A switch the material turns OFF must not silently match the ON permutation.</summary>
+    [Fact]
+    public void AnUncookedSwitchValueResolvesToNothingAndSaysWhy()
+    {
+        var pool = new[] { ("FEATURE_MASKED", "1") };
+        ulong masked = ShaderCacheReader.PermutationKey(new[] { "FEATURE_MASKED=1" });
+        var toc = ShaderCacheReader.ParseToc(BuildToc(pool, new[] { (masked, 5u) }), "s.ps.dx11")!;
+
+        var hit = ShaderCacheReader.ResolvePermutation(
+            toc, NoMacros, new Dictionary<string, bool> { ["FEATURE_MASKED"] = false }, null, null, out var why);
+
+        Assert.Null(hit);
+        Assert.Contains("FEATURE_MASKED", why);
+    }
+
+    /// <summary>Axes nothing pins are enumerated both ways, because the engine injects some macros per mesh
+    /// and they appear in neither the material nor the shader definition. Treating them as definitively
+    /// absent is what produced false "this material is broken" verdicts in M166.</summary>
+    [Fact]
+    public void AnUnpinnedAxisIsTriedBothPresentAndAbsent()
+    {
+        var pool = new[] { ("NO_BAKED_LIGHTING", "1") };
+        ulong withIt = ShaderCacheReader.PermutationKey(new[] { "NO_BAKED_LIGHTING=1" });
+        var toc = ShaderCacheReader.ParseToc(BuildToc(pool, new[] { (withIt, 77u) }), "s.ps.dx11")!;
+
+        // the material says nothing about it, yet only the present form is cooked
+        var hit = ShaderCacheReader.ResolvePermutation(toc, NoMacros, NoSwitches, null, null, out _);
+        Assert.NotNull(hit);
+        Assert.Equal(77u, hit!.BlobIndex);
+    }
+
+    [Fact]
+    public void TheShadersOwnDefaultsAreUsedWhenTheMaterialIsSilent()
+    {
+        var pool = new[] { ("USE_DYNAMIC_LIGHTING", "1"), ("LOW_QUALITY_MODE", "1") };
+        ulong dyn = ShaderCacheReader.PermutationKey(new[] { "USE_DYNAMIC_LIGHTING=1" });
+        ulong low = ShaderCacheReader.PermutationKey(new[] { "LOW_QUALITY_MODE=1" });
+        var toc = ShaderCacheReader.ParseToc(BuildToc(pool, new[] { (dyn, 3u), (low, 9u) }), "s.ps.dx11")!;
+
+        var hit = ShaderCacheReader.ResolvePermutation(toc, NoMacros, NoSwitches, null,
+            new Dictionary<string, bool> { ["USE_DYNAMIC_LIGHTING"] = true, ["LOW_QUALITY_MODE"] = false },
+            out var why);
+
+        Assert.NotNull(hit);
+        Assert.Equal(3u, hit!.BlobIndex);
+        Assert.Contains("shader default", why);
+    }
+
+    [Fact]
+    public void MacrosBeatSwitchesAndShaderDefaults()
+    {
+        var pool = new[] { ("DISABLE_FOW", "1"), ("DISABLE_FOW", "0") };
+        ulong on = ShaderCacheReader.PermutationKey(new[] { "DISABLE_FOW=1" });
+        ulong off = ShaderCacheReader.PermutationKey(new[] { "DISABLE_FOW=0" });
+        var toc = ShaderCacheReader.ParseToc(BuildToc(pool, new[] { (on, 1u), (off, 2u) }), "s.ps.dx11")!;
+
+        var hit = ShaderCacheReader.ResolvePermutation(
+            toc,
+            new Dictionary<string, string> { ["DISABLE_FOW"] = "0" },      // macro says off
+            new Dictionary<string, bool> { ["DISABLE_FOW"] = true },       // switch says on
+            null, null, out var why);
+
+        Assert.NotNull(hit);
+        Assert.Equal(2u, hit!.BlobIndex);
+        Assert.Contains("material macro", why);
+    }
+
+    [Fact]
+    public void TheBasePermutationResolvesWhenNothingIsSet()
+    {
+        var toc = ShaderCacheReader.ParseToc(
+            BuildToc(Array.Empty<(string, string)>(),
+                new[] { (ShaderCacheReader.PermutationKey(Array.Empty<string>()), 0u) }), "s.vs.dx11")!;
+
+        var hit = ShaderCacheReader.ResolvePermutation(toc, NoMacros, NoSwitches, null, null, out var why);
+        Assert.NotNull(hit);
+        Assert.Contains("base permutation", why);
+    }
+
+    /// <summary>Failing to resolve is a real answer - it is the condition that makes the live client render
+    /// nothing - so it must be reported, never papered over with an arbitrary blob.</summary>
+    [Fact]
+    public void AnUnmatchableDefineSetReturnsNullRatherThanGuessingABlob()
+    {
+        var pool = new[] { ("A", "1"), ("B", "1") };
+        // only A=1 is cooked; the material demands both
+        ulong onlyA = ShaderCacheReader.PermutationKey(new[] { "A=1" });
+        var toc = ShaderCacheReader.ParseToc(BuildToc(pool, new[] { (onlyA, 4u) }), "s.ps.dx11")!;
+
+        var hit = ShaderCacheReader.ResolvePermutation(
+            toc, new Dictionary<string, string> { ["A"] = "1", ["B"] = "1" }, NoSwitches, null, null, out var why);
+
+        Assert.Null(hit);
+        Assert.Contains("Unable to find correct hash", why);
+    }
+
     [Theory]
     [InlineData("shaders/env/foo.vs.dx11", "shaders/env/foo")]
     [InlineData("shaders/env/foo.ps.dx11", "shaders/env/foo")]

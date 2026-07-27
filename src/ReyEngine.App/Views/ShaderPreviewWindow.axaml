@@ -143,6 +143,57 @@
             </ScrollViewer>
           </TabItem>
 
+          <TabItem Header="Material">
+            <DockPanel Margin="6">
+              <TextBlock DockPanel.Dock="Top" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,0,2,6"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         Text="Pick a .bin, then a material inside it. Loading resolves the permutation the engine would actually pick for that material's define set, binds its real .tex textures, and writes its parameters into the constants the shader declares." />
+
+              <TextBox DockPanel.Dock="Top" Text="{Binding BinFilter}" Watermark="filter .bin files…"
+                       FontSize="11" Margin="0,0,0,4" />
+
+              <Button DockPanel.Dock="Bottom" Classes="primary" Content="▶  Load this material"
+                      Command="{Binding ApplyMaterialCommand}" FontSize="11.5" Margin="0,6,0,0"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,7"
+                      IsEnabled="{Binding SelectedMaterial, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+              <Grid RowDefinitions="*,4,*,Auto">
+                <ListBox Grid.Row="0" ItemsSource="{Binding MaterialBins}" SelectedItem="{Binding SelectedBin}"
+                         FontFamily="Consolas" FontSize="10.5">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:MaterialBinRow">
+                      <TextBlock Text="{Binding Display}" TextTrimming="CharacterEllipsis"
+                                 ToolTip.Tip="{Binding Path}" />
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+
+                <GridSplitter Grid.Row="1" Background="Transparent" ResizeDirection="Rows" />
+
+                <ListBox Grid.Row="2" ItemsSource="{Binding Materials}" SelectedItem="{Binding SelectedMaterial}"
+                         FontSize="11">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:MaterialRow">
+                      <StackPanel Spacing="1" Margin="0,2">
+                        <TextBlock Text="{Binding Label}" FontFamily="Consolas" FontSize="11"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+                        <TextBlock Text="{Binding Detail}" FontSize="9.5" Opacity="0.55"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+
+                <ScrollViewer Grid.Row="3" MaxHeight="240" HorizontalScrollBarVisibility="Auto" Margin="0,6,0,0">
+                  <SelectableTextBlock Text="{Binding MaterialReport}" FontFamily="Consolas" FontSize="10"
+                                       TextWrapping="NoWrap"
+                                       Foreground="{DynamicResource ReyTextBrush}" />
+                </ScrollViewer>
+              </Grid>
+            </DockPanel>
+          </TabItem>
+
           <TabItem Header="Bindings">
             <ScrollViewer HorizontalScrollBarVisibility="Auto">
               <SelectableTextBlock Text="{Binding Bindings}" FontFamily="Consolas" FontSize="10.5"

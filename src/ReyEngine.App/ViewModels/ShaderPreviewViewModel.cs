@@ -6,7 +6,9 @@ using Avalonia.Platform;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Hashing;
+using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.Shaders;
 using ReyEngine.Rendering.D3D11;
 
@@ -33,6 +35,25 @@ public sealed class ShaderRow
             return s;
         }
     }
+}
+
+/// <summary>A .bin asset that might hold materials.</summary>
+public sealed class MaterialBinRow
+{
+    public required string Path { get; init; }
+    public required ulong Hash { get; init; }
+    public string Display => System.IO.Path.GetFileName(Path);
+    public override string ToString() => Path;
+}
+
+/// <summary>One material inside the selected bin.</summary>
+public sealed class MaterialRow
+{
+    public required MaterialBinding Binding { get; init; }
+    public string Name => Binding.Name;
+    public string Shader => Binding.RenderShader ?? Binding.ShaderName ?? "(no shader)";
+    public string Label => $"{Name}";
+    public string Detail => $"{Shader}   ·   {Binding.Slots.Count} texture(s), {Binding.Parameters.Count} param(s)";
 }
 
 /// <summary>One cooked permutation, as a row.</summary>
@@ -81,6 +102,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     private readonly PreviewSettings _settings = new();
     private readonly DispatcherTimer _timer;
     private readonly List<string> _allShaderNames = new();
+    private readonly Func<ulong, byte[]?>? _readAsset;
+    private readonly Func<uint, string?> _resolveBinName;
+    private readonly ShaderPermutationIndex? _perms;
+    private readonly List<MaterialBinRow> _allBins = new();
     private DxbcShader? _vs, _ps;
     // double-buffered: an Image only repaints when its Source REFERENCE changes, so writing into the
     // same WriteableBitmap every frame shows nothing. Alternating two avoids the null-then-set flicker.
@@ -97,6 +122,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     public ObservableCollection<TextureSlotRow> TextureSlots { get; } = new();
     public ObservableCollection<ConstantRow> Constants { get; } = new();
     public ObservableCollection<string> MeshNames { get; } = new(PreviewGeometry.BuiltInNames);
+    public ObservableCollection<MaterialBinRow> MaterialBins { get; } = new();
+    public ObservableCollection<MaterialRow> Materials { get; } = new();
 
     [ObservableProperty] private string _filter = "";
     [ObservableProperty] private ShaderRow? _selectedShader;
@@ -112,6 +139,11 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     [ObservableProperty] private string _perf = "";
     [ObservableProperty] private string _comparisonSource = "";
     [ObservableProperty] private bool _isLoaded;
+    [ObservableProperty] private string _binFilter = "";
+    [ObservableProperty] private MaterialBinRow? _selectedBin;
+    [ObservableProperty] private MaterialRow? _selectedMaterial;
+    [ObservableProperty] private string _materialReport = "";
+    public bool CanBrowseMaterials => _readAsset is not null && _allBins.Count > 0;
 
     // render settings, mirrored onto PreviewSettings
     [ObservableProperty] private double _yaw = 0.6, _pitch = 0.4, _distance = 3.2;
@@ -126,8 +158,18 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
     public bool CacheAvailable => _cache is not null;
 
-    public ShaderPreviewViewModel(string? gameDataFinalDir, IHashResolver? resolver)
+    public ShaderPreviewViewModel(string? gameDataFinalDir, IHashResolver? resolver,
+        Func<ulong, byte[]?>? readAsset = null,
+        IEnumerable<(string Path, ulong Hash)>? binAssets = null,
+        Func<uint, string?>? resolveBinName = null)
     {
+        _readAsset = readAsset;
+        _resolveBinName = resolveBinName ?? (_ => null);
+        if (binAssets is not null)
+            foreach (var (path, hash) in binAssets)
+                _allBins.Add(new MaterialBinRow { Path = path, Hash = hash });
+        ApplyBinFilter();
+
         if (string.IsNullOrWhiteSpace(gameDataFinalDir) || !Directory.Exists(gameDataFinalDir))
         {
             Status = "No game directory is configured, so there is no shader cache to read. "
@@ -136,6 +178,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         }
         else
         {
+            try { _perms = new ShaderPermutationIndex(gameDataFinalDir); }
+            catch { _perms = null; }   // only affects define-set completeness, not loading
+
             _cache = ShaderCacheReader.Open(gameDataFinalDir, resolver, out var err);
             if (_cache is null) { Status = err ?? "the shader cache could not be opened"; HasError = true; }
             else
@@ -193,6 +238,177 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         if (truncated)
             Status = "Permutation define sets could not be recovered (the define pool is too large to enumerate); "
                      + "blob indices are still exact.";
+    }
+
+    partial void OnBinFilterChanged(string value) => ApplyBinFilter();
+
+    private void ApplyBinFilter()
+    {
+        MaterialBins.Clear();
+        foreach (var b in _allBins)
+            if (BinFilter.Length == 0 || b.Path.Contains(BinFilter, StringComparison.OrdinalIgnoreCase))
+                MaterialBins.Add(b);
+    }
+
+    partial void OnSelectedBinChanged(MaterialBinRow? value)
+    {
+        Materials.Clear();
+        SelectedMaterial = null;
+        if (value is null || _readAsset is null) return;
+
+        try
+        {
+            var bytes = _readAsset(value.Hash);
+            if (bytes is null || bytes.Length == 0) { Fail($"{value.Display}: not readable from any mount"); return; }
+            var doc = MaterialDocument.Parse(bytes, _resolveBinName);
+            foreach (var m in doc.Materials) Materials.Add(new MaterialRow { Binding = m });
+
+            Status = Materials.Count == 0
+                ? $"{value.Display} holds no materials."
+                : $"{value.Display}: {Materials.Count} material(s). Pick one to load its shader, textures and parameters.";
+            HasError = Materials.Count == 0;
+        }
+        catch (Exception ex) { Fail($"{value.Display}: {ex.Message}"); }
+    }
+
+    /// <summary>M213: bring a real material up end to end - its shader, the permutation the engine would
+    /// actually pick for its define set, its textures decoded from the game's own .tex files, and its
+    /// parameters written into the constants the shader declares.</summary>
+    [RelayCommand]
+    private void ApplyMaterial()
+    {
+        if (SelectedMaterial is null || _cache is null) return;
+        var b = SelectedMaterial.Binding;
+        var sb = new StringBuilder();
+
+        string? shader = b.RenderShader;
+        if (string.IsNullOrWhiteSpace(shader))
+        {
+            Fail($"'{b.Name}' names no renderShader, so there is no shader to load.");
+            MaterialReport = $"{b.Name}\\n\\nThis material has no renderShader. Its class was "
+                             + $"'{b.ShaderName ?? "unknown"}'.";
+            return;
+        }
+
+        string full = "assets/shaders/generated/" + shader.Trim('/');
+        var match = _allShaderNames.FirstOrDefault(n => n.Equals(full, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+        {
+            Fail($"'{shader}' is not in the shader cache.");
+            MaterialReport = $"{b.Name}\\n\\nrenderShader: {shader}\\nexpected at: {full}\\n\\nNot present in "
+                             + "ShaderCache.dx11.wad.client.";
+            return;
+        }
+
+        sb.AppendLine($"MATERIAL   {b.Name}");
+        sb.AppendLine($"shader     {shader}");
+        sb.AppendLine($"class      {b.ShaderName}");
+        sb.AppendLine();
+
+        // the define set the engine would resolve
+        _perms?.TryGetShaderDefs(shader, out var features, out var switchDefaults);
+        IReadOnlyDictionary<string, string>? feat = null;
+        IReadOnlyDictionary<string, bool>? swDef = null;
+        if (_perms is not null && _perms.TryGetShaderDefs(shader, out var f2, out var s2)) { feat = f2; swDef = s2; }
+
+        sb.AppendLine("DEFINE SET");
+        sb.AppendLine($"   material switches  {(b.Switches.Count == 0 ? "(none)" : string.Join(", ", b.Switches.Select(kv => $"{kv.Key}={(kv.Value ? 1 : 0)}")))}");
+        sb.AppendLine($"   material macros    {(b.Macros.Count == 0 ? "(none)" : string.Join(", ", b.Macros.Select(kv => $"{kv.Key}={kv.Value}")))}");
+        sb.AppendLine($"   shader defaults    {(swDef is null || swDef.Count == 0 ? "(none / shaders.bin unavailable)" : string.Join(", ", swDef.Select(kv => $"{kv.Key}={(kv.Value ? 1 : 0)}")))}");
+        sb.AppendLine();
+
+        // resolve BOTH stages against that set
+        string vsPath = ShaderCacheReader.TocPathFor(match, DxbcStage.Vertex);
+        string psPath = ShaderCacheReader.TocPathFor(match, DxbcStage.Pixel);
+        var vsToc = _cache.ReadToc(vsPath);
+        var psToc = _cache.ReadToc(psPath);
+        if (vsToc is null || psToc is null) { Fail($"'{shader}' does not ship both stages."); MaterialReport = sb.ToString(); return; }
+
+        var vsPerm = ShaderCacheReader.ResolvePermutation(vsToc, b.Macros, b.Switches, feat, swDef, out var vsWhy);
+        var psPerm = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out var psWhy);
+
+        sb.AppendLine("PERMUTATION RESOLUTION");
+        sb.AppendLine($"   vertex  {(vsPerm is null ? "NOT FOUND" : $"blob #{vsPerm.BlobIndex}, key 0x{vsPerm.Key:x16}")}");
+        sb.AppendLine($"           {vsWhy}");
+        sb.AppendLine($"   pixel   {(psPerm is null ? "NOT FOUND" : $"blob #{psPerm.BlobIndex}, key 0x{psPerm.Key:x16}")}");
+        sb.AppendLine($"           {psWhy}");
+        sb.AppendLine();
+
+        if (vsPerm is null || psPerm is null)
+        {
+            MaterialReport = sb.ToString();
+            Fail("No cooked permutation matches this material's define set - the live client would fail the same way.");
+            return;
+        }
+
+        // select them in the UI, then load through the normal path
+        SelectedShader = ShaderNames.FirstOrDefault(r => r.Full.Equals(match, StringComparison.OrdinalIgnoreCase))
+                         ?? new ShaderRow { Full = match };
+        SelectedVertexPerm = VertexPermutations.FirstOrDefault(r => r.Perm.Key == vsPerm.Key)
+                             ?? new PermutationRow { Perm = vsPerm, Ordinal = -1 };
+        SelectedPixelPerm = PixelPermutations.FirstOrDefault(r => r.Perm.Key == psPerm.Key)
+                            ?? new PermutationRow { Perm = psPerm, Ordinal = -1 };
+        Load();
+        if (!IsLoaded) { MaterialReport = sb.ToString() + "\\nShader creation failed - see the Shader tab."; return; }
+
+        // ---- textures, from the game's own .tex files
+        sb.AppendLine("TEXTURES");
+        int bound = 0, missing = 0;
+        var declared = TextureSlots.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var slot in b.Slots)
+        {
+            string target = slot.SamplerName + "__TX";
+            bool wanted = declared.Contains(target);
+            if (string.IsNullOrWhiteSpace(slot.Path))
+            { sb.AppendLine($"   -  {slot.SamplerName,-28} (no path authored)"); continue; }
+
+            if (!wanted)
+            {
+                sb.AppendLine($"   ·  {slot.SamplerName,-28} -> {target} not declared by this permutation");
+                continue;
+            }
+            if (_readAsset is null) { sb.AppendLine($"   ?  {slot.SamplerName,-28} (no asset mounts)"); missing++; continue; }
+
+            try
+            {
+                var data = _readAsset(HashAlgorithms.WadPath(slot.Path.ToLowerInvariant()));
+                if (data is null || data.Length == 0)
+                { sb.AppendLine($"   !  {slot.SamplerName,-28} {slot.Path}  NOT FOUND"); missing++; continue; }
+
+                var img = TextureDecoder.Decode(data);
+                _renderer.SetTexture(target, img.Rgba, img.Width, img.Height);
+                var row = TextureSlots.FirstOrDefault(t => t.Name.Equals(target, StringComparison.OrdinalIgnoreCase));
+                if (row is not null) row.Source = $"{System.IO.Path.GetFileName(slot.Path)} ({img.Width}x{img.Height})";
+                sb.AppendLine($"   +  {slot.SamplerName,-28} {img.Width}x{img.Height}  {slot.Path}");
+                bound++;
+            }
+            catch (Exception ex)
+            { sb.AppendLine($"   !  {slot.SamplerName,-28} {slot.Path}  {ex.Message}"); missing++; }
+        }
+        sb.AppendLine();
+
+        // ---- parameters into the reflected constants
+        sb.AppendLine("PARAMETERS");
+        int applied = 0;
+        foreach (var prm in b.Parameters)
+        {
+            var target = Constants.FirstOrDefault(c => c.Name.Equals(prm.Name, StringComparison.OrdinalIgnoreCase));
+            if (target is null)
+            { sb.AppendLine($"   ·  {prm.Name,-28} not a constant this permutation declares"); continue; }
+            if (!prm.TryGetVector4(out var v))
+            { sb.AppendLine($"   ·  {prm.Name,-28} {prm.TypeName} is not numeric"); continue; }
+
+            target.Value = string.Join(" ", new[] { v.X, v.Y, v.Z, v.W }
+                .Select(x => x.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            sb.AppendLine($"   +  {prm.Name,-28} {target.Value}");
+            applied++;
+        }
+
+        MaterialReport = sb.ToString();
+        RebuildBindings();
+        Status = $"'{b.Name}' loaded: {bound} texture(s) bound, {applied} parameter(s) applied"
+                 + (missing > 0 ? $", {missing} texture(s) missing." : ".");
+        HasError = missing > 0;
     }
 
     [RelayCommand]
