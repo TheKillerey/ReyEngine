@@ -23,6 +23,10 @@ public static class MapGeoDecoder
         bool anyColor = false;
         var lightmapUvs = new List<float>();   // atlas-mapped lightmap UV (0,0 when a mesh has none)
         bool anyLightmap = false;
+        // M230: Texcoord5 is the GRASS CLUMP PIVOT - see the read below. Falls back to the vertex's own
+        // position, which makes the deform a no-op rather than a divide by zero.
+        var grassPivots = new List<float>();
+        bool anyGrassPivot = false;
         var indices = new List<uint>();
         var groups = new List<MapGeoGroup>();
         var meshes = new List<MapGeoMesh>();
@@ -66,6 +70,22 @@ public static class MapGeoDecoder
                 string lmTex = meshHasLm ? lm.Texture : "";
                 if (meshHasLm) anyLightmap = true;
 
+                // M230: Texcoord5, and it is NOT a UV. Only meshes drawn with Shaders/StaticMesh/VertexDeform
+                // carry it, and staticmesh/vertexdeform's vertex shader spends it as a POSITION:
+                //
+                //     mov  r3.xyz, v3.xyzx                     // v3 = TEXCOORD5, r3.w already 1.0
+                //     dp4  r4.x, r3.xyzw, cb1[0].xyzw          // r4 = mul(float4(TEXCOORD5,1), WORLD_MATRIX)
+                //     add  r5.xyz, r2.xyzx, -r4.xyzx           // r5 = worldPos - r4
+                //
+                // so it lives in the same object space as POSITION and needs the same mesh transform.
+                // Measured on Map12 base.mapgeo MapGeo_Instance_299: XYZ_Float32, 60 distinct values across
+                // 3,068 vertices, range nested inside the position bounds and sitting at the BOTTOM of their
+                // Y span. That is one shared value per grass clump, at its root - the pivot the blades bend
+                // and sway around.
+                bool meshHasPivot = view.TryGetAccessor(ElementName.Texcoord5, out var pvAcc);
+                Vector3[]? meshPivot = meshHasPivot ? ReadVector3(pvAcc, vc) : null;
+                if (meshHasPivot) anyGrassPivot = true;
+
                 var meshMin = new Vector3(float.MaxValue);
                 var meshMax = new Vector3(float.MinValue);
 
@@ -99,6 +119,14 @@ public static class MapGeoDecoder
                         lightmapUvs.Add(meshLmUv[i].Y * lm.Scale.Y + lm.Bias.Y);
                     }
                     else { lightmapUvs.Add(0f); lightmapUvs.Add(0f); }
+
+                    // Same transform as the position, because it IS a position in that space.
+                    if (meshPivot is not null)
+                    {
+                        var gp = Vector3.Transform(meshPivot[i], transform);
+                        grassPivots.Add(gp.X); grassPivots.Add(gp.Y); grassPivots.Add(gp.Z);
+                    }
+                    else { grassPivots.Add(p.X); grassPivots.Add(p.Y); grassPivots.Add(p.Z); }
                 }
 
                 var ia = mesh.Indices;
@@ -225,6 +253,8 @@ public static class MapGeoDecoder
             HasVertexColor = anyColor,
             LightmapUvs = anyLightmap ? lightmapUvs.ToArray() : null,
             HasLightmap = anyLightmap,
+            GrassPivots = anyGrassPivot ? grassPivots.ToArray() : null,
+            HasGrassPivot = anyGrassPivot,
             Indices = indices.ToArray(),
             Groups = groups,
             Meshes = meshes,

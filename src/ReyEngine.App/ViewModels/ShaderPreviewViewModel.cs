@@ -178,6 +178,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// bound from the map itself rather than left on the white stand-in.</summary>
     private int _slicesMerged;
     private int _permutationsChanged;
+
+    /// <summary>M230: the uploaded scene geometry, kept so a material slice can measure its own centre.</summary>
+    private PreviewMesh? _sceneMesh;
+    private int _grassMaterials;
     private int _lightmapsBound;
     private readonly HashSet<string> _lightmapPages = new(StringComparer.Ordinal);
 
@@ -706,7 +710,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             {
                 var map = MapGeoDecoder.Decode(bytes);
                 mesh = PreviewGeometry.FromLeagueArrays(asset.Display, map.Positions.Length / 3,
-                    map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices);
+                    map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices,
+                    grassPivots: map.GrassPivots);
                 // M226: the lightmap atlas travels WITH THE GROUP. It is a per-mesh property, and keying
                 // it by material name (taking the first group's) handed 71.5% of Map12's lit groups another
                 // mesh's atlas page - 3,171 of 4,434 groups, 59.4% of triangles. The UVs were always right;
@@ -734,11 +739,13 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
         _slicesMerged = 0;
         _permutationsChanged = 0;
+        _grassMaterials = 0;
         _lightmapsBound = 0;
         _lightmapPages.Clear();
         _axisCounts.Clear();
         _renderer.ClearMaterials();
         _renderer.SetMesh(mesh);
+        _sceneMesh = mesh;
 
         int ok = 0, failed = 0, texBound = 0, texMissing = 0;
         DxbcShader? firstVs = null;
@@ -805,6 +812,11 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         }
         sb.AppendLine();
         sb.AppendLine($"lightmaps: {_lightmapsBound} slice(s) bound across {_lightmapPages.Count} distinct atlas page(s)");
+        if (_grassMaterials > 0)
+            sb.AppendLine($"vertex-deform (grass): {_grassMaterials} slice(s) given their own MESH_CENTER"
+                          + (_sceneMesh is not null && _sceneMesh.Vertices.Any(v => v.GrassPivot != v.Position)
+                              ? "   ·   TEXCOORD5 clump pivots present"
+                              : "   ·   no TEXCOORD5 in this geometry - pivots fall back to vertex position"));
         sb.AppendLine($"slices merged away: {_slicesMerged}   ·   distinct textures resident: {_renderer.CachedTextureCount}");
         int overrides = SceneDefines.Count(d => d.Mode != 0);
         if (overrides > 0)
@@ -965,6 +977,26 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     }
 
     /// <summary>Resolve one material to a live pipeline covering its submesh slices.</summary>
+    /// <summary>Bounds centre of the vertices a slice of the shared index buffer touches.</summary>
+    private System.Numerics.Vector3 SliceCentre(int start, int count)
+    {
+        if (_sceneMesh is null || count <= 0) return System.Numerics.Vector3.Zero;
+        var idx = _sceneMesh.Indices;
+        var verts = _sceneMesh.Vertices;
+        var lo = new System.Numerics.Vector3(float.MaxValue);
+        var hi = new System.Numerics.Vector3(float.MinValue);
+        int end = Math.Min(start + count, idx.Length);
+        for (int i = start; i < end; i++)
+        {
+            uint vi = idx[i];
+            if (vi >= verts.Length) continue;
+            var pv = verts[vi].Position;
+            lo = System.Numerics.Vector3.Min(lo, pv);
+            hi = System.Numerics.Vector3.Max(hi, pv);
+        }
+        return lo.X > hi.X ? System.Numerics.Vector3.Zero : (lo + hi) * 0.5f;
+    }
+
     private PreviewMaterial? BuildSceneMaterial(MaterialBinding b,
         List<(string Material, int Start, int Count, string Lightmap)> slices, StringBuilder sb,
         ref int texBound, ref int texMissing, out string why, out bool usedFallback)
@@ -1080,6 +1112,20 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         {
             var mat = _renderer.BuildMaterial(b.Name, vs, ps, slice.Start, slice.Count, out var rep);
             if (mat is null) { why = rep.Error ?? "pipeline creation failed"; sb.AppendLine($"   !  {b.Name,-34} {why}"); return null; }
+
+            // M230: MESH_CENTER is per mesh in the engine, and staticmesh/vertexdeform uses it twice - as the
+            // reference point for the grass-flattening spheres AND as the wave's phase offset,
+            // sin(sin(cx+cy+cz) + WaveFrequency*TIME). One shared value would sway every clump on the map in
+            // perfect lockstep. The scene is one merged vertex buffer, so the finest honest granularity here
+            // is the slice: each contiguous run of grass gets its own centre and so its own phase. Clumps
+            // *within* one slice still share a phase - a preview limitation, and stated as one.
+            if (vs.ConstantBuffers.Any(cb => cb.Variables.Any(v =>
+                    v.IsUsed && v.Name.Equals("MESH_CENTER", StringComparison.Ordinal))))
+            {
+                var c = SliceCentre(slice.Start, slice.Count);
+                mat.Params["MESH_CENTER"] = new[] { c.X, c.Y, c.Z, 0f };
+                _grassMaterials++;
+            }
 
             foreach (var slot in b.Slots)
             {

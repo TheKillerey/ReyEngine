@@ -437,6 +437,14 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         }
     }
 
+    /// <summary>Tiles a float4 <paramref name="count"/> times - for cbuffer array constants.</summary>
+    private static float[] Repeat(float[] v, int count)
+    {
+        var r = new float[v.Length * count];
+        for (int i = 0; i < count; i++) Array.Copy(v, 0, r, i * v.Length, v.Length);
+        return r;
+    }
+
     /// <summary>Semantic → byte offset inside <see cref="PreviewVertex"/>.</summary>
     private static (uint Offset, int Components, bool Known) MapSemantic(string semantic, int index, int declared)
         => (semantic.ToUpperInvariant(), index) switch
@@ -448,11 +456,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             ("TEXCOORD", 1) => (48u, 2, true),
             ("TEXCOORD", 2) => (56u, 2, true),
             ("TEXCOORD", 3) => (64u, 2, true),
+            ("TEXCOORD", 5) => (128u, 3, true),                  // M230: the grass clump pivot
             ("TEXCOORD", 7) => (72u, 2, true),                   // M224: the lightmap UV
             ("COLOR", 0) => (80u, 4, true),
             ("BLENDWEIGHT", 0) => (96u, 4, true),
             ("BLENDINDICES", 0) => (112u, 4, true),
-            _ => (128u, Math.Max(1, declared), false),           // the zero pad
+            _ => (144u, Math.Max(1, declared), false),           // the zero pad
         };
 
     private static Format FormatFor(uint componentType, int comps) => componentType switch
@@ -957,6 +966,40 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // Below this world height the engine treats everything as permanently visible. Nothing
                     // in the preview should ever be force-fogged, so push it above any real geometry.
                     "FOG_OF_WAR_ALWAYS_BELOW_Y" => new[] { 1e9f, 1e9f, 1e9f, 1e9f },
+
+                    // M230: the ten grass-flattening spheres - one per nearby unit, the reason grass parts as
+                    // a champion walks through it. Leaving them zero did not merely disable the effect, it
+                    // made grass VANISH. staticmesh/vertexdeform vs blob 25:
+                    //
+                    //     add  r7.xyz, -r3.xyzx, r7.xyzx    // sphereXZ - pivotXZ, both (0,0,0)
+                    //     dp3  r1.w, r7.yzxy, r7.yzxy       // 0
+                    //     rsq  r2.w, r1.w                   // rsq(0) = +INF
+                    //     mul  r7.xyz, r2.wwww, r7.xyzx     // INF * 0 = NaN
+                    //     ...
+                    //     add  r6.xyz, r6.xyzx, r7.xyzx     // NaN accumulates over all ten iterations
+                    //     add  r1.xyz, r1.xyzx, r6.xyzx     // and lands in the output POSITION
+                    //
+                    // A NaN vertex position makes the rasteriser discard the triangle, so all 104,876
+                    // triangles of Map12 grass drew nothing at all.
+                    //
+                    // The inert state is "no unit is standing in the grass": spheres far away, radius zero.
+                    // Both loops then resolve to exactly no effect rather than to NaN -
+                    //   distortion: len is huge and (spread*radius*velocity) is 0, so div_sat gives 1, the
+                    //     angle works out to (1*-0.1 + 0.1)*2pi = 0, and sincos(0) is the identity rotation;
+                    //   see-through alpha: t = saturate((dist - R)/R) reaches 1 well before 2R, and the final
+                    //     lerp(SeeThroughAlphaMin, SeeThroughAlphaMax, 1) is fully opaque.
+                    // 1e6 is ~60x outside any real map yet squares to 3e12, far inside fp32 range.
+                    "GrassDistortSpheres" => Repeat(new[] { 1e6f, 1e6f, 1e6f, 0f }, 10),
+                    "GrassVelocities" => Repeat(new[] { 0f, 0f, 0f, 0f }, 10),
+
+                    // Scales the velocity term above. Neutral at 1; with zero velocities it is moot either way.
+                    "VelocityStrength" => new[] { 1f, 1f, 1f, 1f },
+
+                    // The mesh's own centre, and NOT only a distance reference: it is also the wave's phase
+                    // offset, sin(sin(cx+cy+cz) + WaveFrequency*TIME), which is how Riot stops every clump on
+                    // the map from swaying in lockstep. The scene loader overrides this per material slice
+                    // via Params; this fallback is for a single-mesh preview, already centred on the origin.
+                    "MESH_CENTER" => new[] { 0f, 0f, 0f, 0f },
 
                     // M212: these two ADD, and the result multiplies a diffuse the shader has ALREADY
                     // doubled and clamped. Measured on staticmesh/defaultenv_flat blob#53 by binding a flat

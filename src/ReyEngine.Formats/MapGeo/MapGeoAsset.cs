@@ -16,6 +16,10 @@ public sealed class MapGeoAsset
     public bool HasVertexColor { get; init; }
     public float[]? LightmapUvs { get; init; }    // 2 floats / vertex, atlas-mapped (uv7*scale+bias); null if none
     public bool HasLightmap { get; init; }
+    /// <summary>M230: Texcoord5 - the grass clump pivot, 3 floats / vertex, already mesh-transformed. Shared
+    /// by every blade in a clump. Only VertexDeform meshes author it; null when no mesh in the file does.</summary>
+    public float[]? GrassPivots { get; init; }
+    public bool HasGrassPivot { get; init; }
     public required uint[] Indices { get; init; }
     public required IReadOnlyList<MapGeoGroup> Groups { get; init; }
     public IReadOnlyList<MapGeoMesh> Meshes { get; init; } = Array.Empty<MapGeoMesh>();

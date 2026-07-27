@@ -30,9 +30,15 @@ public struct PreviewVertex
     public Vector4 Color;         // +80   COLOR0
     public Vector4 BlendWeight;   // +96   BLENDWEIGHT0
     public uint B0, B1, B2, B3;   // +112  BLENDINDICES0 (uint4 - shaders declare it as an integer input)
-    public Vector4 Zero;          // +128  the pad every unmatched semantic points at
+    /// <summary>M230: the grass clump pivot, which staticmesh/vertexdeform declares as TEXCOORD5 and reads as
+    /// a position. Aliasing it onto the zero pad put every blade's pivot at the origin, and a zero-length
+    /// vector into an <c>rsq</c> - see the distortion loop in ShaderPreviewRenderer's GrassDistortSpheres
+    /// note. Non-grass meshes carry their own vertex position here, making the deform a no-op.</summary>
+    public Vector3 GrassPivot;    // +128  TEXCOORD5
+    private float _pad;           // +140  keeps Zero 16-byte aligned
+    public Vector4 Zero;          // +144  the pad every unmatched semantic points at
 
-    public const int SizeInBytes = 144;
+    public const int SizeInBytes = 160;
 }
 
 /// <summary>A test mesh ready for upload.</summary>
@@ -180,7 +186,8 @@ public static class PreviewGeometry
     public static PreviewMesh FromLeagueArrays(
         string name, int vertexCount,
         float[] positions, float[]? normals, float[]? uvs, float[]? colors, float[]? lightmapUvs,
-        uint[] indices, int[]? blendIndices = null, float[]? blendWeights = null)
+        uint[] indices, int[]? blendIndices = null, float[]? blendWeights = null,
+        float[]? grassPivots = null)
     {
         var verts = new PreviewVertex[vertexCount];
 
@@ -207,6 +214,13 @@ public static class PreviewGeometry
                 ? new Vector2(uvs[i * 2], uvs[i * 2 + 1]) : Vector2.Zero;
 
             verts[i] = Make(pos, nrm, uv, Vector3.UnitX);
+
+            // M230: recentred by the SAME offset as the position. The pivot is only meaningful as a point in
+            // the same space as the geometry - offsetting one and not the other would put every clump's
+            // pivot a map-width away, which is the bug this fixes, just with a different constant.
+            verts[i].GrassPivot = grassPivots is not null && grassPivots.Length >= (i + 1) * 3
+                ? new Vector3(grassPivots[i * 3], grassPivots[i * 3 + 1], grassPivots[i * 3 + 2]) - centre
+                : pos;
 
             // M224: onto TEXCOORD7, which is what the shaders actually read. The decoder has already
             // applied the per-mesh atlas scale/bias, so these are final atlas coordinates.
