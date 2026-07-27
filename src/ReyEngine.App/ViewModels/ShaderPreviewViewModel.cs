@@ -58,13 +58,16 @@ public sealed partial class SceneSubmeshRow : ObservableObject
     public required string Status { get; init; }
     public required bool Ok { get; init; }
     public string? Shader { get; init; }
+    public bool UsedFallbackShader { get; init; }
     public PreviewMaterial? Pipeline { get; init; }
 
     [ObservableProperty] private bool _visible = true;
     partial void OnVisibleChanged(bool v) { if (Pipeline is not null) Pipeline.Visible = v; }
 
     public string Label => $"{Material}   ({Triangles:n0} tris)";
-    public string Detail => Ok ? $"{Shader}" : Status;
+    public string Detail => Ok
+        ? (UsedFallbackShader ? $"⚠ picked shader · {Shader}" : Shader ?? "")
+        : Status;
 }
 
 /// <summary>A .bin asset that might hold materials.</summary>
@@ -80,10 +83,14 @@ public sealed class MaterialBinRow
 public sealed class MaterialRow
 {
     public required MaterialBinding Binding { get; init; }
+    /// <summary>Which bin it actually came from - often a long-named dependency, not the one picked.</summary>
+    public string SourceBin { get; init; } = "";
     public string Name => Binding.Name;
     public string Shader => Binding.RenderShader ?? Binding.ShaderName ?? "(no shader)";
+    public bool HasShader => !string.IsNullOrWhiteSpace(Binding.RenderShader);
     public string Label => $"{Name}";
-    public string Detail => $"{Shader}   ·   {Binding.Slots.Count} texture(s), {Binding.Parameters.Count} param(s)";
+    public string Detail => $"{Shader}   ·   {Binding.Slots.Count} tex, {Binding.Parameters.Count} param"
+                            + (SourceBin.Length > 0 ? $"   ·   {System.IO.Path.GetFileName(SourceBin)}" : "");
 }
 
 /// <summary>One cooked permutation, as a row.</summary>
@@ -357,14 +364,55 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
         try
         {
-            var bytes = _readAsset(value.Hash);
-            if (bytes is null || bytes.Length == 0) { Fail($"{value.Display}: not readable from any mount"); return; }
-            var doc = MaterialDocument.Parse(bytes, _resolveBinName);
-            foreach (var m in doc.Materials) Materials.Add(new MaterialRow { Binding = m });
+            // M217: follow the DEPENDENCY CLOSURE, not just the bin that was picked.
+            //
+            // A champion's skin bin barely holds any materials - it lists long-named dependency bins that
+            // do, and the same BFS is how the app already finds champion VFX (M84-M86). Reading only the
+            // selected bin found nothing for Kayn but a "(skin default texture)" placeholder with no
+            // renderShader, so every submesh fell through to it and nothing drew.
+            var seen = new HashSet<ulong> { value.Hash };
+            var queue = new Queue<(string Path, ulong Hash)>();
+            queue.Enqueue((value.Path, value.Hash));
 
+            var byName = new Dictionary<string, MaterialRow>(StringComparer.OrdinalIgnoreCase);
+            int binsRead = 0, guard = 0;
+
+            while (queue.Count > 0 && guard++ < 64)
+            {
+                var (path, hash) = queue.Dequeue();
+                byte[]? bytes;
+                try { bytes = _readAsset(hash); } catch { continue; }
+                if (bytes is null || bytes.Length == 0) continue;
+                binsRead++;
+
+                try
+                {
+                    var doc = MaterialDocument.Parse(bytes, _resolveBinName);
+                    foreach (var m in doc.Materials)
+                    {
+                        var row = new MaterialRow { Binding = m, SourceBin = path };
+                        // a definition that names a shader beats a placeholder of the same name
+                        if (!byName.TryGetValue(m.Name, out var existing) || (row.HasShader && !existing.HasShader))
+                            byName[m.Name] = row;
+                    }
+                }
+                catch { /* a bin that will not parse as materials is normal in the closure */ }
+
+                foreach (var dep in ReyEngine.Formats.Vfx.VfxSystemResolver.ExtractDependencies(bytes))
+                {
+                    ulong h = HashAlgorithms.WadPath(dep);
+                    if (seen.Add(h)) queue.Enqueue((dep, h));
+                }
+            }
+
+            foreach (var row in byName.Values.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
+                Materials.Add(row);
+
+            int withShader = Materials.Count(r => r.HasShader);
             Status = Materials.Count == 0
-                ? $"{value.Display} holds no materials."
-                : $"{value.Display}: {Materials.Count} material(s). Pick one to load its shader, textures and parameters.";
+                ? $"{value.Display} and its {binsRead - 1} dependency bin(s) hold no materials."
+                : $"{value.Display}: {Materials.Count} material(s) ({withShader} with a shader) "
+                  + $"across {binsRead} bin(s) including dependencies.";
             HasError = Materials.Count == 0;
         }
         catch (Exception ex) { Fail($"{value.Display}: {ex.Message}"); }
@@ -597,7 +645,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             if (!binding.Name.Equals(matName, StringComparison.OrdinalIgnoreCase))
                 sb.AppendLine($"      submesh '{matName}' -> material '{binding.Name}'");
 
-            var built = BuildSceneMaterial(binding, group.ToList(), sb, ref texBound, ref texMissing, out string why);
+            var built = BuildSceneMaterial(binding, group.ToList(), sb, ref texBound, ref texMissing,
+                out string why, out bool usedFallback);
             if (built is null)
             {
                 SceneSubmeshes.Add(new SceneSubmeshRow
@@ -611,8 +660,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             {
                 Material = matName, Triangles = tris, Ok = true, Status = "ok",
                 Shader = binding.Name.Equals(matName, StringComparison.OrdinalIgnoreCase)
-                    ? binding.RenderShader
-                    : $"{binding.Name} · {binding.RenderShader}",
+                    ? (binding.RenderShader ?? SelectedShader?.Display)
+                    : $"{binding.Name} · {binding.RenderShader ?? SelectedShader?.Display}",
+                UsedFallbackShader = usedFallback,
                 Pipeline = built,
             });
             ok++;
@@ -629,7 +679,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         if (ok == 0)
         {
             IsLoaded = false;
-            Fail($"{asset.Display}: not one material resolved, so there is nothing to draw.");
+            Fail(SelectedShader is null
+                ? $"{asset.Display}: nothing resolved. These materials author no shader of their own - "
+                  + "pick one in the Shader list on the left to stand in, then load the scene again."
+                : $"{asset.Display}: not one material resolved, so there is nothing to draw.");
             return;
         }
 
@@ -642,7 +695,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         FocusCamera();
         IsLoaded = true;
         HasError = failed > 0;
-        Status = $"{asset.Display}: {ok} material(s) drawing, {failed} unresolved.";
+        int fellBack = SceneSubmeshes.Count(r => r.UsedFallbackShader);
+        Status = $"{asset.Display}: {ok} material(s) drawing, {failed} unresolved"
+                 + (fellBack > 0 ? $", {fellBack} using the picked shader (they author none)." : ".");
         AppendLog();
     }
 
@@ -657,18 +712,32 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// the name is the fallback. A material flagged as the default covers anything left over.</para></summary>
     private MaterialBinding? MaterialFor(string submeshOrName)
     {
-        // 1. a material that explicitly lists this submesh
-        foreach (var r in Materials)
-            foreach (var sub in r.Binding.Submeshes)
-                if (sub.Equals(submeshOrName, StringComparison.OrdinalIgnoreCase)) return r.Binding;
+        // Each rule is tried for a material that actually names a shader before settling for one that
+        // does not - otherwise Kayn's "(skin default texture)" placeholder swallowed every submesh.
+        foreach (bool needShader in new[] { true, false })
+        {
+            // 1. a material that explicitly lists this submesh
+            foreach (var r in Materials)
+            {
+                if (needShader && !r.HasShader) continue;
+                foreach (var sub in r.Binding.Submeshes)
+                    if (sub.Equals(submeshOrName, StringComparison.OrdinalIgnoreCase)) return r.Binding;
+            }
 
-        // 2. a material named after it (this is how mapgeo groups reference materials)
-        foreach (var r in Materials)
-            if (r.Binding.Name.Equals(submeshOrName, StringComparison.OrdinalIgnoreCase)) return r.Binding;
+            // 2. a material named after it (this is how mapgeo groups reference materials)
+            foreach (var r in Materials)
+            {
+                if (needShader && !r.HasShader) continue;
+                if (r.Binding.Name.Equals(submeshOrName, StringComparison.OrdinalIgnoreCase)) return r.Binding;
+            }
 
-        // 3. whatever the bin marks as the default
-        foreach (var r in Materials)
-            if (r.Binding.IsDefault) return r.Binding;
+            // 3. whatever the bin marks as the default
+            foreach (var r in Materials)
+            {
+                if (needShader && !r.HasShader) continue;
+                if (r.Binding.IsDefault) return r.Binding;
+            }
+        }
 
         return null;
     }
@@ -676,11 +745,33 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// <summary>Resolve one material to a live pipeline covering its submesh slices.</summary>
     private PreviewMaterial? BuildSceneMaterial(MaterialBinding b,
         List<(string Material, int Start, int Count)> slices, StringBuilder sb,
-        ref int texBound, ref int texMissing, out string why)
+        ref int texBound, ref int texMissing, out string why, out bool usedFallback)
     {
         why = "";
         string? shader = b.RenderShader;
-        if (string.IsNullOrWhiteSpace(shader)) { why = "no renderShader"; sb.AppendLine($"   !  {b.Name,-34} no renderShader"); return null; }
+
+        // M217: a champion's skin bin frequently authors NO shader at all - Kayn's base skin resolves four
+        // pseudo-bindings, "(skin default texture)" and three "(inline override: ...)", which carry the
+        // TEXTURES but never a renderShader. The engine supplies a default there and what that default is
+        // has not been established, so rather than invent one the preview falls back to whatever shader is
+        // selected in the list on the left, and says so on the row. That keeps the window useful for
+        // exactly the thing it is for - putting a real material's textures through a real shader - without
+        // asserting something about the game that has not been measured. 42% of the material corpus is in
+        // the same position, so this is the common case, not an edge one.
+        usedFallback = false;
+        if (string.IsNullOrWhiteSpace(shader))
+        {
+            shader = SelectedShader?.Full is { Length: > 0 } picked
+                ? ShaderCacheReader.StripStage(picked).Replace("assets/shaders/generated/", "", StringComparison.OrdinalIgnoreCase)
+                : null;
+            if (string.IsNullOrWhiteSpace(shader))
+            {
+                why = "no renderShader, and no shader picked to stand in";
+                sb.AppendLine($"   !  {b.Name,-34} no renderShader - pick one in the Shader list to stand in");
+                return null;
+            }
+            usedFallback = true;
+        }
 
         string full = "assets/shaders/generated/" + shader.Trim('/');
         string vsPath = ShaderCacheReader.TocPathFor(full, DxbcStage.Vertex);
@@ -736,8 +827,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             first ??= mat;
         }
 
-        sb.AppendLine($"   +  {b.Name,-34} {shader}  (vs blob {vsPerm.BlobIndex}, ps blob {psPerm.BlobIndex}, "
-                      + $"{slices.Count} slice(s))");
+        sb.AppendLine($"   {(usedFallback ? "~" : "+")}  {b.Name,-34} {shader}"
+                      + $"  (vs blob {vsPerm.BlobIndex}, ps blob {psPerm.BlobIndex}, {slices.Count} slice(s))"
+                      + (usedFallback ? "   [picked shader, not authored]" : ""));
         return first;
     }
 
