@@ -32,7 +32,11 @@ public sealed partial class ParticlePlacementViewModel : ObservableObject
 
     partial void OnEditedNameChanged(string? value) => OnPropertyChanged(nameof(HasEdits));
     partial void OnEditedTintChanged(string? value) => OnPropertyChanged(nameof(HasEdits));
-    partial void OnEditedSystemHashChanged(uint value) => OnPropertyChanged(nameof(HasEdits));
+    partial void OnEditedSystemHashChanged(uint value)
+    {
+        OnPropertyChanged(nameof(HasEdits));
+        OnPropertyChanged(nameof(IsRelinked));
+    }
     partial void OnIsRemovedChanged(bool value) => OnPropertyChanged(nameof(HasEdits));
 
     /// <summary>The tint as the writer wants it, or null when untouched or unparseable. InvariantCulture:
@@ -61,6 +65,9 @@ public sealed partial class ParticlePlacementViewModel : ObservableObject
     public Vector4? EffectiveTint => ParsedTint ?? Placement.ColorModulate;
 
     /// <summary>Any edit at all, not just a move - this is what gates Save to Mod.</summary>
+    /// <summary>M205: pointed at a different VFX system than the bin authored.</summary>
+    public bool IsRelinked => EditedSystemHash != 0 && EditedSystemHash != Placement.SystemHash;
+
     public bool HasEdits => IsMoved || IsRemoved || EditedSystemHash != 0
                             || (EditedName is not null && EditedName != Placement.Name)
                             || ParsedTint is not null;

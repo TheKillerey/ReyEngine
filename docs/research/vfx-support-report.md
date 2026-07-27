@@ -1540,9 +1540,14 @@ deletion stops the placement rendering immediately while touching nothing on dis
 undoable. A tint that is not four numbers is flagged in red rather than silently dropped, and the render
 falls back to the authored tint rather than blanking.
 
-**Still not done:** re-link has a model and a writer path (`EditedSystemHash` / `SystemLink`) but no
-picker in the UI — it needs a searchable list of the systems in the map; and adding a brand-new placement
-is not implemented (it needs a template to clone, the way `MapMaterialFactory` does for materials).
+**M205 added the re-link picker**, so all four verbs are now reachable. A map bin defines a few hundred
+systems, so it is a filter box plus a dropdown rather than a bare list — the shape M197 already used for
+the Particle Editor's SYSTEMS panel. Only systems with a visual emitter are offered: linking a placement
+to one that draws nothing would look like a broken save. Choosing the placement's *current* system clears
+the edit instead of recording a no-op re-link, which matters because the picker starts pointed at it.
+
+**Still not done:** adding a brand-new placement (it needs a template to clone, the way
+`MapMaterialFactory` does for materials).
 
 #### 5.1b — M200: the optional item was chasing the wrong thing
 

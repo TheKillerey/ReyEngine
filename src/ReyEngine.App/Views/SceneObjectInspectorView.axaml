@@ -222,6 +222,17 @@
         <TextBlock Text="Needs four numbers, e.g. 1, 0.97, 0.84, 0.6" FontSize="9" Foreground="#E5645B"
                    IsVisible="{Binding SelectedParticleNode.TintIsInvalid, FallbackValue=False}" />
 
+        <!-- M205: re-link. A map defines a few hundred systems, so the list is filtered rather than raw. -->
+        <TextBlock Text="VFX system" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+        <TextBox Text="{Binding RelinkFilter}" FontSize="10" Padding="3,1" Watermark="Filter systems…"
+                 ToolTip.Tip="Narrow the list below" />
+        <ComboBox ItemsSource="{Binding RelinkChoices}" SelectedItem="{Binding SelectedRelinkChoice}"
+                  DisplayMemberBinding="{Binding Name}"
+                  FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="260"
+                  ToolTip.Tip="Point this placement at a different VFX system. Choosing its current system clears the edit." />
+        <TextBlock Text="Re-linked — Save to Mod will repoint it." FontSize="9" Foreground="#E5A227"
+                   IsVisible="{Binding SelectedParticleNode.IsRelinked, FallbackValue=False}" />
+
         <TextBlock Text="Position" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <Grid ColumnDefinitions="14,*,14,*,14,*">
           <TextBlock Grid.Column="0" Text="X" FontSize="10" Foreground="#E5645B" VerticalAlignment="Center" />

@@ -136,6 +136,48 @@ public class PlacementEditVerbTests
     }
 
     [Fact]
+    public void RelinkingToADifferentSystemIsAnEdit()
+    {
+        var vm = Vm();
+        vm.EditedSystemHash = 0x9999u;
+        Assert.True(vm.IsRelinked);
+        Assert.True(vm.HasEdits);
+    }
+
+    [Fact]
+    public void RelinkingToTheSystemItAlreadyUsesIsNotAnEdit()
+    {
+        // The picker starts pointed at the current system, so opening the dropdown and re-choosing the
+        // same entry must not dirty the map. MainWindowViewModel clears the hash for this case; the model
+        // also refuses to call it a re-link if the hash is set to the authored one directly.
+        var vm = Vm();
+        vm.EditedSystemHash = vm.Placement.SystemHash;
+        Assert.False(vm.IsRelinked);
+    }
+
+    [Fact]
+    public void ARelinkProducesASystemLinkAndNothingElse()
+    {
+        var vm = Vm();
+        vm.EditedSystemHash = 0xBEEFu;
+
+        var edit = new MapPlacementEdit(vm.Placement.Id)
+        {
+            Transform = vm.IsMoved ? vm.CurrentTransform : null,
+            Name = vm.EditedName is { } n && n != vm.Placement.Name ? n : null,
+            ColorModulate = vm.ParsedTint,
+            SystemLink = vm.EditedSystemHash != 0 ? vm.EditedSystemHash : null,
+            Remove = vm.IsRemoved,
+        };
+
+        Assert.Equal(0xBEEFu, edit.SystemLink);
+        Assert.Null(edit.Transform);
+        Assert.Null(edit.Name);
+        Assert.Null(edit.ColorModulate);
+        Assert.False(edit.Remove);
+    }
+
+    [Fact]
     public void AnEditedPlacementProducesAWriterEditCarryingOnlyWhatChanged()
     {
         // The shape MainWindowViewModel builds: untouched verbs stay null so the writer skips them.

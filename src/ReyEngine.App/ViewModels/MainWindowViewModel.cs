@@ -153,10 +153,67 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
     partial void OnSelectedParticleTreeItemChanged(object? value)
         => SelectedParticleNode = value as ParticlePlacementViewModel;
+
+    // ---- M205: the re-link picker -------------------------------------------------------------------
+    // MapPlaceableWriter has accepted a SystemLink since M199 and M204 wired it to the view model, but
+    // there was no way to choose a system. A map bin defines a few hundred of them, so this is a filtered
+    // list rather than a bare dropdown - the same shape the Particle Editor's SYSTEMS panel uses.
+
+    /// <summary>Every VFX system defined in the loaded map, sorted, for the re-link picker.</summary>
+    private readonly List<VfxSystemItemViewModel> _relinkAll = new();
+    public ObservableCollection<VfxSystemItemViewModel> RelinkChoices { get; } = new();
+
+    [ObservableProperty] private string _relinkFilter = "";
+    [ObservableProperty] private VfxSystemItemViewModel? _selectedRelinkChoice;
+
+    partial void OnRelinkFilterChanged(string value) => ApplyRelinkFilter();
+
+    partial void OnSelectedRelinkChoiceChanged(VfxSystemItemViewModel? value)
+    {
+        if (SelectedParticleNode is not { } node) return;
+        // Choosing the placement's CURRENT system clears the edit rather than recording a no-op re-link.
+        node.EditedSystemHash = value is null || value.Hash == node.Placement.SystemHash ? 0u : value.Hash;
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits) || MapContent.Sounds.Any(s => s.IsMoved);
+        RebuildParticlePlayback();
+    }
+
+    /// <summary>Rebuild the candidate list from the loaded map. Only systems with a visual emitter: linking
+    /// a placement to a system that draws nothing would look like a broken save.</summary>
+    private void RebuildRelinkChoices()
+    {
+        _relinkAll.Clear();
+        foreach (var s in _vfxSystems.Values
+                     .Where(s => s.Emitters.Any(e => e.IsVisual))
+                     .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
+            _relinkAll.Add(new VfxSystemItemViewModel { Hash = s.PathHash, Name = s.Name, EmitterCount = s.Emitters.Count(e => e.IsVisual) });
+        ApplyRelinkFilter();
+    }
+
+    private void ApplyRelinkFilter()
+    {
+        var keep = RelinkFilter;
+        RelinkChoices.Clear();
+        foreach (var c in string.IsNullOrWhiteSpace(keep)
+                     ? _relinkAll
+                     : _relinkAll.Where(c => c.Name.Contains(keep, StringComparison.OrdinalIgnoreCase)))
+            RelinkChoices.Add(c);
+    }
+
+    /// <summary>Point the picker at what the selected placement currently links to, WITHOUT recording an
+    /// edit - assigning SelectedRelinkChoice fires its own handler, which compares against the authored
+    /// hash and clears the edit when they match.</summary>
+    private void SyncRelinkPicker(ParticlePlacementViewModel? node)
+    {
+        if (node is null) { SelectedRelinkChoice = null; return; }
+        uint current = node.EditedSystemHash != 0 ? node.EditedSystemHash : node.Placement.SystemHash;
+        SelectedRelinkChoice = _relinkAll.FirstOrDefault(c => c.Hash == current);
+    }
+
     partial void OnSelectedParticleNodeChanged(ParticlePlacementViewModel? value)
     {
         SelectedParticleMarker = value?.CurrentPosition;
         RefreshParticleMoveFields(value);
+        SyncRelinkPicker(value);   // M205
         if (value is { } p)
         {
             ShowParticles = true;
@@ -5228,6 +5285,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var binBytes = GetAssetBytes(binEntry);
             _vfxSystems = VfxSystemResolver.ExtractAll(binBytes);
+            RebuildRelinkChoices();   // M205: the re-link picker's candidate list
             var particles = MapParticleExtractor.Extract(binBytes, hash =>
                 _vfxSystems.TryGetValue(hash, out var system) ? system.ParticlePath : ResolveBinName(hash));
             CurrentModelParticles = particles.Count > 0 ? particles : null;
