@@ -53,6 +53,11 @@ public sealed class PreviewSettings
     public Vector3? MapSunDirection;
     public float? MapLightMapScale;
 
+    /// <summary>M229: the map's depth-fog colour and its RAW fogStartAndEnd, in Riot's own convention -
+    /// the shader consumes them unmodified, so they must NOT be normalised to (near, far) here.</summary>
+    public Vector4? MapFogColor;
+    public Vector2? MapFogStartEnd;
+
     /// <summary>M223: mirror world X, which is what the rest of the editor's viewport does. League's data is
     /// authored in the opposite handedness to the renderer, so without this a map is laid out mirrored
     /// against every other view in the app.</summary>
@@ -917,6 +922,37 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // uv = worldXZ * 0 + 0 samples one texel of the (white) stand-in, which is what a
                     // fully-revealed map looks like. Left at zero deliberately.
                     "FOG_OF_WAR_PARAMS" => new[] { 0f, 0f, 0f, 0f },
+
+                    // M229: DEPTH FOG, and all-zeros here is what turned every mesh below world Y = 0
+                    // completely black. From staticmesh/defaultenv_flat ps blob 152 - the base permutation,
+                    // which is what an ordinary map material resolves to:
+                    //
+                    //     add     r0.w, -cb1[10].y, cb1[10].x     // start - end
+                    //     div     r0.w, l(1.0), r0.w              // 1 / (start - end)
+                    //     add     r1.x, v1.w, -cb1[10].y          // v1.w is WORLD Y, from the VS
+                    //     mul_sat r0.w, r0.w, r1.x                // t = saturate((worldY - end)/(start - end))
+                    //     ... smoothstep(t), * 2.88539, exp2, reciprocal -> fogFactor
+                    //     mad o0.xyz, fogFactor, (fogColour - lit), lit
+                    //
+                    // With start = end = 0 the divide is 1/0 = INF, so t becomes a STEP at worldY = 0:
+                    // 1 above it and 0 below. That makes fogFactor 0.135 above and exactly 1.0 below, and
+                    // a fogFactor of 1 replaces the pixel with the fog colour outright - which was black,
+                    // because nothing supplied ENV_FOG_COLOR either. Hence "meshes under a specific y value
+                    // go fully black", and only partly on a mesh that straddles zero.
+                    //
+                    // Riot stores fogStartAndEnd negative and "reversed" (Twisted Treeline ships
+                    // -10000, -50000). The shader consumes them raw, so they are passed through raw rather
+                    // than through TryGetFogRange's (near, far) normalisation.
+                    "ENV_FOG_START_END_SCALE_EMISSIVE_REMAP" => s.MapFogStartEnd is { } fse
+                        ? new[] { fse.X, fse.Y, 1f, 1f }
+                        // No map fog: pick a range wide enough that t saturates to 1 everywhere, so the
+                        // factor is the uniform 0.135 minimum and there is no cliff. The stage cannot be
+                        // switched off from the constants - 0.135 is the floor of 1/exp2(smoothstep*2.885).
+                        : new[] { 1f, -1e9f, 1f, 1f },
+
+                    "ENV_FOG_COLOR" or "ENV_FOG_ALT_COLOR" => s.MapFogColor is { } fc
+                        ? new[] { fc.X, fc.Y, fc.Z, fc.W }
+                        : new[] { 0f, 0f, 0f, 1f },
 
                     // Below this world height the engine treats everything as permanently visible. Nothing
                     // in the preview should ever be force-fogged, so push it above any real geometry.

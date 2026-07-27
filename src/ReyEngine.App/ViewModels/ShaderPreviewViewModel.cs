@@ -489,7 +489,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                                 + $"   sunColor          {_mapSun.SunColor}\n"
                                 + $"   sunDirection      {_mapSun.SunDirection}\n"
                                 + $"   lightMapColorScale {_mapSun.LightMapColorScale}\n"
-                                + $"   skyLightColor     {_mapSun.SkyLightColor} (scale {_mapSun.SkyLightScale})\n";
+                                + $"   skyLightColor     {_mapSun.SkyLightColor} (scale {_mapSun.SkyLightScale})\n"
+                                + $"   fogColor          {_mapSun.FogColor}\n"
+                                + $"   fogStartAndEnd    {_mapSun.FogStartAndEnd} (raw, Riot convention)\n";
                     }
                     foreach (var m in doc.Materials)
                     {
@@ -1335,6 +1337,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         _settings.MapSunColor = useMap ? _mapSun!.SunColor : null;
         _settings.MapSunDirection = useMap ? _mapSun!.SunDirection : null;
         _settings.MapLightMapScale = useMap ? _mapSun!.LightMapColorScale : null;
+        _settings.MapFogColor = useMap ? _mapSun!.FogColor : null;
+        _settings.MapFogStartEnd = useMap ? _mapSun!.FogStartAndEnd : null;
 
         _settings.MirrorX = MirrorX;
         _settings.SuppliedView = Camera.View;
