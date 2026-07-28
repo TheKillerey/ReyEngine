@@ -82,15 +82,25 @@ public sealed class D3D11ParticlePlayback
         if (vsToc is null || psToc is null) { error = "particlesystem/quad_vs+quad_ps not in the shader cache"; return false; }
 
         sb.AppendLine($"SYSTEM  {system.Name}");
-        sb.AppendLine($"{system.Emitters.Count} emitter(s)");
-        sb.AppendLine();
-
         _sim = new VfxParticleSimulator(seed: 12345);
         _sim.SetSystem(system, Vector3.Zero);
 
-        for (int i = 0; i < system.Emitters.Count; i++)
+        sb.AppendLine($"{system.Emitters.Count} emitter(s) authored, {_sim.Emitters.Count} visual");
+        if (_sim.Emitters.Count < system.Emitters.Count)
+            sb.AppendLine($"   {system.Emitters.Count - _sim.Emitters.Count} non-visual emitter(s) skipped "
+                          + "(no texture and no mesh) - the simulator does not run them");
+        sb.AppendLine();
+
+        // M236: iterate the SIMULATOR's emitter list, not the system's.
+        //
+        // SetSystem drops every non-visual emitter (`if (!includeNonVisual && !e.IsVisual) continue`), so
+        // the two lists have different lengths and different indices. Slices built from system.Emitters
+        // then indexed _sim.Emitters, which threw out of range on the very first Tick - the crash on
+        // loading a particle. Taking the definition off EmitterState keeps index and definition in step
+        // by construction, so they cannot drift apart again.
+        for (int i = 0; i < _sim.Emitters.Count; i++)
         {
-            var e = system.Emitters[i];
+            var e = _sim.Emitters[i].Def;
 
             // The whole point of the milestone: the define set comes from the emitter's own flags.
             var defines = VfxShaderFlags.For(e, out var why);
@@ -181,8 +191,13 @@ public sealed class D3D11ParticlePlayback
         // assembly, so they can be unit-tested without the simulator or a device.
         var (right, up, normal) = ParticleQuadBuilder.Basis(toCamera, worldUp);
 
+        // Bounds-guarded on purpose. The index/definition pairing is now correct by construction, but a
+        // simulator that reshapes its emitter list for any other reason should degrade to drawing nothing
+        // rather than taking the whole app down - a preview is not worth a crash.
         int totalQuads = 0;
-        foreach (var sl in _slices) totalQuads += _sim.Emitters[sl.EmitterIndex].InstanceCount;
+        foreach (var sl in _slices)
+            if ((uint)sl.EmitterIndex < (uint)_sim.Emitters.Count)
+                totalQuads += _sim.Emitters[sl.EmitterIndex].InstanceCount;
         _clamped = Math.Max(0, totalQuads - MaxQuads);
         totalQuads = Math.Min(totalQuads, MaxQuads);
         LiveParticles = totalQuads;
@@ -196,6 +211,7 @@ public sealed class D3D11ParticlePlayback
         int v = 0, idx = 0;
         foreach (var sl in _slices)
         {
+            if ((uint)sl.EmitterIndex >= (uint)_sim.Emitters.Count) { sl.Material.Visible = false; continue; }
             var es = _sim.Emitters[sl.EmitterIndex];
             int start = idx;
             int drawn = ParticleQuadBuilder.Append(es.Instances, es.InstanceCount,
@@ -221,6 +237,11 @@ public sealed class D3D11ParticlePlayback
             sb.AppendLine($"   [{sl.EmitterIndex}] {sl.Name,-34} {sl.Quads,6} quads   {(sl.Material.Additive ? "additive" : "alpha")}");
         return sb.ToString();
     }
+
+    /// <summary>Emitter count the simulator is actually running, for the report.</summary>
+    public int SimulatedEmitters => _sim?.Emitters.Count ?? 0;
+
+
 
     public void Restart() => _sim?.Reset();
 }
