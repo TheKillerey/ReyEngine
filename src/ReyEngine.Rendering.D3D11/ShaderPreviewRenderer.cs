@@ -1040,6 +1040,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // only one that does not silently crop the texture to a sub-rectangle.
                     "TEXTURE_INFO" => new[] { 1f, 1f, 1f, 0f },
 
+                    // M231. Shifts the quad along the view ray to bias it in the depth test; zero is
+                    // "where the emitter put it". NOTE: this case was accidentally deleted by the M234
+                    // patch and restored here - the unbound-constant report is what caught it.
+                    "PARTICLE_DEPTH_PUSH_PULL" or "EMITTER_DEPTH_PUSH_PULL" or "CAMERAOFFSET"
+                        => new[] { 0f, 0f, 0f, 0f },
+
                     // M234: DERIVED, by disassembling the permutation each define selects. The earlier
                     // attempt reasoned from field names, made two permutations worse and none better, and
                     // was reverted; these are read off the arithmetic instead, and each is chosen so the
@@ -1086,8 +1092,20 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // the stand-in texture holds. The earlier guess (0, 1e6, 0, 1e6) evaluated to 0 - 0 = 0
                     // - fully transparent - which is why SOFT_PARTICLES never drew a pixel.
                     "CSOFTPARTICLEPARAMS" => new[] { -1e6f, 0f, 1f, 0f },
-                    // Not referenced by this permutation; kept so the report does not flag it as missing.
-                    "CSOFTPARTICLECONTROL" => new[] { 0f, 0f, 0f, 0f },
+                    // M234b: NOT a parameter - a SELECTOR, and calling it unused was what made every
+                    // SOFT_PARTICLES permutation render nothing. The tail of ps blob 129 is
+                    //     mad o0.xyz, cb0[1].xxxx, colour, fade*colour*cb0[1].y
+                    //     mad o0.w,   cb0[1].z,    alpha,  fade*alpha *cb0[1].w
+                    // so it picks, per channel, between the un-faded value and the faded one. All zeros
+                    // multiplies the whole output by zero, which is exactly the black frame observed.
+                    //
+                    // Which channel should carry the fade depends on how the emitter blends, which is
+                    // presumably why Riot made it selectable at all: an additive sprite is invisible when
+                    // its RGB goes to zero and ignores alpha entirely, while an alpha-blended one is the
+                    // other way round.
+                    "CSOFTPARTICLECONTROL" => mat is { Additive: true }
+                        ? new[] { 0f, 1f, 1f, 0f }      // additive: fade the RGB, leave alpha
+                        : new[] { 1f, 0f, 0f, 1f },     // alpha:    leave RGB, fade the alpha
                     // Feeds two reciprocals. Both terms must stay finite or d is NaN and the quad vanishes,
                     // so neither component may be zero.
                     "CDEPTHCONVERSIONPARAMS" => new[] { 1f, 1f, 0f, 0f },
