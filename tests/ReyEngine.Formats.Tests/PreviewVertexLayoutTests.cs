@@ -15,6 +15,9 @@ namespace ReyEngine.Formats.Tests;
 /// lightmap lookup landed on texel (0,0) - black ground across Map12. M230: TEXCOORD5 had no slot, so the
 /// grass clump pivot read as the origin, a zero-length vector reached an <c>rsq</c>, and NaN vertex positions
 /// made all 104,876 triangles of Map12 grass vanish. Both were offset bugs that compiled, ran, and drew.</para>
+
+/// <para>It has since paid for itself: widening TEXCOORD0 to a float4 in M232 shifted nine offsets, and this
+/// test failed on all nine before the change could reach the screen.</para>
 /// </summary>
 public class PreviewVertexLayoutTests
 {
@@ -24,16 +27,18 @@ public class PreviewVertexLayoutTests
         { "POSITION0", 0 },
         { "NORMAL0", 12 },
         { "TANGENT0", 24 },
+        // M232: TEXCOORD0 widened to a float4 (u, v, flipbook frame, erosion drive), shifting everything
+        // after it by 8 bytes. This test failing is what caught that shift.
         { "TEXCOORD0", 40 },
-        { "TEXCOORD1", 48 },
-        { "TEXCOORD2", 56 },
-        { "TEXCOORD3", 64 },
-        { "TEXCOORD7", 72 },
-        { "COLOR0", 80 },
-        { "BLENDWEIGHT0", 96 },
-        { "BLENDINDICES0", 112 },
-        { "TEXCOORD5", 128 },
-        { "(zero pad)", 144 },
+        { "TEXCOORD1", 56 },
+        { "TEXCOORD2", 64 },
+        { "TEXCOORD3", 72 },
+        { "TEXCOORD7", 80 },
+        { "COLOR0", 88 },
+        { "BLENDWEIGHT0", 104 },
+        { "BLENDINDICES0", 120 },
+        { "TEXCOORD5", 136 },
+        { "(zero pad)", 152 },
     };
 
     [Theory]

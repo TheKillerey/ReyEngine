@@ -137,6 +137,10 @@ public sealed unsafe class PreviewMaterial : IDisposable
 
     public bool Visible { get; set; } = true;
 
+    /// <summary>M232: draw this material with additive blending rather than straight alpha. Set from the
+    /// emitter's blendMode; see VfxShaderFlags for how that integer is read and what is still a guess.</summary>
+    public bool Additive { get; set; }
+
     public IEnumerable<string> UnboundTextures =>
         PsRefl.Textures.Concat(VsRefl.Textures).Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase)
             .Where(n => !Textures.ContainsKey(n));
@@ -299,6 +303,9 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         if (m is not null) _materials.Add(m);
         return r;
     }
+
+    /// <summary>M232: the additive blend state, selected per material by <see cref="PreviewMaterial.Additive"/>.</summary>
+    private ComPtr<ID3D11BlendState> _blendAdditive;
 
     public void ClearMaterials()
     {
@@ -473,16 +480,17 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             ("POSITION", 0) => (0u, 3, true),
             ("NORMAL", 0) => (12u, 3, true),
             ("TANGENT", 0) => (24u, 4, true),
-            ("TEXCOORD", 0) => (40u, 2, true),
-            ("TEXCOORD", 1) => (48u, 2, true),
-            ("TEXCOORD", 2) => (56u, 2, true),
-            ("TEXCOORD", 3) => (64u, 2, true),
-            ("TEXCOORD", 5) => (128u, 3, true),                  // M230: the grass clump pivot
-            ("TEXCOORD", 7) => (72u, 2, true),                   // M224: the lightmap UV
-            ("COLOR", 0) => (80u, 4, true),
-            ("BLENDWEIGHT", 0) => (96u, 4, true),
-            ("BLENDINDICES", 0) => (112u, 4, true),
-            _ => (144u, Math.Max(1, declared), false),           // the zero pad
+            // M232: four components. quad_vs packs frame index and erosion drive into .zw - see PreviewVertex.
+            ("TEXCOORD", 0) => (40u, 4, true),
+            ("TEXCOORD", 1) => (56u, 2, true),
+            ("TEXCOORD", 2) => (64u, 2, true),
+            ("TEXCOORD", 3) => (72u, 2, true),
+            ("TEXCOORD", 5) => (136u, 3, true),                  // M230: the grass clump pivot
+            ("TEXCOORD", 7) => (80u, 2, true),                   // M224: the lightmap UV
+            ("COLOR", 0) => (88u, 4, true),
+            ("BLENDWEIGHT", 0) => (104u, 4, true),
+            ("BLENDINDICES", 0) => (120u, 4, true),
+            _ => (152u, Math.Max(1, declared), false),           // the zero pad
         };
 
     private static Format FormatFor(uint componentType, int comps) => componentType switch
@@ -612,8 +620,88 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     // ---------------------------------------------------------------- resources
 
+    /// <summary>M232: true when the current buffers were made writable by <see cref="SetDynamicMesh"/>.</summary>
+    private bool _dynamicMesh;
+    private int _vbCapacity, _ibCapacity;
+
+    /// <summary>
+    /// <para>M232: allocate DYNAMIC vertex and index buffers big enough for <paramref name="maxVertices"/>,
+    /// so animated particle geometry can be rewritten every frame with Map/WriteDiscard instead of
+    /// recreating a buffer per frame.</para>
+    ///
+    /// <para>Re-allocates only when the request outgrows what is already there, so a system whose particle
+    /// count fluctuates settles on one allocation rather than thrashing.</para>
+    /// </summary>
+    public void SetDynamicMesh(int maxVertices, int maxIndices)
+    {
+        if (_dynamicMesh && maxVertices <= _vbCapacity && maxIndices <= _ibCapacity) return;
+
+        _vb.Dispose(); _ib.Dispose();
+        _vb = default; _ib = default;
+        _vbCapacity = Math.Max(maxVertices, 4);
+        _ibCapacity = Math.Max(maxIndices, 6);
+
+        var vdesc = new BufferDesc
+        {
+            ByteWidth = (uint)(_vbCapacity * PreviewVertex.SizeInBytes),
+            Usage = Usage.Dynamic,
+            BindFlags = (uint)BindFlag.VertexBuffer,
+            CPUAccessFlags = (uint)CpuAccessFlag.Write,
+        };
+        ComPtr<ID3D11Buffer> vb = default;
+        _device.CreateBuffer(in vdesc, null, ref vb);
+        _vb = vb;
+
+        var idesc = new BufferDesc
+        {
+            ByteWidth = (uint)(_ibCapacity * sizeof(uint)),
+            Usage = Usage.Dynamic,
+            BindFlags = (uint)BindFlag.IndexBuffer,
+            CPUAccessFlags = (uint)CpuAccessFlag.Write,
+        };
+        ComPtr<ID3D11Buffer> ib = default;
+        _device.CreateBuffer(in idesc, null, ref ib);
+        _ib = ib;
+
+        _dynamicMesh = true;
+        _indexCount = 0;
+        Mesh = null;
+    }
+
+    /// <summary>M232: overwrite the dynamic buffers for this frame. Silently no-ops when the buffers are
+    /// immutable, so a caller that forgot SetDynamicMesh gets a still frame rather than a device removal.</summary>
+    public void UpdateDynamicMesh(PreviewVertex[] vertices, int vertexCount, uint[] indices, int indexCount)
+    {
+        if (!_dynamicMesh || _vb.Handle is null || _ib.Handle is null) return;
+        vertexCount = Math.Min(vertexCount, _vbCapacity);
+        indexCount = Math.Min(indexCount, _ibCapacity);
+
+        MappedSubresource mv = default;
+        if (_ctx.Map(_vb, 0, Map.WriteDiscard, 0, ref mv) >= 0)
+        {
+            fixed (PreviewVertex* src = vertices)
+                System.Buffer.MemoryCopy(src, mv.PData,
+                    (long)_vbCapacity * PreviewVertex.SizeInBytes,
+                    (long)vertexCount * PreviewVertex.SizeInBytes);
+            _ctx.Unmap(_vb, 0);
+        }
+
+        MappedSubresource mi = default;
+        if (_ctx.Map(_ib, 0, Map.WriteDiscard, 0, ref mi) >= 0)
+        {
+            fixed (uint* src = indices)
+                System.Buffer.MemoryCopy(src, mi.PData, (long)_ibCapacity * sizeof(uint),
+                    (long)indexCount * sizeof(uint));
+            _ctx.Unmap(_ib, 0);
+        }
+
+        _indexCount = indexCount;
+    }
+
     public void SetMesh(PreviewMesh mesh)
     {
+        _dynamicMesh = false;
+        _vbCapacity = _ibCapacity = 0;
         Mesh = mesh;
         _vb.Dispose(); _ib.Dispose();
         _vb = default; _ib = default;
@@ -823,6 +911,21 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         _device.CreateBlendState(in bd, ref bs);
         _blend = bs;
 
+        // M232: additive, for particle emitters whose blendMode says so. Same source factor, but the
+        // destination ADDS instead of being scaled down, and alpha is left alone.
+        var abd = new BlendDesc();
+        abd.RenderTarget[0] = new RenderTargetBlendDesc
+        {
+            BlendEnable = 1,
+            SrcBlend = Blend.SrcAlpha, DestBlend = Blend.One, BlendOp = BlendOp.Add,
+            SrcBlendAlpha = Blend.Zero, DestBlendAlpha = Blend.One, BlendOpAlpha = BlendOp.Add,
+            RenderTargetWriteMask = (byte)ColorWriteEnable.All,
+        };
+        _blendAdditive.Dispose();
+        ComPtr<ID3D11BlendState> abs = default;
+        _device.CreateBlendState(in abd, ref abs);
+        _blendAdditive = abs;
+
         var dsd = new DepthStencilDesc
         {
             DepthEnable = s.DepthTest,
@@ -937,6 +1040,23 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // only one that does not silently crop the texture to a sub-rectangle.
                     "TEXTURE_INFO" => new[] { 1f, 1f, 1f, 0f },
 
+                    // M232 NOT DONE, and deliberately left unbound rather than guessed. Flipping each
+                    // particle define and diffing the reflected interface says exactly WHICH constants that
+                    // stage adds:
+                    //     ALPHA_EROSION      -> cAlphaErosionParams, cAlphaErosionTextureMixer
+                    //     SOFT_PARTICLES     -> cSoftParticleParams, cSoftParticleControl, cDepthConversionParams
+                    //     PALETTIZE_TEXTURES -> cPaletteSelectMain, cPaletteSrcMixerMain
+                    //     ALPHA_TEST         -> AlphaTestReferenceValue
+                    // It does NOT say what values they should hold. A first attempt at "neutral" defaults
+                    // (erosion mixer = red channel, wide feathers, zero alpha reference) was measured on a
+                    // 3-quad probe across all 33 permutations Ahri's emitters select: it changed nothing on
+                    // 31 and turned two from drawing to blank. So the values were wrong, and reasoning about
+                    // them from the field names is the same mistake M212 made with SHADOW_COLOR.
+                    //
+                    // They are left absent so the unbound-constant report NAMES them, which is the honest
+                    // signal. Deriving them needs either the per-permutation disassembly or a real emitter
+                    // supplying them through Params - the emitter path already does the latter.
+
                     // Shifts the quad along the view ray to bias it in the depth test. Zero is "where the
                     // emitter put it"; the engine authors it per emitter.
                     "PARTICLE_DEPTH_PUSH_PULL" or "EMITTER_DEPTH_PUSH_PULL" or "CAMERAOFFSET" => new[] { 0f, 0f, 0f, 0f },
@@ -952,6 +1072,10 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     "BLOOMTHRESHOLD" => new[] { 1f, 1f, 1f, 1f },
                     "FOW_INTENSITY_RGBA" or "FOW_INTENSITY_BLOOM" => new[] { 0f, 0f, 0f, 0f },
                     "COLOR_LOOKUP_UV" => new[] { 0f, 0f, 0f, 0f },
+
+                    // M232: MULT_PASS's second flipbook atlas descriptor, same shape as TEXTURE_INFO
+                    // and derived the same way (M231).
+                    "TEXTURE_INFO_2" => new[] { 1f, 1f, 1f, 0f },
                     "KCOLORFACTOR" => new[] { 1f, 1f, 1f, 1f },
                     "TIME" => new[] { s.TimeSeconds, s.TimeSeconds * 0.5f, MathF.Sin(s.TimeSeconds), 1f },
                     // M228: this points TOWARD the sun, and getting it backwards makes flat ground black.
@@ -1265,6 +1389,15 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             foreach (var mat in _materials)
             {
             if (!mat.Visible) continue;
+
+            // M232: blend is per MATERIAL, not per frame. Particle emitters in one system routinely mix
+            // additive and straight-alpha passes, so binding one state before the loop cannot represent
+            // them. Non-particle materials leave Additive false and get exactly the previous behaviour.
+            if (mat.Additive && _blendAdditive.Handle is not null)
+                _ctx.OMSetBlendState(_blendAdditive, factor, 0xFFFFFFFF);
+            else
+                _ctx.OMSetBlendState(_blend, factor, 0xFFFFFFFF);
+
             _ctx.IASetInputLayout(mat.Layout);
             _ctx.VSSetShader(mat.Vs, null, 0);
             _ctx.PSSetShader(compare ? _comparePs : mat.Ps, null, 0);

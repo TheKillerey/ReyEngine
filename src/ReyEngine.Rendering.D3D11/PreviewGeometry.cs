@@ -18,27 +18,33 @@ public struct PreviewVertex
     public Vector3 Position;      // +0    POSITION0
     public Vector3 Normal;        // +12   NORMAL0
     public Vector4 Tangent;       // +24   TANGENT0
-    public Vector2 Uv0;           // +40   TEXCOORD0
-    public Vector2 Uv1;           // +48   TEXCOORD1
-    public Vector2 Uv2;           // +56   TEXCOORD2
-    public Vector2 Uv3;           // +64   TEXCOORD3
+    /// <summary>M232: FOUR components, because League's particle path needs all of them.
+    /// <c>particlesystem/quad_vs</c> declares TEXCOORD0 as <c>xyzw</c> and spends them separately:
+    /// <c>.xy</c> is the cell UV, <c>.z</c> is the flipbook FRAME INDEX (<c>round_ni r0.x, v2.z</c>), and in
+    /// the ALPHA_EROSION permutation <c>.w</c> is the per-particle erosion drive (<c>mov o3.z, v2.w</c>,
+    /// verified on vs blob 5). A two-component TEXCOORD0 pins every particle to frame 0 and erosion 0.
+    /// Shaders that declare TEXCOORD0 as a float2 simply read xy and ignore the rest.</summary>
+    public Vector4 Uv0;           // +40   TEXCOORD0 (u, v, frame, erosionDrive)
+    public Vector2 Uv1;           // +56   TEXCOORD1
+    public Vector2 Uv2;           // +64   TEXCOORD2
+    public Vector2 Uv3;           // +72   TEXCOORD3
     /// <summary>M224: the LIGHTMAP UV. League's baked-lighting vertex shaders declare TEXCOORD7 - measured
     /// on defaultenv_flat, whose lightmapped permutation takes POSITION0 NORMAL0 TEXCOORD0 TEXCOORD7 while
     /// the NO_BAKED_LIGHTING one takes only the first three. Without a slot for it the semantic aliased onto
     /// the zero pad and every pixel sampled texel (0,0) of the lightmap atlas, which is black.</summary>
-    public Vector2 Uv7;           // +72   TEXCOORD7
-    public Vector4 Color;         // +80   COLOR0
-    public Vector4 BlendWeight;   // +96   BLENDWEIGHT0
-    public uint B0, B1, B2, B3;   // +112  BLENDINDICES0 (uint4 - shaders declare it as an integer input)
+    public Vector2 Uv7;           // +80   TEXCOORD7
+    public Vector4 Color;         // +88   COLOR0
+    public Vector4 BlendWeight;   // +104  BLENDWEIGHT0
+    public uint B0, B1, B2, B3;   // +120  BLENDINDICES0 (uint4 - shaders declare it as an integer input)
     /// <summary>M230: the grass clump pivot, which staticmesh/vertexdeform declares as TEXCOORD5 and reads as
     /// a position. Aliasing it onto the zero pad put every blade's pivot at the origin, and a zero-length
     /// vector into an <c>rsq</c> - see the distortion loop in ShaderPreviewRenderer's GrassDistortSpheres
     /// note. Non-grass meshes carry their own vertex position here, making the deform a no-op.</summary>
-    public Vector3 GrassPivot;    // +128  TEXCOORD5
-    private float _pad;           // +140  keeps Zero 16-byte aligned
-    public Vector4 Zero;          // +144  the pad every unmatched semantic points at
+    public Vector3 GrassPivot;    // +136  TEXCOORD5
+    private float _pad;           // +148  keeps Zero 16-byte aligned
+    public Vector4 Zero;          // +152  the pad every unmatched semantic points at
 
-    public const int SizeInBytes = 160;
+    public const int SizeInBytes = 168;
 }
 
 /// <summary>A test mesh ready for upload.</summary>
@@ -279,6 +285,7 @@ public static class PreviewGeometry
             var uv = uvs is not null && uvs.Length >= (i + 1) * 2
                 ? new Vector2(uvs[i * 2], uvs[i * 2 + 1]) : Vector2.Zero;
 
+
             verts[i] = Make(pos, nrm, uv, Vector3.UnitX);
 
             // M230: recentred by the SAME offset as the position. The pivot is only meaningful as a point in
@@ -318,7 +325,9 @@ public static class PreviewGeometry
         Position = pos,
         Normal = Vector3.Normalize(normal),
         Tangent = new Vector4(Vector3.Normalize(tangent), 1f),
-        Uv0 = uv, Uv1 = uv, Uv2 = uv, Uv3 = uv,
+        // M232: Uv0 is a float4 now - z is the flipbook frame, w the erosion drive. Both default to 0,
+        // which is frame 0 and no erosion, i.e. what every non-particle mesh wants.
+        Uv0 = new Vector4(uv.X, uv.Y, 0f, 0f), Uv1 = uv, Uv2 = uv, Uv3 = uv,
         Color = Vector4.One,
         BlendWeight = new Vector4(1f, 0f, 0f, 0f),
         B0 = 0, B1 = 0, B2 = 0, B3 = 0,
