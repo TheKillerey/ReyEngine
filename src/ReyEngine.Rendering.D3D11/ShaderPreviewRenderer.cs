@@ -1862,6 +1862,37 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     /// <summary>Pick the buffer for this cbuffer and make sure it holds the right bytes. Material-independent
     /// buffers are shared and uploaded at most once per frame.</summary>
+
+    /// <summary>
+    /// <para>M265: the cache key for a per-frame shared constant buffer. It must name every input that
+    /// changes the BYTES, not just the layout.</para>
+    ///
+    /// <para>M216 shared these buffers by <c>name + size</c> on the reasoning that a "per frame" buffer
+    /// holds the same values for every material, so the first material of the frame can fill it and the
+    /// rest can bind it. That is true of the camera and the sun. It is NOT true of two constants, because
+    /// <see cref="FillConstantBuffer"/> resolves them from the material:</para>
+    /// <list type="bullet">
+    ///   <item><c>MPROJ</c> is <c>ParticleStyleProjection(mat) ? vp : proj</c> - the full world-to-clip
+    ///   transform for particles, projection alone for anything with a bone buffer.</item>
+    ///   <item><c>CSOFTPARTICLECONTROL</c> is selected from <c>mat.Additive</c>.</item>
+    /// </list>
+    ///
+    /// <para>Sharing across that difference is silent and total: a map staticmesh claims
+    /// <c>PerFrameVertexCB#560</c> and writes projection alone, then a particle quad binds the same buffer
+    /// and transforms its world-space vertices with no view matrix at all - landing on the near plane and
+    /// drawing nothing. The draw call succeeds, the counters look right, and the frame is byte-identical
+    /// to one without the particle. It only became reachable when M264 let a map and particles share a
+    /// frame; before that the two never coexisted.</para>
+    ///
+    /// <para><b>Invariant:</b> if you add a case to FillConstantBuffer's switch that reads <c>mat</c>,
+    /// add it here too. <c>mat.Params</c> is exempt - the materialSpecific test above already routes
+    /// those materials to their own buffer. The `coexist` harness mode is the regression check.</para>
+    /// </summary>
+    private string SharedCbKey(DxbcConstantBuffer cb, PreviewMaterial mat)
+        => cb.Name + "#" + cb.AllocationSize
+           + (ParticleStyleProjection(mat) ? "#vp" : "#proj")
+           + (mat.Additive ? "#add" : "");
+
     private ComPtr<ID3D11Buffer> ResolveCb(PreviewMaterial mat, DxbcConstantBuffer cb,
         Dictionary<int, ComPtr<ID3D11Buffer>> own, PreviewSettings s,
         Matrix4x4 world, Matrix4x4 view, Matrix4x4 proj, List<string>? unbound)
@@ -1879,7 +1910,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             return mine;
         }
 
-        string key = cb.Name + "#" + cb.AllocationSize;
+        string key = SharedCbKey(cb, mat);
         if (!_sharedCbs.TryGetValue(key, out var shared))
         {
             var desc = new BufferDesc
