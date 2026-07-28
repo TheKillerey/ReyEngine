@@ -40,6 +40,16 @@ answered by reading a draw's bound state, and having them in one capture means o
 
 ## Question 1 — the `blendMode` integer table
 
+**Status: census RUN (M260) - 6/7/8 bounded, and the anchors now dispute the shipped mapping.**
+Modes 6 and 8 show no additive signature at all (0%) and mode 7's textures use four different
+conventions, so none of the three should join `IsAdditive`. But the anchors came back inverted: art
+says absent and mode 2 are additive while 1, 3, 4 and 5 are not, against a mapping that says exactly
+the reverse for 1,119,000 emitters. Mode 0 is never authored at all. Nothing was changed on this
+evidence - it implies authoring intent, not pipeline state. See `q1-blendmodes.md`. This makes Q1 the
+highest-value capture question, ahead of Q5.
+
+The original entry, kept for the record:
+
 **Status:** guessed. `IsAdditive(m) => m is 1 or 3 or 4 or 5`, carried identically in both renderers so they
 cannot disagree with each other while both being wrong. Modes 6/7/8 (258 emitters) fall off the end.
 
@@ -136,10 +146,10 @@ art. The A/B diff from M252 already does everything except supply the test textu
 flip cancels as predicted; if they differ, one is upside down and the diff will show it as a coverage
 mismatch band.
 
-**Q1 (blend modes), partially** — the M174 texture-authoring correlation already narrows this: additive art
-must be black-bordered and alpha-free, and mode 0/absent showed the clean additive signature while mode 1
-showed the clean straight-alpha one. Extending that census to modes 6/7/8 specifically would at least
-bound them.
+**Q1 (blend modes)** - DONE (M260), and it did not go as expected. Extending the census to 6/7/8 did
+bound them (none is additive), but calibrating against modes 0-5 showed the shipped mapping is close
+to inverted on the modes that carry the population. The census cannot settle the integer-to-state
+table itself, so this promotes Q1 to a capture question rather than retiring it.
 
 **Q4 (`miscRenderFlags`)** - DONE (M259). Ran, and it retires the question: the flag is the constant 1
 on 99.3% of emitters and no parsed field predicts the rest. Not flat across `isGroundLayer` as guessed -
@@ -153,6 +163,12 @@ Since writing that, Q3 and Q4 have both been answered capture-free, and neither 
 the V axis correct (the test was wrong), Q4 found nothing to decode. Two of the five questions have
 dissolved. If the capture is ever taken, note that Q4's only real signal - bit 2 - clusters with the
 stencil fields, so reading `miscRenderFlags` on the Q5 draws would settle both at once.
+
+M260 then pushed the other way. Q1's capture-free evidence turned out to *dispute* the shipped blend
+mapping over a million emitters rather than confirm it, which it cannot settle on its own. So the
+count is not simply shrinking: Q3 and Q4 are gone, but **Q1 has been promoted above Q5**. If a capture
+is ever taken, the first thing to read is the output-merger blend state on six or seven particle
+draws covering modes 1-5 - that is where 92% of all emitters live.
 
 Which reframes the whole exercise: the capture is worth taking if you want stencil correct. For everything
 else, cheaper evidence exists.

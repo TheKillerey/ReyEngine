@@ -58,6 +58,25 @@ public readonly record struct StateDescription(
     /// of its 347 shader definitions - so it lives in the executable and would take a frame capture to
     /// settle. Modes 6, 7 and 8 (258 emitters) fall off the end of this list rather than being decided,
     /// and an absent blendMode defaults to 1 for 110,540 emitters (7.9%).</para>
+    ///
+    /// <para><b>M260: the texture-authoring census DISPUTES this mapping.</b> Additive art is authored on
+    /// black with alpha unused; straight-alpha art carries the silhouette in alpha. Classifying 26,924
+    /// textures over 1.2M emitters by that signature gives: absent 65% additive, mode 2 65% additive, but
+    /// mode 1 only 1% additive (54% straight), mode 3 75% fully opaque, mode 4 42% straight vs 23%
+    /// additive, mode 5 1% additive (58% premultiplied). That is close to the opposite of the list below,
+    /// over 1,119,000 emitters.</para>
+    ///
+    /// <para>Deliberately NOT acted on. Art authoring implies intent, not the blend state Riot sets, and
+    /// flipping a boolean on indirect evidence is how a wrong fix gets locked in - it would look correct
+    /// either way, because our additive is <c>SrcAlpha, One</c> rather than <c>One, One</c>, so
+    /// alpha-authored art rendered additively still respects its silhouette and merely reads brighter.
+    /// See <c>docs/research/q1-blendmodes.md</c>; settling it is now the top capture question.</para>
+    ///
+    /// <para>Also measured: <b>mode 0 is never authored</b> - not once in 1,221,115 emitters. Only the
+    /// absent case exists, so the 0 in <see cref="IsBlendModeUnderstood"/> covers a value that never
+    /// occurs. Modes 6 and 8 show no additive signature at all (0%), so the fallback to alpha above 5 is
+    /// at least consistent with their art; mode 7's 20 textures use four different conventions and cannot
+    /// be assigned one.</para>
     /// </summary>
     public static BlendKind BlendFromRiotMode(int blendMode) =>
         blendMode is 1 or 3 or 4 or 5 ? BlendKind.Additive : BlendKind.Alpha;
