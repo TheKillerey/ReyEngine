@@ -78,6 +78,11 @@ public partial class MainWindow : Window
             vm.UseDx11Viewport = false;
             return;
         }
+
+        // M249 (step 2): build whatever map is open into the D3D11 renderer. Done on toggle rather than on
+        // map load so a user who never enables this never pays for it.
+        _dx11.SceneReport = vm.BuildDx11Scene(_dx11.Renderer);
+        _dx11.HasScene = _dx11.Renderer.MaterialCount > 0;
         QueueDx11Frame();
     }
 
@@ -94,6 +99,12 @@ public partial class MainWindow : Window
             RenderDx11Frame(vm);
             QueueDx11Frame();
         });
+    }
+
+    private static string FirstLine(string s)
+    {
+        int i = s.IndexOf((char)10);
+        return (i < 0 ? s : s[..i]).Trim();
     }
 
     private void RenderDx11Frame(MainWindowViewModel vm)
@@ -113,8 +124,12 @@ public partial class MainWindow : Window
         Dx11Surface.Source = _dx11.Current;
         Dx11Surface.Width = Viewport.Bounds.Width;
         Dx11Surface.Height = Viewport.Bounds.Height;
-        vm.Dx11ViewportStatus = $"D3D11  {_dx11.LastFrameMs:F2} ms  ·  {_dx11.LastDrawCalls} draws"
-                                + (_dx11.LastCulled > 0 ? $"  ·  {_dx11.LastCulled} culled" : "");
+        vm.Dx11ViewportStatus = _dx11.HasScene
+            ? $"D3D11  {_dx11.LastFrameMs:F2} ms  ·  {_dx11.LastDrawCalls} draws"
+              + (_dx11.LastCulled > 0 ? $"  ·  {_dx11.LastCulled} culled" : "")
+            // No scene is a legitimate state, not a failure - say which, rather than showing an empty
+            // viewport and letting it read as a broken renderer.
+            : "D3D11  no scene: " + FirstLine(_dx11.SceneReport);
     }
 
     // ---- M81: About + updates ----

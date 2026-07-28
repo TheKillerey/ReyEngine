@@ -230,6 +230,10 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     public string DeviceDescription { get; private set; } = "(no device)";
     public bool IsReady => _device.Handle is not null && _materials.Count > 0;
+
+    /// <summary>M249: how many materials are live, so a host can tell "a scene is loaded" from "the
+    /// fallback mesh is showing".</summary>
+    public int MaterialCount => _materials.Count;
     public int DrawCalls { get; private set; }
     public double LastFrameMs { get; private set; }
     public PreviewMesh? Mesh { get; private set; }

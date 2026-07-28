@@ -1812,6 +1812,48 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M166: the shipped shader-permutation set, used to decide whether clearing a macro would
     /// leave the material asking for a shader the client cannot load. Built once per game directory.</summary>
+    // ---- M249 (phase 6, step 2): hand the open map to the side-by-side D3D11 surface ----
+
+    private Formats.Shaders.ShaderCacheReader? _dx11ShaderCache;
+    private string? _dx11ShaderCacheDir;
+
+    /// <summary>M249: build the currently open map into <paramref name="renderer"/>. Returns a report, or a
+    /// reason string when there is nothing to build - never null, because "the viewport is empty and I do
+    /// not know why" is the state this whole phase exists to avoid.</summary>
+    public string BuildDx11Scene(ReyEngine.Rendering.D3D11.ShaderPreviewRenderer renderer)
+    {
+        if (_currentMap is not { } map) return "No map open - the D3D11 surface has no scene to draw yet.";
+        if (_currentMapEntry is not { } mapEntry) return "The open map has no WAD entry.";
+
+        string? dir = string.IsNullOrEmpty(Project.GameDirectory) ? null
+            : Path.Combine(Project.GameDirectory, "DATA", "FINAL");
+        if (dir is null || !Directory.Exists(dir)) return "Game directory is not set, so the shader cache cannot be opened.";
+
+        if (_dx11ShaderCache is null || !string.Equals(_dx11ShaderCacheDir, dir, StringComparison.OrdinalIgnoreCase))
+        {
+            _dx11ShaderCache = Formats.Shaders.ShaderCacheReader.Open(dir, _resolver.Database, out var cacheErr);
+            _dx11ShaderCacheDir = dir;
+            if (_dx11ShaderCache is null) return "ShaderCache.dx11.wad.client: " + (cacheErr ?? "not readable");
+        }
+
+        // The map's own materials.bin - the same sibling lookup the material editor uses, so the viewport
+        // and the editor cannot disagree about which bin describes this map.
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+            return "No materials.bin alongside this mapgeo.";
+
+        Formats.Materials.MaterialDocument doc;
+        try { doc = Formats.Materials.MaterialDocument.Parse(GetAssetBytes(binEntry), ResolveBinName); }
+        catch (Exception ex) { return $"{binEntry.DisplayName}: {ex.Message}"; }
+
+        var result = Services.Dx11SceneBuilder.Build(
+            renderer, _dx11ShaderCache, ShaderPerms(), map, doc.Materials,
+            TryReadAssetBytes, AppInfo.DisplayVersion);
+
+        _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
+                          + $"{result.Slices} slice(s), {result.Textures} texture binding(s)");
+        return result.Report;
+    }
+
     private Formats.Materials.ShaderPermutationIndex? _shaderPerms;
     private string? _shaderPermsDir;
     private Formats.Materials.ShaderPermutationIndex? ShaderPerms()

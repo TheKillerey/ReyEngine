@@ -35,6 +35,14 @@ public sealed class Dx11ViewportSurface : IDisposable
 
     public bool IsReady => _ready;
 
+    /// <summary>M249: the renderer, so a scene can be built into it. Exposed rather than wrapped because
+    /// the builder needs the full surface and hiding it behind a facade would only duplicate it.</summary>
+    public ShaderPreviewRenderer Renderer => _renderer;
+
+    /// <summary>M249: what happened the last time a scene was built, and whether one is loaded at all.</summary>
+    public string SceneReport { get; set; } = "";
+    public bool HasScene { get; set; }
+
     /// <summary>The image to show. Swaps between two bitmaps so Avalonia is never compositing the one being
     /// written - a single bitmap tears under the compositor.</summary>
     public WriteableBitmap? Current { get; private set; }
@@ -50,8 +58,8 @@ public sealed class Dx11ViewportSurface : IDisposable
         if (_ready) return true;
         if (!_renderer.Initialize(out var err)) { Error = err ?? "D3D11 device creation failed"; return false; }
 
-        // Something recognisable to look at until step 2 supplies real scene content. A sphere makes a
-        // wrong projection or a mirrored axis obvious at a glance in a way an empty frame does not.
+        // M249: only the fallback now - a real map replaces it. Kept because a recognisable shape makes a
+        // wrong projection or a mirrored axis obvious at a glance, where an empty frame says nothing.
         _renderer.SetMesh(PreviewGeometry.CreateBuiltIn("Sphere"));
         _ready = true;
         return true;
