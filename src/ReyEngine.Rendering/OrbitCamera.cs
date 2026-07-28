@@ -14,8 +14,24 @@ public sealed class OrbitCamera
     public float Yaw = 0.7f;     // radians, around Y
     public float Pitch = 0.5f;   // radians, up/down
     public float FieldOfView = MathF.PI / 4f;
+    /// <summary>UPPER BOUND on the near plane, not the near plane itself - see <see cref="EffectiveNear"/>.</summary>
     public float Near = 1f;
     public float Far = 200000f;
+
+    /// <summary>
+    /// <para>The near plane actually used, derived from how close the camera currently is.</para>
+    ///
+    /// <para>M267: it used to be whatever a caller last assigned, and the callers sized it from the
+    /// FRAMING distance. Framing a 97,000-unit map put it around 2,000 units and left it there, so flying
+    /// in clipped away everything within 2,000 units of the eye - the camera could orbit a map fine and
+    /// then refuse to let you approach anything in it. Tying it to Distance instead means it shrinks as
+    /// you close in, which is the only thing it was ever meant to do.</para>
+    ///
+    /// <para>Kept as a MINIMUM against <see cref="Near"/> rather than replacing it, so a caller that
+    /// deliberately wants a coarser near plane at range still gets one - it just cannot survive a zoom.
+    /// The 0.02 floor keeps the far/near ratio finite when Distance reaches its own floor.</para>
+    /// </summary>
+    public float EffectiveNear => MathF.Min(Near, MathF.Max(0.02f, Distance * 0.01f));
 
     /// <summary>World units per second of WASD fly (user-adjustable via RMB+wheel).</summary>
     public float FlySpeed = 600f;
@@ -58,7 +74,9 @@ public sealed class OrbitCamera
         Target += (Forward * forward + Right * right + Vector3.UnitY * up) * (FlySpeed * dt);
     }
 
-    public void Zoom(float factor) => Distance = Math.Clamp(Distance * factor, 5f, 100000f);
+    // Floor of 1 rather than 5: with the near plane now tracking Distance there is nothing to protect
+    // against down there, and 5 units is a visible standoff on a prop-sized mesh.
+    public void Zoom(float factor) => Distance = Math.Clamp(Distance * factor, 1f, 100000f);
 
     public void AdjustFlySpeed(float factor) => FlySpeed = Math.Clamp(FlySpeed * factor, 20f, 50000f);
 
@@ -72,14 +90,14 @@ public sealed class OrbitCamera
     public void FocusOn(Vector3 center, float radius)
     {
         Target = center;
-        Distance = Math.Clamp(radius / MathF.Tan(FieldOfView * 0.5f) * 1.25f, 10f, 100000f);
+        Distance = Math.Clamp(radius / MathF.Tan(FieldOfView * 0.5f) * 1.25f, 1f, 100000f);
         FlySpeed = Math.Max(200f, radius);
     }
 
     public Matrix4x4 View => Matrix4x4.CreateLookAt(Position, Target, Vector3.UnitY);
 
     public Matrix4x4 Projection(float aspect) =>
-        Matrix4x4.CreatePerspectiveFieldOfView(FieldOfView, aspect <= 0 ? 1f : aspect, Near, Far);
+        Matrix4x4.CreatePerspectiveFieldOfView(FieldOfView, aspect <= 0 ? 1f : aspect, EffectiveNear, Far);
 
     public Matrix4x4 ViewProjection(float aspect) => View * Projection(aspect);
 }

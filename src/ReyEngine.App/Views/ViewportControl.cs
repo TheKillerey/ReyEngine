@@ -1085,7 +1085,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 // at build time so dragging the dummy moves live beams instead of needing a replay.
                 psim.SetBeamTarget(TargetDummyPosition);
                 psim.Update(dt);
-                prend.Render(psim, viewProj, view, _camera.Near, _camera.Far);
+                prend.Render(psim, viewProj, view, _camera.EffectiveNear, _camera.Far);
             }
 
             // M180 (2.7): child systems. The simulator only SCHEDULES these - it is GL-free by design and
@@ -1106,7 +1106,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 // a child system with a beam is exactly that shape of omission.
                 csim.SetBeamTarget(TargetDummyPosition);
                 csim.Update(dt);
-                prend.Render(csim, viewProj, view, _camera.Near, _camera.Far);
+                prend.Render(csim, viewProj, view, _camera.EffectiveNear, _camera.Far);
             }
             RequestNextFrameRendering();
         }
@@ -1670,6 +1670,8 @@ public sealed class ViewportControl : OpenGlControlBase
         float dist = radius / MathF.Sin(_camera.FieldOfView * 0.5f) * 1.25f; // fit sphere + margin
         _camera.Target = m.Center;
         _camera.Distance = Math.Clamp(dist, 5f, 100000f);
+        // A CEILING only. EffectiveNear tightens this as Distance drops; latching the framing distance
+        // here is what stopped the camera approaching anything inside a large map.
         _camera.Near = MathF.Max(dist * 0.01f, 0.05f);
         _camera.Far = dist * 40f + radius * 20f;
     }
