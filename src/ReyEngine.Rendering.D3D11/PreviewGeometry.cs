@@ -259,7 +259,7 @@ public static class PreviewGeometry
         string name, int vertexCount,
         float[] positions, float[]? normals, float[]? uvs, float[]? colors, float[]? lightmapUvs,
         uint[] indices, int[]? blendIndices = null, float[]? blendWeights = null,
-        float[]? grassPivots = null)
+        float[]? grassPivots = null, bool recentre = true)
     {
         var verts = new PreviewVertex[vertexCount];
 
@@ -271,7 +271,15 @@ public static class PreviewGeometry
             min = Vector3.Min(min, pv);
             max = Vector3.Max(max, pv);
         }
-        var centre = (min + max) * 0.5f;
+        // M253: recentring is a PREVIEW affordance, not a property of the data. A shader-preview camera
+        // orbits the origin, and a map whose world coordinates run to tens of thousands would otherwise sit
+        // far outside the view - so the preview subtracts the bounds centre.
+        //
+        // It is WRONG anywhere the camera is shared with something that does not do it. The editor viewport
+        // draws the map at its authored position, so a D3D11 surface driven by the same camera must too;
+        // recentring there pointed the two renderers at different places and made the A/B pixel diff
+        // measure the offset instead of the renderers.
+        var centre = recentre ? (min + max) * 0.5f : Vector3.Zero;
         float radius = MathF.Max((max - min).Length() * 0.5f, 1e-3f);
 
         for (int i = 0; i < vertexCount; i++)

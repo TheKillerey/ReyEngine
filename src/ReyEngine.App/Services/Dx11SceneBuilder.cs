@@ -61,7 +61,10 @@ public static class Dx11SceneBuilder
         var mesh = PreviewGeometry.FromLeagueArrays(
             "viewport", map.Positions.Length / 3,
             map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices,
-            grassPivots: map.GrassPivots);
+            grassPivots: map.GrassPivots,
+            // M253: authored world coordinates, NOT recentred. The editor camera is shared with the GL
+            // viewport, which draws the map where the data puts it.
+            recentre: false);
 
         var merged = MergeSlices(map);
         var byName = new Dictionary<string, MaterialBinding>(StringComparer.OrdinalIgnoreCase);
