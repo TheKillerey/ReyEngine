@@ -75,8 +75,17 @@ public sealed record DxbcConstantBuffer(
 
 /// <summary>A texture, sampler or cbuffer bind point.</summary>
 public sealed record DxbcResource(
-    string Name, DxbcResourceKind Kind, uint BindPoint, uint BindCount, uint Dimension, uint ReturnType)
+    string Name, DxbcResourceKind Kind, uint BindPoint, uint BindCount, uint Dimension, uint ReturnType,
+    uint Flags = 0)
 {
+    /// <summary>M254: D3D_SIF_COMPARISON_SAMPLER, which is <b>0x2</b> - not 0x20. The neighbouring bits are
+    /// USERPACKED (0x1) and the TEXTURE_COMPONENT pair (0x4/0x8), so a wrong mask here silently matches
+    /// nothing: League'+chr(39)+'s shadow samplers carry 0x02 and Clamp_No_Mip_SharedSampler carries 0x01.
+    /// A sampler with this bit is used by <c>sample_c</c>, and a
+    /// non-comparison sampler state bound in its place makes every comparison fail - which reads as
+    /// "everything is in shadow", not as a binding error.</summary>
+    public bool IsComparisonSampler => Kind == DxbcResourceKind.Sampler && (Flags & 0x02) != 0;
+
     public string DimensionName => Dimension switch
     {
         1 => "buffer", 2 => "tex1d", 3 => "tex1darray", 4 => "tex2d", 5 => "tex2darray",
@@ -238,7 +247,11 @@ public static class DxbcReflection
                 BindPoint: U32(d, o + 20),
                 BindCount: U32(d, o + 24),
                 Dimension: U32(d, o + 12),
-                ReturnType: U32(d, o + 8)));
+                ReturnType: U32(d, o + 8),
+                // M254: uFlags, at +28 of the 32-byte bind desc. Never read before, and it is the only
+                // place RDEF says whether a sampler is a COMPARISON sampler - the distinction that decides
+                // whether sample_c can succeed at all.
+                Flags: U32(d, o + 28)));
         }
 
         // SM5 grew the variable record from 24 to 40 bytes; reading the wrong stride yields garbage names.

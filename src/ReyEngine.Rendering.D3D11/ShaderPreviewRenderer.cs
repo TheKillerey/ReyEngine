@@ -216,7 +216,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11DepthStencilView> _dsv;
     private int _width, _height;
 
-    private ComPtr<ID3D11SamplerState> _linearWrap, _linearClamp;
+    private ComPtr<ID3D11SamplerState> _linearWrap, _linearClamp, _comparison;
     private ComPtr<ID3D11RasterizerState> _raster;
     private ComPtr<ID3D11BlendState> _blend;
     private ComPtr<ID3D11DepthStencilState> _depthState;
@@ -300,6 +300,31 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         ComPtr<ID3D11SamplerState> s2 = default;
         _device.CreateSamplerState(in sd, ref s2);
         _linearClamp = s2;
+
+        // M254: a COMPARISON sampler, for the shadow lookups.
+        //
+        // sample_c evaluates through the sampler's ComparisonFunc, and the two states above use
+        // ComparisonFunc.Never - which means exactly what it says: every tap fails. League's foliage
+        // shader lights itself from five PCF taps and then does
+        //     mad r0.xyz, shadowTerm, SHADOW_COLOR_COMPLEMENT, SHADOW_COLOR
+        // so a term pinned at 0 collapses the result to SHADOW_COLOR, the fully-shadowed colour, and every
+        // shadow-sampling surface renders black. That is what the M252 A/B diff showed as black foliage
+        // silhouettes across the whole map.
+        //
+        // Always rather than LessEqual, because there is no shadow map: the stand-in is an opaque white
+        // 1x1 and the preview renders no shadow pass. Always means "nothing occludes anything", which is
+        // the honest answer when no depth has been rendered - LessEqual against a stand-in would be
+        // comparing against a number that means nothing.
+        var cmp = new SamplerDesc
+        {
+            Filter = Filter.ComparisonMinMagMipLinear,
+            AddressU = TextureAddressMode.Clamp, AddressV = TextureAddressMode.Clamp,
+            AddressW = TextureAddressMode.Clamp,
+            MaxLOD = float.MaxValue, ComparisonFunc = ComparisonFunc.Always,
+        };
+        ComPtr<ID3D11SamplerState> s3 = default;
+        _device.CreateSamplerState(in cmp, ref s3);
+        _comparison = s3;
 
         // an opaque white 1x1 stands in for every texture the material does not supply, so a missing
         // binding shows as "unlit but present" rather than as a black or undefined surface
@@ -1785,7 +1810,11 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         foreach (var smp in refl.Samplers)
         {
             // "Clamp_" prefixed shared samplers are the engine's clamped ones; everything else wraps.
-            var st = smp.Name.StartsWith("Clamp", StringComparison.OrdinalIgnoreCase) ? _linearClamp : _linearWrap;
+            // M254: the shader's own RDEF flag decides this, not the sampler's name. D3D_SIF_COMPARISON_SAMPLER
+            // is the only place that distinction is recorded, and binding an ordinary state where the shader
+            // uses sample_c fails silently as "fully shadowed" rather than as an error.
+            var st = smp.IsComparisonSampler ? _comparison
+                : smp.Name.StartsWith("Clamp", StringComparison.OrdinalIgnoreCase) ? _linearClamp : _linearWrap;
             if (pixel) _ctx.PSSetSamplers(smp.BindPoint, 1, ref st);
             else _ctx.VSSetSamplers(smp.BindPoint, 1, ref st);
         }
@@ -1814,7 +1843,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         ClearPipelineCache();
         _vb.Dispose(); _ib.Dispose(); _compareCb.Dispose();
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
-        _linearWrap.Dispose(); _linearClamp.Dispose();
+        _linearWrap.Dispose(); _linearClamp.Dispose(); _comparison.Dispose();
         _raster.Dispose(); _blend.Dispose(); _depthState.Dispose();
         _ctx.Dispose(); _device.Dispose();
         _d3d?.Dispose();
