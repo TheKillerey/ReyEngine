@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Avalonia;
 using Avalonia.Media.Imaging;
@@ -53,6 +55,12 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// normalises to.</summary>
     public byte[]? LastPixels { get; private set; }
 
+    private readonly List<string> _unbound = new();
+
+    /// <summary>Constants the last frame declared but nothing wrote. Distinct, because a scene with 1,389
+    /// slices repeats the same name once per draw.</summary>
+    public IReadOnlyList<string> UnboundConstants => _unbound.Distinct().ToList();
+
     public double LastFrameMs { get; private set; }
     public int LastDrawCalls { get; private set; }
     public int LastCulled { get; private set; }
@@ -96,7 +104,10 @@ public sealed class Dx11ViewportSurface : IDisposable
         };
 
         var t0 = DateTime.UtcNow;
-        var pixels = _renderer.RenderFrame(width, height, settings, out _, null);
+        // M255: collect the constants nothing supplied. This report is what solved M229, M230 and M235,
+        // and the viewport path was built without it - so it has been resolving scenes blind.
+        _unbound.Clear();
+        var pixels = _renderer.RenderFrame(width, height, settings, out _, _unbound);
         LastFrameMs = (DateTime.UtcNow - t0).TotalMilliseconds;
         if (pixels is null) return false;
 

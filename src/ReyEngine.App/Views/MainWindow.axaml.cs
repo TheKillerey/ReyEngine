@@ -198,6 +198,13 @@ public partial class MainWindow : Window
         vm.Dx11ViewportStatus = _dx11.HasScene
             ? $"D3D11  {_dx11.LastFrameMs:F2} ms  ·  {_dx11.LastDrawCalls} draws"
               + (_dx11.LastCulled > 0 ? $"  ·  {_dx11.LastCulled} culled" : "")
+              // M255: name what nothing supplied. An unbound constant reads as zero, and zero is black
+              // for anything the shader multiplies by - so this is the difference between a diagnosis and
+              // a guess.
+              + (_dx11.UnboundConstants.Count > 0
+                  ? $"  ·  UNBOUND: {string.Join(", ", _dx11.UnboundConstants.Take(4))}"
+                    + (_dx11.UnboundConstants.Count > 4 ? $" +{_dx11.UnboundConstants.Count - 4}" : "")
+                  : "")
             // No scene is a legitimate state, not a failure - say which, rather than showing an empty
             // viewport and letting it read as a broken renderer.
             : "D3D11  no scene: " + FirstLine(_dx11.SceneReport);

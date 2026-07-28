@@ -34,7 +34,8 @@ public static class Dx11SceneBuilder
         string Name, int Start, int Count,
         DxbcShader Vs, DxbcShader Ps,
         ShaderDescription VsDesc, ShaderDescription PsDesc,
-        IReadOnlyList<(string Target, string Key)> Textures);
+        IReadOnlyList<(string Target, string Key)> Textures,
+        IReadOnlyList<(string Name, float[] Value)> Parameters);
 
     /// <summary>Everything a scene needs that does not touch D3D.</summary>
     public sealed class PreparedScene
@@ -118,10 +119,21 @@ public static class Dx11SceneBuilder
 
             foreach (var (_, key) in wanted) distinct.Add(key);
 
+            // M255: the material's OWN parameters. Missing these is what made the viewport draw black
+            // foliage while the shader preview - which has always written them - drew the same map
+            // correctly. TintColor lives at $Globals+0 and staticmesh/vertexdeform does
+            //     mul r2.xyz, diffuse, cb0[0].xyzx
+            // so an unwritten TintColor is zero and everything multiplied by it is black. Any material
+            // whose shader multiplies by an authored parameter has the same failure.
+            var parameters = new List<(string, float[])>();
+            foreach (var prm in b.Parameters)
+                if (prm.TryGetVector4(out var pv))
+                    parameters.Add((prm.Name, new[] { pv.X, pv.Y, pv.Z, pv.W }));
+
             scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,
                 new ShaderDescription(full, DxbcStage.Vertex, vp.Key, vp.BlobIndex, b.Macros, vs),
                 new ShaderDescription(full, DxbcStage.Pixel, pp.Key, pp.BlobIndex, b.Macros, ps),
-                wanted));
+                wanted, parameters));
         }
 
         DecodeTextures(distinct, readAsset, scene);
@@ -192,6 +204,8 @@ public static class Dx11SceneBuilder
             // in front and grouping by pipeline cannot change the image.
             mat.Bounds = SliceBounds(scene.Mesh, s.Start, s.Count);
             mat.SortableByPipeline = true;
+
+            foreach (var (name, value) in s.Parameters) mat.Params[name] = value;
 
             foreach (var (target, key) in s.Textures)
             {
