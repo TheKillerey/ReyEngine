@@ -149,9 +149,16 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// every material that binds the same asset - a Map12 load binds 1,841 slots from 138 distinct files,
     /// and one lightmap atlas is shared by 282 of them. Disposing per material would release a view other
     /// materials are still using, which blanks textures or crashes.</summary>
+    /// <summary>M242: false when Vs/Ps/Layout came from the pipeline cache and are shared with other
+    /// materials. Disposing a shared shader object is a use-after-free that shows up as a device removal
+    /// on some later frame, a long way from the cause - so ownership is explicit rather than assumed.</summary>
+    public bool OwnsPipeline { get; set; } = true;
+
     public void Dispose()
     {
-        Vs.Dispose(); Ps.Dispose(); Layout.Dispose();
+        if (OwnsPipeline) { Vs.Dispose(); Ps.Dispose(); Layout.Dispose(); }
+        // Constant buffers are ALWAYS per-material: they hold this material's uploaded values, so two
+        // materials sharing a pipeline still need their own. Only the immutable objects are shared.
         foreach (var b in VsCbs.Values) b.Dispose();
         foreach (var b in PsCbs.Values) b.Dispose();
         VsCbs.Clear(); PsCbs.Clear(); Textures.Clear();
@@ -322,13 +329,80 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         _comparePs = default;
     }
 
+    /// <summary>M242: the immutable half of a pipeline - the two shader objects and the input layout.
+    /// Everything else about a material (constant buffer contents, textures, draw range) differs per
+    /// material and is not shared.</summary>
+    private sealed class CachedPipeline
+    {
+        public ComPtr<ID3D11VertexShader> Vs;
+        public ComPtr<ID3D11PixelShader> Ps;
+        public ComPtr<ID3D11InputLayout> Layout;
+
+        public void Dispose() { Vs.Dispose(); Ps.Dispose(); Layout.Dispose(); }
+    }
+
+    private readonly Dictionary<PipelineKey, CachedPipeline> _pipelines = new();
+
+    /// <summary>Pipelines currently held, and how many builds the cache satisfied without touching the
+    /// driver. Surfaced so a scene report can show the ratio rather than claim an improvement.</summary>
+    public int CachedPipelineCount => _pipelines.Count;
+    public int PipelineCacheHits { get; private set; }
+    public int PipelineCacheMisses { get; private set; }
+
+    /// <summary>The game build the cache is keyed against. Set by the host; changing it does not by itself
+    /// invalidate anything, because the bytecode hash already covers correctness - this is what makes the
+    /// cache PRUNABLE on patch day and what a user-facing message keys on.</summary>
+    public string GameVersion { get; set; } = "unknown";
+
+    /// <summary>Drop every cached pipeline. The scene's materials must be gone first - they hold
+    /// non-owning references to exactly these objects.</summary>
+    public void ClearPipelineCache()
+    {
+        foreach (var pl in _pipelines.Values) pl.Dispose();
+        _pipelines.Clear();
+        PipelineCacheHits = PipelineCacheMisses = 0;
+    }
+
     /// <summary>M214: bring up one material's pipeline. <paramref name="indexCount"/> below zero means the
-    /// whole index buffer, which is what the bench uses.</summary>
+    /// whole index buffer, which is what the bench uses.
+    ///
+    /// <para>M242: the shader objects and input layout come from the pipeline cache when an identical
+    /// (shader, permutation, state, backend) combination has already been built. Map12 was building 921 of
+    /// these for 120 material names, and CreateVertexShader / CreatePixelShader / CreateInputLayout are the
+    /// expensive calls in here - they are where the driver compiles.</para></summary>
     public PreviewMaterial? BuildMaterial(string name, DxbcShader vsRefl, DxbcShader psRefl,
-        int startIndex, int indexCount, out ShaderLoadReport r)
+        int startIndex, int indexCount, out ShaderLoadReport r,
+        ShaderDescription? vsDesc = null, ShaderDescription? psDesc = null,
+        StateDescription? state = null)
     {
         r = new ShaderLoadReport();
         if (_device.Handle is null) { r.Error = "no D3D11 device"; return null; }
+
+        // Only cacheable when the caller supplied the descriptions that identify the variant. Without them
+        // there is no honest key - two materials could share a shader NAME and differ in permutation - so
+        // the uncached path stays, rather than inventing a key that might collide.
+        PipelineKey? key = vsDesc is not null && psDesc is not null
+            ? PipelineKey.For(vsDesc, psDesc, state ?? StateDescription.Geometry, GameVersion, RenderBackend.D3D11)
+            : null;
+
+        if (key is { } k && _pipelines.TryGetValue(k, out var hit))
+        {
+            PipelineCacheHits++;
+            var shared = new PreviewMaterial
+            {
+                Name = name, VsRefl = vsRefl, PsRefl = psRefl,
+                StartIndex = startIndex, IndexCount = indexCount,
+                OwnsPipeline = false,
+                Vs = hit.Vs, Ps = hit.Ps, Layout = hit.Layout,
+            };
+            // Constant buffers are per material even on a hit - same layout, different contents.
+            CreateConstantBuffers(vsRefl, shared.VsCbs, r, "vertex");
+            CreateConstantBuffers(psRefl, shared.PsCbs, r, "pixel");
+            r.Step($"pipeline cache HIT ({_pipelines.Count} resident)");
+            r.Success = true;
+            return shared;
+        }
+        if (key is not null) PipelineCacheMisses++;
 
         var mat = new PreviewMaterial
         {
@@ -374,6 +448,16 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         // ---- 3. one constant buffer per reflected cbuffer, sized as the shader declares
         CreateConstantBuffers(vsRefl, mat.VsCbs, r, "vs");
         CreateConstantBuffers(psRefl, mat.PsCbs, r, "ps");
+
+        // M242: publish the immutable half so the next material with the same key skips the driver calls
+        // above. The material keeps using its own handles - the cache holds the SAME COM objects, and the
+        // ownership flag is what stops the material from releasing them out from under the cache.
+        if (key is { } store)
+        {
+            _pipelines[store] = new CachedPipeline { Vs = mat.Vs, Ps = mat.Ps, Layout = mat.Layout };
+            mat.OwnsPipeline = false;
+            r.Step($"pipeline cached ({_pipelines.Count} resident)");
+        }
 
         r.Success = true;
         return mat;
@@ -1603,6 +1687,9 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         ClearTextures();
         _white.Dispose();
         _identityRamp.Dispose();
+        // M242: the cache owns shader objects that no material releases, so it must be drained here or
+        // every pipeline ever built leaks for the lifetime of the process.
+        ClearPipelineCache();
         _vb.Dispose(); _ib.Dispose(); _compareCb.Dispose();
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClamp.Dispose();

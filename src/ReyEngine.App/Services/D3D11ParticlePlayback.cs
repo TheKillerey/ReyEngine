@@ -120,10 +120,19 @@ public sealed class D3D11ParticlePlayback
             var ps = _cache.LoadShader(ShaderCacheReader.TocPathFor(psName, DxbcStage.Pixel), psPerm.BlobIndex, out _);
             if (vs is null || ps is null) { sb.AppendLine("       bytecode would not load"); continue; }
 
-            var mat = _renderer.BuildMaterial(e.Name, vs, ps, 0, 0, out var rep);
+            // M242: describe the variant and the state so the pipeline cache has an honest key. Emitters
+            // sharing a permutation AND a blend now share one set of shader objects; a system where every
+            // emitter is a base-permutation additive quad collapses to a single pipeline.
+            bool additive = VfxShaderFlags.IsAdditive(e.BlendMode);
+            var vsDesc = new ShaderDescription(vsName, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, defines, vs);
+            var psDesc = new ShaderDescription(psName, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, defines, ps);
+            var stateDesc = StateDescription.Particle(
+                additive ? BlendKind.Additive : BlendKind.Alpha, e.AlphaRef / 255f);
+
+            var mat = _renderer.BuildMaterial(e.Name, vs, ps, 0, 0, out var rep, vsDesc, psDesc, stateDesc);
             if (mat is null) { sb.AppendLine($"       pipeline failed: {rep.Error}"); continue; }
 
-            mat.Additive = VfxShaderFlags.IsAdditive(e.BlendMode);
+            mat.Additive = additive;
             sb.AppendLine($"     blend: {(mat.Additive ? "additive" : "alpha")} (blendMode {e.BlendMode})");
 
             // The sprite. TEXTURE__TX is the name quad_ps declares for it.
@@ -166,6 +175,11 @@ public sealed class D3D11ParticlePlayback
         }
 
         _renderer.SetDynamicMesh(MaxQuads * 4, MaxQuads * 6);
+
+        sb.AppendLine();
+        sb.AppendLine($"pipelines: {_renderer.PipelineCacheHits} cache hit(s), "
+                      + $"{_renderer.PipelineCacheMisses} built, {_renderer.CachedPipelineCount} resident");
+
         Report = sb.ToString();
         return true;
     }
