@@ -126,6 +126,11 @@ public sealed class D3D11ParticlePlayback
             // Derived in M231 from quad_vs's cell arithmetic.
             mat.Params["TEXTURE_INFO"] = ParticleQuadBuilder.TextureInfo(e.TexDiv);
 
+            // M235: BuildMaterial CREATES the pipeline but does not register it for drawing - the caller
+            // must add it, which is what LoadShaders does for the single-shader path. Without this the
+            // renderer has no materials at all, IsReady is false, and RenderFrame bails out with
+            // "no shader loaded": the entire particle path built correct pipelines and drew nothing.
+            _renderer.AddMaterial(mat);
             _slices.Add(new Slice { Material = mat, EmitterIndex = i, Name = e.Name });
         }
 
