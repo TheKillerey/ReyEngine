@@ -1276,6 +1276,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             // vertex walk MESH_CENTER already needed, so this costs one extra min/max per vertex rather
             // than a second pass over the index buffer.
             mat.Bounds = SliceBounds(slice.Start, slice.Count);
+            // M246: scene geometry writes depth, so the depth buffer - not submission order - decides what
+            // is in front. Safe to group by pipeline.
+            mat.SortableByPipeline = StateDescription.Geometry.DepthWrite;
 
             // M230: MESH_CENTER is per mesh in the engine, and staticmesh/vertexdeform uses it twice - as the
             // reference point for the grass-flattening spheres AND as the wave's phase offset,

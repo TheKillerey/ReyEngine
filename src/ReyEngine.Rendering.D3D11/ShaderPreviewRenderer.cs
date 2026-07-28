@@ -58,6 +58,12 @@ public sealed class PreviewSettings
     public Vector4? MapFogColor;
     public Vector2? MapFogStartEnd;
 
+    /// <summary>M246: collapse pipeline state changes by drawing depth-writing geometry grouped by
+    /// pipeline. Order-sensitive draws (additive, or anything that does not write depth) are never
+    /// reordered. On by default; a toggle exists because if an ordering artefact ever does appear, being
+    /// able to switch this off is how it gets identified rather than guessed at.</summary>
+    public bool SortByPipeline = true;
+
     /// <summary>M223: mirror world X, which is what the rest of the editor's viewport does. League's data is
     /// authored in the opposite handedness to the renderer, so without this a map is laid out mirrored
     /// against every other view in the app.</summary>
@@ -137,6 +143,11 @@ public sealed unsafe class PreviewMaterial : IDisposable
 
     public bool Visible { get; set; } = true;
 
+    /// <summary>M246: which distinct pipeline this material uses. Materials sharing an id share their
+    /// shaders and input layout, so drawing them back to back costs no state change. -1 = uncached, which
+    /// sorts last and keeps its relative order.</summary>
+    public int PipelineId { get; set; } = -1;
+
     /// <summary>M245: this slice's world-space bounds, for frustum culling. Null means "always draw" -
     /// which is what a single-mesh preview, a particle system, or anything whose extent is not known
     /// should get, because culling on a guess is worse than not culling.</summary>
@@ -145,6 +156,12 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// <summary>M232: draw this material with additive blending rather than straight alpha. Set from the
     /// emitter's blendMode; see VfxShaderFlags for how that integer is read and what is still a guess.</summary>
     public bool Additive { get; set; }
+
+    /// <summary>M246: safe to reorder relative to other draws. True only when this draw WRITES DEPTH and
+    /// is not additive - such draws resolve by the depth buffer, so submission order is not observable.
+    /// An additive or non-depth-writing draw blends with whatever is already there, so its order IS the
+    /// image and must be preserved.</summary>
+    public bool SortableByPipeline { get; set; }
 
     public IEnumerable<string> UnboundTextures =>
         PsRefl.Textures.Concat(VsRefl.Textures).Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase)
@@ -342,6 +359,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         public ComPtr<ID3D11VertexShader> Vs;
         public ComPtr<ID3D11PixelShader> Ps;
         public ComPtr<ID3D11InputLayout> Layout;
+        public int Id;
 
         public void Dispose() { Vs.Dispose(); Ps.Dispose(); Layout.Dispose(); }
     }
@@ -399,6 +417,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                 StartIndex = startIndex, IndexCount = indexCount,
                 OwnsPipeline = false,
                 Vs = hit.Vs, Ps = hit.Ps, Layout = hit.Layout,
+                PipelineId = hit.Id,
             };
             // Constant buffers are per material even on a hit - same layout, different contents.
             CreateConstantBuffers(vsRefl, shared.VsCbs, r, "vertex");
@@ -459,7 +478,8 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         // ownership flag is what stops the material from releasing them out from under the cache.
         if (key is { } store)
         {
-            _pipelines[store] = new CachedPipeline { Vs = mat.Vs, Ps = mat.Ps, Layout = mat.Layout };
+            _pipelines[store] = new CachedPipeline { Vs = mat.Vs, Ps = mat.Ps, Layout = mat.Layout, Id = _pipelines.Count };
+            mat.PipelineId = _pipelines.Count - 1;
             mat.OwnsPipeline = false;
             r.Step($"pipeline cached ({_pipelines.Count} resident)");
         }
@@ -1446,6 +1466,13 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     /// than assumed - a culler that quietly rejects nothing is indistinguishable from one that works.</summary>
     public int CulledSlices { get; private set; }
 
+    /// <summary>M246: how many times the pipeline actually changed while drawing the last frame. With
+    /// sorting on this approaches the number of distinct pipelines; without it, it approaches the number
+    /// of draws. Reported so the difference is visible rather than claimed.</summary>
+    public int PipelineSwitches { get; private set; }
+
+    private readonly List<int> _drawOrder = new();
+
     /// <summary>Gribb-Hartmann plane extraction from a combined view-projection, in System.Numerics'
     /// row-vector convention (v * M). Planes point INWARD; a point is inside when every dot is >= 0.</summary>
     private static Vector4[] ExtractFrustum(Matrix4x4 m)
@@ -1568,8 +1595,34 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
             // M214: one pass per material. A champion skin is one vertex/index buffer whose submeshes each
             // want their own shader, permutation and textures, so the pipeline is rebound per slice.
-            foreach (var mat in _materials)
+            // M246: draw order.
+            //
+            // Sorting by pipeline collapses state changes, but it CANNOT be applied blindly: reordering
+            // alpha-blended draws changes the image, and for particles the authored `pass` order is the
+            // artist's intent. So only draws that WRITE DEPTH are sorted - those resolve by the depth
+            // buffer rather than by submission order, so their relative order is not observable. Everything
+            // else keeps the order it was added in, and is drawn after, still in that order.
+            _drawOrder.Clear();
+            for (int i = 0; i < _materials.Count; i++) _drawOrder.Add(i);
+            if (s.SortByPipeline)
             {
+                _drawOrder.Sort((a, b) =>
+                {
+                    var ma = _materials[a]; var mb = _materials[b];
+                    bool sa = ma.SortableByPipeline, sb2 = mb.SortableByPipeline;
+                    if (sa != sb2) return sa ? -1 : 1;          // depth-writing first
+                    if (!sa) return a.CompareTo(b);             // order-sensitive: keep submission order
+                    int p = ma.PipelineId.CompareTo(mb.PipelineId);
+                    return p != 0 ? p : a.CompareTo(b);         // stable within a pipeline
+                });
+            }
+
+            int lastPipeline = int.MinValue;
+            PipelineSwitches = 0;
+
+            foreach (var drawIndex in _drawOrder)
+            {
+            var mat = _materials[drawIndex];
             if (!mat.Visible) continue;
 
             // M245: frustum cull. Slices with no bounds are always drawn.
@@ -1583,6 +1636,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             else
                 _ctx.OMSetBlendState(_blend, factor, 0xFFFFFFFF);
 
+            if (mat.PipelineId != lastPipeline) { PipelineSwitches++; lastPipeline = mat.PipelineId; }
             _ctx.IASetInputLayout(mat.Layout);
             _ctx.VSSetShader(mat.Vs, null, 0);
             _ctx.PSSetShader(compare ? _comparePs : mat.Ps, null, 0);

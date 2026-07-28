@@ -133,6 +133,9 @@ public sealed class D3D11ParticlePlayback
             if (mat is null) { sb.AppendLine($"       pipeline failed: {rep.Error}"); continue; }
 
             mat.Additive = additive;
+            // Particles never write depth, so they are never reordered - the authored emitter order is
+            // the composite the artist built.
+            mat.SortableByPipeline = false;
             sb.AppendLine($"     blend: {(mat.Additive ? "additive" : "alpha")} (blendMode {e.BlendMode})");
 
             // The sprite. TEXTURE__TX is the name quad_ps declares for it.
