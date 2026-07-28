@@ -871,6 +871,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                               ? "   ·   TEXCOORD5 clump pivots present"
                               : "   ·   no TEXCOORD5 in this geometry - pivots fall back to vertex position"));
         sb.AppendLine($"slices merged away: {_slicesMerged}   ·   distinct textures resident: {_renderer.CachedTextureCount}");
+        sb.AppendLine($"pipelines: {_renderer.PipelineCacheHits} cache hit(s), {_renderer.PipelineCacheMisses} built, "
+                      + $"{_renderer.CachedPipelineCount} resident");
         int overrides = SceneDefines.Count(d => d.Mode != 0);
         if (overrides > 0)
             sb.AppendLine($"define overrides active: {overrides}   ·   materials whose permutation actually changed: {_permutationsChanged}"
@@ -1163,7 +1165,20 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         PreviewMaterial? first = null;
         foreach (var slice in merged)
         {
-            var mat = _renderer.BuildMaterial(b.Name, vs, ps, slice.Start, slice.Count, out var rep);
+            // M243: describe the variant so the pipeline cache can key on it. Every slice of the same
+            // material resolves to the same permutation, and across a map many DIFFERENT materials resolve
+            // to the same one too - Map12 built 921 pipeline objects for 120 material names, and the real
+            // count of distinct pipelines is far below either number.
+            //
+            // State is StateDescription.Geometry for all of them, which is honest rather than lazy: the
+            // renderer draws every scene material with one blend/depth/cull setup today. When per-material
+            // blend and technique state is read out of the map bin, that becomes the varying half of the
+            // key and this line is where it changes.
+            var vsDesc = new ShaderDescription(full, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, macros, vs);
+            var psDesc = new ShaderDescription(full, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, macros, ps);
+
+            var mat = _renderer.BuildMaterial(b.Name, vs, ps, slice.Start, slice.Count, out var rep,
+                vsDesc, psDesc, StateDescription.Geometry);
             if (mat is null) { why = rep.Error ?? "pipeline creation failed"; sb.AppendLine($"   !  {b.Name,-34} {why}"); return null; }
 
             // M230: MESH_CENTER is per mesh in the engine, and staticmesh/vertexdeform uses it twice - as the
