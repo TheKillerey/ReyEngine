@@ -302,6 +302,63 @@
             </DockPanel>
           </TabItem>
 
+          <TabItem Header="Particles">
+            <DockPanel Margin="6">
+              <TextBlock DockPanel.Dock="Top" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,0,2,6"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         Text="Pick a .bin on the Material tab, then a VFX system here. Each emitter resolves its OWN permutation of particlesystem/quad_vs + quad_ps from its authored flags (alpha erosion, soft particles, palette, navmesh mask, alpha test, mult pass) and draws with its own blend mode." />
+
+              <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                <Button Classes="primary" Content="▶  Play this system"
+                        Command="{Binding PlayParticlesCommand}" FontSize="11.5"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,7"
+                        IsEnabled="{Binding SelectedParticleSystem, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                <Grid ColumnDefinitions="*,4,*,4,*">
+                  <ToggleButton Grid.Column="0" Content="Pause" IsChecked="{Binding !ParticlesPlaying}"
+                                FontSize="11" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Grid.Column="2" Content="Restart" Command="{Binding RestartParticlesCommand}"
+                          FontSize="11" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Grid.Column="4" Content="Stop" Command="{Binding StopParticlesCommand}"
+                          FontSize="11" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="Speed" FontSize="10.5" VerticalAlignment="Center" Opacity="0.7"
+                             Foreground="{DynamicResource ReyTextBrush}" />
+                  <Slider Minimum="0" Maximum="3" Value="{Binding ParticleSpeed}" Width="150"
+                          VerticalAlignment="Center" />
+                  <TextBlock Text="{Binding ParticleSpeed, StringFormat={}{0:F2}x}" FontSize="10.5"
+                             VerticalAlignment="Center" FontFamily="Consolas"
+                             Foreground="{DynamicResource ReyTextBrush}" />
+                </StackPanel>
+              </StackPanel>
+
+              <Grid RowDefinitions="*,4,2*">
+                <ListBox Grid.Row="0" ItemsSource="{Binding ParticleSystems}"
+                         SelectedItem="{Binding SelectedParticleSystem}" FontSize="11">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ParticleSystemRow">
+                      <StackPanel Spacing="1" Margin="0,2">
+                        <TextBlock Text="{Binding Label}" FontFamily="Consolas" FontSize="11"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+                        <TextBlock Text="{Binding Detail}" FontSize="9.5" Opacity="0.55"
+                                   Foreground="{DynamicResource ReyTextBrush}" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+
+                <GridSplitter Grid.Row="1" Background="Transparent" ResizeDirection="Rows" />
+
+                <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Auto">
+                  <SelectableTextBlock Text="{Binding ParticleReport}" FontFamily="Consolas" FontSize="10"
+                                       TextWrapping="NoWrap"
+                                       Foreground="{DynamicResource ReyTextBrush}" />
+                </ScrollViewer>
+              </Grid>
+            </DockPanel>
+          </TabItem>
+
           <TabItem Header="Bindings">
             <ScrollViewer HorizontalScrollBarVisibility="Auto">
               <SelectableTextBlock Text="{Binding Bindings}" FontFamily="Consolas" FontSize="10.5"

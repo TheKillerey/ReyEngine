@@ -12,6 +12,8 @@ using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Shaders;
+using ReyEngine.Formats.Vfx;
+using ReyEngine.App.Services;
 using ReyEngine.Rendering;
 using ReyEngine.Rendering.D3D11;
 
@@ -99,6 +101,17 @@ public sealed class MaterialBinRow
     public required ulong Hash { get; init; }
     public string Display => System.IO.Path.GetFileName(Path);
     public override string ToString() => Path;
+}
+
+/// <summary>M233: one VFX system found in the selected bin's dependency closure.</summary>
+public sealed class ParticleSystemRow
+{
+    public required VfxSystemDefinition Def { get; init; }
+    public required string Source { get; init; }
+
+    public string Label => Def.Name ?? "(unnamed)";
+    public string Detail => $"{Def.Emitters.Count} emitter(s)  ·  {System.IO.Path.GetFileName(Source)}";
+    public override string ToString() => Label;
 }
 
 /// <summary>One material inside the selected bin.</summary>
@@ -306,6 +319,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     public ObservableCollection<SceneSubmeshRow> SceneSubmeshes { get; } = new();
     public ObservableCollection<SceneDefineRow> SceneDefines { get; } = new();
 
+    /// <summary>M233: VFX systems found in the selected bin's dependency closure, for the particle picker.</summary>
+    public ObservableCollection<ParticleSystemRow> ParticleSystems { get; } = new();
+
     [ObservableProperty] private string _filter = "";
     [ObservableProperty] private ShaderRow? _selectedShader;
     [ObservableProperty] private PermutationRow? _selectedVertexPerm;
@@ -485,6 +501,11 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             queue.Enqueue((value.Path, value.Hash));
 
             var byName = new Dictionary<string, MaterialRow>(StringComparer.OrdinalIgnoreCase);
+            // M233: the same closure walk that finds materials also finds VFX systems, so the particle
+            // picker costs one dictionary rather than a second traversal.
+            ParticleSystems.Clear();
+            SelectedParticleSystem = null;
+            var vfxSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int binsRead = 0, guard = 0;
 
             while (queue.Count > 0 && guard++ < 64)
@@ -494,6 +515,18 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 try { bytes = _readAsset(hash); } catch { continue; }
                 if (bytes is null || bytes.Length == 0) continue;
                 binsRead++;
+
+                try
+                {
+                    foreach (var sys in VfxSystemResolver.ExtractAll(bytes).Values)
+                    {
+                        if (sys.Emitters.Count == 0) continue;
+                        string key = sys.Name ?? "";
+                        if (key.Length == 0 || !vfxSeen.Add(key)) continue;
+                        ParticleSystems.Add(new ParticleSystemRow { Def = sys, Source = path });
+                    }
+                }
+                catch { /* not every bin holds VFX */ }
 
                 try
                 {
@@ -1233,6 +1266,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         var report = _renderer.LoadShaders(_vs, _ps);
         if (!report.Success) { Fail(report.Error ?? "shader creation failed"); BuildMetadata(vsPath, psPath, report); return; }
 
+        _playback = null;                   // M233: a mesh preview and particle playback cannot co-exist
         _renderer.SetMesh(PreviewGeometry.CreateBuiltIn(SelectedMesh));
         _quadFacing = null;                 // M231: force the billboard to rebuild for the current camera
         FocusCamera();
@@ -1260,6 +1294,52 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     }
 
     [RelayCommand] private void Reload() => Load();
+
+    /// <summary>M233: start the selected VFX system playing through Riot's quad_vs/quad_ps.</summary>
+    [RelayCommand]
+    private void PlayParticles()
+    {
+        if (SelectedParticleSystem is null || _cache is null || _readAsset is null) return;
+
+        _playback = new D3D11ParticlePlayback(_renderer, _cache,
+            path => { try { return _readAsset(HashAlgorithms.WadPath(path)); } catch { return null; } });
+
+        if (!_playback.Load(SelectedParticleSystem.Def, out var err))
+        {
+            _playback = null;
+            ParticleReport = err ?? "the system could not be loaded";
+            Fail(ParticleReport);
+            return;
+        }
+
+        // The particle path owns the renderer from here: it drives a dynamic vertex buffer and its own
+        // per-emitter materials, so the mesh/material preview is not showing at the same time.
+        ParticleReport = _playback.Report;
+        ParticlesPlaying = true;
+        IsLoaded = true;
+        HasError = false;
+        Status = $"Playing {SelectedParticleSystem.Label} - {_playback.DrawSlices} emitter slice(s).";
+        AppendLog();
+    }
+
+    [RelayCommand]
+    private void StopParticles()
+    {
+        _playback = null;
+        _renderer.ClearMaterials();
+        IsLoaded = false;
+        Status = "Particle playback stopped.";
+    }
+
+    [RelayCommand] private void RestartParticles() => _playback?.Restart();
+
+    partial void OnSelectedParticleSystemChanged(ParticleSystemRow? value)
+    {
+        if (value is null) return;
+        // Only auto-swap when something is already playing; otherwise wait for the Play button so a stray
+        // click in the list does not blow away a loaded mesh preview.
+        if (_playback is not null) PlayParticles();
+    }
 
     partial void OnSelectedMeshChanged(string value)
     {
@@ -1397,6 +1477,17 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         _renderer.SetMesh(PreviewGeometry.ParticleQuad(toCam, System.Numerics.Vector3.UnitY));
     }
 
+    /// <summary>M233: the running particle playback, or null when the preview is showing a mesh instead.
+    /// The two are mutually exclusive - Load() clears the renderer's materials either way.</summary>
+    private D3D11ParticlePlayback? _playback;
+
+    [ObservableProperty] private ParticleSystemRow? _selectedParticleSystem;
+    [ObservableProperty] private bool _particlesPlaying = true;
+    [ObservableProperty] private string _particleReport = "";
+    [ObservableProperty] private float _particleSpeed = 1f;
+
+    private int _frameCounter;
+
     private bool _drivenExternally;
 
     /// <summary>M227: called from the window's compositor animation callback. Switches the fallback timer
@@ -1416,6 +1507,16 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         float dt = (float)Math.Clamp((now0 - _lastTick).TotalSeconds, 0.0, 0.25);
         _lastTick = now0;
         ApplyCameraInput(dt);
+        _frameCounter++;
+
+        // M233: advance the simulation and rebuild this frame's quads. Paused still rebuilds once so the
+        // billboards keep facing the camera while the user orbits a frozen effect.
+        if (_playback is not null)
+        {
+            _playback.Tick(ParticlesPlaying ? dt * Math.Max(0f, ParticleSpeed) : 0f,
+                ShaderPreviewRenderer.CameraForward(_settings), System.Numerics.Vector3.UnitY);
+            if (_frameCounter % 15 == 0) ParticleReport = _playback.FrameReport() + "\n" + _playback.Report;
+        }
 
         // M228: the map's measured sun beats the sliders, unless the user turns it off
         bool useMap = UseMapSun && _mapSun is not null;
