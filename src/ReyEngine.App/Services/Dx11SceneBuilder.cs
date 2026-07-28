@@ -18,42 +18,180 @@ namespace ReyEngine.App.Services;
 /// own version of this over M213-M247, and the divergence between that and the app's real path is exactly
 /// what let M235's bug hide - a probe that exercised a sibling code path reported green while the product
 /// drew nothing. The viewport gets the same builder or it gets nothing.</para>
+///
+/// <para>M250: split into <see cref="Prepare"/> (CPU, safe on a worker thread) and <see cref="Commit"/>
+/// (D3D, must be on the UI thread). The split is drawn where D3D allows it, not where it is convenient:
+/// device resource creation is free-threaded but the immediate context is not, and texture upload maps
+/// buffers through it. So uploads stay on the UI thread and only the decoding moves - which M224 measured
+/// at 88% of a 42 s Map12 load, and is why this is worth doing at all.</para>
 /// </summary>
 public static class Dx11SceneBuilder
 {
     public sealed record Result(int Materials, int Failed, int Textures, int Slices, string Report);
 
-    /// <summary>Upload the geometry and build one pipeline per drawable slice.</summary>
-    public static Result Build(
-        ShaderPreviewRenderer renderer,
+    /// <summary>One slice, resolved and ready to become a pipeline. Everything here is CPU-side.</summary>
+    public sealed record PreparedSlice(
+        string Name, int Start, int Count,
+        DxbcShader Vs, DxbcShader Ps,
+        ShaderDescription VsDesc, ShaderDescription PsDesc,
+        IReadOnlyList<(string Target, string Key)> Textures);
+
+    /// <summary>Everything a scene needs that does not touch D3D.</summary>
+    public sealed class PreparedScene
+    {
+        public required PreviewMesh Mesh { get; init; }
+        public required List<PreparedSlice> Slices { get; init; }
+        public required Dictionary<string, TextureImage> Textures { get; init; }
+        public int Failed { get; set; }
+        public int RawGroups { get; set; }
+        public double PrepareMs { get; set; }
+    }
+
+    // ---------------------------------------------------------------- CPU half
+
+    public static PreparedScene Prepare(
         ShaderCacheReader cache,
         ShaderPermutationIndex? perms,
         MapGeoAsset map,
         IReadOnlyList<MaterialBinding> materials,
-        Func<ulong, byte[]?> readAsset,
-        string gameVersion)
+        Func<ulong, byte[]?> readAsset)
     {
-        var sb = new StringBuilder();
-        renderer.GameVersion = gameVersion;
-        renderer.ClearMaterials();
+        var t0 = DateTime.UtcNow;
 
         var mesh = PreviewGeometry.FromLeagueArrays(
             "viewport", map.Positions.Length / 3,
             map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices,
             grassPivots: map.GrassPivots);
-        renderer.SetMesh(mesh);
 
-        // M226: the lightmap atlas is a per-GROUP property. Keying it by material name handed 71.5% of
-        // Map12's lit groups another mesh's atlas page, so it travels on the slice.
-        var slices = map.Groups
+        var merged = MergeSlices(map);
+        var byName = new Dictionary<string, MaterialBinding>(StringComparer.OrdinalIgnoreCase);
+        foreach (var m in materials) byName[m.Name] = m;
+
+        var scene = new PreparedScene
+        {
+            Mesh = mesh,
+            Slices = new List<PreparedSlice>(merged.Count),
+            Textures = new Dictionary<string, TextureImage>(StringComparer.Ordinal),
+            RawGroups = map.Groups.Count,
+        };
+
+        foreach (var slice in merged)
+        {
+            if (!byName.TryGetValue(slice.Material, out var b) || string.IsNullOrEmpty(b.RenderShader))
+            { scene.Failed++; continue; }
+
+            string full = "assets/shaders/generated/" + b.RenderShader!.Trim('/');
+            IReadOnlyDictionary<string, string>? feat = null;
+            IReadOnlyDictionary<string, bool>? swDef = null;
+            perms?.TryGetShaderDefs(b.RenderShader!, out feat, out swDef);
+
+            var vsToc = cache.ReadToc(ShaderCacheReader.TocPathFor(full, DxbcStage.Vertex));
+            var psToc = cache.ReadToc(ShaderCacheReader.TocPathFor(full, DxbcStage.Pixel));
+            if (vsToc is null || psToc is null) { scene.Failed++; continue; }
+
+            var vp = ShaderCacheReader.ResolvePermutation(vsToc, b.Macros, b.Switches, feat, swDef, out _);
+            var pp = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out _);
+            if (vp is null || pp is null) { scene.Failed++; continue; }
+
+            var vs = cache.LoadShader(ShaderCacheReader.TocPathFor(full, DxbcStage.Vertex), vp.BlobIndex, out _);
+            var ps = cache.LoadShader(ShaderCacheReader.TocPathFor(full, DxbcStage.Pixel), pp.BlobIndex, out _);
+            if (vs is null || ps is null) { scene.Failed++; continue; }
+
+            var wanted = new List<(string Target, string Key)>();
+            foreach (var slot in b.Slots)
+            {
+                if (string.IsNullOrWhiteSpace(slot.Path)) continue;
+                string? target = ResolveTextureTarget(slot.SamplerName, ps);
+                if (target is not null) wanted.Add((target, slot.Path!.ToLowerInvariant()));
+            }
+            if (slice.Lightmap.Length > 0
+                && ps.Textures.FirstOrDefault(t => t.Name.Contains("BAKED_LIGHT", StringComparison.OrdinalIgnoreCase))
+                    is { } lmSlot)
+                wanted.Add((lmSlot.Name, slice.Lightmap.ToLowerInvariant()));
+
+            // Decode once per distinct path, not once per slice - 1,389 slices reference far fewer files.
+            foreach (var (_, key) in wanted)
+            {
+                if (scene.Textures.ContainsKey(key)) continue;
+                try
+                {
+                    var data = readAsset(HashAlgorithms.WadPath(key));
+                    if (data is { Length: > 0 }) scene.Textures[key] = TextureDecoder.Decode(data);
+                }
+                catch { /* left out here; the commit pass reports what failed to bind */ }
+            }
+
+            scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,
+                new ShaderDescription(full, DxbcStage.Vertex, vp.Key, vp.BlobIndex, b.Macros, vs),
+                new ShaderDescription(full, DxbcStage.Pixel, pp.Key, pp.BlobIndex, b.Macros, ps),
+                wanted));
+        }
+
+        scene.PrepareMs = (DateTime.UtcNow - t0).TotalMilliseconds;
+        return scene;
+    }
+
+    // ---------------------------------------------------------------- D3D half
+
+    /// <summary>Must run on the UI thread - every call in here touches the device or the immediate
+    /// context.</summary>
+    public static Result Commit(ShaderPreviewRenderer renderer, PreparedScene scene, string gameVersion)
+    {
+        var sb = new StringBuilder();
+        var t0 = DateTime.UtcNow;
+
+        renderer.GameVersion = gameVersion;
+        renderer.ClearMaterials();
+        renderer.SetMesh(scene.Mesh);
+
+        int ok = 0, textures = 0, failed = scene.Failed;
+        foreach (var s in scene.Slices)
+        {
+            var mat = renderer.BuildMaterial(s.Name, s.Vs, s.Ps, s.Start, s.Count, out var rep,
+                s.VsDesc, s.PsDesc, StateDescription.Geometry);
+            if (mat is null) { failed++; sb.AppendLine($"   ! {s.Name}: {rep.Error}"); continue; }
+
+            // M245 culling + M246 sorting. Scene geometry writes depth, so the depth buffer decides what is
+            // in front and grouping by pipeline cannot change the image.
+            mat.Bounds = SliceBounds(scene.Mesh, s.Start, s.Count);
+            mat.SortableByPipeline = true;
+
+            foreach (var (target, key) in s.Textures)
+            {
+                if (renderer.TryBindCached(mat, target, key)) { textures++; continue; }
+                if (!scene.Textures.TryGetValue(key, out var img)) continue;
+                renderer.SetTexture(mat, target, key, img.Rgba, img.Width, img.Height);
+                textures++;
+            }
+
+            renderer.AddMaterial(mat);
+            ok++;
+        }
+
+        double commitMs = (DateTime.UtcNow - t0).TotalMilliseconds;
+        sb.AppendLine($"{scene.Mesh.Vertices.Length:n0} vertices, {scene.Mesh.TriangleCount:n0} triangles");
+        sb.AppendLine($"{scene.RawGroups} groups -> {scene.Slices.Count} slices");
+        sb.AppendLine($"{ok} material(s) live, {failed} unresolved, {textures} texture binding(s)");
+        sb.AppendLine($"pipelines: {renderer.PipelineCacheHits} hit, {renderer.PipelineCacheMisses} built, "
+                      + $"{renderer.CachedPipelineCount} resident");
+        sb.AppendLine($"timing: {scene.PrepareMs:F0} ms off-thread + {commitMs:F0} ms on the UI thread");
+        return new Result(ok, failed, textures, scene.Slices.Count, sb.ToString());
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    /// <summary>M226: coalesce runs that are already adjacent AND want the same atlas page. The lightmap
+    /// has to be part of the key: it is a per-GROUP property, and keying it by material name handed 71.5%
+    /// of Map12's lit groups another mesh's atlas page.</summary>
+    private static List<(string Material, int Start, int Count, string Lightmap)> MergeSlices(MapGeoAsset map)
+    {
+        var ordered = map.Groups
             .Select(g => (g.Material, Start: g.StartIndex, Count: g.IndexCount, Lightmap: g.LightmapTexture))
             .OrderBy(x => x.Start)
             .ToList();
 
-        // M226: coalesce runs that are already adjacent AND want the same atlas page. The lightmap has to
-        // be part of the key or merging re-introduces the bug above.
         var merged = new List<(string Material, int Start, int Count, string Lightmap)>();
-        foreach (var s in slices)
+        foreach (var s in ordered)
         {
             if (merged.Count > 0)
             {
@@ -65,76 +203,11 @@ public static class Dx11SceneBuilder
             }
             merged.Add((s.Material, s.Start, s.Count, s.Lightmap));
         }
-
-        var byName = new Dictionary<string, MaterialBinding>(StringComparer.OrdinalIgnoreCase);
-        foreach (var m in materials) byName[m.Name] = m;
-
-        int ok = 0, failed = 0, textures = 0;
-        var texCache = new Dictionary<string, bool>(StringComparer.Ordinal);
-
-        foreach (var slice in merged)
-        {
-            if (!byName.TryGetValue(slice.Material, out var b) || string.IsNullOrEmpty(b.RenderShader))
-            { failed++; continue; }
-
-            string full = "assets/shaders/generated/" + b.RenderShader!.Trim('/');
-            IReadOnlyDictionary<string, string>? feat = null;
-            IReadOnlyDictionary<string, bool>? swDef = null;
-            perms?.TryGetShaderDefs(b.RenderShader!, out feat, out swDef);
-
-            var vsToc = cache.ReadToc(ShaderCacheReader.TocPathFor(full, DxbcStage.Vertex));
-            var psToc = cache.ReadToc(ShaderCacheReader.TocPathFor(full, DxbcStage.Pixel));
-            if (vsToc is null || psToc is null) { failed++; continue; }
-
-            var vp = ShaderCacheReader.ResolvePermutation(vsToc, b.Macros, b.Switches, feat, swDef, out _);
-            var pp = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out _);
-            if (vp is null || pp is null) { failed++; continue; }
-
-            var vs = cache.LoadShader(ShaderCacheReader.TocPathFor(full, DxbcStage.Vertex), vp.BlobIndex, out _);
-            var ps = cache.LoadShader(ShaderCacheReader.TocPathFor(full, DxbcStage.Pixel), pp.BlobIndex, out _);
-            if (vs is null || ps is null) { failed++; continue; }
-
-            var vsDesc = new ShaderDescription(full, DxbcStage.Vertex, vp.Key, vp.BlobIndex, b.Macros, vs);
-            var psDesc = new ShaderDescription(full, DxbcStage.Pixel, pp.Key, pp.BlobIndex, b.Macros, ps);
-
-            var mat = renderer.BuildMaterial(b.Name, vs, ps, slice.Start, slice.Count, out var rep,
-                vsDesc, psDesc, StateDescription.Geometry);
-            if (mat is null) { failed++; sb.AppendLine($"   ! {b.Name}: {rep.Error}"); continue; }
-
-            // M245 culling + M246 sorting. Scene geometry writes depth, so the depth buffer decides what is
-            // in front and grouping by pipeline cannot change the image.
-            mat.Bounds = SliceBounds(mesh, slice.Start, slice.Count);
-            mat.SortableByPipeline = true;
-
-            foreach (var slot in b.Slots)
-            {
-                if (string.IsNullOrWhiteSpace(slot.Path)) continue;
-                string? target = ResolveTextureTarget(slot.SamplerName, ps);
-                if (target is null) continue;
-                if (BindTexture(renderer, mat, target, slot.Path!, readAsset, texCache)) textures++;
-            }
-
-            if (slice.Lightmap.Length > 0
-                && ps.Textures.FirstOrDefault(t => t.Name.Contains("BAKED_LIGHT", StringComparison.OrdinalIgnoreCase))
-                    is { } lmSlot
-                && BindTexture(renderer, mat, lmSlot.Name, slice.Lightmap, readAsset, texCache))
-                textures++;
-
-            renderer.AddMaterial(mat);
-            ok++;
-        }
-
-        sb.AppendLine($"{mesh.Vertices.Length:n0} vertices, {mesh.TriangleCount:n0} triangles");
-        sb.AppendLine($"{map.Groups.Count} groups -> {merged.Count} slices");
-        sb.AppendLine($"{ok} material(s) live, {failed} unresolved, {textures} texture binding(s)");
-        sb.AppendLine($"pipelines: {renderer.PipelineCacheHits} hit, {renderer.PipelineCacheMisses} built, "
-                      + $"{renderer.CachedPipelineCount} resident");
-
-        return new Result(ok, failed, textures, merged.Count, sb.ToString());
+        return merged;
     }
 
-    /// <summary>M210's rule: a material sampler binds to the shader texture named after it plus "__TX".
-    /// Anything ending _SharedTexture is engine-supplied and is never material-bound.</summary>
+    /// <summary>M210: a material sampler binds to the shader texture named after it plus "__TX". Anything
+    /// ending _SharedTexture is engine-supplied and never material-bound.</summary>
     private static string? ResolveTextureTarget(string sampler, DxbcShader ps)
     {
         var exact = ps.Textures.FirstOrDefault(t =>
@@ -142,24 +215,6 @@ public static class Dx11SceneBuilder
         if (exact is not null) return exact.Name;
         return ps.Textures.FirstOrDefault(t =>
             t.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase))?.Name;
-    }
-
-    private static bool BindTexture(ShaderPreviewRenderer renderer, PreviewMaterial mat, string target,
-        string path, Func<ulong, byte[]?> readAsset, Dictionary<string, bool> tried)
-    {
-        string key = path.ToLowerInvariant();
-        if (renderer.TryBindCached(mat, target, key)) return true;
-        if (tried.TryGetValue(key, out bool wasOk) && !wasOk) return false;
-        try
-        {
-            var data = readAsset(HashAlgorithms.WadPath(key));
-            if (data is null || data.Length == 0) { tried[key] = false; return false; }
-            var img = TextureDecoder.Decode(data);
-            renderer.SetTexture(mat, target, key, img.Rgba, img.Width, img.Height);
-            tried[key] = true;
-            return true;
-        }
-        catch { tried[key] = false; return false; }
     }
 
     private static (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max)? SliceBounds(

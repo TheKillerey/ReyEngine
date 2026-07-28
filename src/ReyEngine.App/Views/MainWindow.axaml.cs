@@ -59,7 +59,7 @@ public partial class MainWindow : Window
 
     // ---- M248: the D3D11 side-by-side surface ----
 
-    private void OnDx11Toggled(MainWindowViewModel vm)
+    private async void OnDx11Toggled(MainWindowViewModel vm)
     {
         if (!vm.UseDx11Viewport)
         {
@@ -81,9 +81,14 @@ public partial class MainWindow : Window
 
         // M249 (step 2): build whatever map is open into the D3D11 renderer. Done on toggle rather than on
         // map load so a user who never enables this never pays for it.
-        _dx11.SceneReport = vm.BuildDx11Scene(_dx11.Renderer);
-        _dx11.HasScene = _dx11.Renderer.MaterialCount > 0;
+        // M250: the CPU half runs off the UI thread. The surface starts drawing immediately with whatever
+        // it has (the fallback mesh on a first toggle) so the viewport is never a frozen blank rectangle
+        // while the scene is prepared.
+        vm.Dx11ViewportStatus = "D3D11  preparing scene…";
         QueueDx11Frame();
+
+        _dx11.SceneReport = await vm.BuildDx11SceneAsync(_dx11.Renderer);
+        _dx11.HasScene = _dx11.Renderer.MaterialCount > 0;
     }
 
     /// <summary>Compositor-driven, like the shader preview window - a DispatcherTimer caps the rate and

@@ -1845,10 +1845,60 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try { doc = Formats.Materials.MaterialDocument.Parse(GetAssetBytes(binEntry), ResolveBinName); }
         catch (Exception ex) { return $"{binEntry.DisplayName}: {ex.Message}"; }
 
-        var result = Services.Dx11SceneBuilder.Build(
-            renderer, _dx11ShaderCache, ShaderPerms(), map, doc.Materials,
-            TryReadAssetBytes, AppInfo.DisplayVersion);
+        var result = Services.Dx11SceneBuilder.Commit(
+            renderer,
+            Services.Dx11SceneBuilder.Prepare(_dx11ShaderCache, ShaderPerms(), map, doc.Materials, TryReadAssetBytes),
+            AppInfo.DisplayVersion);
 
+        _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
+                          + $"{result.Slices} slice(s), {result.Textures} texture binding(s)");
+        return result.Report;
+    }
+
+    /// <summary>M250: the async form. The CPU half - mesh build, permutation resolution, and every texture
+    /// decode - runs on a worker; only the D3D commit comes back to the UI thread. Map12/bloom spent 5.5 s
+    /// in here synchronously, almost all of it decoding 2,860 texture bindings.</summary>
+    public async Task<string> BuildDx11SceneAsync(ReyEngine.Rendering.D3D11.ShaderPreviewRenderer renderer)
+    {
+        if (_currentMap is not { } map) return "No map open - the D3D11 surface has no scene to draw yet.";
+        if (_currentMapEntry is not { } mapEntry) return "The open map has no WAD entry.";
+
+        string? dir = string.IsNullOrEmpty(Project.GameDirectory) ? null
+            : Path.Combine(Project.GameDirectory, "DATA", "FINAL");
+        if (dir is null || !Directory.Exists(dir)) return "Game directory is not set, so the shader cache cannot be opened.";
+
+        if (_dx11ShaderCache is null || !string.Equals(_dx11ShaderCacheDir, dir, StringComparison.OrdinalIgnoreCase))
+        {
+            _dx11ShaderCache = Formats.Shaders.ShaderCacheReader.Open(dir, _resolver.Database, out var cacheErr);
+            _dx11ShaderCacheDir = dir;
+            if (_dx11ShaderCache is null) return "ShaderCache.dx11.wad.client: " + (cacheErr ?? "not readable");
+        }
+
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+            return "No materials.bin alongside this mapgeo.";
+
+        byte[] binBytes;
+        try { binBytes = GetAssetBytes(binEntry); }
+        catch (Exception ex) { return $"{binEntry.DisplayName}: {ex.Message}"; }
+
+        var cache = _dx11ShaderCache;
+        var perms = ShaderPerms();
+
+        Services.Dx11SceneBuilder.PreparedScene? prepared = null;
+        string? error = null;
+        await Task.Run(() =>
+        {
+            try
+            {
+                var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName);
+                prepared = Services.Dx11SceneBuilder.Prepare(cache, perms, map, doc.Materials, TryReadAssetBytes);
+            }
+            catch (Exception ex) { error = ex.Message; }
+        });
+
+        if (prepared is null) return error ?? "the scene could not be prepared";
+
+        var result = Services.Dx11SceneBuilder.Commit(renderer, prepared, AppInfo.DisplayVersion);
         _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
                           + $"{result.Slices} slice(s), {result.Textures} texture binding(s)");
         return result.Report;
