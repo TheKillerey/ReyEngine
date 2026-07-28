@@ -68,11 +68,14 @@ public sealed class D3D11ParticlePlayback
 
     /// <summary>Resolve one pipeline per emitter and start the simulation. Returns false with a reason in
     /// <see cref="Report"/> when nothing could be built.</summary>
-    public bool Load(VfxSystemDefinition system, out string? error)
+    /// <param name="clearMaterials">M264: false when the renderer is already holding a map scene, so the
+    /// particles are added ON TOP of it instead of replacing it. The preview window still clears, because
+    /// there it is the only thing on screen.</param>
+    public bool Load(VfxSystemDefinition system, out string? error, bool clearMaterials = true)
     {
         error = null;
         var sb = new StringBuilder();
-        _renderer.ClearMaterials();
+        if (clearMaterials) _renderer.ClearMaterials();
         _slices.Clear();
 
         const string vsName = "assets/shaders/hlsl/particlesystem/quad_vs";
@@ -166,6 +169,9 @@ public sealed class D3D11ParticlePlayback
             // must add it, which is what LoadShaders does for the single-shader path. Without this the
             // renderer has no materials at all, IsReady is false, and RenderFrame bails out with
             // "no shader loaded": the entire particle path built correct pipelines and drew nothing.
+            // M264: these quads live in the dynamic buffer, not the static scene mesh. Without this the
+            // draw would read particle index ranges out of the map's vertex buffer.
+            mat.UsesDynamicMesh = true;
             _renderer.AddMaterial(mat);
             _slices.Add(new Slice { Material = mat, EmitterIndex = i, Name = e.Name });
         }

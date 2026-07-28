@@ -143,6 +143,10 @@ public sealed unsafe class PreviewMaterial : IDisposable
 
     public bool Visible { get; set; } = true;
 
+    /// <summary>M264: read this draw's geometry from the renderer's DYNAMIC buffer rather than the static
+    /// scene mesh. Set by anything that rewrites its vertices every frame - particles today.</summary>
+    public bool UsesDynamicMesh { get; set; }
+
     /// <summary>M246: which distinct pipeline this material uses. Materials sharing an id share their
     /// shaders and input layout, so drawing them back to back costs no state change. -1 = uncached, which
     /// sorts last and keeps its relative order.</summary>
@@ -209,6 +213,11 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     private ComPtr<ID3D11PixelShader> _comparePs;
     private ComPtr<ID3D11Buffer> _vb, _ib;
+    // M264: a SECOND pair, for geometry that is rewritten every frame. Until now SetMesh and
+    // SetDynamicMesh both replaced _vb/_ib, so a scene could hold static geometry or particles but never
+    // both - which is why the map viewport could not show particles at all.
+    private ComPtr<ID3D11Buffer> _dynVb, _dynIb;
+    private int _dynIndexCount;
     private int _indexCount;
 
     private ComPtr<ID3D11Texture2D> _rt, _stage, _depth;
@@ -760,7 +769,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     /// <summary>M232: true when the current buffers were made writable by <see cref="SetDynamicMesh"/>.</summary>
     private bool _dynamicMesh;
-    private int _vbCapacity, _ibCapacity;
+    private int _dynVbCapacity, _dynIbCapacity;
 
     /// <summary>
     /// <para>M232: allocate DYNAMIC vertex and index buffers big enough for <paramref name="maxVertices"/>,
@@ -772,74 +781,106 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     /// </summary>
     public void SetDynamicMesh(int maxVertices, int maxIndices)
     {
-        if (_dynamicMesh && maxVertices <= _vbCapacity && maxIndices <= _ibCapacity) return;
+        if (_dynamicMesh && maxVertices <= _dynVbCapacity && maxIndices <= _dynIbCapacity) return;
 
-        _vb.Dispose(); _ib.Dispose();
-        _vb = default; _ib = default;
-        _vbCapacity = Math.Max(maxVertices, 4);
-        _ibCapacity = Math.Max(maxIndices, 6);
+        _dynVb.Dispose(); _dynIb.Dispose();
+        _dynVb = default; _dynIb = default;
+        _dynVbCapacity = Math.Max(maxVertices, 4);
+        _dynIbCapacity = Math.Max(maxIndices, 6);
 
         var vdesc = new BufferDesc
         {
-            ByteWidth = (uint)(_vbCapacity * PreviewVertex.SizeInBytes),
+            ByteWidth = (uint)(_dynVbCapacity * PreviewVertex.SizeInBytes),
             Usage = Usage.Dynamic,
             BindFlags = (uint)BindFlag.VertexBuffer,
             CPUAccessFlags = (uint)CpuAccessFlag.Write,
         };
         ComPtr<ID3D11Buffer> vb = default;
         _device.CreateBuffer(in vdesc, null, ref vb);
-        _vb = vb;
+        _dynVb = vb;
 
         var idesc = new BufferDesc
         {
-            ByteWidth = (uint)(_ibCapacity * sizeof(uint)),
+            ByteWidth = (uint)(_dynIbCapacity * sizeof(uint)),
             Usage = Usage.Dynamic,
             BindFlags = (uint)BindFlag.IndexBuffer,
             CPUAccessFlags = (uint)CpuAccessFlag.Write,
         };
         ComPtr<ID3D11Buffer> ib = default;
         _device.CreateBuffer(in idesc, null, ref ib);
-        _ib = ib;
+        _dynIb = ib;
 
         _dynamicMesh = true;
-        _indexCount = 0;
-        Mesh = null;
+        _dynIndexCount = 0;
+        // M264: does NOT clear Mesh. This pair sits alongside the static scene now rather than replacing
+        // it, and nulling the static mesh here is what used to make the map vanish behind particles.
     }
 
     /// <summary>M232: overwrite the dynamic buffers for this frame. Silently no-ops when the buffers are
     /// immutable, so a caller that forgot SetDynamicMesh gets a still frame rather than a device removal.</summary>
     public void UpdateDynamicMesh(PreviewVertex[] vertices, int vertexCount, uint[] indices, int indexCount)
     {
-        if (!_dynamicMesh || _vb.Handle is null || _ib.Handle is null) return;
-        vertexCount = Math.Min(vertexCount, _vbCapacity);
-        indexCount = Math.Min(indexCount, _ibCapacity);
+        if (!_dynamicMesh || _dynVb.Handle is null || _dynIb.Handle is null) return;
+        vertexCount = Math.Min(vertexCount, _dynVbCapacity);
+        indexCount = Math.Min(indexCount, _dynIbCapacity);
 
         MappedSubresource mv = default;
-        if (_ctx.Map(_vb, 0, Map.WriteDiscard, 0, ref mv) >= 0)
+        if (_ctx.Map(_dynVb, 0, Map.WriteDiscard, 0, ref mv) >= 0)
         {
             fixed (PreviewVertex* src = vertices)
                 System.Buffer.MemoryCopy(src, mv.PData,
-                    (long)_vbCapacity * PreviewVertex.SizeInBytes,
+                    (long)_dynVbCapacity * PreviewVertex.SizeInBytes,
                     (long)vertexCount * PreviewVertex.SizeInBytes);
-            _ctx.Unmap(_vb, 0);
+            _ctx.Unmap(_dynVb, 0);
         }
 
         MappedSubresource mi = default;
-        if (_ctx.Map(_ib, 0, Map.WriteDiscard, 0, ref mi) >= 0)
+        if (_ctx.Map(_dynIb, 0, Map.WriteDiscard, 0, ref mi) >= 0)
         {
             fixed (uint* src = indices)
-                System.Buffer.MemoryCopy(src, mi.PData, (long)_ibCapacity * sizeof(uint),
+                System.Buffer.MemoryCopy(src, mi.PData, (long)_dynIbCapacity * sizeof(uint),
                     (long)indexCount * sizeof(uint));
-            _ctx.Unmap(_ib, 0);
+            _ctx.Unmap(_dynIb, 0);
         }
 
-        _indexCount = indexCount;
+        _dynIndexCount = indexCount;
+    }
+
+    /// <summary>
+    /// <para>M264: point the input assembler at whichever buffer pair this draw reads from, rebinding only
+    /// when a draw crosses between them - so a frame of map geometry followed by particles costs one extra
+    /// bind, not one per slice.</para>
+    ///
+    /// <para>Returns false when the requested pair does not exist yet. That is a real case rather than a
+    /// defensive one: particle materials are registered when their pipelines resolve, which is before any
+    /// quad has been uploaded, and drawing from a null buffer would take the device down.</para>
+    /// </summary>
+    private bool BindMeshSource(bool dynamic, ref int bound)
+    {
+        if (dynamic ? _dynVb.Handle is null || _dynIb.Handle is null
+                    : _vb.Handle is null || _ib.Handle is null) return false;
+        int want = dynamic ? 1 : 0;
+        if (want == bound) return true;
+
+        uint stride = PreviewVertex.SizeInBytes, offset = 0;
+        if (dynamic)
+        {
+            _ctx.IASetVertexBuffers(0, 1, ref _dynVb, in stride, in offset);
+            _ctx.IASetIndexBuffer(_dynIb, Format.FormatR32Uint, 0);
+        }
+        else
+        {
+            _ctx.IASetVertexBuffers(0, 1, ref _vb, in stride, in offset);
+            _ctx.IASetIndexBuffer(_ib, Format.FormatR32Uint, 0);
+        }
+        bound = want;
+        return true;
     }
 
     public void SetMesh(PreviewMesh mesh)
     {
-        _dynamicMesh = false;
-        _vbCapacity = _ibCapacity = 0;
+        // M264: deliberately does NOT touch the dynamic pair - loading a map must not silently drop
+        // the particles drawn on top of it.
         Mesh = mesh;
         _vb.Dispose(); _ib.Dispose();
         _vb = default; _ib = default;
@@ -1637,7 +1678,10 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         error = null;
         DrawCalls = 0;
         if (!IsReady) { error = "no shader loaded"; return null; }
-        if (_vb.Handle is null || _indexCount == 0) { error = "no mesh set"; return null; }
+        // M264: either source is enough. A particle-only frame has no static mesh, and a map frame has
+        // no dynamic one until something uploads quads.
+        if ((_vb.Handle is null || _indexCount == 0) && (_dynVb.Handle is null || _dynIndexCount == 0))
+        { error = "no mesh set"; return null; }
         if (width <= 0 || height <= 0) { error = "zero-sized target"; return null; }
 
         var sw = Stopwatch.StartNew();
@@ -1669,9 +1713,9 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             _ctx.OMSetDepthStencilState(_depthState, 0);
 
             _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
-            uint stride = PreviewVertex.SizeInBytes, offset = 0;
-            _ctx.IASetVertexBuffers(0, 1, ref _vb, in stride, in offset);
-            _ctx.IASetIndexBuffer(_ib, Format.FormatR32Uint, 0);
+            // M264: bound per draw now, because one frame can contain both sources. -1 forces the first
+            // draw to bind rather than inheriting whatever the previous frame left set.
+            int boundSource = -1;
 
             bool compare = s.UseComparisonShader && _comparePs.Handle is not null;
 
@@ -1772,8 +1816,10 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             }
             BindResources(mat, mat.VsRefl, pixel: false);
 
-            uint count = mat.IndexCount < 0 ? (uint)_indexCount : (uint)mat.IndexCount;
-            if (count > 0)
+            uint count = mat.IndexCount < 0
+                ? (uint)(mat.UsesDynamicMesh ? _dynIndexCount : _indexCount)
+                : (uint)mat.IndexCount;
+            if (count > 0 && BindMeshSource(mat.UsesDynamicMesh, ref boundSource))
             {
                 _ctx.DrawIndexed(count, (uint)Math.Max(0, mat.StartIndex), 0);
                 DrawCalls++;
@@ -1899,7 +1945,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         // M242: the cache owns shader objects that no material releases, so it must be drained here or
         // every pipeline ever built leaks for the lifetime of the process.
         ClearPipelineCache();
-        _vb.Dispose(); _ib.Dispose(); _compareCb.Dispose();
+        _vb.Dispose(); _ib.Dispose(); _dynVb.Dispose(); _dynIb.Dispose(); _compareCb.Dispose();
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClamp.Dispose(); _comparison.Dispose();
         _raster.Dispose(); _blend.Dispose(); _depthState.Dispose();
