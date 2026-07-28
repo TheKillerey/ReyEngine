@@ -75,7 +75,21 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// </summary>
     public bool AnimateTime { get; set; } = true;
 
+    /// <summary>M263: wireframe, from the toolbar's Wire toggle. The renderer has always supported it;
+    /// nothing was passing it.</summary>
+    public bool Wireframe { get; set; }
+
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+    private float _frozenTime;
+
+    /// <summary>M263: the clock the TIME constant reads. Pausing FREEZES it rather than sending zero -
+    /// zeroing would snap every animated material back to its first frame, which is a different thing from
+    /// pausing and makes the button useless for looking at a moment.</summary>
+    private float AnimationTime()
+    {
+        if (AnimateTime) _frozenTime = (float)_clock.Elapsed.TotalSeconds;
+        return _frozenTime;
+    }
 
     /// <summary>The image to show. Swaps between two bitmaps so Avalonia is never compositing the one being
     /// written - a single bitmap tears under the compositor.</summary>
@@ -143,7 +157,8 @@ public sealed class Dx11ViewportSurface : IDisposable
 
             // M261. The sun and the lightmap scale are ungated, matching the GL path, which applies them
             // unconditionally. Fog is gated on the toggle, also matching it.
-            TimeSeconds = AnimateTime ? (float)_clock.Elapsed.TotalSeconds : 0f,
+            TimeSeconds = AnimationTime(),
+            Wireframe = Wireframe,
             MapSunColor = MapSun?.SunColor,
             MapSunDirection = MapSun?.SunDirection,
             MapLightMapScale = (float)LightmapScale,

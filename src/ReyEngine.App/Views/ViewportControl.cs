@@ -530,6 +530,35 @@ public sealed class ViewportControl : OpenGlControlBase
 
     /// <summary>World-space pick ray under a control-relative point (for click-to-select), derived from
     /// the exact matrices used to render the last frame.</summary>
+    /// <summary>The one place the pick state is written, so the GL path and the D3D11 path cannot drift
+    /// apart at exactly the line that matters.</summary>
+    private void CachePickMatrices(Matrix4x4 viewProj, double w, double h)
+    {
+        _lastViewProj = viewProj;
+        _lastViewportW = w;
+        _lastViewportH = h;
+        _lastCamPos = new Vector3(-_camera.Position.X, _camera.Position.Y, _camera.Position.Z);
+    }
+
+    /// <summary>
+    /// <para>M263: keep picking working when something OTHER than this control is presenting.</para>
+    ///
+    /// <para>Selection is a CPU raycast against the last view-projection, and that was only ever written
+    /// by the GL render. Under D3D11 this control is hidden and never renders, so the cached matrix went
+    /// stale - clicks were tested against wherever the camera last was under GL, or against identity if
+    /// GL never ran at all. The pointer events themselves always arrived, because the transparent
+    /// ViewportInput border covers both surfaces; only the matrix was wrong.</para>
+    ///
+    /// <para>The X mirror is applied here for the same reason it is in the render: League data is authored
+    /// in the opposite handedness. D3D11 mirrors inside the shader via PreviewSettings.MirrorX, which is
+    /// the same transform, so a screen ray means the same thing under both.</para>
+    /// </summary>
+    public void SyncPickMatrices(double width, double height)
+    {
+        float aspect = height <= 0 ? 1f : (float)(width / height);
+        CachePickMatrices(Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjection(aspect), width, height);
+    }
+
     public bool TryGetPickRay(Point screenPos, out Vector3 rayOrigin, out Vector3 rayDir)
         => ViewportPicking.TryGetRay(new Vector2((float)screenPos.X, (float)screenPos.Y),
             _lastViewProj, _lastViewportW, _lastViewportH, out rayOrigin, out rayDir);
@@ -829,10 +858,7 @@ public sealed class ViewportControl : OpenGlControlBase
         // events, outside the render loop) always matches what's actually on screen. The eye is stored
         // in MESH-DATA space: vertices get X-mirrored before the view matrix, so the camera effectively
         // sits at (-x, y, z) relative to the un-mirrored data the pivots/bounds live in.
-        _lastViewProj = viewProj;
-        _lastViewportW = Bounds.Width;
-        _lastViewportH = Bounds.Height;
-        _lastCamPos = new Vector3(-_camera.Position.X, _camera.Position.Y, _camera.Position.Z);
+        CachePickMatrices(viewProj, Bounds.Width, Bounds.Height);
         // M56: notify camera movement for positional map ambience (coarse: every ~100 world units)
         if (CameraMoved is not null && Vector3.DistanceSquared(_lastCamPos, _lastAudioCamPos) > 100f * 100f)
         {

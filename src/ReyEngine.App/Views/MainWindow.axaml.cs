@@ -106,56 +106,6 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>M252 (phase 6, step 3): render the SAME frame through both renderers and diff it.
-    ///
-    /// <para>The GL side has to come from glReadPixels inside the render callback - Avalonia cannot
-    /// screenshot an OpenGlControlBase - so this asks the control for one frame, waits for it, then renders
-    /// the D3D11 side at the identical size with the identical camera.</para></summary>
-    private async void OnCompareRenderers(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        if (DataContext is not MainWindowViewModel vm) return;
-        if (_dx11 is null || !_dx11.IsReady)
-        {
-            vm.Dx11ViewportStatus = "Turn DX11 on at least once first - the device is created lazily.";
-            return;
-        }
-
-        var tcs = new TaskCompletionSource<(byte[] Px, int W, int H)>();
-        void OnCap(byte[] px, int w, int h) => tcs.TrySetResult((px, w, h));
-        Viewport.FrameCaptured += OnCap;
-        try
-        {
-            bool wasDx11 = vm.UseDx11Viewport;
-            vm.UseDx11Viewport = false;             // the GL surface must be the visible one to render
-            await Task.Delay(50);
-            Viewport.RequestCapture();
-
-            var gl = await Task.WhenAny(tcs.Task, Task.Delay(3000)) == tcs.Task
-                ? tcs.Task.Result
-                : default;
-            if (gl.Px is null) { vm.Dx11ViewportStatus = "GL capture timed out."; return; }
-
-            // Same size, same camera - anything else and the diff measures the setup, not the renderers.
-            if (!_dx11.Render(Viewport.Camera, gl.W, gl.H)) { vm.Dx11ViewportStatus = "D3D11 render failed."; return; }
-            var dx = _dx11.LastPixels;
-            if (dx is null) { vm.Dx11ViewportStatus = "D3D11 produced no pixels."; return; }
-
-            var diffBuf = new byte[gl.Px.Length];
-            var report = Services.FrameDiff.Compare(gl.Px, dx, gl.W, gl.H, diffBuf);
-
-            string dir = Path.Combine(Path.GetTempPath(), "ReyEngine", "framediff");
-            Directory.CreateDirectory(dir);
-            SavePng(Path.Combine(dir, "a-opengl.png"), gl.Px, gl.W, gl.H);
-            SavePng(Path.Combine(dir, "b-dx11.png"), dx, gl.W, gl.H);
-            SavePng(Path.Combine(dir, "diff.png"), diffBuf, gl.W, gl.H);
-
-            vm.UseDx11Viewport = wasDx11;
-            vm.Dx11ViewportStatus = $"diff: {report.DifferingPercent:F1}% differ, "
-                                    + $"{report.CoverageMismatch:n0} coverage mismatch  ->  {dir}";
-            vm.LogRendererDiff(report.Describe() + Environment.NewLine + "images written to " + dir);
-        }
-        finally { Viewport.FrameCaptured -= OnCap; }
-    }
 
     private static void SavePng(string path, byte[] bgra, int w, int h)
     {
@@ -196,25 +146,33 @@ public partial class MainWindow : Window
         _dx11.MapSun = vm.CurrentSunProperties;
         _dx11.FogEnabled = vm.ShowFog;
         _dx11.LightmapScale = vm.CurrentLightmapScale;
+        _dx11.AnimateTime = vm.AnimationsPlaying;
+        _dx11.Wireframe = vm.ShowWireframe;
 
         if (!_dx11.Render(Viewport.Camera, w, h)) return;
 
         Dx11Surface.Source = _dx11.Current;
         Dx11Surface.Width = Viewport.Bounds.Width;
         Dx11Surface.Height = Viewport.Bounds.Height;
-        vm.Dx11ViewportStatus = _dx11.HasScene
-            ? $"D3D11  {_dx11.LastFrameMs:F2} ms  ·  {_dx11.LastDrawCalls} draws"
-              + (_dx11.LastCulled > 0 ? $"  ·  {_dx11.LastCulled} culled" : "")
-              // M255: name what nothing supplied. An unbound constant reads as zero, and zero is black
-              // for anything the shader multiplies by - so this is the difference between a diagnosis and
-              // a guess.
+
+        // M263: the GL control is hidden and not rendering, so nothing else refreshes the matrices that
+        // mesh picking raycasts against. Same size the GL path caches - logical bounds, not pixels.
+        Viewport.SyncPickMatrices(Viewport.Bounds.Width, Viewport.Bounds.Height);
+        // M263: the toolbar shows the frame cost and nothing else.
+        vm.Dx11ViewportStatus = _dx11.HasScene ? $"{_dx11.LastFrameMs:F2} ms" : "no scene";
+
+        // ...and everything that used to be on the toolbar is still one hover away. M255's unbound report
+        // in particular: an unbound constant reads as zero, and zero is black for anything the shader
+        // multiplies by, which is the difference between a diagnosis and a guess.
+        vm.Dx11ViewportDetail = _dx11.HasScene
+            ? $"D3D11  ·  {_dx11.LastDrawCalls} draws  ·  {_dx11.LastCulled} culled"
               + (_dx11.UnboundConstants.Count > 0
-                  ? $"  ·  UNBOUND: {string.Join(", ", _dx11.UnboundConstants.Take(4))}"
-                    + (_dx11.UnboundConstants.Count > 4 ? $" +{_dx11.UnboundConstants.Count - 4}" : "")
-                  : "")
+                  ? "\nUNBOUND: " + string.Join(", ", _dx11.UnboundConstants.Take(6))
+                    + (_dx11.UnboundConstants.Count > 6 ? $" +{_dx11.UnboundConstants.Count - 6}" : "")
+                  : "\nall declared constants bound")
             // No scene is a legitimate state, not a failure - say which, rather than showing an empty
             // viewport and letting it read as a broken renderer.
-            : "D3D11  no scene: " + FirstLine(_dx11.SceneReport);
+            : "D3D11 no scene: " + FirstLine(_dx11.SceneReport);
     }
 
     // ---- M81: About + updates ----

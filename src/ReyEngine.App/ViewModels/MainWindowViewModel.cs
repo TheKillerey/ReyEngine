@@ -1486,6 +1486,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>What the D3D11 surface is doing, for the status bar. Empty when it is not running.</summary>
     [ObservableProperty] private string _dx11ViewportStatus = "";
 
+    /// <summary>M263: the frame cost line is now just the milliseconds, as asked. The draw/cull/unbound
+    /// detail moves here and shows on hover - it is the diagnostic that found M229, M230, M255 and M261,
+    /// so it is worth keeping reachable even when it is not worth staring at.</summary>
+    [ObservableProperty] private string _dx11ViewportDetail = "";
+
+    /// <summary>M263: drives the TIME constant. Pausing freezes the clock where it is rather than resetting
+    /// it, so this holds a moment rather than jumping back to frame zero.</summary>
+    [ObservableProperty] private bool _animationsPlaying = true;
+
     [ObservableProperty] private bool _showWireframe;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;

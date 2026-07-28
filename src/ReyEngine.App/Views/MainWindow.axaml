@@ -499,16 +499,20 @@
                 <ComboBoxItem>Debug · Mirrored</ComboBoxItem>
               </ComboBox>
               <ToggleButton Classes="vp" Content="◫ Wire" IsChecked="{Binding ShowWireframe}" ToolTip.Tip="Wireframe overlay" />
-              <!-- M248 (phase 6, step 1): OpenGL <-> Direct3D 11, side by side. Nothing is removed; this
-                   swaps which of two sibling surfaces is visible. -->
-              <Button Classes="vp" Content="A/B" Click="OnCompareRenderers"
-                      ToolTip.Tip="Render this exact frame through both renderers and diff it. Writes a-opengl.png, b-dx11.png and diff.png, and puts the histogram in the console." />
+              <!-- M248 (phase 6, step 1): OpenGL <-> Direct3D 11. Swaps which of two sibling surfaces is
+                   visible. M263 removed the A/B compare button - it had served its purpose, and the
+                   FrameDiff machinery behind it stays for the harness. -->
               <ToggleButton Classes="vp" Content="DX11" IsChecked="{Binding UseDx11Viewport}"
-                            ToolTip.Tip="Render this viewport with Direct3D 11 instead of OpenGL (experimental). Step 1 draws a reference mesh with the editor camera; scene content follows in step 2." />
+                            ToolTip.Tip="Render this viewport with Direct3D 11 instead of OpenGL." />
+              <!-- M263: pause freezes the animation clock where it is rather than resetting it. -->
+              <ToggleButton Classes="vp" Content="▶" IsChecked="{Binding AnimationsPlaying}"
+                            IsVisible="{Binding UseDx11Viewport}"
+                            ToolTip.Tip="Play or pause shader animation (scrolling UVs, flipbooks, flow). Pausing holds the current moment." />
               <TextBlock Text="{Binding Dx11ViewportStatus}" VerticalAlignment="Center" Margin="8,0,0,0"
                          FontFamily="Consolas" FontSize="10" Opacity="0.7"
                          Foreground="{DynamicResource ReyTextBrush}"
-                         IsVisible="{Binding UseDx11Viewport}" />
+                         IsVisible="{Binding UseDx11Viewport}"
+                         ToolTip.Tip="{Binding Dx11ViewportDetail}" />
               <ToggleButton Classes="vp" Content="◪ Cull" IsChecked="{Binding CullBackfaces}"
                             ToolTip.Tip="Respect each material's cullEnable (single-sided materials cull backfaces; cullEnable=false renders two-sided with flipped-normal lighting). Off = force everything two-sided." />
               <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" ToolTip.Tip="Show skeleton bones" />
