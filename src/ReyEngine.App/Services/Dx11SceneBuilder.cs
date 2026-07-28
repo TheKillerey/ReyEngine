@@ -126,9 +126,21 @@ public static class Dx11SceneBuilder
             // so an unwritten TintColor is zero and everything multiplied by it is black. Any material
             // whose shader multiplies by an authored parameter has the same failure.
             var parameters = new List<(string, float[])>();
+            var authored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var prm in b.Parameters)
                 if (prm.TryGetVector4(out var pv))
+                {
                     parameters.Add((prm.Name, new[] { pv.X, pv.Y, pv.Z, pv.W }));
+                    authored.Add(prm.Name);
+                }
+
+            // M257: fall back to the SHADER's declared default for anything the material leaves out.
+            // shaders.bin records these on 343 of its 347 definitions, as parameters[].name + .data.
+            // Without them an unauthored parameter is simply unwritten, i.e. zero - and zero is not
+            // "unspecified", it is a value the shader multiplies by. Authored always wins.
+            if (perms is not null && perms.TryGetParameterDefaults(b.RenderShader!, out var defs))
+                foreach (var (dn, dv) in defs)
+                    if (!authored.Contains(dn)) parameters.Add((dn, dv));
 
             scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,
                 new ShaderDescription(full, DxbcStage.Vertex, vp.Key, vp.BlobIndex, b.Macros, vs),

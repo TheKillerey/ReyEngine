@@ -36,6 +36,7 @@ public sealed class ShaderPermutationIndex
     private readonly Dictionary<string, Toc?> _tocs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Dictionary<string, string>> _featureDefines = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Dictionary<string, bool>> _switchDefaults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Dictionary<string, float[]>> _paramDefaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly WadFile? _cache;
     private readonly Dictionary<ulong, string> _cachePaths = new();
 
@@ -87,6 +88,8 @@ public sealed class ShaderPermutationIndex
             uint nameHash = HashAlgorithms.Fnv1a("name");
             uint defHash = HashAlgorithms.Fnv1a("onByDefault");
             uint pathHash = HashAlgorithms.Fnv1a("objectPath");
+            uint paramsHash = HashAlgorithms.Fnv1a("parameters");
+            uint dataHash = HashAlgorithms.Fnv1a("data");
 
             foreach (var (_, obj) in tree.Objects)
             {
@@ -108,8 +111,28 @@ public sealed class ShaderPermutationIndex
                         if (sn is not null) sd[sn] = on;
                     }
 
+                // M257: the shader's own PARAMETER DEFAULTS. Each entry of `parameters` is a struct with a
+                // `name` string and a `data` Vector4 - e.g. albedoNewMin = <0.1,0,0,0>, rimOffset =
+                // <0.3,0,0,0>. Present on 343 of the 347 shader definitions.
+                //
+                // These are what a material means when it does not author a parameter. Without them the
+                // constant is simply left unwritten, i.e. zero - and zero is not "unspecified", it is a
+                // value the shader will happily multiply by. The same failure as M255's TintColor, one
+                // level further out.
+                var pd = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+                if (obj.Properties.TryGetValue(paramsHash, out var prp) && prp is BinTreeContainer pc)
+                    foreach (var el in pc.Elements.OfType<BinTreeStruct>())
+                    {
+                        string? pn = el.Properties.TryGetValue(nameHash, out var pnp) && pnp is BinTreeString pns
+                            ? pns.Value : null;
+                        if (pn is null) continue;
+                        if (el.Properties.TryGetValue(dataHash, out var dv) && dv is BinTreeVector4 v4)
+                            pd[pn] = new[] { v4.Value.X, v4.Value.Y, v4.Value.Z, v4.Value.W };
+                    }
+
                 _featureDefines[shaderPath] = fd;
                 _switchDefaults[shaderPath] = sd;
+                _paramDefaults[shaderPath] = pd;
             }
         }
         catch { /* best effort — an unreadable shaders.bin just means fewer fixed defines */ }
@@ -276,6 +299,17 @@ public sealed class ShaderPermutationIndex
     /// <summary>M213: the shader's own featureDefines and staticSwitch defaults, from shaders.bin. The DX11
     /// preview needs these to reconstruct a material's COMPLETE define set - a material only authors the
     /// switches it changes, and the rest come from the shader definition.</summary>
+    /// <summary>M257: the shader's declared defaults for parameters a material does not author. Empty when
+    /// shaders.bin is unavailable, which is a reason to bind nothing rather than to bind zero.</summary>
+    public bool TryGetParameterDefaults(string shader, out IReadOnlyDictionary<string, float[]> defaults)
+    {
+        if (_paramDefaults.TryGetValue(shader, out var d)) { defaults = d; return true; }
+        defaults = EmptyParams;
+        return false;
+    }
+
+    private static readonly Dictionary<string, float[]> EmptyParams = new();
+
     public bool TryGetShaderDefs(string shader,
         out IReadOnlyDictionary<string, string> featureDefines,
         out IReadOnlyDictionary<string, bool> switchDefaults)
