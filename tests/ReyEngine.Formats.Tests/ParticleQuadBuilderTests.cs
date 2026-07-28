@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Numerics;
 using ReyEngine.Rendering.D3D11;
 using Xunit;
@@ -141,6 +142,80 @@ public class ParticleQuadBuilderTests
         Assert.Equal(cols, t[0]);
         Assert.Equal(invC, t[1], 5);
         Assert.Equal(invR, t[2], 5);
+    }
+
+    [Fact]
+    public void Direction_oriented_points_the_quad_along_screen_space_velocity()
+    {
+        // GL: rotation = atan(-dot(vel,right), dot(vel,up)). Velocity straight along the camera's up
+        // resolves to zero rotation; velocity along its right resolves to a quarter turn. Asserted by
+        // comparing against the same particle WITHOUT the mode, which is the only claim that isolates it.
+        var alongUp = OneParticle(Vector3.Zero, 1f, 4f, Vector4.One);
+        alongUp[ParticleQuadBuilder.OffVel + 1] = 10f;
+        var alongRight = OneParticle(Vector3.Zero, 1f, 4f, Vector4.One);
+        alongRight[ParticleQuadBuilder.OffVel + 0] = 10f;
+
+        var dir = new ParticleQuadBuilder.QuadOrientation(false, true, default, default, default);
+        var plain = BuildWith(OneParticle(Vector3.Zero, 1f, 4f, Vector4.One), default);
+
+        // moving "up" the screen means no turn, so it matches the unrotated quad exactly
+        var up = BuildWith(alongUp, dir);
+        for (int i = 0; i < 4; i++) Assert.Equal(plain[i].Position.Y, up[i].Position.Y, 4);
+
+        // moving "right" turns it, so it must not
+        var side = BuildWith(alongRight, dir);
+        Assert.True(Vector3.Distance(plain[0].Position, side[0].Position) > 0.5f,
+            $"velocity along the camera right did not turn the quad: {plain[0].Position} -> {side[0].Position}");
+    }
+
+    [Fact]
+    public void Arbitrary_quad_uses_the_placement_frame_and_ignores_the_spin()
+    {
+        // A placement frame rotated into the XZ plane must put the quad there, and aRotFrame must be
+        // suppressed (GL: `rotation = uArbitraryQuad != 0 ? 0.0 : aRotFrame.x`).
+        var inst = OneParticle(Vector3.Zero, 2f, 2f, Vector4.One, rot: 1.234f);
+        var orient = new ParticleQuadBuilder.QuadOrientation(
+            true, false, Vector3.UnitX, Vector3.UnitZ, Vector3.UnitY);
+
+        var v = BuildWith(inst, orient);
+        foreach (var vert in v) Assert.Equal(0f, vert.Position.Y, 4);   // flat in XZ, not facing the camera
+
+        // and the suppressed spin means it matches the same quad with rot = 0
+        var noSpin = BuildWith(OneParticle(Vector3.Zero, 2f, 2f, Vector4.One), orient);
+        for (int i = 0; i < 4; i++)
+            Assert.Equal(v[i].Position.X, noSpin[i].Position.X, 4);
+    }
+
+    [Fact]
+    public void Rotation_scales_along_the_screen_axes_not_the_quad_axes()
+    {
+        // The GL order is rotate-the-CORNER and only then scale per axis, which has a consequence worth
+        // pinning down: a quarter turn maps the corner square onto itself, so the per-axis scales land on
+        // the same screen axes as before and the quad's EXTENTS do not change. Rotating the basis instead
+        // - what M232 did - would swap them to 1 x 4. This test is the difference between the two.
+        var v = BuildWith(OneParticle(Vector3.Zero, 4f, 1f, Vector4.One, rot: MathF.PI / 2f), default);
+
+        float minX = v.Min(x => x.Position.X), maxX = v.Max(x => x.Position.X);
+        float minY = v.Min(x => x.Position.Y), maxY = v.Max(x => x.Position.Y);
+        Assert.Equal(4f, maxX - minX, 3);
+        Assert.Equal(1f, maxY - minY, 3);
+
+        // and the texture IS turned - the corner carrying UV (0,0) moves to a different screen position.
+        // Compare the whole vector: under a quarter turn its X happens to be unchanged and only Y flips,
+        // so checking one component alone would look like "no rotation".
+        var unrotated = BuildWith(OneParticle(Vector3.Zero, 4f, 1f, Vector4.One), default);
+        Assert.True(Vector3.Distance(unrotated[0].Position, v[0].Position) > 0.5f,
+            $"corner 0 barely moved: {unrotated[0].Position} -> {v[0].Position}");
+    }
+
+    private static PreviewVertex[] BuildWith(float[] inst, ParticleQuadBuilder.QuadOrientation o)
+    {
+        var verts = new PreviewVertex[4];
+        var idx = new uint[6];
+        int v = 0, i = 0;
+        var (r, u, n) = ParticleQuadBuilder.Basis(Vector3.UnitZ, Vector3.UnitY);
+        ParticleQuadBuilder.Append(inst, 1, verts, ref v, idx, ref i, r, u, n, o);
+        return verts;
     }
 
     [Fact]

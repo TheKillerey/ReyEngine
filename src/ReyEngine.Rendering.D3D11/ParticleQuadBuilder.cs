@@ -25,7 +25,8 @@ public static class ParticleQuadBuilder
     /// 19 floats: pos(0-2) sizeX(3) sizeY(4) rgba(5-8) rot(9) frame(10) age(11) vel(12-14) euler(15-17)
     /// erosionDrive(18).</summary>
     public const int Stride = 19;
-    public const int OffPos = 0, OffSizeX = 3, OffSizeY = 4, OffColor = 5, OffRot = 9, OffFrame = 10, OffErosion = 18;
+    public const int OffPos = 0, OffSizeX = 3, OffSizeY = 4, OffColor = 5, OffRot = 9, OffFrame = 10;
+    public const int OffVel = 12, OffEuler = 15, OffErosion = 18;
 
     /// <summary>An orthonormal billboard basis facing <paramref name="toCamera"/>. Falls back to fixed axes
     /// when the direction is degenerate or parallel to up, so a quad never collapses to a line.</summary>
@@ -39,6 +40,18 @@ public static class ParticleQuadBuilder
         return (right, Vector3.Normalize(Vector3.Cross(n, right)), n);
     }
 
+    /// <summary>How a quad is oriented, mirroring the OpenGL renderer's three cases.</summary>
+    public readonly record struct QuadOrientation(
+        bool ArbitraryQuad,
+        bool DirectionOriented,
+        Vector3 PlacementRight,
+        Vector3 PlacementUp,
+        Vector3 PlacementForward)
+    {
+        /// <summary>Plain camera billboard - what every emitter got before M238.</summary>
+        public static QuadOrientation Billboard => default;
+    }
+
     /// <summary>
     /// Append <paramref name="count"/> quads from <paramref name="instances"/> into the vertex and index
     /// buffers at <paramref name="vertexCursor"/> / <paramref name="indexCursor"/>, advancing both.
@@ -48,7 +61,8 @@ public static class ParticleQuadBuilder
         float[] instances, int count,
         PreviewVertex[] verts, ref int vertexCursor,
         uint[] indices, ref int indexCursor,
-        Vector3 right, Vector3 up, Vector3 normal)
+        Vector3 right, Vector3 up, Vector3 normal,
+        QuadOrientation orientation = default)
     {
         int written = 0;
         for (int p = 0; p < count; p++)
@@ -58,9 +72,8 @@ public static class ParticleQuadBuilder
             if (vertexCursor + 4 > verts.Length || indexCursor + 6 > indices.Length) break;
 
             var pos = new Vector3(instances[o + OffPos], instances[o + OffPos + 1], instances[o + OffPos + 2]);
-            float hx = instances[o + OffSizeX] * 0.5f;
-            float hy = instances[o + OffSizeY] * 0.5f;
-            float rot = instances[o + OffRot];
+            float sx = instances[o + OffSizeX];
+            float sy = instances[o + OffSizeY];
 
             // BGRA. The simulator stores RGBA; quad_vs reads COLOR0.zyxw.
             var colour = new Vector4(
@@ -70,20 +83,54 @@ public static class ParticleQuadBuilder
             float frame = instances[o + OffFrame];
             float erosion = instances[o + OffErosion];
 
-            // Per-particle roll about the view axis, applied to the basis rather than to each corner.
+            // M238: the three orientation cases, transcribed from the GL vertex shader so the two previews
+            // cannot disagree.
+            //
+            //   arbitraryQuad     the quad lies in the emitter's PLACEMENT frame, turned by the
+            //                     per-particle Euler rotation, and the spin about the view axis is
+            //                     suppressed (GL: `rotation = uArbitraryQuad != 0 ? 0.0 : aRotFrame.x`)
+            //   directionOriented the spin instead points the quad along the particle's screen-space
+            //                     velocity, so a spark leans the way it travels
+            //   otherwise         a plain camera billboard
+            float rot = orientation.ArbitraryQuad ? 0f : instances[o + OffRot];
+            if (orientation.DirectionOriented)
+            {
+                var vel = new Vector3(instances[o + OffVel], instances[o + OffVel + 1], instances[o + OffVel + 2]);
+                float vx = Vector3.Dot(vel, right);
+                float vy = Vector3.Dot(vel, up);
+                if (MathF.Abs(vx) + MathF.Abs(vy) > 1e-4f) rot = MathF.Atan2(-vx, vy);
+            }
+
+            var basisR = right;
+            var basisU = up;
+            var basisN = normal;
+            if (orientation.ArbitraryQuad)
+            {
+                var euler = new Vector3(instances[o + OffEuler], instances[o + OffEuler + 1], instances[o + OffEuler + 2]);
+                var lr = RotateEuler(Vector3.UnitX, euler);
+                var lu = RotateEuler(Vector3.UnitY, euler);
+                basisR = orientation.PlacementRight * lr.X + orientation.PlacementUp * lr.Y + orientation.PlacementForward * lr.Z;
+                basisU = orientation.PlacementRight * lu.X + orientation.PlacementUp * lu.Y + orientation.PlacementForward * lu.Z;
+                var cr = Vector3.Cross(basisR, basisU);
+                if (cr.LengthSquared() > 1e-8f) basisN = Vector3.Normalize(cr);
+            }
+
+            // The CORNER is rotated and only then scaled per axis - the GL order. Rotating the basis
+            // instead (what M232 did) gives a different shape whenever sizeX != sizeY, which is the
+            // discrepancy M237 flagged and this closes.
             float cs = MathF.Cos(rot), sn = MathF.Sin(rot);
-            var rx = right * cs + up * sn;
-            var ry = up * cs - right * sn;
 
             uint b = (uint)vertexCursor;
             for (int k = 0; k < 4; k++)
             {
                 var (dx, dy, u, v) = Corner(k);
+                float rx = dx * cs - dy * sn;
+                float ry = dx * sn + dy * cs;
                 ref var vert = ref verts[vertexCursor++];
                 vert = default;
-                vert.Position = pos + rx * (dx * hx) + ry * (dy * hy);
-                vert.Normal = normal;
-                vert.Tangent = new Vector4(rx, 1f);
+                vert.Position = pos + basisR * (rx * sx) + basisU * (ry * sy);
+                vert.Normal = basisN;
+                vert.Tangent = new Vector4(basisR, 1f);
                 vert.Uv0 = new Vector4(u, v, frame, erosion);
                 vert.Uv1 = new Vector2(u, v);
                 vert.Color = colour;
@@ -100,14 +147,25 @@ public static class ParticleQuadBuilder
         return written;
     }
 
-    /// <summary>Quad corner k: offset in [-1,1] and its UV, v increasing downward to match an atlas read
+    /// <summary>Euler xyz in radians, in the same order the GL shader applies them (x, then y, then z).</summary>
+    private static Vector3 RotateEuler(Vector3 v, Vector3 r)
+    {
+        float sx = MathF.Sin(r.X), cx = MathF.Cos(r.X);
+        float sy = MathF.Sin(r.Y), cy = MathF.Cos(r.Y);
+        float sz = MathF.Sin(r.Z), cz = MathF.Cos(r.Z);
+        v = new Vector3(v.X, v.Y * cx - v.Z * sx, v.Y * sx + v.Z * cx);
+        v = new Vector3(v.X * cy + v.Z * sy, v.Y, -v.X * sy + v.Z * cy);
+        return new Vector3(v.X * cz - v.Y * sz, v.X * sz + v.Y * cz, v.Z);
+    }
+
+    /// <summary>Quad corner k: offset in [-0.5, 0.5] - GL's base quad - and its UV, v increasing downward to match an atlas read
     /// from the top-left.</summary>
     private static (float dx, float dy, float u, float v) Corner(int k) => k switch
     {
-        0 => (-1f, 1f, 0f, 0f),
-        1 => (1f, 1f, 1f, 0f),
-        2 => (1f, -1f, 1f, 1f),
-        _ => (-1f, -1f, 0f, 1f),
+        0 => (-0.5f, 0.5f, 0f, 0f),
+        1 => (0.5f, 0.5f, 1f, 0f),
+        2 => (0.5f, -0.5f, 1f, 1f),
+        _ => (-0.5f, -0.5f, 0f, 1f),
     };
 
     /// <summary>The flipbook atlas descriptor <c>quad_vs</c> expects: (columns, 1/columns, 1/rows, 0).

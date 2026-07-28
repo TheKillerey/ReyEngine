@@ -228,8 +228,14 @@ public sealed class D3D11ParticlePlayback
             if ((uint)sl.EmitterIndex >= (uint)_sim.Emitters.Count) { sl.Material.Visible = false; continue; }
             var es = _sim.Emitters[sl.EmitterIndex];
             int start = idx;
+            // M238: each emitter carries its own orientation mode, and arbitraryQuad needs the emitter's
+            // PLACEMENT frame, which the simulator computed when the system was placed.
+            var orient = new ParticleQuadBuilder.QuadOrientation(
+                es.Def.IsArbitraryQuad, es.Def.IsDirectionOriented,
+                es.PlacementRight, es.PlacementUp, es.PlacementForward);
+
             int drawn = ParticleQuadBuilder.Append(es.Instances, es.InstanceCount,
-                _verts, ref v, _indices, ref idx, right, up, normal);
+                _verts, ref v, _indices, ref idx, right, up, normal, orient);
 
             sl.Quads = drawn;
             sl.Material.StartIndex = start;
