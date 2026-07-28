@@ -1040,38 +1040,57 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // only one that does not silently crop the texture to a sub-rectangle.
                     "TEXTURE_INFO" => new[] { 1f, 1f, 1f, 0f },
 
-                    // M232 NOT DONE, and deliberately left unbound rather than guessed. Flipping each
-                    // particle define and diffing the reflected interface says exactly WHICH constants that
-                    // stage adds:
-                    //     ALPHA_EROSION      -> cAlphaErosionParams, cAlphaErosionTextureMixer
-                    //     SOFT_PARTICLES     -> cSoftParticleParams, cSoftParticleControl, cDepthConversionParams
-                    //     PALETTIZE_TEXTURES -> cPaletteSelectMain, cPaletteSrcMixerMain
-                    //     ALPHA_TEST         -> AlphaTestReferenceValue
-                    // It does NOT say what values they should hold. A first attempt at "neutral" defaults
-                    // (erosion mixer = red channel, wide feathers, zero alpha reference) was measured on a
-                    // 3-quad probe across all 33 permutations Ahri's emitters select: it changed nothing on
-                    // 31 and turned two from drawing to blank. So the values were wrong, and reasoning about
-                    // them from the field names is the same mistake M212 made with SHADOW_COLOR.
-                    //
-                    // They are left absent so the unbound-constant report NAMES them, which is the honest
-                    // signal. Deriving them needs either the per-permutation disassembly or a real emitter
-                    // supplying them through Params - the emitter path already does the latter.
+                    // M234: DERIVED, by disassembling the permutation each define selects. The earlier
+                    // attempt reasoned from field names, made two permutations worse and none better, and
+                    // was reverted; these are read off the arithmetic instead, and each is chosen so the
+                    // stage is a provable no-op for ALL inputs rather than merely plausible.
 
-                    // Shifts the quad along the view ray to bias it in the depth test. Zero is "where the
-                    // emitter put it"; the engine authors it per emitter.
-                    "PARTICLE_DEPTH_PUSH_PULL" or "EMITTER_DEPTH_PUSH_PULL" or "CAMERAOFFSET" => new[] { 0f, 0f, 0f, 0f },
+                    // ALPHA_EROSION, from ps blob 15:
+                    //     dp4_sat r0.y, erosionTexel, cb0[1]     // e = sat(dot(texel, MIXER))
+                    //     add     r0.x, r0.y, -cb0[0].y
+                    //     add     r0.xy, -r0.xyxx, v3.zzzz       // x = drive-e+P.y , y = drive-e
+                    //     mul_sat r0.xy, r0.xyxx, cb0[0].zwzz    // x *= P.z , y *= P.w
+                    //     add     r0.x, -r0.y, r0.x              // mask = sat(x) - sat(y)
+                    // With drive and e both in [0,1], drive-e is in [-1,1]. P.y = 2 puts x in [1,3] so
+                    // sat(x) is 1 everywhere, and P.w = 0 forces sat(y) = 0, giving mask = 1 for every
+                    // input. P.y = 1 was the earlier guess and it fails exactly when the erosion map is
+                    // the WHITE stand-in: e = 1, drive = 0, sat((0-1+1)*1) = 0, sprite fully erased. That
+                    // is why those permutations rendered blank. P.x is not referenced at all here.
+                    "CALPHAEROSIONPARAMS" => new[] { 0f, 2f, 1f, 0f },
+                    // Dotted against the erosion texel; the census measured (1,0,0,0) - red - on ~74%.
+                    "CALPHAEROSIONTEXTUREMIXER" => new[] { 1f, 0f, 0f, 0f },
 
-                    // defaultparticlequadunlit's material parameters. Neutral values so a shader picked
-                    // straight from the dropdown - with no material behind it - shows its diffuse rather
-                    // than a black or fully-eroded quad. A material that authors them overrides via Params.
-                    "COLOR_USE_TEXTURECOLOR" => new[] { 1f, 1f, 1f, 1f },
-                    "ALPHA_TEXTURE_USE" => new[] { 0f, 0f, 0f, 0f },
-                    "COLOR_CHANNELTOUSE" => new[] { 1f, 0f, 0f, 0f },
-                    "ALPHA_CHANNELTOUSE" => new[] { 0f, 0f, 0f, 1f },
-                    "SOFTPARTICLE_FADEDISTANCE" => new[] { 0f, 0f, 0f, 0f },
-                    "BLOOMTHRESHOLD" => new[] { 1f, 1f, 1f, 1f },
-                    "FOW_INTENSITY_RGBA" or "FOW_INTENSITY_BLOOM" => new[] { 0f, 0f, 0f, 0f },
-                    "COLOR_LOOKUP_UV" => new[] { 0f, 0f, 0f, 0f },
+                    // ALPHA_TEST, from ps blob 8:
+                    //     mad r1.x, v1.w, r0.w, -cb0[0].x   // vColor.a * tex.a - REF
+                    //     lt  r1.x, r1.x, l(0)
+                    //     discard_nz r1.x
+                    // so a reference of 0 discards only where alpha is negative, i.e. never.
+                    "ALPHATESTREFERENCEVALUE" => new[] { 0f, 0f, 0f, 0f },
+
+                    // PALETTIZE_TEXTURES, from ps blob 21:
+                    //     dp4_sat r1.x, spriteTexel, cb0[1]   // u = sat(dot(texel, SRC_MIXER))
+                    //     add     r1.x, r1.x, cb0[0].z        // u += Select.z
+                    //     add     r1.y, cb0[0].w, cb0[0].x    // v  = Select.w + Select.x
+                    //     sample  paletteStrip(u, v)
+                    // There is no bypass - the palette colour REPLACES the sprite's - so this stage cannot
+                    // be neutralised, only fed sanely: row 0, and the red channel driving the lookup, which
+                    // is the same convention the erosion mixer uses. A real emitter overrides both.
+                    "CPALETTESELECTMAIN" => new[] { 0f, 0f, 0f, 0f },
+                    "CPALETTESRCMIXERMAIN" => new[] { 1f, 0f, 0f, 0f },
+
+                    // SOFT_PARTICLES, from ps blob 129:
+                    //     d    = 1/(sceneDepth*DC.y + DC.x) - 1/(SV_Position.z*DC.y + DC.x)
+                    //     fade = smoothstep(sat((d - P.x)*P.z)) - smoothstep(sat((d - P.y)*P.w))
+                    // P.x = -1e6 with P.z = 1 makes the first term sat(d + 1e6) = 1 for any finite d, and
+                    // P.w = 0 makes the second sat(0) = 0, so fade = 1 - 0 = 1 regardless of what depth
+                    // the stand-in texture holds. The earlier guess (0, 1e6, 0, 1e6) evaluated to 0 - 0 = 0
+                    // - fully transparent - which is why SOFT_PARTICLES never drew a pixel.
+                    "CSOFTPARTICLEPARAMS" => new[] { -1e6f, 0f, 1f, 0f },
+                    // Not referenced by this permutation; kept so the report does not flag it as missing.
+                    "CSOFTPARTICLECONTROL" => new[] { 0f, 0f, 0f, 0f },
+                    // Feeds two reciprocals. Both terms must stay finite or d is NaN and the quad vanishes,
+                    // so neither component may be zero.
+                    "CDEPTHCONVERSIONPARAMS" => new[] { 1f, 1f, 0f, 0f },
 
                     // M232: MULT_PASS's second flipbook atlas descriptor, same shape as TEXTURE_INFO
                     // and derived the same way (M231).
