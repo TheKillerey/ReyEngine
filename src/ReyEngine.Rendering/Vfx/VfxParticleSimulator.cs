@@ -725,7 +725,19 @@ public sealed class VfxParticleSimulator
             BirthDrag = birthDrag,
             Age = 0f,
             Life = life,
-            BirthSize = new Vector2(birthScale.X, birthScale.Y == 0 ? birthScale.X : birthScale.Y),
+            // M239: isUniformScale means the size is SCALAR - X drives both axes and Y/Z are ignored.
+            //
+            // This matters because Riot's authoring tool leaves stale bytes in the unused components. On
+            // Map12's Bloom_SmallWaterfall the two "flower petal" emitters both carry
+            // birthScale0 = <26, 3428.093, 5242.965> and <15, 3428.093, 5242.965> - X differs per emitter,
+            // Y and Z are byte-identical leftovers. Taking Y at face value gave a 250:1 aspect ratio, and
+            // the petals drew as long diagonal streaks across the whole viewport instead of flying about.
+            //
+            // The pre-existing `Y == 0 ? X : Y` fallback was aimed at exactly this case but cannot fire,
+            // because the junk is not zero. The authored flag is the reliable signal, not the value.
+            BirthSize = d.Extras?.IsUniformScale == true
+                ? new Vector2(birthScale.X, birthScale.X)
+                : new Vector2(birthScale.X, birthScale.Y == 0 ? birthScale.X : birthScale.Y),
             BirthColor = d.BirthColor.SampleBirth(_rng),
             BirthRotation = birthRotation * (MathF.PI / 180f),
             Rot = d.IsMeshPrimitive ? 0f : birthRotation.X * (MathF.PI / 180f),
@@ -767,6 +779,8 @@ public sealed class VfxParticleSimulator
             var lg = lingering ? d.Linger : null;
 
             var scaleMul = lg?.Scale?.Sample(lt) ?? d.ScaleOverLife?.Sample(t) ?? Vector3.One;
+            // M239: the over-life multiplier is scalar for the same reason the birth size is.
+            if (d.Extras?.IsUniformScale == true) scaleMul = new Vector3(scaleMul.X);
             var colMul = lg?.SeparateColor?.Sample(lt) ?? d.ColorOverLife?.Sample(t) ?? Vector4.One;
             var col = p.BirthColor * colMul;
             // M203: applied HERE, not per primitive type, because the billboard, ribbon (trail/beam) and
