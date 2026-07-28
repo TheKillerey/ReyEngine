@@ -128,8 +128,13 @@ or corrects it and covers 2/3/4.
 
 ## Also worth grabbing while you are in there
 
-- `Alpha_Offset` — the one constant M257 could not resolve. Not in `shaders.bin`, unauthored by any Map12
-  material. Read its value from the bound constant buffer on a draw whose shader declares it.
+- `Alpha_Offset` - **RESOLVED without a capture (M262), no longer worth grabbing.** It is an additive
+  bias on output alpha: `add o0.w, r2.w, cb0[1].x` in staticmesh/env_glowsign, so the identity is 0.
+  Declared by four pixel shaders, used in all 2,176 permutations, no RDEF default, and authored by 26
+  bins with values from -0.795 to 2 - a spread straddling zero. Half of Map12's ENV_GlowSign materials
+  omit it, so Riot's content relies on a neutral default. M257 called it unresolvable after checking
+  only shaders.bin; it is a per-material parameter, not a global. Bound to 0 explicitly, which changed
+  no pixels - it was already reading as zero - and cleared the last entry from the unbound report.
 - The **shadow map** itself: its format, resolution, and the real `mShadowProj`. M256 bound identity as a
   placeholder; this is what would replace it.
 - Whether `SHADOW_COLOR` / `SHADOW_COLOR_COMPLEMENT` really sum to 1.0 in the client, which M212 inferred

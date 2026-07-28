@@ -1284,6 +1284,27 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // and derived the same way (M231).
                     "TEXTURE_INFO_2" => new[] { 1f, 1f, 1f, 0f },
                     "KCOLORFACTOR" => new[] { 1f, 1f, 1f, 1f },
+
+                    // M262: an additive bias on OUTPUT ALPHA. The identity for an add is zero.
+                    // From staticmesh/env_glowsign ps blob 0, $Globals+16 -> cb0[1].x:
+                    //
+                    //     add o0.w, r2.w, cb0[1].x        // outAlpha = alpha + Alpha_Offset
+                    //
+                    // Declared by exactly four pixel shaders - skinnedmesh/diffuse_alpha_add,
+                    // skinnedmesh/glowsign, staticmesh/env_glowsign and env_glowsign_atlas - USED in all
+                    // 2,176 permutations, and carrying no RDEF default in any of them. M257 called it
+                    // unresolvable after finding nothing in shaders.bin; it is simply a per-material
+                    // parameter, authored by 26 bins with values from -0.795 to 2. A spread straddling
+                    // zero is what a bias around a zero default looks like, and half of Map12's eight
+                    // ENV_GlowSign materials omit it entirely - so Riot's own content depends on the
+                    // default being neutral.
+                    //
+                    // Zero was already the effective value, because an unwritten constant reads as zero.
+                    // Binding it makes that deliberate rather than incidental and clears the last standing
+                    // entry out of the unbound report - a permanent false positive is worse than none,
+                    // since it is the instrument that solved M229, M230, M235, M255 and M261.
+                    // Material-authored values still win: mat.Params is consulted before this switch.
+                    "ALPHA_OFFSET" => new[] { 0f, 0f, 0f, 0f },
                     "TIME" => new[] { s.TimeSeconds, s.TimeSeconds * 0.5f, MathF.Sin(s.TimeSeconds), 1f },
                     // M228: this points TOWARD the sun, and getting it backwards makes flat ground black.
                     //
