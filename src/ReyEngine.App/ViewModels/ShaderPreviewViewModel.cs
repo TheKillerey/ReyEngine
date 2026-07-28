@@ -348,9 +348,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     // render settings, mirrored onto PreviewSettings
     [ObservableProperty] private double _yaw = 0.6, _pitch = 0.4, _distance = 3.2;
     [ObservableProperty] private bool _wireframe;
-    [ObservableProperty] private bool _cullBackFaces = true;
+    [ObservableProperty] private bool _cullBackFaces;          // M240: off - League art is authored single-sided
     [ObservableProperty] private bool _depthTest = true;
-    [ObservableProperty] private bool _alphaBlend;
+    [ObservableProperty] private bool _alphaBlend = true;      // M240: on for every content type
     [ObservableProperty] private bool _transposeMatrices = true;
     [ObservableProperty] private bool _useComparisonShader;
     [ObservableProperty] private bool _animateTime = true;
@@ -748,6 +748,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         var asset = SelectedSceneAsset;
         var sb = new StringBuilder();
         SceneSubmeshes.Clear();
+
+        // M240: the render-state preset follows the CONTENT, not the last thing the user toggled.
+        ApplyPreset(asset.IsMap ? PreviewKind.Map : PreviewKind.Character);
 
         PreviewMesh mesh;
         List<(string Material, int Start, int Count, string Lightmap)> parts;
@@ -1293,6 +1296,43 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         AppendLog();
     }
 
+    /// <summary>M240: what is being previewed, which is the only thing the render-state preset depends on.</summary>
+    public enum PreviewKind { Character, Map, Particles }
+
+    /// <summary>
+    /// <para>M240: the render states that make League content read correctly, confirmed against the live
+    /// game by the user after the M210-M239 work.</para>
+    ///
+    /// <para>All three kinds agree except one flag: particles draw with the depth TEST off, because they
+    /// are additively blended sprites that must not occlude one another - with it on, a sprite that spawns
+    /// nearer the camera punches a hole in the ones behind it. Meshes and maps need it on for the obvious
+    /// reason.</para>
+    ///
+    /// <para>Back-face culling is off everywhere: League's art is authored single-sided and a good deal of
+    /// it - capes, foliage cards, particle quads - is meant to be seen from behind. Alpha blend is on
+    /// everywhere. Transpose matrices and Mirror X are handedness corrections that apply to all content,
+    /// and Map sun is harmless where no map supplied one because the sliders take over.</para>
+    /// </summary>
+    public void ApplyPreset(PreviewKind kind)
+    {
+        Wireframe = false;
+        CullBackFaces = false;
+        AlphaBlend = true;
+        AnimateTime = true;
+        TransposeMatrices = true;
+        UseMapSun = true;
+        MirrorX = true;
+        UseComparisonShader = false;
+
+        DepthTest = kind != PreviewKind.Particles;
+
+        if (kind == PreviewKind.Character) DefaultShaderHint = "shaders/skinnedmesh/diffuse_alpha";
+    }
+
+    /// <summary>M240: the shader a character falls back to when its material names none - Riot uses this one
+    /// for the overwhelming majority of skins.</summary>
+    public string? DefaultShaderHint { get; private set; }
+
     [RelayCommand] private void Reload() => Load();
 
     /// <summary>M233: start the selected VFX system playing through Riot's quad_vs/quad_ps.</summary>
@@ -1314,6 +1354,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
         // The particle path owns the renderer from here: it drives a dynamic vertex buffer and its own
         // per-emitter materials, so the mesh/material preview is not showing at the same time.
+        ApplyPreset(PreviewKind.Particles);
         ParticleReport = _playback.Report;
         ParticlesPlaying = true;
         IsLoaded = true;
