@@ -82,6 +82,15 @@ be silently wrong today.
 
 ## Question 4 — `miscRenderFlags`
 
+**Status: ANSWERED without a capture (M259) - nothing to decode.** The premise below was wrong: it is
+not a three-bit space, it is the constant 1. Over 484,286 emitters, 99.3% hold the literal value 1 and
+only 3,364 (0.69%) hold anything else. Correlating against every co-field - value, presence and nested
+type - the strongest predictor of a non-default value is 25.2% at n=309, and nothing with real support
+exceeds 18%; a driver would sit near 100%. Presence of the field tracks other fields' presence, which
+is schema versioning rather than meaning. Conclusion: treat it as a no-op. See `q4-miscrenderflags.md`.
+
+The original entry, kept for the record:
+
 **Status:** undecoded. U8 bitfield on 547,010 emitters (39.1%), only bits 0–2 ever set, distribution flat
 across blend modes so it is not a blend qualifier.
 
@@ -132,13 +141,18 @@ must be black-bordered and alpha-free, and mode 0/absent showed the clean additi
 showed the clean straight-alpha one. Extending that census to modes 6/7/8 specifically would at least
 bound them.
 
-**Q4 (`miscRenderFlags`)** — before capturing, check whether the bits correlate with anything already
-parsed. A flag that is flat across blend modes may not be flat across primitive class, `pass`, or
-`isGroundLayer`. That is a pure data question over 547,010 emitters and costs one harness run.
+**Q4 (`miscRenderFlags`)** - DONE (M259). Ran, and it retires the question: the flag is the constant 1
+on 99.3% of emitters and no parsed field predicts the rest. Not flat across `isGroundLayer` as guessed -
+that correlation turned out to be with field *presence*, i.e. schema version, not with the value.
 
 That leaves **Q2** and **Q5** as the ones genuinely needing a capture — and Q2 is low-risk inference that
 has never contradicted anything, so realistically **Q5 (stencil) is the only question where a capture is
 the sole route.**
+
+Since writing that, Q3 and Q4 have both been answered capture-free, and neither needed one: Q3 found
+the V axis correct (the test was wrong), Q4 found nothing to decode. Two of the five questions have
+dissolved. If the capture is ever taken, note that Q4's only real signal - bit 2 - clusters with the
+stencil fields, so reading `miscRenderFlags` on the Q5 draws would settle both at once.
 
 Which reframes the whole exercise: the capture is worth taking if you want stencil correct. For everything
 else, cheaper evidence exists.

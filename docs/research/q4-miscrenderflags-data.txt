@@ -1,0 +1,93 @@
+
+emitters scanned             1,221,115
+with miscRenderFlags           484,286  (39.7%)
+
+value distribution:
+     1 = 0b0001        480,922  (99.3%)
+     5 = 0b0101          1,688  (0.3%)
+     3 = 0b0011            995  (0.2%)
+     4 = 0b0100            347  (0.1%)
+     2 = 0b0010            334  (0.1%)
+
+bit set rates (the base rate each correlation below is measured against):
+   bit 0       483,605  (99.9%)
+   bit 1         1,329  (0.3%)
+   bit 2         2,035  (0.4%)
+
+--- association per bit (support >= 242) ---
+A feature that DRIVES a bit sits near 0% or 100%. A feature that does not sits at the base rate.
+
+BIT 0   base rate 99.9%
+     81.3%  n=       305   pass=-800
+     97.1%  n=     9,623   has:isFollowingTerrain
+     97.1%  n=     9,623   isFollowingTerrain=true
+     89.4%  n=       246   numFrames=10
+     92.6%  n=       309   has:postRotateOrientationAxis
+     99.1%  n=     8,173   type:fieldCollectionDefinition=VfxFieldCollectionDefinitionData
+     99.1%  n=     8,232   has:fieldCollectionDefinition
+     97.2%  n=       727   pass=1001
+     98.8%  n=     3,475   pass=7
+     99.1%  n=     4,581   particleLingerType=1
+     99.2%  n=     4,760   has:particleLingerType
+     97.8%  n=       464   pass=98
+
+BIT 1   base rate 0.3%
+     10.7%  n=     9,623   has:isFollowingTerrain
+     10.7%  n=     9,623   isFollowingTerrain=true
+      6.6%  n=     3,129   stencilRef=1
+     18.7%  n=       305   pass=-800
+      4.4%  n=     2,444   blendMode=3
+      1.9%  n=     8,198   type:primitive=VfxPrimitiveArbitraryTrail
+      1.7%  n=     9,614   stencilMode=2
+      1.3%  n=    15,602   has:stencilRef
+      7.4%  n=       309   has:postRotateOrientationAxis
+      0.5%  n=   224,677   has:isGroundLayer
+      0.5%  n=   224,677   isGroundLayer=true
+      1.3%  n=    15,315   has:stencilMode
+
+BIT 2   base rate 0.4%
+     13.2%  n=     3,516   alphaRef=1
+     16.8%  n=     1,908   stencilMode=1
+     12.5%  n=     2,665   stencilRef=4
+      8.7%  n=     2,649   pass=-9999
+      3.7%  n=    15,315   has:stencilMode
+      3.6%  n=    15,602   has:stencilRef
+      9.5%  n=     1,601   pass=9999
+     17.8%  n=       309   has:postRotateOrientationAxis
+     18.3%  n=       246   numFrames=10
+      1.1%  n=   104,912   type:primitive=VfxPrimitiveMesh
+      4.4%  n=     2,836   has:TextureFlipV
+      4.4%  n=     2,836   TextureFlipV=true
+
+--- what predicts a NON-DEFAULT value (flags != 1) ---   base rate 0.69%  (n=3,364)
+A driver would sit near 100%. Anything well short of that is an enrichment, not a cause.
+     10.7%  n=     9,623   has:isFollowingTerrain
+     10.7%  n=     9,623   isFollowingTerrain=true
+     18.2%  n=     1,908   stencilMode=1
+     13.2%  n=     3,516   alphaRef=1
+     12.5%  n=     2,665   stencilRef=4
+      5.0%  n=    15,315   has:stencilMode
+      4.9%  n=    15,602   has:stencilRef
+      9.8%  n=     2,649   pass=-9999
+     25.2%  n=       309   has:postRotateOrientationAxis
+      7.5%  n=     3,129   stencilRef=1
+      9.5%  n=     1,601   pass=9999
+      4.0%  n=     9,614   stencilMode=2
+     18.7%  n=       305   pass=-800
+     18.3%  n=       246   numFrames=10
+      1.5%  n=   104,912   type:primitive=VfxPrimitiveMesh
+
+--- what predicts the flag being PRESENT at all ---
+base rate 39.7%
+     86.1%  n=   260,835   has:isGroundLayer
+     86.1%  n=   260,835   isGroundLayer=true
+     83.9%  n=   149,705   has:useNavmeshMask
+     83.9%  n=   149,705   useNavmeshMask=true
+     22.2%  n=   183,823   has:depthBiasFactors
+      7.8%  n=    52,895   type:primitive=VfxPrimitiveAttachedMesh
+     10.3%  n=    51,189   has:0xcb13aff1
+     10.1%  n=    46,058   0xcb13aff1=-
+     80.7%  n=    18,989   has:stencilMode
+     15.8%  n=    53,877   has:reflectionDefinition
+     15.7%  n=    53,456   type:reflectionDefinition=VfxReflectionDefinitionData
+     77.0%  n=    20,257   has:stencilRef
