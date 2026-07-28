@@ -323,6 +323,10 @@ public sealed class ViewportControl : OpenGlControlBase
     private ViewportMeshRenderer? _bgRenderer;      // M88: NVR map backdrop
     private bool _bgMeshDirty, _bgTexDirty;
     private readonly OrbitCamera _camera = new();
+
+    /// <summary>M248: the editor camera, so a side-by-side D3D11 surface can render the SAME view rather
+    /// than a reconstruction of it. Read-only by intent - input still goes through this control.</summary>
+    public OrbitCamera Camera => _camera;
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
     private bool _dynamicLightsDirty;   // M70: re-upload the Light.dat table on the GL thread when it changes
     private bool _lightMarkersDirty;    // M71: recompute the transformed light-position icons

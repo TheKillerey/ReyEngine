@@ -308,7 +308,14 @@
               </ScrollViewer>
             </Border>
           <Grid>
+            <!-- M248 (phase 6, step 1): the D3D11 surface sits behind the same input overlay as the GL one
+                 and the two swap by visibility. ViewportControl derives from OpenGlControlBase, so it IS
+                 the GL surface and cannot render D3D itself - hence two siblings rather than one control
+                 with a mode. Nothing GL is removed; this is reversible by unticking the box. -->
+            <Image x:Name="Dx11Surface" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top"
+                   IsVisible="{Binding UseDx11Viewport}" />
             <views:ViewportControl x:Name="Viewport"
+                IsVisible="{Binding !UseDx11Viewport}"
                 Skybox="{Binding CurrentSkybox}"
                 Mesh="{Binding CurrentMesh}"
                 ModelTextures="{Binding CurrentModelTextures}"
@@ -492,6 +499,14 @@
                 <ComboBoxItem>Debug · Mirrored</ComboBoxItem>
               </ComboBox>
               <ToggleButton Classes="vp" Content="◫ Wire" IsChecked="{Binding ShowWireframe}" ToolTip.Tip="Wireframe overlay" />
+              <!-- M248 (phase 6, step 1): OpenGL <-> Direct3D 11, side by side. Nothing is removed; this
+                   swaps which of two sibling surfaces is visible. -->
+              <ToggleButton Classes="vp" Content="DX11" IsChecked="{Binding UseDx11Viewport}"
+                            ToolTip.Tip="Render this viewport with Direct3D 11 instead of OpenGL (experimental). Step 1 draws a reference mesh with the editor camera; scene content follows in step 2." />
+              <TextBlock Text="{Binding Dx11ViewportStatus}" VerticalAlignment="Center" Margin="8,0,0,0"
+                         FontFamily="Consolas" FontSize="10" Opacity="0.7"
+                         Foreground="{DynamicResource ReyTextBrush}"
+                         IsVisible="{Binding UseDx11Viewport}" />
               <ToggleButton Classes="vp" Content="◪ Cull" IsChecked="{Binding CullBackfaces}"
                             ToolTip.Tip="Respect each material's cullEnable (single-sided materials cull backfaces; cullEnable=false renders two-sided with flipped-normal lighting). Off = force everything two-sided." />
               <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" ToolTip.Tip="Show skeleton bones" />

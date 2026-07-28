@@ -33,12 +33,88 @@ public partial class MainWindow : Window
     private bool _pressMoved;
     private const double ClickSlopPixels = 4.0;
 
+    // M248 (phase 6, step 1): the side-by-side D3D11 surface. Null until the toggle is first turned on -
+    // a user who never touches it never creates a D3D11 device.
+    private Dx11ViewportSurface? _dx11;
+    private bool _dx11FrameQueued;
+    private bool _closed;
+
     public MainWindow()
     {
         InitializeComponent();
         LoadBranding();
         TitleVersionText.Text = AppInfo.DisplayVersion;   // M81
         _ = AutoCheckUpdatesAsync();                      // M81: silent startup check
+
+        DataContextChanged += (_, _) =>
+        {
+            if (DataContext is MainWindowViewModel vm)
+                vm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(MainWindowViewModel.UseDx11Viewport)) OnDx11Toggled(vm);
+                };
+        };
+        Closed += (_, _) => { _closed = true; _dx11?.Dispose(); _dx11 = null; };
+    }
+
+    // ---- M248: the D3D11 side-by-side surface ----
+
+    private void OnDx11Toggled(MainWindowViewModel vm)
+    {
+        if (!vm.UseDx11Viewport)
+        {
+            // Left alive rather than torn down: toggling back and forth to compare is the entire purpose
+            // of this step, and re-creating a device each time would make that slow and flickery.
+            vm.Dx11ViewportStatus = "";
+            return;
+        }
+
+        _dx11 ??= new Dx11ViewportSurface();
+        if (!_dx11.IsReady && !_dx11.Initialize())
+        {
+            // Fall straight back to OpenGL and SAY why. A viewport that silently stays blank would look
+            // like a rendering bug rather than a device that never came up.
+            vm.Dx11ViewportStatus = "D3D11 unavailable: " + (_dx11.Error ?? "unknown");
+            vm.UseDx11Viewport = false;
+            return;
+        }
+        QueueDx11Frame();
+    }
+
+    /// <summary>Compositor-driven, like the shader preview window - a DispatcherTimer caps the rate and
+    /// measured 20 fps there. Only runs while the toggle is on.</summary>
+    private void QueueDx11Frame()
+    {
+        if (_closed || _dx11FrameQueued) return;
+        _dx11FrameQueued = true;
+        TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_ =>
+        {
+            _dx11FrameQueued = false;
+            if (_closed || DataContext is not MainWindowViewModel vm || !vm.UseDx11Viewport) return;
+            RenderDx11Frame(vm);
+            QueueDx11Frame();
+        });
+    }
+
+    private void RenderDx11Frame(MainWindowViewModel vm)
+    {
+        if (_dx11 is null || !_dx11.IsReady) return;
+
+        // Match the GL surface's pixel size, scaling included - a mismatch would silently change the
+        // aspect ratio and make the two viewports disagree for a reason that has nothing to do with either
+        // renderer.
+        double scale = RenderScaling;
+        int w = (int)(Viewport.Bounds.Width * scale);
+        int h = (int)(Viewport.Bounds.Height * scale);
+        if (w <= 0 || h <= 0) return;
+
+        if (!_dx11.Render(Viewport.Camera, w, h)) return;
+
+        Dx11Surface.Source = _dx11.Current;
+        Dx11Surface.Width = Viewport.Bounds.Width;
+        Dx11Surface.Height = Viewport.Bounds.Height;
+        vm.Dx11ViewportStatus = $"D3D11  {_dx11.LastFrameMs:F2} ms  ·  {_dx11.LastDrawCalls} draws"
+                                + (_dx11.LastCulled > 0 ? $"  ·  {_dx11.LastCulled} culled" : "");
     }
 
     // ---- M81: About + updates ----

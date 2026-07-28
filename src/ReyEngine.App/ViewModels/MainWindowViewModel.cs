@@ -1476,6 +1476,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
+    /// <summary>M248 (phase 6, step 1): render the viewport with Direct3D 11 instead of OpenGL.
+    ///
+    /// <para>Off by default and deliberately reversible. The OpenGL path is the only reference for what the
+    /// editor used to look like, so it stays until the D3D11 one is trusted - deleting it would remove the
+    /// ability to A/B a regression, which is the whole point of having both.</para></summary>
+    [ObservableProperty] private bool _useDx11Viewport;
+
+    /// <summary>What the D3D11 surface is doing, for the status bar. Empty when it is not running.</summary>
+    [ObservableProperty] private string _dx11ViewportStatus = "";
+
     [ObservableProperty] private bool _showWireframe;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;
