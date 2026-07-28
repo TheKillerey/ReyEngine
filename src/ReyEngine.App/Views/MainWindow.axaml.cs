@@ -89,6 +89,11 @@ public partial class MainWindow : Window
 
         _dx11.SceneReport = await vm.BuildDx11SceneAsync(_dx11.Renderer);
         _dx11.HasScene = _dx11.Renderer.MaterialCount > 0;
+
+        // M266: the ordering is not negotiable. Dx11SceneBuilder.Commit calls ClearMaterials, which disposes
+        // every material AND the texture pool - so any particle material registered before this point is
+        // already gone. Re-registering has to happen after the commit, which is what this schedules.
+        _dx11.NotifySceneRebuilt();
     }
 
     /// <summary>Compositor-driven, like the shader preview window - a DispatcherTimer caps the rate and
@@ -149,6 +154,15 @@ public partial class MainWindow : Window
         _dx11.AnimateTime = vm.AnimationsPlaying;
         _dx11.Wireframe = vm.ShowWireframe;
 
+        // Pushed per frame rather than on load: the cache is opened lazily the first time a scene is built,
+        // which can be after this surface has already drawn its first frames.
+        _dx11.ShaderCache = vm.Dx11ShaderCache;
+        // M266: the particle gate, and it is CurrentParticlePlayback - the same property MainWindow.axaml
+        // binds the GL viewport's ParticlePlayback to. Not ShowParticles: that toggle drives the position
+        // markers only, so binding to it would draw particles here while GL draws dots, and hide them here
+        // while GL is playing.
+        _dx11.ParticlePlayback = vm.CurrentParticlePlayback;
+
         if (!_dx11.Render(Viewport.Camera, w, h)) return;
 
         Dx11Surface.Source = _dx11.Current;
@@ -170,6 +184,9 @@ public partial class MainWindow : Window
                   ? "\nUNBOUND: " + string.Join(", ", _dx11.UnboundConstants.Take(6))
                     + (_dx11.UnboundConstants.Count > 6 ? $" +{_dx11.UnboundConstants.Count - 6}" : "")
                   : "\nall declared constants bound")
+              // M266: the quad budget is the one place D3D11 can legitimately draw fewer particles than GL,
+              // so the line that says how many were thinned belongs where the draw counts are, not in a log.
+              + (_dx11.ParticleStatus.Length > 0 ? "\n" + _dx11.ParticleStatus : "")
             // No scene is a legitimate state, not a failure - say which, rather than showing an empty
             // viewport and letting it read as a broken renderer.
             : "D3D11 no scene: " + FirstLine(_dx11.SceneReport);

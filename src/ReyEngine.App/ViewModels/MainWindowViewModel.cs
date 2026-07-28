@@ -1829,6 +1829,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private Formats.Shaders.ShaderCacheReader? _dx11ShaderCache;
     private string? _dx11ShaderCacheDir;
 
+    /// <summary>M266: the open shader cache, for the D3D11 surface's particle driver. Read-only and the
+    /// minimum exposure that works: the driver takes its TEXTURES from the already-resolved VfxPlaybackItem
+    /// lists, so it needs no asset reader at all - which is also what guarantees it resolves the same files
+    /// the GL viewport does.</summary>
+    public Formats.Shaders.ShaderCacheReader? Dx11ShaderCache => _dx11ShaderCache;
+
     /// <summary>M249: build the currently open map into <paramref name="renderer"/>. Returns a report, or a
     /// reason string when there is nothing to build - never null, because "the viewport is empty and I do
     /// not know why" is the state this whole phase exists to avoid.</summary>

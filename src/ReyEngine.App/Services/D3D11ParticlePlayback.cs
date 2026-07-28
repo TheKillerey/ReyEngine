@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
 using System.Text;
 using ReyEngine.Formats.Shaders;
@@ -78,11 +77,8 @@ public sealed class D3D11ParticlePlayback
         if (clearMaterials) _renderer.ClearMaterials();
         _slices.Clear();
 
-        const string vsName = "assets/shaders/hlsl/particlesystem/quad_vs";
-        const string psName = "assets/shaders/hlsl/particlesystem/quad_ps";
-        var vsToc = _cache.ReadToc(ShaderCacheReader.TocPathFor(vsName, DxbcStage.Vertex));
-        var psToc = _cache.ReadToc(ShaderCacheReader.TocPathFor(psName, DxbcStage.Pixel));
-        if (vsToc is null || psToc is null) { error = "particlesystem/quad_vs+quad_ps not in the shader cache"; return false; }
+        var tocs = VfxD3D11EmitterPipeline.ReadTocs(_cache, out error);
+        if (tocs is null) return false;
 
         sb.AppendLine($"SYSTEM  {system.Name}");
         _sim = new VfxParticleSimulator(seed: 12345);
@@ -105,73 +101,20 @@ public sealed class D3D11ParticlePlayback
         {
             var e = _sim.Emitters[i].Def;
 
-            // The whole point of the milestone: the define set comes from the emitter's own flags.
-            var defines = VfxShaderFlags.For(e, out var why);
-
-            var vsPerm = ShaderCacheReader.ResolvePermutation(vsToc, defines, null, null, null, out var vw);
-            var psPerm = ShaderCacheReader.ResolvePermutation(psToc, defines, null, null, null, out var pw);
-
             sb.AppendLine($"[{i}] {e.Name}");
-            sb.AppendLine($"     defines: {(defines.Count == 0 ? "(none - base permutation)" : string.Join(", ", defines.Keys))}");
-            foreach (var w in why) sb.AppendLine($"       {w}");
-            sb.AppendLine($"     vs {(vsPerm is null ? "UNRESOLVED" : "blob " + vsPerm.BlobIndex)}   ps {(psPerm is null ? "UNRESOLVED" : "blob " + psPerm.BlobIndex)}");
-            if (vsPerm is null) sb.AppendLine($"       vs: {vw}");
-            if (psPerm is null) sb.AppendLine($"       ps: {pw}");
-            if (vsPerm is null || psPerm is null) continue;
 
-            var vs = _cache.LoadShader(ShaderCacheReader.TocPathFor(vsName, DxbcStage.Vertex), vsPerm.BlobIndex, out _);
-            var ps = _cache.LoadShader(ShaderCacheReader.TocPathFor(psName, DxbcStage.Pixel), psPerm.BlobIndex, out _);
-            if (vs is null || ps is null) { sb.AppendLine("       bytecode would not load"); continue; }
+            // M266: the whole defines -> permutation -> pipeline -> textures -> Params sequence now lives in
+            // VfxD3D11EmitterPipeline, shared with the map viewport. It used to be inline here, and each of
+            // the two bugs this path has had (M236, M237) was a thing one copy of it knew and the other
+            // did not.
+            var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, e,
+                sampler => DecodeByPath(sampler, e, sb), sb);
+            if (mat is null) continue;
 
-            // M242: describe the variant and the state so the pipeline cache has an honest key. Emitters
-            // sharing a permutation AND a blend now share one set of shader objects; a system where every
-            // emitter is a base-permutation additive quad collapses to a single pipeline.
-            bool additive = VfxShaderFlags.IsAdditive(e.BlendMode);
-            var vsDesc = new ShaderDescription(vsName, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, defines, vs);
-            var psDesc = new ShaderDescription(psName, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, defines, ps);
-            var stateDesc = StateDescription.Particle(
-                additive ? BlendKind.Additive : BlendKind.Alpha, e.AlphaRef / 255f);
-
-            var mat = _renderer.BuildMaterial(e.Name, vs, ps, 0, 0, out var rep, vsDesc, psDesc, stateDesc);
-            if (mat is null) { sb.AppendLine($"       pipeline failed: {rep.Error}"); continue; }
-
-            mat.Additive = additive;
-            // Particles never write depth, so they are never reordered - the authored emitter order is
-            // the composite the artist built.
-            mat.SortableByPipeline = false;
-            sb.AppendLine($"     blend: {(mat.Additive ? "additive" : "alpha")} (blendMode {e.BlendMode})");
-
-            // The sprite. TEXTURE__TX is the name quad_ps declares for it.
-            BindTexture(mat, ps, "TEXTURE", e.TexturePath, sb);
-            if (!string.IsNullOrEmpty(e.TextureMultPath)) BindTexture(mat, ps, "TEXTUREMULT", e.TextureMultPath, sb);
-            if (e.AlphaErosion is not null) BindTexture(mat, ps, "sAlphaErosionTexture", e.AlphaErosion.MapPath, sb);
-            if (e.Palette is not null) BindTexture(mat, ps, "sPalettesTexture", e.Palette.TexturePath, sb);
-
-            // The flipbook atlas descriptor, per emitter: (columns, 1/columns, 1/rows).
-            // Derived in M231 from quad_vs's cell arithmetic.
-            mat.Params["TEXTURE_INFO"] = ParticleQuadBuilder.TextureInfo(e.TexDiv);
-
-            // M237: pass the values that SELECTED the permutation, which the first cut did not.
-            //
-            // VfxShaderFlags turns ALPHA_TEST on precisely because alphaRef > 0, and then the renderer's
-            // engine default bound AlphaTestReferenceValue = 0 - a cutoff of zero discards nothing, so the
-            // permutation was selected and then neutered. The GL renderer discards at the authored value
-            // (`if (uAlphaRef > 0.0 && t.a * vColor.a < uAlphaRef) discard`), so the two previews disagreed
-            // on every one of the 425,866 emitters that author it.
-            if (e.AlphaRef > 0) mat.Params["AlphaTestReferenceValue"] = new[] { e.AlphaRef / 255f, 0f, 0f, 0f };
-
-            // Same shape of omission: quad_vs slides each vertex along its own camera ray by this, and the
-            // GL path applies the emitter's authored value, while this bound a flat 0.
-            if (e.DepthPushPull != 0f)
-                mat.Params["PARTICLE_DEPTH_PUSH_PULL"] = new[] { e.DepthPushPull, 0f, 0f, 0f };
-
-            // M235: BuildMaterial CREATES the pipeline but does not register it for drawing - the caller
-            // must add it, which is what LoadShaders does for the single-shader path. Without this the
-            // renderer has no materials at all, IsReady is false, and RenderFrame bails out with
-            // "no shader loaded": the entire particle path built correct pipelines and drew nothing.
-            // M264: these quads live in the dynamic buffer, not the static scene mesh. Without this the
-            // draw would read particle index ranges out of the map's vertex buffer.
-            mat.UsesDynamicMesh = true;
+            // M235: Build CREATES the pipeline but does not register it for drawing - the caller must add
+            // it, which is what LoadShaders does for the single-shader path. Without this the renderer has
+            // no materials at all, IsReady is false, and RenderFrame bails out with "no shader loaded": the
+            // entire particle path built correct pipelines and drew nothing.
             _renderer.AddMaterial(mat);
             _slices.Add(new Slice { Material = mat, EmitterIndex = i, Name = e.Name });
         }
@@ -193,25 +136,31 @@ public sealed class D3D11ParticlePlayback
         return true;
     }
 
-    private void BindTexture(PreviewMaterial mat, DxbcShader ps, string sampler, string? path, StringBuilder sb)
+    /// <summary>The preview window's half of the sprite seam: it holds an asset reader, so it resolves a
+    /// stage by reading and decoding the emitter's authored path. The map viewport instead hands back the
+    /// TextureImage its view-model already resolved, which is what makes the two agree about WHICH file a
+    /// path landed on.</summary>
+    private VfxD3D11EmitterPipeline.Sprite? DecodeByPath(string sampler, VfxEmitterDefinition e, StringBuilder sb)
     {
-        if (string.IsNullOrWhiteSpace(path)) return;
-        var slot = ps.Textures.FirstOrDefault(t =>
-            t.Name.Equals(sampler + "__TX", StringComparison.OrdinalIgnoreCase)
-            || t.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase));
-        if (slot is null) { sb.AppendLine($"     {sampler}: no such slot in this permutation"); return; }
+        string? path = sampler switch
+        {
+            "TEXTURE" => e.TexturePath,
+            "TEXTUREMULT" => e.TextureMultPath,
+            "sAlphaErosionTexture" => e.AlphaErosion?.MapPath,
+            "sPalettesTexture" => e.Palette?.TexturePath,
+            _ => null,
+        };
+        if (string.IsNullOrWhiteSpace(path)) return null;
 
         string key = path.ToLowerInvariant();
-        if (_renderer.TryBindCached(mat, slot.Name, key)) return;
-        try
+        // Deferred: the pipeline probes the texture pool by this key first, so a repeat play of the same
+        // system costs no WAD read at all.
+        return new VfxD3D11EmitterPipeline.Sprite(key, () =>
         {
             var data = _readAsset(key);
-            if (data is null || data.Length == 0) { sb.AppendLine($"     {sampler}: NOT FOUND {path}"); return; }
-            var img = ReyEngine.Core.Decoding.TextureDecoder.Decode(data);
-            _renderer.SetTexture(mat, slot.Name, key, img.Rgba, img.Width, img.Height);
-            sb.AppendLine($"     {sampler} -> {slot.Name} ({img.Width}x{img.Height})");
-        }
-        catch (Exception ex) { sb.AppendLine($"     {sampler}: FAILED {ex.Message}"); }
+            if (data is null || data.Length == 0) { sb.AppendLine($"     {sampler}: NOT FOUND {path}"); return null; }
+            return ReyEngine.Core.Decoding.TextureDecoder.Decode(data);
+        });
     }
 
     // ---------------------------------------------------------------- per frame

@@ -147,6 +147,12 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// scene mesh. Set by anything that rewrites its vertices every frame - particles today.</summary>
     public bool UsesDynamicMesh { get; set; }
 
+    /// <summary>M266: false for particles. GL runs them with the depth TEST on and the depth MASK off
+    /// (VfxParticleRenderer.cs:350-351); the single global depth state here writes depth unconditionally, so
+    /// without this an additive quad occludes the map behind it. Everything else leaves this true and gets
+    /// byte-identical behaviour.</summary>
+    public bool WritesDepth { get; set; } = true;
+
     /// <summary>M246: which distinct pipeline this material uses. Materials sharing an id share their
     /// shaders and input layout, so drawing them back to back costs no state change. -1 = uncached, which
     /// sorts last and keeps its relative order.</summary>
@@ -229,6 +235,9 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11RasterizerState> _raster;
     private ComPtr<ID3D11BlendState> _blend;
     private ComPtr<ID3D11DepthStencilState> _depthState;
+    /// <summary>M266: the same state with DepthWriteMask.Zero, selected per material by
+    /// <see cref="PreviewMaterial.WritesDepth"/>. Particles need it; nothing else does.</summary>
+    private ComPtr<ID3D11DepthStencilState> _depthStateNoWrite;
 
     /// <summary>The scene. One entry for the single-shader bench, one per submesh for a loaded model.</summary>
     private readonly List<PreviewMaterial> _materials = new();
@@ -527,6 +536,22 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     }
 
     public void AddMaterial(PreviewMaterial m) => _materials.Add(m);
+
+    /// <summary>M266: drop only the materials matching <paramref name="pred"/>, and return how many went.
+    ///
+    /// <para>Deliberately does NOT touch _texPool, _retired or _sharedCbs the way ClearMaterials does: the
+    /// map scene is still using all three, and rebuilding it costs seconds. Retracting a particle playback
+    /// has to be possible without wiping the ~1,600 materials sitting underneath it.</para>
+    ///
+    /// <para>Disposing here is safe because cache-hit materials carry OwnsPipeline=false - Dispose releases
+    /// their own constant buffers and leaves the shared shader objects and input layout alone.</para></summary>
+    public int RemoveMaterials(Predicate<PreviewMaterial> pred)
+    {
+        int n = 0;
+        for (int i = _materials.Count - 1; i >= 0; i--)
+            if (pred(_materials[i])) { _materials[i].Dispose(); _materials.RemoveAt(i); n++; }
+        return n;
+    }
 
     private bool CreateInputLayout(PreviewMaterial mat, ShaderLoadReport r)
     {
@@ -1119,6 +1144,17 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         ComPtr<ID3D11DepthStencilState> ds = default;
         _device.CreateDepthStencilState(in dsd, ref ds);
         _depthState = ds;
+
+        // M266: the no-write twin. StateDescription.Particle already declares "no depth write", but that is
+        // only a PIPELINE CACHE KEY - its sole consumer is PipelineKey.For - and it was never applied as
+        // device state. The preview window hid that by turning depth test off entirely for the Particles
+        // preset; the map viewport keeps depth test on, so the write has to be masked instead.
+        var dsdNoWrite = dsd;
+        dsdNoWrite.DepthWriteMask = DepthWriteMask.Zero;
+        _depthStateNoWrite.Dispose();
+        ComPtr<ID3D11DepthStencilState> dsn = default;
+        _device.CreateDepthStencilState(in dsdNoWrite, ref dsn);
+        _depthStateNoWrite = dsn;
     }
 
     // ---------------------------------------------------------------- constants
@@ -1767,6 +1803,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             else
                 _ctx.OMSetBlendState(_blend, factor, 0xFFFFFFFF);
 
+            // M266: and so is the depth WRITE, for the same reason. A particle quad tests against the map
+            // but must not deposit depth, or the next additive quad behind it is rejected and the map is
+            // occluded by something the artist authored as transparent.
+            _ctx.OMSetDepthStencilState(
+                mat.WritesDepth || _depthStateNoWrite.Handle is null ? _depthState : _depthStateNoWrite, 0);
+
             if (mat.PipelineId != lastPipeline) { PipelineSwitches++; lastPipeline = mat.PipelineId; }
             _ctx.IASetInputLayout(mat.Layout);
             _ctx.VSSetShader(mat.Vs, null, 0);
@@ -1980,6 +2022,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClamp.Dispose(); _comparison.Dispose();
         _raster.Dispose(); _blend.Dispose(); _depthState.Dispose();
+        _blendAdditive.Dispose(); _depthStateNoWrite.Dispose();
         _ctx.Dispose(); _device.Dispose();
         _d3d?.Dispose();
     }

@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Numerics;
+using ReyEngine.Formats.Vfx;
 using Silk.NET.OpenGL;
 
 namespace ReyEngine.Rendering.Vfx;
@@ -296,9 +297,10 @@ public sealed class VfxParticleRenderer
 
         // camera basis in world space, derived from the (mirror-inclusive) view matrix's inverse, so
         // billboards face the camera and are oriented correctly on screen even under the -X mirror.
+        // M266: the derivation moved to VfxBillboardBasis so the D3D11 particle path uses THIS one rather
+        // than its own origin-relative approximation. `inv` is still needed below for camPos.
         Matrix4x4.Invert(view, out var inv);
-        var camRight = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitX, inv));
-        var camUp = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitY, inv));
+        var (camRight, camUp, _) = VfxBillboardBasis.FromView(view);
 
         _gl.UseProgram(_program);
         _gl.UniformMatrix4(_uViewProj, 1, false, in viewProj.M11);

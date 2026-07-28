@@ -5,6 +5,8 @@ using System.Numerics;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using ReyEngine.App.Services;
+using ReyEngine.App.ViewModels;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Rendering;
 using ReyEngine.Rendering.D3D11;
@@ -91,6 +93,84 @@ public sealed class Dx11ViewportSurface : IDisposable
         return _frozenTime;
     }
 
+    private float _lastParticleTime = -1f;
+
+    /// <summary>
+    /// <para>M266: seconds since the last particle tick, read off the SAME clock the TIME constant uses.</para>
+    ///
+    /// <para>That gives pausing the M263 meaning for particles too: the clock freezes, dt goes to 0 and
+    /// <c>VfxParticleSimulator.Update</c> early-returns - but the quads are still rebuilt against the new
+    /// camera basis, so orbiting a frozen effect works instead of leaving stale billboards facing an old
+    /// camera. Unpausing produces one large delta, which the simulator's own <c>dt = Min(dt, 0.1f)</c>
+    /// absorbs; that is the same clamp the GL viewport relies on for a hitched frame.</para>
+    ///
+    /// <para>This is an INTENTIONAL divergence: the GL map viewport never pauses particles, because its
+    /// ParticlePaused property is only bound in the particle editor. The play/pause button is DX11-only, so
+    /// the difference is only observable while a DX11-exclusive control is held - and its tooltip says so.</para>
+    /// </summary>
+    private float ParticleDelta(float now)
+    {
+        float dt = _lastParticleTime < 0f ? 0f : MathF.Max(0f, now - _lastParticleTime);
+        _lastParticleTime = now;
+        return dt;
+    }
+
+    /// <summary>M266: the map's particle driver, built lazily once a shader cache has been supplied - a
+    /// viewport that never opens a map never creates one.</summary>
+    public D3D11MapParticles? Particles { get; private set; }
+
+    /// <summary>M266: the shader cache the particle pipelines resolve against, pushed from the view-model.
+    /// The map scene builder already has one; particles need the same instance so the two share its
+    /// pipeline cache.</summary>
+    public ReyEngine.Formats.Shaders.ShaderCacheReader? ShaderCache { get; set; }
+
+    private VfxPlayback? _particlePlayback;
+
+    /// <summary>
+    /// <para>M266: what to play, straight from <c>CurrentParticlePlayback</c> - the SAME property the GL
+    /// viewport is bound to in XAML, so the two are gated identically.</para>
+    ///
+    /// <para>Compared by REFERENCE deliberately. Every mutation path builds a fresh VfxPlayback, so a
+    /// reference change is exactly "something changed"; VfxPlayback and VfxPlaybackItem are records, so
+    /// <c>==</c> would compare a Matrix4x4 for each of thousands of items on every frame.</para>
+    /// </summary>
+    public VfxPlayback? ParticlePlayback
+    {
+        get => _particlePlayback;
+        set
+        {
+            if (ReferenceEquals(_particlePlayback, value)) return;
+            _particlePlayback = value;
+            Particles?.SetPlayback(value);
+        }
+    }
+
+    /// <summary>M266: call after a scene build. <c>Dx11SceneBuilder.Commit</c> calls ClearMaterials, which
+    /// disposes the particle materials and empties the texture pool along with the map's - so the retained
+    /// playback has to be registered again, AFTER the commit.</summary>
+    public void NotifySceneRebuilt() => Particles?.Invalidate();
+
+    /// <summary>Last frame's particle counts, for the viewport's detail tooltip. Empty when nothing is
+    /// playing, which is a state rather than a failure.</summary>
+    public string ParticleStatus { get; private set; } = "";
+
+    /// <summary>The first line of a build report that reads like a problem. The whole report is a
+    /// per-system tally and far too long for a tooltip, but the reason nothing drew is worth one line.</summary>
+    private static string FirstProblem(string report)
+    {
+        foreach (var line in report.Split('\n'))
+        {
+            var t = line.Trim();
+            if (t.Length == 0) continue;
+            if (t.Contains("no pipeline", StringComparison.OrdinalIgnoreCase)
+                || t.Contains("unresolved", StringComparison.OrdinalIgnoreCase)
+                || t.Contains("not in the shader cache", StringComparison.OrdinalIgnoreCase)
+                || t.Contains("failed", StringComparison.OrdinalIgnoreCase))
+                return t;
+        }
+        return report.Split('\n')[0].Trim();
+    }
+
     /// <summary>The image to show. Swaps between two bitmaps so Avalonia is never compositing the one being
     /// written - a single bitmap tears under the compositor.</summary>
     public WriteableBitmap? Current { get; private set; }
@@ -137,6 +217,10 @@ public sealed class Dx11ViewportSurface : IDisposable
     {
         if (!_ready || width <= 0 || height <= 0) return false;
 
+        // Hoisted out of the settings initialiser because the particle tick below needs the same value:
+        // one clock reading per frame, or the shader animation and the particles would drift apart.
+        float t = AnimationTime();
+
         var settings = new PreviewSettings
         {
             // The editor camera is authoritative. Supplying the matrices directly rather than copying
@@ -157,7 +241,7 @@ public sealed class Dx11ViewportSurface : IDisposable
 
             // M261. The sun and the lightmap scale are ungated, matching the GL path, which applies them
             // unconditionally. Fog is gated on the toggle, also matching it.
-            TimeSeconds = AnimationTime(),
+            TimeSeconds = t,
             Wireframe = Wireframe,
             MapSunColor = MapSun?.SunColor,
             MapSunDirection = MapSun?.SunDirection,
@@ -170,6 +254,38 @@ public sealed class Dx11ViewportSurface : IDisposable
             MapFogColor = FogEnabled ? MapSun?.FogColor : null,
             MapFogStartEnd = FogEnabled ? MapSun?.FogStartAndEnd : null,
         };
+
+        // M266: advance the particles and refill the dynamic buffer, HERE and not in the host window.
+        //
+        // Two reasons this placement is load-bearing. First, RenderFrame is what reads the dynamic index
+        // count that UpdateDynamicMesh writes, so ticking after it would draw last frame's quads - a
+        // one-frame lag that reads as particles trailing the camera. Second, the mirror-inclusive view is
+        // only knowable here: RenderFrame applies the -X mirror itself, from the same MirrorX flag set
+        // above, and reconstructing that anywhere else would be a second source of truth for the one thing
+        // hardest to get right.
+        EnsureParticles();
+        // Gated on the DRIVER existing, not on it having a playback. SetPlayback(null) only marks the
+        // driver dirty - the teardown that calls RemoveMaterials lives in Tick's Rebuild - so gating on
+        // HasPlayback made retraction unreachable: switching Play All off left the last frame's quads
+        // registered, Visible, and pointing into a dynamic buffer nobody rewrites, painted over the map
+        // forever while the status line was blanked. Tick already returns immediately once Rebuild has
+        // run against a null playback, so this costs nothing when there is nothing to draw.
+        if (Particles is not null)
+        {
+            var particleView = camera.View;
+            if (settings.MirrorX) particleView = Matrix4x4.CreateScale(-1f, 1f, 1f) * particleView;
+            Particles.Tick(ParticleDelta(t), particleView,
+                particleView * settings.SuppliedProjection!.Value, camera.Position, camera.Distance);
+            ParticleStatus = Particles.FrameReport();
+            // Surface the BUILD report too, but only when it names a failure. It records unresolved
+            // sprites, emitters whose permutation would not resolve, and a missing shader TOC - and it
+            // had no consumer anywhere in the app, so any of those showed up as "0 slices" with no
+            // reason given. The per-frame line above cannot explain why a system is absent; this can.
+            if (Particles.DrawSlices == 0 && Particles.BuildReport.Length > 0)
+                ParticleStatus = (ParticleStatus.Length > 0 ? ParticleStatus + "\n" : "")
+                                 + FirstProblem(Particles.BuildReport);
+        }
+        else ParticleStatus = "";
 
         var t0 = DateTime.UtcNow;
         // M255: collect the constants nothing supplied. This report is what solved M229, M230 and M235,
@@ -196,6 +312,17 @@ public sealed class Dx11ViewportSurface : IDisposable
         }
         Current = target;
         return true;
+    }
+
+    /// <summary>Build the particle driver the first time a shader cache is available, and hand it whatever
+    /// playback was set while it did not exist yet. Deferred rather than constructed with the surface
+    /// because the cache is opened by the view-model when a map is loaded, which can be long after this
+    /// surface starts drawing its fallback sphere.</summary>
+    private void EnsureParticles()
+    {
+        if (Particles is not null || ShaderCache is null) return;
+        Particles = new D3D11MapParticles(_renderer, ShaderCache);
+        if (_particlePlayback is not null) Particles.SetPlayback(_particlePlayback);
     }
 
     private void EnsureBitmaps(int width, int height)

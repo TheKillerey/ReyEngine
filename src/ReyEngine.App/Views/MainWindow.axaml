@@ -504,10 +504,13 @@
                    FrameDiff machinery behind it stays for the harness. -->
               <ToggleButton Classes="vp" Content="DX11" IsChecked="{Binding UseDx11Viewport}"
                             ToolTip.Tip="Render this viewport with Direct3D 11 instead of OpenGL." />
-              <!-- M263: pause freezes the animation clock where it is rather than resetting it. -->
+              <!-- M263: pause freezes the animation clock where it is rather than resetting it.
+                   M266: the same clock now drives the particles, so pausing freezes them too. That is a
+                   stated difference from the OpenGL viewport, which never pauses its map particles - the
+                   tooltip says so rather than leaving it to be discovered. -->
               <ToggleButton Classes="vp" Content="▶" IsChecked="{Binding AnimationsPlaying}"
                             IsVisible="{Binding UseDx11Viewport}"
-                            ToolTip.Tip="Play or pause shader animation (scrolling UVs, flipbooks, flow). Pausing holds the current moment." />
+                            ToolTip.Tip="Play or pause shader animation (scrolling UVs, flipbooks, flow) and particle simulation. Pausing holds the current moment; the camera still orbits it. OpenGL has no equivalent button, so its particles keep running." />
               <TextBlock Text="{Binding Dx11ViewportStatus}" VerticalAlignment="Center" Margin="8,0,0,0"
                          FontFamily="Consolas" FontSize="10" Opacity="0.7"
                          Foreground="{DynamicResource ReyTextBrush}"

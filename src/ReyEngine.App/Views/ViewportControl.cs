@@ -1504,16 +1504,11 @@ public sealed class ViewportControl : OpenGlControlBase
 
         foreach (var item in pb.Items)
         {
-            if (item.System.Emitters.Count == 0) continue;
-            // A stable placement-specific seed prevents every repeated torch/brazier from animating in lockstep.
-            int seed = HashCode.Combine(item.System.PathHash,
-                BitConverter.SingleToInt32Bits(item.Transform.M41),
-                BitConverter.SingleToInt32Bits(item.Transform.M42),
-                BitConverter.SingleToInt32Bits(item.Transform.M43));
-            var sim = new VfxParticleSimulator(seed);
-            sim.SetSystem(item.System, item.Transform);
-            if (item.ColorModulate is { } tint) sim.PlacementTint = tint;   // M203
-            if (item.StartDelay > 0f) sim.SetStartDelay(item.StartDelay);   // M91: frame-accurate clip events
+            // M266: seed, transform, tint and start delay all come from VfxPlaybackSim now, because the
+            // D3D11 viewport has to produce the SAME animation and HashCode.Combine is salted per process -
+            // a second copy of the seed expression could never be shown to agree with this one.
+            var sim = Services.VfxPlaybackSim.Create(item);
+            if (sim is null) continue;
             BindEmitterAssets(sim, item);
             _particleSimCache[item] = sim;
             _particleSims.Add(sim);
@@ -1528,17 +1523,15 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         if (!playback.CullByCamera) return;
 
-        float maxDistance = Math.Max(6000f, _camera.Distance * 1.35f);
-        float maxDistanceSq = maxDistance * maxDistance;
+        // M266: the gate itself lives in VfxPlaybackSim so the D3D11 viewport culls the same placements at
+        // the same distance. _lastCamPos is already X-mirrored (CachePickMatrices) and viewProj is the
+        // mirror-inclusive matrix - both are what IsActive documents it needs.
+        float maxDistanceSq = Services.VfxPlaybackSim.MaxDistanceSquared(_camera.Distance);
         var wanted = _wantedParticleSims;
         wanted.Clear();
         foreach (var item in playback.Items)
         {
-            if (Vector3.DistanceSquared(_lastCamPos, item.WorldPos) > maxDistanceSq) continue;
-            var clip = Vector4.Transform(new Vector4(item.WorldPos, 1f), viewProj);
-            if (clip.W <= 0f) continue;
-            float margin = clip.W * 1.25f;
-            if (MathF.Abs(clip.X) > margin || MathF.Abs(clip.Y) > margin || clip.Z < -margin || clip.Z > margin) continue;
+            if (!Services.VfxPlaybackSim.IsActive(item, _lastCamPos, maxDistanceSq, viewProj)) continue;
             if (_particleSimCache.TryGetValue(item, out var sim)) wanted.Add(sim);
         }
 
@@ -1559,24 +1552,10 @@ public sealed class ViewportControl : OpenGlControlBase
             if (_particleMeshAnimations.TryGetValue(es, out var anim)) _animatedMeshEmitters.Add((es, anim));
     }
 
-    /// <summary>A soft radial-gradient RGBA sprite used when a particle's real texture can't be resolved.</summary>
-    private static byte[] SoftDot(int n)
-    {
-        var px = new byte[n * n * 4];
-        float c = (n - 1) / 2f;
-        for (int y = 0; y < n; y++)
-        for (int x = 0; x < n; x++)
-        {
-            float dx = (x - c) / c, dy = (y - c) / c;
-            // tight core: glow fades out by ~55% of the quad radius so the placeholder reads as a small dot
-            float a = Math.Clamp(1f - MathF.Sqrt(dx * dx + dy * dy) * 1.8f, 0f, 1f);
-            a *= a;
-            int i = (y * n + x) * 4;
-            px[i] = px[i + 1] = px[i + 2] = 255;
-            px[i + 3] = (byte)(a * 255);
-        }
-        return px;
-    }
+    /// <summary>A soft radial-gradient RGBA sprite used when a particle's real texture can't be resolved.
+    /// M266: the pixels moved to VfxPlaybackSim so the D3D11 viewport substitutes the same ones - its own
+    /// fallback is an opaque 1x1 white, which turns an unresolved sprite into a solid card.</summary>
+    private static byte[] SoftDot(int n) => Services.VfxPlaybackSim.SoftDot(n);
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
