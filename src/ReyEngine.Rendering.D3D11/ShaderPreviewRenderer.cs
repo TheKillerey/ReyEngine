@@ -137,6 +137,11 @@ public sealed unsafe class PreviewMaterial : IDisposable
 
     public bool Visible { get; set; } = true;
 
+    /// <summary>M245: this slice's world-space bounds, for frustum culling. Null means "always draw" -
+    /// which is what a single-mesh preview, a particle system, or anything whose extent is not known
+    /// should get, because culling on a guess is worse than not culling.</summary>
+    public (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max)? Bounds { get; set; }
+
     /// <summary>M232: draw this material with additive blending rather than straight alpha. Set from the
     /// emitter's blendMode; see VfxShaderFlags for how that integer is read and what is still a guess.</summary>
     public bool Additive { get; set; }
@@ -1437,6 +1442,53 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         };
     }
 
+    /// <summary>M245: how many slices the frustum rejected last frame, next to DrawCalls. Reported rather
+    /// than assumed - a culler that quietly rejects nothing is indistinguishable from one that works.</summary>
+    public int CulledSlices { get; private set; }
+
+    /// <summary>Gribb-Hartmann plane extraction from a combined view-projection, in System.Numerics'
+    /// row-vector convention (v * M). Planes point INWARD; a point is inside when every dot is >= 0.</summary>
+    private static Vector4[] ExtractFrustum(Matrix4x4 m)
+    {
+        var p = new Vector4[6];
+        p[0] = new Vector4(m.M14 + m.M11, m.M24 + m.M21, m.M34 + m.M31, m.M44 + m.M41);  // left
+        p[1] = new Vector4(m.M14 - m.M11, m.M24 - m.M21, m.M34 - m.M31, m.M44 - m.M41);  // right
+        p[2] = new Vector4(m.M14 + m.M12, m.M24 + m.M22, m.M34 + m.M32, m.M44 + m.M42);  // bottom
+        p[3] = new Vector4(m.M14 - m.M12, m.M24 - m.M22, m.M34 - m.M32, m.M44 - m.M42);  // top
+        // Near uses the UNSUMMED row because D3D clip space is 0..1 in z, not -1..1. Using the OpenGL form
+        // here would put the near plane in the wrong place and cull geometry in front of the camera.
+        p[4] = new Vector4(m.M13, m.M23, m.M33, m.M43);                                   // near
+        p[5] = new Vector4(m.M14 - m.M13, m.M24 - m.M23, m.M34 - m.M33, m.M44 - m.M43);   // far
+        for (int i = 0; i < 6; i++)
+        {
+            float len = new Vector3(p[i].X, p[i].Y, p[i].Z).Length();
+            if (len > 1e-6f) p[i] /= len;
+        }
+        return p;
+    }
+
+    /// <summary>True when the box is not entirely outside any single plane. This is the cheap
+    /// conservative test: it can keep a box the frustum does not really touch, which costs a draw, but it
+    /// never rejects one that is visible, which would cost a hole in the image.</summary>
+    private static bool FrustumContains(Vector4[] planes, Vector3 min, Vector3 max)
+    {
+        foreach (var pl in planes)
+        {
+            // the box corner furthest along the plane normal - if even that is behind, all eight are
+            var far = new Vector3(
+                pl.X >= 0 ? max.X : min.X,
+                pl.Y >= 0 ? max.Y : min.Y,
+                pl.Z >= 0 ? max.Z : min.Z);
+            if (pl.X * far.X + pl.Y * far.Y + pl.Z * far.Z + pl.W < 0f) return false;
+        }
+        return true;
+    }
+
+    /// <summary>M245: the cull test, exposed so it can be checked against a brute-force reference without
+    /// a device. Correctness here is not optional - a false reject is a hole in the image.</summary>
+    public static bool TestFrustumForTests(Matrix4x4 viewProj, Vector3 min, Vector3 max)
+        => FrustumContains(ExtractFrustum(viewProj), min, max);
+
     private static Matrix4x4 Invert(Matrix4x4 m) => Matrix4x4.Invert(m, out var r) ? r : Matrix4x4.Identity;
 
     /// <summary>M231: unit vector from the origin toward the camera - which is what a billboard at the origin
@@ -1509,11 +1561,19 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
             bool compare = s.UseComparisonShader && _comparePs.Handle is not null;
 
+            // M245: six planes from the combined view-projection, Gribb-Hartmann. Extracted once per
+            // frame, not per slice.
+            var planes = ExtractFrustum(Matrix4x4.Multiply(view, proj));
+            CulledSlices = 0;
+
             // M214: one pass per material. A champion skin is one vertex/index buffer whose submeshes each
             // want their own shader, permutation and textures, so the pipeline is rebound per slice.
             foreach (var mat in _materials)
             {
             if (!mat.Visible) continue;
+
+            // M245: frustum cull. Slices with no bounds are always drawn.
+            if (mat.Bounds is { } bb && !FrustumContains(planes, bb.Min, bb.Max)) { CulledSlices++; continue; }
 
             // M232: blend is per MATERIAL, not per frame. Particle emitters in one system routinely mix
             // additive and straight-alpha passes, so binding one state before the loop cannot represent

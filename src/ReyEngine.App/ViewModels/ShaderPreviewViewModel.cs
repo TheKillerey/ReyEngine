@@ -1067,6 +1067,27 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     }
 
     /// <summary>Resolve one material to a live pipeline covering its submesh slices.</summary>
+    /// <summary>M245: world-space bounds of the vertices a slice touches, for frustum culling. Null when
+    /// the slice covers nothing measurable, which reads as "always draw".</summary>
+    private (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max)? SliceBounds(int start, int count)
+    {
+        if (_sceneMesh is null || count <= 0) return null;
+        var idx = _sceneMesh.Indices;
+        var verts = _sceneMesh.Vertices;
+        var lo = new System.Numerics.Vector3(float.MaxValue);
+        var hi = new System.Numerics.Vector3(float.MinValue);
+        int end = Math.Min(start + count, idx.Length);
+        for (int i = start; i < end; i++)
+        {
+            uint vi = idx[i];
+            if (vi >= verts.Length) continue;
+            var pv = verts[vi].Position;
+            lo = System.Numerics.Vector3.Min(lo, pv);
+            hi = System.Numerics.Vector3.Max(hi, pv);
+        }
+        return lo.X > hi.X ? null : (lo, hi);
+    }
+
     /// <summary>Bounds centre of the vertices a slice of the shared index buffer touches.</summary>
     private System.Numerics.Vector3 SliceCentre(int start, int count)
     {
@@ -1250,6 +1271,11 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             var mat = _renderer.BuildMaterial(b.Name, vs, ps, slice.Start, slice.Count, out var rep,
                 vsDesc, psDesc, StateDescription.Geometry);
             if (mat is null) { why = rep.Error ?? "pipeline creation failed"; sb.AppendLine($"   !  {b.Name,-34} {why}"); return null; }
+
+            // M245: the slice's own bounds, so the renderer can frustum-cull it. Computed from the same
+            // vertex walk MESH_CENTER already needed, so this costs one extra min/max per vertex rather
+            // than a second pass over the index buffer.
+            mat.Bounds = SliceBounds(slice.Start, slice.Count);
 
             // M230: MESH_CENTER is per mesh in the engine, and staticmesh/vertexdeform uses it twice - as the
             // reference point for the grass-flattening spheres AND as the wave's phase offset,
