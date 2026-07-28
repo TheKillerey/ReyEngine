@@ -736,7 +736,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// resolves to, its textures, and its parameters. A submesh whose material cannot be resolved is
     /// reported and skipped rather than drawn with someone else's shader.</para></summary>
     [RelayCommand]
-    private void LoadScene()
+    private async Task LoadScene()
     {
         if (SelectedSceneAsset is null || _cache is null || _readAsset is null) return;
         if (Materials.Count == 0)
@@ -752,37 +752,66 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         // M240: the render-state preset follows the CONTENT, not the last thing the user toggled.
         ApplyPreset(asset.IsMap ? PreviewKind.Map : PreviewKind.Character);
 
+        // M244: the CPU half runs off the UI thread. Everything below this point that touches D3D stays
+        // on it - device resource creation is free-threaded, but the immediate context is NOT, and the
+        // texture upload path maps buffers through it.
+        //
+        // What moves is the part that was actually costing the 2-4 s freeze: the WAD read, the geometry
+        // decode, and - measured as 88% of a 42 s Map12 load back in M224 - decoding every referenced .tex
+        // to RGBA. The upload itself is comparatively cheap and stays where it is safe.
+        IsLoadingScene = true;
+        Status = $"Reading {asset.Display}…";
+
         PreviewMesh mesh;
         List<(string Material, int Start, int Count, string Lightmap)> parts;
+        string? decodeError = null;
+        PreviewMesh? decodedMesh = null;
+        List<(string Material, int Start, int Count, string Lightmap)>? decodedParts = null;
+
+        await Task.Run(() =>
+        {
         try
         {
             var bytes = _readAsset(asset.Hash);
-            if (bytes is null || bytes.Length == 0) { Fail($"{asset.Display}: not readable"); return; }
+            if (bytes is null || bytes.Length == 0) { decodeError = "not readable"; return; }
 
             if (asset.IsMap)
             {
                 var map = MapGeoDecoder.Decode(bytes);
-                mesh = PreviewGeometry.FromLeagueArrays(asset.Display, map.Positions.Length / 3,
+                decodedMesh = PreviewGeometry.FromLeagueArrays(asset.Display, map.Positions.Length / 3,
                     map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices,
                     grassPivots: map.GrassPivots);
                 // M226: the lightmap atlas travels WITH THE GROUP. It is a per-mesh property, and keying
                 // it by material name (taking the first group's) handed 71.5% of Map12's lit groups another
                 // mesh's atlas page - 3,171 of 4,434 groups, 59.4% of triangles. The UVs were always right;
                 // the page under them was not.
-                parts = map.Groups
+                decodedParts = map.Groups
                     .Select(g => (g.Material, g.StartIndex, g.IndexCount, Lightmap: g.LightmapTexture))
                     .ToList();
             }
             else
             {
                 var m = SkinnedMeshDecoder.Decode(bytes);
-                mesh = PreviewGeometry.FromLeagueArrays(asset.Display, m.VertexCount,
+                decodedMesh = PreviewGeometry.FromLeagueArrays(asset.Display, m.VertexCount,
                     m.Positions, m.Normals, m.Uvs, m.Colors, m.LightmapUvs, m.Indices,
                     m.BlendIndices, m.BlendWeights);
-                parts = m.SubMeshes.Select(x => (x.Material, x.StartIndex, x.IndexCount, Lightmap: "")).ToList();
+                decodedParts = m.SubMeshes.Select(x => (x.Material, x.StartIndex, x.IndexCount, Lightmap: "")).ToList();
             }
+
+            // Pre-decode every texture the scene will ask for, still off the UI thread. The material loop
+            // below then finds them ready and only uploads. Failures are left out silently here and
+            // reported by the existing per-material path, so nothing is hidden.
+            PreDecodeTextures(decodedParts!);
         }
-        catch (Exception ex) { Fail($"{asset.Display}: {ex.Message}"); return; }
+        catch (Exception ex) { decodeError = ex.Message; }
+        });
+
+        IsLoadingScene = false;
+
+        if (decodeError is not null || decodedMesh is null || decodedParts is null)
+        { Fail($"{asset.Display}: {decodeError ?? "decode produced nothing"}"); return; }
+        mesh = decodedMesh;
+        parts = decodedParts;
 
         sb.AppendLine($"SCENE   {asset.Display}   ({asset.Kind})");
         sb.AppendLine($"        {mesh.Vertices.Length:n0} vertices, {mesh.TriangleCount:n0} triangles, "
@@ -873,6 +902,12 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         sb.AppendLine($"slices merged away: {_slicesMerged}   ·   distinct textures resident: {_renderer.CachedTextureCount}");
         sb.AppendLine($"pipelines: {_renderer.PipelineCacheHits} cache hit(s), {_renderer.PipelineCacheMisses} built, "
                       + $"{_renderer.CachedPipelineCount} resident");
+        sb.AppendLine($"textures pre-decoded off the UI thread: {_preDecoded.Count}");
+
+        // M244: the hand-off is over. Holding every texture's RGBA after upload would keep a second full
+        // copy of the scene's textures alive in managed memory for no purpose - the renderer's pool is the
+        // one that survives.
+        _preDecoded.Clear();
         int overrides = SceneDefines.Count(d => d.Mode != 0);
         if (overrides > 0)
             sb.AppendLine($"define overrides active: {overrides}   ·   materials whose permutation actually changed: {_permutationsChanged}"
@@ -1052,6 +1087,41 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         return lo.X > hi.X ? System.Numerics.Vector3.Zero : (lo + hi) * 0.5f;
     }
 
+    /// <summary>M244: RGBA decoded off the UI thread, keyed by lower-cased asset path. Consumed and
+    /// cleared by the material loop - this is a hand-off, not a second cache; the GPU-side cache in the
+    /// renderer is what survives.</summary>
+    private readonly Dictionary<string, TextureImage> _preDecoded = new(StringComparer.Ordinal);
+
+    /// <summary>Read and decode every texture the scene's materials and lightmaps reference. Runs on a
+    /// worker thread; touches no D3D and no observable property.</summary>
+    private void PreDecodeTextures(List<(string Material, int Start, int Count, string Lightmap)> parts)
+    {
+        _preDecoded.Clear();
+        var wanted = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var slice in parts)
+            if (slice.Lightmap.Length > 0) wanted.Add(slice.Lightmap.ToLowerInvariant());
+
+        var names = parts.Select(x => x.Material).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in Materials)
+        {
+            if (!names.Contains(row.Binding.Name)) continue;
+            foreach (var slot in row.Binding.Slots)
+                if (!string.IsNullOrWhiteSpace(slot.Path)) wanted.Add(slot.Path.ToLowerInvariant());
+        }
+
+        foreach (var key in wanted)
+        {
+            if (_renderer.HasCachedTexture(key)) continue;      // already on the GPU from a previous load
+            try
+            {
+                var data = _readAsset!(HashAlgorithms.WadPath(key));
+                if (data is { Length: > 0 }) _preDecoded[key] = TextureDecoder.Decode(data);
+            }
+            catch { /* reported per material by the binding path below */ }
+        }
+    }
+
     private PreviewMaterial? BuildSceneMaterial(MaterialBinding b,
         List<(string Material, int Start, int Count, string Lightmap)> slices, StringBuilder sb,
         ref int texBound, ref int texMissing, out string why, out bool usedFallback)
@@ -1205,10 +1275,16 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 if (_renderer.TryBindCached(mat, target, key)) { texBound++; continue; }
                 try
                 {
-                    var data = _readAsset!(HashAlgorithms.WadPath(key));
-                    if (data is null || data.Length == 0)
-                    { sb.AppendLine($"      texture NOT FOUND  {slot.Path}"); texMissing++; continue; }
-                    var img = TextureDecoder.Decode(data);
+                    // M244: decoded off the UI thread already, in the common case
+                    TextureImage img;
+                    if (_preDecoded.TryGetValue(key, out var ready)) img = ready;
+                    else
+                    {
+                        var data = _readAsset!(HashAlgorithms.WadPath(key));
+                        if (data is null || data.Length == 0)
+                        { sb.AppendLine($"      texture NOT FOUND  {slot.Path}"); texMissing++; continue; }
+                        img = TextureDecoder.Decode(data);
+                    }
                     _renderer.SetTexture(mat, target, key, img.Rgba, img.Width, img.Height);
                     if (!target.Equals(slot.SamplerName + "__TX", StringComparison.OrdinalIgnoreCase))
                         sb.AppendLine($"      '{slot.SamplerName}' -> {target}  ({img.Width}x{img.Height})");
@@ -1229,10 +1305,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 {
                     try
                     {
-                        var lmData = _readAsset!(HashAlgorithms.WadPath(lmKey));
-                        if (lmData is { Length: > 0 })
+                        byte[]? lmData = _preDecoded.ContainsKey(lmKey) ? null : _readAsset!(HashAlgorithms.WadPath(lmKey));
+                        if (_preDecoded.TryGetValue(lmKey, out var lmReady) || lmData is { Length: > 0 })
                         {
-                            var lmImg = TextureDecoder.Decode(lmData);
+                            var lmImg = lmReady ?? TextureDecoder.Decode(lmData!);
                             _renderer.SetTexture(mat, lmSlot.Name, lmKey, lmImg.Rgba, lmImg.Width, lmImg.Height);
                             texBound++;
                             _lightmapsBound++;
@@ -1541,6 +1617,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     [ObservableProperty] private bool _particlesPlaying = true;
     [ObservableProperty] private string _particleReport = "";
     [ObservableProperty] private float _particleSpeed = 1f;
+
+    /// <summary>M244: true while the off-thread decode is running, so the UI can disable the load button
+    /// and say what it is doing instead of appearing hung.</summary>
+    [ObservableProperty] private bool _isLoadingScene;
 
     private int _frameCounter;
 

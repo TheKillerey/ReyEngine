@@ -828,6 +828,10 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     /// which is the caller's cue to read and decode it - and the point of the whole thing, because on a hit
     /// neither the WAD read nor the decode happens. A Map12 load decoded one 2048 lightmap 282 times at
     /// 35.8 ms each before this existed.</summary>
+    /// <summary>M244: is this texture already resident on the GPU? Lets the off-thread pre-decode skip
+    /// work the renderer would only throw away.</summary>
+    public bool HasCachedTexture(string key) => _texPool.ContainsKey(key);
+
     public bool TryBindCached(PreviewMaterial m, string reflectedName, string key)
     {
         if (!_texPool.TryGetValue(key, out var srv) || srv.Handle is null) return false;
