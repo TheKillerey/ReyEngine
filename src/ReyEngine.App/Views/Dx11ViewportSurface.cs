@@ -5,6 +5,7 @@ using System.Numerics;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using ReyEngine.Formats.MapGeo;
 using ReyEngine.Rendering;
 using ReyEngine.Rendering.D3D11;
 
@@ -45,14 +46,52 @@ public sealed class Dx11ViewportSurface : IDisposable
     public string SceneReport { get; set; } = "";
     public bool HasScene { get; set; }
 
+    /// <summary>
+    /// <para>M261: the map's own lighting, from the same source the GL viewport binds to
+    /// (<c>CurrentSunProperties</c>). Until now this surface supplied NONE of it, so every scene rendered
+    /// against the renderer's fallback sun and the no-map-fog path - which is why the sun looked wrong and
+    /// the fog looked absent while the preview window, which does supply them, looked right.</para>
+    ///
+    /// <para>Null is meaningful: it selects the same neutral fallbacks the preview uses when no map is
+    /// loaded, rather than zeros. An unbound constant reads as zero and zero is black - see M229.</para>
+    /// </summary>
+    public MapSunProperties? MapSun { get; set; }
+
+    /// <summary>Mirrors the GL viewport's <c>FogEnabled</c>, itself bound to <c>ShowFog</c>. Gated the same
+    /// way on purpose: if the two viewports disagreed about whether fog is on, the A/B diff would report a
+    /// difference that is a UI setting rather than a rendering one.</summary>
+    public bool FogEnabled { get; set; }
+
+    /// <summary>Mirrors the GL viewport's <c>LightmapScale</c> (<c>CurrentLightmapScale</c>).</summary>
+    public double LightmapScale { get; set; } = 1.0;
+
+    /// <summary>
+    /// <para>Drives the <c>TIME</c> constant, which is what animates scrolling UVs, flipbooks and flow.</para>
+    ///
+    /// <para>Deliberately NOT gated on <c>HasFlowmapWater</c> the way the GL path's <c>AnimateWater</c> is.
+    /// That gate is a property of our own GL shader, where TIME only ever fed the water; Riot's shaders use
+    /// it for far more, so gating on water would leave most animated materials frozen. This also matches
+    /// the "Animate TIME = On" map preset from M240.</para>
+    /// </summary>
+    public bool AnimateTime { get; set; } = true;
+
+    private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+
     /// <summary>The image to show. Swaps between two bitmaps so Avalonia is never compositing the one being
     /// written - a single bitmap tears under the compositor.</summary>
     public WriteableBitmap? Current { get; private set; }
 
     /// <summary>Last frame's cost and draw count, for the side-by-side comparison this step exists to make
     /// possible.</summary>
-    /// <summary>M252: the raw BGRA of the last frame, for the A/B diff. Same layout the GL capture
-    /// normalises to.</summary>
+    /// <summary>
+    /// <para>M252: the raw BGRA of the last frame, for the A/B diff. Same layout the GL capture
+    /// normalises to.</para>
+    ///
+    /// <para><b>Aliases the renderer's reused readback buffer</b>, so it is only valid until the next
+    /// <see cref="Render"/>. The A/B path is safe because it renders and compares back to back on the UI
+    /// thread with no await between them - but anything that holds this across a frame boundary must copy
+    /// it first. See the note on <c>ShaderPreviewRenderer.RenderFrame</c>.</para>
+    /// </summary>
     public byte[]? LastPixels { get; private set; }
 
     private readonly List<string> _unbound = new();
@@ -101,6 +140,20 @@ public sealed class Dx11ViewportSurface : IDisposable
             CullBackFaces = false,
             MirrorX = true,
             TransposeMatrices = true,
+
+            // M261. The sun and the lightmap scale are ungated, matching the GL path, which applies them
+            // unconditionally. Fog is gated on the toggle, also matching it.
+            TimeSeconds = AnimateTime ? (float)_clock.Elapsed.TotalSeconds : 0f,
+            MapSunColor = MapSun?.SunColor,
+            MapSunDirection = MapSun?.SunDirection,
+            MapLightMapScale = (float)LightmapScale,
+
+            // RAW fogStartAndEnd, not TryGetFogRange's normalised (near, far). Riot ships these negative
+            // and reversed and the shader consumes them unmodified - the GL path normalises only because
+            // its fog is our own reimplementation. Normalising here would put the fog cliff in the wrong
+            // place rather than fail loudly.
+            MapFogColor = FogEnabled ? MapSun?.FogColor : null,
+            MapFogStartEnd = FogEnabled ? MapSun?.FogStartAndEnd : null,
         };
 
         var t0 = DateTime.UtcNow;

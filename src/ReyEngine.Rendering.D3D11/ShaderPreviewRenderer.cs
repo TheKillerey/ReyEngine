@@ -1599,8 +1599,17 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     // ---------------------------------------------------------------- render
 
-    /// <summary>Draw one frame and return it as BGRA8 bytes, row-packed at <paramref name="width"/>*4.
-    /// Returns null when there is nothing to draw; <paramref name="error"/> then says why.</summary>
+    /// <summary>
+    /// <para>Draw one frame and return it as BGRA8 bytes, row-packed at <paramref name="width"/>*4.
+    /// Returns null when there is nothing to draw; <paramref name="error"/> then says why.</para>
+    ///
+    /// <para><b>The returned array is REUSED between calls</b> - it is the renderer's staging readback
+    /// buffer, not a fresh allocation. Anything that needs to hold a frame across another RenderFrame must
+    /// copy it. Comparing two "different" frames without copying compares one buffer with itself, which
+    /// reads as a perfect zero difference and is indistinguishable from a real engine failure; that cost a
+    /// wrong diagnosis in M261. Kept reused rather than allocated because the viewport calls this every
+    /// frame at up to 7 MB a time.</para>
+    /// </summary>
     public byte[]? RenderFrame(int width, int height, PreviewSettings s, out string? error,
         List<string>? unboundConstants = null)
     {

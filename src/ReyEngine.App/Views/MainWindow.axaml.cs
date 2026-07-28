@@ -190,6 +190,13 @@ public partial class MainWindow : Window
         int h = (int)(Viewport.Bounds.Height * scale);
         if (w <= 0 || h <= 0) return;
 
+        // M261: the same lighting inputs the GL surface is bound to in XAML. Pushed every frame rather
+        // than on load because all three are live-editable - the sun sliders, the fog toggle and the
+        // lightmap scale all change without the scene being rebuilt.
+        _dx11.MapSun = vm.CurrentSunProperties;
+        _dx11.FogEnabled = vm.ShowFog;
+        _dx11.LightmapScale = vm.CurrentLightmapScale;
+
         if (!_dx11.Render(Viewport.Camera, w, h)) return;
 
         Dx11Surface.Source = _dx11.Current;
