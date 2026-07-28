@@ -106,6 +106,72 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>M252 (phase 6, step 3): render the SAME frame through both renderers and diff it.
+    ///
+    /// <para>The GL side has to come from glReadPixels inside the render callback - Avalonia cannot
+    /// screenshot an OpenGlControlBase - so this asks the control for one frame, waits for it, then renders
+    /// the D3D11 side at the identical size with the identical camera.</para></summary>
+    private async void OnCompareRenderers(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm) return;
+        if (_dx11 is null || !_dx11.IsReady)
+        {
+            vm.Dx11ViewportStatus = "Turn DX11 on at least once first - the device is created lazily.";
+            return;
+        }
+
+        var tcs = new TaskCompletionSource<(byte[] Px, int W, int H)>();
+        void OnCap(byte[] px, int w, int h) => tcs.TrySetResult((px, w, h));
+        Viewport.FrameCaptured += OnCap;
+        try
+        {
+            bool wasDx11 = vm.UseDx11Viewport;
+            vm.UseDx11Viewport = false;             // the GL surface must be the visible one to render
+            await Task.Delay(50);
+            Viewport.RequestCapture();
+
+            var gl = await Task.WhenAny(tcs.Task, Task.Delay(3000)) == tcs.Task
+                ? tcs.Task.Result
+                : default;
+            if (gl.Px is null) { vm.Dx11ViewportStatus = "GL capture timed out."; return; }
+
+            // Same size, same camera - anything else and the diff measures the setup, not the renderers.
+            if (!_dx11.Render(Viewport.Camera, gl.W, gl.H)) { vm.Dx11ViewportStatus = "D3D11 render failed."; return; }
+            var dx = _dx11.LastPixels;
+            if (dx is null) { vm.Dx11ViewportStatus = "D3D11 produced no pixels."; return; }
+
+            var diffBuf = new byte[gl.Px.Length];
+            var report = Services.FrameDiff.Compare(gl.Px, dx, gl.W, gl.H, diffBuf);
+
+            string dir = Path.Combine(Path.GetTempPath(), "ReyEngine", "framediff");
+            Directory.CreateDirectory(dir);
+            SavePng(Path.Combine(dir, "a-opengl.png"), gl.Px, gl.W, gl.H);
+            SavePng(Path.Combine(dir, "b-dx11.png"), dx, gl.W, gl.H);
+            SavePng(Path.Combine(dir, "diff.png"), diffBuf, gl.W, gl.H);
+
+            vm.UseDx11Viewport = wasDx11;
+            vm.Dx11ViewportStatus = $"diff: {report.DifferingPercent:F1}% differ, "
+                                    + $"{report.CoverageMismatch:n0} coverage mismatch  ->  {dir}";
+            vm.LogRendererDiff(report.Describe() + Environment.NewLine + "images written to " + dir);
+        }
+        finally { Viewport.FrameCaptured -= OnCap; }
+    }
+
+    private static void SavePng(string path, byte[] bgra, int w, int h)
+    {
+        var bmp = new Avalonia.Media.Imaging.WriteableBitmap(
+            new Avalonia.PixelSize(w, h), new Avalonia.Vector(96, 96),
+            Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Premul);
+        using (var fb = bmp.Lock())
+        {
+            int stride = w * 4;
+            for (int y = 0; y < h; y++)
+                System.Runtime.InteropServices.Marshal.Copy(bgra, y * stride, fb.Address + y * fb.RowBytes, stride);
+        }
+        using var fs = File.Create(path);
+        bmp.Save(fs);
+    }
+
     private static string FirstLine(string s)
     {
         int i = s.IndexOf((char)10);

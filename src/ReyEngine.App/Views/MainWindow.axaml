@@ -501,6 +501,8 @@
               <ToggleButton Classes="vp" Content="◫ Wire" IsChecked="{Binding ShowWireframe}" ToolTip.Tip="Wireframe overlay" />
               <!-- M248 (phase 6, step 1): OpenGL <-> Direct3D 11, side by side. Nothing is removed; this
                    swaps which of two sibling surfaces is visible. -->
+              <Button Classes="vp" Content="A/B" Click="OnCompareRenderers"
+                      ToolTip.Tip="Render this exact frame through both renderers and diff it. Writes a-opengl.png, b-dx11.png and diff.png, and puts the histogram in the console." />
               <ToggleButton Classes="vp" Content="DX11" IsChecked="{Binding UseDx11Viewport}"
                             ToolTip.Tip="Render this viewport with Direct3D 11 instead of OpenGL (experimental). Step 1 draws a reference mesh with the editor camera; scene content follows in step 2." />
               <TextBlock Text="{Binding Dx11ViewportStatus}" VerticalAlignment="Center" Margin="8,0,0,0"

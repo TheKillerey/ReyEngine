@@ -49,6 +49,10 @@ public sealed class Dx11ViewportSurface : IDisposable
 
     /// <summary>Last frame's cost and draw count, for the side-by-side comparison this step exists to make
     /// possible.</summary>
+    /// <summary>M252: the raw BGRA of the last frame, for the A/B diff. Same layout the GL capture
+    /// normalises to.</summary>
+    public byte[]? LastPixels { get; private set; }
+
     public double LastFrameMs { get; private set; }
     public int LastDrawCalls { get; private set; }
     public int LastCulled { get; private set; }
@@ -96,6 +100,7 @@ public sealed class Dx11ViewportSurface : IDisposable
         LastFrameMs = (DateTime.UtcNow - t0).TotalMilliseconds;
         if (pixels is null) return false;
 
+        LastPixels = pixels;
         LastDrawCalls = _renderer.DrawCalls;
         LastCulled = _renderer.CulledSlices;
 

@@ -327,6 +327,16 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>M248: the editor camera, so a side-by-side D3D11 surface can render the SAME view rather
     /// than a reconstruction of it. Read-only by intent - input still goes through this control.</summary>
     public OrbitCamera Camera => _camera;
+
+    // M252 (phase 6, step 3): one-shot frame capture, for the OpenGL vs Direct3D 11 comparison.
+    private bool _captureRequested;
+
+    /// <summary>Fires once per <see cref="RequestCapture"/>, on the GL thread, with BGRA top-down pixels -
+    /// the same layout the D3D11 readback produces, so the two can be diffed directly.</summary>
+    public event Action<byte[], int, int>? FrameCaptured;
+
+    /// <summary>Capture the next rendered frame. One shot; call again for another.</summary>
+    public void RequestCapture() { _captureRequested = true; RequestNextFrameRendering(); }
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
     private bool _dynamicLightsDirty;   // M70: re-upload the Light.dat table on the GL thread when it changes
     private bool _lightMarkersDirty;    // M71: recompute the transformed light-position icons
@@ -1081,6 +1091,40 @@ public sealed class ViewportControl : OpenGlControlBase
         _gl.BlitFramebuffer(0, 0, (int)w, (int)h, 0, 0, (int)w, (int)h,
             (uint)ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)fb);
+
+        // M252 (phase 6, step 3): hand this frame's pixels out for the A/B diff. Read AFTER the blit, so
+        // it is the composited result rather than an intermediate target.
+        //
+        // Two conversions matter and both are silent if wrong: glReadPixels returns RGBA bottom-up, while
+        // the D3D11 readback is BGRA top-down. Comparing them raw would report every pixel as different
+        // and the diff would say nothing. Normalised here, at the source, so the comparison sees one
+        // format.
+        if (_captureRequested)
+        {
+            _captureRequested = false;
+            int cw = (int)w, ch = (int)h;
+            if (cw > 0 && ch > 0)
+            {
+                var buf = new byte[cw * ch * 4];
+                _gl.ReadPixels<byte>(0, 0, (uint)cw, (uint)ch, PixelFormat.Rgba, PixelType.UnsignedByte, buf);
+                var outBuf = new byte[buf.Length];
+                int stride = cw * 4;
+                for (int y = 0; y < ch; y++)
+                {
+                    int src = (ch - 1 - y) * stride;      // flip vertically
+                    int dst = y * stride;
+                    for (int x = 0; x < cw; x++)
+                    {
+                        outBuf[dst + x * 4 + 0] = buf[src + x * 4 + 2];   // B
+                        outBuf[dst + x * 4 + 1] = buf[src + x * 4 + 1];   // G
+                        outBuf[dst + x * 4 + 2] = buf[src + x * 4 + 0];   // R
+                        outBuf[dst + x * 4 + 3] = buf[src + x * 4 + 3];   // A
+                    }
+                }
+                FrameCaptured?.Invoke(outBuf, cw, ch);
+            }
+        }
+
     }
 
     private void EnsureFbo(uint w, uint h)

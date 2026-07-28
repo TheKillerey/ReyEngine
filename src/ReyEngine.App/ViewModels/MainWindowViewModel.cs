@@ -1814,6 +1814,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// leave the material asking for a shader the client cannot load. Built once per game directory.</summary>
     // ---- M249 (phase 6, step 2): hand the open map to the side-by-side D3D11 surface ----
 
+    /// <summary>M252: the A/B diff result, into the console where it can be read and copied.</summary>
+    public void LogRendererDiff(string text) => _log.Info("DX11", "renderer A/B diff" + System.Environment.NewLine + text);
+
     private Formats.Shaders.ShaderCacheReader? _dx11ShaderCache;
     private string? _dx11ShaderCacheDir;
 
