@@ -136,6 +136,20 @@ public sealed class D3D11ParticlePlayback
             // Derived in M231 from quad_vs's cell arithmetic.
             mat.Params["TEXTURE_INFO"] = ParticleQuadBuilder.TextureInfo(e.TexDiv);
 
+            // M237: pass the values that SELECTED the permutation, which the first cut did not.
+            //
+            // VfxShaderFlags turns ALPHA_TEST on precisely because alphaRef > 0, and then the renderer's
+            // engine default bound AlphaTestReferenceValue = 0 - a cutoff of zero discards nothing, so the
+            // permutation was selected and then neutered. The GL renderer discards at the authored value
+            // (`if (uAlphaRef > 0.0 && t.a * vColor.a < uAlphaRef) discard`), so the two previews disagreed
+            // on every one of the 425,866 emitters that author it.
+            if (e.AlphaRef > 0) mat.Params["AlphaTestReferenceValue"] = new[] { e.AlphaRef / 255f, 0f, 0f, 0f };
+
+            // Same shape of omission: quad_vs slides each vertex along its own camera ray by this, and the
+            // GL path applies the emitter's authored value, while this bound a flat 0.
+            if (e.DepthPushPull != 0f)
+                mat.Params["PARTICLE_DEPTH_PUSH_PULL"] = new[] { e.DepthPushPull, 0f, 0f, 0f };
+
             // M235: BuildMaterial CREATES the pipeline but does not register it for drawing - the caller
             // must add it, which is what LoadShaders does for the single-shader path. Without this the
             // renderer has no materials at all, IsReady is false, and RenderFrame bails out with
