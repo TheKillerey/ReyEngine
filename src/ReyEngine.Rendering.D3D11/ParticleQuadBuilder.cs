@@ -159,17 +159,14 @@ public static class ParticleQuadBuilder
     }
 
     /// <summary>
-    /// <para>Quad corner k: offset in [-0.5, 0.5] - GL's base quad - and its UV.</para>
+    /// <para>Quad corner k: offset in [-0.5, 0.5] - GL's base quad - and its UV, v increasing downward to
+    /// match an atlas read from the top-left.</para>
     ///
-    /// <para><b>M258: MEASURED FLIPPED, cause not yet located.</b> The intent below is v=0 at the top, to
-    /// match League's top-down .tex rows. A direct test - hand-built texture, row 0 red, last row blue, one
-    /// face-on quad, no mirroring, no decoder in the path - renders red at the BOTTOM. So sprites in this
-    /// path are currently upside down and this comment is aspiration, not description.</para>
-    ///
-    /// <para>It is not the decoder (the test bypasses it), not these UVs as written, and not the readback
-    /// (which preserves row order). Reproduce with the `vaxis` harness mode before changing anything here -
-    /// flipping these corners would fix the symptom whether or not it is the cause, which is exactly how a
-    /// wrong fix gets locked in.</para>
+    /// <para>M258 verified this end to end rather than by inspection: source row 0 renders at the top of the
+    /// image, world +up renders at the top of the screen, and v=0.25 samples the source top half. The
+    /// `vaxis` and `vaxisbisect` harness modes reproduce all three. Do not "fix" the V axis here without
+    /// re-running them - an earlier run claimed a flip that turned out to be a channel-order bug in the test
+    /// itself.</para>
     /// </summary>
     private static (float dx, float dy, float u, float v) Corner(int k) => k switch
     {
