@@ -1172,6 +1172,34 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                     // are outside this rule and keep the old behaviour; nothing has measured what their
                     // mProj is for.
                     "MPROJ" => Mat(ParticleStyleProjection(mat) ? vp : proj, s),
+
+                    // M256: the shadow plumbing. These are PLACEHOLDERS, and worth being plain about why:
+                    // the preview renders no shadow pass, so there is no shadow camera to derive them from.
+                    // Their job is to be finite and non-degenerate, not to be right - and with the M254
+                    // comparison sampler set to Always, every PCF tap returns 1 regardless of what these
+                    // hold, so the lit result does not depend on them today.
+                    //
+                    // Binding them anyway matters for one reason: an unbound constant is the signal this
+                    // project uses to find real bugs (M229, M230, M235, M255 were all found that way), and
+                    // three permanent entries in that report are three lines of noise every future
+                    // diagnosis has to look past.
+                    //
+                    // mShadowProj maps world into shadow-map space. Identity is the only defensible stand-in
+                    // without a shadow camera; it makes the lookup coordinate the world position, which is
+                    // meaningless but bounded. A zero matrix would collapse every tap onto one texel.
+                    "MSHADOWPROJ" => Mat(Matrix4x4.Identity, s),
+
+                    // Pushes the shadow lookup along the normal to avoid acne. Zero = no offset, which is
+                    // the honest value when there is nothing to be biased against. It sits at
+                    // PerFrameVertexCB+540, immediately after the float3 SUN_LIGHT_DIRECTION at +528 - the
+                    // sun binding writes three floats and stops, which is why this stayed unbound.
+                    "NORMAL_OFFSET_BIAS" => new[] { 0f, 0f, 0f, 0f },
+
+                    // Texel offsets for the four surrounding PCF taps, as (±x, ±y) pairs. Zero would make
+                    // all five taps read the same texel - harmless now, but it would silently disable the
+                    // filtering the moment a real shadow map arrives. One texel of a 2048 map is a
+                    // defensible default and degrades to correct rather than to broken.
+                    "SHADOW_SAMPLE_OFFSETS" => new[] { 1f / 2048f, 1f / 2048f, -1f / 2048f, 1f / 2048f },
                     "VCAMERA" or "CAMERA_POSITION" => new[] { cam.X, cam.Y, cam.Z, 1f },
 
                     // M231: the particle flipbook atlas descriptor. Derived from quad_vs, which spends it as
