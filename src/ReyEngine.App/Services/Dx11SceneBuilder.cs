@@ -67,6 +67,10 @@ public static class Dx11SceneBuilder
         var byName = new Dictionary<string, MaterialBinding>(StringComparer.OrdinalIgnoreCase);
         foreach (var m in materials) byName[m.Name] = m;
 
+        // Every distinct texture path the scene will need, collected first so the decode can be one
+        // parallel pass rather than interleaved with shader resolution.
+        var distinct = new HashSet<string>(StringComparer.Ordinal);
+
         var scene = new PreparedScene
         {
             Mesh = mesh,
@@ -109,17 +113,7 @@ public static class Dx11SceneBuilder
                     is { } lmSlot)
                 wanted.Add((lmSlot.Name, slice.Lightmap.ToLowerInvariant()));
 
-            // Decode once per distinct path, not once per slice - 1,389 slices reference far fewer files.
-            foreach (var (_, key) in wanted)
-            {
-                if (scene.Textures.ContainsKey(key)) continue;
-                try
-                {
-                    var data = readAsset(HashAlgorithms.WadPath(key));
-                    if (data is { Length: > 0 }) scene.Textures[key] = TextureDecoder.Decode(data);
-                }
-                catch { /* left out here; the commit pass reports what failed to bind */ }
-            }
+            foreach (var (_, key) in wanted) distinct.Add(key);
 
             scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,
                 new ShaderDescription(full, DxbcStage.Vertex, vp.Key, vp.BlobIndex, b.Macros, vs),
@@ -127,8 +121,48 @@ public static class Dx11SceneBuilder
                 wanted));
         }
 
+        DecodeTextures(distinct, readAsset, scene);
         scene.PrepareMs = (DateTime.UtcNow - t0).TotalMilliseconds;
         return scene;
+    }
+
+    /// <summary>
+    /// <para>M251: read sequentially, decode in parallel.</para>
+    ///
+    /// <para>The asymmetry is not arbitrary. <c>WadArchive.Extract</c> takes a lock, so concurrent reads
+    /// would queue on it and buy nothing - parallelising that half would add contention for no gain.
+    /// Decoding is pure CPU per buffer with no shared state, which is the half that scales.</para>
+    ///
+    /// <para>Once per distinct PATH, never once per slice: bloom has 2,860 texture bindings across far
+    /// fewer files, and decoding per binding would make this slower than the version it replaced.</para>
+    /// </summary>
+    private static void DecodeTextures(
+        HashSet<string> distinct, Func<ulong, byte[]?> readAsset, PreparedScene scene)
+    {
+        var keys = distinct.ToArray();
+        var raw = new byte[keys.Length][];
+
+        for (int i = 0; i < keys.Length; i++)
+        {
+            try { raw[i] = readAsset(HashAlgorithms.WadPath(keys[i])) ?? Array.Empty<byte>(); }
+            catch { raw[i] = Array.Empty<byte>(); }
+        }
+
+        var decoded = new System.Collections.Concurrent.ConcurrentDictionary<string, TextureImage>(
+            StringComparer.Ordinal);
+
+        System.Threading.Tasks.Parallel.For(0, keys.Length, i =>
+        {
+            var bytes = raw[i];
+            if (bytes.Length == 0) return;
+            // A texture that will not decode is left out and reported by the commit pass, exactly as when
+            // this ran serially - a throw here would abort the whole scene over one bad file.
+            try { decoded[keys[i]] = TextureDecoder.Decode(bytes); }
+            catch { }
+            finally { raw[i] = Array.Empty<byte>(); }   // release the compressed copy as we go
+        });
+
+        foreach (var kv in decoded) scene.Textures[kv.Key] = kv.Value;
     }
 
     // ---------------------------------------------------------------- D3D half
