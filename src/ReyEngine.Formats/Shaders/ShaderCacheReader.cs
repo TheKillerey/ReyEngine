@@ -117,6 +117,44 @@ public sealed class ShaderCacheReader : IDisposable
     public static string TocPathFor(string shaderName, DxbcStage stage) =>
         $"{shaderName}.{(stage == DxbcStage.Vertex ? "vs" : "ps")}.dx11";
 
+    /// <summary>
+    /// <para>M231: the name of the OTHER stage, for shaders whose two stages are separate cache entries.</para>
+    ///
+    /// <para>Most of the cache pairs both stages under one name - 371 of 462 - and those need nothing from
+    /// this. The <c>assets/shaders/hlsl/</c> families instead ship the stage in the NAME, so
+    /// <c>particlesystem/quad_vs</c> has only a <c>.vs.dx11</c> TOC and its partner
+    /// <c>particlesystem/quad_ps</c> only a <c>.ps.dx11</c>. Asking for the missing stage of either returns
+    /// null, which read as "this shader cannot be previewed".</para>
+    ///
+    /// <para>The rule is the LAST <c>_vs</c>/<c>_ps</c> token, not a suffix: it has to also turn
+    /// <c>quad_vs_fixedalphauv</c> into <c>quad_ps_fixedalphauv</c>. Verified over the whole cache - every
+    /// vertex-only name under particlesystem/ and skinnedmesh/ pairs this way. Returns null when the name
+    /// carries no such token (<c>renderer/vs_screenvertex</c>, <c>ui/animation</c>) rather than guessing.</para>
+    /// </summary>
+    public static string? PartnerStageName(string shaderName, DxbcStage want)
+    {
+        string from = want == DxbcStage.Vertex ? "_ps" : "_vs";
+        string to = want == DxbcStage.Vertex ? "_vs" : "_ps";
+        int i = shaderName.LastIndexOf(from, StringComparison.OrdinalIgnoreCase);
+        if (i < 0) return null;
+        return shaderName[..i] + to + shaderName[(i + from.Length)..];
+    }
+
+    /// <summary>The TOC for <paramref name="stage"/> of <paramref name="shaderName"/>, falling back to the
+    /// partner name when this one does not ship that stage. <paramref name="resolvedName"/> reports which
+    /// name actually supplied it, so the UI can say so instead of quietly previewing a different shader.</summary>
+    public ShaderStageToc? ReadTocOrPartner(string shaderName, DxbcStage stage, out string resolvedName)
+    {
+        resolvedName = shaderName;
+        var toc = ReadToc(TocPathFor(shaderName, stage));
+        if (toc is not null) return toc;
+
+        if (PartnerStageName(shaderName, stage) is not { } partner) return null;
+        toc = ReadToc(TocPathFor(partner, stage));
+        if (toc is not null) resolvedName = partner;
+        return toc;
+    }
+
     /// <summary>Parse a stage TOC. Returns null when the cache has no such entry — which for a shader that
     /// exists in the other stage is normal and not an error.</summary>
     public ShaderStageToc? ReadToc(string tocPath)

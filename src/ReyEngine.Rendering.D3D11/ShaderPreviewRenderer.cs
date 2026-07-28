@@ -437,6 +437,27 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         }
     }
 
+    /// <summary>M231: does this material's vertex shader want mProj to be the whole world-to-clip transform?
+    /// True when it uses mProj without a bone palette, which across the cache selects exactly the particle
+    /// shaders. Null material (the built-in comparison path) keeps the champion reading.</summary>
+    private static bool ParticleStyleProjection(PreviewMaterial? mat)
+    {
+        if (mat is null) return false;
+
+        // A bone palette means the champion reading: bones already applied object-to-view.
+        if (mat.VsRefl.ConstantBuffers.Any(cb => cb.Name.Contains("Bone", StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        // env_scrollingdiffuse and the four tft_* shaders use mProj AND a view-projection matrix. Whatever
+        // their mProj is for, it is not the world-to-clip transform - that job is already taken - so they are
+        // explicitly excluded rather than swept in by "has no bones".
+        if (mat.VsRefl.ConstantBuffers.Any(cb => cb.Variables.Any(v => v.IsUsed
+                && v.Name.Contains("VIEW_PROJECTION", StringComparison.OrdinalIgnoreCase))))
+            return false;
+
+        return true;
+    }
+
     /// <summary>Tiles a float4 <paramref name="count"/> times - for cbuffer array constants.</summary>
     private static float[] Repeat(float[] v, int count)
     {
@@ -888,8 +909,50 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
                         0.5f, 0.5f, 0.5f, 1f, 0.5f, 0.5f, 0.5f, 1f, 0.5f, 0.5f, 0.5f, 1f,
                         0.5f, 0.5f, 0.5f, 1f, 0.5f, 0.5f, 0.5f, 1f, 0.5f, 0.5f, 0.5f, 1f,
                     },
-                    "MPROJ" => Mat(proj, s),
+                    // M231: mProj is TWO different matrices depending on who is asking, and the shader
+                    // itself does not say which - only the company it keeps does.
+                    //
+                    // Censused every vertex stage in the cache and the split is total:
+                    //   235 use mProj AND declare a bone buffer  -> champions. The bone palette carries
+                    //       object-to-VIEW (see BonePose), so mProj is projection ALONE.
+                    //    17 use mProj and declare NO bone buffer -> and all 17 are particle shaders
+                    //       (particles/* and particlesystem/*). Nothing else is in that set.
+                    //
+                    // For the particle case mProj must be the FULL world-to-clip transform, which
+                    // particlesystem/quad_vs proves directly: it computes POSITION - vCamera, and vCamera is
+                    // a world-space camera position, so POSITION is world-space and mProj has to finish the
+                    // job. Binding projection alone there puts the quad on the near plane.
+                    //
+                    // Five staticmesh shaders (env_scrollingdiffuse, tft_*) use mProj AND a VP matrix. They
+                    // are outside this rule and keep the old behaviour; nothing has measured what their
+                    // mProj is for.
+                    "MPROJ" => Mat(ParticleStyleProjection(mat) ? vp : proj, s),
                     "VCAMERA" or "CAMERA_POSITION" => new[] { cam.X, cam.Y, cam.Z, 1f },
+
+                    // M231: the particle flipbook atlas descriptor. Derived from quad_vs, which spends it as
+                    //     col = frame - floor(frame * TEXTURE_INFO.y) * TEXTURE_INFO.x
+                    //     out.uv = (col + u) * TEXTURE_INFO.y, (row + v) * TEXTURE_INFO.z
+                    // so x = columns, y = 1/columns, z = 1/rows. A single-frame particle is a 1x1 atlas,
+                    // which passes the UV through unchanged - the right default for a still preview, and the
+                    // only one that does not silently crop the texture to a sub-rectangle.
+                    "TEXTURE_INFO" => new[] { 1f, 1f, 1f, 0f },
+
+                    // Shifts the quad along the view ray to bias it in the depth test. Zero is "where the
+                    // emitter put it"; the engine authors it per emitter.
+                    "PARTICLE_DEPTH_PUSH_PULL" or "EMITTER_DEPTH_PUSH_PULL" or "CAMERAOFFSET" => new[] { 0f, 0f, 0f, 0f },
+
+                    // defaultparticlequadunlit's material parameters. Neutral values so a shader picked
+                    // straight from the dropdown - with no material behind it - shows its diffuse rather
+                    // than a black or fully-eroded quad. A material that authors them overrides via Params.
+                    "COLOR_USE_TEXTURECOLOR" => new[] { 1f, 1f, 1f, 1f },
+                    "ALPHA_TEXTURE_USE" => new[] { 0f, 0f, 0f, 0f },
+                    "COLOR_CHANNELTOUSE" => new[] { 1f, 0f, 0f, 0f },
+                    "ALPHA_CHANNELTOUSE" => new[] { 0f, 0f, 0f, 1f },
+                    "SOFTPARTICLE_FADEDISTANCE" => new[] { 0f, 0f, 0f, 0f },
+                    "BLOOMTHRESHOLD" => new[] { 1f, 1f, 1f, 1f },
+                    "FOW_INTENSITY_RGBA" or "FOW_INTENSITY_BLOOM" => new[] { 0f, 0f, 0f, 0f },
+                    "COLOR_LOOKUP_UV" => new[] { 0f, 0f, 0f, 0f },
+                    "KCOLORFACTOR" => new[] { 1f, 1f, 1f, 1f },
                     "TIME" => new[] { s.TimeSeconds, s.TimeSeconds * 0.5f, MathF.Sin(s.TimeSeconds), 1f },
                     // M228: this points TOWARD the sun, and getting it backwards makes flat ground black.
                     //
@@ -1126,6 +1189,14 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     }
 
     private static Matrix4x4 Invert(Matrix4x4 m) => Matrix4x4.Invert(m, out var r) ? r : Matrix4x4.Identity;
+
+    /// <summary>M231: unit vector from the origin toward the camera - which is what a billboard at the origin
+    /// needs to face. Uses the supplied camera position when a scene set one, otherwise the orbit.</summary>
+    public static Vector3 CameraForward(PreviewSettings s)
+    {
+        var c = s.SuppliedCameraPosition ?? CameraPosition(s);
+        return c.LengthSquared() > 1e-8f ? Vector3.Normalize(c) : Vector3.UnitZ;
+    }
 
     private static Vector3 CameraPosition(PreviewSettings s) => new(
         s.Distance * MathF.Cos(s.Pitch) * MathF.Sin(s.Yaw),

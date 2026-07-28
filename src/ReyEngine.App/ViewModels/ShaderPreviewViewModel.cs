@@ -416,14 +416,31 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         PixelPermutations.Clear();
         if (value is null || _cache is null) return;
 
-        Fill(VertexPermutations, ShaderCacheReader.TocPathFor(value.Full, DxbcStage.Vertex));
-        Fill(PixelPermutations, ShaderCacheReader.TocPathFor(value.Full, DxbcStage.Pixel));
+        // M231: the hlsl/ families name the stage instead of pairing both under one name, so
+        // particlesystem/quad_vs ships only a vertex TOC and quad_ps only a pixel one. Follow the partner
+        // rather than reporting "this shader cannot be previewed".
+        _vsName = value.Full;
+        _psName = value.Full;
+        _cache.ReadTocOrPartner(value.Full, DxbcStage.Vertex, out _vsName);
+        _cache.ReadTocOrPartner(value.Full, DxbcStage.Pixel, out _psName);
+
+        Fill(VertexPermutations, ShaderCacheReader.TocPathFor(_vsName, DxbcStage.Vertex));
+        Fill(PixelPermutations, ShaderCacheReader.TocPathFor(_psName, DxbcStage.Pixel));
         SelectedVertexPerm = VertexPermutations.FirstOrDefault();
         SelectedPixelPerm = PixelPermutations.FirstOrDefault();
 
         Status = $"{VertexPermutations.Count:n0} vertex / {PixelPermutations.Count:n0} pixel permutations cooked.";
+        if (!string.Equals(_vsName, _psName, StringComparison.OrdinalIgnoreCase))
+            Status += $"   Stages are separate cache entries: VS from '{ShortName(_vsName)}', PS from '{ShortName(_psName)}'.";
         HasError = false;
     }
+
+    /// <summary>M231: which cache entry each stage actually came from. Equal to the selected name for the
+    /// 371 shaders that pair both stages; different for the stage-split hlsl/ families.</summary>
+    private string _vsName = "";
+    private string _psName = "";
+
+    private static string ShortName(string full) => full.Split('/').LastOrDefault() ?? full;
 
     private void Fill(ObservableCollection<PermutationRow> into, string tocPath)
     {
@@ -1203,8 +1220,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             return;
         }
 
-        string vsPath = ShaderCacheReader.TocPathFor(SelectedShader.Full, DxbcStage.Vertex);
-        string psPath = ShaderCacheReader.TocPathFor(SelectedShader.Full, DxbcStage.Pixel);
+        string vsPath = ShaderCacheReader.TocPathFor(
+            _vsName.Length > 0 ? _vsName : SelectedShader.Full, DxbcStage.Vertex);
+        string psPath = ShaderCacheReader.TocPathFor(
+            _psName.Length > 0 ? _psName : SelectedShader.Full, DxbcStage.Pixel);
 
         _vs = _cache.LoadShader(vsPath, SelectedVertexPerm.Perm.BlobIndex, out var e1);
         if (_vs is null) { Fail($"vertex stage: {e1}"); return; }
@@ -1215,6 +1234,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         if (!report.Success) { Fail(report.Error ?? "shader creation failed"); BuildMetadata(vsPath, psPath, report); return; }
 
         _renderer.SetMesh(PreviewGeometry.CreateBuiltIn(SelectedMesh));
+        _quadFacing = null;                 // M231: force the billboard to rebuild for the current camera
         FocusCamera();
         BuildSlots();
         BuildMetadata(vsPath, psPath, report);
@@ -1243,6 +1263,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
     partial void OnSelectedMeshChanged(string value)
     {
+        _quadFacing = null;
         if (IsLoaded) _renderer.SetMesh(PreviewGeometry.CreateBuiltIn(value));
     }
 
@@ -1359,6 +1380,23 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
     // ---------------------------------------------------------------- frame loop
 
+    /// <summary>M231: the view direction the particle quad was last built for. quad_vs does NOT billboard -
+    /// it only projects - so the CPU has to re-orient the quad, exactly as the engine's particle system does.
+    /// Rebuilt only when the direction actually changes, not every frame.</summary>
+    private System.Numerics.Vector3? _quadFacing;
+
+    private void UpdateParticleQuad()
+    {
+        if (!IsLoaded || !string.Equals(SelectedMesh, PreviewGeometry.ParticleQuadName, StringComparison.Ordinal))
+            return;
+
+        var toCam = ShaderPreviewRenderer.CameraForward(_settings);
+        if (_quadFacing is { } prev && System.Numerics.Vector3.Distance(prev, toCam) < 1e-4f) return;
+
+        _quadFacing = toCam;
+        _renderer.SetMesh(PreviewGeometry.ParticleQuad(toCam, System.Numerics.Vector3.UnitY));
+    }
+
     private bool _drivenExternally;
 
     /// <summary>M227: called from the window's compositor animation callback. Switches the fallback timer
@@ -1371,6 +1409,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
     private void Tick()
     {
+        UpdateParticleQuad();
         if (!IsLoaded || !_renderer.IsReady) return;
 
         var now0 = DateTime.UtcNow;

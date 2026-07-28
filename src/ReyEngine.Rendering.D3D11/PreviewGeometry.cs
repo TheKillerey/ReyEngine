@@ -55,14 +55,80 @@ public sealed class PreviewMesh
 
 public static class PreviewGeometry
 {
-    public static IReadOnlyList<string> BuiltInNames { get; } = new[] { "Sphere", "Cube", "Plane" };
+    public static IReadOnlyList<string> BuiltInNames { get; } = new[] { "Sphere", "Cube", "Plane", ParticleQuadName };
+
+    /// <summary>M231: the test mesh for League's particle shaders.</summary>
+    public const string ParticleQuadName = "Particle Quad";
 
     public static PreviewMesh CreateBuiltIn(string name) => name switch
     {
         "Cube" => Cube(),
         "Plane" => Plane(),
+        ParticleQuadName => ParticleQuad(Vector3.UnitZ, Vector3.UnitY),
         _ => Sphere(),
     };
+
+    /// <summary>
+    /// <para>M231: one camera-facing particle quad, built the way the engine builds them.</para>
+    ///
+    /// <para><c>particlesystem/quad_vs</c> does NOT billboard - it only projects. Its whole body is:</para>
+    /// <code>
+    ///   add  r0.xyz, v0.xyzx, -cb2[4].xyzx   // POSITION - vCamera
+    ///   rsq / mul                            // normalize that
+    ///   mad  r0.xyz, r0.xyzx, cb1[1].xxxx, v0.xyzx   // += dir * PARTICLE_DEPTH_PUSH_PULL
+    ///   dp4  o0, r0, cb2[0..3]               // mul(float4(pos,1), mProj)
+    ///   mov  o1.xyzw, v1.zyxw                // COLOR0, swizzled
+    ///   round_ni r0.x, v2.z                  // floor(TEXCOORD0.z) - a flipbook FRAME INDEX
+    /// </code>
+    ///
+    /// <para>Three things follow, and all three are measured rather than assumed:</para>
+    /// <list type="number">
+    /// <item>POSITION is in WORLD space - it is differenced against <c>vCamera</c>, a world position - so the
+    /// CPU orients the quad and <c>mProj</c> carries the full world-to-clip transform.</item>
+    /// <item>COLOR0 is read <c>.zyxw</c>, so the buffer holds <b>BGRA</b>. Feeding RGBA swaps red and blue.</item>
+    /// <item>TEXCOORD0.z is a flipbook frame index, not a UV component. The layout supplies TEXCOORD0 as
+    /// two floats, so z defaults to 0 - frame 0 - which is what a still preview wants.</item>
+    /// </list>
+    /// </summary>
+    public static PreviewMesh ParticleQuad(Vector3 toCamera, Vector3 up, float size = 1f)
+    {
+        // Orthonormal basis facing the camera. Falls back to a fixed axis when the view direction is
+        // degenerate or parallel to up, so the quad never collapses to a line.
+        var n = toCamera.LengthSquared() > 1e-8f ? Vector3.Normalize(toCamera) : Vector3.UnitZ;
+        var right = Vector3.Cross(up, n);
+        if (right.LengthSquared() < 1e-6f) right = Vector3.Cross(Vector3.UnitX, n);
+        if (right.LengthSquared() < 1e-6f) right = Vector3.UnitX;
+        right = Vector3.Normalize(right);
+        var upv = Vector3.Normalize(Vector3.Cross(n, right));
+
+        float h = size * 0.5f;
+        var verts = new PreviewVertex[4];
+        // (u,v) with v down, matching a texture atlas read top-left first
+        var corners = new (float dx, float dy, float u, float v)[]
+        {
+            (-1f,  1f, 0f, 0f),
+            ( 1f,  1f, 1f, 0f),
+            ( 1f, -1f, 1f, 1f),
+            (-1f, -1f, 0f, 1f),
+        };
+        for (int i = 0; i < 4; i++)
+        {
+            var (dx, dy, u, v) = corners[i];
+            var p = right * (dx * h) + upv * (dy * h);
+            verts[i] = Make(p, n, new Vector2(u, v), right);
+            // BGRA, per the .zyxw read above. Opaque white either way, but the order is the point.
+            verts[i].Color = new Vector4(1f, 1f, 1f, 1f);
+            verts[i].Uv1 = new Vector2(u, v);   // the separate alpha UV, same mapping by default
+        }
+
+        return new PreviewMesh
+        {
+            Name = ParticleQuadName,
+            Vertices = verts,
+            Indices = new uint[] { 0, 1, 2, 0, 2, 3 },
+            Radius = h * 1.4142f,
+        };
+    }
 
     /// <summary>UV sphere. Tangents follow the u direction so tangent-space shaders have something sane.</summary>
     public static PreviewMesh Sphere(int segments = 48, int rings = 32, float radius = 1f)
