@@ -416,6 +416,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         foreach (var t in _texPool.Values) t.Dispose();
         foreach (var t in _retired) t.Dispose();
         _texPool.Clear();
+        _texAlpha.Clear();
         _retired.Clear();
         _comparePs.Dispose();
         _comparePs = default;
@@ -1432,6 +1433,18 @@ float4 psmain_tex(VTexOut i) : SV_Target
 
     public bool IsCached(string key) => _texPool.TryGetValue(key, out var v) && v.Handle is not null;
 
+    /// <summary>M273: does the pooled asset under this key use its alpha channel? Recorded as a side effect
+    /// of decoding, because modes 2 and 3 pick their blend state from it (VfxShaderFlags.IsAdditive) and the
+    /// pipeline has to know BEFORE it builds - by which point a pool hit means nobody has the pixels any
+    /// more. Keyed and cleared exactly like <see cref="_texPool"/>, so the two cannot fall out of step.</summary>
+    private readonly Dictionary<string, bool> _texAlpha = new(StringComparer.Ordinal);
+
+    public bool TryGetTextureAlpha(string key, out bool hasAlpha) => _texAlpha.TryGetValue(key, out hasAlpha);
+
+    /// <summary>Record what a caller decoded elsewhere. Only needed when pixels reach the pool by a route
+    /// that skips <see cref="SetTexture"/>; the normal path records itself.</summary>
+    public void NoteTextureAlpha(string key, bool hasAlpha) => _texAlpha[key] = hasAlpha;
+
     /// <summary>Bind RGBA8 pixels to a reflected texture name on EVERY material that declares it. That is
     /// what the bench wants; a scene binds per material instead.</summary>
     public void SetTexture(string reflectedName, byte[] rgba, int width, int height)
@@ -1459,6 +1472,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
         if (_texPool.TryGetValue(key, out var previous) && previous.Handle is not null) _retired.Add(previous);
 
         _texPool[key] = made.Value;
+        _texAlpha[key] = Formats.Vfx.VfxShaderFlags.TextureUsesAlpha(rgba);
         m.Textures[reflectedName] = made.Value;
     }
 
@@ -1471,6 +1485,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
         foreach (var t in _texPool.Values) t.Dispose();
         foreach (var t in _retired) t.Dispose();
         _texPool.Clear();
+        _texAlpha.Clear();
         _retired.Clear();
     }
 

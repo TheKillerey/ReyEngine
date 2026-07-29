@@ -66,11 +66,22 @@ public readonly record struct StateDescription(
     /// additive, mode 5 1% additive (58% premultiplied). That is close to the opposite of the list below,
     /// over 1,119,000 emitters.</para>
     ///
-    /// <para>Deliberately NOT acted on. Art authoring implies intent, not the blend state Riot sets, and
-    /// flipping a boolean on indirect evidence is how a wrong fix gets locked in - it would look correct
-    /// either way, because our additive is <c>SrcAlpha, One</c> rather than <c>One, One</c>, so
+    /// <para>Deliberately NOT acted on for modes 1/4/5. Art authoring implies intent, not the blend state
+    /// Riot sets, and flipping a boolean on indirect evidence is how a wrong fix gets locked in - it would
+    /// look correct either way, because our additive is <c>SrcAlpha, One</c> rather than <c>One, One</c>, so
     /// alpha-authored art rendered additively still respects its silhouette and merely reads brighter.
     /// See <c>docs/research/q1-blendmodes.md</c>; settling it is now the top capture question.</para>
+    ///
+    /// <para><b>M273: mode 2 WAS acted on, because it acquired direct in-engine evidence the others still
+    /// lack</b> - Map22's <c>impactStones_smoke</c> was measured painting solid black rectangles under alpha
+    /// (100.0% of covered pixels darkened, worst drop 127 of 127) and none under additive. It was resolved
+    /// per-sprite rather than flipped, so the dark mode-2 effects M117 found still render dark. That logic
+    /// is in <c>VfxShaderFlags.IsAdditive(int, bool?)</c>, which is what both renderers call.</para>
+    ///
+    /// <para><b>This function is on no render path.</b> Its only caller is its own unit test; the GL and
+    /// D3D11 particle paths both go through <c>VfxShaderFlags</c>. It survives as the documented
+    /// texture-blind table, so keep it agreeing with <c>VfxShaderFlags.IsAdditive(int)</c> - and do not
+    /// reach for it expecting to change what draws, which is a trap M272 fell into for a whole session.</para>
     ///
     /// <para>Also measured: <b>mode 0 is never authored</b> - not once in 1,221,115 emitters. Only the
     /// absent case exists, so the 0 in <see cref="IsBlendModeUnderstood"/> covers a value that never

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using ReyEngine.Formats.Shaders;
+using ReyEngine.Formats.Vfx;
 using Xunit;
 
 namespace ReyEngine.Formats.Tests;
@@ -87,7 +88,14 @@ public class ShaderDescriptionTests
     }
 
     [Theory]
-    // the guess both renderers share, kept identical on purpose so they cannot disagree
+    // The texture-BLIND fallback, which is all this table can be. Modes 2 and 3 are mixed populations
+    // whose real answer comes from the sprite (VfxShaderFlags.IsAdditive(int, bool?)); they appear here as
+    // Alpha because that is what an unknown sprite falls back to, NOT because the integer decides them.
+    //
+    // This assertion restates the table, so on its own it can only fail when someone edits the table - it
+    // is a change-detector, not evidence. The evidence lives in Mode_2_is_decided_by_the_sprite below and
+    // in VfxShaderFlags' comment; what this one is FOR is pinning the fallback, because a silent change to
+    // the unknown-sprite case would otherwise be invisible.
     [InlineData(0, BlendKind.Alpha)]
     [InlineData(1, BlendKind.Additive)]
     [InlineData(2, BlendKind.Alpha)]
@@ -98,6 +106,69 @@ public class ShaderDescriptionTests
     {
         Assert.Equal(expected, StateDescription.BlendFromRiotMode(mode));
         Assert.True(StateDescription.IsBlendModeUnderstood(mode));
+    }
+
+    /// <summary>
+    /// M273. Mode 2 was rendered as Alpha unconditionally, and on Map22's Rising_Mist_Supernova that painted
+    /// solid black rectangles: isolated over a mid-grey clear, impactStones_smoke darkened 100.0% of the
+    /// 3,271 px it covered with a worst channel drop of 127 (grey 127 straight to 0), while the identical
+    /// quads forced additive darkened 0 px. Its sprite TFT_PDM_Cosmic_Spark_2x2 is 0.0% alpha-varied and
+    /// 100% opaque - additive art with no silhouette in alpha at all, so alpha blending had nothing to mask
+    /// the black field with.
+    ///
+    /// The mode cannot simply be flipped, because M117 assigned it Alpha for a real reason: Kayn's
+    /// BlackMotes and Darkunderglow_* are DARK effects and additive can only brighten. Those sprites measure
+    /// 99.6%, 99.7% and 100.0% alpha-varied, so the per-sprite rule keeps them on Alpha. Both observations
+    /// are satisfied at once, which is why the split is the fix and a flip is not.
+    ///
+    /// Corpus check behind the numbers: 8,189 mode-2 emitters, 2,114 distinct sprites -> 67% of sprites
+    /// (62% of emitters) have no real alpha and become additive. M260's independent border-darkness census
+    /// put mode 2 at 65% additive, so two unrelated measurements agree.
+    /// </summary>
+    [Theory]
+    // mode, sprite uses its alpha channel, expected additive
+    [InlineData(2, false, true)]    // TFT_PDM_Cosmic_Spark_2x2 - the black rectangles
+    [InlineData(2, true, false)]    // Kayn_base_w_slayer_glow - Darkunderglow must still be able to darken
+    [InlineData(3, false, true)]    // M117c, unchanged: Kayn R scythe flipbooks
+    [InlineData(3, true, false)]    // M117c, unchanged: skin02 R ghost reusing the skin's TX_CM
+    [InlineData(1, true, true)]     // every other mode ignores the sprite entirely
+    [InlineData(1, false, true)]
+    [InlineData(4, true, true)]
+    [InlineData(5, true, true)]
+    [InlineData(0, false, false)]
+    public void Mode_2_is_decided_by_the_sprite(int mode, bool spriteUsesAlpha, bool expectedAdditive)
+        => Assert.Equal(expectedAdditive, VfxShaderFlags.IsAdditive(mode, spriteUsesAlpha));
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void An_unknown_sprite_falls_back_to_the_blind_table_rather_than_guessing(int mode)
+    {
+        // Null is "nobody resolved the sprite", which happens when a stage binds the soft-dot fallback.
+        // Falling back preserves the behaviour that shipped rather than picking the majority cluster.
+        Assert.Equal(VfxShaderFlags.IsAdditive(mode), VfxShaderFlags.IsAdditive(mode, null));
+    }
+
+    [Fact]
+    public void Alpha_use_is_measured_with_a_tolerance_because_encoders_scatter_254s()
+    {
+        // 4 px, all alpha 255: flat opaque, no silhouette -> additive art.
+        Assert.False(VfxShaderFlags.TextureUsesAlpha(new byte[] { 0,0,0,255, 0,0,0,255, 0,0,0,255, 0,0,0,255 }));
+
+        // A real silhouette: half the sprite transparent.
+        Assert.True(VfxShaderFlags.TextureUsesAlpha(new byte[] { 0,0,0,0, 0,0,0,0, 0,0,0,255, 0,0,0,255 }));
+
+        // 254 is NOT alpha use - that is BC encoder noise on flat-opaque art, and an exact ==255 test would
+        // read it as a silhouette and send genuinely additive sprites down the alpha path.
+        Assert.False(VfxShaderFlags.TextureUsesAlpha(new byte[] { 0,0,0,254, 0,0,0,254, 0,0,0,255, 0,0,0,255 }));
+
+        // The threshold is a >1% SHARE, so one transparent pixel in a large sprite is still "no alpha".
+        var mostlyOpaque = new byte[400 * 4];
+        for (int i = 3; i < mostlyOpaque.Length; i += 4) mostlyOpaque[i] = 255;
+        mostlyOpaque[3] = 0;                                  // 1 of 400 = 0.25%
+        Assert.False(VfxShaderFlags.TextureUsesAlpha(mostlyOpaque));
+        for (int i = 3; i < 10 * 4; i += 4) mostlyOpaque[i] = 0;   // 10 of 400 = 2.5%
+        Assert.True(VfxShaderFlags.TextureUsesAlpha(mostlyOpaque));
     }
 
     [Theory]

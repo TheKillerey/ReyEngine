@@ -167,10 +167,10 @@ public sealed class VfxParticleRenderer
 
     public unsafe uint UploadTexture(byte[] rgba, int width, int height)
     {
-        // M117c: does this texture use its alpha channel at all? (>1% of pixels below ~opaque)
-        int _n = width * height, _varied = 0;
-        for (int _i = 3; _i < rgba.Length; _i += 4) if (rgba[_i] < 250) _varied++;
-        bool _hasAlpha = _varied > _n / 100;
+        // M117c: does this texture use its alpha channel at all? M273 moved the predicate itself into
+        // VfxShaderFlags - it is now consulted by the D3D11 path too, and two copies of a threshold that
+        // decides a blend state is exactly the drift the shared table exists to prevent.
+        bool _hasAlpha = VfxShaderFlags.TextureUsesAlpha(rgba);
 
         uint tex = _gl.GenTexture();
         _gl.BindTexture(TextureTarget.Texture2D, tex);
@@ -614,18 +614,15 @@ public sealed class VfxParticleRenderer
     ///   0 → alpha (legacy .troy convention; zero occurrences in the survey)
     ///   2 → alpha (BlackMotes / Darkunderglow — DARK on-screen effects, which additive cannot
     ///       produce: additive only ever brightens)
+    ///
+    /// M273: the table itself now lives in VfxShaderFlags so the D3D11 path cannot drift from it, and
+    /// mode 2 joined mode 3 as texture-decided. The M117 observation above still holds and is what
+    /// keeps it honest - the Kayn sprites that motivated "2 → alpha" measure 99.6-100% alpha-varied
+    /// and still render alpha. See VfxShaderFlags.IsAdditive(int, bool?).
     /// </summary>
-    private static bool IsAdditive(int blendMode) => blendMode is 1 or 3 or 4 or 5;
-
-    /// <summary>M117c: the effective blend for an emitter. Mode 3 is texture-dependent in practice —
-    /// Kayn's base R scythe flipbooks are dark-background with NO alpha (must be additive or they show
-    /// as black boxes), while skin02's R ghost .skn uses the skin's TX_CM WITH alpha and washes into an
-    /// oversaturated blob when added. Both are mode 3, so the alpha channel decides: no alpha =>
-    /// additive, real alpha => alpha blend. Modes 1/4/5 stay additive, 0/2 stay alpha.</summary>
     private bool IsAdditiveFor(int blendMode, uint texture) =>
-        blendMode == 3
-            ? !(_texHasAlpha.TryGetValue(texture, out var hasAlpha) && hasAlpha)
-            : IsAdditive(blendMode);
+        VfxShaderFlags.IsAdditive(blendMode,
+            _texHasAlpha.TryGetValue(texture, out var hasAlpha) ? hasAlpha : null);
 
     /// <summary>M184 (2.10): Riot's texture-address enum, read off their OWN named shared samplers in
     /// assets/shaders/shareddata.bin - Wrap_No_Mip / CharacterWrap / EnvironmentWrap write 0, and the
