@@ -144,10 +144,17 @@ public sealed class ShaderPermutationIndex
         string path = $"assets/shaders/generated/{renderShader}.{stage}.dx11".ToLowerInvariant();
         if (_tocs.TryGetValue(path, out var cached)) return cached;
 
+        // M277: the 2026-07-29 patch renamed every cache entry ".vs.dx11" -> ".vs-dx11". This index is
+        // FAIL-SAFE (no TOC means "cannot prove the removal is safe"), so the rename did not corrupt
+        // anything here - it just made CanRemoveMacro refuse every macro in the game, silently. Resolve
+        // whichever spelling this install ships instead of hard-coding one.
+        string lookup = Shaders.ShaderCacheReader.ResolveCachePath(
+            path, p => _cache.Chunks.ContainsKey(HashAlgorithms.WadPath(p))) ?? path;
+
         Toc? toc = null;
         try
         {
-            if (_cache.Chunks.TryGetValue(HashAlgorithms.WadPath(path), out var chunk))
+            if (_cache.Chunks.TryGetValue(HashAlgorithms.WadPath(lookup), out var chunk))
             {
                 using var s = _cache.OpenChunk(chunk);
                 var ms = new MemoryStream();

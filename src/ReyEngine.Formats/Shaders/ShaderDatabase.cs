@@ -46,20 +46,21 @@ public sealed class ShaderDatabase
 
 public static class ShaderScanner
 {
-    /// <summary>Scan a ShaderCache WAD: each <c>.vs.dx11</c>/<c>.ps.dx11</c> entry is a shader TOC.</summary>
+    /// <summary>Scan a ShaderCache WAD: each stage-TOC entry is a shader. M277: the suffix test lives in
+    /// ShaderCacheReader now, because the cache ships two spellings of it and this list going empty is
+    /// indistinguishable from "no shaders installed".</summary>
     public static ShaderDatabase Scan(WadArchive shaderCache, Action<float>? progress = null)
     {
         var db = new ShaderDatabase();
         var tocs = shaderCache.Entries
-            .Where(e => e.IsResolved && (e.Path.EndsWith(".vs.dx11", StringComparison.OrdinalIgnoreCase)
-                                         || e.Path.EndsWith(".ps.dx11", StringComparison.OrdinalIgnoreCase)))
+            .Where(e => e.IsResolved && ShaderCacheReader.IsTocPath(e.Path))
             .ToList();
 
         int i = 0;
         foreach (var e in tocs)
         {
-            bool vs = e.Path.EndsWith(".vs.dx11", StringComparison.OrdinalIgnoreCase);
-            string name = e.Path[..^(vs ? ".vs.dx11".Length : ".ps.dx11".Length)];
+            ShaderCacheReader.TryStripStage(e.Path, out string name, out var stage);
+            bool vs = stage == DxbcStage.Vertex;
 
             int variants = 0;
             var defines = new List<string>();

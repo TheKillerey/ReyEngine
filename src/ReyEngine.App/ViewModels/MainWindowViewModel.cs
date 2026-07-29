@@ -7564,7 +7564,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var entry = SelectedNode?.Entry;
         if (entry is null || _archive is null && _mounts is null) { _log.Warn("Shader", "Select a shader (.dx11) asset first."); return; }
-        if (!entry.Path.Contains(".dx11", StringComparison.OrdinalIgnoreCase)) { _log.Warn("Shader", "Selected asset isn't a shader (.dx11)."); return; }
+        // M277: the cache ships both ".dx11" and "-dx11" spellings (the 2026-07-29 patch renamed them all),
+        // so testing only the dotted one rejects every shader asset in a current install.
+        if (!entry.Path.Contains(".dx11", StringComparison.OrdinalIgnoreCase)
+            && !entry.Path.Contains("-dx11", StringComparison.OrdinalIgnoreCase))
+        { _log.Warn("Shader", "Selected asset isn't a shader (.dx11/-dx11)."); return; }
         var outPath = await Dialogs.SaveFileAsync("Export shader bytecode", entry.DisplayName);
         if (outPath is null) return;
         try { await File.WriteAllBytesAsync(outPath, ReadAsset(entry.PathHash)); _log.Success("Shader", $"Wrote {outPath}."); }

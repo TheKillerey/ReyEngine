@@ -61,6 +61,11 @@ public sealed class ShaderStageToc
 /// container holding up to 100 length-prefixed DXBC blobs back to back. Blob 128 is therefore the 29th
 /// entry of <c>..._100</c>.</para>
 ///
+/// <para><b>M277: the stage separator is not stable.</b> The 2026-07-29 patch renamed every entry from
+/// <c>.vs.dx11</c> to <c>.vs-dx11</c>, containers included. Both spellings are supported — see
+/// <see cref="StageSuffixes"/> and <see cref="ResolveCachePath"/> — and every lookup here resolves the
+/// name it will actually use rather than assuming the caller's.</para>
+///
 /// <para><b>The gotcha that costs an afternoon.</b> A container's length prefix runs one byte longer than
 /// the DXBC it wraps (1,757 vs the 1,756 the DXBC header declares at offset 24). D3D rejects any bytecode
 /// whose buffer length disagrees with its own <c>totalSize</c>, with a bare <c>E_INVALIDARG</c> and no
@@ -76,17 +81,15 @@ public sealed class ShaderCacheReader : IDisposable
     public bool IsAvailable => _wad is not null;
     public string? LoadError { get; }
 
-    /// <summary>Every <c>.vs.dx11</c>/<c>.ps.dx11</c> TOC path in the cache, sorted. Only resolved paths
-    /// appear — an unresolved hash cannot be turned back into the <c>_N</c> container names.</summary>
+    /// <summary>Every stage-TOC path in the cache, sorted. Only resolved paths appear — an unresolved hash
+    /// cannot be turned back into the <c>_N</c> container names.</summary>
     public IReadOnlyList<string> TocPaths { get; } = Array.Empty<string>();
 
     public ShaderCacheReader(WadArchive shaderCacheWad)
     {
         _wad = shaderCacheWad;
         TocPaths = _wad.Entries
-            .Where(e => e.IsResolved
-                        && (e.Path.EndsWith(".vs.dx11", StringComparison.OrdinalIgnoreCase)
-                            || e.Path.EndsWith(".ps.dx11", StringComparison.OrdinalIgnoreCase)))
+            .Where(e => e.IsResolved && IsTocPath(e.Path))
             .Select(e => e.Path)
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -109,13 +112,69 @@ public sealed class ShaderCacheReader : IDisposable
         .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
         .ToList();
 
-    public static string StripStage(string tocPath) =>
-        tocPath.EndsWith(".vs.dx11", StringComparison.OrdinalIgnoreCase) ? tocPath[..^".vs.dx11".Length]
-        : tocPath.EndsWith(".ps.dx11", StringComparison.OrdinalIgnoreCase) ? tocPath[..^".ps.dx11".Length]
-        : tocPath;
+    /// <summary>
+    /// <para>M277: every stage suffix the shipped cache has used, because it has now used two.</para>
+    ///
+    /// <para>Up to the 2026-07-29 patch every entry was <c>{shader}.vs.dx11</c>; that patch renamed all
+    /// 2,176 of them to <c>{shader}.vs-dx11</c> (and the blob containers with them, <c>....vs-dx11_0</c>).
+    /// Both spellings are kept rather than swapping to the new one: mods and older installs still carry the
+    /// dotted form, and the naming has now demonstrably changed once, so treating either as "the" spelling
+    /// is a bet this file has already lost.</para>
+    /// </summary>
+    private static readonly (string Suffix, DxbcStage Stage)[] StageSuffixes =
+    {
+        (".vs-dx11", DxbcStage.Vertex), (".ps-dx11", DxbcStage.Pixel),
+        (".vs.dx11", DxbcStage.Vertex), (".ps.dx11", DxbcStage.Pixel),
+    };
 
+    /// <summary>Split a TOC path into shader name and stage. False (and the path unchanged) when it carries
+    /// no stage suffix at all, which is how a caller tells "unknown layout" from "pixel shader" — the
+    /// distinction the old suffix chain silently lost by falling through to Pixel.</summary>
+    public static bool TryStripStage(string tocPath, out string shaderName, out DxbcStage stage)
+    {
+        foreach (var (suffix, st) in StageSuffixes)
+            if (tocPath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            { shaderName = tocPath[..^suffix.Length]; stage = st; return true; }
+        shaderName = tocPath;
+        stage = DxbcStage.Unknown;
+        return false;
+    }
+
+    public static string StripStage(string tocPath) =>
+        TryStripStage(tocPath, out var name, out _) ? name : tocPath;
+
+    /// <summary>Is this WAD path a stage TOC (either spelling)? Blob containers end <c>_N</c> and are not.</summary>
+    public static bool IsTocPath(string path) => TryStripStage(path, out _, out _);
+
+    /// <summary>Both spellings of a cache path, the caller's first. Works on blob containers too, because
+    /// the token to swap is <c>.dx11</c>/<c>-dx11</c> wherever it sits, not a trailing suffix —
+    /// <c>foo.vs.dx11_0</c> has to become <c>foo.vs-dx11_0</c>, and a suffix rule cannot do that.</summary>
+    public static IReadOnlyList<string> CachePathCandidates(string path)
+    {
+        char other = '-';
+        int i = path.LastIndexOf(".dx11", StringComparison.OrdinalIgnoreCase);
+        if (i < 0) { i = path.LastIndexOf("-dx11", StringComparison.OrdinalIgnoreCase); other = '.'; }
+        if (i < 0) return new[] { path };
+        return new[] { path, path[..i] + other + path[(i + 1)..] };
+    }
+
+    /// <summary>Which spelling of <paramref name="path"/> the cache actually holds, or null when neither
+    /// does. <paramref name="exists"/> is the archive's own lookup; passing it in keeps the naming rule
+    /// testable against real shipped names without needing a WAD on disk.</summary>
+    public static string? ResolveCachePath(string path, Func<string, bool> exists)
+    {
+        foreach (var candidate in CachePathCandidates(path))
+            if (exists(candidate)) return candidate;
+        return null;
+    }
+
+    /// <summary>The canonical request form. Callers never have to know which spelling shipped — every
+    /// lookup below runs it through <see cref="ResolveCachePath"/> first.</summary>
     public static string TocPathFor(string shaderName, DxbcStage stage) =>
         $"{shaderName}.{(stage == DxbcStage.Vertex ? "vs" : "ps")}.dx11";
+
+    private bool WadHas(string path) =>
+        _wad is not null && _wad.TryGetEntry(HashAlgorithms.WadPath(path.ToLowerInvariant()), out _);
 
     /// <summary>
     /// <para>M231: the name of the OTHER stage, for shaders whose two stages are separate cache entries.</para>
@@ -165,11 +224,18 @@ public sealed class ShaderCacheReader : IDisposable
         ShaderStageToc? toc = null;
         try
         {
-            ulong h = HashAlgorithms.WadPath(tocPath.ToLowerInvariant());
-            if (_wad.TryGetEntry(h, out _))
+            // M277: ask for whichever spelling this install actually ships (see StageSuffixes). A reader
+            // that knows only one form does not degrade gracefully - it misses EVERY shader at once, which
+            // is how the rename surfaced: "0 material(s), 21 unresolved" and a status line stuck on
+            // "preparing scene...", with nothing saying why, because a lookup that finds nothing looks
+            // exactly like an asset that was never there.
+            if (ResolveCachePath(tocPath, WadHas) is { } actual)
             {
-                var bytes = _wad.Extract(h);
-                if (bytes is { Length: > 0 }) toc = ParseToc(bytes, tocPath);
+                var bytes = _wad.Extract(HashAlgorithms.WadPath(actual.ToLowerInvariant()));
+                // Stamp the path that RESOLVED, not the one that was asked for: ShaderStageToc.Path is
+                // what a UI shows, and claiming a spelling the cache does not hold sends the next reader
+                // looking for a file that is not there.
+                if (bytes is { Length: > 0 }) toc = ParseToc(bytes, actual);
             }
         }
         catch { toc = null; }
@@ -211,12 +277,16 @@ public sealed class ShaderCacheReader : IDisposable
             var perms = new List<ShaderPermutation>((int)permCount);
             for (int i = 0; i < permCount; i++) perms.Add(new ShaderPermutation(keys[i], blobs[i]));
 
+            // M277: read the stage off whichever suffix this path carries. The old test was a single
+            // ".vs.dx11" EndsWith with Pixel as the else, so a hyphenated VERTEX toc reported itself as a
+            // pixel shader - a silently wrong answer rather than a missing one.
+            TryStripStage(tocPath, out string name, out var stage);
+
             return new ShaderStageToc
             {
                 Path = tocPath,
-                ShaderName = StripStage(tocPath),
-                Stage = tocPath.EndsWith(".vs.dx11", StringComparison.OrdinalIgnoreCase)
-                    ? DxbcStage.Vertex : DxbcStage.Pixel,
+                ShaderName = name,
+                Stage = stage,
                 DefinePool = pool,
                 Permutations = perms,
                 DeclaredBlobCount = blobCount,
@@ -432,18 +502,34 @@ public sealed class ShaderCacheReader : IDisposable
 
         uint containerBase = blobIndex / 100 * 100;
         int within = (int)(blobIndex % 100);
-        string containerPath = $"{tocPath}_{containerBase}";
+        string wanted = $"{tocPath}_{containerBase}";
+
+        // M277: THE step the 2026-07-29 rename actually broke, and the one that hid behind the TOC. The
+        // container name is derived from the TOC path, so a reader that finds the TOC by trying both
+        // spellings still asks for the container by the spelling the CALLER used - measured on Map12/bloom:
+        // 1,389 of 1,389 TOCs resolved and 1,389 of 1,389 permutations resolved, then 0 of 1,389 blobs
+        // loaded, on "blob container not in the cache: ...DefaultEnv_Flat.vs.dx11_0". Resolve the container
+        // independently instead of assuming it matches the request.
+        string? containerPath = ResolveCachePath(wanted, WadHas);
+        if (containerPath is null)
+        {
+            // Name every spelling that was tried. "not in the cache" without the paths is what made this
+            // look like a scene bug rather than a naming one.
+            error = "blob container not in the cache, tried: "
+                    + string.Join(" and ", CachePathCandidates(wanted));
+            return null;
+        }
         ulong hash = HashAlgorithms.WadPath(containerPath.ToLowerInvariant());
 
         if (!_containerCache.TryGetValue(hash, out var cont))
         {
-            try { cont = _wad.TryGetEntry(hash, out _) ? _wad.Extract(hash) : null; }
+            try { cont = _wad.Extract(hash); }
             catch (Exception ex) { cont = null; error = $"container {containerPath}: {ex.Message}"; }
             _containerCache[hash] = cont;
         }
         if (cont is null || cont.Length == 0)
         {
-            error ??= $"blob container not in the cache: {containerPath}";
+            error ??= $"blob container is empty: {containerPath}";
             return null;
         }
 
