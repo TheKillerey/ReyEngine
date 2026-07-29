@@ -1870,6 +1870,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
                           + $"{result.Slices} slice(s), {result.Textures} texture binding(s)");
+        // M278: never log a failure COUNT on its own. This exact line read "0 material(s), 21 unresolved"
+        // for an afternoon while the shader cache had simply been renamed underneath us, and it named
+        // nothing that could be looked up.
+        foreach (var why in result.Reasons) _log.Warn("DX11", "unresolved - " + why);
         return result.Report;
     }
 
@@ -1919,6 +1923,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var result = Services.Dx11SceneBuilder.Commit(renderer, prepared, AppInfo.DisplayVersion);
         _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
                           + $"{result.Slices} slice(s), {result.Textures} texture binding(s)");
+        // M278: never log a failure COUNT on its own. This exact line read "0 material(s), 21 unresolved"
+        // for an afternoon while the shader cache had simply been renamed underneath us, and it named
+        // nothing that could be looked up.
+        foreach (var why in result.Reasons) _log.Warn("DX11", "unresolved - " + why);
         return result.Report;
     }
 

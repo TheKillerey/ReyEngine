@@ -139,6 +139,22 @@ public partial class MainWindow : Window
         return (i < 0 ? s : s[..i]).Trim();
     }
 
+    /// <summary>M278: the one line worth showing when the scene came out empty.
+    ///
+    /// <para>The status panel has room for a single line, and it was taking the FIRST one - which is the
+    /// vertex count, i.e. the one line that is always fine. So when the shader cache was renamed underneath
+    /// us the panel said "0 material(s), 21 unresolved" and never got as far as the line naming the path it
+    /// could not find. Dx11SceneBuilder now emits "unresolved - {kind}: {detail}"; prefer that.</para></summary>
+    private static string WhyNoScene(string report)
+    {
+        foreach (var line in report.Split((char)10))
+        {
+            var t = line.Trim();
+            if (t.StartsWith("unresolved - ", StringComparison.Ordinal)) return t;
+        }
+        return FirstLine(report);
+    }
+
     private void RenderDx11Frame(MainWindowViewModel vm)
     {
         if (_dx11 is null || !_dx11.IsReady) return;
@@ -200,7 +216,7 @@ public partial class MainWindow : Window
               + (_dx11.ParticleStatus.Length > 0 ? "\n" + _dx11.ParticleStatus : "")
             // No scene is a legitimate state, not a failure - say which, rather than showing an empty
             // viewport and letting it read as a broken renderer.
-            : "D3D11 no scene: " + FirstLine(_dx11.SceneReport);
+            : "D3D11 no scene: " + WhyNoScene(_dx11.SceneReport);
     }
 
     // ---- M81: About + updates ----

@@ -27,7 +27,11 @@ namespace ReyEngine.App.Services;
 /// </summary>
 public static class Dx11SceneBuilder
 {
-    public sealed record Result(int Materials, int Failed, int Textures, int Slices, string Report);
+    /// <summary><paramref name="Reasons"/> (M278) is the first example of each distinct failure kind. A
+    /// caller that logs <paramref name="Failed"/> without one of these is reporting a number nobody can
+    /// act on - which is what "0 material(s), 21 unresolved" was.</summary>
+    public sealed record Result(int Materials, int Failed, int Textures, int Slices, string Report,
+        IReadOnlyList<string> Reasons);
 
     /// <summary>One slice, resolved and ready to become a pipeline. Everything here is CPU-side.</summary>
     public sealed record PreparedSlice(
@@ -46,6 +50,18 @@ public static class Dx11SceneBuilder
         public int Failed { get; set; }
         public int RawGroups { get; set; }
         public double PrepareMs { get; set; }
+
+        /// <summary>M278: why the failures failed, first example per distinct kind, in the order they were
+        /// first hit. The report used to say "21 unresolved" and nothing else, so a shader cache whose
+        /// entries had all been renamed underneath us read exactly like a scene bug - and was chased as one
+        /// for an afternoon. A categorical failure should name itself.</summary>
+        public Dictionary<string, string> FailureReasons { get; } = new();
+
+        public void Fail(string kind, string detail)
+        {
+            Failed++;
+            if (FailureReasons.Count < 8) FailureReasons.TryAdd(kind, detail);
+        }
     }
 
     // ---------------------------------------------------------------- CPU half
@@ -86,24 +102,30 @@ public static class Dx11SceneBuilder
         foreach (var slice in merged)
         {
             if (!byName.TryGetValue(slice.Material, out var b) || string.IsNullOrEmpty(b.RenderShader))
-            { scene.Failed++; continue; }
+            { scene.Fail("no material binding or no renderShader", slice.Material); continue; }
 
             string full = "assets/shaders/generated/" + b.RenderShader!.Trim('/');
             IReadOnlyDictionary<string, string>? feat = null;
             IReadOnlyDictionary<string, bool>? swDef = null;
             perms?.TryGetShaderDefs(b.RenderShader!, out feat, out swDef);
 
-            var vsToc = cache.ReadToc(ShaderCacheReader.TocPathFor(full, DxbcStage.Vertex));
-            var psToc = cache.ReadToc(ShaderCacheReader.TocPathFor(full, DxbcStage.Pixel));
-            if (vsToc is null || psToc is null) { scene.Failed++; continue; }
+            string vsPath = ShaderCacheReader.TocPathFor(full, DxbcStage.Vertex);
+            string psPath = ShaderCacheReader.TocPathFor(full, DxbcStage.Pixel);
 
-            var vp = ShaderCacheReader.ResolvePermutation(vsToc, b.Macros, b.Switches, feat, swDef, out _);
-            var pp = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out _);
-            if (vp is null || pp is null) { scene.Failed++; continue; }
+            var vsToc = cache.ReadToc(vsPath);
+            var psToc = cache.ReadToc(psPath);
+            if (vsToc is null || psToc is null)
+            { scene.Fail("no TOC in the shader cache", vsToc is null ? vsPath : psPath); continue; }
 
-            var vs = cache.LoadShader(ShaderCacheReader.TocPathFor(full, DxbcStage.Vertex), vp.BlobIndex, out _);
-            var ps = cache.LoadShader(ShaderCacheReader.TocPathFor(full, DxbcStage.Pixel), pp.BlobIndex, out _);
-            if (vs is null || ps is null) { scene.Failed++; continue; }
+            var vp = ShaderCacheReader.ResolvePermutation(vsToc, b.Macros, b.Switches, feat, swDef, out var vwhy);
+            var pp = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out var pwhy);
+            if (vp is null || pp is null)
+            { scene.Fail("no cooked permutation", $"{b.Name}: {(vp is null ? vwhy : pwhy)}"); continue; }
+
+            var vs = cache.LoadShader(vsPath, vp.BlobIndex, out var vsErr);
+            var ps = cache.LoadShader(psPath, pp.BlobIndex, out var psErr);
+            if (vs is null || ps is null)
+            { scene.Fail("bytecode would not load", (vs is null ? vsErr : psErr) ?? "(no reason given)"); continue; }
 
             var wanted = new List<(string Target, string Key)>();
             foreach (var slot in b.Slots)
@@ -206,11 +228,18 @@ public static class Dx11SceneBuilder
         renderer.SetMesh(scene.Mesh);
 
         int ok = 0, textures = 0, failed = scene.Failed;
+        var reasons = new Dictionary<string, string>(scene.FailureReasons);
         foreach (var s in scene.Slices)
         {
             var mat = renderer.BuildMaterial(s.Name, s.Vs, s.Ps, s.Start, s.Count, out var rep,
                 s.VsDesc, s.PsDesc, StateDescription.Geometry);
-            if (mat is null) { failed++; sb.AppendLine($"   ! {s.Name}: {rep.Error}"); continue; }
+            if (mat is null)
+            {
+                failed++;
+                sb.AppendLine($"   ! {s.Name}: {rep.Error}");
+                if (reasons.Count < 8) reasons.TryAdd("pipeline would not build", $"{s.Name}: {rep.Error}");
+                continue;
+            }
 
             // M245 culling + M246 sorting. Scene geometry writes depth, so the depth buffer decides what is
             // in front and grouping by pipeline cannot change the image.
@@ -235,13 +264,25 @@ public static class Dx11SceneBuilder
         sb.AppendLine($"{scene.Mesh.Vertices.Length:n0} vertices, {scene.Mesh.TriangleCount:n0} triangles");
         sb.AppendLine($"{scene.RawGroups} groups -> {scene.Slices.Count} slices");
         sb.AppendLine($"{ok} material(s) live, {failed} unresolved, {textures} texture binding(s)");
+        // M278: never report a count of failures without a reason for them. The FIRST distinct reason is
+        // what localises a categorical failure; the rest are usually the same one repeated.
+        foreach (var (kind, detail) in reasons) sb.AppendLine($"   unresolved - {kind}: {Trim(detail)}");
         sb.AppendLine($"pipelines: {renderer.PipelineCacheHits} hit, {renderer.PipelineCacheMisses} built, "
                       + $"{renderer.CachedPipelineCount} resident");
         sb.AppendLine($"timing: {scene.PrepareMs:F0} ms off-thread + {commitMs:F0} ms on the UI thread");
-        return new Result(ok, failed, textures, scene.Slices.Count, sb.ToString());
+        return new Result(ok, failed, textures, scene.Slices.Count, sb.ToString(),
+            reasons.Select(kv => $"{kv.Key}: {Trim(kv.Value)}").ToList());
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /// <summary>Keep a reason on one line of the status panel. ResolvePermutation's explanation lists every
+    /// axis it pinned and can run to several hundred characters.</summary>
+    private static string Trim(string s)
+    {
+        s = s.Replace('\n', ' ').Replace('\r', ' ');
+        return s.Length <= 160 ? s : s[..157] + "...";
+    }
 
     /// <summary>M226: coalesce runs that are already adjacent AND want the same atlas page. The lightmap
     /// has to be part of the key: it is a per-GROUP property, and keying it by material name handed 71.5%
