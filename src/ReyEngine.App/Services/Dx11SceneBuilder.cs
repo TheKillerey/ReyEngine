@@ -33,13 +33,17 @@ public static class Dx11SceneBuilder
     public sealed record Result(int Materials, int Failed, int Textures, int Slices, string Report,
         IReadOnlyList<string> Reasons);
 
-    /// <summary>One slice, resolved and ready to become a pipeline. Everything here is CPU-side.</summary>
+    /// <summary>One slice, resolved and ready to become a pipeline. Everything here is CPU-side.
+    /// <para>M279: <paramref name="Profile"/> is the material's OWN render state, derived from its
+    /// technique/pass in the .materials.bin. Commit reads exactly one field off it - see there for what is
+    /// honoured and what deliberately is not.</para></summary>
     public sealed record PreparedSlice(
         string Name, int Start, int Count,
         DxbcShader Vs, DxbcShader Ps,
         ShaderDescription VsDesc, ShaderDescription PsDesc,
         IReadOnlyList<(string Target, string Key)> Textures,
-        IReadOnlyList<(string Name, float[] Value)> Parameters);
+        IReadOnlyList<(string Name, float[] Value)> Parameters,
+        MaterialProfile Profile);
 
     /// <summary>Everything a scene needs that does not touch D3D.</summary>
     public sealed class PreparedScene
@@ -167,7 +171,7 @@ public static class Dx11SceneBuilder
             scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,
                 new ShaderDescription(full, DxbcStage.Vertex, vp.Key, vp.BlobIndex, b.Macros, vs),
                 new ShaderDescription(full, DxbcStage.Pixel, pp.Key, pp.BlobIndex, b.Macros, ps),
-                wanted, parameters));
+                wanted, parameters, b.Profile));
         }
 
         DecodeTextures(distinct, readAsset, scene);
@@ -227,7 +231,7 @@ public static class Dx11SceneBuilder
         renderer.ClearMaterials();
         renderer.SetMesh(scene.Mesh);
 
-        int ok = 0, textures = 0, failed = scene.Failed;
+        int ok = 0, textures = 0, failed = scene.Failed, transparent = 0;
         var reasons = new Dictionary<string, string>(scene.FailureReasons);
         foreach (var s in scene.Slices)
         {
@@ -241,10 +245,51 @@ public static class Dx11SceneBuilder
                 continue;
             }
 
-            // M245 culling + M246 sorting. Scene geometry writes depth, so the depth buffer decides what is
-            // in front and grouping by pipeline cannot change the image.
-            mat.Bounds = SliceBounds(scene.Mesh, s.Start, s.Count);
-            mat.SortableByPipeline = true;
+            mat.Bounds = SliceBounds(scene.Mesh, s.Start, s.Count);   // M245 frustum culling
+
+            // M279: the material's authored depth-write decides BOTH of these, and the two have to agree.
+            //
+            // M246 set SortableByPipeline unconditionally on the reasoning that "scene geometry writes
+            // depth, so the depth buffer decides what is in front and grouping by pipeline cannot change
+            // the image". That is true of opaque geometry and false of every transparent pass - 83 of
+            // Map453/jade_container's 426 slices and 204 of Map12/bloom's 1,389. A decal authored
+            // "transparent cutout - blend - no depth-write" was still given the depth mask, so it stamped
+            // depth at its own plane and then DEPTH-REJECTED the paving it was supposed to composite over -
+            // and because the sort is by PipelineId, whether that happened at all depended on cache
+            // assignment order, which is why it looked intermittent. Measured: base_chasm1's decal sorted
+            // to draw position 395 of 426 while the ground under it drew at 407-414.
+            //
+            // Measured on the pixels, not inferred: one decal isolated over its own paving, mean
+            // per-channel distance from the ideal composite across its partially transparent margin, 0..255.
+            // base_chasm1 33.2 -> 6.2, new_stone_road 70.7 -> 0.5, grasstuft 39.1 -> 5.8. The decal's OPAQUE
+            // core stayed on screen throughout (79% -> 90%), which is what rules out the other explanation,
+            // that the margin "improved" because the decal stopped drawing.
+            //
+            // Setting WritesDepth false is what reaches the device (ShaderPreviewRenderer picks the
+            // no-write depth state per material). Setting SortableByPipeline false is what puts the draw in
+            // the order-preserving TAIL the sort comparator already maintains, so every transparent slice
+            // lands after all the solid geometry - the same two passes ViewportMeshRenderer runs on the GL
+            // side off the same predicate (AlphaMode >= 2 is exactly !MaterialProfile.DepthWrite), which is
+            // why the two viewports now agree instead of only one of them being right. GL needed no change.
+            //
+            // The cost is real and was measured: pipeline state changes on a full Map12/bloom draw go from
+            // 24 to 93, because the tail cannot be grouped by pipeline. Frame time did not move out of the
+            // harness's own repeat spread.
+            //
+            // NOT honoured here, deliberately. Per-material back-face culling: one rasterizer state is
+            // built from PreviewSettings, and StateDescription.Geometry's cull-off is an M240 decision
+            // carrying its own live-game evidence, so it has to be settled on that evidence rather than
+            // smuggled in behind a decal fix (it is also 95% of materials, not 17%). Blend FACTORS other
+            // than SrcAlpha/InvSrcAlpha: 52 of 9,036 materials censused across four maps author anything
+            // else, all of them on Map22. Back-to-front sorting inside the transparent tail: the GL path
+            // does not do it either, so doing it here would break the parity this change just bought.
+            // And the alpha CUTOUT needs nothing at all - it is a discard compiled into Riot's own pixel
+            // shader ("lt r1.x, r0.w, cb0[2].x" then "discard_nz"), driven by the AlphaTestValue this
+            // builder already puts in mat.Params, so it was never a blend-state question.
+            bool depthWrite = s.Profile.DepthWrite;
+            mat.WritesDepth = depthWrite;
+            mat.SortableByPipeline = depthWrite;
+            if (!depthWrite) transparent++;
 
             foreach (var (name, value) in s.Parameters) mat.Params[name] = value;
 
@@ -264,6 +309,11 @@ public static class Dx11SceneBuilder
         sb.AppendLine($"{scene.Mesh.Vertices.Length:n0} vertices, {scene.Mesh.TriangleCount:n0} triangles");
         sb.AppendLine($"{scene.RawGroups} groups -> {scene.Slices.Count} slices");
         sb.AppendLine($"{ok} material(s) live, {failed} unresolved, {textures} texture binding(s)");
+        // M279: worth a line of its own, because it is the number that silently used to be zero. If a map
+        // that visibly has decals reports 0 transparent slices, the profile classification is what broke,
+        // not the renderer.
+        if (transparent > 0)
+            sb.AppendLine($"{transparent} transparent slice(s): no depth write, drawn after the solid pass in authored order");
         // M278: never report a count of failures without a reason for them. The FIRST distinct reason is
         // what localises a categorical failure; the rest are usually the same one repeated.
         foreach (var (kind, detail) in reasons) sb.AppendLine($"   unresolved - {kind}: {Trim(detail)}");
