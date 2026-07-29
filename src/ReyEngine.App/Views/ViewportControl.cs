@@ -792,14 +792,13 @@ public sealed class ViewportControl : OpenGlControlBase
             // so the markers track the layout as the user drags the position sliders.
             if (ShowLightMarkers && DynamicLights is { Count: > 0 } lights)
             {
-                double ps = DynamicLightPositionScale, sx = DynamicLightScaleX, sz = DynamicLightScaleZ;
-                double ox = DynamicLightOffsetX, oz = DynamicLightOffsetZ;
+                // M280: through the ONE shared formula rather than a third hand-inlined copy of it.
+                float spread = (float)DynamicLightPositionScale;
+                var scaleXZ = new System.Numerics.Vector2((float)DynamicLightScaleX, (float)DynamicLightScaleZ);
+                var offset = new System.Numerics.Vector2((float)DynamicLightOffsetX, (float)DynamicLightOffsetZ);
                 var pts = new Vector3[lights.Count];
                 for (int i = 0; i < lights.Count; i++)
-                {
-                    var p = lights[i].Position;
-                    pts[i] = new Vector3((float)(p.X * ps * sx + ox), p.Y, (float)(p.Z * ps * sz + oz));
-                }
+                    pts[i] = Formats.Baking.BakeLighting.FitPosition(lights[i].Position, spread, scaleXZ, offset);
                 _meshRenderer.SetLightMarkers(pts, _markerSize * 1.2f);
             }
             else _meshRenderer.SetLightMarkers(Array.Empty<Vector3>(), _markerSize);

@@ -1715,6 +1715,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             lightIntensity: (float)DynamicLightIntensity,
             lightRadiusScale: (float)DynamicLightRadiusScale,
             lightPositionScale: (float)DynamicLightPositionScale,
+            lightPositionScaleXZ: new System.Numerics.Vector2((float)DynamicLightScaleX, (float)DynamicLightScaleZ),
+            lightPositionOffset: new System.Numerics.Vector2((float)DynamicLightOffsetX, (float)DynamicLightOffsetZ),
             settings: settings);   // M168: the REAL settings — this used to be a throwaway default, so
                                    // SunShadows/PointLightShadows/FalloffSoftness ignored the UI entirely
 

@@ -44,11 +44,15 @@ public sealed class LightBakeService
         Vector3 sunDirectionTowardSun, Vector3 sunColor, Vector3 skyColor, float skyScale,
         float lightMapColorScale, IReadOnlyList<BakePointLight> lights,
         float lightIntensity, float lightRadiusScale, float lightPositionScale,
+        Vector2 lightPositionScaleXZ, Vector2 lightPositionOffset,
         BakeSettings settings)
         => BakeLighting.FromViewport(
             sunDirectionTowardSun, sunColor, skyColor, skyScale, lightMapColorScale, lights,
             lightIntensity, lightRadiusScale, lightPositionScale,
-            Vector2.One, Vector2.Zero,
+            // M280: these two were hardcoded to identity while the master spread above was passed - so
+            // the fit panel's Scale X/Z and Offset X/Z moved the preview and did nothing to the bake.
+            // ResolvePosition had implemented the full transform all along; nothing ever fed it.
+            lightPositionScaleXZ, lightPositionOffset,
             sunShadows: settings.SunSamples > 0,
             pointLightShadows: settings.PointLightSamples > 0,
             falloffSoftness: settings.FalloffSoftness);

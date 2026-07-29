@@ -51,14 +51,26 @@ public sealed class BakeLighting
 
     /// <summary>Resolve a light's world position exactly as the shader's uLightPos* uniforms do — the
     /// same scale/offset must be applied here or baked lights land somewhere else than preview lights.</summary>
+    /// <summary>
+    /// <para>M280: THE light-fit formula - scale about the world origin, per-axis on top of the master
+    /// spread, offset applied after, height never touched. It must stay identical to the GL shader's
+    /// application (ViewportMeshRenderer, uLightPosScale/uLightPosScaleXZ/uLightPosOffset):</para>
+    /// <code>
+    ///     lightPos.x = lightPos.x * uLightPosScale * uLightPosScaleXZ.x + uLightPosOffset.x;
+    ///     lightPos.z = lightPos.z * uLightPosScale * uLightPosScaleXZ.y + uLightPosOffset.y;
+    /// </code>
+    /// <para>Static and shared because there used to be THREE copies of this line - the shader, this
+    /// method, and a hand-inlined loop placing the light markers - and the project has been bitten
+    /// repeatedly by twins that agree until one of them gains a feature. The GLSL copy cannot be unified;
+    /// the two CPU copies now can't drift because there is only one.</para>
+    /// </summary>
+    public static Vector3 FitPosition(Vector3 p, float spread, Vector2 scaleXZ, Vector2 offset) => new(
+        p.X * spread * scaleXZ.X + offset.X,
+        p.Y,
+        p.Z * spread * scaleXZ.Y + offset.Y);
+
     public Vector3 ResolvePosition(in BakePointLight l)
-    {
-        var p = l.Position;
-        return new Vector3(
-            p.X * LightPositionScale * LightPositionScaleXZ.X + LightPositionOffset.X,
-            p.Y,
-            p.Z * LightPositionScale * LightPositionScaleXZ.Y + LightPositionOffset.Y);
-    }
+        => FitPosition(l.Position, LightPositionScale, LightPositionScaleXZ, LightPositionOffset);
 
     public float ResolveRadius(in BakePointLight l) => l.Radius * LightRadiusScale;
 
@@ -124,7 +136,9 @@ public sealed class BakeLighting
             LightIntensity = Math.Clamp(lightIntensity, 0f, 8f),
             LightRadiusScale = Math.Clamp(lightRadiusScale, 0.01f, 40f),
             LightPositionScale = Math.Clamp(lightPositionScale, 0.05f, 20f),
-            LightPositionScaleXZ = lightPositionScaleXZ,
+            // Clamped to the same range the GL setter enforces (SetLightPositionScaleXZ, [0.05, 20]),
+            // so a degenerate slider value cannot make the bake diverge from what the preview showed.
+            LightPositionScaleXZ = Vector2.Clamp(lightPositionScaleXZ, new Vector2(0.05f), new Vector2(20f)),
             LightPositionOffset = lightPositionOffset,
             SunShadows = sunShadows,
             PointLightShadows = pointLightShadows,
