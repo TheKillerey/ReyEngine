@@ -102,10 +102,32 @@ public static class VfxD3D11EmitterPipeline
         var ps = cache.LoadShader(ShaderCacheReader.TocPathFor(PsName, DxbcStage.Pixel), psPerm.BlobIndex, out _);
         if (vs is null || ps is null) { log.AppendLine("       bytecode would not load"); return null; }
 
+        // M273: modes 2 and 3 pick their blend from the SPRITE, not the integer, so the diffuse stage has to
+        // be resolved before the pipeline is built rather than after it (see VfxShaderFlags.IsAdditive).
+        // Nothing is decoded twice to get this: a pooled asset already recorded its answer at decode time,
+        // and the image read here is handed to BindTexture below instead of being re-opened. The map
+        // viewport's sprites are Sprite.Decoded, so Open() there is just a field read.
+        var texSprite = sprites("TEXTURE");
+        TextureImage? texImage = null;
+        bool? texHasAlpha = null;
+        if (texSprite is { } sp)
+        {
+            if (renderer.TryGetTextureAlpha(sp.Key, out var cachedAlpha)) texHasAlpha = cachedAlpha;
+            else if (sp.Open is not null)
+            {
+                try { texImage = sp.Open(); } catch { /* BindTexture reports it properly a few lines down */ }
+                if (texImage is not null)
+                {
+                    texHasAlpha = VfxShaderFlags.TextureUsesAlpha(texImage.Rgba);
+                    renderer.NoteTextureAlpha(sp.Key, texHasAlpha.Value);
+                }
+            }
+        }
+
         // M242: describe the variant and the state so the pipeline cache has an honest key. Emitters
         // sharing a permutation AND a blend now share one set of shader objects; a system where every
         // emitter is a base-permutation additive quad collapses to a single pipeline.
-        bool additive = VfxShaderFlags.IsAdditive(e.BlendMode);
+        bool additive = VfxShaderFlags.IsAdditive(e.BlendMode, texHasAlpha);
         var vsDesc = new ShaderDescription(VsName, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, defines, vs);
         var psDesc = new ShaderDescription(PsName, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, defines, ps);
         var stateDesc = StateDescription.Particle(
@@ -127,10 +149,15 @@ public static class VfxD3D11EmitterPipeline
         // The D3D11 renderer's single depth state writes unconditionally, so without this an additive quad
         // punches a hole in the map behind it.
         mat.WritesDepth = false;
-        log.AppendLine($"     blend: {(mat.Additive ? "additive" : "alpha")} (blendMode {e.BlendMode})");
+        // Say WHICH rule decided it. On a texture-decided mode the integer alone does not explain the
+        // result, and "blend: additive (blendMode 2)" read on its own looks like a bug in the table.
+        log.AppendLine($"     blend: {(mat.Additive ? "additive" : "alpha")} (blendMode {e.BlendMode}"
+            + (e.BlendMode is 2 or 3 && texHasAlpha is { } ha
+                ? $", sprite {(ha ? "uses" : "ignores")} alpha -> {(ha ? "alpha" : "additive")})"
+                : ")"));
 
         // The sprite. TEXTURE__TX is the name quad_ps declares for it.
-        BindTexture(renderer, mat, ps, "TEXTURE", sprites, log);
+        BindTexture(renderer, mat, ps, "TEXTURE", sprites, log, texImage);
         if (!string.IsNullOrEmpty(e.TextureMultPath)) BindTexture(renderer, mat, ps, "TEXTUREMULT", sprites, log);
         if (e.AlphaErosion is not null) BindTexture(renderer, mat, ps, "sAlphaErosionTexture", sprites, log);
         if (e.Palette is not null) BindTexture(renderer, mat, ps, "sPalettesTexture", sprites, log);
@@ -154,8 +181,10 @@ public static class VfxD3D11EmitterPipeline
         return mat;
     }
 
+    /// <param name="preloaded">Pixels the caller already had to decode for the blend decision (M273). Saves
+    /// the second read; null means "open it here", which is every stage except TEXTURE.</param>
     private static void BindTexture(ShaderPreviewRenderer renderer, PreviewMaterial mat, DxbcShader ps,
-        string sampler, Func<string, Sprite?> sprites, StringBuilder log)
+        string sampler, Func<string, Sprite?> sprites, StringBuilder log, TextureImage? preloaded = null)
     {
         var slot = ps.Textures.FirstOrDefault(t =>
             t.Name.Equals(sampler + "__TX", StringComparison.OrdinalIgnoreCase)
@@ -170,7 +199,20 @@ public static class VfxD3D11EmitterPipeline
         // _retired is only freed by ClearMaterials - so a rebuild that went straight to SetTexture would leak
         // one view per sprite per particle-selection click, and RebuildParticlePlayback fires on every one of
         // those. Probing by key first also means a repeat play costs no WAD read and no decode.
-        if (renderer.TryBindCached(mat, slot.Name, sprite.Key)) return;
+        // M272: SAY SO. This branch used to return silently, and silence here is not neutral - it reads as
+        // "this emitter has no sprite". Measured on Map22's Rising_Mist_Supernova: emitters [3] darkMist and
+        // [5] brightMotes1 each re-author a .tex an earlier emitter in the same system already put in the
+        // pool ([0] brightMist's Morde_Base_Dust, [1] impactStones_smoke's TFT_PDM_Cosmic_Spark_2x2), so both
+        // took this branch and printed nothing at all. That silence was read off the log as "brightMotes1
+        // binds no texture", and it cost a whole diagnosis - PreviewMaterial.UnboundTextures says TEXTURE__TX
+        // is bound on both, and the pool holds 5 distinct views for 6 emitters, which is the dedup working.
+        // The dimensions are not printed because the pool stores views, not sizes; the key identifies the
+        // asset, which is what the reader actually needs to compare two emitters.
+        if (renderer.TryBindCached(mat, slot.Name, sprite.Key))
+        {
+            log.AppendLine($"     {sampler} -> {slot.Name} (pooled: {sprite.Key})");
+            return;
+        }
 
         if (sprite.Open is null)
         {
@@ -180,9 +222,12 @@ public static class VfxD3D11EmitterPipeline
             return;
         }
 
-        TextureImage? img;
-        try { img = sprite.Open(); }
-        catch (Exception ex) { log.AppendLine($"     {sampler}: FAILED {ex.Message}"); return; }
+        TextureImage? img = preloaded;
+        if (img is null)
+        {
+            try { img = sprite.Open(); }
+            catch (Exception ex) { log.AppendLine($"     {sampler}: FAILED {ex.Message}"); return; }
+        }
         if (img is null) return;   // the callback already said why; nothing bound = the renderer's stand-in
 
         renderer.SetTexture(mat, slot.Name, sprite.Key, img.Rgba, img.Width, img.Height);
