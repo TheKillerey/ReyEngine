@@ -80,3 +80,73 @@ the only question a capture is genuinely the sole route to. If that capture ever
 capture could settle both at once.
 
 Raw output: `q4-miscrenderflags-data.txt`. Harness mode: `miscflags`.
+
+---
+
+## M276 amendment: the scope was wrong, and bit 2 is now partly decoded
+
+Two corrections, both measured. Neither changes the conclusion - *do not implement it* still stands, and
+now for better reasons - but the numbers above should not be quoted as they are.
+
+### The sweep never read a map WAD
+
+`MiscFlags.cs:71-80` globs `Directory.GetFiles(<GameRoot>/Maps, "*.wad.client")` without recursing. Every
+map WAD lives one level down in `Maps/Shipping`, so that glob matches **zero files**, counted directly:
+
+| directory | `*.wad.client`, non-locale |
+|---|---:|
+| `DATA/FINAL/Maps` | **0** - what the sweep looked at |
+| `DATA/FINAL/Maps/Shipping` | 9 |
+| `DATA/FINAL/Champions` | 203 |
+| `DATA/FINAL` itself | 28, including every `TFTSet*.wad.client` |
+
+So "484,286 emitters, sweeping champion + map WADs" is champion WADs only, and it also missed the whole
+root level. It additionally reads WADs through raw `WadFile` rather than `WadArchive`, which drops
+zstd-subchunked bins.
+
+Re-swept over 245 WADs (root + Champions + Maps/Shipping + Shaders + Localized), 1,828,445 emitters:
+
+| value | count | share |
+|---|---:|---:|
+| 1 | 717,899 | **99.2%** |
+| 5 | 2,789 | 0.4% |
+| 3 | 1,113 | 0.2% |
+| 4 | 1,104 | 0.2% |
+| 2 | 441 | 0.1% |
+| 7 | 4 | - |
+| 6 | 2 | - |
+
+**Bit 2 is set on 3,899 emitters, not 2,035**, across 108 WADs and 1,340 systems. The shape of the
+result is unchanged: still the constant 1 with well under 1% exceptions, and 39.6% of emitters carry the
+field at all against the 39.7% measured here - the two parsers agree on the base rate.
+
+Absolute counts from the two sweeps are **not interchangeable**. On champion WADs alone the new walk
+finds value 4 = 411 against 347 above, and value 5 = 1,841 against 1,688; it walks systems reachable from
+`VfxSystemDefinitionData` over `WadArchive`, this one walks every nested struct over raw `WadFile`. The
+~15% gap is not root-caused.
+
+### "Nothing drives it" was right; here is what bit 2 is not
+
+M276 tested a specific reading - that bit 2 marks a camera-relative / screen-space card - and refuted it.
+The negative results are worth recording because they are the cheap explanations:
+
+- **Not a placement mode of any kind.** Only 214 of 1,340 systems have every emitter flagged, and 819
+  have under 20% flagged. `Caitlyn_Skin11_R_CameraBoundVFX` flags 19 of its 32 emitters. A placement rule
+  cannot be true of 19 emitters and false of 13 inside one effect.
+- **Not a backdrop marker.** 96.4% of League's backdrop-named emitters do not carry bit 2, and only 7.5%
+  of the bit-2 population is backdrop-named.
+- **Not a different unit for size.** With mesh primitives resolved through their bound meshes, **zero** of
+  3,843 drawable bit-2 emitters are sub-pixel; 2,127 sit between 50 and 500 units.
+- **Not in the shader.** All 16 cooked permutations of `particlesystem/quad_vs` compute `SV_Position` with
+  the same four `dp4` against one matrix, and none reads `SCREEN_MATRIX`, `mView`, `mViewInv` or
+  `VIEW_PROJECTION_MATRIX`. No value of the flag can select a different behaviour, because there is no
+  different behaviour to select.
+
+What survives is the association this document already measured. The bit-2 population is 58.3% mesh
+primitives, and its commonest name tokens after `skin` and `tft` are `stencil` (631), `mask` (526),
+`write` (525) and `hud` (380) - the same stencil/mask flavour as the `stencilMode=1` / `stencilRef=4` /
+`alphaRef=1` enrichments above. **The advice to carry bit 2 into a Q5 stencil capture is strengthened,
+not weakened**; the set to read is 3,899 emitters rather than 2,035.
+
+Detail and raw output: `bit2-tft-skybox.md` / `bit2-tft-skybox-data.txt`. Harness modes: `bit2`, `bit2x`,
+`skyname`, `meshsky`.

@@ -169,6 +169,12 @@ the V axis correct (the test was wrong), Q4 found nothing to decode. Two of the 
 dissolved. If the capture is ever taken, note that Q4's only real signal - bit 2 - clusters with the
 stencil fields, so reading `miscRenderFlags` on the Q5 draws would settle both at once.
 
+M276 re-ran Q4's sweep after finding that M259's WAD glob matched **zero map WADs**, and tested one
+specific reading of bit 2 (a camera-relative card) to destruction. "Nothing to decode" holds and the
+advice above is strengthened: bit 2 is now known *not* to be a placement mode, a backdrop marker, a
+different unit for size, or anything `quad_vs` can select, and what survives is still the stencil/mask
+association. The set to read on the Q5 draws is 3,899 emitters, not 2,035. See `bit2-tft-skybox.md`.
+
 M260 then pushed the other way. Q1's capture-free evidence turned out to *dispute* the shipped blend
 mapping over a million emitters rather than confirm it, which it cannot settle on its own. So the
 count is not simply shrinking: Q3 and Q4 are gone, but **Q1 has been promoted above Q5**. If a capture

@@ -1,0 +1,284 @@
+M276 - raw output behind `bit2-tft-skybox.md`.
+Harness modes: meshsky | screencard | bit2 | bit2x | skyname | skyplace | domesize | arenasize |
+disasm | permscan | cachels.
+
+====================================================================================================
+COVERAGE vs CAMERA DISTANCE, CPU-EXACT, NO GPU  (harness `meshsky`)
+====================================================================================================
+
+Map22/darkstar_supernova :: TFT_Skybox_Darkstar_C
+placement: 1 in this bin, first at (2000, 0, 2000), attachToCamera=absent
+
+emitter                  prim   flags  authored  scaleOverride   mesh                                 dome XZ    scaled XZ
+Base                     mesh   4          0.20  (18.0,18.0,18.0) TFT_Skybox_BackgroundClouds.scb          6471        1294
+BlueClouds               mesh   4          0.27  (17.0,17.0,17.0) TFT_Skybox_MidgroundClouds.scb           5329        1439
+Pink01                   mesh   4          0.20  (17.0,17.0,17.0) TFT_Skybox_ForegroundClouds.scb          1852         370
+Pink02                   mesh   4          0.20  (17.0,17.0,17.0) TFT_Skybox_ForegroundClouds.scb          1852         370
+Glow                     mesh   4          0.20  (17.0,17.0,17.0) TFT_Skybox_BackgroundClouds_B.scb        4665         933
+Glow_base                mesh   4          0.29  (17.0,17.0,17.0) TFT_Skybox_BackgroundClouds_B.scb        4665        1353
+Star_Detail              mesh   4          0.20  (18.0,18.0,18.0) TFT_Skybox_BackgroundClouds.scb          6471        1294
+Star_Detail1             mesh   4          0.19  (18.0,18.0,18.0) TFT_Skybox_BackgroundClouds.scb          6471        1229
+("dome XZ" is the XZ DIAGONAL, 2 x radiusXZ, not the width. BackgroundClouds is 4,576 wide.)
+
+DOME WINDING (share of triangles facing the mesh's own centre) and cull state:
+   TFT_Skybox_BackgroundClouds.scb           240 tris   inward-facing  100.0%   disableBackfaceCull=False
+   TFT_Skybox_MidgroundClouds.scb            240 tris   inward-facing  100.0%   disableBackfaceCull=False
+   TFT_Skybox_ForegroundClouds.scb            40 tris   inward-facing  100.0%   disableBackfaceCull=False
+   TFT_Skybox_BackgroundClouds_B.scb         240 tris   inward-facing  100.0%   disableBackfaceCull=False
+
+CONTROL - every OTHER mesh primitive reachable from this WAD's bins:
+   5269 distinct mesh(es): 121 skybox-named, 5148 not
+   mean inward-facing share   skybox-named 89.4%   others 33.7%
+   fully inward (>99%)        skybox-named 101/121        others 680/5148
+      TFT_ArenaSkin_CafeCuties_Sky_Mesh.scb             960 tris  inward  100.0%  used by 1
+      Level7_Lux_Fence_A_Mesh.scb                      9828 tris  inward  100.0%  used by 2
+      Set14_Lux_secaihuan_001.scb                       336 tris  inward  100.0%  used by 1
+      Level7_Lux_boli_005.scb                            41 tris  inward  100.0%  used by 3
+      Set14_Lux_FA_001.scb                               56 tris  inward  100.0%  used by 3
+      Level7_Lux_BenchShadow_E.scb                      288 tris  inward  100.0%  used by 2
+   (The "others" figure is inflated: a planar mesh has its centroid in its own plane, so the test is
+   degenerate for flat cards. The contrast between 83.5% and 13.2% fully-inward is the measurement.)
+
+IS scaleOverride THE GENERAL MECHANISM, OR IS DARKSTAR SPECIAL?  (this WAD)
+   68,028 visual emitter(s); 691 carry scaleOverride (1.016%); values -1.0..40.0
+   skybox-named mesh emitters: 499; with scaleOverride 265, without 234
+   world span of skybox meshes (birthScale x mesh diagonal), three populations:
+      no override, as authored                   p10      521  p50    10313  p90    21171  max    44496  n=223
+      HAS an override, override ignored          p10      730  p50     2160  p90     3309  max    58219  n=265
+      HAS an override, override APPLIED          p10    12402  p50    37800  p90    56247  max  1047939  n=265
+      darkstar's eight, ignored / applied         370..1,439  /  6,664..25,884   (arena is 4,289 across)
+
+==================================================================================
+COVERAGE vs CAMERA DISTANCE   (union of projected footprints, 256x256, fov 45 deg)
+  A world quad   what the renderer draws today (quad fallback, authored = world size)
+  C screen quad  the hypothesis: anchored at |pos|, size = fraction of view height
+  M mesh world   the dome, uniformly scaled by the authored number, at its world position
+  S mesh x sO    M with the parsed-but-never-applied scaleOverride folded in
+==================================================================================
+
+  distance      A world     C screen       M mesh  S mesh x sO   note
+     1,000      0.0000%      8.3557%     73.5855%    100.0000%   eye 1000 from the system; dome radius M 719 (outside), S 12229 (INSIDE)
+     2,500      0.0000%      8.3557%     14.2319%    100.0000%   eye 2500 from the system; dome radius M 719 (outside), S 12229 (INSIDE)
+     5,000      0.0000%      8.3557%      3.6392%    100.0000%   eye 5000 from the system; dome radius M 719 (outside), S 12229 (INSIDE)
+    10,000      0.0000%      8.3557%      0.9323%     83.3237%   eye 10000 from the system; dome radius M 719 (outside), S 12229 (INSIDE)
+    20,000      0.0000%      8.3557%      0.2411%     48.5306%   eye 20000 from the system; dome radius M 719 (outside), S 12229 (outside)
+    40,000      0.0000%      8.3557%      0.0580%     11.0321%   eye 40000 from the system; dome radius M 719 (outside), S 12229 (outside)
+
+SHAPE OF EACH CURVE (coverage at 40,000 as a share of coverage at 1,000):
+   A world quad        0.0000% ->    0.0000%   ratio  0.0000   flat at zero
+   C screen quad       8.3557% ->    8.3557%   ratio  1.0000   FLAT - holds its share of the frame as the camera dollies
+   M mesh world       73.5855% ->    0.0580%   ratio  0.0008   SHRINKS like world geometry
+   S mesh x sO       100.0000% ->   11.0321%   ratio  0.1103   SHRINKS like world geometry
+
+YAW SWEEP at 5,000 units (a backdrop must not break when the camera turns):
+   A world quad     min    0.0000%  max    0.0000%  mean    0.0000%  spread    0.0000%
+   C screen quad    min    8.3557%  max    8.3557%  mean    8.3557%  spread    0.0000%
+   M mesh world     min    3.6072%  max    3.6194%  mean    3.6108%  spread    0.0122%
+   S mesh x sO      min  100.0000%  max  100.0000%  mean  100.0000%  spread    0.0000%
+
+WHAT SCALE WOULD WRAP THE CAMERA? (largest dome, half-diagonal 3235 at scale 1)
+   camera at   1,000: scale >=    0.31 to enclose the eye   (authored 0.20, authored x scaleOverride 3.50)
+   camera at   2,500: scale >=    0.77 to enclose the eye   (authored 0.20, authored x scaleOverride 3.50)
+   camera at   5,000: scale >=    1.55 to enclose the eye   (authored 0.20, authored x scaleOverride 3.50)
+   camera at  10,000: scale >=    3.09 to enclose the eye   (authored 0.20, authored x scaleOverride 3.50)
+   camera at  20,000: scale >=    6.18 to enclose the eye   (authored 0.20, authored x scaleOverride 3.50)
+   camera at  40,000: scale >=   12.36 to enclose the eye   (authored 0.20, authored x scaleOverride 3.50)
+
+
+====================================================================================================
+GPU RUN OF THE SAME SWEEP  (harness `screencard`, D3D11, real Map22/darkstar_supernova scene:
+21 materials, 21 slices, 49 texture bindings; 8/8 emitter pipelines built, 7/7 sprites decoded)
+Readings: A = world quad; B = camera-anchored at D=|pos| with WORLD size (the position claim alone);
+C = anchored at D=|pos| with screen-fraction size (the full hypothesis); E = anchored at a FIXED
+50,000 with screen-fraction size (separates "camera anchor" from "size rule").
+====================================================================================================
+
+CPU geometric coverage (% of frame, union of the 8 cards' projected footprints):
+  distance      A world     B anchor     C screen       E far
+     1,000      0.0000%      0.0000%      8.3557%     8.3557%
+     2,500      0.0000%      0.0000%      8.3557%     8.3557%
+     5,000      0.0000%      0.0000%      8.3557%     8.3557%
+    10,000      0.0000%      0.0000%      8.3557%     8.3557%
+    20,000      0.0000%      0.0000%      8.3557%     8.3557%
+    40,000      0.0000%      0.0000%      8.3557%     8.3557%
+
+GPU pixel contribution (materials shown vs hidden, same settings, cloned frames):
+     1,000      0.0015%      0.0015%      7.4432%     0.0015%
+     2,500      0.0000%      0.0000%      7.4417%     1.4023%
+     5,000      0.0000%      0.0000%      7.4417%     2.4719%
+    10,000      0.0000%      0.0000%      7.4417%     3.0289%
+    20,000      0.0000%      0.0000%      7.4417%     5.8258%
+    40,000      0.0000%      0.0000%      7.4417%     7.0526%
+
+Share of CHANGED pixels landing on arena geometry (depth test on; low = behind the arena):
+     1,000       100.0%       100.0%       100.0%      100.0%
+     2,500         0.0%         0.0%        81.2%        0.0%
+     5,000         0.0%         0.0%        66.8%        0.0%
+    10,000         0.0%         0.0%        59.3%        0.0%
+    20,000         0.0%         0.0%        21.7%        0.0%
+    40,000         0.0%         0.0%         5.2%        0.0%
+(A/B/E at 1,000 are 100% of ~13 pixels = noise. C at 1,000 is over 4,878 pixels.)
+
+Biggest card, projected size in a 256px frame, and its NDC centre:
+  A   0.09 / 0.04 / 0.02 / 0.01 / 0.00 / 0.00 px at 1k..40k, NDC (0.01,0.37)..(0.00,0.01)
+      ON SCREEN throughout - so 0% is SUB-PIXEL, not mis-aimed.
+  B   0.60 px, constant at every distance.
+  C,E 74.24 px = 29.0% of frame height, constant. The 8.3557% union is the largest card alone
+      (0.29^2 = 8.41%): all eight are concentric.
+
+Rotation, yaw 0..315 deg at 5,000: A 0.0000% at all 8 angles; B 0.0000%; C 8.3557% (spread 0.0000%);
+E 8.3557%.
+
+Controls: two identical renders differ 0.000%. RenderFrame returned THE SAME ARRAY twice (the .Clone()
+trap, demonstrated rather than asserted). Hiding the 8 materials changes 7.442%, so the subject is
+genuinely on screen. Derived eye (-735.4, 1237.0, 5998.4) vs mirrored camera (-735.4, 1237.0, 5998.4),
+delta 0.0003.
+
+Scale audit for the subject: placement transform scale (1.000, 1.000, 1.000), translation
+(2000, 0, 2000). System transform absent. overrideScaleCap absent.
+
+Bin census, every visual emitter in darkstar_supernova.materials.bin by miscRenderFlags:
+   flag       n   median birthScale   p90    with scaleOverride   single-particle
+   absent    23           10.00      50.00            0                  6
+   1          9          200.00     250.00            0                  2
+   4          8            0.20       0.27            8                  8
+
+
+====================================================================================================
+FULL-CORPUS BIT-2 CENSUS  (harness `bit2` + `bit2x`, 245 WADs, 1,828,445 emitters parsed)
+====================================================================================================
+
+723,352 emitters carry miscRenderFlags (39.6%; M259 measured 39.7%, so the parsers agree).
+Value distribution, all WADs: 1 = 717,899 (99.2%) | 5 = 2,789 | 3 = 1,113 | 4 = 1,104 | 2 = 441
+                              | 7 = 4 | 6 = 2.
+BIT 2 SET = 3,899 emitters (3,843 drawable) across 108 WADs and 1,340 systems.
+Champion-WAD-only split, for comparison with M259: value 4 = 411 (M259: 347), value 5 = 1,841
+(M259: 1,688). The two walks differ (systems-only over WadArchive vs every nested struct over raw
+WadFile); the ~15% gap is NOT root-caused.
+
+Primitive mix of the 3,843 drawable bit-2 emitters:
+   mesh 58.3% | quad 20.9% | arbitrary-quad 19.4% | direction-quad 1.3% | trail 0.1%
+
+Name families (each row in exactly one family; the labels are ours, the numbers are measured):
+   other         2,163  56.3%   mesh 44.8%   median size 30.0
+   camera/HUD      742  19.3%   mesh 58.2%   median size 10.0
+   stencil/mask    650  16.9%   mesh 87.2%   median size  7.0
+   backdrop        288   7.5%   mesh 94.8%   median size  1.2
+Commonest name tokens: skin 2569, tft 726, stencil 631, base 580, mask 526, write 525, hud 380,
+cameraboundvfx 300, recall 272, mis 261.
+
+Is the flag a whole-system decision, as a placement mode would be? NO.
+   214 of 1,340 systems (16.0%) have every emitter flagged.
+   819 of 1,340 (61.1%) have under 20% of their emitters flagged.
+   Share of rows whose own system leaves >80% of siblings unflagged, by family:
+      stencil/mask 92.6% | other 33.6% | backdrop 5.9% | camera/HUD 1.1%
+
+Effective size (authored birthScale max component, resolved THROUGH the mesh for mesh primitives -
+max |vertex coord| of the bound .scb/.sco; 2,198 of 2,241 mesh rows resolved):
+   <= 0.5 units (sub-pixel):        0 of 3,843    0.0%
+   0.5 - 5:                       111            2.9%
+   5 - 50:                        549           14.3%
+   50 - 500:                    2,127           55.3%
+   > 500:                       1,056           27.5%
+Quads only (n=1,603): <=0.5: 0 | 0.5-5: 83 | 5-50: 443 | 50-500: 816 | >500: 260.
+NOT ONE bit-2 emitter in the game is sub-pixel once meshes are resolved.
+
+Authored size, bit-2 vs the unflagged drawable population:
+   p5/p25/p50/p75/p95   bit 2:  0.85 / 2.20 / 11.0 / 108 / 900
+                    unflagged:  1.00 / 7.50 / 56.0 / 156 / 500
+
+Sprite dimensions of the bit-2 population (3,841 of 3,843 resolved): 128x128 964, 256x256 720,
+256x128 341, 512x512 331, 8x8 290, 64x64 196, 4x4 111.
+
+CONTROL - how Riot actually builds backdrops (harness `skyname`):
+Backdrop-named systems corpus-wide (skybox/backdrop/background in name or path): 7,174 drawable
+emitters in 578 distinct system names.
+   miscRenderFlags: absent 4,371 (60.9%) | 1 = 2,545 (35.5%) | 4 = 219 (3.1%) | 5 = 39 (0.5%)
+   => 96.4% of League's backdrop emitters do not carry bit 2 at all.
+   Among *Skybox*-named system groups: 114 of 149 contain no bit-2 emitter whatsoever.
+   Authored size within that population, split on the bit:
+      p25/p50/p75/p95   bit 2 set:  0.22 / 1.20 / 1.50 / 370
+                      bit 2 clear:  1.00 / 20.0 / 230  / 1000
+   Examples of the unflagged majority: BackStage_Dusk_Skybox max size 2200 at |pos| 1628;
+   L1_7YAnniversary_Skybox_VFX 2700 at |pos| 4252; DragonLanternFestivalStreet_Night_Skybox_01 1500;
+   L1_DawnbringerNightbringer_Skybox 993 at |pos| 2782.
+
+CameraBound-named systems (the one family whose name asserts the hypothesis): 1,134 drawable emitters
+in 191 system names; only 297 (26.2%) carry bit 2. Of 55 such systems only 23 are 100% flagged.
+Caitlyn_Skin11_R_CameraBoundVFX flags 19 of 32 emitters; TFT3_Ekko_Base_R_CameraBoundVFX 19 of 32;
+Vi_Skin48_R_CameraBoundVFX 10 of 24.
+
+Where camera-relative placement DOES live in shipped data: MapParticlePlacement.AttachToCamera (M195),
+7 placements corpus-wide, all on Map22 - Lux_idle_Level7_02,
+TFT_Set15_SpiritBlossom_Win_Streak_Persistent, Level7_AprilFool_Board_Light_VFX_02,
+Level1_ArenaSkin_ChosenOfTheWolf_IDLE_VFX_02, TFT_Project_Env_Victor_03,
+TFT_Project_light_z_Level1_1, Level1_Gwen_Glow_G. None is a skybox. None of Map22's 173 skybox-named
+placements sets it, out of 4,780 particle placements.
+
+
+====================================================================================================
+SHADER EVIDENCE  (harness `disasm` + `permscan`, assets/shaders/hlsl/particlesystem/quad_vs)
+====================================================================================================
+
+Blob 1, permutation key 0xef46db3751d8e999 = the hash of the EMPTY define set. sm5.0, 2,832 bytes,
+~20 instruction slots. The whole vertex program:
+
+  add  r0.xyz, v0.xyzx, -cb2[4].xyzx          // POSITION - vCamera
+  dp3/rsq/mul                                 // normalize -> unit camera->vertex ray
+  mad  r0.xyz, r0.xyzx, cb1[1].xxxx, v0.xyzx  // += ray * PARTICLE_DEPTH_PUSH_PULL
+  mov  r0.w, l(1.000000)
+  dp4  o0.x/y/z/w, r0.xyzw, cb2[0..3].xyzw    // SV_Position = mul(float4(p,1), mProj)
+  mov  o1.xyzw, v1.zyxw                       // COLOR0 read BGRA
+  round_ni/mul/round_ni/mad/add/mul           // flipbook cell UV from TEXCOORD0.z
+  mad  o3.xy, v0.xzxx, cb2[19].xyxx, cb2[19].zwzz   // FOW uv = world.XZ * FOW_PARAMS.xy + .zw
+
+Input signature, all 16 cooked permutations: POSITION0 (xyz), COLOR0 (xyzw), TEXCOORD0 (xyzw, .w
+unread in blob 1), TEXCOORD1 (xy). No size attribute, no corner offset, no per-instance stream, no
+SV_VertexID, and dcl_temps 1 leaves no room to reconstruct a corner.
+
+Constants declared and NEVER READ in every permutation: TIME, TERRAIN_XFORM, VIEW_PROJECTION_MATRIX,
+mShadowProj, SCREEN_MATRIX (+240), FOG_OF_WAR_ALWAYS_BELOW_Y, FOW_HEIGHT_FADE, MANTIS_FORCE_DATA,
+mView (+384), mViewInv (+448), GLOBAL_ENVIRONMENT_VALUES, SUN_LIGHT_DIRECTION, NORMAL_OFFSET_BIAS,
+DRAGON_TERRAIN, ENV_QUALITY. `dcl_constantbuffer CB2[20]` caps the addressable range at byte 319;
+the widest permutation declares CB2[23] = byte 367. mView and mViewInv are OUTSIDE what any cooked
+quad_vs can address at all.
+
+All 16 permutations: axes DISABLE_FOW / MASKED / ALPHA_EROSION / MULT_PASS. Instruction counts
+20,20,21,21,21,21,22,22,26,26,27,27,27,27,28,28 - the growth is UV and erosion work. Every one
+computes SV_Position with the identical four dp4 against cb2[0..3].
+
+particlesystem/quad_screenspaceuv (the one shader in the family named for screen space) does the SAME
+position math, then divides the clip result to NDC and runs it through a UV transform. Even the
+explicitly screen-space particle shader keeps its GEOMETRY in world space.
+
+
+====================================================================================================
+SUPPORTING MEASUREMENTS
+====================================================================================================
+
+Dome bounds (harness `domesize`, Map22):
+   mesh                                   min                      max                    size            radiusXZ
+   TFT_Skybox_BackgroundClouds.scb    (-2288, -317,-2288)   ( 2288, 1212, 2288)   ( 4576, 1529, 4576)     3235
+   TFT_Skybox_MidgroundClouds.scb     (-1884, -259,-1884)   ( 1884, 1256, 1884)   ( 3768, 1515, 3768)     2664
+   TFT_Skybox_BackgroundClouds_B.scb  (-1649, -249,-1649)   ( 1649,  437, 1649)   ( 3299,  686, 3299)     2333
+   TFT_Skybox_ForegroundClouds.scb    ( -600,   91, -648)   (  653,  447,  716)   ( 1253,  356, 1364)      926
+(For scale, other TFT skies in the same WAD: tft_skybox_cloud_e.scb is 28,096 across.)
+
+Arena bounds (harness `arenasize`, darkstar_supernova.mapgeo, 53 meshes):
+   min (-150.8, -1780.5, -102.0)   max (4138.2, 1097.2, 4026.7)
+   size (4289.0, 2877.7, 4128.7)   half-diagonal XZ 2976.7
+   8/53 meshes within 250 units of (2000,-,2000); 12/53 within 1,000; 53/53 within 2,000.
+
+Shader cache state on the patched client (harness `cachels`, ShaderCache.dx11.wad.client):
+   2,176 chunks, 2,154 resolved (99.0%). Suffix census:
+   .ps-dx11 439 | .ps-dx11_0 439 | .vs-dx11 402 | .vs-dx11_0 402 | .ps-dx11_100 134 |
+   .ps-dx11_200 56 | .ps-dx11_300 36 | .ps-dx11_400 23.   ZERO entries end in .vs.dx11 / .ps.dx11.
+   Consequence, measured: harness `shaders` prints "TOC entries (resolved): 0, distinct shader
+   names: 0"; harness `mapparticles Map22 darkstar_supernova` prints "map scene: 0 materials,
+   0 slices, 0 texture bindings" and then dies with a NullReferenceException.
+
+M259 scope check (DATA/FINAL layout, counted directly):
+   Maps/*.wad.client            = 0 files      <- what MiscFlags.cs:71-80 globbed
+   Maps/Shipping/*.wad.client   = 9 (non-locale)
+   Champions/*.wad.client       = 203 (non-locale)
+   DATA/FINAL/*.wad.client      = 28 (non-locale, includes every TFTSet*.wad.client)
