@@ -2695,6 +2695,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private int _inspectorTab;
     [ObservableProperty] private int _previewMode; // 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal
     [ObservableProperty] private string _shaderDbStatus = "Riot shaders not scanned.";
+    /// <summary>
+    /// <para>M268: bumped whenever the open map is replaced or cleared. _currentMap is a plain field, so
+    /// nothing observable fired on a map load - which is why the D3D11 viewport only ever built its scene
+    /// on the toggle, and opening a different map while it was on left the PREVIOUS map on screen.</para>
+    ///
+    /// <para>A counter rather than exposing the map itself: the view needs to know THAT it changed, not
+    /// what it changed to, and a counter cannot be accidentally held alive by a binding.</para>
+    /// </summary>
+    [ObservableProperty] private int _mapGeneration;
+
     private MapGeoAsset? _currentMap;
     private IReadOnlyDictionary<string, MaterialProfile>? _currentMapProfiles;
     private Dictionary<string, string>? _currentMaterialToTexture;   // M172c: material name -> diffuse .tex path // M34: material name → render-state profile
@@ -3051,6 +3061,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         CurrentSkeleton = null; ShowBones = false;
         _currentMap = s.Map; _currentMapBytes = s.MapBytes; _currentMapEntry = s.Entry;
+        MapGeneration++;
         InvalidateRayIndex();
         PrebuildRayIndex(s.Map, MeshVerticesRevision);   // M172a
         HasMapGeo = true;   // M79
@@ -3810,6 +3821,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _visibilityResolver = null;
         _currentMapBytes = null;
         _currentMapEntry = null;
+        MapGeneration++;
         OnPropertyChanged(nameof(CanBakeLighting));   // M158
         OnPropertyChanged(nameof(HasMapForLayout));  // M147
         OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
@@ -5385,6 +5397,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 PrebuildRayIndex(map, MeshVerticesRevision);   // M172a: warm it so the first click is instant
                 _currentMapBytes = rawMapBytes;
                 _currentMapEntry = entry;
+                MapGeneration++;
                 HasMapGeo = true;   // M79
                 OnPropertyChanged(nameof(CanBakeLighting));   // M158
                 OnPropertyChanged(nameof(HasMapForLayout));  // M147

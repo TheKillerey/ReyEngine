@@ -52,6 +52,11 @@ public partial class MainWindow : Window
                 vm.PropertyChanged += (_, e) =>
                 {
                     if (e.PropertyName == nameof(MainWindowViewModel.UseDx11Viewport)) OnDx11Toggled(vm);
+                    // M268: and rebuild when the MAP changes underneath a viewport that is already on.
+                    // The scene was only ever built on the toggle, so opening a second map left the first
+                    // one on screen - stale geometry that looked like the new map had failed to load.
+                    else if (e.PropertyName == nameof(MainWindowViewModel.MapGeneration)
+                             && vm.UseDx11Viewport) OnDx11Toggled(vm);
                 };
         };
         Closed += (_, _) => { _closed = true; _dx11?.Dispose(); _dx11 = null; };
@@ -79,8 +84,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        // M249 (step 2): build whatever map is open into the D3D11 renderer. Done on toggle rather than on
-        // map load so a user who never enables this never pays for it.
+        // M249 (step 2): build whatever map is open into the D3D11 renderer. Done on toggle - and, since
+        // M268, on a map change while the toggle is on - rather than eagerly on every map load, so a user
+        // who never enables this never pays for it.
         // M250: the CPU half runs off the UI thread. The surface starts drawing immediately with whatever
         // it has (the fallback mesh on a first toggle) so the viewport is never a frozen blank rectangle
         // while the scene is prepared.
