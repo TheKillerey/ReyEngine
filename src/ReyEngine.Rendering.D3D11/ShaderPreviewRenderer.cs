@@ -1433,6 +1433,17 @@ float4 psmain_tex(VTexOut i) : SV_Target
 
     public bool IsCached(string key) => _texPool.TryGetValue(key, out var v) && v.Handle is not null;
 
+    /// <summary>M275: the authored sun direction as a unit vector, for upload to SUN_LIGHT_DIRECTION.
+    /// A zero vector is passed through rather than normalised - Vector3.Normalize would hand back NaN and
+    /// NaN in a dp3 poisons the whole pixel, where zero just means "no sun", which is a survivable answer to
+    /// a map that authored nothing.</summary>
+    private static float[] UnitSun(Vector3 d)
+    {
+        float len = d.Length();
+        if (len < 1e-6f) return new[] { d.X, d.Y, d.Z, 0f };
+        return new[] { d.X / len, d.Y / len, d.Z / len, 0f };
+    }
+
     /// <summary>M273: does the pooled asset under this key use its alpha channel? Recorded as a side effect
     /// of decoding, because modes 2 and 3 pick their blend state from it (VfxShaderFlags.IsAdditive) and the
     /// pipeline has to know BEFORE it builds - by which point a pool hit means nobody has the pixels any
@@ -1882,8 +1893,40 @@ float4 psmain_tex(VTexOut i) : SV_Target
                     // measure a mean of 6.5-50 out of 255 on Map12. That reads as black ground under lit
                     // walls, which is exactly what was reported. MapSunProperties.SunDirection defaults to
                     // (0,1,0) - up - which independently says the stored convention is toward-the-sun.
+                    // M275: NORMALISED, because Riot's own shaders never do it and their artists never
+                    // authored it. The dp3 above consumes this constant raw, so a non-unit vector scales
+                    // the whole sun term by its LENGTH - and Riot ships lengths up to 8.775
+                    // (Map22 base_dragon_cloud <2, 8, -3>). Every one of the 256 distinct pixel
+                    // permutations of DefaultEnv_Flat / VertexDeform / Env_GlowSign uses
+                    // SUN_LIGHT_DIRECTION and not one normalises it, so the client must be doing it before
+                    // upload or Riot's own TFT maps would render 7-9x over-lit.
+                    //
+                    // The authoring tells agree: on Map22 the GLOBAL sun blocks are unit-length 136 times
+                    // of 156 - darkstar_supernova's is <-0.38480574, 0.8271427, -0.40958446>, normalised to
+                    // seven decimals - while the lighting VOLUME blocks in the SAME bins are non-unit 126
+                    // times of 159 and read as hand-typed (<-0.8, 6.82, 2>). Two tools, one habit applied
+                    // in only one of them. Intensity also already has its own field (sunColor), so length
+                    // cannot be carrying it too.
+                    //
+                    // Measured, lightmapped slices only, mean luma of lit pixels:
+                    //   Map22/darkstar_supernova (len 7.152)  191.5/255 with 31.7% blown to white -> 58.9 with 0.0%
+                    //   Map22/base_dragon_fire   (len 7.152)  126.3 -> 37.0
+                    //   Map30/arenab             (len 6.453)  217.6 with 3.5% blown -> 90.8 with 0.0%
+                    //   Map12/bloom              (len 0.9996) 107.6 -> 107.6, bit-for-bit no-op
+                    //   Map11/base_srx           (len 0.792)  112.4 -> 112.4, and 112.4 with the sun term
+                    //                                         REMOVED - SR's visible permutations do not
+                    //                                         read the sun at all, so this cannot touch it
+                    //
+                    // Not done instead: dropping the sun on lightmapped surfaces (the intuitive fix, since
+                    // a bake already contains the sun). Riot's shader ADDS them - it samples BAKED_LIGHT,
+                    // multiplies rgb by LIGHT_MAP_COLOR_SCALE, and mads the sun on top gated by the
+                    // lightmap's ALPHA, which carries the sun's SHADOW rather than replacing its light.
+                    // Removing it costs Map12/bloom 61% of its brightness (107.6 -> 41.7).
+                    //
+                    // The parsed MapSunProperties are deliberately left alone so the Map Bin editor keeps
+                    // showing what Riot actually wrote.
                     "SUN_LIGHT_DIRECTION" => s.MapSunDirection is { } msd
-                        ? new[] { msd.X, msd.Y, msd.Z, 0f }
+                        ? UnitSun(msd)
                         : new[] { -s.SunDirection.X, -s.SunDirection.Y, -s.SunDirection.Z, 0f },
 
                     "SUN_LIGHT_COLOR" => s.MapSunColor is { } msc
