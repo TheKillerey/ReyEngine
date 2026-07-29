@@ -159,6 +159,10 @@ public partial class MainWindow : Window
         _dx11.LightmapScale = vm.CurrentLightmapScale;
         _dx11.AnimateTime = vm.AnimationsPlaying;
         _dx11.Wireframe = vm.ShowWireframe;
+        // M269: pushed every frame rather than on a selection-changed event - the selection, the map and
+        // the scene rebuild all move independently, and one of the three going stale is exactly how a
+        // highlight ends up pointing at geometry that is no longer there.
+        _dx11.Renderer.SetHighlightRanges(vm.Dx11HighlightRanges);
 
         // Pushed per frame rather than on load: the cache is opened lazily the first time a scene is built,
         // which can be after this surface has already drawn its first frames.

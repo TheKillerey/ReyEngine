@@ -2705,6 +2705,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     [ObservableProperty] private int _mapGeneration;
 
+    /// <summary>
+    /// <para>M269: the current selection as INDEX RANGES, for the D3D11 overlay.</para>
+    ///
+    /// <para>Ranges rather than material or slice indices, and that is not a style choice.
+    /// Dx11SceneBuilder.MergeSlices sorts the map's groups by start index and merges adjacent ones, so the
+    /// Nth D3D11 material is not the Nth mapgeo group. Handing the renderer material indices would
+    /// highlight confidently and highlight the wrong mesh. A group's (StartIndex, IndexCount) is what
+    /// mapgeo actually stores and survives the merge untouched.</para>
+    /// </summary>
+    public IReadOnlyList<(int Start, int Count)> Dx11HighlightRanges
+    {
+        get
+        {
+            if (SelectedSubmeshIndices is not { Count: > 0 } sel || _currentMap is not { } map)
+                return Array.Empty<(int, int)>();
+            var ranges = new List<(int, int)>(sel.Count);
+            foreach (int i in sel)
+                if (i >= 0 && i < map.Groups.Count)
+                    ranges.Add((map.Groups[i].StartIndex, map.Groups[i].IndexCount));
+            return ranges;
+        }
+    }
+
     private MapGeoAsset? _currentMap;
     private IReadOnlyDictionary<string, MaterialProfile>? _currentMapProfiles;
     private Dictionary<string, string>? _currentMaterialToTexture;   // M172c: material name -> diffuse .tex path // M34: material name → render-state profile

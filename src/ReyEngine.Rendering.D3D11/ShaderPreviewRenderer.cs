@@ -218,6 +218,18 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11DeviceContext> _ctx;
 
     private ComPtr<ID3D11PixelShader> _comparePs;
+
+    // M269: the overlay pipeline - our own shaders, for things Riot's have no way to express. Editor
+    // furniture (a selection highlight, and later bounds/bones/buckets) is not something a game shader
+    // was ever asked to draw, so it gets a trivial pipeline of its own rather than a contorted material.
+    private ComPtr<ID3D11VertexShader> _overlayVs;
+    private ComPtr<ID3D11PixelShader> _overlayPs;
+    private ComPtr<ID3D11InputLayout> _overlayLayout;
+    private ComPtr<ID3D11Buffer> _overlayCb;
+    private ComPtr<ID3D11DepthStencilState> _overlayDepth, _overlayDepthNoTest;
+    private ComPtr<ID3D11BlendState> _overlayBlend;
+    private bool _overlayTried;
+    private List<(int Start, int Count)> _highlight = new();
     private ComPtr<ID3D11Buffer> _vb, _ib;
     // M264: a SECOND pair, for geometry that is rewritten every frame. Until now SetMesh and
     // SetDynamicMesh both replaced _vb/_ib, so a scene could hold static geometry or particles but never
@@ -785,7 +797,206 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         return true;
     }
 
+    /// <summary>How many highlight ranges were drawn in the last frame - 0 when nothing is selected, and
+    /// also 0 if the overlay pipeline could not be built, which is worth telling apart.</summary>
+    public int HighlightDraws { get; private set; }
+
     public bool HasComparisonShader => _comparePs.Handle is not null;
+
+    /// <summary>Ranges of the STATIC index buffer to draw as a selection highlight, in the same units
+    /// mapgeo groups use.</summary>
+    public int HighlightRangeCount => _highlight.Count;
+
+    /// <summary>Colour of the highlight overlay. Alpha is the blend weight over the shaded pixel.</summary>
+    public Vector4 HighlightColor = new(1.0f, 0.55f, 0.15f, 0.45f);
+
+    /// <summary>
+    /// <para>Whether the highlight is occluded by geometry in front of it. Defaults OFF, against the
+    /// instinct, because the instinct was measured and lost: with the test on, the overlay changed 0.03%
+    /// of pixels; with it off, 1.29% - on the same on-screen geometry. The overlay re-derives clip depth
+    /// in its own vertex shader, so it does not land bit-identically on what Riot's shader wrote for the
+    /// same triangle, and at equal depth LessEqual is a coin toss the highlight loses.</para>
+    ///
+    /// <para>The cost is that a selection behind a wall still shows. For a selection marker that is
+    /// arguably right - you want to see what you picked - and it beats the alternative, which is a
+    /// highlight that silently does nothing. The `highlight` harness mode measures both.</para>
+    /// </summary>
+    public bool HighlightDepthTest = false;
+
+    /// <summary>
+    /// <para>M269: mark index RANGES for the selection highlight - not materials.</para>
+    ///
+    /// <para>The obvious API would take material indices, and it would be wrong.
+    /// <c>Dx11SceneBuilder.MergeSlices</c> sorts the map's groups by start index and merges adjacent ones,
+    /// so a material does not correspond to a submesh and the Nth material is not the Nth group. Marking
+    /// materials would highlight confidently, and highlight the wrong geometry. A range is what mapgeo
+    /// actually stores and survives the merge untouched.</para>
+    /// </summary>
+    public void SetHighlightRanges(IReadOnlyList<(int Start, int Count)>? ranges)
+    {
+        _highlight.Clear();
+        if (ranges is null) return;
+        foreach (var r in ranges)
+            if (r.Count > 0 && r.Start >= 0) _highlight.Add(r);
+    }
+
+    private const string OverlayHlsl = @"
+cbuffer OverlayCB : register(b0)
+{
+    row_major float4x4 gMvp;
+    float4 gColor;
+};
+struct VIn { float3 pos : POSITION; };
+float4 vsmain(VIn i) : SV_Position { return mul(float4(i.pos, 1.0), gMvp); }
+float4 psmain() : SV_Target { return gColor; }
+";
+
+    /// <summary>Compile the overlay pipeline once. Failure is remembered so a broken HLSL compiler costs
+    /// one attempt rather than one per frame, and it is never fatal - the scene still renders without
+    /// its furniture.</summary>
+    private bool EnsureOverlay()
+    {
+        if (_overlayTried) return _overlayVs.Handle is not null;
+        _overlayTried = true;
+
+        ID3D10Blob* vsCode = null, psCode = null, errs = null;
+        var src = System.Text.Encoding.ASCII.GetBytes(OverlayHlsl);
+        try
+        {
+            var compiler = D3DCompiler.GetApi();
+            fixed (byte* sp = src)
+            {
+                var vsEntry = System.Text.Encoding.ASCII.GetBytes("vsmain\0");
+                var vsTarget = System.Text.Encoding.ASCII.GetBytes("vs_5_0\0");
+                fixed (byte* ep = vsEntry) fixed (byte* tp = vsTarget)
+                    if (compiler.Compile(sp, (nuint)src.Length, (byte*)null, null, (ID3DInclude*)null,
+                            ep, tp, 0u, 0u, &vsCode, &errs) < 0 || vsCode is null)
+                    { Log("overlay vs failed to compile"); return false; }
+
+                var psEntry = System.Text.Encoding.ASCII.GetBytes("psmain\0");
+                var psTarget = System.Text.Encoding.ASCII.GetBytes("ps_5_0\0");
+                fixed (byte* ep = psEntry) fixed (byte* tp = psTarget)
+                    if (compiler.Compile(sp, (nuint)src.Length, (byte*)null, null, (ID3DInclude*)null,
+                            ep, tp, 0u, 0u, &psCode, &errs) < 0 || psCode is null)
+                    { Log("overlay ps failed to compile"); return false; }
+            }
+        }
+        catch (Exception ex) { Log("overlay: the HLSL compiler is unavailable: " + ex.Message); return false; }
+
+        ComPtr<ID3D11VertexShader> vs = default;
+        if (_device.CreateVertexShader(vsCode->GetBufferPointer(), vsCode->GetBufferSize(),
+                ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref vs) < 0) { Log("overlay CreateVertexShader failed"); return false; }
+        _overlayVs = vs;
+
+        ComPtr<ID3D11PixelShader> ps = default;
+        if (_device.CreatePixelShader(psCode->GetBufferPointer(), psCode->GetBufferSize(),
+                ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref ps) < 0) { Log("overlay CreatePixelShader failed"); return false; }
+        _overlayPs = ps;
+
+        // POSITION alone, read out of the same fat vertex the scene already uses - so the highlight draws
+        // the identical geometry with the identical stride and cannot drift from what it is highlighting.
+        var semantic = System.Text.Encoding.ASCII.GetBytes("POSITION\0");
+        fixed (byte* sem = semantic)
+        {
+            var el = new InputElementDesc
+            {
+                SemanticName = sem, SemanticIndex = 0,
+                Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 0,
+                InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0,
+            };
+            ComPtr<ID3D11InputLayout> layout = default;
+            if (_device.CreateInputLayout(&el, 1, vsCode->GetBufferPointer(), vsCode->GetBufferSize(), ref layout) < 0)
+            { Log("overlay CreateInputLayout failed"); return false; }
+            _overlayLayout = layout;
+        }
+
+        var cbDesc = new BufferDesc
+        {
+            ByteWidth = 80,                      // float4x4 + float4
+            Usage = Usage.Dynamic,
+            BindFlags = (uint)BindFlag.ConstantBuffer,
+            CPUAccessFlags = (uint)CpuAccessFlag.Write,
+        };
+        ComPtr<ID3D11Buffer> cb = default;
+        if (_device.CreateBuffer(in cbDesc, null, ref cb) < 0) { Log("overlay cbuffer failed"); return false; }
+        _overlayCb = cb;
+
+        // Depth test ON, write OFF: the highlight should be occluded by geometry in front of it - a
+        // selection glowing through a wall would misreport where the thing actually is - but it must not
+        // disturb the depth buffer for anything drawn afterwards.
+        var dsd = new DepthStencilDesc
+        {
+            DepthEnable = 1, DepthWriteMask = DepthWriteMask.Zero, DepthFunc = ComparisonFunc.LessEqual,
+        };
+        ComPtr<ID3D11DepthStencilState> ds = default;
+        _device.CreateDepthStencilState(in dsd, ref ds);
+        _overlayDepth = ds;
+
+        // The overlay recomputes clip position with its own vertex shader, so its depth does not land
+        // bit-identically on what Riot's shader wrote for the same triangle. At equal depth LessEqual is
+        // a coin toss, and the highlight loses. This is the escape hatch, and which one is needed is a
+        // measurement rather than a guess - see the `highlight` harness mode.
+        var dsdNoTest = dsd; dsdNoTest.DepthEnable = 0;
+        ComPtr<ID3D11DepthStencilState> dsn = default;
+        _device.CreateDepthStencilState(in dsdNoTest, ref dsn);
+        _overlayDepthNoTest = dsn;
+
+        var bd = new BlendDesc();
+        bd.RenderTarget[0] = new RenderTargetBlendDesc
+        {
+            BlendEnable = 1,
+            SrcBlend = Blend.SrcAlpha, DestBlend = Blend.InvSrcAlpha, BlendOp = BlendOp.Add,
+            SrcBlendAlpha = Blend.One, DestBlendAlpha = Blend.InvSrcAlpha, BlendOpAlpha = BlendOp.Add,
+            RenderTargetWriteMask = (byte)ColorWriteEnable.All,
+        };
+        ComPtr<ID3D11BlendState> bs = default;
+        _device.CreateBlendState(in bd, ref bs);
+        _overlayBlend = bs;
+
+        Log("overlay pipeline built");
+        return true;
+    }
+
+    /// <summary>Draw the highlighted ranges over the finished frame. Returns the number of draws made.</summary>
+    private int DrawHighlight(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_highlight.Count == 0 || _vb.Handle is null || _ib.Handle is null) return 0;
+        if (!EnsureOverlay()) return 0;
+
+        // view already carries the X mirror when MirrorX is on (applied at the top of the draw), so the
+        // overlay lands on the same pixels as the geometry it is marking rather than its reflection.
+        var mvp = Matrix4x4.Multiply(view, proj);
+        var bytes = new byte[80];
+        var m = new[]
+        {
+            mvp.M11, mvp.M12, mvp.M13, mvp.M14, mvp.M21, mvp.M22, mvp.M23, mvp.M24,
+            mvp.M31, mvp.M32, mvp.M33, mvp.M34, mvp.M41, mvp.M42, mvp.M43, mvp.M44,
+            HighlightColor.X, HighlightColor.Y, HighlightColor.Z, HighlightColor.W,
+        };
+        System.Buffer.BlockCopy(m, 0, bytes, 0, 80);
+        Upload(_overlayCb, bytes, 80);
+
+        uint stride = PreviewVertex.SizeInBytes, offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _vb, in stride, in offset);
+        _ctx.IASetIndexBuffer(_ib, Format.FormatR32Uint, 0);
+        _ctx.IASetInputLayout(_overlayLayout);
+        _ctx.VSSetShader(_overlayVs, null, 0);
+        _ctx.PSSetShader(_overlayPs, null, 0);
+        _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.OMSetDepthStencilState(HighlightDepthTest ? _overlayDepth : _overlayDepthNoTest, 0);
+        var factor = stackalloc float[4] { 0, 0, 0, 0 };
+        _ctx.OMSetBlendState(_overlayBlend, factor, 0xFFFFFFFF);
+
+        int draws = 0;
+        foreach (var (start, count) in _highlight)
+        {
+            if (start + count > _indexCount) continue;   // a stale range from a previous map
+            _ctx.DrawIndexed((uint)count, (uint)start, 0);
+            draws++;
+        }
+        return draws;
+    }
 
     /// <summary>The generated HLSL, so the window can show exactly what it is being compared against.</summary>
     public string? ComparisonShaderSource { get; private set; }
@@ -1868,6 +2079,10 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             }
             }
 
+            // M269: editor furniture last, over the finished shading.
+            HighlightDraws = DrawHighlight(view, proj);
+            DrawCalls += HighlightDraws;
+
             _ctx.CopyResource(_stage, _rt);
             MappedSubresource map = default;
             int hr = _ctx.Map(_stage, 0, Map.Read, 0, ref map);
@@ -2019,6 +2234,8 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         // every pipeline ever built leaks for the lifetime of the process.
         ClearPipelineCache();
         _vb.Dispose(); _ib.Dispose(); _dynVb.Dispose(); _dynIb.Dispose(); _compareCb.Dispose();
+        _overlayVs.Dispose(); _overlayPs.Dispose(); _overlayLayout.Dispose();
+        _overlayCb.Dispose(); _overlayDepth.Dispose(); _overlayDepthNoTest.Dispose(); _overlayBlend.Dispose();
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClamp.Dispose(); _comparison.Dispose();
         _raster.Dispose(); _blend.Dispose(); _depthState.Dispose();
