@@ -163,6 +163,7 @@ public partial class MainWindow : Window
         // the scene rebuild all move independently, and one of the three going stale is exactly how a
         // highlight ends up pointing at geometry that is no longer there.
         _dx11.Renderer.SetHighlightRanges(vm.Dx11HighlightRanges);
+        _dx11.Renderer.SetIcons(vm.Dx11Icons(Viewport.Camera.Distance));
 
         // Pushed per frame rather than on load: the cache is opened lazily the first time a scene is built,
         // which can be after this surface has already drawn its first frames.

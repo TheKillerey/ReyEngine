@@ -2714,6 +2714,34 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// highlight confidently and highlight the wrong mesh. A group's (StartIndex, IndexCount) is what
     /// mapgeo actually stores and survives the merge untouched.</para>
     /// </summary>
+    /// <summary>
+    /// <para>M270: the placement markers for the D3D11 viewport, colour-coded by type.</para>
+    ///
+    /// <para>Reads the SAME four marker lists the GL viewport is bound to, so the two viewports show and
+    /// hide the same things: each list is already emptied by its own Show toggle upstream, and duplicating
+    /// that gating here is how the two would drift apart.</para>
+    ///
+    /// <para>Size scales with camera distance because these mark a POSITION, not an object with a size -
+    /// a fixed world size vanishes when you pull back over a 97,000-unit map and swallows the screen when
+    /// you fly in.</para>
+    /// </summary>
+    public IReadOnlyList<(System.Numerics.Vector3 Pos, System.Numerics.Vector4 Color, float Size)>
+        Dx11Icons(float cameraDistance)
+    {
+        var outp = new List<(System.Numerics.Vector3, System.Numerics.Vector4, float)>();
+        float size = Math.Clamp(cameraDistance * 0.012f, 12f, 320f);
+        void Add(IReadOnlyList<System.Numerics.Vector3>? pts, System.Numerics.Vector4 colour)
+        {
+            if (pts is null) return;
+            foreach (var p in pts) outp.Add((p, colour, size));
+        }
+        Add(ParticleMarkers, new System.Numerics.Vector4(1.00f, 0.42f, 0.78f, 0.85f));   // pink
+        Add(SoundMarkers,    new System.Numerics.Vector4(0.35f, 0.80f, 1.00f, 0.85f));   // cyan
+        Add(PropMarkers,     new System.Numerics.Vector4(1.00f, 0.80f, 0.25f, 0.85f));   // amber
+        Add(ProbeMarkers,    new System.Numerics.Vector4(0.55f, 1.00f, 0.45f, 0.85f));   // green
+        return outp;
+    }
+
     public IReadOnlyList<(int Start, int Count)> Dx11HighlightRanges
     {
         get

@@ -230,6 +230,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11BlendState> _overlayBlend;
     private bool _overlayTried;
     private List<(int Start, int Count)> _highlight = new();
+
+    // M270: placement markers - particles, sounds, props, probes. Their own buffer pair, because the
+    // dynamic pair belongs to the particle simulation and both are rewritten every frame.
+    private ComPtr<ID3D11Buffer> _iconVb, _iconIb;
+    private int _iconVbCapacity, _iconIbCapacity;
+    private readonly List<(Vector3 Pos, Vector4 Color, float Size)> _icons = new();
     private ComPtr<ID3D11Buffer> _vb, _ib;
     // M264: a SECOND pair, for geometry that is rewritten every frame. Until now SetMesh and
     // SetDynamicMesh both replaced _vb/_ib, so a scene could hold static geometry or particles but never
@@ -832,6 +838,152 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     /// materials would highlight confidently, and highlight the wrong geometry. A range is what mapgeo
     /// actually stores and survives the merge untouched.</para>
     /// </summary>
+    /// <summary>
+    /// <para>M270: the placement markers the GL viewport draws - one camera-facing quad per placement,
+    /// coloured by type. Replaces the whole set; pass nothing to clear.</para>
+    ///
+    /// <para>Grouped by colour on submission so the draw is one call per TYPE rather than per placement:
+    /// a Summoner's Rift bin carries a thousand of these and per-marker draws would cost more than the map
+    /// behind them.</para>
+    /// </summary>
+    public void SetIcons(IReadOnlyList<(Vector3 Pos, Vector4 Color, float Size)>? icons)
+    {
+        _icons.Clear();
+        if (icons is null) return;
+        foreach (var i in icons) if (i.Size > 0f) _icons.Add(i);
+        // Stable ordering by packed colour, so equal-coloured markers end up contiguous and can share a
+        // draw. The sort is on a value, not a reference, so the batching is deterministic frame to frame.
+        _icons.Sort((a, b) => Key(a.Color).CompareTo(Key(b.Color)));
+        static long Key(Vector4 c) =>
+            ((long)(c.X * 255) << 24) | ((long)(c.Y * 255) << 16) | ((long)(c.Z * 255) << 8) | (long)(c.W * 255);
+    }
+
+    /// <summary>How many marker draws the last frame issued - one per distinct colour, not per marker.</summary>
+    public int IconDraws { get; private set; }
+
+    public int IconCount => _icons.Count;
+
+    private int DrawIcons(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_icons.Count == 0) return 0;
+        if (!EnsureOverlay()) return 0;
+
+        // Camera basis from the MIRROR-INCLUSIVE view's inverse, the same derivation the particles use -
+        // an origin-relative approximation is only correct for a marker at the world origin, and these are
+        // scattered across the whole map.
+        Matrix4x4.Invert(view, out var inv);
+        var right = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitX, inv));
+        var up = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitY, inv));
+
+        int quads = _icons.Count;
+        EnsureIconBuffers(quads * 4, quads * 6);
+        if (_iconVb.Handle is null || _iconIb.Handle is null) return 0;
+
+        var verts = new PreviewVertex[quads * 4];
+        var idx = new uint[quads * 6];
+        for (int i = 0; i < quads; i++)
+        {
+            var (pos, _, size) = _icons[i];
+            float h = size * 0.5f;
+            var r = right * h; var u = up * h;
+            int v = i * 4;
+            verts[v + 0].Position = pos - r + u;
+            verts[v + 1].Position = pos + r + u;
+            verts[v + 2].Position = pos + r - u;
+            verts[v + 3].Position = pos - r - u;
+            int o = i * 6;
+            idx[o + 0] = (uint)v; idx[o + 1] = (uint)(v + 1); idx[o + 2] = (uint)(v + 2);
+            idx[o + 3] = (uint)v; idx[o + 4] = (uint)(v + 2); idx[o + 5] = (uint)(v + 3);
+        }
+        UploadIcons(verts, idx);
+
+        uint stride = PreviewVertex.SizeInBytes, offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _iconVb, in stride, in offset);
+        _ctx.IASetIndexBuffer(_iconIb, Format.FormatR32Uint, 0);
+        _ctx.IASetInputLayout(_overlayLayout);
+        _ctx.VSSetShader(_overlayVs, null, 0);
+        _ctx.PSSetShader(_overlayPs, null, 0);
+        // Markers are furniture: they must be findable behind geometry, so no depth test at all.
+        _ctx.OMSetDepthStencilState(_overlayDepthNoTest, 0);
+        var factor = stackalloc float[4] { 0, 0, 0, 0 };
+        _ctx.OMSetBlendState(_overlayBlend, factor, 0xFFFFFFFF);
+
+        var mvp = Matrix4x4.Multiply(view, proj);
+        int draws = 0, runStart = 0;
+        for (int i = 1; i <= quads; i++)
+        {
+            if (i < quads && _icons[i].Color == _icons[runStart].Color) continue;
+            SetOverlayCb(mvp, _icons[runStart].Color);
+            _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+            _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+            _ctx.DrawIndexed((uint)((i - runStart) * 6), (uint)(runStart * 6), 0);
+            draws++;
+            runStart = i;
+        }
+        return draws;
+    }
+
+    private void EnsureIconBuffers(int verts, int indices)
+    {
+        if (_iconVb.Handle is not null && verts <= _iconVbCapacity && indices <= _iconIbCapacity) return;
+        _iconVb.Dispose(); _iconIb.Dispose();
+        _iconVb = default; _iconIb = default;
+        _iconVbCapacity = Math.Max(verts, 64);
+        _iconIbCapacity = Math.Max(indices, 96);
+
+        var vd = new BufferDesc
+        {
+            ByteWidth = (uint)(_iconVbCapacity * PreviewVertex.SizeInBytes), Usage = Usage.Dynamic,
+            BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+        };
+        ComPtr<ID3D11Buffer> vb = default;
+        _device.CreateBuffer(in vd, null, ref vb);
+        _iconVb = vb;
+
+        var id = new BufferDesc
+        {
+            ByteWidth = (uint)(_iconIbCapacity * sizeof(uint)), Usage = Usage.Dynamic,
+            BindFlags = (uint)BindFlag.IndexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+        };
+        ComPtr<ID3D11Buffer> ib = default;
+        _device.CreateBuffer(in id, null, ref ib);
+        _iconIb = ib;
+    }
+
+    private void UploadIcons(PreviewVertex[] verts, uint[] indices)
+    {
+        MappedSubresource mv = default;
+        if (_ctx.Map(_iconVb, 0, Map.WriteDiscard, 0, ref mv) >= 0)
+        {
+            fixed (PreviewVertex* src = verts)
+                System.Buffer.MemoryCopy(src, mv.PData,
+                    (long)_iconVbCapacity * PreviewVertex.SizeInBytes,
+                    (long)verts.Length * PreviewVertex.SizeInBytes);
+            _ctx.Unmap(_iconVb, 0);
+        }
+        MappedSubresource mi = default;
+        if (_ctx.Map(_iconIb, 0, Map.WriteDiscard, 0, ref mi) >= 0)
+        {
+            fixed (uint* src = indices)
+                System.Buffer.MemoryCopy(src, mi.PData, (long)_iconIbCapacity * sizeof(uint),
+                    (long)indices.Length * sizeof(uint));
+            _ctx.Unmap(_iconIb, 0);
+        }
+    }
+
+    private void SetOverlayCb(Matrix4x4 mvp, Vector4 color)
+    {
+        var bytes = new byte[80];
+        var m = new[]
+        {
+            mvp.M11, mvp.M12, mvp.M13, mvp.M14, mvp.M21, mvp.M22, mvp.M23, mvp.M24,
+            mvp.M31, mvp.M32, mvp.M33, mvp.M34, mvp.M41, mvp.M42, mvp.M43, mvp.M44,
+            color.X, color.Y, color.Z, color.W,
+        };
+        System.Buffer.BlockCopy(m, 0, bytes, 0, 80);
+        Upload(_overlayCb, bytes, 80);
+    }
+
     public void SetHighlightRanges(IReadOnlyList<(int Start, int Count)>? ranges)
     {
         _highlight.Clear();
@@ -966,15 +1118,7 @@ float4 psmain() : SV_Target { return gColor; }
         // view already carries the X mirror when MirrorX is on (applied at the top of the draw), so the
         // overlay lands on the same pixels as the geometry it is marking rather than its reflection.
         var mvp = Matrix4x4.Multiply(view, proj);
-        var bytes = new byte[80];
-        var m = new[]
-        {
-            mvp.M11, mvp.M12, mvp.M13, mvp.M14, mvp.M21, mvp.M22, mvp.M23, mvp.M24,
-            mvp.M31, mvp.M32, mvp.M33, mvp.M34, mvp.M41, mvp.M42, mvp.M43, mvp.M44,
-            HighlightColor.X, HighlightColor.Y, HighlightColor.Z, HighlightColor.W,
-        };
-        System.Buffer.BlockCopy(m, 0, bytes, 0, 80);
-        Upload(_overlayCb, bytes, 80);
+        SetOverlayCb(mvp, HighlightColor);
 
         uint stride = PreviewVertex.SizeInBytes, offset = 0;
         _ctx.IASetVertexBuffers(0, 1, ref _vb, in stride, in offset);
@@ -2081,7 +2225,8 @@ float4 psmain() : SV_Target { return gColor; }
 
             // M269: editor furniture last, over the finished shading.
             HighlightDraws = DrawHighlight(view, proj);
-            DrawCalls += HighlightDraws;
+            IconDraws = DrawIcons(view, proj);
+            DrawCalls += HighlightDraws + IconDraws;
 
             _ctx.CopyResource(_stage, _rt);
             MappedSubresource map = default;
@@ -2236,6 +2381,7 @@ float4 psmain() : SV_Target { return gColor; }
         _vb.Dispose(); _ib.Dispose(); _dynVb.Dispose(); _dynIb.Dispose(); _compareCb.Dispose();
         _overlayVs.Dispose(); _overlayPs.Dispose(); _overlayLayout.Dispose();
         _overlayCb.Dispose(); _overlayDepth.Dispose(); _overlayDepthNoTest.Dispose(); _overlayBlend.Dispose();
+        _iconVb.Dispose(); _iconIb.Dispose();
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClamp.Dispose(); _comparison.Dispose();
         _raster.Dispose(); _blend.Dispose(); _depthState.Dispose();
