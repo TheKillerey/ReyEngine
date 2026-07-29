@@ -235,7 +235,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     // dynamic pair belongs to the particle simulation and both are rewritten every frame.
     private ComPtr<ID3D11Buffer> _iconVb, _iconIb;
     private int _iconVbCapacity, _iconIbCapacity;
-    private readonly List<(Vector3 Pos, Vector4 Color, float Size)> _icons = new();
+    private readonly List<(Vector3 Pos, Vector4 Color, float Size, IconGlyph Glyph)> _icons = new();
+    private ComPtr<ID3D11VertexShader> _overlayVsTex;
+    private ComPtr<ID3D11PixelShader> _overlayPsTex;
+    private ComPtr<ID3D11InputLayout> _overlayLayoutTex;
+    private ComPtr<ID3D11SamplerState> _iconSampler;
+    private readonly ComPtr<ID3D11ShaderResourceView>[] _glyphSrv = new ComPtr<ID3D11ShaderResourceView>[4];
     private ComPtr<ID3D11Buffer> _vb, _ib;
     // M264: a SECOND pair, for geometry that is rewritten every frame. Until now SetMesh and
     // SetDynamicMesh both replaced _vb/_ib, so a scene could hold static geometry or particles but never
@@ -846,14 +851,18 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     /// a Summoner's Rift bin carries a thousand of these and per-marker draws would cost more than the map
     /// behind them.</para>
     /// </summary>
-    public void SetIcons(IReadOnlyList<(Vector3 Pos, Vector4 Color, float Size)>? icons)
+    public void SetIcons(IReadOnlyList<(Vector3 Pos, Vector4 Color, float Size, IconGlyph Glyph)>? icons)
     {
         _icons.Clear();
         if (icons is null) return;
         foreach (var i in icons) if (i.Size > 0f) _icons.Add(i);
-        // Stable ordering by packed colour, so equal-coloured markers end up contiguous and can share a
-        // draw. The sort is on a value, not a reference, so the batching is deterministic frame to frame.
-        _icons.Sort((a, b) => Key(a.Color).CompareTo(Key(b.Color)));
+        // Ordered by GLYPH first and colour second, so a batch is one texture bind and one cbuffer write.
+        // The sort is on values, not references, so the batching is deterministic frame to frame.
+        _icons.Sort((a, b) =>
+        {
+            int g = ((int)a.Glyph).CompareTo((int)b.Glyph);
+            return g != 0 ? g : Key(a.Color).CompareTo(Key(b.Color));
+        });
         static long Key(Vector4 c) =>
             ((long)(c.X * 255) << 24) | ((long)(c.Y * 255) << 16) | ((long)(c.Z * 255) << 8) | (long)(c.W * 255);
     }
@@ -883,14 +892,14 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         var idx = new uint[quads * 6];
         for (int i = 0; i < quads; i++)
         {
-            var (pos, _, size) = _icons[i];
+            var (pos, _, size, _) = _icons[i];
             float h = size * 0.5f;
             var r = right * h; var u = up * h;
             int v = i * 4;
-            verts[v + 0].Position = pos - r + u;
-            verts[v + 1].Position = pos + r + u;
-            verts[v + 2].Position = pos + r - u;
-            verts[v + 3].Position = pos - r - u;
+            verts[v + 0].Position = pos - r + u; verts[v + 0].Uv0 = new Vector4(0f, 0f, 0f, 0f);
+            verts[v + 1].Position = pos + r + u; verts[v + 1].Uv0 = new Vector4(1f, 0f, 0f, 0f);
+            verts[v + 2].Position = pos + r - u; verts[v + 2].Uv0 = new Vector4(1f, 1f, 0f, 0f);
+            verts[v + 3].Position = pos - r - u; verts[v + 3].Uv0 = new Vector4(0f, 1f, 0f, 0f);
             int o = i * 6;
             idx[o + 0] = (uint)v; idx[o + 1] = (uint)(v + 1); idx[o + 2] = (uint)(v + 2);
             idx[o + 3] = (uint)v; idx[o + 4] = (uint)(v + 2); idx[o + 5] = (uint)(v + 3);
@@ -900,9 +909,13 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         uint stride = PreviewVertex.SizeInBytes, offset = 0;
         _ctx.IASetVertexBuffers(0, 1, ref _iconVb, in stride, in offset);
         _ctx.IASetIndexBuffer(_iconIb, Format.FormatR32Uint, 0);
-        _ctx.IASetInputLayout(_overlayLayout);
-        _ctx.VSSetShader(_overlayVs, null, 0);
-        _ctx.PSSetShader(_overlayPs, null, 0);
+        // Textured when the glyph pipeline came up, flat squares when it did not - a marker in the wrong
+        // shape still tells you something is there, which beats no marker.
+        bool textured = _overlayVsTex.Handle is not null && _overlayLayoutTex.Handle is not null;
+        _ctx.IASetInputLayout(textured ? _overlayLayoutTex : _overlayLayout);
+        _ctx.VSSetShader(textured ? _overlayVsTex : _overlayVs, null, 0);
+        _ctx.PSSetShader(textured ? _overlayPsTex : _overlayPs, null, 0);
+        if (textured) _ctx.PSSetSamplers(0, 1, ref _iconSampler);
         // Markers are furniture: they must be findable behind geometry, so no depth test at all.
         _ctx.OMSetDepthStencilState(_overlayDepthNoTest, 0);
         var factor = stackalloc float[4] { 0, 0, 0, 0 };
@@ -912,10 +925,17 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         int draws = 0, runStart = 0;
         for (int i = 1; i <= quads; i++)
         {
-            if (i < quads && _icons[i].Color == _icons[runStart].Color) continue;
+            if (i < quads && _icons[i].Color == _icons[runStart].Color
+                          && _icons[i].Glyph == _icons[runStart].Glyph) continue;
             SetOverlayCb(mvp, _icons[runStart].Color);
             _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
             _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+            if (textured)
+            {
+                int gi = (int)_icons[runStart].Glyph;
+                if (gi >= 0 && gi < _glyphSrv.Length && _glyphSrv[gi].Handle is not null)
+                    _ctx.PSSetShaderResources(0, 1, ref _glyphSrv[gi]);
+            }
             _ctx.DrawIndexed((uint)((i - runStart) * 6), (uint)(runStart * 6), 0);
             draws++;
             runStart = i;
@@ -1001,6 +1021,25 @@ cbuffer OverlayCB : register(b0)
 struct VIn { float3 pos : POSITION; };
 float4 vsmain(VIn i) : SV_Position { return mul(float4(i.pos, 1.0), gMvp); }
 float4 psmain() : SV_Target { return gColor; }
+
+// Textured variant, for the placement glyphs. The glyph carries its SHAPE in alpha and is otherwise
+// white, so one texture serves every tint - the colour comes from gColor and multiplies through.
+struct VTexIn  { float3 pos : POSITION; float2 uv : TEXCOORD0; };
+struct VTexOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+Texture2D gGlyph : register(t0);
+SamplerState gGlyphSamp : register(s0);
+VTexOut vsmain_tex(VTexIn i)
+{
+    VTexOut o;
+    o.pos = mul(float4(i.pos, 1.0), gMvp);
+    o.uv = i.uv;
+    return o;
+}
+float4 psmain_tex(VTexOut i) : SV_Target
+{
+    float4 g = gGlyph.Sample(gGlyphSamp, i.uv);
+    return float4(gColor.rgb, gColor.a * g.a);
+}
 ";
 
     /// <summary>Compile the overlay pipeline once. Failure is remembered so a broken HLSL compiler costs
@@ -1104,6 +1143,83 @@ float4 psmain() : SV_Target { return gColor; }
         ComPtr<ID3D11BlendState> bs = default;
         _device.CreateBlendState(in bd, ref bs);
         _overlayBlend = bs;
+
+        // The textured pair, for glyphs. Compiled in the same pass so a failure here is reported with
+        // the rest rather than surfacing later as markers that are silently square.
+        ID3D10Blob* vsT = null, psT = null;
+        try
+        {
+            var compiler = D3DCompiler.GetApi();
+            fixed (byte* sp = src)
+            {
+                var e1 = System.Text.Encoding.ASCII.GetBytes("vsmain_tex\0");
+                var t1 = System.Text.Encoding.ASCII.GetBytes("vs_5_0\0");
+                fixed (byte* ep = e1) fixed (byte* tp = t1)
+                    if (compiler.Compile(sp, (nuint)src.Length, (byte*)null, null, (ID3DInclude*)null,
+                            ep, tp, 0u, 0u, &vsT, &errs) < 0 || vsT is null)
+                    { Log("overlay textured vs failed to compile"); return true; }
+
+                var e2 = System.Text.Encoding.ASCII.GetBytes("psmain_tex\0");
+                var t2 = System.Text.Encoding.ASCII.GetBytes("ps_5_0\0");
+                fixed (byte* ep = e2) fixed (byte* tp = t2)
+                    if (compiler.Compile(sp, (nuint)src.Length, (byte*)null, null, (ID3DInclude*)null,
+                            ep, tp, 0u, 0u, &psT, &errs) < 0 || psT is null)
+                    { Log("overlay textured ps failed to compile"); return true; }
+            }
+        }
+        catch { Log("overlay textured pair unavailable"); return true; }
+
+        ComPtr<ID3D11VertexShader> vst = default;
+        _device.CreateVertexShader(vsT->GetBufferPointer(), vsT->GetBufferSize(),
+            ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref vst);
+        _overlayVsTex = vst;
+        ComPtr<ID3D11PixelShader> pst = default;
+        _device.CreatePixelShader(psT->GetBufferPointer(), psT->GetBufferSize(),
+            ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref pst);
+        _overlayPsTex = pst;
+
+        // POSITION and TEXCOORD0 out of the same fat vertex. Uv0 is a float4 there; declaring two
+        // components simply ignores the rest, so no new vertex format is needed for glyphs.
+        var semPos = System.Text.Encoding.ASCII.GetBytes("POSITION\0");
+        var semUv = System.Text.Encoding.ASCII.GetBytes("TEXCOORD\0");
+        fixed (byte* sp0 = semPos)
+        fixed (byte* sp1 = semUv)
+        {
+            var els = stackalloc InputElementDesc[2];
+            els[0] = new InputElementDesc
+            {
+                SemanticName = sp0, SemanticIndex = 0, Format = Format.FormatR32G32B32Float,
+                InputSlot = 0, AlignedByteOffset = 0,
+                InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0,
+            };
+            els[1] = new InputElementDesc
+            {
+                SemanticName = sp1, SemanticIndex = 0, Format = Format.FormatR32G32Float,
+                InputSlot = 0, // PreviewVertex.Uv0 sits at +40; the same offset the material path maps TEXCOORD0 to.
+                AlignedByteOffset = 40,
+                InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0,
+            };
+            ComPtr<ID3D11InputLayout> lt = default;
+            _device.CreateInputLayout(els, 2, vsT->GetBufferPointer(), vsT->GetBufferSize(), ref lt);
+            _overlayLayoutTex = lt;
+        }
+
+        var sd = new SamplerDesc
+        {
+            Filter = Filter.MinMagMipLinear,
+            AddressU = TextureAddressMode.Clamp, AddressV = TextureAddressMode.Clamp,
+            AddressW = TextureAddressMode.Clamp, MaxLOD = float.MaxValue,
+        };
+        ComPtr<ID3D11SamplerState> smp = default;
+        _device.CreateSamplerState(in sd, ref smp);
+        _iconSampler = smp;
+
+        for (int g = 0; g < _glyphSrv.Length; g++)
+        {
+            var rgba = IconGlyphs.Build((IconGlyph)g);
+            var srv = MakeTexture(rgba, IconGlyphs.Size, IconGlyphs.Size);
+            if (srv is { } v) _glyphSrv[g] = v;
+        }
 
         Log("overlay pipeline built");
         return true;
@@ -2382,6 +2498,8 @@ float4 psmain() : SV_Target { return gColor; }
         _overlayVs.Dispose(); _overlayPs.Dispose(); _overlayLayout.Dispose();
         _overlayCb.Dispose(); _overlayDepth.Dispose(); _overlayDepthNoTest.Dispose(); _overlayBlend.Dispose();
         _iconVb.Dispose(); _iconIb.Dispose();
+        _overlayVsTex.Dispose(); _overlayPsTex.Dispose(); _overlayLayoutTex.Dispose(); _iconSampler.Dispose();
+        for (int g = 0; g < _glyphSrv.Length; g++) _glyphSrv[g].Dispose();
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClamp.Dispose(); _comparison.Dispose();
         _raster.Dispose(); _blend.Dispose(); _depthState.Dispose();

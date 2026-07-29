@@ -2725,20 +2725,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// a fixed world size vanishes when you pull back over a 97,000-unit map and swallows the screen when
     /// you fly in.</para>
     /// </summary>
-    public IReadOnlyList<(System.Numerics.Vector3 Pos, System.Numerics.Vector4 Color, float Size)>
-        Dx11Icons(float cameraDistance)
+    public IReadOnlyList<(System.Numerics.Vector3 Pos, System.Numerics.Vector4 Color, float Size,
+        ReyEngine.Rendering.D3D11.IconGlyph Glyph)> Dx11Icons(float cameraDistance)
     {
-        var outp = new List<(System.Numerics.Vector3, System.Numerics.Vector4, float)>();
+        var outp = new List<(System.Numerics.Vector3, System.Numerics.Vector4, float,
+            ReyEngine.Rendering.D3D11.IconGlyph)>();
         float size = Math.Clamp(cameraDistance * 0.012f, 12f, 320f);
-        void Add(IReadOnlyList<System.Numerics.Vector3>? pts, System.Numerics.Vector4 colour)
+        void Add(IReadOnlyList<System.Numerics.Vector3>? pts, System.Numerics.Vector4 colour,
+                 ReyEngine.Rendering.D3D11.IconGlyph glyph)
         {
             if (pts is null) return;
-            foreach (var p in pts) outp.Add((p, colour, size));
+            foreach (var p in pts) outp.Add((p, colour, size, glyph));
         }
-        Add(ParticleMarkers, new System.Numerics.Vector4(1.00f, 0.42f, 0.78f, 0.85f));   // pink
-        Add(SoundMarkers,    new System.Numerics.Vector4(0.35f, 0.80f, 1.00f, 0.85f));   // cyan
-        Add(PropMarkers,     new System.Numerics.Vector4(1.00f, 0.80f, 0.25f, 0.85f));   // amber
-        Add(ProbeMarkers,    new System.Numerics.Vector4(0.55f, 1.00f, 0.45f, 0.85f));   // green
+        Add(ParticleMarkers, new System.Numerics.Vector4(1.00f, 0.42f, 0.78f, 0.85f),
+            ReyEngine.Rendering.D3D11.IconGlyph.Particle);
+        Add(SoundMarkers, new System.Numerics.Vector4(0.35f, 0.80f, 1.00f, 0.85f),
+            ReyEngine.Rendering.D3D11.IconGlyph.Sound);
+        Add(PropMarkers, new System.Numerics.Vector4(1.00f, 0.80f, 0.25f, 0.85f),
+            ReyEngine.Rendering.D3D11.IconGlyph.Prop);
+        Add(ProbeMarkers, new System.Numerics.Vector4(0.55f, 1.00f, 0.45f, 0.85f),
+            ReyEngine.Rendering.D3D11.IconGlyph.Probe);
         return outp;
     }
 
