@@ -15,20 +15,36 @@ using ReyEngine.Core.Decoding;
 
 namespace ReyEngine.App.ViewModels;
 
+/// <summary>M280 (lightmap recolour): what kind of texture a row is, purely for labelling — both kinds
+/// go through the identical decode/adjust/encode path, since a baked lightmap is an ordinary .tex
+/// container and <see cref="ReyEngine.Core.Decoding.TextureRecolor"/> never inspects what a texture is
+/// used for.</summary>
+public enum RecolorTargetKind { Diffuse, Lightmap }
+
 /// <summary>One texture in the recolour list.</summary>
 public sealed partial class RecolorTargetViewModel : ObservableObject
 {
     public required RecolorTarget Target { get; init; }
     public required string Name { get; init; }
     public required string Folder { get; init; }
-    /// <summary>How many of the map's materials sample this texture — the practical measure of how much
-    /// of the map a change to it will repaint.</summary>
+    public RecolorTargetKind Kind { get; init; } = RecolorTargetKind.Diffuse;
+    public bool IsLightmap => Kind == RecolorTargetKind.Lightmap;
+    /// <summary>How many of the map's materials sample this texture (Diffuse), or how many mesh groups
+    /// point their baked-light UVs at this atlas (Lightmap) — either way, the practical measure of how
+    /// much of the map a change to it will repaint.</summary>
     public int UsedBy { get; init; }
     /// <summary>Set when this texture already carries a saved recolour.</summary>
     [ObservableProperty] private bool _isRecolored;
     [ObservableProperty] private bool _isSelected = true;
 
-    public string Subtitle => UsedBy > 1 ? $"{Folder}  ·  {UsedBy} materials" : Folder;
+    public string Subtitle
+    {
+        get
+        {
+            string unit = Kind == RecolorTargetKind.Lightmap ? "group" : "material";
+            return UsedBy > 1 ? $"{Folder}  ·  {UsedBy} {unit}s" : Folder;
+        }
+    }
 }
 
 /// <summary>M171: the Recolor Textures tool. Picks up every texture the open map paints with, applies one

@@ -2467,44 +2467,87 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ShowTextureRecolorWindow?.Invoke();
     }
 
-    /// <summary>Every texture the open map actually paints with, ranked by how much of the map each one
-    /// covers. Deliberately the DIFFUSE set only: normal maps, masks and gradients are data rather than
-    /// colour, and hue-shifting them would corrupt the lighting instead of recolouring the map.</summary>
+    /// <summary>
+    /// <para>Every texture the open map actually paints with, ranked by how much of the map each one
+    /// covers — plus, since M280, every baked LIGHTMAP atlas the map references. Normal maps, masks and
+    /// gradients stay excluded: those are data rather than colour, and hue-shifting them would corrupt
+    /// the lighting instead of recolouring the map. A lightmap atlas is different from those — it IS a
+    /// colour (baked ambient/bounced light), stored in an ordinary .tex container, so it goes through the
+    /// exact same <see cref="TextureRecolor.Apply"/> path as a diffuse texture with no special-casing.</para>
+    ///
+    /// <para>Recolouring one tints the map's baked lighting rather than its surfaces — warming or
+    /// cooling shadowed areas, for instance — which is a genuinely different effect from recolouring a
+    /// diffuse texture and is why lightmap rows carry their own badge in the picker rather than being
+    /// silently mixed in.</para>
+    /// </summary>
     public IReadOnlyList<RecolorTargetViewModel> GatherRecolorTargets()
     {
-        var empty = Array.Empty<RecolorTargetViewModel>();
-        if (_currentMap is not { } map || _currentMapEntry is not { } mapEntry) return empty;
-        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) return empty;
-
-        var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
-        var (materialToTexture, _, _) = ResolveMapMaterials(binEntry, names);
-        if (materialToTexture.Count == 0) return empty;
+        if (_currentMap is not { } map || _currentMapEntry is not { } mapEntry)
+            return Array.Empty<RecolorTargetViewModel>();
 
         var recolored = Project.TextureRecolors.Select(r => r.PathHash).ToHashSet();
-        var byPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var tex in materialToTexture.Values)
-            if (!string.IsNullOrEmpty(tex)) byPath[tex] = byPath.GetValueOrDefault(tex) + 1;
+        var list = new List<RecolorTargetViewModel>();
 
-        var list = new List<RecolorTargetViewModel>(byPath.Count);
-        foreach (var (path, uses) in byPath)
+        // ---- diffuse: every texture a material actually samples ----
+        // Guarded rather than an early return for the whole method — a map whose materials.bin fails to
+        // resolve should still offer its lightmaps rather than nothing at all.
+        if (TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         {
-            ulong hash = HashAlgorithms.WadPath(path);
-            // Triage on the header alone — a map's texture list is long and decoding all of it just to
-            // populate a list would stall the window for seconds. Anything we cannot write back is left
-            // out entirely rather than offered and then silently skipped.
+            var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
+            var (materialToTexture, _, _) = ResolveMapMaterials(binEntry, names);
+            var byPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var tex in materialToTexture.Values)
+                if (!string.IsNullOrEmpty(tex)) byPath[tex] = byPath.GetValueOrDefault(tex) + 1;
+
+            foreach (var (path, uses) in byPath)
+            {
+                ulong hash = HashAlgorithms.WadPath(path);
+                // Triage on the header alone — a map's texture list is long and decoding all of it just to
+                // populate a list would stall the window for seconds. Anything we cannot write back is
+                // left out entirely rather than offered and then silently skipped.
+                var bytes = TryReadAssetBytes(hash);
+                if (bytes is null || !TextureRecolor.IsSupported(bytes)) continue;
+
+                list.Add(new RecolorTargetViewModel
+                {
+                    Target = new RecolorTarget(hash, path),
+                    Name = Path.GetFileName(path),
+                    Folder = Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "",
+                    Kind = RecolorTargetKind.Diffuse,
+                    UsedBy = uses,
+                    IsRecolored = recolored.Contains(hash),
+                });
+            }
+        }
+
+        // ---- lightmaps: every baked-light atlas the map references ----
+        // The same enumeration LightBaker uses to decide what to re-bake, reused here so "every atlas
+        // this map has" cannot drift into two different answers depending on which tool you opened.
+        foreach (var atlas in Formats.Baking.LightBaker.EnumerateAtlases(map))
+        {
+            ulong hash = HashAlgorithms.WadPath(atlas);
             var bytes = TryReadAssetBytes(hash);
             if (bytes is null || !TextureRecolor.IsSupported(bytes)) continue;
 
+            int uses = map.Groups.Count(g => string.Equals(g.LightmapTexture, atlas, StringComparison.OrdinalIgnoreCase));
             list.Add(new RecolorTargetViewModel
             {
-                Target = new RecolorTarget(hash, path),
-                Name = Path.GetFileName(path),
-                Folder = Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "",
+                Target = new RecolorTarget(hash, atlas),
+                Name = Path.GetFileName(atlas),
+                Folder = Path.GetDirectoryName(atlas)?.Replace('\\', '/') ?? "",
+                Kind = RecolorTargetKind.Lightmap,
                 UsedBy = uses,
                 IsRecolored = recolored.Contains(hash),
             });
         }
-        return list.OrderByDescending(t => t.UsedBy).ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
+
+        // Diffuse first (unchanged relative order from before M280), lightmaps trailing as their own
+        // cluster — there is no section header in the list, so grouping by sort order is what keeps the
+        // two kinds from interleaving, and the per-row badge is what tells them apart at a glance.
+        return list.OrderBy(t => t.Kind)
+                   .ThenByDescending(t => t.UsedBy)
+                   .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+                   .ToList();
     }
 
     private byte[]? TryReadAssetBytes(ulong hash)
