@@ -1086,14 +1086,24 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         }
     }
 
+    /// <summary>M285: display-space colour to linear. For values a HUMAN picked - the clear colour, a
+    /// selection highlight, a marker tint - which are then written through the sRGB target that encodes
+    /// them again. Without this every piece of editor furniture comes out lighter than it was chosen.</summary>
+    private static Vector4 ToLinear(Vector4 c) => new(
+        MathF.Pow(Math.Clamp(c.X, 0f, 1f), 2.2f),
+        MathF.Pow(Math.Clamp(c.Y, 0f, 1f), 2.2f),
+        MathF.Pow(Math.Clamp(c.Z, 0f, 1f), 2.2f),
+        c.W);
+
     private void SetOverlayCb(Matrix4x4 mvp, Vector4 color)
     {
+        var lin = ToLinear(color);
         var bytes = new byte[80];
         var m = new[]
         {
             mvp.M11, mvp.M12, mvp.M13, mvp.M14, mvp.M21, mvp.M22, mvp.M23, mvp.M24,
             mvp.M31, mvp.M32, mvp.M33, mvp.M34, mvp.M41, mvp.M42, mvp.M43, mvp.M44,
-            color.X, color.Y, color.Z, color.W,
+            lin.X, lin.Y, lin.Z, lin.W,
         };
         System.Buffer.BlockCopy(m, 0, bytes, 0, 80);
         Upload(_overlayCb, bytes, 80);
@@ -1520,7 +1530,9 @@ float4 psmain_tex(VTexOut i) : SV_Target
 
     public bool TryBindCached(PreviewMaterial m, string reflectedName, string key)
     {
-        if (!_texPool.TryGetValue(key, out var srv) || srv.Handle is null) return false;
+        // M285: must ask for the same VARIANT SetTexture would have created, or a colour slot would be
+        // handed the linear view an earlier data slot pooled under the plain key.
+        if (!_texPool.TryGetValue(PoolKey(key, reflectedName), out var srv) || srv.Handle is null) return false;
         m.Textures[reflectedName] = srv;
         return true;
     }
@@ -1569,14 +1581,20 @@ float4 psmain_tex(VTexOut i) : SV_Target
         // ALWAYS create. Skipping the work on a cache hit is the CALLER's job, via TryBindCached - if this
         // reused the pooled view whenever the key existed, re-binding a different image to the same slot
         // from the Textures tab would silently keep showing the old one.
-        var made = MakeTexture(rgba, width, height);
+        bool srgb = IsColourSlot(reflectedName);
+        if (srgb) SrgbTextureCount++; else LinearTextureCount++;
+        var made = MakeTexture(rgba, width, height, srgb);
         if (made is null) return;                           // creation failed and was reported
+
+        string pooled = PoolKey(key, reflectedName);
 
         // A view already under this key may still be referenced by materials bound earlier, so it is
         // retired rather than disposed here; the whole set goes at ClearTextures.
-        if (_texPool.TryGetValue(key, out var previous) && previous.Handle is not null) _retired.Add(previous);
+        if (_texPool.TryGetValue(pooled, out var previous) && previous.Handle is not null) _retired.Add(previous);
 
-        _texPool[key] = made.Value;
+        _texPool[pooled] = made.Value;
+        // Alpha is a property of the PIXELS, not of how they are decoded, so it stays under the plain key -
+        // both views of one asset share the answer and TryGetTextureAlpha's callers are unaffected.
         _texAlpha[key] = Formats.Vfx.VfxShaderFlags.TextureUsesAlpha(rgba);
         m.Textures[reflectedName] = made.Value;
     }
@@ -1597,11 +1615,43 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// <summary>How many distinct assets are resident, for the scene report.</summary>
     public int CachedTextureCount => _texPool.Count;
 
+    /// <summary>M285: how the colour/data split actually landed on a real scene. Reported rather than
+    /// assumed - the allowlist is name-based, and a map whose diffuse slot is named something the list
+    /// does not recognise would decode NOTHING while still looking plausible.</summary>
+    public int SrgbTextureCount { get; private set; }
+    public int LinearTextureCount { get; private set; }
+    public bool SrgbTargetActive { get; private set; }
+
     /// <summary>M226: returns null on failure instead of a null-handle view. Neither HRESULT was checked
     /// before, so a failed creation still got stored under its key and then bound as a null resource -
     /// which samples BLACK rather than falling through to the white stand-in. BuildMaterial already checks
     /// its shader HRESULTs; this was the one place that did not.</summary>
-    private ComPtr<ID3D11ShaderResourceView>? MakeTexture(byte[] rgba, int w, int h)
+    /// <summary>M285: which sampler slots hold COLOUR, and therefore want a hardware sRGB decode.
+    ///
+    /// <para>An allowlist, not a denylist, and deliberately so. Riot's shaders sample colour and DATA
+    /// through identically-shaped slots - masks, ramps, palettes, normal maps, flow maps, noise - and
+    /// decoding a data texture is just as wrong as failing to decode a colour one, only harder to notice.
+    /// Anything not named here keeps exactly the behaviour it had before this change, so the blast radius
+    /// is the slots we are confident about: the diffuse and the baked light, which are what actually
+    /// drive scene brightness.</para></summary>
+    private static bool IsColourSlot(string reflectedName)
+    {
+        string n = reflectedName.ToUpperInvariant();
+        // A mask that happens to be called *_Color_Mask is still a mask; check the exclusions first.
+        if (n.Contains("MASK") || n.Contains("RAMP") || n.Contains("NORMAL") || n.Contains("PALETTE")
+            || n.Contains("NOISE") || n.Contains("FLOW") || n.Contains("HEIGHT") || n.Contains("OPACITY")
+            || n.Contains("EROSION") || n.Contains("DISTORT") || n.Contains("FOW")) return false;
+        return n.Contains("DIFFUSE") || n.Contains("BAKED_LIGHT") || n.Contains("EMISSIVE")
+            || n.Contains("ALBEDO") || n.Contains("GLOW") || n.Contains("MATCAP");
+    }
+
+    /// <summary>The pool key a slot's view lives under. sRGB-ness is part of it because the SAME asset can
+    /// legitimately be a colour texture for one material and data for another, and one view cannot serve
+    /// both - without this the first binding would win and silently mis-decode the second.</summary>
+    private static string PoolKey(string key, string reflectedName)
+        => IsColourSlot(reflectedName) ? key + " srgb" : key;
+
+    private ComPtr<ID3D11ShaderResourceView>? MakeTexture(byte[] rgba, int w, int h, bool srgb = false)
     {
         if (w <= 0 || h <= 0 || rgba.Length < w * h * 4)
         {
@@ -1612,7 +1662,10 @@ float4 psmain_tex(VTexOut i) : SV_Target
         var desc = new Texture2DDesc
         {
             Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1,
-            Format = Format.FormatR8G8B8A8Unorm, SampleDesc = new SampleDesc(1, 0),
+            // M285: an _SRGB view makes the sampler decode to linear in hardware, which is the space
+            // Riot's shaders were compiled to do their lighting in.
+            Format = srgb ? Format.FormatR8G8B8A8UnormSrgb : Format.FormatR8G8B8A8Unorm,
+            SampleDesc = new SampleDesc(1, 0),
             Usage = Usage.Immutable, BindFlags = (uint)BindFlag.ShaderResource,
         };
         ComPtr<ID3D11Texture2D> tex = default;
@@ -2191,21 +2244,42 @@ float4 psmain(VOut i) : SV_Target
         _sceneCopySrv = default; _sceneCopy = default;
         _width = w; _height = h;
 
-        // BGRA so the readback drops straight into an Avalonia Bgra8888 bitmap with no swizzle
+        // BGRA so the readback drops straight into an Avalonia Bgra8888 bitmap with no swizzle.
+        //
+        // M285: TYPELESS, so the same pixels can be viewed two ways. Writes go through an _SRGB render
+        // target view, which encodes linear -> sRGB in hardware; the staging copy is read back as plain
+        // UNORM, which is the already-encoded byte the bitmap wants. Both halves are required: decoding
+        // textures without encoding the output would leave the frame FAR darker than doing neither, since
+        // the lighting result would be presented as though it were already display-encoded.
         var rtDesc = new Texture2DDesc
         {
             Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1,
-            Format = Format.FormatB8G8R8A8Unorm, SampleDesc = new SampleDesc(1, 0),
-            Usage = Usage.Default, BindFlags = (uint)BindFlag.RenderTarget,
+            Format = Format.FormatB8G8R8A8Typeless, SampleDesc = new SampleDesc(1, 0),
+            Usage = Usage.Default, BindFlags = (uint)(BindFlag.RenderTarget | BindFlag.ShaderResource),
         };
         ComPtr<ID3D11Texture2D> rt = default;
         _device.CreateTexture2D(in rtDesc, null, ref rt);
         _rt = rt;
+        var rtvDesc = new RenderTargetViewDesc
+        {
+            Format = Format.FormatB8G8R8A8UnormSrgb,
+            ViewDimension = RtvDimension.Texture2D,
+        };
         ComPtr<ID3D11RenderTargetView> rtv = default;
-        _device.CreateRenderTargetView(_rt, null, ref rtv);
+        int rtvHr = _device.CreateRenderTargetView(_rt, in rtvDesc, ref rtv);
+        SrgbTargetActive = rtvHr >= 0;
+        if (!SrgbTargetActive)
+        {
+            // Say so loudly. A silently-failed sRGB view leaves the frame in the OLD colour space while
+            // the textures decode into the new one, which is far darker than either being consistent -
+            // the worst of both, and indistinguishable from "the fix did nothing" without this line.
+            Log($"M285: the sRGB render-target view failed (0x{rtvHr:X8}); falling back to UNORM");
+            _device.CreateRenderTargetView(_rt, null, ref rtv);
+        }
         _rtv = rtv;
 
         var st = rtDesc;
+        st.Format = Format.FormatB8G8R8A8Unorm;   // the encoded bytes, as Avalonia expects them
         st.Usage = Usage.Staging; st.BindFlags = 0; st.CPUAccessFlags = (uint)CpuAccessFlag.Read;
         ComPtr<ID3D11Texture2D> stage = default;
         _device.CreateTexture2D(in st, null, ref stage);
@@ -2220,8 +2294,17 @@ float4 psmain(VOut i) : SV_Target
         if (_device.CreateTexture2D(in sc, null, ref scene) >= 0)
         {
             _sceneCopy = scene;
+            // M285: sampled through an _SRGB view too, so the refraction reads LINEAR scene light and the
+            // value it writes back is re-encoded by the target. Sampling this one as plain UNORM while the
+            // target encodes would double-encode the refracted pixels and make heat haze glow.
+            var ssrvDesc = new ShaderResourceViewDesc
+            {
+                Format = Format.FormatB8G8R8A8UnormSrgb,
+                ViewDimension = Silk.NET.Core.Native.D3DSrvDimension.D3D11SrvDimensionTexture2D,
+            };
+            ssrvDesc.Texture2D.MipLevels = 1;
             ComPtr<ID3D11ShaderResourceView> ssrv = default;
-            if (_device.CreateShaderResourceView(_sceneCopy, null, ref ssrv) >= 0) _sceneCopySrv = ssrv;
+            if (_device.CreateShaderResourceView(_sceneCopy, in ssrvDesc, ref ssrv) >= 0) _sceneCopySrv = ssrv;
             else Log("distortion: CreateShaderResourceView for the scene copy failed");
         }
         else Log("distortion: the scene-copy texture could not be created; heat haze will be skipped");
@@ -2934,7 +3017,10 @@ float4 psmain(VOut i) : SV_Target
             _ctx.RSSetViewports(1, in vpRect);
             _ctx.OMSetRenderTargets(1, ref _rtv, _dsv);
 
-            var clear = stackalloc float[4] { s.ClearColor.X, s.ClearColor.Y, s.ClearColor.Z, s.ClearColor.W };
+            // M285: the clear colour is picked in DISPLAY space, and an _SRGB target encodes whatever it is
+            // given - so it has to be linearised or the viewport background comes out lighter than chosen.
+            var cc = ToLinear(s.ClearColor);
+            var clear = stackalloc float[4] { cc.X, cc.Y, cc.Z, cc.W };
             _ctx.ClearRenderTargetView(_rtv, clear);
             _ctx.ClearDepthStencilView(_dsv, (uint)ClearFlag.Depth, 1f, 0);
 
