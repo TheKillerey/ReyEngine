@@ -1681,10 +1681,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             EditableLights.Clear();
             foreach (var s in rec.Lights)
                 EditableLights.Add(new PointLightViewModel(
-                    new PointLight(
-                        new System.Numerics.Vector3((float)s.X, (float)s.Y, (float)s.Z),
-                        new System.Numerics.Vector3((float)s.R, (float)s.G, (float)s.B),
-                        (float)s.Radius, (float)s.Intensity), this)
+                    PointLightViewModel.FromStored(s.X, s.Y, s.Z, s.R, s.G, s.B, s.Radius, s.Intensity), this)
                 { Name = s.Name });
             SelectedLight = null;
         }
@@ -9023,6 +9020,21 @@ public sealed partial class PointLightViewModel : ObservableObject
         new System.Numerics.Vector3((float)(R / 255.0), (float)(G / 255.0), (float)(B / 255.0)),
         (float)Math.Max(Radius, 0.01),    // Parse drops radius <= 0, so never produce one
         (float)Math.Max(Intensity, 0));
+
+    /// <summary>M288: the exact INVERSE of <see cref="ToPointLight"/>, for rebuilding a light from the
+    /// 0-255 components the project stores.
+    ///
+    /// <para>It exists because the constructor above takes a PointLight whose colour is 0-1 and scales it
+    /// UP by 255. Handing that constructor stored 0-255 values therefore multiplies twice, and M287 did
+    /// exactly that: every restored light came back 255x too bright, which only showed itself after a
+    /// bake because that is what reloads the map and runs the restore. Placed next to its inverse so the
+    /// two conversions cannot be read - or changed - separately again.</para></summary>
+    public static PointLight FromStored(double x, double y, double z,
+                                        double r, double g, double b, double radius, double intensity)
+        => new(new System.Numerics.Vector3((float)x, (float)y, (float)z),
+               new System.Numerics.Vector3((float)(r / 255.0), (float)(g / 255.0), (float)(b / 255.0)),
+               (float)Math.Max(radius, 0.01),
+               (float)Math.Max(intensity, 0));
 
     /// <summary>M154: the colour as a real Color, so the inspector can use a proper picker (spectrum +
     /// palette + hex) instead of three raw sliders. Backed by the same R/G/B the file stores.</summary>
