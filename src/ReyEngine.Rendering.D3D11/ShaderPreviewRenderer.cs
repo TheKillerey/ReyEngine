@@ -2740,7 +2740,7 @@ float4 psmain(VOut i) : SV_Target
                     // shader actually USES (FillConstantBuffer gates on v.IsUsed), and $Globals.Tint was on
                     // that list for Map453's map geometry - so this was a used float4 multiplier arriving
                     // as zero, exactly the failure the M218 note below describes.
-                    "TINTCOLOR" or "TINT" => new[] { 1f, 1f, 1f, 1f },
+                    "TINTCOLOR" => new[] { 1f, 1f, 1f, 1f },
 
                     // M218: constants that MULTIPLY must not default to zero.
                     //
