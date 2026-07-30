@@ -2736,7 +2736,11 @@ float4 psmain(VOut i) : SV_Target
                     // Applying it a second time here would be the error this replaces, in the other
                     // direction.
                     "BAKED_LIGHT_SCALE_AND_BIAS" => new[] { 1f, 1f, 0f, 0f },
-                    "TINTCOLOR" => new[] { 1f, 1f, 1f, 1f },
+                    // M284: "Tint" as well as "TINTCOLOR". The unbound report only names constants the
+                    // shader actually USES (FillConstantBuffer gates on v.IsUsed), and $Globals.Tint was on
+                    // that list for Map453's map geometry - so this was a used float4 multiplier arriving
+                    // as zero, exactly the failure the M218 note below describes.
+                    "TINTCOLOR" or "TINT" => new[] { 1f, 1f, 1f, 1f },
 
                     // M218: constants that MULTIPLY must not default to zero.
                     //
