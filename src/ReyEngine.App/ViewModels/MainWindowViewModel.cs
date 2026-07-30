@@ -1718,11 +1718,51 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _log.Info("Lights", $"Added a point light at ({at.X:0}, {at.Y:0}, {at.Z:0}). Drag the gizmo to place it.");
     }
 
+    /// <summary>M289: the lights picked in the Lighting window's table. The outliner still drives the
+    /// single <see cref="SelectedLight"/> that the inspector edits; this is the separate, list-shaped
+    /// selection that exists so a 374-light Light.dat can be pruned without 374 clicks.</summary>
+    public ObservableCollection<PointLightViewModel> SelectedLights { get; } = new();
+
+    /// <summary>Delete every light in the table selection, falling back to the single outliner selection
+    /// so the button does the obvious thing whichever way the user picked a light.</summary>
+    [RelayCommand]
+    private void DeleteSelectedLights()
+    {
+        var doomed = SelectedLights.Count > 0
+            ? SelectedLights.ToList()
+            : SelectedLight is { } one ? new List<PointLightViewModel> { one } : new List<PointLightViewModel>();
+        if (doomed.Count == 0) return;
+
+        foreach (var l in doomed) EditableLights.Remove(l);
+        SelectedLights.Clear();
+        SelectedLight = null;
+        RepublishLights();
+        PersistMapLighting();
+        _log.Info("Lights", $"Deleted {doomed.Count} point light(s); {EditableLights.Count} left.");
+    }
+
+    /// <summary>Empty the table. Separate from the multi-delete because "remove these six" and "throw the
+    /// whole imported .dat away" are different intents, and making the second one reachable only by
+    /// select-all is how people delete more than they meant to.</summary>
+    [RelayCommand]
+    private void ClearAllLights()
+    {
+        int n = EditableLights.Count;
+        if (n == 0) return;
+        EditableLights.Clear();
+        SelectedLights.Clear();
+        SelectedLight = null;
+        RepublishLights();
+        PersistMapLighting();
+        _log.Info("Lights", $"Removed all {n} point light(s).");
+    }
+
     [RelayCommand]
     private void DeleteLight()
     {
         if (SelectedLight is not { } l) return;
         EditableLights.Remove(l);
+        SelectedLights.Remove(l);
         SelectedLight = null;
         RepublishLights();
         PersistMapLighting();   // M287

@@ -159,7 +159,41 @@
             <TextBlock Text="{Binding DynamicLightsStatus}" FontSize="11" TextWrapping="Wrap"
                        Foreground="{DynamicResource ReyAccentBrush}" />
             <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
-                       Text="Select a light under Map Content ▸ Lights to edit its position, colour, radius and strength — or drag it in the viewport." />
+                       Text="Click a light to select it — Ctrl or Shift for several. Position, colour, radius and strength are edited in the inspector (Map Content ▸ Lights), or by dragging the light in the viewport." />
+
+            <!-- M289: the table was previously invisible - the only way to reach a light was one at a time
+                 through the outliner, which does not scale to an imported Light.dat of several hundred. -->
+            <ListBox ItemsSource="{Binding EditableLights}"
+                     SelectedItem="{Binding SelectedLight, Mode=TwoWay}"
+                     SelectedItems="{Binding SelectedLights}"
+                     SelectionMode="Multiple"
+                     IsVisible="{Binding HasDynamicLights}"
+                     MaxHeight="200" FontSize="11" Margin="0,4,0,0"
+                     Background="Transparent" BorderThickness="0">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <Grid ColumnDefinitions="Auto,*,Auto">
+                    <Border Grid.Column="0" Width="10" Height="10" CornerRadius="2" Margin="0,0,6,0"
+                            VerticalAlignment="Center" Background="{Binding ColorHex}" />
+                    <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="2" Text="{Binding Radius, StringFormat='r{0:0}'}" FontSize="9"
+                               VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+
+            <Grid ColumnDefinitions="*,*" Margin="0,4,0,0" IsVisible="{Binding HasDynamicLights}">
+              <Button Grid.Column="0" Classes="tool" Content="✕ Delete selected"
+                      Command="{Binding DeleteSelectedLightsCommand}"
+                      HorizontalAlignment="Stretch" Margin="0,0,3,0" FontSize="11" Padding="8,4"
+                      ToolTip.Tip="Remove every light selected above. Falls back to the one picked in the outliner when nothing is selected here." />
+              <Button Grid.Column="1" Classes="tool" Content="🗑 Remove all"
+                      Command="{Binding ClearAllLightsCommand}"
+                      HorizontalAlignment="Stretch" Margin="3,0,0,0" FontSize="11" Padding="8,4"
+                      ToolTip.Tip="Empty the whole table - e.g. to discard an imported Light.dat and start again." />
+            </Grid>
 
             <Button Classes="tool" Content="⏻ Load Light.dat…" Command="{Binding LoadLightDatCommand}"
                     HorizontalAlignment="Stretch" FontSize="11" Padding="8,4" Margin="0,4,0,0"
