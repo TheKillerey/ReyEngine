@@ -94,6 +94,22 @@ public sealed class D3D11MapParticles
         public readonly List<VfxParticleSimulator.EmitterState> Live = new();
     }
 
+    /// <summary>M283: a mesh-primitive emitter. Unlike <see cref="Slice"/> this is one per PLACEMENT, not
+    /// one per emitter definition, because everything a mesh draw needs is placement-specific: the basis
+    /// vectors come from that placement's transform, and an animated mesh is skinned to that placement's
+    /// own emitter age. Two base doors on opposite sides of the map are the same .skn at different
+    /// orientations and different points in their animation, so they cannot share geometry.</summary>
+    private sealed class MeshSlice
+    {
+        public required PreviewMaterial Material { get; init; }
+        public required VfxEmitterDefinition Def { get; init; }
+        public required VfxParticleSimulator Owner { get; init; }
+        public required VfxParticleSimulator.EmitterState State { get; init; }
+        public required int GeometryId { get; init; }
+        public ReyEngine.Formats.Meshes.VfxMeshAnimation? Animation { get; init; }
+    }
+    private readonly List<MeshSlice> _meshSlices = new();
+
     public D3D11MapParticles(ShaderPreviewRenderer renderer, ShaderCacheReader cache,
         int maxQuads = DefaultMaxQuads)
     {
@@ -165,6 +181,7 @@ public sealed class D3D11MapParticles
         _renderer.RemoveMaterials(m => _mine.Contains(m));
         _mine.Clear();
         _slices.Clear();
+        _meshSlices.Clear();
         _liveBySlice.Clear();
         _byEmitter.Clear();
         _noPipeline.Clear();
@@ -205,7 +222,15 @@ public sealed class D3D11MapParticles
             {
                 var def = es.Def;
                 if (def.Beam is not null || def.Trail is not null) { SkippedBeamTrailEmitters++; continue; }
-                if (def.IsMeshPrimitive) { SkippedMeshEmitters++; continue; }
+
+                // M283: mesh-primitive emitters draw their own .skn through the renderer's mesh pipeline.
+                // The decoded mesh has been on the playback item all along - it is what GL draws - and this
+                // path simply never read it, so the emitter was counted as skipped and nothing appeared.
+                if (def.IsMeshPrimitive)
+                {
+                    if (!BuildMeshSlice(item, sim, es, def, tocs, sb)) SkippedMeshEmitters++;
+                    continue;
+                }
 
                 if (_byEmitter.TryGetValue(def, out var existing))
                 {
@@ -327,7 +352,10 @@ public sealed class D3D11MapParticles
         Vector3 cameraPosition, float cameraDistance)
     {
         if (_dirty) Rebuild();
-        if (_playback is not { } pb || _slices.Count == 0) return;
+        // M283: mesh emitters count too. Returning on _slices alone would freeze a system whose only
+        // drawable emitters are meshes - it has no quad slices at all, so the old test read as "nothing
+        // to do" and its meshes never advanced or drew.
+        if (_playback is not { } pb || (_slices.Count == 0 && _meshSlices.Count == 0)) return;
 
         UpdateActive(pb, mirrorInclusiveViewProj, cameraPosition, cameraDistance);
 
@@ -335,7 +363,10 @@ public sealed class D3D11MapParticles
         // SetBeamTarget is deliberately not called: TargetDummyPosition is unbound in MainWindow.axaml, so
         // the GL map path passes null too, and beam emitters are not drawn by this path at all.
 
+        TickMeshSlices();
+
         var (right, up, normal) = VfxBillboardBasis.FromView(mirrorInclusiveView);
+        if (_slices.Count == 0) return;   // meshes are updated above; there is nothing to pack
 
         // Refill each slice's live source list: a placement the camera gate dropped contributes nothing,
         // but its emitter's material stays registered so re-entering costs no pipeline work.
@@ -376,6 +407,108 @@ public sealed class D3D11MapParticles
         _renderer.SetDynamicMesh(vertexCount, indexCount);
         _renderer.UpdateDynamicMesh(_verts, vertexCount, _indices, indexCount);
     }
+
+    /// <summary>M283: build one mesh-primitive emitter's material and upload its geometry. Returns false
+    /// when the emitter cannot be drawn, which keeps it counted as skipped rather than silently absent.
+    ///
+    /// <para>Indices are used whenever the mesh HAS them. The GL path instead passes indices only when an
+    /// animation resolved (ViewportControl.cs:1443-1450), so an indexed .skn whose .skl or .anm is missing
+    /// is drawn there as unindexed triangle soup - visible garbage. That is not replicated.</para></summary>
+    private bool BuildMeshSlice(VfxPlaybackItem item, VfxParticleSimulator sim,
+        VfxParticleSimulator.EmitterState es, VfxEmitterDefinition def,
+        VfxD3D11EmitterPipeline.Tocs tocs, StringBuilder sb)
+    {
+        int idx = VfxPlaybackSim.AuthoredIndex(item.System, def);
+        var mesh = item.EmitterMeshes is { } list && idx >= 0 && idx < list.Count ? list[idx] : null;
+        if (mesh is null || mesh.Positions.Length == 0)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: mesh primitive with no decoded mesh");
+            return false;
+        }
+
+        // An untextured mesh emitter draws NOTHING rather than taking the renderer's opaque-white stand-in.
+        // A white 1x1 stretched over a door-sized mesh is a huge solid card, which is worse than an absent
+        // effect; the GL host refuses the same case for the same stated reason (ViewportControl.cs:1451-1456).
+        if (ResolveSprite("TEXTURE", item, def) is not { } sprite || sprite.Key == VfxPlaybackSim.SoftDotKey)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: mesh primitive with no texture - not drawn");
+            return false;
+        }
+
+        int geometryId = _renderer.CreateMeshGeometry(mesh.Positions, mesh.Uvs,
+            mesh.Indices is { Length: > 0 } ? mesh.Indices : null);
+        if (geometryId < 0)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: mesh geometry upload failed");
+            return false;
+        }
+
+        var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, def,
+            sampler => ResolveSprite(sampler, item, def), sb);
+        if (mat is null)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: no pipeline (mesh)");
+            return false;
+        }
+
+        mat.MeshGeometryId = geometryId;
+        mat.UsesDynamicMesh = false;      // its geometry is its own, not the shared quad buffer
+        mat.Visible = false;              // until a Tick finds it active and gives it particles
+        _renderer.AddMaterial(mat);
+        _mine.Add(mat);
+        _meshSlices.Add(new MeshSlice
+        {
+            Material = mat, Def = def, Owner = sim, State = es,
+            GeometryId = geometryId, Animation = mesh.Animation,
+        });
+        return true;
+    }
+
+    /// <summary>Per-frame update for the mesh emitters: particle instances, the placement basis, UV scroll,
+    /// and a re-skin for anything animated.</summary>
+    private void TickMeshSlices()
+    {
+        MeshEmittersDrawn = 0;
+        foreach (var ms in _meshSlices)
+        {
+            var mat = ms.Material;
+            var es = ms.State;
+            bool live = _activeSet.Contains(ms.Owner) && es.InstanceCount > 0;
+            mat.Visible = live;
+            if (!live) continue;
+
+            mat.MeshInstances = es.Instances;
+            mat.MeshInstanceCount = es.InstanceCount;
+            mat.MeshRight = es.PlacementRight;
+            mat.MeshUp = es.PlacementUp;
+            mat.MeshForward = es.PlacementForward;
+
+            // M47c: mesh particles animate by scrolling their texture along the mesh UVs; M117: texDiv is
+            // fractional tiling. Both taken from the GL path verbatim (VfxParticleRenderer.cs:949-960) -
+            // guessing either would show up as a smeared atlas rather than as an obvious fault.
+            // es.EmitterAge is the public accessor for the same field GL scrolls by (EmitterAge => Age).
+            mat.MeshUvOffset = ms.Def.UvScrollRate * es.EmitterAge;
+            mat.MeshUvOffsetMult = ms.Def.TextureMultUvScrollRate * es.EmitterAge;
+            var div = ms.Def.TexDiv;
+            mat.MeshTexDiv = new Vector2(div.X > 0 ? div.X : 1f, div.Y > 0 ? div.Y : 1f);
+            var divMult = ms.Def.TextureMultTexDiv;
+            mat.MeshTexDivMult = new Vector2(divMult.X > 0 ? divMult.X : 1f, divMult.Y > 0 ? divMult.Y : 1f);
+
+            // The skinned pose is per EMITTER, not per particle: one vertex buffer serves every particle of
+            // this emitter, so they necessarily share a pose. GL has the same property for the same reason.
+            if (ms.Animation is { } anim && anim.Clip.Duration > 1e-3f)
+            {
+                float t = es.EmitterAge % anim.Clip.Duration;
+                var frame = ReyEngine.Formats.Animation.SkinnedMeshAnimator.Skin(
+                    anim.Mesh, anim.Skeleton, anim.Clip, t);
+                _renderer.UpdateMeshGeometryPositions(ms.GeometryId, frame.Positions);
+            }
+            MeshEmittersDrawn++;
+        }
+    }
+
+    /// <summary>How many mesh emitters actually drew last frame.</summary>
+    public int MeshEmittersDrawn { get; private set; }
 
     /// <summary>The camera gate, and the reason it is not just a cost saving: a placement ENTERING the set is
     /// Reset, so it restarts at t=0 exactly as the GL viewport restarts it. Without that, a system that

@@ -177,6 +177,33 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// (VfxParticleRenderer.cs:398-402) and this does the same.</para></summary>
     public float? DistortionStrength { get; set; }
 
+    /// <summary>M283: non-null makes this a MESH-primitive emitter - it draws a real .skn through the mesh
+    /// pipeline instead of a billboard out of the shared quad buffer. The value is a handle from
+    /// <see cref="ShaderPreviewRenderer.CreateMeshGeometry"/>.</summary>
+    public int? MeshGeometryId { get; set; }
+
+    /// <summary>The emitter's live particles, in the simulator's packed layout
+    /// (<see cref="ShaderPreviewRenderer.MeshInstanceStride"/> floats each). Handed over by reference and
+    /// re-read every frame rather than copied.</summary>
+    public float[]? MeshInstances { get; set; }
+    public int MeshInstanceCount { get; set; }
+
+    /// <summary>The placement's basis, already normalised. GL discards the placement's scale by
+    /// normalising these, so only its rotation reaches the mesh - matching that matters more than being
+    /// right, or the two viewports disagree about how big a door shield is.</summary>
+    public Vector3 MeshRight { get; set; } = Vector3.UnitX;
+    public Vector3 MeshUp { get; set; } = Vector3.UnitY;
+    public Vector3 MeshForward { get; set; } = Vector3.UnitZ;
+
+    public Vector2 MeshUvOffset { get; set; }
+    public Vector2 MeshUvOffsetMult { get; set; }
+    public Vector2 MeshTexDiv { get; set; } = Vector2.One;
+    public Vector2 MeshTexDivMult { get; set; } = Vector2.One;
+
+    /// <summary>Back-face culling for this emitter, from <c>!disableBackfaceCull</c>. The mesh path is the
+    /// only place in the VFX renderer that culls at all.</summary>
+    public bool MeshCull { get; set; }
+
     /// <summary>The key <see cref="Textures"/> holds a distortion emitter's normal map under. Reserved
     /// rather than a real sampler name because no shader in Riot's cache declares this stage - it belongs
     /// to our own pipeline. Routed through the ordinary texture pool so its lifetime is pooled like every
@@ -280,6 +307,31 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11InputLayout> _distortLayout;
     private ComPtr<ID3D11Buffer> _distortCb;
     private bool _distortTried;
+
+    // M283: mesh-primitive particle emitters. A separate pipeline again, and separate GEOMETRY - these
+    // draw a real .skn, not a billboard, so they cannot live in the shared quad buffer the way every other
+    // particle does. Ported from the GL mesh program (VfxParticleRenderer.cs:891-1023, 1310-1413).
+    private ComPtr<ID3D11VertexShader> _meshVs;
+    private ComPtr<ID3D11PixelShader> _meshPs;
+    private ComPtr<ID3D11InputLayout> _meshLayout;
+    private ComPtr<ID3D11Buffer> _meshCb;
+    private ComPtr<ID3D11RasterizerState> _meshCullCw, _meshCullCcw;
+    private bool _meshTried;
+
+    /// <summary>One emitter's mesh. The vertex buffer is dynamic because an animated emitter re-skins on
+    /// the CPU every frame and rewrites its positions; the index buffer never changes.</summary>
+    private sealed class MeshGeom
+    {
+        public ComPtr<ID3D11Buffer> Vb, Ib;
+        public int VertexCount, IndexCount;
+        public float[] Interleaved = Array.Empty<float>();
+    }
+    private readonly List<MeshGeom> _meshGeoms = new();
+
+    /// <summary>Floats per mesh vertex: position (3) + uv (2). No normal - the ported shader has no
+    /// lighting term that would read one. Fresnel and the reflection cubemap, which are the only things in
+    /// the GL mesh shader that use normals, are deliberately not ported yet (see MeshHlsl).</summary>
+    public const int MeshVertexStride = 5;
 
     private ComPtr<ID3D11Texture2D> _rt, _stage, _depth;
     private ComPtr<ID3D11RenderTargetView> _rtv;
@@ -456,6 +508,10 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         _texPool.Clear();
         _texAlpha.Clear();
         _retired.Clear();
+        // M283: mesh geometry is per-emitter and owned here, so it dies with the scene that referenced it.
+        // The handles materials hold are indices into this list, which is why it is cleared alongside them
+        // rather than lazily - a stale handle would index another emitter's mesh.
+        ReleaseMeshGeometry();
         _comparePs.Dispose();
         _comparePs = default;
     }
@@ -1575,6 +1631,337 @@ float4 psmain_tex(VTexOut i) : SV_Target
         return srv;
     }
 
+    /// <summary>M283: mesh-primitive particles, ported from the GL mesh program
+    /// (<c>VfxParticleRenderer.cs:1310-1413</c>).
+    ///
+    /// <para>The transform is the GL one exactly: a Y-axis spin by <c>rot</c>, a UNIFORM scalar scale (the
+    /// mesh path uses birthScale.x alone - Y is not read), then composition against the placement's three
+    /// normalised basis vectors. Because those are normalised, the placement's SCALE is discarded and only
+    /// its rotation survives - that is GL's behaviour and matching it matters more than being right.</para>
+    ///
+    /// <para>Not ported: fresnel and the reflection cubemap. Both need per-vertex normals, which the
+    /// StaticMeshData this path receives does not carry (the .skn decoder drops them and GL recomputes
+    /// them from face winding), plus a cubemap SRV that nothing resolves on this side. They affect a
+    /// subset of mesh emitters and are called out rather than silently approximated.</para></summary>
+    private const string MeshHlsl = @"
+cbuffer MeshCB : register(b0)
+{
+    row_major float4x4 gViewProj;
+    float4 gRight;      // xyz = placement right
+    float4 gUp;
+    float4 gForward;
+    float4 gPosScale;   // xyz = world position, w = uniform scale
+    float4 gColor;
+    float4 gUv;         // xy = scroll offset, zw = tiling
+    float4 gUvMult;
+    float4 gMisc;       // x = rotation (radians, Y axis), y = has texMult
+};
+Texture2D gTex     : register(t0);
+Texture2D gTexMult : register(t1);
+SamplerState gSamp : register(s0);
+
+struct VIn  { float3 pos : POSITION; float2 uv : TEXCOORD0; };
+struct VOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float2 uvMult : TEXCOORD1; };
+
+VOut vsmain(VIn i)
+{
+    VOut o;
+    float s = sin(gMisc.x);
+    float c = cos(gMisc.x);
+    float3 local = float3(i.pos.x * c - i.pos.z * s, i.pos.y, i.pos.x * s + i.pos.z * c) * gPosScale.w;
+    float3 p = gRight.xyz * local.x + gUp.xyz * local.y + gForward.xyz * local.z + gPosScale.xyz;
+    o.pos = mul(float4(p, 1.0), gViewProj);
+    o.uv     = i.uv * max(gUv.zw, 0.0001) + gUv.xy;
+    o.uvMult = i.uv * max(gUvMult.zw, 0.0001) + gUvMult.xy;
+    return o;
+}
+
+float4 psmain(VOut i) : SV_Target
+{
+    float4 t = gTex.Sample(gSamp, i.uv);
+    if (gMisc.y != 0.0) t *= gTexMult.Sample(gSamp, i.uvMult);
+    return t * gColor;
+}";
+
+    private bool EnsureMesh()
+    {
+        if (_meshTried) return _meshVs.Handle is not null;
+        _meshTried = true;
+
+        ID3D10Blob* vsCode = null, psCode = null, errs = null;
+        var src = System.Text.Encoding.ASCII.GetBytes(MeshHlsl);
+        try
+        {
+            var compiler = D3DCompiler.GetApi();
+            fixed (byte* sp = src)
+            {
+                var vsEntry = System.Text.Encoding.ASCII.GetBytes("vsmain\0");
+                var vsTarget = System.Text.Encoding.ASCII.GetBytes("vs_5_0\0");
+                fixed (byte* ep = vsEntry) fixed (byte* tp = vsTarget)
+                    if (compiler.Compile(sp, (nuint)src.Length, (byte*)null, null, (ID3DInclude*)null,
+                            ep, tp, 0u, 0u, &vsCode, &errs) < 0 || vsCode is null)
+                    { Log("mesh vs failed to compile"); return false; }
+
+                var psEntry = System.Text.Encoding.ASCII.GetBytes("psmain\0");
+                var psTarget = System.Text.Encoding.ASCII.GetBytes("ps_5_0\0");
+                fixed (byte* ep = psEntry) fixed (byte* tp = psTarget)
+                    if (compiler.Compile(sp, (nuint)src.Length, (byte*)null, null, (ID3DInclude*)null,
+                            ep, tp, 0u, 0u, &psCode, &errs) < 0 || psCode is null)
+                    { Log("mesh ps failed to compile"); return false; }
+            }
+        }
+        catch (Exception ex) { Log("mesh: the HLSL compiler is unavailable: " + ex.Message); return false; }
+
+        ComPtr<ID3D11VertexShader> vs = default;
+        if (_device.CreateVertexShader(vsCode->GetBufferPointer(), vsCode->GetBufferSize(),
+                ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref vs) < 0)
+        { Log("mesh CreateVertexShader failed"); return false; }
+        _meshVs = vs;
+
+        ComPtr<ID3D11PixelShader> ps = default;
+        if (_device.CreatePixelShader(psCode->GetBufferPointer(), psCode->GetBufferSize(),
+                ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref ps) < 0)
+        { Log("mesh CreatePixelShader failed"); return false; }
+        _meshPs = ps;
+
+        var semPos = System.Text.Encoding.ASCII.GetBytes("POSITION\0");
+        var semUv = System.Text.Encoding.ASCII.GetBytes("TEXCOORD\0");
+        fixed (byte* sp0 = semPos)
+        fixed (byte* sp1 = semUv)
+        {
+            var els = stackalloc InputElementDesc[2];
+            els[0] = new InputElementDesc
+            {
+                SemanticName = sp0, SemanticIndex = 0, Format = Format.FormatR32G32B32Float,
+                InputSlot = 0, AlignedByteOffset = 0,
+                InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0,
+            };
+            els[1] = new InputElementDesc
+            {
+                SemanticName = sp1, SemanticIndex = 0, Format = Format.FormatR32G32Float,
+                InputSlot = 0, AlignedByteOffset = 12,
+                InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0,
+            };
+            ComPtr<ID3D11InputLayout> layout = default;
+            if (_device.CreateInputLayout(els, 2, vsCode->GetBufferPointer(), vsCode->GetBufferSize(), ref layout) < 0)
+            { Log("mesh CreateInputLayout failed"); return false; }
+            _meshLayout = layout;
+        }
+
+        var cbDesc = new BufferDesc
+        {
+            ByteWidth = 192,
+            Usage = Usage.Dynamic,
+            BindFlags = (uint)BindFlag.ConstantBuffer,
+            CPUAccessFlags = (uint)CpuAccessFlag.Write,
+        };
+        ComPtr<ID3D11Buffer> cb = default;
+        if (_device.CreateBuffer(in cbDesc, null, ref cb) < 0) { Log("mesh cbuffer failed"); return false; }
+        _meshCb = cb;
+
+        // Two states for one convention. GL culls with front = CW, and flips to CCW when a particle's
+        // scale is negative - a uniform negative scale has a negative determinant, so it reverses winding
+        // and the correct faces would otherwise be the ones discarded (VfxParticleRenderer.cs:1006-1008).
+        foreach (bool ccw in new[] { false, true })
+        {
+            var rd = new RasterizerDesc
+            {
+                FillMode = FillMode.Solid, CullMode = CullMode.Back,
+                FrontCounterClockwise = ccw ? (Silk.NET.Core.Bool32)true : false,
+                DepthClipEnable = true,
+            };
+            ComPtr<ID3D11RasterizerState> rs = default;
+            _device.CreateRasterizerState(in rd, ref rs);
+            if (ccw) _meshCullCcw = rs; else _meshCullCw = rs;
+        }
+
+        Log("mesh particle pipeline built");
+        return true;
+    }
+
+    /// <summary>Upload one emitter's mesh and return a handle. Positions and UVs are interleaved here
+    /// rather than kept as parallel arrays, because the re-skin path rewrites only the position floats in
+    /// place and re-uploads the whole buffer - which is what the GL side does too.</summary>
+    public int CreateMeshGeometry(float[] positions, float[] uvs, uint[]? indices)
+    {
+        if (!EnsureMesh()) return -1;
+        int vertexCount = positions.Length / 3;
+        if (vertexCount == 0) return -1;
+
+        var interleaved = new float[vertexCount * MeshVertexStride];
+        for (int v = 0; v < vertexCount; v++)
+        {
+            interleaved[v * MeshVertexStride + 0] = positions[v * 3 + 0];
+            interleaved[v * MeshVertexStride + 1] = positions[v * 3 + 1];
+            interleaved[v * MeshVertexStride + 2] = positions[v * 3 + 2];
+            interleaved[v * MeshVertexStride + 3] = v * 2 + 1 < uvs.Length ? uvs[v * 2 + 0] : 0f;
+            interleaved[v * MeshVertexStride + 4] = v * 2 + 1 < uvs.Length ? uvs[v * 2 + 1] : 0f;
+        }
+
+        var geom = new MeshGeom { VertexCount = vertexCount, Interleaved = interleaved };
+
+        var vbDesc = new BufferDesc
+        {
+            ByteWidth = (uint)(interleaved.Length * sizeof(float)),
+            Usage = Usage.Dynamic, BindFlags = (uint)BindFlag.VertexBuffer,
+            CPUAccessFlags = (uint)CpuAccessFlag.Write,
+        };
+        ComPtr<ID3D11Buffer> vb = default;
+        if (_device.CreateBuffer(in vbDesc, null, ref vb) < 0) { Log("mesh vertex buffer failed"); return -1; }
+        geom.Vb = vb;
+        UploadMeshVertices(geom);
+
+        if (indices is { Length: > 0 })
+        {
+            var ibDesc = new BufferDesc
+            {
+                ByteWidth = (uint)(indices.Length * sizeof(uint)),
+                Usage = Usage.Default, BindFlags = (uint)BindFlag.IndexBuffer,
+            };
+            ComPtr<ID3D11Buffer> ib = default;
+            fixed (uint* p = indices)
+            {
+                var sub = new SubresourceData { PSysMem = p };
+                if (_device.CreateBuffer(in ibDesc, in sub, ref ib) >= 0) { geom.Ib = ib; geom.IndexCount = indices.Length; }
+                else Log("mesh index buffer failed");
+            }
+        }
+
+        _meshGeoms.Add(geom);
+        return _meshGeoms.Count - 1;
+    }
+
+    /// <summary>Rewrite an animated emitter's positions from a freshly skinned frame. UVs are untouched -
+    /// skinning moves vertices, it does not re-parameterise the surface.</summary>
+    public void UpdateMeshGeometryPositions(int id, float[] positions)
+    {
+        if (id < 0 || id >= _meshGeoms.Count) return;
+        var geom = _meshGeoms[id];
+        int n = Math.Min(geom.VertexCount, positions.Length / 3);
+        for (int v = 0; v < n; v++)
+        {
+            geom.Interleaved[v * MeshVertexStride + 0] = positions[v * 3 + 0];
+            geom.Interleaved[v * MeshVertexStride + 1] = positions[v * 3 + 1];
+            geom.Interleaved[v * MeshVertexStride + 2] = positions[v * 3 + 2];
+        }
+        UploadMeshVertices(geom);
+    }
+
+    private void UploadMeshVertices(MeshGeom geom)
+    {
+        if (geom.Vb.Handle is null) return;
+        var map = new MappedSubresource();
+        if (_ctx.Map(geom.Vb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        fixed (float* src = geom.Interleaved)
+            System.Buffer.MemoryCopy(src, map.PData, (long)geom.Interleaved.Length * sizeof(float),
+                (long)geom.Interleaved.Length * sizeof(float));
+        _ctx.Unmap(geom.Vb, 0);
+    }
+
+    public int MeshGeometryCount => _meshGeoms.Count;
+
+    private void ReleaseMeshGeometry()
+    {
+        foreach (var g in _meshGeoms) { g.Vb.Dispose(); g.Ib.Dispose(); }
+        _meshGeoms.Clear();
+    }
+
+    /// <summary>How many mesh-particle draws the last frame issued. One per PARTICLE, as GL does - mesh
+    /// emitters are usually single-particle, but this is reported rather than assumed so a system that
+    /// spawns many is visible as a cost rather than a mystery.</summary>
+    public int MeshDraws { get; private set; }
+
+    private bool DrawMeshParticles(PreviewMaterial mat, Matrix4x4 vp)
+    {
+        if (!EnsureMesh()) return false;
+        if (mat.MeshGeometryId is not { } id || id < 0 || id >= _meshGeoms.Count) return false;
+        var geom = _meshGeoms[id];
+        if (geom.Vb.Handle is null) return false;
+        var inst = mat.MeshInstances;
+        if (inst is null || mat.MeshInstanceCount == 0) return false;
+
+        _ctx.IASetInputLayout(_meshLayout);
+        _ctx.VSSetShader(_meshVs, null, 0);
+        _ctx.PSSetShader(_meshPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+
+        uint stride = MeshVertexStride * sizeof(float), offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref geom.Vb, in stride, in offset);
+        if (geom.IndexCount > 0) _ctx.IASetIndexBuffer(geom.Ib, Format.FormatR32Uint, 0);
+
+        var bound = BoundTexture(mat, "TEXTURE");
+        var boundMult = BoundTexture(mat, "TEXTUREMULT");
+        var tex = bound.Handle is not null ? bound : _white;
+        var texMult = boundMult.Handle is not null ? boundMult : _white;
+        var srvs = stackalloc ID3D11ShaderResourceView*[2];
+        srvs[0] = tex; srvs[1] = texMult;
+        _ctx.PSSetShaderResources(0, 2, srvs);
+        var samp = _linearWrap;
+        _ctx.PSSetSamplers(0, 1, ref samp);
+
+        _ctx.OMSetBlendState(mat.Additive && _blendAdditive.Handle is not null ? _blendAdditive : _blend,
+            stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        _ctx.OMSetDepthStencilState(
+            _depthStateNoWrite.Handle is not null ? _depthStateNoWrite : _depthState, 0);
+
+        int drawn = 0;
+        var bytes = new byte[192];
+        for (int i = 0; i < mat.MeshInstanceCount; i++)
+        {
+            int o = i * MeshInstanceStride;
+            float scale = inst[o + 3];
+            // GL clamps away from zero rather than skipping: a scale of exactly 0 would collapse the mesh,
+            // and Riot authors 0 to mean "unscaled" often enough that dropping those loses real geometry.
+            if (MathF.Abs(scale) < 0.01f) scale = MathF.CopySign(0.01f, scale == 0f ? 1f : scale);
+
+            var vals = new[]
+            {
+                vp.M11, vp.M12, vp.M13, vp.M14, vp.M21, vp.M22, vp.M23, vp.M24,
+                vp.M31, vp.M32, vp.M33, vp.M34, vp.M41, vp.M42, vp.M43, vp.M44,
+                mat.MeshRight.X, mat.MeshRight.Y, mat.MeshRight.Z, 0f,
+                mat.MeshUp.X, mat.MeshUp.Y, mat.MeshUp.Z, 0f,
+                mat.MeshForward.X, mat.MeshForward.Y, mat.MeshForward.Z, 0f,
+                inst[o + 0], inst[o + 1], inst[o + 2], scale,
+                inst[o + 5], inst[o + 6], inst[o + 7], inst[o + 8],
+                mat.MeshUvOffset.X, mat.MeshUvOffset.Y, mat.MeshTexDiv.X, mat.MeshTexDiv.Y,
+                mat.MeshUvOffsetMult.X, mat.MeshUvOffsetMult.Y, mat.MeshTexDivMult.X, mat.MeshTexDivMult.Y,
+                inst[o + 9], boundMult.Handle is not null ? 1f : 0f, 0f, 0f,
+            };
+            System.Buffer.BlockCopy(vals, 0, bytes, 0, 192);
+            Upload(_meshCb, bytes, 192);
+            _ctx.VSSetConstantBuffers(0, 1, ref _meshCb);
+            _ctx.PSSetConstantBuffers(0, 1, ref _meshCb);
+
+            if (mat.MeshCull)
+                _ctx.RSSetState(scale < 0f ? _meshCullCcw : _meshCullCw);
+            else
+                _ctx.RSSetState(_raster);
+
+            if (geom.IndexCount > 0) _ctx.DrawIndexed((uint)geom.IndexCount, 0, 0);
+            else _ctx.Draw((uint)geom.VertexCount, 0);
+            drawn++;
+        }
+
+        // Put the shared rasterizer back, or every draw after this one inherits mesh culling.
+        _ctx.RSSetState(_raster);
+        MeshDraws += drawn;
+        return drawn > 0;
+    }
+
+    /// <summary>The view bound for a sampler, by the names Riot's shaders declare. Matching on a PREFIX
+    /// would be wrong here: "TEXTURE" is a prefix of "TEXTUREMULT", so a prefix test can hand back the
+    /// multiply texture when the diffuse was wanted, silently, on exactly the emitters that author both.</summary>
+    private ComPtr<ID3D11ShaderResourceView> BoundTexture(PreviewMaterial mat, string sampler)
+    {
+        if (mat.Textures.TryGetValue(sampler + "__TX", out var a) && a.Handle is not null) return a;
+        if (mat.Textures.TryGetValue(sampler, out var b) && b.Handle is not null) return b;
+        return default;
+    }
+
+    /// <summary>Floats per mesh particle instance, matching the simulator's packed layout so the App layer
+    /// can hand over a slice of it unchanged: [x,y,z, sizeX,sizeY, r,g,b,a, rot, frame].</summary>
+    public const int MeshInstanceStride = 11;
+
     /// <summary>M282: the heat-haze pass, ported line for line from the GL original at
     /// <c>VfxParticleRenderer.cs:1631-1640</c>. Two details are worth stating because they look like bugs:
     ///
@@ -1759,8 +2146,7 @@ float4 psmain(VOut i) : SV_Target
         // The emitter's own diffuse, for its alpha only. A distortion emitter that ships no diffuse gets
         // the opaque white stand-in, which leaves the mask as normal.a * colour.a - the same value GL
         // computes when its diffuse sample is opaque.
-        var diffuse = mat.Textures.FirstOrDefault(kv =>
-            kv.Key.StartsWith("TEXTURE", StringComparison.OrdinalIgnoreCase)).Value;
+        var diffuse = BoundTexture(mat, "TEXTURE");
         if (diffuse.Handle is null) diffuse = _white;
 
         var srvs = stackalloc ID3D11ShaderResourceView*[3];
@@ -2593,6 +2979,7 @@ float4 psmain(VOut i) : SV_Target
             PipelineSwitches = 0;
             bool sceneCaptured = false;
             DistortionDraws = 0;
+            MeshDraws = 0;
 
             foreach (var drawIndex in _drawOrder)
             {
@@ -2610,6 +2997,20 @@ float4 psmain(VOut i) : SV_Target
                 if (!sceneCaptured) { CaptureSceneCopy(); sceneCaptured = true; }
                 if (DrawDistortion(mat, strength, Matrix4x4.Multiply(view, proj), width, height, ref boundSource))
                 { DistortionDraws++; DrawCalls++; }
+                continue;
+            }
+
+            // M283: mesh-primitive emitters, likewise handled before the ordinary material state - they
+            // draw their own geometry, so even the vertex buffer below does not apply to them.
+            if (mat.MeshGeometryId is not null)
+            {
+                int before = MeshDraws;
+                if (DrawMeshParticles(mat, Matrix4x4.Multiply(view, proj)))
+                {
+                    DrawCalls += MeshDraws - before;
+                    // The mesh path binds its own buffers, so whatever the loop thought was bound is stale.
+                    boundSource = -1;
+                }
                 continue;
             }
 
@@ -2846,6 +3247,9 @@ float4 psmain(VOut i) : SV_Target
         _overlayCb.Dispose(); _overlayDepth.Dispose(); _overlayDepthNoTest.Dispose(); _overlayBlend.Dispose();
         _distortVs.Dispose(); _distortPs.Dispose(); _distortLayout.Dispose(); _distortCb.Dispose();
         _sceneCopySrv.Dispose(); _sceneCopy.Dispose();
+        _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();
+        _meshCullCw.Dispose(); _meshCullCcw.Dispose();
+        ReleaseMeshGeometry();
         _iconVb.Dispose(); _iconIb.Dispose();
         _overlayVsTex.Dispose(); _overlayPsTex.Dispose(); _overlayLayoutTex.Dispose(); _iconSampler.Dispose();
         for (int g = 0; g < _glyphSrv.Length; g++) _glyphSrv[g].Dispose();

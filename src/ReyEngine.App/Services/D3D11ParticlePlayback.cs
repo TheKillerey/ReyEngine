@@ -49,6 +49,11 @@ public sealed class D3D11ParticlePlayback
         public required int EmitterIndex { get; init; }
         public required string Name { get; init; }
         public int Quads;
+        /// <summary>M283: >= 0 for a mesh-primitive emitter - its handle into the renderer's mesh
+        /// geometry. Such a slice contributes no quads and is skipped by the packing loop entirely.</summary>
+        public int GeometryId { get; init; } = -1;
+        public ReyEngine.Formats.Meshes.VfxMeshAnimation? Animation { get; init; }
+        public bool IsMesh => GeometryId >= 0;
     }
 
     public string Report { get; private set; } = "";
@@ -107,16 +112,43 @@ public sealed class D3D11ParticlePlayback
             // VfxD3D11EmitterPipeline, shared with the map viewport. It used to be inline here, and each of
             // the two bugs this path has had (M236, M237) was a thing one copy of it knew and the other
             // did not.
+            // M283: a mesh-primitive emitter draws its .skn, not a billboard. This path used to have no
+            // mesh check at all - it built a quad pipeline for one and drew the mesh's texture as flat
+            // cards, so the two D3D11 hosts disagreed: the map viewport skipped these, this one faked them.
+            int geometryId = -1;
+            ReyEngine.Formats.Meshes.VfxMeshAnimation? meshAnim = null;
+            if (e.IsMeshPrimitive)
+            {
+                var decoded = DecodeMesh(e, sb);
+                if (decoded is null) { sb.AppendLine("     mesh primitive: no usable mesh - not drawn"); continue; }
+                geometryId = _renderer.CreateMeshGeometry(decoded.Positions, decoded.Uvs,
+                    decoded.Indices is { Length: > 0 } ? decoded.Indices : null);
+                if (geometryId < 0) { sb.AppendLine("     mesh primitive: geometry upload failed"); continue; }
+                meshAnim = decoded.Animation;
+            }
+
             var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, e,
                 sampler => DecodeByPath(sampler, e, sb), sb);
             if (mat is null) continue;
+
+            if (geometryId >= 0)
+            {
+                mat.MeshGeometryId = geometryId;
+                mat.UsesDynamicMesh = false;
+                sb.AppendLine($"     mesh primitive: geometry {geometryId}"
+                    + (meshAnim is not null ? ", animated" : ", bind pose"));
+            }
 
             // M235: Build CREATES the pipeline but does not register it for drawing - the caller must add
             // it, which is what LoadShaders does for the single-shader path. Without this the renderer has
             // no materials at all, IsReady is false, and RenderFrame bails out with "no shader loaded": the
             // entire particle path built correct pipelines and drew nothing.
             _renderer.AddMaterial(mat);
-            _slices.Add(new Slice { Material = mat, EmitterIndex = i, Name = e.Name });
+            _slices.Add(new Slice
+            {
+                Material = mat, EmitterIndex = i, Name = e.Name,
+                GeometryId = geometryId, Animation = meshAnim,
+            });
         }
 
         if (_slices.Count == 0)
@@ -140,6 +172,46 @@ public sealed class D3D11ParticlePlayback
     /// stage by reading and decoding the emitter's authored path. The map viewport instead hands back the
     /// TextureImage its view-model already resolved, which is what makes the two agree about WHICH file a
     /// path landed on.</summary>
+    /// <summary>M283: read and decode a mesh emitter's .skn/.scb, plus its skeleton and animation when it
+    /// has them. The map viewport gets this from the view-model's cache; this window holds an asset reader
+    /// instead, so it does its own read - the same split the sprite stages already have.</summary>
+    private ReyEngine.Formats.Meshes.StaticMeshData? DecodeMesh(VfxEmitterDefinition e, StringBuilder sb)
+    {
+        if (string.IsNullOrEmpty(e.MeshPath)) return null;
+        byte[]? bytes;
+        try { bytes = _readAsset(e.MeshPath.ToLowerInvariant()); }
+        catch (Exception ex) { sb.AppendLine($"     mesh read failed: {ex.Message}"); return null; }
+        if (bytes is null) return null;
+
+        if (!e.MeshPath.EndsWith(".skn", StringComparison.OrdinalIgnoreCase))
+        {
+            try { return ReyEngine.Formats.Meshes.StaticObjectDecoder.Decode(bytes, e.MeshPath); }
+            catch (Exception ex) { sb.AppendLine($"     mesh decode failed: {ex.Message}"); return null; }
+        }
+
+        try
+        {
+            var m = ReyEngine.Formats.Meshes.SkinnedMeshDecoder.Decode(bytes);
+            ReyEngine.Formats.Meshes.VfxMeshAnimation? anim = null;
+            if (m.CanSkin && e.MeshSkeletonPath is { } sklP && e.MeshAnimationPath is { } anmP)
+            {
+                try
+                {
+                    var sklB = _readAsset(sklP.ToLowerInvariant());
+                    var anmB = _readAsset(anmP.ToLowerInvariant());
+                    if (sklB is not null && anmB is not null)
+                        anim = new ReyEngine.Formats.Meshes.VfxMeshAnimation(m,
+                            ReyEngine.Formats.Skeletons.SkeletonDecoder.Decode(sklB),
+                            ReyEngine.Formats.Animation.AnimationDecoder.Decode(anmB, System.IO.Path.GetFileName(anmP)));
+                }
+                catch { /* bind pose fallback, exactly as the view-model's resolver does */ }
+            }
+            return new ReyEngine.Formats.Meshes.StaticMeshData(m.Positions, m.Uvs, m.Indices,
+                System.IO.Path.GetFileName(e.MeshPath)) { Animation = anim };
+        }
+        catch (Exception ex) { sb.AppendLine($"     skn decode failed: {ex.Message}"); return null; }
+    }
+
     private VfxD3D11EmitterPipeline.Sprite? DecodeByPath(string sampler, VfxEmitterDefinition e, StringBuilder sb)
     {
         string? path = sampler switch
@@ -184,7 +256,7 @@ public sealed class D3D11ParticlePlayback
         // rather than taking the whole app down - a preview is not worth a crash.
         int totalQuads = 0;
         foreach (var sl in _slices)
-            if ((uint)sl.EmitterIndex < (uint)_sim.Emitters.Count)
+            if (!sl.IsMesh && (uint)sl.EmitterIndex < (uint)_sim.Emitters.Count)
                 totalQuads += _sim.Emitters[sl.EmitterIndex].InstanceCount;
         _clamped = Math.Max(0, totalQuads - MaxQuads);
         totalQuads = Math.Min(totalQuads, MaxQuads);
@@ -201,6 +273,33 @@ public sealed class D3D11ParticlePlayback
         {
             if ((uint)sl.EmitterIndex >= (uint)_sim.Emitters.Count) { sl.Material.Visible = false; continue; }
             var es = _sim.Emitters[sl.EmitterIndex];
+
+            // M283: a mesh emitter draws its own geometry, so it takes none of the quad packing below.
+            if (sl.IsMesh)
+            {
+                var mm = sl.Material;
+                mm.Visible = es.InstanceCount > 0;
+                mm.MeshInstances = es.Instances;
+                mm.MeshInstanceCount = es.InstanceCount;
+                mm.MeshRight = es.PlacementRight;
+                mm.MeshUp = es.PlacementUp;
+                mm.MeshForward = es.PlacementForward;
+                mm.MeshUvOffset = es.Def.UvScrollRate * es.EmitterAge;
+                mm.MeshUvOffsetMult = es.Def.TextureMultUvScrollRate * es.EmitterAge;
+                var d0 = es.Def.TexDiv;
+                mm.MeshTexDiv = new Vector2(d0.X > 0 ? d0.X : 1f, d0.Y > 0 ? d0.Y : 1f);
+                var d1 = es.Def.TextureMultTexDiv;
+                mm.MeshTexDivMult = new Vector2(d1.X > 0 ? d1.X : 1f, d1.Y > 0 ? d1.Y : 1f);
+                if (sl.Animation is { } anim && anim.Clip.Duration > 1e-3f)
+                {
+                    float t = es.EmitterAge % anim.Clip.Duration;
+                    var frame = ReyEngine.Formats.Animation.SkinnedMeshAnimator.Skin(
+                        anim.Mesh, anim.Skeleton, anim.Clip, t);
+                    _renderer.UpdateMeshGeometryPositions(sl.GeometryId, frame.Positions);
+                }
+                continue;
+            }
+
             int start = idx;
             // M238: each emitter carries its own orientation mode, and arbitraryQuad needs the emitter's
             // PLACEMENT frame, which the simulator computed when the system was placed.
