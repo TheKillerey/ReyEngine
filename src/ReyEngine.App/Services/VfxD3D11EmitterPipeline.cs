@@ -124,10 +124,20 @@ public static class VfxD3D11EmitterPipeline
             }
         }
 
+        // M282: a heat-haze emitter does not shade at all - the renderer swaps in the distortion pipeline
+        // and refracts the scene behind the quad. Decided HERE rather than after BuildMaterial so the state
+        // description below is honest: distortion is always straight alpha, and a pipeline cache keyed on a
+        // blend the draw will not use would hand this material's shaders to an additive emitter later.
+        bool isDistortion = e.Distortion is { NormalMapTexturePath.Length: > 0 };
+
         // M242: describe the variant and the state so the pipeline cache has an honest key. Emitters
         // sharing a permutation AND a blend now share one set of shader objects; a system where every
         // emitter is a base-permutation additive quad collapses to a single pipeline.
-        bool additive = VfxShaderFlags.IsAdditive(e.BlendMode, texHasAlpha);
+        //
+        // Riot authors heat haze blendMode=1, which reads as additive - and additive on top of an already
+        // bright refracted sample is exactly what turns it into a white blob. GL overrides the authored
+        // mode back to alpha for these (VfxParticleRenderer.cs:398-402); so does this.
+        bool additive = !isDistortion && VfxShaderFlags.IsAdditive(e.BlendMode, texHasAlpha);
         var vsDesc = new ShaderDescription(VsName, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, defines, vs);
         var psDesc = new ShaderDescription(PsName, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, defines, ps);
         var stateDesc = StateDescription.Particle(
@@ -162,6 +172,22 @@ public static class VfxD3D11EmitterPipeline
         if (e.AlphaErosion is not null) BindTexture(renderer, mat, ps, "sAlphaErosionTexture", sprites, log);
         if (e.Palette is not null) BindTexture(renderer, mat, ps, "sPalettesTexture", sprites, log);
 
+        // M282: heat haze. The strength is set whether or not the normal map resolves, because it is what
+        // routes this material away from the billboard path - and an unresolved heat haze must draw NOTHING
+        // rather than fall back to that path. Its sprite is routinely a deliberate blank (Jade's is an 8x8
+        // all-white "color-hold"), so the fallback is not a degraded effect, it is a solid white card over
+        // the map. GL skips the emitter under the same condition (VfxParticleRenderer.cs:381).
+        if (isDistortion)
+        {
+            mat.DistortionStrength = e.Distortion!.Strength;
+            BindTexture(renderer, mat, ps, "DISTORTION", sprites, log,
+                        targetKey: PreviewMaterial.DistortionNormalKey);
+            bool bound = mat.HasTexture(PreviewMaterial.DistortionNormalKey);
+            log.AppendLine($"     distortion: strength {e.Distortion.Strength:0.###}, mode {e.Distortion.Mode}"
+                + $", blend forced to alpha (authored {e.BlendMode})"
+                + (bound ? "" : " - NORMAL MAP UNRESOLVED, emitter will not draw"));
+        }
+
         // The flipbook atlas descriptor, per emitter: (columns, 1/columns, 1/rows).
         // Derived in M231 from quad_vs's cell arithmetic.
         mat.Params["TEXTURE_INFO"] = ParticleQuadBuilder.TextureInfo(e.TexDiv);
@@ -183,13 +209,24 @@ public static class VfxD3D11EmitterPipeline
 
     /// <param name="preloaded">Pixels the caller already had to decode for the blend decision (M273). Saves
     /// the second read; null means "open it here", which is every stage except TEXTURE.</param>
+    /// <param name="targetKey">M282: bind under THIS key instead of a name resolved from the shader's
+    /// declared textures. Needed for the distortion normal map, which no permutation of quad_ps declares -
+    /// it feeds our own pipeline - but which still wants the pooling and lifetime handling every other
+    /// stage gets, so it takes the same road with a different destination.</param>
     private static void BindTexture(ShaderPreviewRenderer renderer, PreviewMaterial mat, DxbcShader ps,
-        string sampler, Func<string, Sprite?> sprites, StringBuilder log, TextureImage? preloaded = null)
+        string sampler, Func<string, Sprite?> sprites, StringBuilder log, TextureImage? preloaded = null,
+        string? targetKey = null)
     {
-        var slot = ps.Textures.FirstOrDefault(t =>
-            t.Name.Equals(sampler + "__TX", StringComparison.OrdinalIgnoreCase)
-            || t.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase));
-        if (slot is null) { log.AppendLine($"     {sampler}: no such slot in this permutation"); return; }
+        string slotName;
+        if (targetKey is not null) slotName = targetKey;
+        else
+        {
+            var slot = ps.Textures.FirstOrDefault(t =>
+                t.Name.Equals(sampler + "__TX", StringComparison.OrdinalIgnoreCase)
+                || t.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase));
+            if (slot is null) { log.AppendLine($"     {sampler}: no such slot in this permutation"); return; }
+            slotName = slot.Name;
+        }
 
         if (sprites(sampler) is not { } sprite) { log.AppendLine($"     {sampler}: not authored"); return; }
 
@@ -208,17 +245,17 @@ public static class VfxD3D11EmitterPipeline
         // is bound on both, and the pool holds 5 distinct views for 6 emitters, which is the dedup working.
         // The dimensions are not printed because the pool stores views, not sizes; the key identifies the
         // asset, which is what the reader actually needs to compare two emitters.
-        if (renderer.TryBindCached(mat, slot.Name, sprite.Key))
+        if (renderer.TryBindCached(mat, slotName, sprite.Key))
         {
-            log.AppendLine($"     {sampler} -> {slot.Name} (pooled: {sprite.Key})");
+            log.AppendLine($"     {sampler} -> {slotName} (pooled: {sprite.Key})");
             return;
         }
 
         if (sprite.Open is null)
         {
-            renderer.SetTexture(mat, slot.Name, sprite.Key, VfxPlaybackSim.SoftDot(SoftDotSize),
+            renderer.SetTexture(mat, slotName, sprite.Key, VfxPlaybackSim.SoftDot(SoftDotSize),
                 SoftDotSize, SoftDotSize);
-            log.AppendLine($"     {sampler} -> {slot.Name}  [soft-dot fallback]");
+            log.AppendLine($"     {sampler} -> {slotName}  [soft-dot fallback]");
             return;
         }
 
@@ -230,7 +267,7 @@ public static class VfxD3D11EmitterPipeline
         }
         if (img is null) return;   // the callback already said why; nothing bound = the renderer's stand-in
 
-        renderer.SetTexture(mat, slot.Name, sprite.Key, img.Rgba, img.Width, img.Height);
-        log.AppendLine($"     {sampler} -> {slot.Name} ({img.Width}x{img.Height})");
+        renderer.SetTexture(mat, slotName, sprite.Key, img.Rgba, img.Width, img.Height);
+        log.AppendLine($"     {sampler} -> {slotName} ({img.Width}x{img.Height})");
     }
 }

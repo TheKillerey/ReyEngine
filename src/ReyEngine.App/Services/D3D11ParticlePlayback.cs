@@ -148,6 +148,8 @@ public sealed class D3D11ParticlePlayback
             "TEXTUREMULT" => e.TextureMultPath,
             "sAlphaErosionTexture" => e.AlphaErosion?.MapPath,
             "sPalettesTexture" => e.Palette?.TexturePath,
+            // M282: the heat-haze normal map, read by path like every other stage in this window.
+            "DISTORTION" => e.Distortion?.NormalMapTexturePath,
             _ => null,
         };
         if (string.IsNullOrWhiteSpace(path)) return null;

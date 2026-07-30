@@ -290,6 +290,10 @@ public sealed class D3D11MapParticles
             "TEXTUREMULT" => (item.EmitterMultTextures, def.TextureMultPath),
             "sAlphaErosionTexture" => (item.EmitterErosionTextures, def.AlphaErosion?.MapPath),
             "sPalettesTexture" => (item.EmitterPaletteTextures, def.Palette?.TexturePath),
+            // M282: the heat-haze normal map. The view-model has resolved this list all along - it is what
+            // GL refracts through - and the D3D11 side simply never asked for it, so a heat-haze emitter
+            // arrived with its actual visual missing and only its blank colour-hold sprite left to draw.
+            "DISTORTION" => (item.EmitterDistortionTextures, def.Distortion?.NormalMapTexturePath),
             _ => (null, null),
         };
 

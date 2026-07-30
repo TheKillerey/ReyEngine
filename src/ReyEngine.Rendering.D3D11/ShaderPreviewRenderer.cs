@@ -167,11 +167,33 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// emitter's blendMode; see VfxShaderFlags for how that integer is read and what is still a guess.</summary>
     public bool Additive { get; set; }
 
+    /// <summary>M282: non-null makes this a heat-haze draw - the renderer replaces the material's own
+    /// shaders with the distortion pipeline and refracts the scene behind the quad instead of shading it.
+    /// The value is the authored <c>distortionDefinition.distortion</c> strength.
+    ///
+    /// <para>Distortion deliberately does NOT ride on <see cref="Additive"/>. Riot authors these emitters
+    /// blendMode=1, which reads as additive, and additive on top of an already-bright refracted sample is
+    /// what turns heat haze into a white blob - so GL overrides the authored mode back to straight alpha
+    /// (VfxParticleRenderer.cs:398-402) and this does the same.</para></summary>
+    public float? DistortionStrength { get; set; }
+
+    /// <summary>The key <see cref="Textures"/> holds a distortion emitter's normal map under. Reserved
+    /// rather than a real sampler name because no shader in Riot's cache declares this stage - it belongs
+    /// to our own pipeline. Routed through the ordinary texture pool so its lifetime is pooled like every
+    /// other view (see the ownership note below); materials do not own their SRVs.</summary>
+    public const string DistortionNormalKey = "__DISTORT_NORMAL";
+
     /// <summary>M246: safe to reorder relative to other draws. True only when this draw WRITES DEPTH and
     /// is not additive - such draws resolve by the depth buffer, so submission order is not observable.
     /// An additive or non-depth-writing draw blends with whatever is already there, so its order IS the
     /// image and must be preserved.</summary>
     public bool SortableByPipeline { get; set; }
+
+    /// <summary>Whether anything is bound under this key. The texture dictionary itself is internal - the
+    /// views in it are pool-owned and handing them out invites a caller to dispose one - but a material's
+    /// builder legitimately needs to know whether an OPTIONAL stage resolved, which is a question about the
+    /// binding and not about the view.</summary>
+    public bool HasTexture(string key) => Textures.ContainsKey(key);
 
     public IEnumerable<string> UnboundTextures =>
         PsRefl.Textures.Concat(VsRefl.Textures).Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase)
@@ -249,9 +271,25 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private int _dynIndexCount;
     private int _indexCount;
 
+    // M282: the distortion (heat haze) pass - our own pipeline, for the same reason the overlay is one.
+    // Riot's quad_ps has no distortion permutation to select: distortion is a separate screen-space stage
+    // in the real engine, not a flag on the billboard shader, so there is nothing in the shader cache that
+    // could draw it. See the GL original at VfxParticleRenderer.cs:1631-1640, which this ports exactly.
+    private ComPtr<ID3D11VertexShader> _distortVs;
+    private ComPtr<ID3D11PixelShader> _distortPs;
+    private ComPtr<ID3D11InputLayout> _distortLayout;
+    private ComPtr<ID3D11Buffer> _distortCb;
+    private bool _distortTried;
+
     private ComPtr<ID3D11Texture2D> _rt, _stage, _depth;
     private ComPtr<ID3D11RenderTargetView> _rtv;
     private ComPtr<ID3D11DepthStencilView> _dsv;
+    /// <summary>M282: an immutable copy of the colour target, taken before the first distortion draw.
+    /// Refraction has to read the scene it is refracting, and a shader may not sample the render target it
+    /// is writing - so the pixels have to come from somewhere else. GL hits the identical constraint and
+    /// solves it the identical way (VfxParticleRenderer.cs:192-217).</summary>
+    private ComPtr<ID3D11Texture2D> _sceneCopy;
+    private ComPtr<ID3D11ShaderResourceView> _sceneCopySrv;
     private int _width, _height;
 
     private ComPtr<ID3D11SamplerState> _linearWrap, _linearClamp, _comparison;
@@ -1537,11 +1575,234 @@ float4 psmain_tex(VTexOut i) : SV_Target
         return srv;
     }
 
+    /// <summary>M282: the heat-haze pass, ported line for line from the GL original at
+    /// <c>VfxParticleRenderer.cs:1631-1640</c>. Two details are worth stating because they look like bugs:
+    ///
+    /// <para>The DIFFUSE texture contributes only its alpha. That is not a simplification - the refracted
+    /// scene sample replaces the emitter's colour outright, which is why a heat-haze emitter can ship a
+    /// deliberately blank sprite (Jade_FireTorch_Med's is an 8x8 all-white "color-hold") and still look
+    /// right. A path that draws that sprite normally draws a solid white card, which is exactly the bug
+    /// this fixes.</para>
+    ///
+    /// <para>SV_Position.y needs no flip. GL's gl_FragCoord is bottom-up and D3D's SV_Position is top-down,
+    /// but the scene copy is stored in the same top-down order the target was rendered in, so screen
+    /// position and scene texel agree in both APIs without a correction. Adding one would tear the
+    /// refraction vertically.</para></summary>
+    private const string DistortHlsl = @"
+cbuffer DistortCB : register(b0)
+{
+    row_major float4x4 gMvp;
+    float4 gParams;      // x = strength, yz = 1/viewport, w unused
+};
+Texture2D gScene   : register(t0);
+Texture2D gNormal  : register(t1);
+Texture2D gDiffuse : register(t2);
+SamplerState gClamp : register(s0);
+SamplerState gWrap  : register(s1);
+
+struct VIn  { float3 pos : POSITION; float2 uv : TEXCOORD0; float4 col : COLOR; };
+struct VOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 col : COLOR; };
+
+VOut vsmain(VIn i)
+{
+    VOut o;
+    o.pos = mul(float4(i.pos, 1.0), gMvp);
+    o.uv = i.uv;
+    o.col = i.col;
+    return o;
+}
+
+float4 psmain(VOut i) : SV_Target
+{
+    float4 n = gNormal.Sample(gWrap, i.uv);
+    float4 t = gDiffuse.Sample(gWrap, i.uv);
+    float mask = n.a * t.a * i.col.a;
+    float2 offset = n.rg * 2.0 - 1.0;
+    float2 sceneUv = i.pos.xy * gParams.yz;
+    sceneUv = clamp(sceneUv + offset * gParams.x * mask, 0.0, 1.0);
+    float3 refracted = gScene.Sample(gClamp, sceneUv).rgb;
+    return float4(refracted, mask);
+}";
+
+    private bool EnsureDistort()
+    {
+        if (_distortTried) return _distortVs.Handle is not null;
+        _distortTried = true;
+
+        ID3D10Blob* vsCode = null, psCode = null, errs = null;
+        var src = System.Text.Encoding.ASCII.GetBytes(DistortHlsl);
+        try
+        {
+            var compiler = D3DCompiler.GetApi();
+            fixed (byte* sp = src)
+            {
+                var vsEntry = System.Text.Encoding.ASCII.GetBytes("vsmain\0");
+                var vsTarget = System.Text.Encoding.ASCII.GetBytes("vs_5_0\0");
+                fixed (byte* ep = vsEntry) fixed (byte* tp = vsTarget)
+                    if (compiler.Compile(sp, (nuint)src.Length, (byte*)null, null, (ID3DInclude*)null,
+                            ep, tp, 0u, 0u, &vsCode, &errs) < 0 || vsCode is null)
+                    { Log("distortion vs failed to compile"); return false; }
+
+                var psEntry = System.Text.Encoding.ASCII.GetBytes("psmain\0");
+                var psTarget = System.Text.Encoding.ASCII.GetBytes("ps_5_0\0");
+                fixed (byte* ep = psEntry) fixed (byte* tp = psTarget)
+                    if (compiler.Compile(sp, (nuint)src.Length, (byte*)null, null, (ID3DInclude*)null,
+                            ep, tp, 0u, 0u, &psCode, &errs) < 0 || psCode is null)
+                    { Log("distortion ps failed to compile"); return false; }
+            }
+        }
+        catch (Exception ex) { Log("distortion: the HLSL compiler is unavailable: " + ex.Message); return false; }
+
+        ComPtr<ID3D11VertexShader> vs = default;
+        if (_device.CreateVertexShader(vsCode->GetBufferPointer(), vsCode->GetBufferSize(),
+                ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref vs) < 0)
+        { Log("distortion CreateVertexShader failed"); return false; }
+        _distortVs = vs;
+
+        ComPtr<ID3D11PixelShader> ps = default;
+        if (_device.CreatePixelShader(psCode->GetBufferPointer(), psCode->GetBufferSize(),
+                ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref ps) < 0)
+        { Log("distortion CreatePixelShader failed"); return false; }
+        _distortPs = ps;
+
+        // Read out of the same fat vertex the particle quads already fill, at the same offsets the material
+        // path maps these semantics to - so the distortion draw sees byte-identical geometry to the one the
+        // ordinary billboard path would have drawn, and cannot drift from it.
+        var semPos = System.Text.Encoding.ASCII.GetBytes("POSITION\0");
+        var semUv = System.Text.Encoding.ASCII.GetBytes("TEXCOORD\0");
+        var semCol = System.Text.Encoding.ASCII.GetBytes("COLOR\0");
+        fixed (byte* sp0 = semPos)
+        fixed (byte* sp1 = semUv)
+        fixed (byte* sp2 = semCol)
+        {
+            var els = stackalloc InputElementDesc[3];
+            els[0] = new InputElementDesc
+            {
+                SemanticName = sp0, SemanticIndex = 0, Format = Format.FormatR32G32B32Float,
+                InputSlot = 0, AlignedByteOffset = 0,
+                InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0,
+            };
+            els[1] = new InputElementDesc
+            {
+                SemanticName = sp1, SemanticIndex = 0, Format = Format.FormatR32G32Float,
+                InputSlot = 0, AlignedByteOffset = 40,      // PreviewVertex.Uv0, a float4; two components used
+                InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0,
+            };
+            els[2] = new InputElementDesc
+            {
+                SemanticName = sp2, SemanticIndex = 0, Format = Format.FormatR32G32B32A32Float,
+                InputSlot = 0, AlignedByteOffset = 88,      // PreviewVertex.Color
+                InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0,
+            };
+            ComPtr<ID3D11InputLayout> layout = default;
+            if (_device.CreateInputLayout(els, 3, vsCode->GetBufferPointer(), vsCode->GetBufferSize(), ref layout) < 0)
+            { Log("distortion CreateInputLayout failed"); return false; }
+            _distortLayout = layout;
+        }
+
+        var cbDesc = new BufferDesc
+        {
+            ByteWidth = 80,                                  // float4x4 + float4
+            Usage = Usage.Dynamic,
+            BindFlags = (uint)BindFlag.ConstantBuffer,
+            CPUAccessFlags = (uint)CpuAccessFlag.Write,
+        };
+        ComPtr<ID3D11Buffer> cb = default;
+        if (_device.CreateBuffer(in cbDesc, null, ref cb) < 0) { Log("distortion cbuffer failed"); return false; }
+        _distortCb = cb;
+
+        Log("distortion pipeline built");
+        return true;
+    }
+
+    /// <summary>Snapshot the colour target so a distortion draw has something to refract. Taken lazily, at
+    /// the first distortion material rather than before the whole frame, so what gets refracted is
+    /// everything drawn UNDER the emitter - map, and any particle already composited - which is what
+    /// refraction means. The render targets are unbound across the copy: reading a resource that is
+    /// simultaneously bound for output is a hazard the debug layer rejects outright.</summary>
+    /// <summary>How many heat-haze draws the last frame issued. Zero while a scene holds distortion
+    /// emitters means the pass is being skipped, which is worth being able to see from a test.</summary>
+    public int DistortionDraws { get; private set; }
+
+    /// <summary>Draw one heat-haze slice. Returns false when the pass cannot run - no compiled pipeline, no
+    /// scene copy, or no normal map - in which case the emitter is drawn NOT AT ALL rather than falling
+    /// back to the ordinary billboard path. That is deliberate and matches GL, which skips the emitter
+    /// outright under the same conditions (VfxParticleRenderer.cs:381): the fallback is what produces the
+    /// solid white card, so it is worse than drawing nothing.</summary>
+    private bool DrawDistortion(PreviewMaterial mat, float strength, Matrix4x4 vp,
+                                int width, int height, ref int boundSource)
+    {
+        if (!EnsureDistort() || _sceneCopySrv.Handle is null) return false;
+        if (!mat.Textures.TryGetValue(PreviewMaterial.DistortionNormalKey, out var normal)) return false;
+
+        uint count = mat.IndexCount < 0
+            ? (uint)(mat.UsesDynamicMesh ? _dynIndexCount : _indexCount)
+            : (uint)mat.IndexCount;
+        if (count == 0 || !BindMeshSource(mat.UsesDynamicMesh, ref boundSource)) return false;
+
+        var bytes = new byte[80];
+        var vals = new[]
+        {
+            vp.M11, vp.M12, vp.M13, vp.M14, vp.M21, vp.M22, vp.M23, vp.M24,
+            vp.M31, vp.M32, vp.M33, vp.M34, vp.M41, vp.M42, vp.M43, vp.M44,
+            strength, 1f / Math.Max(1, width), 1f / Math.Max(1, height), 0f,
+        };
+        System.Buffer.BlockCopy(vals, 0, bytes, 0, 80);
+        Upload(_distortCb, bytes, 80);
+
+        _ctx.IASetInputLayout(_distortLayout);
+        _ctx.VSSetShader(_distortVs, null, 0);
+        _ctx.PSSetShader(_distortPs, null, 0);
+        _ctx.VSSetConstantBuffers(0, 1, ref _distortCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _distortCb);
+
+        // The emitter's own diffuse, for its alpha only. A distortion emitter that ships no diffuse gets
+        // the opaque white stand-in, which leaves the mask as normal.a * colour.a - the same value GL
+        // computes when its diffuse sample is opaque.
+        var diffuse = mat.Textures.FirstOrDefault(kv =>
+            kv.Key.StartsWith("TEXTURE", StringComparison.OrdinalIgnoreCase)).Value;
+        if (diffuse.Handle is null) diffuse = _white;
+
+        var srvs = stackalloc ID3D11ShaderResourceView*[3];
+        srvs[0] = _sceneCopySrv; srvs[1] = normal; srvs[2] = diffuse;
+        _ctx.PSSetShaderResources(0, 3, srvs);
+
+        var samplers = stackalloc ID3D11SamplerState*[2];
+        samplers[0] = _linearClamp; samplers[1] = _linearWrap;
+        _ctx.PSSetSamplers(0, 2, samplers);
+
+        // Straight alpha, never additive - see PreviewMaterial.DistortionStrength for why the authored
+        // blendMode must not reach this draw. Depth is tested but not written, as for every particle.
+        _ctx.OMSetBlendState(_blend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        _ctx.OMSetDepthStencilState(
+            _depthStateNoWrite.Handle is not null ? _depthStateNoWrite : _depthState, 0);
+
+        _ctx.DrawIndexed(count, (uint)Math.Max(0, mat.StartIndex), 0);
+
+        // Unbind the scene copy. It is the resource CopyResource writes into on the next distortion draw,
+        // and leaving it bound as an SRV while it is a copy destination is the same read/write hazard the
+        // capture avoids on the target - it would simply be reported one draw later.
+        var none = stackalloc ID3D11ShaderResourceView*[3];
+        none[0] = null; none[1] = null; none[2] = null;
+        _ctx.PSSetShaderResources(0, 3, none);
+        return true;
+    }
+
+    private void CaptureSceneCopy()
+    {
+        if (_sceneCopy.Handle is null || _rt.Handle is null) return;
+        _ctx.OMSetRenderTargets(0, (ID3D11RenderTargetView**)null, (ID3D11DepthStencilView*)null);
+        _ctx.CopyResource(_sceneCopy, _rt);
+        _ctx.OMSetRenderTargets(1, ref _rtv, _dsv);
+    }
+
     private void EnsureTargets(int w, int h)
     {
         if (_width == w && _height == h && _rt.Handle is not null) return;
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _rtv = default; _rt = default; _stage = default; _dsv = default; _depth = default;
+        _sceneCopySrv.Dispose(); _sceneCopy.Dispose();
+        _sceneCopySrv = default; _sceneCopy = default;
         _width = w; _height = h;
 
         // BGRA so the readback drops straight into an Avalonia Bgra8888 bitmap with no swizzle
@@ -1563,6 +1824,21 @@ float4 psmain_tex(VTexOut i) : SV_Target
         ComPtr<ID3D11Texture2D> stage = default;
         _device.CreateTexture2D(in st, null, ref stage);
         _stage = stage;
+
+        // M282: the distortion scene copy. Same format and size as the target, which is what lets the copy
+        // be a straight CopyResource rather than a draw. Allocated with the targets rather than lazily, so
+        // a resize can never leave a distortion draw sampling a stale-sized view.
+        var sc = rtDesc;
+        sc.BindFlags = (uint)BindFlag.ShaderResource;
+        ComPtr<ID3D11Texture2D> scene = default;
+        if (_device.CreateTexture2D(in sc, null, ref scene) >= 0)
+        {
+            _sceneCopy = scene;
+            ComPtr<ID3D11ShaderResourceView> ssrv = default;
+            if (_device.CreateShaderResourceView(_sceneCopy, null, ref ssrv) >= 0) _sceneCopySrv = ssrv;
+            else Log("distortion: CreateShaderResourceView for the scene copy failed");
+        }
+        else Log("distortion: the scene-copy texture could not be created; heat haze will be skipped");
 
         var dd = new Texture2DDesc
         {
@@ -2315,6 +2591,8 @@ float4 psmain_tex(VTexOut i) : SV_Target
 
             int lastPipeline = int.MinValue;
             PipelineSwitches = 0;
+            bool sceneCaptured = false;
+            DistortionDraws = 0;
 
             foreach (var drawIndex in _drawOrder)
             {
@@ -2323,6 +2601,17 @@ float4 psmain_tex(VTexOut i) : SV_Target
 
             // M245: frustum cull. Slices with no bounds are always drawn.
             if (mat.Bounds is { } bb && !FrustumContains(planes, bb.Min, bb.Max)) { CulledSlices++; continue; }
+
+            // M282: heat haze takes a pipeline of its own. Handled before any of the ordinary material
+            // state below, because none of it applies - different shaders, different layout, different
+            // cbuffer, and a blend mode that overrides what the emitter authored.
+            if (mat.DistortionStrength is { } strength)
+            {
+                if (!sceneCaptured) { CaptureSceneCopy(); sceneCaptured = true; }
+                if (DrawDistortion(mat, strength, Matrix4x4.Multiply(view, proj), width, height, ref boundSource))
+                { DistortionDraws++; DrawCalls++; }
+                continue;
+            }
 
             // M232: blend is per MATERIAL, not per frame. Particle emitters in one system routinely mix
             // additive and straight-alpha passes, so binding one state before the loop cannot represent
@@ -2555,6 +2844,8 @@ float4 psmain_tex(VTexOut i) : SV_Target
         _vb.Dispose(); _ib.Dispose(); _dynVb.Dispose(); _dynIb.Dispose(); _compareCb.Dispose();
         _overlayVs.Dispose(); _overlayPs.Dispose(); _overlayLayout.Dispose();
         _overlayCb.Dispose(); _overlayDepth.Dispose(); _overlayDepthNoTest.Dispose(); _overlayBlend.Dispose();
+        _distortVs.Dispose(); _distortPs.Dispose(); _distortLayout.Dispose(); _distortCb.Dispose();
+        _sceneCopySrv.Dispose(); _sceneCopy.Dispose();
         _iconVb.Dispose(); _iconIb.Dispose();
         _overlayVsTex.Dispose(); _overlayPsTex.Dispose(); _overlayLayoutTex.Dispose(); _iconSampler.Dispose();
         for (int g = 0; g < _glyphSrv.Length; g++) _glyphSrv[g].Dispose();
