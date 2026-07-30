@@ -1587,6 +1587,112 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         DynamicLightsStatus = EditableLights.Count == 0
             ? "no point lights"
             : $"{EditableLights.Count} point light(s)" + (LightDatPath is { } p ? $" — {Path.GetFileName(p)}" : " — unsaved");
+        // M287: every light edit funnels through here - add, delete, duplicate, gizmo drag, inspector
+        // field - so one capture here covers all of them without hooking each one.
+        CaptureMapLighting();
+    }
+
+    /// <summary>M287: true while a map load or a restore is writing the lighting properties, so the change
+    /// notifications that follow do NOT capture. Without it the reset that ApplySunProperties performs on
+    /// every map open would be captured as the user's authored state and overwrite the very record the
+    /// restore is about to read - the save would destroy itself, once per map load.</summary>
+    private bool _applyingLighting;
+
+    /// <summary>Copy the current lighting into the project record for the open map. In memory only: this
+    /// runs on every gizmo drag and every slider tick, and writing JSON at that rate would be a file
+    /// write per frame. The disk write happens on the discrete commands via PersistMapLighting, and any
+    /// other project save picks this up because IsDirty is set here.</summary>
+    private void CaptureMapLighting()
+    {
+        if (_applyingLighting || _currentMapEntry is not { } entry) return;
+
+        var rec = Project.MapLighting.FirstOrDefault(r => r.PathHash == entry.PathHash);
+        if (rec is null)
+        {
+            rec = new ReyEngine.Core.Projects.MapLightingRecord
+            { PathHash = entry.PathHash, MapgeoPath = entry.Path };
+            Project.MapLighting.Add(rec);
+        }
+        rec.MapgeoPath = entry.Path;
+
+        rec.SunIntensity = SunIntensity;
+        rec.SunColorR = SunColorR; rec.SunColorG = SunColorG; rec.SunColorB = SunColorB;
+        rec.SkyIntensity = SkyIntensity;
+        rec.SkyColorR = SkyColorR; rec.SkyColorG = SkyColorG; rec.SkyColorB = SkyColorB;
+        rec.LightmapScale = CurrentLightmapScale;
+
+        rec.LightIntensity = DynamicLightIntensity;
+        rec.LightRadiusScale = DynamicLightRadiusScale;
+        rec.FalloffSoftness = LightFalloffSoftness;
+        rec.PositionScale = DynamicLightPositionScale;
+        rec.ScaleX = DynamicLightScaleX;
+        rec.ScaleZ = DynamicLightScaleZ;
+        rec.OffsetX = DynamicLightOffsetX;
+        rec.OffsetZ = DynamicLightOffsetZ;
+        rec.LightDatPath = LightDatPath;
+
+        rec.Lights = EditableLights.Select(l => new ReyEngine.Core.Projects.SavedPointLight
+        {
+            X = l.X, Y = l.Y, Z = l.Z,
+            R = l.R, G = l.G, B = l.B,
+            Radius = l.Radius, Intensity = l.Intensity, Name = l.Name,
+        }).ToList();
+
+        Project.IsDirty = true;
+    }
+
+    /// <summary>Capture and write. For the discrete edits - adding, deleting or importing lights - where
+    /// losing the change to a crash would be worse than one JSON write.</summary>
+    private void PersistMapLighting()
+    {
+        CaptureMapLighting();
+        if (Project.ProjectFilePath is { } p) ReyProjectService.Save(Project, p);
+    }
+
+    /// <summary>M287: put the user's authored lighting back after a map load. MUST run after
+    /// ApplySunProperties, which unconditionally resets sun/sky to the map's own values and SunIntensity to
+    /// 1.0 - that reset is what made every edit look like it had never been made.</summary>
+    private void RestoreMapLighting(Core.Assets.WadAssetEntry entry)
+    {
+        if (Project.MapLighting.FirstOrDefault(r => r.PathHash == entry.PathHash) is not { } rec) return;
+
+        _applyingLighting = true;
+        try
+        {
+            _suppressSunRebuild = true;
+            SunIntensity = rec.SunIntensity;
+            SunColorR = rec.SunColorR; SunColorG = rec.SunColorG; SunColorB = rec.SunColorB;
+            SkyIntensity = rec.SkyIntensity;
+            SkyColorR = rec.SkyColorR; SkyColorG = rec.SkyColorG; SkyColorB = rec.SkyColorB;
+            _suppressSunRebuild = false;
+            RebuildSun();
+
+            CurrentLightmapScale = rec.LightmapScale;
+            DynamicLightIntensity = rec.LightIntensity;
+            DynamicLightRadiusScale = rec.LightRadiusScale;
+            LightFalloffSoftness = rec.FalloffSoftness;
+            DynamicLightPositionScale = rec.PositionScale;
+            DynamicLightScaleX = rec.ScaleX;
+            DynamicLightScaleZ = rec.ScaleZ;
+            DynamicLightOffsetX = rec.OffsetX;
+            DynamicLightOffsetZ = rec.OffsetZ;
+            LightDatPath = rec.LightDatPath;
+
+            EditableLights.Clear();
+            foreach (var s in rec.Lights)
+                EditableLights.Add(new PointLightViewModel(
+                    new PointLight(
+                        new System.Numerics.Vector3((float)s.X, (float)s.Y, (float)s.Z),
+                        new System.Numerics.Vector3((float)s.R, (float)s.G, (float)s.B),
+                        (float)s.Radius, (float)s.Intensity), this)
+                { Name = s.Name });
+            SelectedLight = null;
+        }
+        finally { _applyingLighting = false; }
+
+        RepublishLights();
+        _log.Info("Lights", $"Restored this map's saved lighting — {rec.Lights.Count} point light(s)"
+            + (rec.LightDatPath is { } p ? $", from {Path.GetFileName(p)}" : ""));
     }
 
     private void LoadEditableLights(IEnumerable<PointLight> lights)
@@ -1597,6 +1703,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             EditableLights.Add(new PointLightViewModel(l, this) { Name = $"Light {n++}" });
         SelectedLight = null;
         RepublishLights();
+        PersistMapLighting();   // M287: an import is a discrete edit worth a write
     }
 
     /// <summary>Add a light at the camera's focus so it lands in view rather than at the origin.</summary>
@@ -1610,6 +1717,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedLight = vm;
         ShowDynamicLights = true;
         RepublishLights();
+        PersistMapLighting();   // M287
         _log.Info("Lights", $"Added a point light at ({at.X:0}, {at.Y:0}, {at.Z:0}). Drag the gizmo to place it.");
     }
 
@@ -1620,6 +1728,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         EditableLights.Remove(l);
         SelectedLight = null;
         RepublishLights();
+        PersistMapLighting();   // M287
     }
 
     [RelayCommand]
@@ -1631,6 +1740,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         EditableLights.Add(copy);
         SelectedLight = copy;
         RepublishLights();
+        PersistMapLighting();   // M287
     }
 
     /// <summary>Write the table back out in Riot's Light.dat format.</summary>
@@ -5517,6 +5627,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _selection.Clear();
                 CurrentModelTextures = textures;
                 ApplySunProperties(sunProperties);
+                // M287: and then put back whatever the user authored for THIS map. ApplySunProperties has
+                // just overwritten sun/sky with the map's own values and forced SunIntensity to 1.0, which
+                // is correct as a starting point and wrong as a final answer once the project holds edits.
+                RestoreMapLighting(entry);
                 ClearSecondaryTextures(); // maps don't use champion secondary samplers
                 PublishMapMaterialLayers(); // re-apply map special-material layers wiped above
                 MapGeoInspector.Show(map, entry.Path);
@@ -5642,14 +5756,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             SkyLightColor = new System.Numerics.Vector4(0.35f, 0.35f, 0.35f, 1f),
             SkyLightScale = 1f,
         };
-        _suppressSunRebuild = true;
-        SunColorR = Clamp01(_baseSun.SunColor.X); SunColorG = Clamp01(_baseSun.SunColor.Y); SunColorB = Clamp01(_baseSun.SunColor.Z);
-        SunIntensity = 1.0;
-        SkyColorR = Clamp01(_baseSun.SkyLightColor.X); SkyColorG = Clamp01(_baseSun.SkyLightColor.Y); SkyColorB = Clamp01(_baseSun.SkyLightColor.Z);
-        SkyIntensity = System.Math.Clamp(_baseSun.SkyLightScale, 0f, 8f);
-        _suppressSunRebuild = false;
-        RebuildSun();
-        CurrentLightmapScale = sun?.LightMapColorScale ?? 1.0;
+        // M287: this whole block RESETS the panel to the map's authored values. That is correct as a
+        // starting point, but it must not be mistaken for something the user chose - so capture is
+        // suppressed across it, or opening a map would immediately overwrite that map's saved record with
+        // the reset and the restore below it would have nothing left to restore.
+        _applyingLighting = true;
+        try
+        {
+            _suppressSunRebuild = true;
+            SunColorR = Clamp01(_baseSun.SunColor.X); SunColorG = Clamp01(_baseSun.SunColor.Y); SunColorB = Clamp01(_baseSun.SunColor.Z);
+            SunIntensity = 1.0;
+            SkyColorR = Clamp01(_baseSun.SkyLightColor.X); SkyColorG = Clamp01(_baseSun.SkyLightColor.Y); SkyColorB = Clamp01(_baseSun.SkyLightColor.Z);
+            SkyIntensity = System.Math.Clamp(_baseSun.SkyLightScale, 0f, 8f);
+            _suppressSunRebuild = false;
+            RebuildSun();
+            CurrentLightmapScale = sun?.LightMapColorScale ?? 1.0;
+        }
+        finally { _applyingLighting = false; }
         if (sun is not null)
             _log.Info("Map", $"MapSunProperties: lightMapColorScale={sun.LightMapColorScale:0.##}, " +
                              $"skyLightScale={sun.SkyLightScale:0.##}, sunColor=({sun.SunColor.X:0.##}, {sun.SunColor.Y:0.##}, {sun.SunColor.Z:0.##}), " +
@@ -5683,6 +5806,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(SkySwatch));
         OnPropertyChanged(nameof(SunColorPick));   // M155
         OnPropertyChanged(nameof(SkyColorPick));
+        // M287: the sun/sky sliders all funnel through here, so one capture covers the panel.
+        CaptureMapLighting();
     }
 
     public Avalonia.Media.IBrush SunSwatch => Swatch(SunColorR * SunIntensity, SunColorG * SunIntensity, SunColorB * SunIntensity);

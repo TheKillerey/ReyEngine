@@ -32,6 +32,16 @@ public sealed class ReyProject
     /// slider costs exactly one BC generation instead of one more each time.</summary>
     public List<TextureRecolorRecord> TextureRecolors { get; set; } = new();
 
+    /// <summary>M287: per-map lighting the USER authored - sun/sky, the baked-light scale, the Light.dat
+    /// fit sliders, and the point-light table itself. Keyed by mapgeo, because two maps in one project
+    /// have nothing to say to each other about lighting.
+    ///
+    /// <para>The lights are stored RESOLVED rather than as a path to re-parse. A Light.dat cannot express
+    /// a light's per-light intensity or its name (LightDatFile folds intensity into the 0-255 colour), so
+    /// re-reading the file on open would silently mangle every light the user tuned - and lights added
+    /// after the import were never in a file at all.</para></summary>
+    public List<MapLightingRecord> MapLighting { get; set; } = new();
+
     /// <summary>M132: pack only known game file types into wads — editor leftovers, notes, PSDs and
     /// other unknown extensions are skipped (each skip is logged). Default on.</summary>
     public bool PackKnownTypesOnly { get; set; } = true;
@@ -102,6 +112,59 @@ public sealed class TextureRecolorRecord
     public float TintG { get; set; } = 1f;
     public float TintB { get; set; } = 1f;
     public float Strength { get; set; } = 1f;
+}
+
+/// <summary>M287: one map's authored lighting. Defaults match the view-model's own initial values, so a
+/// record written by an older build - or a hand-edited one missing a field - restores to what the editor
+/// would have shown anyway rather than to zero.</summary>
+public sealed class MapLightingRecord
+{
+    public ulong PathHash { get; set; }
+    public string MapgeoPath { get; set; } = "";
+
+    public double SunIntensity { get; set; } = 1.0;
+    public double SunColorR { get; set; } = 0.75;
+    public double SunColorG { get; set; } = 0.75;
+    public double SunColorB { get; set; } = 0.75;
+    public double SkyIntensity { get; set; } = 1.0;
+    public double SkyColorR { get; set; } = 0.35;
+    public double SkyColorG { get; set; } = 0.35;
+    public double SkyColorB { get; set; } = 0.35;
+    public double LightmapScale { get; set; } = 1.0;
+
+    // The Light.dat fit block - what "spread and shift this table onto this map" resolved to.
+    public double LightIntensity { get; set; } = 1.0;
+    public double LightRadiusScale { get; set; } = 1.0;
+    public double FalloffSoftness { get; set; } = 0.6;
+    public double PositionScale { get; set; } = 1.0;
+    public double ScaleX { get; set; } = 1.0;
+    public double ScaleZ { get; set; } = 1.0;
+    public double OffsetX { get; set; }
+    public double OffsetZ { get; set; }
+
+    /// <summary>Where an imported Light.dat came from, kept so Save still round-trips to the same file
+    /// after reopening. A HINT only - never re-parsed on load, or a file changed or moved behind the
+    /// editor's back would silently overwrite the edits this record exists to protect.</summary>
+    public string? LightDatPath { get; set; }
+
+    public List<SavedPointLight> Lights { get; set; } = new();
+}
+
+/// <summary>One point light as the editor holds it. Colour is 0-255 to match both the Light.dat text form
+/// and the view-model, so the number a user reads in the inspector is the number in the file.</summary>
+public sealed class SavedPointLight
+{
+    public double X { get; set; }
+    public double Y { get; set; }
+    public double Z { get; set; }
+    public double R { get; set; }
+    public double G { get; set; }
+    public double B { get; set; }
+    public double Radius { get; set; }
+    /// <summary>Editor-only: Light.dat has no field for it, which is the main reason this table is
+    /// persisted here rather than being recovered by re-reading the .dat.</summary>
+    public double Intensity { get; set; } = 1.0;
+    public string Name { get; set; } = "Light";
 }
 
 /// <summary>One overridden chunk: its path hash + the on-disk replacement file.</summary>
