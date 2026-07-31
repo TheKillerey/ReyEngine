@@ -121,6 +121,12 @@ public sealed class ProjectReferenceIndex : IReferenceIndex
             }
             start = -1;
         }
+        if (start >= 0 && limit - start >= 4)
+        {
+            string run = Encoding.ASCII.GetString(bytes, start, Math.Min(limit - start, 512));
+            if (run.IndexOf('/') > 0 || run.IndexOf('.') > 0 || run.IndexOf('_') > 0)
+                AddReference(run);
+        }
     }
 
     /// <summary>Record one referencing string under every spelling it could match a file by.</summary>

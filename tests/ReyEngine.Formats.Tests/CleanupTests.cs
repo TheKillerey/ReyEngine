@@ -51,6 +51,14 @@ public class CleanupTests
     }
 
     [Fact]
+    public void AssetNameAtTheLastByteIsIndexed()
+    {
+        var ix = new ProjectReferenceIndex();
+        ix.AddAssetNames(Encoding.ASCII.GetBytes("binary\0assets/x/at_eof.dds"));
+        Assert.True(Ref(ix, "assets/x/at_eof.dds"));
+    }
+
+    [Fact]
     public void AShortStemDoesNotMatchOnNameAlone()
     {
         // "sky" is too generic to be evidence about assets/.../sky.dds; requiring 4+ chars keeps the
@@ -122,6 +130,30 @@ public class CleanupTests
             var c = Assert.Single(r.Candidates);
             Assert.Equal(CleanupGroup.Unused, c.Group);
             Assert.True(c.SelectedByDefault);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void GeneratedOutputNestedInAProjectFolderIsExcluded()
+    {
+        var (root, folder) = MakeProject(
+            ("assets/x/dead.dds", new byte[] { 1 }),
+            ("Build/staged/Map11/assets/x/generated.dds", new byte[] { 2 }));
+        try
+        {
+            var baseOptions = Opts(root, folder, new FakeIndex());
+            var options = new CleanupScanOptions
+            {
+                ProjectRoot = baseOptions.ProjectRoot,
+                Folders = baseOptions.Folders,
+                References = baseOptions.References,
+                GameWadHashes = baseOptions.GameWadHashes,
+                ExcludedRoots = new[] { Path.Combine(folder, "Build") },
+            };
+
+            var candidate = Assert.Single(CleanupScanner.Scan(options).Candidates);
+            Assert.Equal("assets/x/dead.dds", candidate.RelPath);
         }
         finally { Directory.Delete(root, true); }
     }

@@ -57,6 +57,9 @@ public partial class MainWindow : Window
                 vm.PropertyChanged += (_, e) =>
                 {
                     if (e.PropertyName == nameof(MainWindowViewModel.UseDx11Viewport)) OnDx11Toggled(vm);
+                    else if (e.PropertyName == nameof(MainWindowViewModel.MeshVerticesRevision)
+                             && vm.UseDx11Viewport && _dx11?.IsReady == true)
+                        vm.UpdateDx11EditedMeshVertices(_dx11.Renderer);
                     // M268: and rebuild when the MAP changes underneath a viewport that is already on.
                     // The scene was only ever built on the toggle, so opening a second map left the first
                     // one on screen - stale geometry that looked like the new map had failed to load.

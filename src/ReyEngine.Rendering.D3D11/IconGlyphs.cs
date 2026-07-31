@@ -3,7 +3,7 @@ using System;
 namespace ReyEngine.Rendering.D3D11;
 
 /// <summary>The placement types the viewport marks.</summary>
-public enum IconGlyph { Particle = 0, Sound = 1, Prop = 2, Probe = 3 }
+public enum IconGlyph { Particle = 0, Sound = 1, Prop = 2, Probe = 3, Light = 4 }
 
 /// <summary>
 /// <para>M271: the marker glyphs, rasterised in code rather than loaded from files.</para>
@@ -11,11 +11,11 @@ public enum IconGlyph { Particle = 0, Sound = 1, Prop = 2, Probe = 3 }
 /// <para>There is no icon art in the repository - the OpenGL viewport draws a soft dot and nothing else -
 /// so shipping textured markers meant either introducing an art pipeline or drawing them. Drawing them
 /// has no missing-file failure mode, no packaging step, and no way for a build to ship with the icons
-/// silently absent, which for four small symbols is worth more than the fidelity a painted sprite would
+/// silently absent, which for five small symbols is worth more than the fidelity a painted sprite would
 /// add.</para>
 ///
 /// <para>Each glyph is a white RGBA image whose ALPHA carries the shape; the colour comes from the
-/// overlay's constant buffer, so one glyph serves every tint and the same four textures cover both the
+/// overlay's constant buffer, so one glyph serves every tint and the same five textures cover both the
 /// normal and the selected state.</para>
 /// </summary>
 public static class IconGlyphs
@@ -36,7 +36,8 @@ public static class IconGlyphs
                 IconGlyph.Particle => Spark(u, v),
                 IconGlyph.Sound => Speaker(u, v),
                 IconGlyph.Prop => Cube(u, v),
-                _ => Probe(u, v),
+                IconGlyph.Probe => Probe(u, v),
+                _ => Light(u, v),
             };
             int o = (y * Size + x) * 4;
             px[o] = 255; px[o + 1] = 255; px[o + 2] = 255;
@@ -109,6 +110,22 @@ public static class IconGlyphs
         float ring = Smooth(0.74f, 0.06f, r) - Smooth(0.58f, 0.06f, r);
         float dot = Smooth(0.17f, 0.06f, Dist(u, v, -0.24f, 0.26f));
         return MathF.Min(1f, MathF.Max(ring, dot * 0.9f));
+    }
+
+    // A compact sun/bulb mark: solid centre with eight short rays.
+    private static float Light(float u, float v)
+    {
+        float r = MathF.Sqrt(u * u + v * v);
+        float core = Smooth(0.28f, 0.05f, r);
+        float rays = 0f;
+        for (int i = 0; i < 8; i++)
+        {
+            float a = i * MathF.PI / 4f;
+            rays = MathF.Max(rays, Seg(u, v,
+                MathF.Cos(a) * 0.43f, MathF.Sin(a) * 0.43f,
+                MathF.Cos(a) * 0.82f, MathF.Sin(a) * 0.82f, 0.055f));
+        }
+        return MathF.Max(core, rays);
     }
 
     private static float Box(float u, float v, float hw, float hh)

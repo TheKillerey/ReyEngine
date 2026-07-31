@@ -10,6 +10,9 @@ public sealed class CleanupScanOptions
     public required IReadOnlyList<(string Name, string Root)> Folders { get; init; }
     public required IReferenceIndex References { get; init; }
 
+    /// <summary>Generated or otherwise out-of-scope trees nested below a project folder.</summary>
+    public IReadOnlyList<string> ExcludedRoots { get; init; } = Array.Empty<string>();
+
     public bool ScanUnused { get; init; } = true;
     public bool ScanRiotIdentical { get; init; } = true;
     public bool IncludeEmptyFolders { get; init; }
@@ -87,6 +90,7 @@ public static class CleanupScanner
             foreach (var (hash, abs) in WadPackService.EnumerateChunkFiles(root))
             {
                 ct.ThrowIfCancellationRequested();
+                if (o.ExcludedRoots.Any(excluded => IsSameOrChild(abs, excluded))) continue;
                 string rel = Path.GetRelativePath(root, abs).Replace('\\', '/');
                 long bytes;
                 try { bytes = new FileInfo(abs).Length; } catch { continue; }
@@ -104,7 +108,7 @@ public static class CleanupScanner
             foreach (var (name, root) in o.Folders)
             {
                 if (!Directory.Exists(root)) continue;
-                foreach (var dir in EmptyDirectories(root))
+                foreach (var dir in EmptyDirectories(root, o.ExcludedRoots))
                     candidates.Add(new CleanupCandidate(CleanupGroup.EmptyFolder,
                         Path.GetRelativePath(root, dir).Replace('\\', '/'), dir, name,
                         AssetType.Unknown, 0, "Contains no files at any depth"));
@@ -193,7 +197,7 @@ public static class CleanupScanner
 
     /// <summary>Directories with no file at any depth. Deepest first, so removing them in order leaves no
     /// parent stranded.</summary>
-    private static IEnumerable<string> EmptyDirectories(string root)
+    private static IEnumerable<string> EmptyDirectories(string root, IReadOnlyList<string> excludedRoots)
     {
         IEnumerable<string> dirs;
         try { dirs = Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories); }
@@ -202,6 +206,7 @@ public static class CleanupScanner
         var found = new List<string>();
         foreach (var d in dirs)
         {
+            if (excludedRoots.Any(excluded => IsSameOrChild(d, excluded))) continue;
             var rel = Path.GetRelativePath(root, d).Replace('\\', '/');
             if (rel.StartsWith(".reyengine", StringComparison.OrdinalIgnoreCase)) continue;
             bool any;
@@ -211,5 +216,14 @@ public static class CleanupScanner
         }
         found.Sort((x, y) => y.Length.CompareTo(x.Length));
         foreach (var d in found) yield return d;
+    }
+
+    private static bool IsSameOrChild(string path, string root)
+    {
+        string fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return fullPath.Equals(fullRoot, comparison)
+            || fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, comparison);
     }
 }

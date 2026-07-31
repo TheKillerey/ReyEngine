@@ -77,7 +77,7 @@
                   FontSize="11" />
         <Button Grid.Column="2" Classes="tool" Content="Select all" Margin="8,0,0,0"
                 Command="{Binding SelectAllCommand}"
-                ToolTip.Tip="Ticks every visible row except the protected/uncertain group." />
+                ToolTip.Tip="Ticks every visible row, including protected/uncertain items; review warnings before cleaning." />
         <Button Grid.Column="3" Classes="tool" Content="Deselect all" Margin="6,0,0,0"
                 Command="{Binding DeselectAllCommand}" />
       </Grid>

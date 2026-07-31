@@ -305,7 +305,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private bool _overlayTried;
     private List<(int Start, int Count)> _highlight = new();
 
-    // M270: placement markers - particles, sounds, props, probes. Their own buffer pair, because the
+    // M270/M305: placement markers - particles, sounds, props, probes, lights. Their own buffer pair, because the
     // dynamic pair belongs to the particle simulation and both are rewritten every frame.
     private ComPtr<ID3D11Buffer> _iconVb, _iconIb;
     private int _iconVbCapacity, _iconIbCapacity;
@@ -314,7 +314,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11PixelShader> _overlayPsTex;
     private ComPtr<ID3D11InputLayout> _overlayLayoutTex;
     private ComPtr<ID3D11SamplerState> _iconSampler;
-    private readonly ComPtr<ID3D11ShaderResourceView>[] _glyphSrv = new ComPtr<ID3D11ShaderResourceView>[4];
+    private readonly ComPtr<ID3D11ShaderResourceView>[] _glyphSrv = new ComPtr<ID3D11ShaderResourceView>[5];
     private ComPtr<ID3D11Buffer> _vb, _ib;
     // M264: a SECOND pair, for geometry that is rewritten every frame. Until now SetMesh and
     // SetDynamicMesh both replaced _vb/_ib, so a scene could hold static geometry or particles but never
@@ -361,7 +361,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         public int VertexCount, IndexCount;
         public float[] Interleaved = Array.Empty<float>();
     }
-    private readonly List<MeshGeom> _meshGeoms = new();
+    private readonly List<MeshGeom?> _meshGeoms = new();
 
     /// <summary>Floats per mesh vertex: position (3) + uv (2). No normal - the ported shader has no
     /// lighting term that would read one. Fresnel and the reflection cubemap, which are the only things in
@@ -381,7 +381,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     private ComPtr<ID3D11SamplerState> _linearWrap, _linearClamp, _comparison;
     private ComPtr<ID3D11RasterizerState> _raster;
-    private ComPtr<ID3D11BlendState> _blend;
+    private ComPtr<ID3D11BlendState> _blend, _blendOpaque;
     private ComPtr<ID3D11DepthStencilState> _depthState;
     /// <summary>M266: the same state with DepthWriteMask.Zero, selected per material by
     /// <see cref="PreviewMaterial.WritesDepth"/>. Particles need it; nothing else does.</summary>
@@ -1521,7 +1521,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
         var vdesc = new BufferDesc
         {
             ByteWidth = (uint)(mesh.Vertices.Length * PreviewVertex.SizeInBytes),
-            Usage = Usage.Immutable, BindFlags = (uint)BindFlag.VertexBuffer,
+            Usage = Usage.Default, BindFlags = (uint)BindFlag.VertexBuffer,
         };
         fixed (PreviewVertex* p = mesh.Vertices)
         {
@@ -1545,6 +1545,38 @@ float4 psmain_tex(VTexOut i) : SV_Target
         }
         _indexCount = mesh.Indices.Length;
         Log($"mesh '{mesh.Name}': {mesh.Vertices.Length:n0} verts, {mesh.TriangleCount:n0} tris");
+    }
+
+    /// <summary>Update an edited mapgeo vertex range without rebuilding shaders or textures.</summary>
+    public void UpdateMeshVertices(float[] positions, float[] normals, int startVertex, int vertexCount)
+    {
+        if (Mesh is null || _vb.Handle is null || vertexCount <= 0) return;
+        int start = Math.Clamp(startVertex, 0, Mesh.Vertices.Length);
+        int end = Math.Clamp(start + vertexCount, start, Mesh.Vertices.Length);
+        end = Math.Min(end, Math.Min(positions.Length / 3, normals.Length / 3));
+        if (end <= start) return;
+
+        for (int v = start; v < end; v++)
+        {
+            Mesh.Vertices[v].Position = new Vector3(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]);
+            Mesh.Vertices[v].Normal = new Vector3(normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]);
+        }
+
+        var box = new Box
+        {
+            Left = (uint)(start * PreviewVertex.SizeInBytes),
+            Right = (uint)(end * PreviewVertex.SizeInBytes),
+            Top = 0,
+            Bottom = 1,
+            Front = 0,
+            Back = 1,
+        };
+        fixed (PreviewVertex* p = &Mesh.Vertices[start])
+            _ctx.UpdateSubresource(_vb, 0, &box, p, 0, 0);
+
+        // Edited vertices invalidate the per-material culling boxes. Drawing without a box is correct;
+        // retaining the old one can incorrectly cull a mesh moved outside its former bounds.
+        foreach (var material in _materials) material.Bounds = null;
     }
 
     /// <summary>M226: decoded textures, keyed by the asset path they came from and shared by every
@@ -1634,6 +1666,16 @@ float4 psmain_tex(VTexOut i) : SV_Target
         _texPool.Clear();
         _texAlpha.Clear();
         _retired.Clear();
+    }
+
+    /// <summary>Release exact scene-owned pool entries after their materials have been removed.</summary>
+    public void RemoveCachedTextures(IEnumerable<string> keys)
+    {
+        foreach (string key in keys.Distinct(StringComparer.Ordinal))
+        {
+            if (_texPool.Remove(key, out var texture)) texture.Dispose();
+            _texAlpha.Remove(key);
+        }
     }
 
     /// <summary>How many distinct assets are resident, for the scene report.</summary>
@@ -2173,6 +2215,8 @@ float4 psmain(VOut i) : SV_Target
             }
         }
 
+        int free = _meshGeoms.FindIndex(g => g is null);
+        if (free >= 0) { _meshGeoms[free] = geom; return free; }
         _meshGeoms.Add(geom);
         return _meshGeoms.Count - 1;
     }
@@ -2183,6 +2227,7 @@ float4 psmain(VOut i) : SV_Target
     {
         if (id < 0 || id >= _meshGeoms.Count) return;
         var geom = _meshGeoms[id];
+        if (geom is null) return;
         int n = Math.Min(geom.VertexCount, positions.Length / 3);
         for (int v = 0; v < n; v++)
         {
@@ -2204,11 +2249,20 @@ float4 psmain(VOut i) : SV_Target
         _ctx.Unmap(geom.Vb, 0);
     }
 
-    public int MeshGeometryCount => _meshGeoms.Count;
+    public int MeshGeometryCount => _meshGeoms.Count(g => g is not null);
+
+    public void ReleaseMeshGeometry(int id)
+    {
+        if (id < 0 || id >= _meshGeoms.Count || _meshGeoms[id] is not { } geom) return;
+        geom.Vb.Dispose();
+        geom.Ib.Dispose();
+        _meshGeoms[id] = null;
+    }
 
     private void ReleaseMeshGeometry()
     {
-        foreach (var g in _meshGeoms) { g.Vb.Dispose(); g.Ib.Dispose(); }
+        foreach (var g in _meshGeoms)
+            if (g is not null) { g.Vb.Dispose(); g.Ib.Dispose(); }
         _meshGeoms.Clear();
     }
 
@@ -2222,6 +2276,7 @@ float4 psmain(VOut i) : SV_Target
         if (!EnsureMesh()) return false;
         if (mat.MeshGeometryId is not { } id || id < 0 || id >= _meshGeoms.Count) return false;
         var geom = _meshGeoms[id];
+        if (geom is null) return false;
         if (geom.Vb.Handle is null) return false;
         // M295: two shapes of instance feed this one pipeline. Particles supply the simulator's packed
         // array (position + scalar scale + Y-spin); props supply real 4x4 placements. Props are the
@@ -2251,10 +2306,12 @@ float4 psmain(VOut i) : SV_Target
         var samp = _linearWrap;
         _ctx.PSSetSamplers(0, 1, ref samp);
 
-        _ctx.OMSetBlendState(mat.Additive && _blendAdditive.Handle is not null ? _blendAdditive : _blend,
+        bool cutoutProp = mat.MeshModels is not null && mat.MeshAlphaCutoff > 0;
+        _ctx.OMSetBlendState(cutoutProp && _blendOpaque.Handle is not null ? _blendOpaque
+                : mat.Additive && _blendAdditive.Handle is not null ? _blendAdditive : _blend,
             stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
         _ctx.OMSetDepthStencilState(
-            _depthStateNoWrite.Handle is not null ? _depthStateNoWrite : _depthState, 0);
+            mat.WritesDepth || _depthStateNoWrite.Handle is null ? _depthState : _depthStateNoWrite, 0);
 
         // M295: a prop material may draw only ONE SUBMESH of a shared geometry, because a prop's submeshes
         // each carry their own diffuse. Particles leave these at 0 and get the whole buffer, as before.
@@ -2635,8 +2692,8 @@ float4 psmain(VOut i) : SV_Target
         if (_stateKey == key && _raster.Handle is not null) return;
         _stateKey = key;
 
-        _raster.Dispose(); _blend.Dispose(); _depthState.Dispose();
-        _raster = default; _blend = default; _depthState = default;
+        _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
+        _raster = default; _blend = default; _blendOpaque = default; _depthState = default;
 
         var rd = new RasterizerDesc
         {
@@ -2663,6 +2720,16 @@ float4 psmain(VOut i) : SV_Target
         ComPtr<ID3D11BlendState> bs = default;
         _device.CreateBlendState(in bd, ref bs);
         _blend = bs;
+
+        var obd = new BlendDesc();
+        obd.RenderTarget[0] = new RenderTargetBlendDesc
+        {
+            BlendEnable = false,
+            RenderTargetWriteMask = (byte)ColorWriteEnable.All,
+        };
+        ComPtr<ID3D11BlendState> obs = default;
+        _device.CreateBlendState(in obd, ref obs);
+        _blendOpaque = obs;
 
         // M232: additive, for particle emitters whose blendMode says so. Same source factor, but the
         // destination ADDS instead of being scaled down, and alpha is left alone.
@@ -3649,7 +3716,7 @@ float4 psmain(VOut i) : SV_Target
         for (int g = 0; g < _glyphSrv.Length; g++) _glyphSrv[g].Dispose();
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClamp.Dispose(); _comparison.Dispose();
-        _raster.Dispose(); _blend.Dispose(); _depthState.Dispose();
+        _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
         _blendAdditive.Dispose(); _depthStateNoWrite.Dispose();
         _ctx.Dispose(); _device.Dispose();
         _d3d?.Dispose();

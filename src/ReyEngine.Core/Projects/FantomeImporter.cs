@@ -135,9 +135,9 @@ public static class FantomeImporter
                         {
                             string target;
                             if (we.IsResolved)
-                                target = Path.Combine(outDir, we.Path.Replace('/', Path.DirectorySeparatorChar));
+                                target = SafeTarget(outDir, we.Path);
                             else if (recovered.TryGetValue(we.PathHash, out var real))
-                                target = Path.Combine(outDir, SafeRelative(real));
+                                target = SafeTarget(outDir, SafeRelative(real));
                             else
                             {
                                 // Read it once, name it from what it is, then write the same bytes.
@@ -185,7 +185,7 @@ public static class FantomeImporter
                     if (rel.Length == 0) continue;
                     try
                     {
-                        string target = Path.Combine(outDir, rel.Replace('/', Path.DirectorySeparatorChar));
+                        string target = SafeTarget(outDir, rel);
                         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                         e.ExtractToFile(target, overwrite: true);
                         extracted++;
@@ -205,10 +205,14 @@ public static class FantomeImporter
             if (!full.StartsWith("RAW/", StringComparison.OrdinalIgnoreCase) || entry.Length == 0) continue;
             string rel = full["RAW/".Length..];
             if (rel.Length == 0) continue;
-            string target = Path.Combine(root, "RAW", rel.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            entry.ExtractToFile(target, overwrite: true);
-            raw++;
+            try
+            {
+                string target = SafeTarget(Path.Combine(root, "RAW"), rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                entry.ExtractToFile(target, overwrite: true);
+                raw++;
+            }
+            catch { failed++; }
         }
         if (raw > 0) folders.Add("RAW");
 
@@ -296,9 +300,29 @@ public static class FantomeImporter
         return clean.Count == 0 ? "recovered.bin" : Path.Combine(clean.ToArray());
     }
 
+    private static string SafeTarget(string root, string relativePath)
+    {
+        if (Path.IsPathRooted(relativePath))
+            throw new InvalidDataException($"Archive entry has a rooted path: {relativePath}");
+
+        string fullRoot = Path.GetFullPath(root);
+        string target = Path.GetFullPath(Path.Combine(
+            fullRoot,
+            relativePath.Replace('/', Path.DirectorySeparatorChar)
+                        .Replace('\\', Path.DirectorySeparatorChar)));
+        string rootPrefix = fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                          + Path.DirectorySeparatorChar;
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!target.StartsWith(rootPrefix, comparison))
+            throw new InvalidDataException($"Archive entry escapes its destination: {relativePath}");
+
+        return target;
+    }
+
     private static string Sanitize(string name)
     {
         foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
-        return name.Trim();
+        name = name.Trim();
+        return name is "" or "." or ".." ? "_" : name;
     }
 }

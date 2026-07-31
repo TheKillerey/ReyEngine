@@ -9,6 +9,7 @@ using ReyEngine.Core.Assets;
 using ReyEngine.Core.Build;
 using ReyEngine.Core.Cleanup;
 using ReyEngine.Core.Hashing;
+using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Meta;
 
 namespace ReyEngine.App.ViewModels;
@@ -35,6 +36,8 @@ public sealed partial class MainWindowViewModel
                 Task.Run(() => ScanForCleanup(unused, riot, empties, progress)),
             CleanAsync = RunCleanupAsync,
             RestoreAsync = RestoreCleanupAsync,
+            HasRestorableRun = () => Project.RootPath is not null
+                && CleanupExecutor.ListRuns(Project.RootPath).Any(r => !r.Restored),
         };
         // Tell the window up front whether Riot comparison is even possible, so the option is disabled
         // before the first scan rather than silently doing nothing.
@@ -77,6 +80,9 @@ public sealed partial class MainWindowViewModel
             .Select(f => (Name: f == "." ? Project.Name : f, Root: Project.ResolveProjectPath(f)))
             .Where(t => Directory.Exists(t.Root))
             .ToList();
+        string outputRoot = Project.OutputDirectory ?? Path.Combine(root, "Build");
+        if (!Path.IsPathFullyQualified(outputRoot)) outputRoot = Path.Combine(root, outputRoot);
+        outputRoot = Path.GetFullPath(outputRoot);
 
         // ---- one reference index, built from the project's own bins ----
         progress.Report((0.02, "Indexing project references…"));
@@ -84,6 +90,7 @@ public sealed partial class MainWindowViewModel
         foreach (var (_, folderRoot) in folders)
             foreach (var (_, path) in WadPackService.EnumerateChunkFiles(folderRoot))
             {
+                if (IsSameOrChild(path, outputRoot)) continue;
                 var ext = Path.GetExtension(path).ToLowerInvariant();
                 try
                 {
@@ -95,6 +102,33 @@ public sealed partial class MainWindowViewModel
                 }
                 catch { }
             }
+
+        int packedReferenceGaps = 0;
+        foreach (var projectWad in Project.ProjectWads)
+        {
+            string wadPath = Project.ResolveProjectPath(projectWad);
+            try
+            {
+                using var wad = WadArchive.Open(wadPath, _resolver);
+                foreach (var entry in wad.Entries)
+                {
+                    string ext = entry.IsResolved ? Path.GetExtension(entry.Path).ToLowerInvariant() : "";
+                    if (entry.IsResolved && ext is not (".bin" or ".mapgeo" or ".skn" or ".scb" or ".sco"))
+                        continue;
+                    try
+                    {
+                        byte[] bytes = wad.Extract(entry.PathHash);
+                        var type = AssetTypeDetector.FromMagic(bytes);
+                        if (ext == ".bin" || !entry.IsResolved) index.AddBin(bytes);
+                        if (ext is ".mapgeo" or ".skn" or ".scb" or ".sco"
+                            || type is AssetType.MapGeometry or AssetType.SkinnedMesh or AssetType.StaticMesh)
+                            index.AddAssetNames(bytes);
+                    }
+                    catch { packedReferenceGaps++; }
+                }
+            }
+            catch { packedReferenceGaps++; }
+        }
 
         // Project metadata points at assets by hash and by path; both count as references, and the files
         // it names outright (thumbnail, recolour snapshots) are protected rather than merely referenced.
@@ -117,9 +151,10 @@ public sealed partial class MainWindowViewModel
 
         _log.Info("Cleanup", $"Reference index: {index.BinsRead:n0} bin(s) read, {index.BinsFailed} unreadable, "
                            + $"{index.NotBins} not bins; {index.PathCount:n0} path(s), {index.HashCount:n0} hash(es).");
-        if (!index.IsComplete)
-            _log.Warn("Cleanup", $"{index.BinsFailed:n0} bin(s) could not be parsed — references they hold are "
-                               + "invisible, so unused results are reported as uncertain.");
+        if (!index.IsComplete || packedReferenceGaps > 0)
+            _log.Warn("Cleanup", $"{index.BinsFailed:n0} bin(s) could not be parsed and "
+                               + $"{packedReferenceGaps:n0} project-WAD chunk(s) could not be read — references "
+                               + "they hold are invisible, so unused results are reported as uncertain.");
 
         // ---- what the installed game ships (a path the game knows is never unused) ----
         progress.Report((0.06, "Indexing game WADs…"));
@@ -139,6 +174,7 @@ public sealed partial class MainWindowViewModel
         {
             ProjectRoot = root,
             Folders = folders,
+            ExcludedRoots = new[] { outputRoot },
             References = index,
             ScanUnused = unused,
             ScanRiotIdentical = riotIdentical,
@@ -149,8 +185,9 @@ public sealed partial class MainWindowViewModel
             ContentEquivalent = ContentEquivalent,
             ProtectedRelPaths = protectedPaths,
             ProtectedHashes = protectedHashes,
-            ReferencesComplete = index.IsComplete,
-            ReferenceGapReason = index.IsComplete ? "" : $"{index.BinsFailed:n0} unparseable bin(s)",
+            ReferencesComplete = index.IsComplete && packedReferenceGaps == 0,
+            ReferenceGapReason = index.IsComplete && packedReferenceGaps == 0 ? ""
+                : $"{index.BinsFailed:n0} unparseable bin(s), {packedReferenceGaps:n0} unreadable project-WAD chunk(s)",
         };
         return CleanupScanner.Scan(options, progress);
     }
@@ -214,13 +251,15 @@ public sealed partial class MainWindowViewModel
     private async Task<string?> RestoreCleanupAsync()
     {
         if (Project.RootPath is null) return null;
-        string? runId = _lastCleanupRunId
-            ?? CleanupExecutor.ListRuns(Project.RootPath).FirstOrDefault(r => !r.Restored)?.Id;
+        var runs = CleanupExecutor.ListRuns(Project.RootPath);
+        string? runId = runs.FirstOrDefault(r => r.Id == _lastCleanupRunId && !r.Restored)?.Id
+            ?? runs.FirstOrDefault(r => !r.Restored)?.Id;
         if (runId is null) { _log.Warn("Cleanup", "No cleanup run to restore."); return null; }
 
         var (ok, bad, log) = await Task.Run(() => CleanupExecutor.Restore(Project.RootPath!, runId));
         foreach (var line in log.Take(20)) _log.Warn("Cleanup", line);
         _log.Success("Cleanup", $"Restored {ok:n0} file(s) from {runId}" + (bad > 0 ? $", {bad:n0} could not be put back." : "."));
+        if (bad == 0) _lastCleanupRunId = null;
         RefreshAfterCleanup();
         return $"Restored {ok:n0} file(s) from {runId}" + (bad > 0 ? $" — {bad:n0} could not be put back (see the log)." : ".");
     }

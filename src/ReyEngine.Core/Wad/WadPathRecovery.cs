@@ -53,6 +53,11 @@ public static class WadPathRecovery
                 }
                 start = -1;
             }
+            if (start >= 0 && bytes.Length - start >= 5)
+            {
+                string run = Encoding.ASCII.GetString(bytes, start, bytes.Length - start);
+                if (run.IndexOf('.') > 0) candidates.Add(run);
+            }
         }
 
         foreach (string s in candidates)

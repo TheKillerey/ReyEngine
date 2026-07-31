@@ -58,6 +58,8 @@ public sealed partial class CleanupWindowViewModel : ObservableObject
     public Func<IReadOnlyList<CleanupCandidate>, Task<string?>>? CleanAsync { get; init; }
     /// <summary>Undo the most recent run. Returns a status line, or null if there was nothing to undo.</summary>
     public Func<Task<string?>>? RestoreAsync { get; init; }
+    /// <summary>Re-check whether an unrestored cleanup run remains after an undo.</summary>
+    public Func<bool>? HasRestorableRun { get; init; }
 
     public ObservableCollection<CleanupGroupViewModel> Groups { get; } = new();
     public ObservableCollection<string> TypeFilters { get; } = new() { "All types" };
@@ -271,6 +273,7 @@ public sealed partial class CleanupWindowViewModel : ObservableObject
                 Apply(await ScanAsync(RemoveUnused, RemoveRiotIdentical, IncludeEmptyFolders, progress));
                 Status = msg;
             }
+            CanRestore = HasRestorableRun?.Invoke() ?? CanRestore;
         }
         catch (Exception ex) { Status = "Restore failed: " + ex.Message; }
         finally { Busy = false; Progress = 0; }

@@ -181,6 +181,8 @@ public sealed class D3D11MapParticles
         _renderer.RemoveMaterials(m => _mine.Contains(m));
         _mine.Clear();
         _slices.Clear();
+        foreach (int id in _meshSlices.Select(s => s.GeometryId).Distinct())
+            _renderer.ReleaseMeshGeometry(id);
         _meshSlices.Clear();
         _liveBySlice.Clear();
         _byEmitter.Clear();

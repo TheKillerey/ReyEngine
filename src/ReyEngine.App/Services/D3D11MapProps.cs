@@ -40,6 +40,7 @@ public sealed class D3D11MapProps
         public readonly List<Matrix4x4> Instances = new();
     }
     private readonly List<PropGeom> _geoms = new();
+    private readonly HashSet<string> _textureKeys = new(StringComparer.Ordinal);
 
     public D3D11MapProps(ShaderPreviewRenderer renderer, ShaderCacheReader cache)
     { _renderer = renderer; _cache = cache; }
@@ -49,14 +50,17 @@ public sealed class D3D11MapProps
     public int SkippedProps { get; private set; }
     public string Report { get; private set; } = "";
 
-    /// <summary>Drop everything this driver owns. The renderer's mesh geometry is pool-owned and released
-    /// with the scene, so only the materials are removed here.</summary>
+    /// <summary>Drop every material, texture, and geometry this driver owns.</summary>
     public void Clear()
     {
         if (_mine.Count > 0) _renderer.RemoveMaterials(m => _mine.Contains(m));
         _mine.Clear();
+        _renderer.RemoveCachedTextures(_textureKeys);
+        _textureKeys.Clear();
+        foreach (var g in _geoms) _renderer.ReleaseMeshGeometry(g.GeometryId);
         _geoms.Clear();
         PropInstanceCount = 0;
+        SkippedProps = 0;
     }
 
     /// <summary>Build materials for a prop set. Safe to call with null - that is "props are switched off",
@@ -130,8 +134,11 @@ public sealed class D3D11MapProps
                 mat.MeshAlphaCutoff = 0.35f;
 
                 if (sub.Texture is { } img)
-                    _renderer.SetTexture(mat, "TEXTURE__TX", $"prop:{g.Mesh.Key}:{sub.Start}",
-                        img.Rgba, img.Width, img.Height);
+                {
+                    string textureKey = $"prop:{g.Mesh.Key}:{g.GeometryId}:{sub.Start}";
+                    _renderer.SetTexture(mat, "TEXTURE__TX", textureKey, img.Rgba, img.Width, img.Height);
+                    _textureKeys.Add(textureKey);
+                }
 
                 _renderer.AddMaterial(mat);
                 _mine.Add(mat);

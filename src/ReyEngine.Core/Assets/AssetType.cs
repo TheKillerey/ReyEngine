@@ -118,6 +118,8 @@ public static class AssetTypeDetector
     /// a way that would quietly mislead anyone browsing the folder.</para></summary>
     public static string? FileExtensionFromMagic(ReadOnlySpan<byte> d)
     {
+        if (d.Length >= 4 && d[0] == 0x89 && d[1] == 'P' && d[2] == 'N' && d[3] == 'G') return "png";
+        if (d.Length >= 2 && d[0] == 0xFF && d[1] == 0xD8) return "jpg";
         if (d.Length >= 13 && Eq(d[..13], "[ObjectBegin]")) return "sco";     // text static mesh
         if (d.Length >= 8 && Eq(d[..4], "r3d2"))
         {

@@ -39,6 +39,19 @@ public class WadPathRecoveryTests
     }
 
     [Fact]
+    public void RecoversAPathThatEndsAtTheLastByte()
+    {
+        const string real = "assets/x/at_eof.dds";
+        byte[] bin = Encoding.ASCII.GetBytes("PROP\0" + real);
+        ulong hash = HashAlgorithms.WadPath(real);
+
+        var found = WadPathRecovery.Recover(
+            new ulong[] { 1 }, new HashSet<ulong> { hash }, _ => bin);
+
+        Assert.Equal(real, Assert.Contains(hash, found));
+    }
+
+    [Fact]
     public void IgnoresChunksThatAreNotBins()
     {
         const string real = "assets/x/y.dds";

@@ -1992,8 +1992,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_currentMap is not { } map) return "No map open - the D3D11 surface has no scene to draw yet.";
         if (_currentMapEntry is not { } mapEntry) return "The open map has no WAD entry.";
 
-        string? dir = string.IsNullOrEmpty(Project.GameDirectory) ? null
-            : Path.Combine(Project.GameDirectory, "DATA", "FINAL");
+        string? dir = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
         if (dir is null || !Directory.Exists(dir)) return "Game directory is not set, so the shader cache cannot be opened.";
 
         if (_dx11ShaderCache is null || !string.Equals(_dx11ShaderCacheDir, dir, StringComparison.OrdinalIgnoreCase))
@@ -2034,8 +2033,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_currentMap is not { } map) return "No map open - the D3D11 surface has no scene to draw yet.";
         if (_currentMapEntry is not { } mapEntry) return "The open map has no WAD entry.";
 
-        string? dir = string.IsNullOrEmpty(Project.GameDirectory) ? null
-            : Path.Combine(Project.GameDirectory, "DATA", "FINAL");
+        string? dir = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
         if (dir is null || !Directory.Exists(dir)) return "Game directory is not set, so the shader cache cannot be opened.";
 
         if (_dx11ShaderCache is null || !string.Equals(_dx11ShaderCacheDir, dir, StringComparison.OrdinalIgnoreCase))
@@ -2917,9 +2915,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// <para>M270: the placement markers for the D3D11 viewport, colour-coded by type.</para>
     ///
-    /// <para>Reads the SAME four marker lists the GL viewport is bound to, so the two viewports show and
-    /// hide the same things: each list is already emptied by its own Show toggle upstream, and duplicating
-    /// that gating here is how the two would drift apart.</para>
+    /// <para>Reads the same placement marker lists the GL viewport is bound to and applies the shared
+    /// fitted-position formula to editable point lights.</para>
     ///
     /// <para>Size scales with camera distance because these mark a POSITION, not an object with a size -
     /// a fixed world size vanishes when you pull back over a 97,000-unit map and swallows the screen when
@@ -2945,6 +2942,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ReyEngine.Rendering.D3D11.IconGlyph.Prop);
         Add(ProbeMarkers, new System.Numerics.Vector4(0.55f, 1.00f, 0.45f, 0.85f),
             ReyEngine.Rendering.D3D11.IconGlyph.Probe);
+        if (ShowLightMarkers && DynamicLights is { Count: > 0 } lights)
+        {
+            float spread = (float)DynamicLightPositionScale;
+            var scaleXZ = new System.Numerics.Vector2((float)DynamicLightScaleX, (float)DynamicLightScaleZ);
+            var offset = new System.Numerics.Vector2((float)DynamicLightOffsetX, (float)DynamicLightOffsetZ);
+            foreach (var light in lights)
+                outp.Add((Formats.Baking.BakeLighting.FitPosition(light.Position, spread, scaleXZ, offset),
+                    new System.Numerics.Vector4(1.00f, 0.62f, 0.20f, 0.90f), size * 1.2f,
+                    ReyEngine.Rendering.D3D11.IconGlyph.Light));
+        }
         return outp;
     }
 
@@ -8810,7 +8817,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var outFolder = Path.Combine(stagingRoot, name);
             folderIdx++;
             int idx = folderIdx;
-            files += CopyTree(srcFolder, outFolder,
+            files += CopyTree(srcFolder, outFolder, buildRoot,
                 n => progress?.Report((0.05 + 0.25 * (idx - 1 + Math.Min(1.0, n / 15000.0)) / Project.ProjectFolders.Count,
                     $"Staging {name}… ({n:n0} files)")));
             stagedFolders.Add((name, outFolder));
@@ -8884,21 +8891,61 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return produced;
     }
 
-    private static int CopyTree(string src, string dst, Action<int>? onProgress = null)
+    private static int CopyTree(string src, string dst, string excludedRoot, Action<int>? onProgress = null)
     {
         int n = 0;
-        foreach (var file in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+        string fullDst = Path.GetFullPath(dst);
+        string fullExcluded = Path.GetFullPath(excludedRoot);
+        var pending = new Stack<string>();
+        pending.Push(Path.GetFullPath(src));
+
+        while (pending.Count > 0)
         {
-            var rel = Path.GetRelativePath(src, file);
-            if (rel.StartsWith(".reyengine", StringComparison.OrdinalIgnoreCase)) continue;
-            var dest = Path.Combine(dst, rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            File.Copy(file, dest, overwrite: true);
-            n++;
-            if (n % 250 == 0) onProgress?.Invoke(n);
+            string dir = pending.Pop();
+            foreach (var child in Directory.EnumerateDirectories(dir))
+            {
+                string fullChild = Path.GetFullPath(child);
+                if (Path.GetFileName(child).Equals(".reyengine", StringComparison.OrdinalIgnoreCase)
+                    || IsSameOrChild(fullChild, fullDst)
+                    || IsSameOrChild(fullChild, fullExcluded))
+                    continue;
+                pending.Push(fullChild);
+            }
+
+            foreach (var file in Directory.EnumerateFiles(dir))
+            {
+                var rel = Path.GetRelativePath(src, file);
+                var dest = Path.Combine(dst, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.Copy(file, dest, overwrite: true);
+                n++;
+                if (n % 250 == 0) onProgress?.Invoke(n);
+            }
         }
         onProgress?.Invoke(n);
         return n;
+    }
+
+    /// <summary>Upload only the mapgeo ranges affected by the current edit.</summary>
+    public void UpdateDx11EditedMeshVertices(ReyEngine.Rendering.D3D11.ShaderPreviewRenderer renderer)
+    {
+        if (_currentMap is not { } map) return;
+        if (_selection.Count == 0)
+        {
+            renderer.UpdateMeshVertices(map.Positions, map.Normals, 0, map.VertexCount);
+            return;
+        }
+        foreach (var mesh in _selection.Items)
+            renderer.UpdateMeshVertices(map.Positions, map.Normals, mesh.VertexStart, mesh.VertexCount);
+    }
+
+    private static bool IsSameOrChild(string path, string root)
+    {
+        string fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return fullPath.Equals(fullRoot, comparison)
+            || fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, comparison);
     }
 
     [RelayCommand]
