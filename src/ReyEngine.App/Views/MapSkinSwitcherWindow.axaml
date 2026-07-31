@@ -4,7 +4,7 @@
         xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         x:Class="ReyEngine.App.Views.MapSkinSwitcherWindow"
         x:DataType="vm:MapSkinSwitcherViewModel"
-        Title="ReyEngine - Map Skin Switcher" Width="700" Height="610"
+        Title="ReyEngine - Map Skin Switcher" Width="700" Height="640"
         WindowStartupLocation="CenterOwner"
         ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}">
@@ -30,9 +30,9 @@
           <StackPanel Spacing="6">
             <TextBlock Classes="cardTitle" Text="RUNTIME-SAFE MAP-SKIN SWITCH" />
             <TextBlock FontSize="11" TextWrapping="Wrap"
-                       Text="This does not rename a mapgeo or transplant server-specific runtime data. It redirects the selected slot through the source skin's map container, object configuration, world particles and grass tint, while the slot keeps its own identity and gameplay-compatible character overrides." />
+                       Text="This creates a complete map-skin override rather than renaming a mapgeo. It routes the source container, object configuration, world particles and grass tint while preserving each MapSkin's runtime identity. It also rewrites the source materials container with the current skin's server-addressed gameplay IDs and routes dedicated source music and ambience when available." />
             <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
-                       Text="This uses the same four routing fields as the proven Map Forcer. Before saving, ReyEngine verifies the source container, route files, object links, strict bin round-trip, and the rerouted slot. The original is backed up under .reyengine/backups." />
+                       Text="Why the compatibility container matters: League's server can request opaque Base_SRX placeable IDs even after the client loads Milkshake. A route-only edit returns null and crashes during StartSpawn. ReyEngine semantically matches those gameplay objects, retains the server IDs, preserves the source-authored skins and values, then validates both generated bins. Both originals are backed up under .reyengine/backups." />
           </StackPanel>
         </Border>
 
@@ -52,7 +52,7 @@
         <Grid ColumnDefinitions="*,34,*">
           <Border Grid.Column="0" Classes="card">
             <StackPanel Spacing="6">
-              <TextBlock Classes="cardTitle" Text="EXPECTED SERVER SLOT" />
+              <TextBlock Classes="cardTitle" Text="CURRENT / BASE SKIN" />
               <ComboBox ItemsSource="{Binding TargetSkins}" SelectedItem="{Binding SelectedTarget}"
                         DisplayMemberBinding="{Binding DisplayName}" FontSize="11" MaxDropDownHeight="320" />
               <TextBlock Text="{Binding TargetDetail}" FontSize="10" TextWrapping="Wrap"
@@ -77,7 +77,7 @@
             <TextBlock Classes="cardTitle" Text="RESULT" />
             <TextBlock Text="{Binding SwapSummary}" FontSize="12" TextWrapping="Wrap"
                        Foreground="{DynamicResource ReyAccentBrush}" />
-            <TextBlock Text="Example: choose Default - Base_SRX on the left and Milkshake_SRS on the right. The server still selects Default, which safely loads Milkshake's environment without importing Milkshake-only spawn overrides into Default."
+            <TextBlock Text="Example: choose Default - Base_SRX on the left and Milkshake_SRS on the right. The result includes Milkshake visuals, winter music and ambience, while Base_SRX's server-facing shopkeeper identities remain valid."
                        FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
           </StackPanel>
         </Border>

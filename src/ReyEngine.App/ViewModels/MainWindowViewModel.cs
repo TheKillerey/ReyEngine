@@ -7416,8 +7416,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         finally { IsBuilding = false; }
     }
 
-    /// <summary>M309: route a normal-map MapSkin slot through another registered skin's safe
-    /// environment fields. Runtime/server data stays with each slot; Map22/TFT is always blocked.</summary>
+    /// <summary>M309: route every normal-map MapSkin slot and alias through another registered skin's
+    /// safe environment fields. Runtime/server data stays with each slot; Map22/TFT is blocked.</summary>
     [RelayCommand]
     private async Task OpenMapSkinSwitcher()
     {
@@ -7512,7 +7512,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         byte[] original = ReadAsset(shippingEntry.PathHash);
         var swap = await Task.Run(() => MapSkinSwitcher.Switch(original, request.Map.MapId,
             request.Target.Info.PathHash, request.Source.Info.PathHash, ResolveBinName));
-        var preflight = await Task.Run(() => ValidateMapSkinSwap(request.Map.MapId, shippingEntry.Path, swap));
+
+        string sourceContainerPath = MapSkinSwitcher.ContainerBinPath(swap.Source.MapContainerLink)
+            ?? throw new InvalidDataException("The selected source skin has no materials container.");
+        if (!TryResolveEntry(HashAlgorithms.WadPath(sourceContainerPath), out var sourceContainerEntry))
+            throw new FileNotFoundException($"The source skin's map-container bin is missing: {sourceContainerPath}");
+        byte[] sourceContainerOriginal = ReadAsset(sourceContainerEntry.PathHash);
+
+        MapSkinContainerCompatibilityResult compatibility;
+        string? targetContainerPath = MapSkinSwitcher.ContainerBinPath(swap.Target.MapContainerLink);
+        if (targetContainerPath is not null)
+        {
+            if (!TryResolveEntry(HashAlgorithms.WadPath(targetContainerPath), out var targetContainerEntry))
+                throw new FileNotFoundException($"The current/base skin's map-container bin is missing: {targetContainerPath}");
+            byte[] targetContainerBytes = ReadAsset(targetContainerEntry.PathHash);
+            compatibility = await Task.Run(() => MapSkinSwitcher.BuildCompatibleContainer(
+                targetContainerBytes, sourceContainerOriginal));
+        }
+        else compatibility = new MapSkinContainerCompatibilityResult(sourceContainerOriginal, 0, 0);
+
+        var preflight = await Task.Run(() => ValidateMapSkinSwap(shippingEntry.Path,
+            swap, sourceContainerPath, compatibility.Bytes));
 
         string safeRoute = SanitizeFileName($"Map{request.Map.MapId}-{swap.Target.Name}-to-{swap.Source.Name}");
         string backupDir = Path.Combine(Project.RootPath, ".reyengine", "backups",
@@ -7521,38 +7541,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             shippingEntry.Path.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(backupFile)!);
         File.WriteAllBytes(backupFile, original);
+        string containerBackup = Path.Combine(backupDir,
+            sourceContainerEntry.Path.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(containerBackup)!);
+        File.WriteAllBytes(containerBackup, sourceContainerOriginal);
         if (Project.ProjectFilePath is { } projectFile && File.Exists(projectFile))
             File.Copy(projectFile, Path.Combine(backupDir, "project.before-map-skin.json"), overwrite: true);
 
-        string homeFolder = RiotWadFolderName(shippingEntry);
-        string directProjectFile = Path.Combine(Project.RootPath, homeFolder,
-            shippingEntry.Path.Replace('/', Path.DirectorySeparatorChar));
-        bool mountedFolderCopy = _mounts.TryGet(shippingEntry.PathHash, out var mountedShipping)
-            && new[] { mountedShipping.Source }.Concat(mountedShipping.AllSources)
-                .Any(source => source.Kind == AssetSourceKind.ProjectFolder
-                    && source.TryGetFilePath(shippingEntry.PathHash, out var file) && File.Exists(file));
-        bool packedHome = Project.ProjectWads.Any(wad =>
-        {
-            string name = Path.GetFileName(wad);
-            return name.Equals(homeFolder + ".wad.client", StringComparison.OrdinalIgnoreCase)
-                || name.Equals(homeFolder, StringComparison.OrdinalIgnoreCase);
-        });
-
-        if (!File.Exists(directProjectFile) && !mountedFolderCopy && !packedHome)
-        {
-            if (!TryPlaceInProjectFolder(shippingEntry, swap.Bytes, out var placed))
-                throw new IOException("Could not create the map's project-folder override.");
-            FinishProjectCopy(shippingEntry,
-                $"Created runtime-safe {swap.Source.Name} environment override at {placed}.");
-        }
-        else
-        {
-            if (!await SaveMapBinBytesAsync(shippingEntry, swap.Bytes))
-                throw new IOException("The validated shipping bin could not be saved to the project.");
-            _overrides.SaveTo(Project);
-            ReyProjectService.Save(Project, Project.ProjectFilePath!);
-            RefreshBrowser();
-        }
+        if (!await SaveGeneratedMapSkinBinAsync(shippingEntry, swap.Bytes))
+            throw new IOException("The validated shipping bin could not be saved to the project.");
+        if (!await SaveGeneratedMapSkinBinAsync(sourceContainerEntry, compatibility.Bytes))
+            throw new IOException("The gameplay-compatible source container could not be saved to the project.");
+        _overrides.SaveTo(Project);
+        ReyProjectService.Save(Project, Project.ProjectFilePath!);
+        BuildMounts();
+        BuildProjectTree();
+        UpdateTitle();
 
         string reportDir = ProjectWorkspace.ReportsDir(Project);
         string reportFile = Path.Combine(reportDir, $"map-skin-{safeRoute}.txt");
@@ -7561,12 +7565,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             $"Project: {Project.Name}",
             $"UTC: {DateTime.UtcNow:O}",
             $"Map: Map{request.Map.MapId} ({request.Map.Catalog.MapStringId})",
-            $"Expected server slot: {swap.Target.Name} [{swap.Target.ObjectPath}]",
-            $"Previous container: {swap.Target.MapContainerLink ?? "legacy/default"}",
+            $"Requested base skin: {swap.Target.Name} [{swap.Target.ObjectPath}]",
+            $"Previous base container: {swap.Target.MapContainerLink ?? "legacy/default"}",
             $"Source skin: {swap.Source.Name} [{swap.Source.ObjectPath}]",
             $"Source container: {swap.Source.MapContainerLink ?? "legacy/default"}",
-            $"Selected slots rerouted: {swap.RoutedSkinHashes.Count:n0}",
+            $"MapSkin definitions rerouted (registered + aliases): {swap.RoutedSkinHashes.Count:n0}",
             $"Changed environment-route properties: {swap.ChangedRouteProperties:n0}",
+            $"Audio profile: {(swap.RoutedAudioSourceHash is null
+                ? "no dedicated source profile"
+                : swap.ChangedAudioProperties > 0
+                    ? $"routed ({swap.ChangedAudioProperties:n0} properties)"
+                    : "already routed")}",
+            $"Server gameplay placeables matched: {compatibility.MatchedServerPlaceables:n0}",
+            $"Server gameplay keys remapped: {compatibility.RemappedServerPlaceableKeys:n0}",
             $"Verified skin-level files: {preflight.SkinAssetCount:n0}",
             $"Verified container bin: {preflight.ContainerBin ?? "not used by this legacy skin"}",
             $"Shipping bin validation: {preflight.ShippingLinks:n0} links, {preflight.ShippingAssets:n0} assets, 0 routed-slot issues",
@@ -7582,7 +7593,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Warn("MapSkin", reportWarning);
         }
 
-        string message = $"Ready: Map{request.Map.MapId} {swap.Target.Name} now uses {swap.Source.Name}'s runtime-safe environment route. "
+        string message = $"Ready: Map{request.Map.MapId}'s slots and aliases now use {swap.Source.Name}'s crash-safe environment"
+            + (swap.RoutedAudioSourceHash is not null ? ", music and ambience. " : ". ")
+            + $"Preserved {compatibility.MatchedServerPlaceables:n0} server gameplay identities. "
             + $"Verified {preflight.ShippingLinks + preflight.ContainerLinks:n0} links and "
             + $"{preflight.ShippingAssets + preflight.ContainerAssets:n0} asset references; backup written."
             + (reportWarning is null ? " Report written." : reportWarning);
@@ -7591,7 +7604,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return message;
     }
 
-    private MapSkinPreflight ValidateMapSkinSwap(int mapId, string shippingPath, MapSkinSwapResult swap)
+    private async Task<bool> SaveGeneratedMapSkinBinAsync(WadAssetEntry entry, byte[] bytes)
+    {
+        try { _ = SafeBinTree.Parse(bytes); }
+        catch (Exception ex) { _log.Error("MapSkin", $"Generated {entry.DisplayName} failed to re-parse: {ex.Message}"); return false; }
+
+        if (TryWriteToProjectFile(entry, bytes, out _))
+        {
+            Project.IsDirty = true;
+            return true;
+        }
+        if (TryPlaceInProjectFolder(entry, bytes, out _))
+        {
+            Project.IsDirty = true;
+            return true;
+        }
+        return await SaveMapBinBytesAsync(entry, bytes);
+    }
+
+    private MapSkinPreflight ValidateMapSkinSwap(string shippingPath, MapSkinSwapResult swap,
+        string containerPath, byte[] containerBytes)
     {
         bool AssetExists(string path) => TryResolveEntry(HashAlgorithms.WadPath(path), out _);
         List<byte[]> Dependencies(byte[] bytes)
@@ -7615,32 +7647,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var shippingReport = BinValidator.Validate(shippingPath, swap.Bytes, Dependencies(swap.Bytes),
             AssetExists, ResolveBinName, LinkExempt);
         var routedHashes = swap.RoutedSkinHashes.ToHashSet();
+        if (swap.RoutedAudioTargetHash is { } audioHash) routedHashes.Add(audioHash);
         var routedIssues = shippingReport.Issues.Where(issue => routedHashes.Contains(issue.ObjectPathHash)).ToList();
         if (routedIssues.Count > 0)
             throw new InvalidDataException($"A routed map-skin slot failed injection validation: "
                 + $"{routedIssues[0].Category}: {routedIssues[0].Detail}");
 
-        string? containerPath = MapSkinSwitcher.ContainerBinPath(swap.Source.MapContainerLink);
-        int containerLinks = 0, containerAssets = 0;
-        if (containerPath is not null)
-        {
-            if (!TryResolveEntry(HashAlgorithms.WadPath(containerPath), out var containerEntry))
-                throw new FileNotFoundException($"The source skin's map-container bin is missing: {containerPath}");
-            byte[] containerBytes = ReadAsset(containerEntry.PathHash);
-            var tree = SafeBinTree.Parse(containerBytes);
-            uint containerHash = HashAlgorithms.Fnv1a(swap.Source.MapContainerLink!);
-            if (!tree.Objects.TryGetValue(containerHash, out var container)
-                || container.ClassHash != HashAlgorithms.Fnv1a("MapContainer"))
-                throw new InvalidDataException($"{containerPath} does not contain the required MapContainer {swap.Source.MapContainerLink}.");
+        var tree = SafeBinTree.Parse(containerBytes);
+        uint containerHash = HashAlgorithms.Fnv1a(swap.Source.MapContainerLink!);
+        if (!tree.Objects.TryGetValue(containerHash, out var container)
+            || container.ClassHash != HashAlgorithms.Fnv1a("MapContainer"))
+            throw new InvalidDataException($"{containerPath} does not contain the required MapContainer {swap.Source.MapContainerLink}.");
 
-            var report = BinValidator.Validate(containerPath, containerBytes, Dependencies(containerBytes),
-                AssetExists, ResolveBinName, LinkExempt);
-            if (!report.IsClean)
-                throw new InvalidDataException($"The source MapContainer failed injection validation: "
-                    + $"{report.Issues[0].Category}: {report.Issues[0].Detail}");
-            containerLinks = report.LinksChecked;
-            containerAssets = report.AssetRefsChecked;
-        }
+        var report = BinValidator.Validate(containerPath, containerBytes, Dependencies(containerBytes),
+            AssetExists, ResolveBinName, LinkExempt);
+        if (!report.IsClean)
+            throw new InvalidDataException($"The source MapContainer failed injection validation: "
+                + $"{report.Issues[0].Category}: {report.Issues[0].Detail}");
+        int containerLinks = report.LinksChecked;
+        int containerAssets = report.AssetRefsChecked;
 
         return new MapSkinPreflight(assetPaths.Count, containerPath, shippingReport.LinksChecked,
             shippingReport.AssetRefsChecked, shippingReport.Issues.Count, containerLinks, containerAssets);

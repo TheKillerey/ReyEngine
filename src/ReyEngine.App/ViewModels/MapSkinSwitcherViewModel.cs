@@ -50,7 +50,7 @@ public sealed partial class MapSkinSwitcherViewModel : ObservableObject
     [ObservableProperty] private MapSkinMapViewModel? _selectedMap;
     [ObservableProperty] private MapSkinOptionViewModel? _selectedTarget;
     [ObservableProperty] private MapSkinOptionViewModel? _selectedSource;
-    [ObservableProperty] private string _status = "Choose the slot the server normally selects, then the environment skin it should load.";
+    [ObservableProperty] private string _status = "Choose the current/base skin, then the complete environment it should load.";
     [ObservableProperty] private bool _running;
 
     public Func<MapSkinApplyRequest, Task<string>>? ApplySwap;
@@ -59,7 +59,7 @@ public sealed partial class MapSkinSwitcherViewModel : ObservableObject
         && SelectedSource is not null && SelectedTarget.Info.PathHash != SelectedSource.Info.PathHash;
     public string SwapSummary => SelectedTarget is null || SelectedSource is null
         ? "Select a target and source skin."
-        : $"{SelectedTarget.Info.Name} keeps its runtime identity and loads {SelectedSource.Info.Name}'s safe environment route.";
+        : $"Every slot keeps its identity while {SelectedSource.Info.Name}'s environment, compatible gameplay IDs, music and ambience are routed together.";
     public string TargetDetail => SelectedTarget?.Detail ?? "";
     public string SourceDetail => SelectedSource?.Detail ?? "";
 
@@ -89,7 +89,8 @@ public sealed partial class MapSkinSwitcherViewModel : ObservableObject
         uint? previousSource = SelectedSource?.Info.PathHash;
         SourceSkins.Clear();
         if (SelectedMap is not null)
-            foreach (var skin in SelectedMap.Catalog.Skins.Where(s => s.PathHash != value?.Info.PathHash))
+            foreach (var skin in SelectedMap.Catalog.Skins.Where(s => s.PathHash != value?.Info.PathHash
+                && s.MapContainerLink is not null))
                 SourceSkins.Add(new MapSkinOptionViewModel { Info = skin });
         SelectedSource = SourceSkins.FirstOrDefault(s => s.Info.PathHash == previousSource)
             ?? SourceSkins.FirstOrDefault();
@@ -114,7 +115,7 @@ public sealed partial class MapSkinSwitcherViewModel : ObservableObject
         Running = true;
         try
         {
-            Status = "Validating the source environment route against the mounted game files...";
+            Status = "Building and validating the crash-safe environment, gameplay and audio overrides...";
             Status = await ApplySwap(new MapSkinApplyRequest(SelectedMap!, SelectedTarget!, SelectedSource!));
         }
         catch (Exception ex) { Status = $"Not changed: {ex.Message}"; }
