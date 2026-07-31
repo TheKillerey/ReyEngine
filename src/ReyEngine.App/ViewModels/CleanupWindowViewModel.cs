@@ -36,6 +36,11 @@ public sealed partial class CleanupGroupViewModel : ObservableObject
     public ObservableCollection<CleanupRowViewModel> Rows { get; } = new();
     [ObservableProperty] private string _summary = "";
     public bool HasRows => Rows.Count > 0;
+
+    // Per-group selection. The rows already notify the window when they change, so these need no
+    // plumbing back to the parent.
+    [RelayCommand] private void SelectGroup() { foreach (var r in Rows) r.IsSelected = true; }
+    [RelayCommand] private void ClearGroup() { foreach (var r in Rows) r.IsSelected = false; }
 }
 
 /// <summary>
@@ -198,13 +203,12 @@ public sealed partial class CleanupWindowViewModel : ObservableObject
     private void SetAll(bool on)
     {
         _suppressCounts = true;
-        // Only what is currently visible, and never the protected group - "select all" must not become a
-        // way to arm the exact rows the scan said it was unsure about.
+        // Everything currently visible, protected rows included. This used to skip the protected group,
+        // which just made the button look broken when that group was what you were looking at - and the
+        // safety rule was only ever that uncertain rows are not ticked FOR you. Choosing them yourself is
+        // the point of the checkbox; the footer and the confirmation both call out how many are in play.
         foreach (var g in Groups)
-        {
-            if (g.Group == CleanupGroup.Protected) continue;
             foreach (var r in g.Rows) r.IsSelected = on;
-        }
         _suppressCounts = false;
         UpdateCounts();
     }

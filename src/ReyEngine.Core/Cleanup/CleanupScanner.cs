@@ -130,8 +130,10 @@ public static class CleanupScanner
         if (o.ProtectedRelPaths.Contains(rel) || o.ProtectedHashes.Contains(hash))
             return Row(CleanupGroup.Protected, "Referenced by project metadata or export settings");
 
-        // A loose <hash>.ext chunk carries no path, so every path-shaped check below is blind to it. Its
-        // hash is still meaningful, so a positive match keeps it - but absence of a match proves nothing.
+        // A loose <hash>.ext chunk has no path, so the path-shaped fallbacks below cannot see it - but the
+        // two conditions that actually decide "unused" never needed one. The file NAME is the chunk's WAD
+        // path hash, so "no game WAD ships it" and "no project bin references it" are both answerable
+        // directly, and the engine can only load a chunk by that same hash.
         bool loose = !rel.Contains('/');
 
         // ---- identical to the Riot original ----
@@ -161,13 +163,13 @@ public static class CleanupScanner
             // The game ships this exact path, so it is an override of real content and is always loadable.
             if (o.GameWadHashes.Contains(hash)) return null;
             if (o.References.IsReferenced(rel, hash, out _)) return null;
-            if (loose)
+            if (!canProveUnused)
                 return Row(CleanupGroup.Protected,
-                    "Hash-named chunk with no known path - nothing here can prove it is unused");
-            return canProveUnused
-                ? Row(CleanupGroup.Unused, "No game WAD ships this path and no project content references it")
-                : Row(CleanupGroup.Protected,
                     "Nothing references it, but the scan could not confirm the game never ships it - unverified");
+            return loose
+                ? Row(CleanupGroup.Unused,
+                    "No game WAD ships this hash and no project content references it (judged by hash - the file has no path)")
+                : Row(CleanupGroup.Unused, "No game WAD ships this path and no project content references it");
         }
         return null;
     }

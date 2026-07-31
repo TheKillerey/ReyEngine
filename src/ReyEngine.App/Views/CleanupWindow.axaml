@@ -90,6 +90,12 @@
             <Border Classes="card" Margin="0,0,0,10">
               <StackPanel Spacing="4">
                 <DockPanel>
+                  <Button DockPanel.Dock="Right" Classes="tool" Content="None" Margin="6,0,0,0"
+                          Command="{Binding ClearGroupCommand}" FontSize="10"
+                          ToolTip.Tip="Untick every row in this group." />
+                  <Button DockPanel.Dock="Right" Classes="tool" Content="All" Margin="6,0,0,0"
+                          Command="{Binding SelectGroupCommand}" FontSize="10"
+                          ToolTip.Tip="Tick every row in this group." />
                   <TextBlock DockPanel.Dock="Right" Text="{Binding Summary}" FontSize="10"
                              Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
                   <TextBlock Classes="cardTitle" Text="{Binding Title}" />

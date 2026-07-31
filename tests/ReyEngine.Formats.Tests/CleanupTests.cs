@@ -233,14 +233,46 @@ public class CleanupTests
     }
 
     [Fact]
-    public void AHashNamedChunkIsNeverJudgedUnused()
+    public void AHashNamedChunkIsJudgedByItsHash()
     {
-        // A loose <hash>.ext file carries no path, so no path-shaped check can say anything about it.
+        // Its NAME is the chunk's WAD path hash, and the engine can only load it by that hash - so both
+        // conditions are answerable without a path. Treating these as unjudgeable stranded 560 MB.
         var (root, folder) = MakeProject(("a1b2c3d4e5f60718.dds", new byte[] { 1 }));
         try
         {
             var c = Assert.Single(CleanupScanner.Scan(Opts(root, folder, new FakeIndex())).Candidates);
-            Assert.Equal(CleanupGroup.Protected, c.Group);
+            Assert.Equal(CleanupGroup.Unused, c.Group);
+            Assert.Contains("hash", c.Reason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AHashNamedChunkTheGameShipsIsKept()
+    {
+        const ulong h = 0xa1b2c3d4e5f60718;
+        var (root, folder) = MakeProject(("a1b2c3d4e5f60718.dds", new byte[] { 1 }));
+        try
+        {
+            var r = CleanupScanner.Scan(Opts(root, folder, new FakeIndex(), new HashSet<ulong> { h }));
+            Assert.Empty(r.Candidates);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AHashNamedChunkAProjectBinReferencesIsKept()
+    {
+        const ulong h = 0xa1b2c3d4e5f60718;
+        var (root, folder) = MakeProject(("a1b2c3d4e5f60718.dds", new byte[] { 1 }));
+        try
+        {
+            // A bin naming the real path hashes to exactly this chunk key, which is how the match lands
+            // even though the file on disk shows only the hash.
+            var ix = new ProjectReferenceIndex();
+            ix.AddHash(h);
+            var r = CleanupScanner.Scan(Opts(root, folder, ix, new HashSet<ulong> { 1 }));
+            Assert.Empty(r.Candidates);
         }
         finally { Directory.Delete(root, true); }
     }
