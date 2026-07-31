@@ -7416,8 +7416,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         finally { IsBuilding = false; }
     }
 
-    /// <summary>M309: replace a normal map's selected MapSkin slot with another complete registered
-    /// skin from the same shipping bin. Map22/TFT is blocked in discovery and the format engine.</summary>
+    /// <summary>M309: route a normal-map MapSkin slot through another registered skin's safe
+    /// environment fields. Runtime/server data stays with each slot; Map22/TFT is always blocked.</summary>
     [RelayCommand]
     private async Task OpenMapSkinSwitcher()
     {
@@ -7543,7 +7543,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (!TryPlaceInProjectFolder(shippingEntry, swap.Bytes, out var placed))
                 throw new IOException("Could not create the map's project-folder override.");
             FinishProjectCopy(shippingEntry,
-                $"Created complete {swap.Source.Name} -> {swap.Target.Name} map-skin override at {placed}.");
+                $"Created runtime-safe {swap.Source.Name} environment override at {placed}.");
         }
         else
         {
@@ -7561,14 +7561,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             $"Project: {Project.Name}",
             $"UTC: {DateTime.UtcNow:O}",
             $"Map: Map{request.Map.MapId} ({request.Map.Catalog.MapStringId})",
-            $"Target slot: {swap.Target.Name} [{swap.Target.ObjectPath}]",
+            $"Expected server slot: {swap.Target.Name} [{swap.Target.ObjectPath}]",
             $"Previous container: {swap.Target.MapContainerLink ?? "legacy/default"}",
             $"Source skin: {swap.Source.Name} [{swap.Source.ObjectPath}]",
             $"Source container: {swap.Source.MapContainerLink ?? "legacy/default"}",
-            $"Copied MapSkin properties: {swap.CopiedProperties:n0}",
+            $"Selected slots rerouted: {swap.RoutedSkinHashes.Count:n0}",
+            $"Changed environment-route properties: {swap.ChangedRouteProperties:n0}",
             $"Verified skin-level files: {preflight.SkinAssetCount:n0}",
             $"Verified container bin: {preflight.ContainerBin ?? "not used by this legacy skin"}",
-            $"Shipping bin validation: {preflight.ShippingLinks:n0} links, {preflight.ShippingAssets:n0} assets, 0 target-slot issues",
+            $"Shipping bin validation: {preflight.ShippingLinks:n0} links, {preflight.ShippingAssets:n0} assets, 0 routed-slot issues",
             $"Unchanged Riot objects with validator warnings: {preflight.UnrelatedShippingIssues:n0}",
             $"Container validation: {preflight.ContainerLinks:n0} links, {preflight.ContainerAssets:n0} assets, 0 issues",
             $"Backup: {backupDir}",
@@ -7581,7 +7582,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Warn("MapSkin", reportWarning);
         }
 
-        string message = $"Ready: Map{request.Map.MapId} {swap.Target.Name} now loads the complete {swap.Source.Name} skin. "
+        string message = $"Ready: Map{request.Map.MapId} {swap.Target.Name} now uses {swap.Source.Name}'s runtime-safe environment route. "
             + $"Verified {preflight.ShippingLinks + preflight.ContainerLinks:n0} links and "
             + $"{preflight.ShippingAssets + preflight.ContainerAssets:n0} asset references; backup written."
             + (reportWarning is null ? " Report written." : reportWarning);
@@ -7613,10 +7614,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var shippingReport = BinValidator.Validate(shippingPath, swap.Bytes, Dependencies(swap.Bytes),
             AssetExists, ResolveBinName, LinkExempt);
-        var targetIssues = shippingReport.Issues.Where(issue => issue.ObjectPathHash == swap.Target.PathHash).ToList();
-        if (targetIssues.Count > 0)
-            throw new InvalidDataException($"The activated {swap.Target.Name} slot failed injection validation: "
-                + $"{targetIssues[0].Category}: {targetIssues[0].Detail}");
+        var routedHashes = swap.RoutedSkinHashes.ToHashSet();
+        var routedIssues = shippingReport.Issues.Where(issue => routedHashes.Contains(issue.ObjectPathHash)).ToList();
+        if (routedIssues.Count > 0)
+            throw new InvalidDataException($"A routed map-skin slot failed injection validation: "
+                + $"{routedIssues[0].Category}: {routedIssues[0].Detail}");
 
         string? containerPath = MapSkinSwitcher.ContainerBinPath(swap.Source.MapContainerLink);
         int containerLinks = 0, containerAssets = 0;

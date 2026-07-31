@@ -28,15 +28,15 @@ public sealed record MapSkinSwapResult(
     byte[] Bytes,
     MapSkinInfo Target,
     MapSkinInfo Source,
-    int CopiedProperties,
+    int ChangedRouteProperties,
+    IReadOnlyList<uint> RoutedSkinHashes,
     IReadOnlyList<string> ReferencedStrings);
 
 /// <summary>
-/// Reads and safely rewires Riot's shipping-map skin slots. A swap replaces the complete target
-/// <c>MapSkin</c> definition with a deep clone of the source definition while retaining the target's
-/// object hash and <c>name</c>. The server can therefore keep selecting the original slot (normally
-/// <c>Default</c>) while the client receives the source skin's map container, minimap, navigation,
-/// alternate terrain/fog assets, audio banks, particles, gamma, grass tint and resource resolvers.
+/// Reads and safely rewires Riot's shipping-map skin slots. A switch copies only the source skin's
+/// environment-loading route to the selected target slot. The target retains its identity and runtime
+/// data (especially its character-skin overrides), while loading the chosen map container, object
+/// configuration, world particles and grass tint.
 /// </summary>
 public static class MapSkinSwitcher
 {
@@ -48,6 +48,20 @@ public static class MapSkinSwitcher
     private static readonly uint MapSkinsField = H("mapSkins");
     private static readonly uint NameField = H("name");
     private static readonly uint MapContainerLinkField = H("mMapContainerLink");
+    private static readonly uint MapObjectsCfgField = H("mMapObjectsCFG");
+    private static readonly uint WorldParticlesField = H("mWorldParticlesINI");
+    private static readonly uint GrassTintField = H("mGrassTintTexture");
+
+    // These are the four fields changed by the long-standing, in-game-proven Map Forcer. Copying an
+    // entire MapSkin is unsafe: seasonal skins carry spawn-time character skin overrides (currently
+    // unresolved field 0x2d3285eb on Map11) that are only valid when the server selected that skin.
+    private static readonly uint[] EnvironmentRouteFields =
+    {
+        MapContainerLinkField,
+        MapObjectsCfgField,
+        WorldParticlesField,
+        GrassTintField,
+    };
 
     private static uint H(string value) => HashAlgorithms.Fnv1a(value);
 
@@ -114,22 +128,29 @@ public static class MapSkinSwitcher
         var tree = SafeBinTree.Parse(shippingBin);
         var target = tree.Objects[targetSkinHash];
         var source = tree.Objects[sourceSkinHash];
-        var cloned = source.Properties.Select(pair => BinTreeCloner.Clone(pair.Value, pair.Key)).ToList();
-
-        // The path hash is the slot identity and the name is its human-readable counterpart. Everything
-        // else is behavior owned by the source skin and must travel together to avoid half-swapped maps.
-        int nameIndex = cloned.FindIndex(p => p.NameHash == NameField);
-        if (nameIndex < 0 || target.Properties[NameField] is not BinTreeString targetName)
-            throw new InvalidDataException("The source or target MapSkin has no identity name.");
-        cloned[nameIndex] = new BinTreeString(NameField, targetName.Value);
-        tree.Objects[targetSkinHash] = new BinTreeObject(targetSkinHash, MapSkinClass, cloned);
+        var properties = target.Properties
+            .Where(pair => !EnvironmentRouteFields.Contains(pair.Key))
+            .Select(pair => BinTreeCloner.Clone(pair.Value, pair.Key))
+            .ToList();
+        int changedRouteProperties = 0;
+        foreach (uint field in EnvironmentRouteFields)
+        {
+            bool hadTarget = target.Properties.TryGetValue(field, out var targetRoute);
+            bool hasSource = source.Properties.TryGetValue(field, out var sourceRoute);
+            if (hasSource) properties.Add(BinTreeCloner.Clone(sourceRoute!, field));
+            if (hadTarget != hasSource || (hadTarget && !BinPropEquality.PropsEqual(targetRoute!, sourceRoute!)))
+                changedRouteProperties++;
+        }
+        if (changedRouteProperties == 0)
+            throw new InvalidOperationException($"{targetInfo.Name} already uses {sourceInfo.Name}'s environment route.");
+        tree.Objects[targetSkinHash] = new BinTreeObject(targetSkinHash, MapSkinClass, properties);
 
         using var output = new MemoryStream(shippingBin.Length);
         tree.Write(output);
         byte[] bytes = output.ToArray();
 
-        // Strict reparse plus semantic invariants. The mapSkins selection table and source definition
-        // must remain untouched, and the target must be the complete source clone except for its name.
+        // Strict reparse plus semantic invariants. The selection table and source definition stay
+        // untouched, and every rewritten slot must survive exact semantic round-trip serialization.
         var verified = new BinTree(new MemoryStream(bytes, writable: false));
         if (verified.Objects.Count != tree.Objects.Count)
             throw new InvalidDataException("The rewritten shipping bin changed its object count.");
@@ -139,13 +160,14 @@ public static class MapSkinSwitcher
             throw new InvalidDataException("The rewrite changed the mapSkins selection table.");
         if (!BinPropEquality.ObjectsEqual(original.Objects[sourceSkinHash], verified.Objects[sourceSkinHash]))
             throw new InvalidDataException("The rewrite changed the source MapSkin.");
-        if (!BinPropEquality.DictsEqual(tree.Objects[targetSkinHash].Properties,
-                verified.Objects[targetSkinHash].Properties))
-            throw new InvalidDataException("The target MapSkin did not survive strict round-trip serialization.");
+        if (!BinPropEquality.ObjectsEqual(tree.Objects[targetSkinHash], verified.Objects[targetSkinHash]))
+            throw new InvalidDataException($"Routed MapSkin 0x{targetSkinHash:x8} did not survive strict round-trip serialization.");
 
         var strings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var property in source.Properties.Values) CollectStrings(property, strings);
-        return new MapSkinSwapResult(bytes, targetInfo, sourceInfo, cloned.Count, strings.Order().ToList());
+        foreach (uint field in EnvironmentRouteFields)
+            if (source.Properties.TryGetValue(field, out var property)) CollectStrings(property, strings);
+        return new MapSkinSwapResult(bytes, targetInfo, sourceInfo, changedRouteProperties,
+            new[] { targetSkinHash }, strings.Order().ToList());
     }
 
     /// <summary>Convert a map-container object path to its companion materials bin.</summary>

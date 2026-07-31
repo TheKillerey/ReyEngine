@@ -50,7 +50,7 @@ public sealed partial class MapSkinSwitcherViewModel : ObservableObject
     [ObservableProperty] private MapSkinMapViewModel? _selectedMap;
     [ObservableProperty] private MapSkinOptionViewModel? _selectedTarget;
     [ObservableProperty] private MapSkinOptionViewModel? _selectedSource;
-    [ObservableProperty] private string _status = "Choose the skin slot the game normally selects, then the complete skin to load instead.";
+    [ObservableProperty] private string _status = "Choose the slot the server normally selects, then the environment skin it should load.";
     [ObservableProperty] private bool _running;
 
     public Func<MapSkinApplyRequest, Task<string>>? ApplySwap;
@@ -59,7 +59,7 @@ public sealed partial class MapSkinSwitcherViewModel : ObservableObject
         && SelectedSource is not null && SelectedTarget.Info.PathHash != SelectedSource.Info.PathHash;
     public string SwapSummary => SelectedTarget is null || SelectedSource is null
         ? "Select a target and source skin."
-        : $"{SelectedTarget.Info.Name} keeps its slot identity; every other setting is cloned from {SelectedSource.Info.Name}.";
+        : $"{SelectedTarget.Info.Name} keeps its runtime identity and loads {SelectedSource.Info.Name}'s safe environment route.";
     public string TargetDetail => SelectedTarget?.Detail ?? "";
     public string SourceDetail => SelectedSource?.Detail ?? "";
 
@@ -114,7 +114,7 @@ public sealed partial class MapSkinSwitcherViewModel : ObservableObject
         Running = true;
         try
         {
-            Status = "Validating the complete source skin against the mounted game files...";
+            Status = "Validating the source environment route against the mounted game files...";
             Status = await ApplySwap(new MapSkinApplyRequest(SelectedMap!, SelectedTarget!, SelectedSource!));
         }
         catch (Exception ex) { Status = $"Not changed: {ex.Message}"; }

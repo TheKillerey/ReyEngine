@@ -28,11 +28,11 @@
       <StackPanel Margin="16" Spacing="12">
         <Border Classes="card">
           <StackPanel Spacing="6">
-            <TextBlock Classes="cardTitle" Text="COMPLETE MAP-SKIN SWITCH" />
+            <TextBlock Classes="cardTitle" Text="RUNTIME-SAFE MAP-SKIN SWITCH" />
             <TextBlock FontSize="11" TextWrapping="Wrap"
-                       Text="This does not rename a mapgeo. It keeps the target slot the game selects and clones the source skin's complete MapSkin definition: map container, minimap, navmesh, terrain/fog alternates, audio banks, particles, gamma, grass tint, resource resolvers and post effects." />
+                       Text="This does not rename a mapgeo or transplant server-specific runtime data. It redirects the selected slot through the source skin's map container, object configuration, world particles and grass tint, while the slot keeps its own identity and gameplay-compatible character overrides." />
             <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
-                       Text="Before saving, ReyEngine verifies the source container, every referenced file, all object links, strict bin round-trip, and the injected shipping bin. The original is backed up under .reyengine/backups." />
+                       Text="This uses the same four routing fields as the proven Map Forcer. Before saving, ReyEngine verifies the source container, route files, object links, strict bin round-trip, and the rerouted slot. The original is backed up under .reyengine/backups." />
           </StackPanel>
         </Border>
 
@@ -52,7 +52,7 @@
         <Grid ColumnDefinitions="*,34,*">
           <Border Grid.Column="0" Classes="card">
             <StackPanel Spacing="6">
-              <TextBlock Classes="cardTitle" Text="REPLACE THIS SLOT" />
+              <TextBlock Classes="cardTitle" Text="EXPECTED SERVER SLOT" />
               <ComboBox ItemsSource="{Binding TargetSkins}" SelectedItem="{Binding SelectedTarget}"
                         DisplayMemberBinding="{Binding DisplayName}" FontSize="11" MaxDropDownHeight="320" />
               <TextBlock Text="{Binding TargetDetail}" FontSize="10" TextWrapping="Wrap"
@@ -63,7 +63,7 @@
                      FontSize="18" Foreground="{DynamicResource ReyAccentBrush}" />
           <Border Grid.Column="2" Classes="card">
             <StackPanel Spacing="6">
-              <TextBlock Classes="cardTitle" Text="USE THIS COMPLETE SKIN" />
+              <TextBlock Classes="cardTitle" Text="FORCE THIS ENVIRONMENT" />
               <ComboBox ItemsSource="{Binding SourceSkins}" SelectedItem="{Binding SelectedSource}"
                         DisplayMemberBinding="{Binding DisplayName}" FontSize="11" MaxDropDownHeight="320" />
               <TextBlock Text="{Binding SourceDetail}" FontSize="10" TextWrapping="Wrap"
@@ -77,7 +77,7 @@
             <TextBlock Classes="cardTitle" Text="RESULT" />
             <TextBlock Text="{Binding SwapSummary}" FontSize="12" TextWrapping="Wrap"
                        Foreground="{DynamicResource ReyAccentBrush}" />
-            <TextBlock Text="Example: choose Default - Base_SRX on the left and Milkshake_SRS on the right. Normal Summoner's Rift games still select Default, but its complete loading definition now points to Milkshake."
+            <TextBlock Text="Example: choose Default - Base_SRX on the left and Milkshake_SRS on the right. The server still selects Default, which safely loads Milkshake's environment without importing Milkshake-only spawn overrides into Default."
                        FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
           </StackPanel>
         </Border>

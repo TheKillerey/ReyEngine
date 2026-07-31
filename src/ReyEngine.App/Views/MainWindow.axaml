@@ -111,7 +111,7 @@
         <MenuItem Header="Recolor Textures…" Command="{Binding OpenTextureRecolorCommand}"
                   ToolTip.Tip="Recolour the textures the open map paints with — hue, saturation, levels and tint, applied across as many of them as you like. Every texture is re-derived from Riot's original, so re-tuning never stacks compression loss, and each one keeps its own pixel format and mip chain" />
         <MenuItem Header="Map Skin Switcher…" Command="{Binding OpenMapSkinSwitcherCommand}"
-                  ToolTip.Tip="Replace a normal map's selected skin with another complete skin from the same map. Copies the full MapSkin loading definition and validates its container, assets and links. TFT / Map22 is intentionally unavailable." />
+                  ToolTip.Tip="Safely route a selected map-skin slot through another skin's environment while preserving server-compatible runtime data. Validates the source container, route assets and links. TFT / Map22 is intentionally unavailable." />
         <Separator />
         <MenuItem Header="Assign Skeleton…" Command="{Binding AssignSkeletonCommand}" />
         <MenuItem Header="Assign Animation…" Command="{Binding AssignAnimationCommand}" />
