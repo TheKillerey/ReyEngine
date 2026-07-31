@@ -33,9 +33,37 @@ public sealed class WadArchive : IDisposable
         _byHash = entries.ToDictionary(e => e.PathHash);
     }
 
+    /// <summary>Set when this archive was opened from a repaired copy rather than the file named by
+    /// <see cref="FilePath"/>, with what was repaired. Null for the normal case. Callers that report to a
+    /// user should surface it - silently accepting a malformed file teaches nobody anything.</summary>
+    public string? RepairNote { get; private set; }
+
+    /// <summary>A de-duplicated temp copy this archive owns and must delete.</summary>
+    private string? _tempCopy;
+
     public static WadArchive Open(string path, IHashResolver? resolver = null)
     {
-        var wad = new WadFile(path);
+        WadFile wad;
+        string? temp = null, note = null;
+        try
+        {
+            wad = new WadFile(path);
+        }
+        catch (InvalidDataException ex) when (ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+        {
+            // M298: LeagueToolkit rejects a WAD whose table of contents lists one path hash twice, and it
+            // rejects the WHOLE FILE - so a single redundant descriptor made an entire 382 MB mod
+            // unimportable. The format itself tolerates this: a chunk descriptor carries an isDuplicate
+            // byte, so duplicates are expressible by design and Riot's own packer emits them.
+            //
+            // Repairing a copy is only honest when the duplicate is REDUNDANT, so WadDeduplicator refuses
+            // when two descriptors for one hash disagree about the data - that would be choosing which of
+            // two answers the author meant, which is a guess, not a repair.
+            temp = WadDeduplicator.TryRepair(path, out note);
+            if (temp is null) throw;
+            wad = new WadFile(temp);
+        }
+
         var list = new List<WadAssetEntry>(wad.Chunks.Count);
 
         foreach (var (hash, chunk) in wad.Chunks)
@@ -52,7 +80,7 @@ public sealed class WadArchive : IDisposable
             });
         }
 
-        var archive = new WadArchive(path, wad, list);
+        var archive = new WadArchive(path, wad, list) { _tempCopy = temp, RepairNote = note };
         if (resolver is not null) archive.ReResolve(resolver);
         return archive;
     }
@@ -144,5 +172,12 @@ public sealed class WadArchive : IDisposable
     {
         _rawStream?.Dispose();
         _wad.Dispose();
+        // M298: the de-duplicated copy is ours and only ours. Deleted after the WadFile above releases its
+        // handle, or the delete silently fails and leaves a WAD-sized file in temp on every open.
+        if (_tempCopy is not null)
+        {
+            try { System.IO.File.Delete(_tempCopy); } catch { /* temp cleanup is best-effort */ }
+            _tempCopy = null;
+        }
     }
 }

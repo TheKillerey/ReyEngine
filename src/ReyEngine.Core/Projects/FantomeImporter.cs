@@ -86,6 +86,9 @@ public static class FantomeImporter
                 {
                     packedFile.ExtractToFile(tmp, overwrite: true);
                     using var wad = WadArchive.Open(tmp, resolver);
+                    // M298: say when a WAD had to be repaired to be readable. It imported correctly, but a
+                    // malformed archive is worth knowing about - especially since the user usually built it.
+                    if (wad.RepairNote is { } repaired) progress?.Report($"{wadName}: {repaired}");
                     int done = 0;
                     foreach (var we in wad.Entries)
                     {
