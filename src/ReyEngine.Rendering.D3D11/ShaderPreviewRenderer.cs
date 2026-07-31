@@ -1897,6 +1897,104 @@ float4 psmain(VOut i) : SV_Target
 
     public int BucketGridVertexCount => _gridVertexCount;
 
+    // M296: the transform gizmo. Position-only line segments per axis, so the overlay pipeline draws it
+    // as-is; only the topology differs from the rest of the furniture.
+    private ComPtr<ID3D11Buffer> _gizmoVb;
+    private int _gizmoVbCapacity;
+    private readonly int[] _gizmoAxisVerts = new int[3];
+    private int _gizmoTotalVerts;
+
+    /// <summary>
+    /// <para>M296: the gizmo's three axis arms, already built by
+    /// <c>ViewportMeshRenderer.BuildGizmoAxis</c> - the same builder the GL viewport uses, so both draw
+    /// the arm the hit-test measures against.</para>
+    ///
+    /// <para>Only DRAWING was missing on D3D11. Dragging already worked: the transparent input border over
+    /// the viewport swallows pointer events in both modes and the hit-test is CPU maths against matrices
+    /// SyncPickMatrices refreshes every D3D11 frame. The user simply had nothing to see or aim at.</para>
+    /// </summary>
+    public void SetGizmoLines(float[]? x, float[]? y, float[]? z)
+    {
+        _gizmoTotalVerts = 0;
+        _gizmoAxisVerts[0] = _gizmoAxisVerts[1] = _gizmoAxisVerts[2] = 0;
+        int floats = (x?.Length ?? 0) + (y?.Length ?? 0) + (z?.Length ?? 0);
+        if (floats < 6 || !EnsureOverlay()) return;
+
+        int bytes = floats * sizeof(float);
+        if (_gizmoVbCapacity < bytes || _gizmoVb.Handle is null)
+        {
+            _gizmoVb.Dispose();
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)bytes, Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> vb = default;
+            if (_device.CreateBuffer(in desc, null, ref vb) < 0) { Log("gizmo vertex buffer failed"); return; }
+            _gizmoVb = vb; _gizmoVbCapacity = bytes;
+        }
+
+        var all = new float[floats];
+        int at = 0;
+        void Append(float[]? a, int slot)
+        {
+            if (a is null || a.Length < 6) return;
+            Array.Copy(a, 0, all, at, a.Length);
+            at += a.Length;
+            _gizmoAxisVerts[slot] = a.Length / 3;
+        }
+        Append(x, 0); Append(y, 1); Append(z, 2);
+
+        var map = new MappedSubresource();
+        if (_ctx.Map(_gizmoVb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        fixed (float* p = all)
+            System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
+        _ctx.Unmap(_gizmoVb, 0);
+        _gizmoTotalVerts = floats / 3;
+    }
+
+    private int DrawGizmo(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_gizmoTotalVerts == 0 || _gizmoVb.Handle is null || !EnsureOverlay()) return 0;
+
+        var mvp = Matrix4x4.Multiply(view, proj);
+        _ctx.IASetInputLayout(_overlayLayout);
+        _ctx.VSSetShader(_overlayVs, null, 0);
+        _ctx.PSSetShader(_overlayPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
+
+        uint stride = 3 * sizeof(float), offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _gizmoVb, in stride, in offset);
+
+        // Depth test OFF, exactly as GL draws it: a gizmo occluded by the thing it moves is a gizmo you
+        // cannot grab, so it is always on top.
+        _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        _ctx.OMSetDepthStencilState(_overlayDepthNoTest, 0);
+
+        // The same three colours the GL viewport uses - X red, Y green, Z blue.
+        var colours = stackalloc Vector4[3];
+        colours[0] = new Vector4(0.95f, 0.25f, 0.25f, 1f);
+        colours[1] = new Vector4(0.30f, 0.90f, 0.35f, 1f);
+        colours[2] = new Vector4(0.30f, 0.55f, 0.98f, 1f);
+
+        int drawn = 0, first = 0;
+        for (int a = 0; a < 3; a++)
+        {
+            int n = _gizmoAxisVerts[a];
+            if (n <= 0) continue;
+            SetOverlayCb(mvp, colours[a]);
+            _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+            _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+            _ctx.Draw((uint)n, (uint)first);
+            first += n;
+            drawn++;
+        }
+
+        // Back to triangles: everything else in this renderer assumes it, and topology is device state.
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+        return drawn;
+    }
+
     private int DrawBucketGrid(Matrix4x4 view, Matrix4x4 proj)
     {
         if (_gridVertexCount == 0 || _gridVb.Handle is null || !EnsureGrid()) return 0;
@@ -3374,7 +3472,8 @@ float4 psmain(VOut i) : SV_Target
             HighlightDraws = DrawHighlight(view, proj);
             IconDraws = DrawIcons(view, proj);
             int gridDraws = DrawBucketGrid(view, proj);   // M293
-            DrawCalls += HighlightDraws + IconDraws + gridDraws;
+            int gizmoDraws = DrawGizmo(view, proj);      // M296, last so it is over everything
+            DrawCalls += HighlightDraws + IconDraws + gridDraws + gizmoDraws;
 
             _ctx.CopyResource(_stage, _rt);
             MappedSubresource map = default;
@@ -3532,6 +3631,7 @@ float4 psmain(VOut i) : SV_Target
         _distortVs.Dispose(); _distortPs.Dispose(); _distortLayout.Dispose(); _distortCb.Dispose();
         _sceneCopySrv.Dispose(); _sceneCopy.Dispose();
         _gridVs.Dispose(); _gridPs.Dispose(); _gridLayout.Dispose(); _gridVb.Dispose();
+        _gizmoVb.Dispose();
         _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();
         _meshCullCw.Dispose(); _meshCullCcw.Dispose();
         ReleaseMeshGeometry();

@@ -190,6 +190,26 @@ public partial class MainWindow : Window
         // rebuild all move independently, and a rebuild would otherwise come back with everything visible.
         _dx11.ApplyGroupVisibility(vm.CurrentModelSubmeshVisible);
 
+        // M296: the transform gizmo. Dragging already worked under D3D11 - the transparent input border
+        // swallows pointer events in both modes and the hit-test is CPU maths against the matrices
+        // SyncPickMatrices refreshes below - but nothing DREW it, so there was nothing to see or aim at.
+        // Built from ViewportMeshRenderer's own builder, at the arm length Viewport.HitTestGizmoAxis
+        // measures against, so what is drawn and what is grabbable are the same geometry by construction.
+        if (vm.GizmoPivot is { } gizmoPivot)
+        {
+            var axes = vm.GizmoAxes;
+            var ax = axes is { Count: 3 } ? axes[0] : System.Numerics.Vector3.UnitX;
+            var ay = axes is { Count: 3 } ? axes[1] : System.Numerics.Vector3.UnitY;
+            var az = axes is { Count: 3 } ? axes[2] : System.Numerics.Vector3.UnitZ;
+            float arm = Viewport.GizmoArmLengthFor(gizmoPivot);
+            int mode = vm.TransformMode;
+            _dx11.Renderer.SetGizmoLines(
+                ReyEngine.Rendering.ViewportMeshRenderer.BuildGizmoAxis(mode, gizmoPivot, ax, arm),
+                ReyEngine.Rendering.ViewportMeshRenderer.BuildGizmoAxis(mode, gizmoPivot, ay, arm),
+                ReyEngine.Rendering.ViewportMeshRenderer.BuildGizmoAxis(mode, gizmoPivot, az, arm));
+        }
+        else _dx11.Renderer.SetGizmoLines(null, null, null);
+
         // M295: props, from the same set the GL viewport binds to. The setter compares by reference, so
         // this is a no-op until the view-model actually republishes the prop set.
         _dx11.PropMeshes = vm.CurrentPropMeshes;

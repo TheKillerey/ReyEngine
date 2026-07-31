@@ -572,6 +572,12 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private float GizmoArmLength(Vector3 pivot) => Math.Clamp(Vector3.Distance(_lastCamPos, pivot) * 0.15f, 10f, 5000f);
 
+    /// <summary>M296: the arm length the HIT-TEST uses, exposed so the D3D11 viewport draws an arm of
+    /// exactly that length. It is derived from the cached mirrored camera position, so anything computing
+    /// its own would drift from what HitTestGizmoAxis measures against - and the arm is what the user aims
+    /// at, so drift there is a gizmo that looks grabbable where it is not.</summary>
+    public float GizmoArmLengthFor(Vector3 pivot) => GizmoArmLength(pivot);
+
     private static float DistancePointToSegment(Vector2 p, Vector2 a, Vector2 b)
     {
         var ab = b - a;

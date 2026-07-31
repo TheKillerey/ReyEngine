@@ -1571,7 +1571,11 @@ void main(){
     }
 
     /// <summary>Build the line-segment vertices for one gizmo axis handle in the given mode (M42).</summary>
-    private static float[] BuildGizmoAxis(int mode, Vector3 pivot, Vector3 axis, float arm)
+    /// <summary>M296: public because the D3D11 viewport draws the SAME gizmo from the same builder. It is
+    /// pure CPU maths with no GL call in it, so sharing it is what stops the two viewports growing gizmos
+    /// that disagree about where an axis arm ends - and the arm is what the user aims at, so a disagreement
+    /// would be a hit-test that misses.</summary>
+    public static float[] BuildGizmoAxis(int mode, Vector3 pivot, Vector3 axis, float arm)
     {
         var v = new List<float>();
         void Seg(Vector3 a, Vector3 b) { v.Add(a.X); v.Add(a.Y); v.Add(a.Z); v.Add(b.X); v.Add(b.Y); v.Add(b.Z); }
