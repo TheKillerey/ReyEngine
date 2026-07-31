@@ -140,6 +140,29 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// viewport that never opens a map never creates one.</summary>
     public D3D11MapParticles? Particles { get; private set; }
 
+    /// <summary>M295: the prop driver - placed meshes like Baron, the dragons and the jungle camps.
+    /// Built alongside the particle driver and for the same reason: both need the shader cache, which the
+    /// view-model opens only once a map is loaded.</summary>
+    public D3D11MapProps? Props { get; private set; }
+
+    /// <summary>The prop set to draw, or null for "props are off". Applied when the driver exists;
+    /// remembered until then, exactly as the particle playback is.</summary>
+    public PropRenderSet? PropMeshes
+    {
+        get => _propMeshes;
+        set
+        {
+            if (ReferenceEquals(_propMeshes, value)) return;   // rebuilt only when the set really changes
+            _propMeshes = value;
+            Props?.Load(value);
+        }
+    }
+    private PropRenderSet? _propMeshes;
+
+    /// <summary>M295: play prop idle animations. Off leaves them in whatever pose they last held, which
+    /// is bind pose until something ticks them.</summary>
+    public bool PlayPropAnimations { get; set; }
+
     /// <summary>M266: the shader cache the particle pipelines resolve against, pushed from the view-model.
     /// The map scene builder already has one; particles need the same instance so the two share its
     /// pipeline cache.</summary>
@@ -169,7 +192,14 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// <summary>M266: call after a scene build. <c>Dx11SceneBuilder.Commit</c> calls ClearMaterials, which
     /// disposes the particle materials and empties the texture pool along with the map's - so the retained
     /// playback has to be registered again, AFTER the commit.</summary>
-    public void NotifySceneRebuilt() => Particles?.Invalidate();
+    public void NotifySceneRebuilt()
+    {
+        Particles?.Invalidate();
+        // M295: a scene rebuild calls ClearMaterials, which takes the prop materials with it AND releases
+        // the mesh geometry their handles point at. Reloading is not an optimisation here - without it the
+        // handles would dangle into another scene's geometry list.
+        Props?.Load(_propMeshes);
+    }
 
     /// <summary>Last frame's particle counts, for the viewport's detail tooltip. Empty when nothing is
     /// playing, which is a state rather than a failure.</summary>
@@ -241,6 +271,11 @@ public sealed class Dx11ViewportSurface : IDisposable
         // Hoisted out of the settings initialiser because the particle tick below needs the same value:
         // one clock reading per frame, or the shader animation and the particles would drift apart.
         float t = AnimationTime();
+
+        // M295: prop idle animations, off the SAME clock as everything else in this viewport - so pausing
+        // pauses props too. GL drives these from a dedicated stopwatch; that divergence is deliberate and
+        // noted here rather than left to be discovered.
+        Props?.Tick(t, PlayPropAnimations);
 
         var settings = new PreviewSettings
         {
@@ -341,9 +376,17 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// surface starts drawing its fallback sphere.</summary>
     private void EnsureParticles()
     {
-        if (Particles is not null || ShaderCache is null) return;
-        Particles = new D3D11MapParticles(_renderer, ShaderCache);
-        if (_particlePlayback is not null) Particles.SetPlayback(_particlePlayback);
+        if (ShaderCache is null) return;
+        if (Particles is null)
+        {
+            Particles = new D3D11MapParticles(_renderer, ShaderCache);
+            if (_particlePlayback is not null) Particles.SetPlayback(_particlePlayback);
+        }
+        if (Props is null)
+        {
+            Props = new D3D11MapProps(_renderer, ShaderCache);
+            if (_propMeshes is not null) Props.Load(_propMeshes);
+        }
     }
 
     private void EnsureBitmaps(int width, int height)

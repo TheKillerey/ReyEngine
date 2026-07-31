@@ -211,6 +211,19 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// only place in the VFX renderer that culls at all.</summary>
     public bool MeshCull { get; set; }
 
+    /// <summary>M295: prop placements, as real world matrices. Non-null selects the PROP branch of the
+    /// mesh draw: the particle instance fields are neutralised and this matrix is the whole transform.
+    /// A prop's placement is an arbitrary 4x4 straight out of the map's .materials.bin - rotation,
+    /// non-uniform scale, shear - which the particle layout (position + one scalar scale + a Y spin)
+    /// simply cannot represent.</summary>
+    public IReadOnlyList<Matrix4x4>? MeshModels { get; set; }
+
+    /// <summary>M295: which slice of the mesh's index buffer this material draws. A prop's submeshes each
+    /// carry their own diffuse, so one uploaded geometry is drawn by several materials over different
+    /// ranges. 0/0 means "all of it", which is what every particle emitter wants.</summary>
+    public int MeshIndexStart { get; set; }
+    public int MeshIndexCount { get; set; }
+
     /// <summary>The key <see cref="Textures"/> holds a distortion emitter's normal map under. Reserved
     /// rather than a real sampler name because no shader in Riot's cache declares this stage - it belongs
     /// to our own pipeline. Routed through the ordinary texture pool so its lifetime is pooled like every
@@ -1699,6 +1712,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
 cbuffer MeshCB : register(b0)
 {
     row_major float4x4 gViewProj;
+    row_major float4x4 gModel;   // M295: props supply a real transform; particles leave it identity
     float4 gRight;      // xyz = placement right
     float4 gUp;
     float4 gForward;
@@ -1722,6 +1736,10 @@ VOut vsmain(VIn i)
     float c = cos(gMisc.x);
     float3 local = float3(i.pos.x * c - i.pos.z * s, i.pos.y, i.pos.x * s + i.pos.z * c) * gPosScale.w;
     float3 p = gRight.xyz * local.x + gUp.xyz * local.y + gForward.xyz * local.z + gPosScale.xyz;
+    // M295: a prop's placement is an arbitrary 4x4 out of the map's .materials.bin - rotation, non-uniform
+    // scale and shear - which the particle path's basis+scalar-scale composition above cannot express. A
+    // particle leaves this identity and is unaffected.
+    p = mul(float4(p, 1.0), gModel).xyz;
     o.pos = mul(float4(p, 1.0), gViewProj);
     o.uv     = i.uv * max(gUv.zw, 0.0001) + gUv.xy;
     o.uvMult = i.uv * max(gUvMult.zw, 0.0001) + gUvMult.xy;
@@ -1971,7 +1989,7 @@ float4 psmain(VOut i) : SV_Target
 
         var cbDesc = new BufferDesc
         {
-            ByteWidth = 192,
+            ByteWidth = 256,          // M295: +float4x4 gModel
             Usage = Usage.Dynamic,
             BindFlags = (uint)BindFlag.ConstantBuffer,
             CPUAccessFlags = (uint)CpuAccessFlag.Write,
@@ -2098,8 +2116,14 @@ float4 psmain(VOut i) : SV_Target
         if (mat.MeshGeometryId is not { } id || id < 0 || id >= _meshGeoms.Count) return false;
         var geom = _meshGeoms[id];
         if (geom.Vb.Handle is null) return false;
+        // M295: two shapes of instance feed this one pipeline. Particles supply the simulator's packed
+        // array (position + scalar scale + Y-spin); props supply real 4x4 placements. Props are the
+        // MeshModels branch and leave every particle field neutral, so the two cannot interfere.
+        var models = mat.MeshModels;
         var inst = mat.MeshInstances;
-        if (inst is null || mat.MeshInstanceCount == 0) return false;
+        int instanceCount = models is not null ? models.Count : mat.MeshInstanceCount;
+        if (instanceCount == 0) return false;
+        if (models is null && inst is null) return false;
 
         _ctx.IASetInputLayout(_meshLayout);
         _ctx.VSSetShader(_meshVs, null, 0);
@@ -2125,40 +2149,74 @@ float4 psmain(VOut i) : SV_Target
         _ctx.OMSetDepthStencilState(
             _depthStateNoWrite.Handle is not null ? _depthStateNoWrite : _depthState, 0);
 
+        // M295: a prop material may draw only ONE SUBMESH of a shared geometry, because a prop's submeshes
+        // each carry their own diffuse. Particles leave these at 0 and get the whole buffer, as before.
+        int idxStart = Math.Max(0, mat.MeshIndexStart);
+        int idxCount = mat.MeshIndexCount > 0
+            ? Math.Min(mat.MeshIndexCount, Math.Max(0, geom.IndexCount - idxStart))
+            : geom.IndexCount;
+
         int drawn = 0;
-        var bytes = new byte[192];
-        for (int i = 0; i < mat.MeshInstanceCount; i++)
+        var bytes = new byte[256];
+        for (int i = 0; i < instanceCount; i++)
         {
-            int o = i * MeshInstanceStride;
-            float scale = inst[o + 3];
-            // GL clamps away from zero rather than skipping: a scale of exactly 0 would collapse the mesh,
-            // and Riot authors 0 to mean "unscaled" often enough that dropping those loses real geometry.
-            if (MathF.Abs(scale) < 0.01f) scale = MathF.CopySign(0.01f, scale == 0f ? 1f : scale);
+            Matrix4x4 model;
+            float scale, rot, cr, cg, cb, ca, px, py, pz;
+            if (models is not null)
+            {
+                model = models[i];
+                // Everything the particle path composes is neutralised: the placement matrix IS the
+                // transform, and a prop is drawn at its authored colour.
+                scale = 1f; rot = 0f; px = py = pz = 0f; cr = cg = cb = ca = 1f;
+            }
+            else
+            {
+                model = Matrix4x4.Identity;
+                int o = i * MeshInstanceStride;
+                scale = inst![o + 3];
+                // GL clamps away from zero rather than skipping: a scale of exactly 0 would collapse the
+                // mesh, and Riot authors 0 to mean "unscaled" often enough that dropping those loses real
+                // geometry.
+                if (MathF.Abs(scale) < 0.01f) scale = MathF.CopySign(0.01f, scale == 0f ? 1f : scale);
+                px = inst[o + 0]; py = inst[o + 1]; pz = inst[o + 2];
+                cr = inst[o + 5]; cg = inst[o + 6]; cb = inst[o + 7]; ca = inst[o + 8];
+                rot = inst[o + 9];
+            }
+
+            var right = models is not null ? Vector3.UnitX : mat.MeshRight;
+            var up = models is not null ? Vector3.UnitY : mat.MeshUp;
+            var fwd = models is not null ? Vector3.UnitZ : mat.MeshForward;
 
             var vals = new[]
             {
                 vp.M11, vp.M12, vp.M13, vp.M14, vp.M21, vp.M22, vp.M23, vp.M24,
                 vp.M31, vp.M32, vp.M33, vp.M34, vp.M41, vp.M42, vp.M43, vp.M44,
-                mat.MeshRight.X, mat.MeshRight.Y, mat.MeshRight.Z, 0f,
-                mat.MeshUp.X, mat.MeshUp.Y, mat.MeshUp.Z, 0f,
-                mat.MeshForward.X, mat.MeshForward.Y, mat.MeshForward.Z, 0f,
-                inst[o + 0], inst[o + 1], inst[o + 2], scale,
-                inst[o + 5], inst[o + 6], inst[o + 7], inst[o + 8],
+                model.M11, model.M12, model.M13, model.M14, model.M21, model.M22, model.M23, model.M24,
+                model.M31, model.M32, model.M33, model.M34, model.M41, model.M42, model.M43, model.M44,
+                right.X, right.Y, right.Z, 0f,
+                up.X, up.Y, up.Z, 0f,
+                fwd.X, fwd.Y, fwd.Z, 0f,
+                px, py, pz, scale,
+                cr, cg, cb, ca,
                 mat.MeshUvOffset.X, mat.MeshUvOffset.Y, mat.MeshTexDiv.X, mat.MeshTexDiv.Y,
                 mat.MeshUvOffsetMult.X, mat.MeshUvOffsetMult.Y, mat.MeshTexDivMult.X, mat.MeshTexDivMult.Y,
-                inst[o + 9], boundMult.Handle is not null ? 1f : 0f, 0f, 0f,
+                rot, boundMult.Handle is not null ? 1f : 0f, 0f, 0f,
             };
-            System.Buffer.BlockCopy(vals, 0, bytes, 0, 192);
-            Upload(_meshCb, bytes, 192);
+            System.Buffer.BlockCopy(vals, 0, bytes, 0, 256);
+            Upload(_meshCb, bytes, 256);
             _ctx.VSSetConstantBuffers(0, 1, ref _meshCb);
             _ctx.PSSetConstantBuffers(0, 1, ref _meshCb);
 
             if (mat.MeshCull)
-                _ctx.RSSetState(scale < 0f ? _meshCullCcw : _meshCullCw);
-            else
-                _ctx.RSSetState(_raster);
+            {
+                // A negative determinant reverses winding, so the correct faces would otherwise be the
+                // ones discarded. GL checks the same thing per prop instance.
+                float det = models is not null ? model.GetDeterminant() : scale;
+                _ctx.RSSetState(det < 0f ? _meshCullCcw : _meshCullCw);
+            }
+            else _ctx.RSSetState(_raster);
 
-            if (geom.IndexCount > 0) _ctx.DrawIndexed((uint)geom.IndexCount, 0, 0);
+            if (idxCount > 0) _ctx.DrawIndexed((uint)idxCount, (uint)idxStart, 0);
             else _ctx.Draw((uint)geom.VertexCount, 0);
             drawn++;
         }

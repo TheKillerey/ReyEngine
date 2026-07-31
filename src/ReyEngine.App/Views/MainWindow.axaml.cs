@@ -190,6 +190,11 @@ public partial class MainWindow : Window
         // rebuild all move independently, and a rebuild would otherwise come back with everything visible.
         _dx11.ApplyGroupVisibility(vm.CurrentModelSubmeshVisible);
 
+        // M295: props, from the same set the GL viewport binds to. The setter compares by reference, so
+        // this is a no-op until the view-model actually republishes the prop set.
+        _dx11.PropMeshes = vm.CurrentPropMeshes;
+        _dx11.PlayPropAnimations = vm.PlayPropAnimations;
+
         // M293: the bucket grid, from the same array the GL viewport is bound to. Re-uploaded only when
         // the ARRAY ITSELF changes - it is multi-megabyte, and the GL host guards it the same way for the
         // same reason. Toggling the grid off publishes null, which clears it.
