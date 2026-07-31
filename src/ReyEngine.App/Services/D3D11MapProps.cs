@@ -125,6 +125,9 @@ public sealed class D3D11MapProps
                 // another would draw over it.
                 mat.WritesDepth = true;
                 mat.MeshCull = true;
+                // M297: cut out rather than blend. GL uses 0.35 explicitly so fur and wing alpha reads;
+                // with depth writes on, blending instead makes those fringes stamp depth and halo.
+                mat.MeshAlphaCutoff = 0.35f;
 
                 if (sub.Texture is { } img)
                     _renderer.SetTexture(mat, "TEXTURE__TX", $"prop:{g.Mesh.Key}:{sub.Start}",

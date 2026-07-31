@@ -224,6 +224,11 @@ public sealed unsafe class PreviewMaterial : IDisposable
     public int MeshIndexStart { get; set; }
     public int MeshIndexCount { get; set; }
 
+    /// <summary>M297: discard texels below this alpha. 0 disables it, which is what every particle wants -
+    /// they blend. Props need it because they WRITE depth, so a blended fringe stamps depth for texels
+    /// that are visually absent and halos whatever is behind.</summary>
+    public float MeshAlphaCutoff { get; set; }
+
     /// <summary>The key <see cref="Textures"/> holds a distortion emitter's normal map under. Reserved
     /// rather than a real sampler name because no shader in Riot's cache declares this stage - it belongs
     /// to our own pipeline. Routed through the ordinary texture pool so its lifetime is pooled like every
@@ -1720,7 +1725,7 @@ cbuffer MeshCB : register(b0)
     float4 gColor;
     float4 gUv;         // xy = scroll offset, zw = tiling
     float4 gUvMult;
-    float4 gMisc;       // x = rotation (radians, Y axis), y = has texMult
+    float4 gMisc;       // x = rotation (radians, Y axis), y = has texMult, z = alpha cutoff
 };
 Texture2D gTex     : register(t0);
 Texture2D gTexMult : register(t1);
@@ -1750,6 +1755,10 @@ float4 psmain(VOut i) : SV_Target
 {
     float4 t = gTex.Sample(gSamp, i.uv);
     if (gMisc.y != 0.0) t *= gTexMult.Sample(gSamp, i.uvMult);
+    // M297: alpha CUTOUT for props. They write depth, so blending their fringes would stamp depth for
+    // near-transparent texels and halo everything behind - fur and wings especially. GL cuts these at
+    // 0.35 for the same reason. Particles leave the cutoff at 0 and keep blending, as they must.
+    if (gMisc.z > 0.0 && t.a < gMisc.z) discard;
     return t * gColor;
 }";
 
@@ -2298,7 +2307,7 @@ float4 psmain(VOut i) : SV_Target
                 cr, cg, cb, ca,
                 mat.MeshUvOffset.X, mat.MeshUvOffset.Y, mat.MeshTexDiv.X, mat.MeshTexDiv.Y,
                 mat.MeshUvOffsetMult.X, mat.MeshUvOffsetMult.Y, mat.MeshTexDivMult.X, mat.MeshTexDivMult.Y,
-                rot, boundMult.Handle is not null ? 1f : 0f, 0f, 0f,
+                rot, boundMult.Handle is not null ? 1f : 0f, mat.MeshAlphaCutoff, 0f,
             };
             System.Buffer.BlockCopy(vals, 0, bytes, 0, 256);
             Upload(_meshCb, bytes, 256);
