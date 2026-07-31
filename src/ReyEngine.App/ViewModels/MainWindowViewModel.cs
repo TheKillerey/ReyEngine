@@ -2608,17 +2608,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void OpenTextureRecolor()
     {
-        if (_currentMap is null) { _log.Warn("Recolor", "Open a map (.mapgeo) first — the tool recolours the textures that map paints with."); return; }
+        if (_currentMap is null) { _log.Warn("Recolor", "Open a map (.mapgeo) first — the tool recolours its surfaces, placed mobs / props and lightmaps."); return; }
         ShowTextureRecolorWindow?.Invoke();
     }
 
     /// <summary>
-    /// <para>Every texture the open map actually paints with, ranked by how much of the map each one
-    /// covers — plus, since M280, every baked LIGHTMAP atlas the map references. Normal maps, masks and
+    /// <para>Every colour-bearing texture used by the open map, its placed mobs / animated props and its
+    /// baked LIGHTMAP atlases, ranked by how many scene references each one has. Normal maps, masks and
     /// gradients stay excluded: those are data rather than colour, and hue-shifting them would corrupt
-    /// the lighting instead of recolouring the map. A lightmap atlas is different from those — it IS a
-    /// colour (baked ambient/bounced light), stored in an ordinary .tex container, so it goes through the
-    /// exact same <see cref="TextureRecolor.Apply"/> path as a diffuse texture with no special-casing.</para>
+    /// the lighting instead of recolouring the map. Prop textures are resolved from the same placed skin
+    /// bins and champion material bindings as the viewport, so Baron, dragons, camps and shopkeepers do
+    /// not silently keep their original diffuse colour.</para>
     ///
     /// <para>Recolouring one tints the map's baked lighting rather than its surfaces — warming or
     /// cooling shadowed areas, for instance — which is a genuinely different effect from recolouring a
@@ -2631,7 +2631,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return Array.Empty<RecolorTargetViewModel>();
 
         var recolored = Project.TextureRecolors.Select(r => r.PathHash).ToHashSet();
-        var list = new List<RecolorTargetViewModel>();
+        var candidates = new Dictionary<ulong, RecolorCandidate>();
+
+        void Add(string? path, int mapUses = 0, int propUses = 0, int lightmapUses = 0)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            string clean = path.Replace('\\', '/').Trim();
+            ulong hash = HashAlgorithms.WadPath(clean);
+            if (!candidates.TryGetValue(hash, out var candidate))
+                candidates[hash] = candidate = new RecolorCandidate(clean);
+            candidate.MapUses += mapUses;
+            candidate.PropUses += propUses;
+            candidate.LightmapUses += lightmapUses;
+        }
 
         // ---- diffuse: every texture a material actually samples ----
         // Guarded rather than an early return for the whole method — a map whose materials.bin fails to
@@ -2644,25 +2656,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var tex in materialToTexture.Values)
                 if (!string.IsNullOrEmpty(tex)) byPath[tex] = byPath.GetValueOrDefault(tex) + 1;
 
-            foreach (var (path, uses) in byPath)
-            {
-                ulong hash = HashAlgorithms.WadPath(path);
-                // Triage on the header alone — a map's texture list is long and decoding all of it just to
-                // populate a list would stall the window for seconds. Anything we cannot write back is
-                // left out entirely rather than offered and then silently skipped.
-                var bytes = TryReadAssetBytes(hash);
-                if (bytes is null || !TextureRecolor.IsSupported(bytes)) continue;
+            foreach (var (path, uses) in byPath) Add(path, mapUses: uses);
+        }
 
-                list.Add(new RecolorTargetViewModel
-                {
-                    Target = new RecolorTarget(hash, path),
-                    Name = Path.GetFileName(path),
-                    Folder = Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "",
-                    Kind = RecolorTargetKind.Diffuse,
-                    UsedBy = uses,
-                    IsRecolored = recolored.Contains(hash),
-                });
-            }
+        // ---- mobs / animated props: diffuse textures from every placed character skin ----
+        // Resolve each unique skin bin once. PropTextureCatalog also includes SkinMeshProperties.texture,
+        // the fallback used by submeshes without a material override, and aggregates repeated placements.
+        if (CurrentModelProps is { Count: > 0 } props)
+        {
+            var propTextures = PropTextureCatalog.Discover(
+                props.GroupBy(prop => prop.Skin, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new PropSkinUsage(group.Key, group.Count())),
+                skin => ReadAssetByPath($"data/{skin.ToLowerInvariant()}.bin"),
+                ResolveBinName);
+            foreach (var texture in propTextures) Add(texture.AssetPath, propUses: texture.Placements);
         }
 
         // ---- lightmaps: every baked-light atlas the map references ----
@@ -2670,29 +2677,47 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // this map has" cannot drift into two different answers depending on which tool you opened.
         foreach (var atlas in Formats.Baking.LightBaker.EnumerateAtlases(map))
         {
-            ulong hash = HashAlgorithms.WadPath(atlas);
+            int uses = map.Groups.Count(g => string.Equals(g.LightmapTexture, atlas, StringComparison.OrdinalIgnoreCase));
+            Add(atlas, lightmapUses: uses);
+        }
+
+        // Header triage happens once after all discovery passes. A texture shared by map geometry and a
+        // prop becomes one row (MAP+PROP), one write and one project record rather than two competing rows.
+        var list = new List<RecolorTargetViewModel>(candidates.Count);
+        foreach (var (hash, candidate) in candidates)
+        {
             var bytes = TryReadAssetBytes(hash);
             if (bytes is null || !TextureRecolor.IsSupported(bytes)) continue;
-
-            int uses = map.Groups.Count(g => string.Equals(g.LightmapTexture, atlas, StringComparison.OrdinalIgnoreCase));
+            var kind = candidate.LightmapUses > 0
+                ? RecolorTargetKind.Lightmap
+                : candidate.MapUses > 0 && candidate.PropUses > 0
+                    ? RecolorTargetKind.MapAndPropDiffuse
+                    : candidate.PropUses > 0 ? RecolorTargetKind.PropDiffuse : RecolorTargetKind.Diffuse;
             list.Add(new RecolorTargetViewModel
             {
-                Target = new RecolorTarget(hash, atlas),
-                Name = Path.GetFileName(atlas),
-                Folder = Path.GetDirectoryName(atlas)?.Replace('\\', '/') ?? "",
-                Kind = RecolorTargetKind.Lightmap,
-                UsedBy = uses,
+                Target = new RecolorTarget(hash, candidate.Path),
+                Name = Path.GetFileName(candidate.Path),
+                Folder = Path.GetDirectoryName(candidate.Path)?.Replace('\\', '/') ?? "",
+                Kind = kind,
+                MapUses = candidate.MapUses,
+                PropUses = candidate.PropUses,
+                LightmapUses = candidate.LightmapUses,
                 IsRecolored = recolored.Contains(hash),
             });
         }
 
-        // Diffuse first (unchanged relative order from before M280), lightmaps trailing as their own
-        // cluster — there is no section header in the list, so grouping by sort order is what keeps the
-        // two kinds from interleaving, and the per-row badge is what tells them apart at a glance.
         return list.OrderBy(t => t.Kind)
                    .ThenByDescending(t => t.UsedBy)
                    .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
                    .ToList();
+    }
+
+    private sealed class RecolorCandidate(string path)
+    {
+        public string Path { get; } = path;
+        public int MapUses { get; set; }
+        public int PropUses { get; set; }
+        public int LightmapUses { get; set; }
     }
 
     private byte[]? TryReadAssetBytes(ulong hash)
