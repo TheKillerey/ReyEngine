@@ -64,6 +64,12 @@ public static class GameReferenceLibrary
     }
 
     /// <summary>Resolve the DATA/FINAL directory from a configured game path (Game, Game/DATA/FINAL, …).</summary>
+    ///
+    /// <para>M302 exposed this. Callers that rebuilt the path by hand as
+    /// <c>gameDirectory + "/DATA/FINAL"</c> silently found nothing on two of the three supported layouts -
+    /// and a cleanup scan that indexes no game WADs would have called real Riot content unused.</para>
+    public static string? FindFinalDirectory(string? gameDirectory) => FindFinalDir(gameDirectory);
+
     private static string? FindFinalDir(string? gameDirectory)
     {
         if (string.IsNullOrWhiteSpace(gameDirectory) || !Directory.Exists(gameDirectory)) return null;

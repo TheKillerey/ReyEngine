@@ -126,6 +126,8 @@
           <MenuItem Header="Map Material Diagnostics" Command="{Binding MapMaterialDiagnosticsCommand}"
                     ToolTip.Tip="Scan the loaded map's bins + mapgeo and write an honest diagnostics report (classes, unknown fields, lighting/lightmap/visibility) to .reyengine/reports/" />
           <Separator />
+          <MenuItem Header="Cleanup Project…" Command="{Binding CleanupProjectCommand}"
+                    ToolTip.Tip="Find files nothing can load and project copies that are identical to the Riot original. Scan first, review a full preview, then move the selection into a project-local backup you can undo — nothing is deleted outright" />
           <MenuItem Header="Patch Update Wizard…" Command="{Binding OpenPatchUpdateWizardCommand}"
                     ToolTip.Tip="Update this mod to the current patch: old originals from CommunityDragon + three-way merge carries only the mod's edits onto the new base — with backups, a per-bin report and validation" />
         </MenuItem>
