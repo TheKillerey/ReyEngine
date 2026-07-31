@@ -51,6 +51,7 @@
 
 **Maps**
 - Load `.mapgeo` maps with baked lightmaps, terrain-blend & flowmap-water shaders, GrassTint (VertexDeform), display-correct decals.
+- **Map Skin Switcher** safely forces a normal map (for example Map11 / Base_SRX) through another shipped environment (for example Milkshake). It routes the complete visual environment across registered slots and internal aliases while retaining their runtime identity, builds a compatibility materials container that preserves the server-addressed gameplay IDs which otherwise crash StartSpawn, and routes dedicated source music/ambience through the current skin's audio identity. Both generated bins, dependencies and asset references are validated before saving; paid TFT arenas / Map22 are intentionally excluded.
 - Select / move / rotate / scale **map meshes, particles and sounds** with viewport gizmos — full undo, snapping, world/local space. Edits are saved by surgical byte patching (originals stay byte-exact).
 - **Add new meshes to a map**: import `.obj` / `.scb` / `.sco`, place with the gizmo, assign a map material, save — appended straight into the mapgeo.
 - **Bucket grids**: view the real 3D culling bake, and regenerate grids after editing geometry.
