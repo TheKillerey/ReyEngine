@@ -1,0 +1,87 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.MapSkinSwitcherWindow"
+        x:DataType="vm:MapSkinSwitcherViewModel"
+        Title="ReyEngine - Map Skin Switcher" Width="700" Height="610"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,9">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Classes="primary" Content="Create Skin Override"
+                Command="{Binding ApplyCommand}" IsEnabled="{Binding CanApply}" Padding="16,5" />
+        <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+          <ProgressBar IsIndeterminate="True" IsVisible="{Binding Running}" Height="2" />
+          <TextBlock Text="{Binding Status}" FontSize="11" TextWrapping="Wrap"
+                     Foreground="{DynamicResource ReyTextDimBrush}" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <ScrollViewer>
+      <StackPanel Margin="16" Spacing="12">
+        <Border Classes="card">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="cardTitle" Text="COMPLETE MAP-SKIN SWITCH" />
+            <TextBlock FontSize="11" TextWrapping="Wrap"
+                       Text="This does not rename a mapgeo. It keeps the target slot the game selects and clones the source skin's complete MapSkin definition: map container, minimap, navmesh, terrain/fog alternates, audio banks, particles, gamma, grass tint, resource resolvers and post effects." />
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="Before saving, ReyEngine verifies the source container, every referenced file, all object links, strict bin round-trip, and the injected shipping bin. The original is backed up under .reyengine/backups." />
+          </StackPanel>
+        </Border>
+
+        <Border Background="#24161A" BorderBrush="#7F3040" BorderThickness="1" CornerRadius="5" Padding="10,8">
+          <TextBlock Text="TFT arenas / Map22 are intentionally excluded because those arenas are paid cosmetics. No TFT shipping bin can be modified by this tool."
+                     FontSize="11" TextWrapping="Wrap" Foreground="#F0A0AE" />
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="cardTitle" Text="MAP" />
+            <ComboBox ItemsSource="{Binding Maps}" SelectedItem="{Binding SelectedMap}"
+                      DisplayMemberBinding="{Binding DisplayName}" FontSize="11" />
+          </StackPanel>
+        </Border>
+
+        <Grid ColumnDefinitions="*,34,*">
+          <Border Grid.Column="0" Classes="card">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="cardTitle" Text="REPLACE THIS SLOT" />
+              <ComboBox ItemsSource="{Binding TargetSkins}" SelectedItem="{Binding SelectedTarget}"
+                        DisplayMemberBinding="{Binding DisplayName}" FontSize="11" MaxDropDownHeight="320" />
+              <TextBlock Text="{Binding TargetDetail}" FontSize="10" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+            </StackPanel>
+          </Border>
+          <TextBlock Grid.Column="1" Text="&lt;-" HorizontalAlignment="Center" VerticalAlignment="Center"
+                     FontSize="18" Foreground="{DynamicResource ReyAccentBrush}" />
+          <Border Grid.Column="2" Classes="card">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="cardTitle" Text="USE THIS COMPLETE SKIN" />
+              <ComboBox ItemsSource="{Binding SourceSkins}" SelectedItem="{Binding SelectedSource}"
+                        DisplayMemberBinding="{Binding DisplayName}" FontSize="11" MaxDropDownHeight="320" />
+              <TextBlock Text="{Binding SourceDetail}" FontSize="10" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <Border Classes="card">
+          <StackPanel Spacing="5">
+            <TextBlock Classes="cardTitle" Text="RESULT" />
+            <TextBlock Text="{Binding SwapSummary}" FontSize="12" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ReyAccentBrush}" />
+            <TextBlock Text="Example: choose Default - Base_SRX on the left and Milkshake_SRS on the right. Normal Summoner's Rift games still select Default, but its complete loading definition now points to Milkshake."
+                       FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>
