@@ -68,6 +68,19 @@
                     ToolTip.Tip="Unwrap UV2, pack atlas regions and rewrite the mapgeo so the uncovered meshes can be baked. Uses the Resolution / Texel density / Padding set below." />
             <TextBlock Text="Working…" FontSize="10" IsVisible="{Binding IsGeneratingLayout}"
                        Foreground="{DynamicResource ReyAccentBrush}" />
+            <Separator Margin="0,4" />
+            <TextBlock Text="EXPERIMENTAL DX11 SHADER" FontSize="10" FontWeight="Bold"
+                       Foreground="{DynamicResource ReyWarningBrush}" />
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="SRX_DynamicEffect has baked-light code, but Riot did not cook it for several Map11 animation-switch combinations. This builds the missing DXBC permutations into a separate ShaderCache.dx11 companion WAD and clears NO_BAKED_LIGHTING only where the patch has a matching VS and PS." />
+            <Button Classes="tool" Content="Enable DynamicEffect Lightmaps (Experimental)"
+                    Command="{Binding EnableExperimentalDynamicEffectCommand}"
+                    IsEnabled="{Binding !IsPatchingDynamicEffect}"
+                    HorizontalAlignment="Stretch" FontSize="11" Padding="10,5"
+                    ToolTip.Tip="Creates an opt-in ShaderCache.dx11.wad.client companion. Riot's installed shader cache is never edited. Build and test in Practice Tool after enabling." />
+            <TextBlock Text="Compiling and validating shader cache…" FontSize="10"
+                       IsVisible="{Binding IsPatchingDynamicEffect}"
+                       Foreground="{DynamicResource ReyAccentBrush}" />
           </StackPanel>
         </Border>
 

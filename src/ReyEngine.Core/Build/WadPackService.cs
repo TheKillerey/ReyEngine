@@ -57,7 +57,7 @@ public static class WadPackService
                 var rel = Path.GetRelativePath(folder, path).Replace('\\', '/');
                 // hash-named loose chunks carry no extension info worth trusting — always packed
                 bool loose = !rel.Contains('/') && Path.GetFileNameWithoutExtension(rel).Length == 16;
-                if (!loose && !KnownGameExtensions.Contains(Path.GetExtension(rel)))
+                if (!loose && !KnownGameExtensions.Contains(Path.GetExtension(rel)) && !IsDx11ShaderCacheEntry(rel))
                 {
                     report.CleanedUnknown.Add(rel);
                     report.Skipped++;
@@ -137,6 +137,23 @@ public static class WadPackService
         catch (Exception ex) { report.Warnings.Add($"Built WAD failed to reopen: {ex.Message}"); }
 
         return report;
+    }
+
+    /// <summary>M312: generated shader-cache TOCs and containers do not have conventional extensions:
+    /// <c>foo.vs-dx11</c> and <c>foo.ps-dx11_400</c>. They are real game assets and must survive the
+    /// known-types cleanup when the explicit ShaderCache project folder is built.</summary>
+    public static bool IsDx11ShaderCacheEntry(string relativePath)
+    {
+        string path = relativePath.Replace('\\', '/');
+        if (!path.StartsWith("assets/shaders/generated/", StringComparison.OrdinalIgnoreCase)) return false;
+        int token = path.LastIndexOf("-dx11", StringComparison.OrdinalIgnoreCase);
+        if (token < 0) token = path.LastIndexOf(".dx11", StringComparison.OrdinalIgnoreCase);
+        if (token < 3) return false;
+        string stage = path.Substring(token - 3, 3);
+        if (!stage.Equals(".vs", StringComparison.OrdinalIgnoreCase)
+            && !stage.Equals(".ps", StringComparison.OrdinalIgnoreCase)) return false;
+        string tail = path[(token + 5)..];
+        return tail.Length == 0 || (tail[0] == '_' && tail.Length > 1 && tail[1..].All(char.IsDigit));
     }
 
     /// <summary>Public since M134 — the Overlay Footprint analysis walks the same file set the packer would.</summary>

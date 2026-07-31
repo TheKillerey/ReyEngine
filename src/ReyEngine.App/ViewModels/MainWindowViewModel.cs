@@ -1968,6 +1968,146 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return result;
     }
 
+    /// <summary>
+    /// M312 experimental: give lightmapped SRX_DynamicEffect map groups a custom DX11 permutation, stage
+    /// it as a ShaderCache companion WAD, then clear NO_BAKED_LIGHTING only on materials the generated
+    /// cache positively covers. Riot's installed cache is never edited.
+    /// </summary>
+    public async Task<string> EnableExperimentalDynamicEffectLightmapsAsync()
+    {
+        if (_currentMap is not { } map || _currentMapEntry is not { } mapEntry)
+            return "Load a map first.";
+        if (!Project.IsFolderProject || Project.RootPath is not { } root)
+            return "Experimental shader-cache patches require a saved folder project.";
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+            return "No materials.bin was found alongside this mapgeo.";
+
+        string? finalDir = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
+        if (finalDir is null)
+            return "Set the League game folder in Project Settings first.";
+
+        byte[] originalBin;
+        Formats.Materials.MaterialDocument document;
+        try
+        {
+            originalBin = ReadAsset(binEntry.PathHash);
+            document = Formats.Materials.MaterialDocument.Parse(originalBin, ResolveBinName);
+        }
+        catch (Exception ex) { return "Materials could not be read: " + ex.Message; }
+
+        var lightmappedNames = map.Groups
+            .Where(g => !string.IsNullOrWhiteSpace(g.LightmapTexture))
+            .Select(g => g.Material)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidates = document.Materials
+            .Where(m => lightmappedNames.Contains(m.Name)
+                     && string.Equals(m.RenderShader ?? m.ShaderName,
+                         Services.ExperimentalDynamicEffectShaderService.RenderShader,
+                         StringComparison.OrdinalIgnoreCase)
+                     && m.MacroOn(Formats.Materials.MaterialBinding.MacroNoBakedLighting))
+            .ToList();
+        if (candidates.Count == 0)
+            return "No lightmapped SRX_DynamicEffect material still uses NO_BAKED_LIGHTING on this map.";
+
+        Services.ExperimentalDynamicEffectPatch patch;
+        try
+        {
+            patch = await Task.Run(() =>
+            {
+                using var cache = Formats.Shaders.ShaderCacheReader.Open(finalDir, _resolver.Database, out var cacheError)
+                    ?? throw new InvalidOperationException(cacheError);
+                using var definitions = new DisposableShaderDefinitions(finalDir);
+                return Services.ExperimentalDynamicEffectShaderService.Build(cache, definitions.Value, candidates);
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Shader", "Experimental DynamicEffect patch failed: " + ex.Message);
+            return "Shader patch generation failed: " + ex.Message;
+        }
+
+        int cleared = 0;
+        foreach (var material in candidates)
+            if (patch.SupportedMaterials.Contains(material.Name)
+                && material.RemoveMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting))
+                cleared++;
+        if (cleared == 0) return "The cache patch did not cover any selected material; nothing was changed.";
+
+        byte[] changedBin;
+        try
+        {
+            changedBin = document.Serialize();
+            _ = Formats.Materials.MaterialDocument.Parse(changedBin, ResolveBinName);
+        }
+        catch (Exception ex) { return "The material rewrite did not validate: " + ex.Message; }
+
+        string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        string backupRoot = Path.Combine(root, ".reyengine", "backups", "dynamic-effect-lightmap-" + stamp);
+        string shaderFolder = Path.Combine(root, "ShaderCache.dx11");
+        try
+        {
+            Directory.CreateDirectory(backupRoot);
+            File.WriteAllBytes(Path.Combine(backupRoot, Path.GetFileName(binEntry.Path)), originalBin);
+
+            // Persist the companion folder before touching the material. A failed save or partial shader
+            // write then leaves the still-unlit material safe; the crash-sensitive macro is cleared last.
+            if (!Project.ProjectFolders.Contains("ShaderCache.dx11", StringComparer.OrdinalIgnoreCase))
+                Project.ProjectFolders.Add("ShaderCache.dx11");
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+
+            foreach (var asset in patch.Assets)
+            {
+                string destination = Path.Combine(shaderFolder,
+                    asset.Path.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(destination))
+                {
+                    string backup = Path.Combine(backupRoot, "ShaderCache.dx11",
+                        asset.Path.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+                    File.Copy(destination, backup, overwrite: true);
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.WriteAllBytes(destination, asset.Bytes);
+            }
+
+            WriteBakedAsset(binEntry.Path, changedBin, ".bin");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Shader", "Could not stage the experimental cache patch: " + ex.Message);
+            return "Could not stage the shader patch: " + ex.Message;
+        }
+
+        try
+        {
+            BuildMounts();
+            BuildProjectTree();
+            UpdateTitle();
+        }
+        catch (Exception ex)
+        {
+            // The patch is already transactionally complete on disk. A remount failure must not imply
+            // that it was rolled back; rebuilding/reopening the project will pick up the staged files.
+            _log.Warn("Shader", "Shader patch was staged, but the project view did not refresh: " + ex.Message);
+        }
+
+        string result = $"Experimental DynamicEffect lightmaps enabled on {cleared:n0} material(s). "
+                      + $"Generated {patch.Detail} and staged ShaderCache.dx11.wad.client content. "
+                      + "Build Package, install both WADs, and test in Practice Tool.";
+        _log.Warn("Shader", result + $" Backup: {backupRoot}");
+        return result;
+    }
+
+    /// <summary>ShaderPermutationIndex has a Dispose method for its LeagueToolkit WAD but predates the
+    /// IDisposable interface. This tiny adapter keeps worker ownership explicit.</summary>
+    private sealed class DisposableShaderDefinitions : IDisposable
+    {
+        public Formats.Materials.ShaderPermutationIndex Value { get; }
+        public DisposableShaderDefinitions(string finalDir) => Value = new(finalDir);
+        public void Dispose() => Value.Dispose();
+    }
+
     /// <summary>M166: the shipped shader-permutation set, used to decide whether clearing a macro would
     /// leave the material asking for a shader the client cannot load. Built once per game directory.</summary>
     // ---- M249 (phase 6, step 2): hand the open map to the side-by-side D3D11 surface ----

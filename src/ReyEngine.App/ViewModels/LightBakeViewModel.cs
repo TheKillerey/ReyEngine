@@ -20,18 +20,21 @@ public sealed partial class LightBakeViewModel : ObservableObject
     private readonly Action<LightBakeResult> _onBaked;
     private readonly Func<BakeSettings, Task<LightmapLayoutResult?>>? _generateLayout;
     private readonly Func<(bool MapOpen, int Missing, int Total)>? _layoutState;
+    private readonly Func<Task<string>>? _enableExperimentalDynamicEffect;
     private CancellationTokenSource? _cts;
 
     public LightBakeViewModel(Func<BakeSettings, LightBakeInputs?> gatherInputs, Func<LightBakeService?> service,
         Action<LightBakeResult> onBaked,
         Func<BakeSettings, Task<LightmapLayoutResult?>>? generateLayout = null,
-        Func<(bool MapOpen, int Missing, int Total)>? layoutState = null)
+        Func<(bool MapOpen, int Missing, int Total)>? layoutState = null,
+        Func<Task<string>>? enableExperimentalDynamicEffect = null)
     {
         _gatherInputs = gatherInputs;
         _service = service;
         _onBaked = onBaked;
         _generateLayout = generateLayout;
         _layoutState = layoutState;
+        _enableExperimentalDynamicEffect = enableExperimentalDynamicEffect;
         RecomputeEstimate();
     }
 
@@ -42,6 +45,28 @@ public sealed partial class LightBakeViewModel : ObservableObject
     [ObservableProperty] private bool _canGenerateLayout;
     [ObservableProperty] private bool _isGeneratingLayout;
     [ObservableProperty] private string _layoutSummary = "";
+    [ObservableProperty] private bool _isPatchingDynamicEffect;
+
+    /// <summary>M312: stage the opt-in ShaderCache companion and clear NO_BAKED_LIGHTING on covered
+    /// SRX_DynamicEffect materials. Kept separate from layout generation because existing Riot maps can
+    /// already have Texcoord7 + atlas references and need only the missing shader permutation.</summary>
+    [RelayCommand]
+    private async Task EnableExperimentalDynamicEffectAsync()
+    {
+        if (_enableExperimentalDynamicEffect is null || IsPatchingDynamicEffect) return;
+        IsPatchingDynamicEffect = true;
+        Stage = "Building experimental DX11 shader patch";
+        Status = "";
+        try
+        {
+            Status = await _enableExperimentalDynamicEffect();
+            Stage = Status.StartsWith("Experimental DynamicEffect", StringComparison.Ordinal)
+                ? "Shader patch ready"
+                : "Shader patch not applied";
+        }
+        catch (Exception ex) { Stage = "Failed"; Status = "Shader patch failed: " + ex.Message; }
+        finally { IsPatchingDynamicEffect = false; Refresh(); }
+    }
 
     /// <summary>M147: unwrap UV2, pack atlas regions and rewrite the mapgeo, so a map Riot never
     /// lightmapped can be baked. This edits GEOMETRY, unlike baking which only writes images.</summary>
