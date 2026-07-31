@@ -317,12 +317,16 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11BlendState> _overlayBlend;
     private bool _overlayTried;
     private List<(int Start, int Count)> _highlight = new();
+    private object? _highlightSource;
 
     // M270/M305: placement markers - particles, sounds, props, probes, lights. Their own buffer pair, because the
     // dynamic pair belongs to the particle simulation and both are rewritten every frame.
     private ComPtr<ID3D11Buffer> _iconVb, _iconIb;
     private int _iconVbCapacity, _iconIbCapacity;
     private readonly List<(Vector3 Pos, Vector4 Color, float Size, IconGlyph Glyph)> _icons = new();
+    private object? _iconSource;
+    private PreviewVertex[] _iconVertsCpu = Array.Empty<PreviewVertex>();
+    private uint[] _iconIndicesCpu = Array.Empty<uint>();
     private ComPtr<ID3D11VertexShader> _overlayVsTex;
     private ComPtr<ID3D11PixelShader> _overlayPsTex;
     private ComPtr<ID3D11InputLayout> _overlayLayoutTex;
@@ -1014,6 +1018,8 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     /// </summary>
     public void SetIcons(IReadOnlyList<(Vector3 Pos, Vector4 Color, float Size, IconGlyph Glyph)>? icons)
     {
+        if (ReferenceEquals(_iconSource, icons)) return;
+        _iconSource = icons;
         _icons.Clear();
         if (icons is null) return;
         foreach (var i in icons) if (i.Size > 0f) _icons.Add(i);
@@ -1049,8 +1055,14 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         EnsureIconBuffers(quads * 4, quads * 6);
         if (_iconVb.Handle is null || _iconIb.Handle is null) return 0;
 
-        var verts = new PreviewVertex[quads * 4];
-        var idx = new uint[quads * 6];
+        bool countChanged = _iconVertsCpu.Length != quads * 4;
+        if (countChanged)
+        {
+            _iconVertsCpu = new PreviewVertex[quads * 4];
+            _iconIndicesCpu = new uint[quads * 6];
+        }
+        var verts = _iconVertsCpu;
+        var idx = _iconIndicesCpu;
         for (int i = 0; i < quads; i++)
         {
             var (pos, _, size, _) = _icons[i];
@@ -1061,9 +1073,12 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             verts[v + 1].Position = pos + r + u; verts[v + 1].Uv0 = new Vector4(1f, 0f, 0f, 0f);
             verts[v + 2].Position = pos + r - u; verts[v + 2].Uv0 = new Vector4(1f, 1f, 0f, 0f);
             verts[v + 3].Position = pos - r - u; verts[v + 3].Uv0 = new Vector4(0f, 1f, 0f, 0f);
-            int o = i * 6;
-            idx[o + 0] = (uint)v; idx[o + 1] = (uint)(v + 1); idx[o + 2] = (uint)(v + 2);
-            idx[o + 3] = (uint)v; idx[o + 4] = (uint)(v + 2); idx[o + 5] = (uint)(v + 3);
+            if (countChanged)
+            {
+                int o = i * 6;
+                idx[o + 0] = (uint)v; idx[o + 1] = (uint)(v + 1); idx[o + 2] = (uint)(v + 2);
+                idx[o + 3] = (uint)v; idx[o + 4] = (uint)(v + 2); idx[o + 5] = (uint)(v + 3);
+            }
         }
         UploadIcons(verts, idx);
 
@@ -1167,6 +1182,8 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     public void SetHighlightRanges(IReadOnlyList<(int Start, int Count)>? ranges)
     {
+        if (ReferenceEquals(_highlightSource, ranges)) return;
+        _highlightSource = ranges;
         _highlight.Clear();
         if (ranges is null) return;
         foreach (var r in ranges)

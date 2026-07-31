@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using Avalonia;
@@ -33,6 +34,7 @@ public sealed class Dx11ViewportSurface : IDisposable
     private WriteableBitmap? _front, _back;
     private int _width, _height;
     private bool _ready;
+    private object? _visibilitySource = new();
 
     /// <summary>Null until <see cref="Initialize"/> succeeds. Non-null and unchanging afterwards, so it can
     /// be reported once rather than polled.</summary>
@@ -57,6 +59,8 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// </summary>
     public void ApplyGroupVisibility(IReadOnlyList<bool>? visible)
     {
+        if (ReferenceEquals(_visibilitySource, visible)) return;
+        _visibilitySource = visible;
         foreach (var m in _renderer.Materials)
         {
             int g = m.MapGroupIndex;
@@ -194,6 +198,7 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// playback has to be registered again, AFTER the commit.</summary>
     public void NotifySceneRebuilt()
     {
+        _visibilitySource = new object();
         Particles?.Invalidate();
         // M295: a scene rebuild calls ClearMaterials, which takes the prop materials with it AND releases
         // the mesh geometry their handles point at. Reloading is not an optimisation here - without it the
@@ -267,6 +272,7 @@ public sealed class Dx11ViewportSurface : IDisposable
     public bool Render(OrbitCamera camera, int width, int height)
     {
         if (!_ready || width <= 0 || height <= 0) return false;
+        var frameClock = Stopwatch.StartNew();
 
         // Hoisted out of the settings initialiser because the particle tick below needs the same value:
         // one clock reading per frame, or the shader animation and the particles would drift apart.
@@ -343,12 +349,10 @@ public sealed class Dx11ViewportSurface : IDisposable
         }
         else ParticleStatus = "";
 
-        var t0 = DateTime.UtcNow;
         // M255: collect the constants nothing supplied. This report is what solved M229, M230 and M235,
         // and the viewport path was built without it - so it has been resolving scenes blind.
         _unbound.Clear();
         var pixels = _renderer.RenderFrame(width, height, settings, out _, _unbound);
-        LastFrameMs = (DateTime.UtcNow - t0).TotalMilliseconds;
         if (pixels is null) return false;
 
         LastPixels = pixels;
@@ -362,11 +366,15 @@ public sealed class Dx11ViewportSurface : IDisposable
         using (var buf = target.Lock())
         {
             int stride = width * 4;
-            for (int y = 0; y < height; y++)
-                System.Runtime.InteropServices.Marshal.Copy(
-                    pixels, y * stride, buf.Address + y * buf.RowBytes, stride);
+            if (buf.RowBytes == stride)
+                System.Runtime.InteropServices.Marshal.Copy(pixels, 0, buf.Address, pixels.Length);
+            else
+                for (int y = 0; y < height; y++)
+                    System.Runtime.InteropServices.Marshal.Copy(
+                        pixels, y * stride, buf.Address + y * buf.RowBytes, stride);
         }
         Current = target;
+        LastFrameMs = frameClock.Elapsed.TotalMilliseconds;
         return true;
     }
 

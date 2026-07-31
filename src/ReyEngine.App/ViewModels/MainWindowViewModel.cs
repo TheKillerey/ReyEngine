@@ -2922,12 +2922,38 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// a fixed world size vanishes when you pull back over a 97,000-unit map and swallows the screen when
     /// you fly in.</para>
     /// </summary>
+    private IReadOnlyList<System.Numerics.Vector3>? _dx11IconParticles, _dx11IconSounds, _dx11IconProps, _dx11IconProbes;
+    private IReadOnlyList<PointLight>? _dx11IconLights;
+    private float _dx11IconSize, _dx11IconSpread, _dx11IconScaleX, _dx11IconScaleZ, _dx11IconOffsetX, _dx11IconOffsetZ;
+    private bool _dx11IconShowLights;
+    private IReadOnlyList<(System.Numerics.Vector3 Pos, System.Numerics.Vector4 Color, float Size,
+        ReyEngine.Rendering.D3D11.IconGlyph Glyph)> _dx11IconCache =
+        Array.Empty<(System.Numerics.Vector3, System.Numerics.Vector4, float, ReyEngine.Rendering.D3D11.IconGlyph)>();
+
     public IReadOnlyList<(System.Numerics.Vector3 Pos, System.Numerics.Vector4 Color, float Size,
         ReyEngine.Rendering.D3D11.IconGlyph Glyph)> Dx11Icons(float cameraDistance)
     {
+        float size = Math.Clamp(cameraDistance * 0.012f, 12f, 320f);
+        float spread = (float)DynamicLightPositionScale;
+        float scaleX = (float)DynamicLightScaleX, scaleZ = (float)DynamicLightScaleZ;
+        float offsetX = (float)DynamicLightOffsetX, offsetZ = (float)DynamicLightOffsetZ;
+        if (ReferenceEquals(_dx11IconParticles, ParticleMarkers)
+            && ReferenceEquals(_dx11IconSounds, SoundMarkers)
+            && ReferenceEquals(_dx11IconProps, PropMarkers)
+            && ReferenceEquals(_dx11IconProbes, ProbeMarkers)
+            && ReferenceEquals(_dx11IconLights, DynamicLights)
+            && _dx11IconSize == size && _dx11IconShowLights == ShowLightMarkers
+            && _dx11IconSpread == spread && _dx11IconScaleX == scaleX && _dx11IconScaleZ == scaleZ
+            && _dx11IconOffsetX == offsetX && _dx11IconOffsetZ == offsetZ)
+            return _dx11IconCache;
+
+        _dx11IconParticles = ParticleMarkers; _dx11IconSounds = SoundMarkers;
+        _dx11IconProps = PropMarkers; _dx11IconProbes = ProbeMarkers; _dx11IconLights = DynamicLights;
+        _dx11IconSize = size; _dx11IconShowLights = ShowLightMarkers; _dx11IconSpread = spread;
+        _dx11IconScaleX = scaleX; _dx11IconScaleZ = scaleZ; _dx11IconOffsetX = offsetX; _dx11IconOffsetZ = offsetZ;
+
         var outp = new List<(System.Numerics.Vector3, System.Numerics.Vector4, float,
             ReyEngine.Rendering.D3D11.IconGlyph)>();
-        float size = Math.Clamp(cameraDistance * 0.012f, 12f, 320f);
         void Add(IReadOnlyList<System.Numerics.Vector3>? pts, System.Numerics.Vector4 colour,
                  ReyEngine.Rendering.D3D11.IconGlyph glyph)
         {
@@ -2944,16 +2970,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ReyEngine.Rendering.D3D11.IconGlyph.Probe);
         if (ShowLightMarkers && DynamicLights is { Count: > 0 } lights)
         {
-            float spread = (float)DynamicLightPositionScale;
-            var scaleXZ = new System.Numerics.Vector2((float)DynamicLightScaleX, (float)DynamicLightScaleZ);
-            var offset = new System.Numerics.Vector2((float)DynamicLightOffsetX, (float)DynamicLightOffsetZ);
+            var scaleXZ = new System.Numerics.Vector2(scaleX, scaleZ);
+            var offset = new System.Numerics.Vector2(offsetX, offsetZ);
             foreach (var light in lights)
                 outp.Add((Formats.Baking.BakeLighting.FitPosition(light.Position, spread, scaleXZ, offset),
                     new System.Numerics.Vector4(1.00f, 0.62f, 0.20f, 0.90f), size * 1.2f,
                     ReyEngine.Rendering.D3D11.IconGlyph.Light));
         }
-        return outp;
+        return _dx11IconCache = outp;
     }
+
+    private IReadOnlyList<int>? _dx11HighlightSelection;
+    private MapGeoAsset? _dx11HighlightMap;
+    private IReadOnlyList<(int Start, int Count)> _dx11HighlightCache = Array.Empty<(int, int)>();
 
     public IReadOnlyList<(int Start, int Count)> Dx11HighlightRanges
     {
@@ -2961,11 +2990,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             if (SelectedSubmeshIndices is not { Count: > 0 } sel || _currentMap is not { } map)
                 return Array.Empty<(int, int)>();
+            if (ReferenceEquals(_dx11HighlightSelection, sel) && ReferenceEquals(_dx11HighlightMap, map))
+                return _dx11HighlightCache;
             var ranges = new List<(int, int)>(sel.Count);
             foreach (int i in sel)
                 if (i >= 0 && i < map.Groups.Count)
                     ranges.Add((map.Groups[i].StartIndex, map.Groups[i].IndexCount));
-            return ranges;
+            _dx11HighlightSelection = sel; _dx11HighlightMap = map;
+            return _dx11HighlightCache = ranges;
         }
     }
 

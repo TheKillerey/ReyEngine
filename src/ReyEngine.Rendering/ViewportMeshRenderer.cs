@@ -98,10 +98,15 @@ public sealed class ViewportMeshRenderer : IDisposable
         public uint Vao, Vbo, Ebo;
         public (int Start, int Count, uint Tex)[] Submeshes = System.Array.Empty<(int, int, uint)>();
         public float[]? Interleaved;   // M54: cached stride-8 stream so idle animation can re-skin pos/normals
+        public Vector3 BoundsMin, BoundsMax;
     }
     private readonly List<PropGeometry> _propGeoms = new();
     private readonly List<(int Geo, Matrix4x4 Model)> _propMeshInstances = new();
     private readonly List<uint> _propTextures = new();
+    private uint[]? _meshIndices;
+    private bool _submeshBoundsDirty;
+    private int[] _opaqueDrawOrder = Array.Empty<int>();
+    private bool _drawOrderDirty;
     // M114: target dummy — a solid practice-target cube for targeted-spell VFX previews
     private uint _dummyVao, _dummyVbo;
     private int _dummyTriVerts, _dummyEdgeVerts;
@@ -125,6 +130,9 @@ public sealed class ViewportMeshRenderer : IDisposable
         public uint MatCapMask;  // slot 5
         public uint Lightmap;    // slot 6 (map baked lightmap atlas)
         public bool Visible;     // layer/visibility filter (map dragon/baron)
+        public Vector3 BoundsMin;
+        public Vector3 BoundsMax;
+        public bool HasBounds;
 
         // M32 per-material preview data. Defaults are identity/off so untouched submeshes render as before.
         public Vector4 UvScaleOffset;   // xy scale, zw offset
@@ -667,6 +675,9 @@ void main() { FragColor = uColor; }";
 
     public bool HasMesh => _hasMesh;
     public int SubmeshCount => _submeshes.Length;
+    public int DrawCalls { get; private set; }
+    public int CulledSlices { get; private set; }
+    public int CulledProps { get; private set; }
 
     public unsafe void Initialize(GL gl, bool gles)
     {
@@ -1075,6 +1086,7 @@ void main(){
         fixed (uint* p = indices)
             _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), p, BufferUsageARB.StaticDraw);
         _indexCount = indices.Length;
+        _meshIndices = indices;
 
         var wire = new uint[indices.Length * 2];
         int w = 0;
@@ -1097,6 +1109,9 @@ void main(){
             _submeshes = new[] { SubmeshDraw.Create(0, indices.Length) };
         else
             _submeshes = submeshes.Select(s => SubmeshDraw.Create(s.start, s.count)).ToArray();
+
+        RebuildSubmeshBounds();
+        _drawOrderDirty = true;
 
         UploadLines(_boundsVao, _boundsVbo, BuildBoxLines(min, max), out _boundsVerts);
         _hasMesh = true;
@@ -1154,6 +1169,7 @@ void main(){
         }
 
         var g = new PropGeometry { Interleaved = inter };
+        UpdatePropBounds(g, vc);
         g.Vao = _gl.GenVertexArray();
         _gl.BindVertexArray(g.Vao);
         g.Vbo = _gl.GenBuffer();
@@ -1193,6 +1209,21 @@ void main(){
         fixed (float* p = inter)
             _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(vc * 8 * sizeof(float)), p);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        UpdatePropBounds(g, vc);
+    }
+
+    private static void UpdatePropBounds(PropGeometry geometry, int vertexCount)
+    {
+        var inter = geometry.Interleaved;
+        if (inter is null || vertexCount <= 0) { geometry.BoundsMin = geometry.BoundsMax = Vector3.Zero; return; }
+        var min = new Vector3(float.MaxValue); var max = new Vector3(float.MinValue);
+        for (int i = 0; i < vertexCount; i++)
+        {
+            int at = i * 8;
+            var p = new Vector3(inter[at], inter[at + 1], inter[at + 2]);
+            min = Vector3.Min(min, p); max = Vector3.Max(max, p);
+        }
+        geometry.BoundsMin = min; geometry.BoundsMax = max;
     }
 
     /// <summary>Place a registered prop geometry at a world transform (M41).</summary>
@@ -1296,6 +1327,7 @@ void main(){
             case 5: _submeshes[index].MatCapMask = textureId; break;
             case 6: _submeshes[index].Lightmap = textureId; break;
         }
+        _drawOrderDirty = true;
     }
 
     /// <summary>Push a submesh's preview material (M32): UV transform + rim/specular feature flags.
@@ -1474,6 +1506,7 @@ void main(){
         _submeshes[index].CompositeGround = mat.CompositeGround;   // M142
         _submeshes[index].NoBakedLighting = mat.NoBakedLighting;   // M150
         _submeshes[index].DisableDepthFog = mat.DisableDepthFog;
+        _drawOrderDirty = true;
     }
 
     /// <summary>Reset every submesh's preview material to identity UV + no rim/specular (M32).</summary>
@@ -1499,6 +1532,31 @@ void main(){
             _submeshes[i].NoBakedLighting = false;   // M150
             _submeshes[i].DisableDepthFog = false;
         }
+        _drawOrderDirty = true;
+    }
+
+    private void EnsureDrawOrder()
+    {
+        if (!_drawOrderDirty) return;
+        _drawOrderDirty = false;
+        int count = 0;
+        for (int i = 0; i < _submeshes.Length; i++) if (_submeshes[i].AlphaMode < 2) count++;
+        if (_opaqueDrawOrder.Length != count) _opaqueDrawOrder = new int[count];
+        int at = 0;
+        for (int i = 0; i < _submeshes.Length; i++) if (_submeshes[i].AlphaMode < 2) _opaqueDrawOrder[at++] = i;
+        Array.Sort(_opaqueDrawOrder, (a, b) =>
+        {
+            ref var x = ref _submeshes[a]; ref var y = ref _submeshes[b];
+            int c = x.Texture.CompareTo(y.Texture); if (c != 0) return c;
+            c = x.Mask.CompareTo(y.Mask); if (c != 0) return c;
+            c = x.Gradient.CompareTo(y.Gradient); if (c != 0) return c;
+            c = x.Emissive.CompareTo(y.Emissive); if (c != 0) return c;
+            c = x.MatCap.CompareTo(y.MatCap); if (c != 0) return c;
+            c = x.MatCapMask.CompareTo(y.MatCapMask); if (c != 0) return c;
+            c = x.Lightmap.CompareTo(y.Lightmap); if (c != 0) return c;
+            c = x.AlphaMode.CompareTo(y.AlphaMode); if (c != 0) return c;
+            return x.Start.CompareTo(y.Start);
+        });
     }
 
     /// <summary>Replace pos+normal of the existing mesh (keeps UVs/indices/textures) — for per-frame skinning.</summary>
@@ -1518,6 +1576,31 @@ void main(){
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
         fixed (float* p = _interleaved)
             _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(_interleaved.Length * sizeof(float)), p);
+        _submeshBoundsDirty = true;
+    }
+
+    private void RebuildSubmeshBounds()
+    {
+        _submeshBoundsDirty = false;
+        if (_meshIndices is null || _interleaved is null) return;
+        foreach (ref var s in _submeshes.AsSpan())
+        {
+            var min = new Vector3(float.MaxValue);
+            var max = new Vector3(float.MinValue);
+            int end = Math.Min(_meshIndices.Length, s.Start + s.Count);
+            bool any = false;
+            for (int i = Math.Max(0, s.Start); i < end; i++)
+            {
+                uint vertexIndex = _meshIndices[i];
+                if (vertexIndex >= (uint)(_interleaved.Length / 8)) continue;
+                int at = (int)vertexIndex * 8;
+                var p = new Vector3(_interleaved[at], _interleaved[at + 1], _interleaved[at + 2]);
+                min = Vector3.Min(min, p); max = Vector3.Max(max, p); any = true;
+            }
+            s.BoundsMin = any ? min : Vector3.Zero;
+            s.BoundsMax = any ? max : Vector3.Zero;
+            s.HasBounds = any;
+        }
     }
 
     public void SetBoneSegments(float[]? lineVerts)
@@ -1797,6 +1880,10 @@ void main(){
     public unsafe void Render(Matrix4x4 viewProjection, Matrix4x4 view, Vector3 camPos, int previewMode, bool wireframe, bool showBounds, bool showBones, bool cullBackfaces = false)
     {
         if (!_ready) return;
+        if (_submeshBoundsDirty) RebuildSubmeshBounds();
+        DrawCalls = 0;
+        CulledSlices = 0;
+        CulledProps = 0;
         var m = viewProjection;
 
         if (_hasMesh)
@@ -1820,6 +1907,7 @@ void main(){
                 _gl.Uniform4(_lColor, 0.55f, 0.62f, 0.72f, 1f);
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _wireEbo);
                 _gl.DrawElements(PrimitiveType.Lines, (uint)_wireIndexCount, DrawElementsType.UnsignedInt, (void*)0);
+                DrawCalls++;
             }
             else
             {
@@ -1881,7 +1969,18 @@ void main(){
                     _gl.ActiveTexture(TextureUnit.Texture0);
                 }
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
+                var frustum = ViewFrustum.FromOpenGl(model.IsIdentity ? m : model * m);
 
+                bool InView(in SubmeshDraw s)
+                {
+                    if (!s.HasBounds || frustum.Intersects(s.BoundsMin, s.BoundsMax)) return true;
+                    CulledSlices++;
+                    return false;
+                }
+
+                EnsureDrawOrder();
+                bool haveBindings = false;
+                uint bound0 = 0, bound1 = 0, bound2 = 0, bound3 = 0, bound4 = 0, bound5 = 0, bound6 = 0;
                 void DrawSubmesh(SubmeshDraw s)
                 {
                     // M34 render state: cull the back faces of single-sided (cullEnable=true) materials; render
@@ -1928,35 +2027,35 @@ void main(){
                     _gl.Uniform1(_mCompositeGround, s.CompositeGround ? 1 : 0);   // M142: Map10 baked ground
                     // M150: DISABLE_DEPTH_FOG excludes this surface from the scene's distance fog.
                     _gl.Uniform1(_mFogEnabled, (_fogEnabled && !s.DisableDepthFog) ? 1 : 0);
-                    _gl.ActiveTexture(TextureUnit.Texture0);
-                    _gl.BindTexture(TextureTarget.Texture2D, s.Texture != 0 ? s.Texture : _whiteTex);
-                    _gl.Uniform1(_mHasTex, s.Texture != 0 ? 1 : 0);
-                    _gl.ActiveTexture(TextureUnit.Texture1);
-                    _gl.BindTexture(TextureTarget.Texture2D, s.Mask != 0 ? s.Mask : _whiteTex);
-                    _gl.Uniform1(_mHasMask, s.Mask != 0 ? 1 : 0);
-                    _gl.ActiveTexture(TextureUnit.Texture2);
-                    _gl.BindTexture(TextureTarget.Texture2D, s.Gradient != 0 ? s.Gradient : _whiteTex);
-                    _gl.Uniform1(_mHasGradient, s.Gradient != 0 ? 1 : 0);
-                    _gl.ActiveTexture(TextureUnit.Texture3);
-                    _gl.BindTexture(TextureTarget.Texture2D, s.Emissive != 0 ? s.Emissive : _whiteTex);
-                    _gl.Uniform1(_mHasEmissive, s.Emissive != 0 ? 1 : 0);
-                    _gl.ActiveTexture(TextureUnit.Texture4);
-                    _gl.BindTexture(TextureTarget.Texture2D, s.MatCap != 0 ? s.MatCap : _whiteTex);
-                    _gl.Uniform1(_mHasMatCap, s.MatCap != 0 ? 1 : 0);
-                    _gl.ActiveTexture(TextureUnit.Texture5);
-                    _gl.BindTexture(TextureTarget.Texture2D, s.MatCapMask != 0 ? s.MatCapMask : _whiteTex);
-                    _gl.Uniform1(_mHasMatCapMask, s.MatCapMask != 0 ? 1 : 0);
-                    _gl.ActiveTexture(TextureUnit.Texture6);
-                    _gl.BindTexture(TextureTarget.Texture2D, s.Lightmap != 0 ? s.Lightmap : _whiteTex);
+                    BindLayer(0, s.Texture, ref bound0, _mHasTex);
+                    BindLayer(1, s.Mask, ref bound1, _mHasMask);
+                    BindLayer(2, s.Gradient, ref bound2, _mHasGradient);
+                    BindLayer(3, s.Emissive, ref bound3, _mHasEmissive);
+                    BindLayer(4, s.MatCap, ref bound4, _mHasMatCap);
+                    BindLayer(5, s.MatCapMask, ref bound5, _mHasMatCapMask);
+                    BindLayer(6, s.Lightmap, ref bound6, -1);
                     // M150: NO_BAKED_LIGHTING makes the surface ignore the baked lightmap entirely.
                     _gl.Uniform1(_mHasLightmap,
                         (_lightmapsEnabled && s.Lightmap != 0 && _hasLightmapUv && !s.NoBakedLighting) ? 1 : 0);
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
+                    haveBindings = true;
+
+                    void BindLayer(int unit, uint texture, ref uint bound, int hasUniform)
+                    {
+                        if (haveBindings && texture == bound) return;
+                        _gl.ActiveTexture(TextureUnit.Texture0 + unit);
+                        _gl.BindTexture(TextureTarget.Texture2D, texture != 0 ? texture : _whiteTex);
+                        if (hasUniform >= 0) _gl.Uniform1(hasUniform, texture != 0 ? 1 : 0);
+                        bound = texture;
+                    }
                 }
 
                 // Pass 1: opaque + cutout (AlphaMode 0/1) with depth writes on.
-                foreach (var s in _submeshes)
-                    if (s.Visible && s.AlphaMode < 2) DrawSubmesh(s);
+                foreach (int i in _opaqueDrawOrder)
+                {
+                    var s = _submeshes[i];
+                    if (s.Visible && InView(s)) { DrawSubmesh(s); DrawCalls++; }
+                }
 
                 // Pass 2: transparent modes (2/3) after solids — alpha-blend, depth-test on but NO depth
                 // write, so overlapping glass/water composites without occluding itself. (No back-to-front
@@ -1969,7 +2068,7 @@ void main(){
                     _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
                     _gl.DepthMask(false);
                     foreach (var s in _submeshes)
-                        if (s.Visible && s.AlphaMode >= 2) DrawSubmesh(s);
+                        if (s.Visible && s.AlphaMode >= 2 && InView(s)) { DrawSubmesh(s); DrawCalls++; }
                     _gl.DepthMask(true);
                 }
                 _gl.Disable(EnableCap.CullFace); // restore default so the line/gizmo overlays are unaffected
@@ -2042,6 +2141,8 @@ void main(){
                 _gl.FrontFace(model.GetDeterminant() < 0 ? FrontFaceDirection.Ccw : FrontFaceDirection.CW);
 
                 var g = _propGeoms[geo];
+                if (!ViewFrustum.FromOpenGl(model * m).Intersects(g.BoundsMin, g.BoundsMax))
+                { CulledProps++; continue; }
                 _gl.BindVertexArray(g.Vao);
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, g.Ebo);
                 foreach (var (start, count, tex) in g.Submeshes)
@@ -2281,6 +2382,9 @@ void main(){
         foreach (var t in _ownedTextures) _gl.DeleteTexture(t);
         _ownedTextures.Clear();
         _submeshes = Array.Empty<SubmeshDraw>();
+        _meshIndices = null;
+        _interleaved = null;
+        _submeshBoundsDirty = false;
         _gl.DeleteBuffer(_vbo);
         _gl.DeleteBuffer(_ebo);
         _gl.DeleteBuffer(_wireEbo);
