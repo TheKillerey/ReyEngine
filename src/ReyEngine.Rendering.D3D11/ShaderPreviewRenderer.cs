@@ -97,6 +97,15 @@ public enum BonePose
     ViewTransposed,
 }
 
+/// <summary>Per-material 2D texture addressing derived from the authored sampler value.</summary>
+public enum PreviewSamplerAddress
+{
+    Wrap,
+    ClampU,
+    ClampV,
+    ClampUV,
+}
+
 public sealed class ShaderLoadReport
 {
     public bool Success;
@@ -159,6 +168,10 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// without this an additive quad occludes the map behind it. Everything else leaves this true and gets
     /// byte-identical behaviour.</summary>
     public bool WritesDepth { get; set; } = true;
+
+    /// <summary>Address mode for the material's ordinary texture samplers. Explicit clamp samplers and
+    /// comparison samplers still take precedence when the shader declares them.</summary>
+    public PreviewSamplerAddress SamplerAddress { get; set; }
 
     /// <summary>M246: which distinct pipeline this material uses. Materials sharing an id share their
     /// shaders and input layout, so drawing them back to back costs no state change. -1 = uncached, which
@@ -379,7 +392,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11ShaderResourceView> _sceneCopySrv;
     private int _width, _height;
 
-    private ComPtr<ID3D11SamplerState> _linearWrap, _linearClamp, _comparison;
+    private ComPtr<ID3D11SamplerState> _linearWrap, _linearClampU, _linearClampV, _linearClamp, _comparison;
     private ComPtr<ID3D11RasterizerState> _raster;
     private ComPtr<ID3D11BlendState> _blend, _blendOpaque;
     private ComPtr<ID3D11DepthStencilState> _depthState;
@@ -469,10 +482,21 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         _device.CreateSamplerState(in sd, ref s1);
         _linearWrap = s1;
 
-        sd.AddressU = sd.AddressV = sd.AddressW = TextureAddressMode.Clamp;
+        sd.AddressU = TextureAddressMode.Clamp;
         ComPtr<ID3D11SamplerState> s2 = default;
         _device.CreateSamplerState(in sd, ref s2);
-        _linearClamp = s2;
+        _linearClampU = s2;
+
+        sd.AddressU = TextureAddressMode.Wrap;
+        sd.AddressV = TextureAddressMode.Clamp;
+        ComPtr<ID3D11SamplerState> s3 = default;
+        _device.CreateSamplerState(in sd, ref s3);
+        _linearClampV = s3;
+
+        sd.AddressU = sd.AddressW = TextureAddressMode.Clamp;
+        ComPtr<ID3D11SamplerState> s4 = default;
+        _device.CreateSamplerState(in sd, ref s4);
+        _linearClamp = s4;
 
         // M254: a COMPARISON sampler, for the shadow lookups.
         //
@@ -495,9 +519,9 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
             AddressW = TextureAddressMode.Clamp,
             MaxLOD = float.MaxValue, ComparisonFunc = ComparisonFunc.Always,
         };
-        ComPtr<ID3D11SamplerState> s3 = default;
-        _device.CreateSamplerState(in cmp, ref s3);
-        _comparison = s3;
+        ComPtr<ID3D11SamplerState> s5 = default;
+        _device.CreateSamplerState(in cmp, ref s5);
+        _comparison = s5;
 
         // an opaque white 1x1 stands in for every texture the material does not supply, so a missing
         // binding shows as "unlit but present" rather than as a black or undefined surface
@@ -3525,7 +3549,7 @@ float4 psmain(VOut i) : SV_Target
                 var firstBound = mat.PsRefl.Textures.FirstOrDefault(t => mat.Textures.ContainsKey(t.Name));
                 var srv = firstBound is not null ? mat.Textures[firstBound.Name] : _white;
                 _ctx.PSSetShaderResources(0, 1, ref srv);
-                var samp = _linearWrap;
+                var samp = MaterialSampler(mat.SamplerAddress);
                 _ctx.PSSetSamplers(0, 1, ref samp);
             }
             else
@@ -3669,16 +3693,26 @@ float4 psmain(VOut i) : SV_Target
         }
         foreach (var smp in refl.Samplers)
         {
-            // "Clamp_" prefixed shared samplers are the engine's clamped ones; everything else wraps.
+            // "Clamp_" prefixed shared samplers are always clamped. Ordinary samplers use the material's
+            // authored per-axis address mode; Wrap is only the default when the material says nothing.
             // M254: the shader's own RDEF flag decides this, not the sampler's name. D3D_SIF_COMPARISON_SAMPLER
             // is the only place that distinction is recorded, and binding an ordinary state where the shader
             // uses sample_c fails silently as "fully shadowed" rather than as an error.
             var st = smp.IsComparisonSampler ? _comparison
-                : smp.Name.StartsWith("Clamp", StringComparison.OrdinalIgnoreCase) ? _linearClamp : _linearWrap;
+                : smp.Name.StartsWith("Clamp", StringComparison.OrdinalIgnoreCase) ? _linearClamp
+                : MaterialSampler(mat.SamplerAddress);
             if (pixel) _ctx.PSSetSamplers(smp.BindPoint, 1, ref st);
             else _ctx.VSSetSamplers(smp.BindPoint, 1, ref st);
         }
     }
+
+    private ComPtr<ID3D11SamplerState> MaterialSampler(PreviewSamplerAddress address) => address switch
+    {
+        PreviewSamplerAddress.ClampU => _linearClampU,
+        PreviewSamplerAddress.ClampV => _linearClampV,
+        PreviewSamplerAddress.ClampUV => _linearClamp,
+        _ => _linearWrap,
+    };
 
     /// <summary>The stand-in for a texture nothing supplied. White for almost everything; an identity
     /// ramp for the colour remap, where white would replace the whole image.</summary>
@@ -3715,7 +3749,8 @@ float4 psmain(VOut i) : SV_Target
         _overlayVsTex.Dispose(); _overlayPsTex.Dispose(); _overlayLayoutTex.Dispose(); _iconSampler.Dispose();
         for (int g = 0; g < _glyphSrv.Length; g++) _glyphSrv[g].Dispose();
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
-        _linearWrap.Dispose(); _linearClamp.Dispose(); _comparison.Dispose();
+        _linearWrap.Dispose(); _linearClampU.Dispose(); _linearClampV.Dispose(); _linearClamp.Dispose();
+        _comparison.Dispose();
         _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
         _blendAdditive.Dispose(); _depthStateNoWrite.Dispose();
         _ctx.Dispose(); _device.Dispose();

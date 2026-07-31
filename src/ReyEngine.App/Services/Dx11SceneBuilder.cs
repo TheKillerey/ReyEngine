@@ -27,6 +27,17 @@ namespace ReyEngine.App.Services;
 /// </summary>
 public static class Dx11SceneBuilder
 {
+    /// <summary>Translate the per-axis clamp flags already used by the GL viewport into the matching
+    /// D3D11 sampler state. Keeping this mapping explicit prevents a one-axis clamp from becoming ClampUV.</summary>
+    public static PreviewSamplerAddress SamplerAddressFor(MaterialProfile profile) =>
+        (profile.ClampU, profile.ClampV) switch
+        {
+            (true, true) => PreviewSamplerAddress.ClampUV,
+            (true, false) => PreviewSamplerAddress.ClampU,
+            (false, true) => PreviewSamplerAddress.ClampV,
+            _ => PreviewSamplerAddress.Wrap,
+        };
+
     /// <summary><paramref name="Reasons"/> (M278) is the first example of each distinct failure kind. A
     /// caller that logs <paramref name="Failed"/> without one of these is reporting a number nobody can
     /// act on - which is what "0 material(s), 21 unresolved" was.</summary>
@@ -236,7 +247,7 @@ public static class Dx11SceneBuilder
         renderer.ClearMaterials();
         renderer.SetMesh(scene.Mesh);
 
-        int ok = 0, textures = 0, failed = scene.Failed, transparent = 0;
+        int ok = 0, textures = 0, failed = scene.Failed, transparent = 0, clamped = 0;
         var reasons = new Dictionary<string, string>(scene.FailureReasons);
         foreach (var s in scene.Slices)
         {
@@ -296,6 +307,8 @@ public static class Dx11SceneBuilder
             mat.WritesDepth = depthWrite;
             mat.SortableByPipeline = depthWrite;
             if (!depthWrite) transparent++;
+            mat.SamplerAddress = SamplerAddressFor(s.Profile);
+            if (mat.SamplerAddress != PreviewSamplerAddress.Wrap) clamped++;
 
             foreach (var (name, value) in s.Parameters) mat.Params[name] = value;
 
@@ -320,6 +333,8 @@ public static class Dx11SceneBuilder
         // not the renderer.
         if (transparent > 0)
             sb.AppendLine($"{transparent} transparent slice(s): no depth write, drawn after the solid pass in authored order");
+        if (clamped > 0)
+            sb.AppendLine($"{clamped} slice(s) use authored per-axis UV clamp addressing");
         // M278: never report a count of failures without a reason for them. The FIRST distinct reason is
         // what localises a categorical failure; the rest are usually the same one repeated.
         foreach (var (kind, detail) in reasons) sb.AppendLine($"   unresolved - {kind}: {Trim(detail)}");
