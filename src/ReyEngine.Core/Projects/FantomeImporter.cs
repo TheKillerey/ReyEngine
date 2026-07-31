@@ -67,6 +67,7 @@ public static class FantomeImporter
             list.Add(entry);
         }
 
+        var projectWads = new List<string>();   // M299: WADs kept packed, mounted as project WADs
         foreach (var (wadName, entries) in wadGroups)
         {
             string wadBase = wadName.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase)
@@ -80,39 +81,51 @@ public static class FantomeImporter
 
             if (packedFile is not null)
             {
-                progress?.Report($"Unpacking {wadName}…");
-                string tmp = Path.Combine(Path.GetTempPath(), $"reyimport-{Guid.NewGuid():N}.wad.client");
+                // M299: keep the WAD AS A WAD.
+                //
+                // This used to unpack every chunk to a loose file, which produced three problems the user
+                // saw as one. It turned a 382 MB archive into 1.3 GB of files; it left the project looking
+                // nothing like the mod that went in; and - the confusing part - every chunk whose path hash
+                // the database cannot resolve was written as "<hash>.bin" at the tree root. On this mod
+                // that was 756 of 3,954 files, and those are exactly the CUSTOM textures, because custom
+                // paths are the ones a hash database is least likely to know. They still LOADED, since
+                // assets resolve by path hash at runtime, so the map rendered with textures the user could
+                // not find by name anywhere in their own project.
+                //
+                // A project WAD has none of those problems: paths keep their identity inside it, the
+                // Content Browser lists it, the build repacks it, and the import is a copy rather than
+                // 3,954 decompressions.
+                progress?.Report($"Copying {wadName}…");
+                string dest = Path.Combine(root, wadName);
                 try
                 {
-                    packedFile.ExtractToFile(tmp, overwrite: true);
-                    using var wad = WadArchive.Open(tmp, resolver);
-                    // M298: say when a WAD had to be repaired to be readable. It imported correctly, but a
-                    // malformed archive is worth knowing about - especially since the user usually built it.
-                    if (wad.RepairNote is { } repaired) progress?.Report($"{wadName}: {repaired}");
-                    int done = 0;
-                    foreach (var we in wad.Entries)
+                    using (var src = packedFile.Open())
+                    using (var dst = File.Create(dest))
+                        src.CopyTo(dst);
+
+                    // Opened once, purely to report on it - a WAD that cannot be read is worth saying so
+                    // at import rather than at first use, and the repair note (M298) belongs here too.
+                    try
                     {
-                        try
-                        {
-                            string target = we.IsResolved
-                                ? Path.Combine(outDir, we.Path.Replace('/', Path.DirectorySeparatorChar))
-                                : Path.Combine(outDir, $"{we.PathHash:x16}.bin");
-                            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                            wad.ExtractToFile(we, target);
-                            extracted++;
-                        }
-                        catch { failed++; }
-                        if (++done % 500 == 0) progress?.Report($"Unpacking {wadBase}… {done:n0} chunks");
+                        using var wad = WadArchive.Open(dest, resolver);
+                        if (wad.RepairNote is { } repaired) progress?.Report($"{wadName}: {repaired}");
+                        extracted += wad.Entries.Count;
+                        int unresolved = wad.Entries.Count - wad.ResolvedCount;
+                        if (unresolved > 0)
+                            progress?.Report($"{wadName}: {unresolved:n0} of {wad.Entries.Count:n0} chunk(s) "
+                                + "have no known path - they keep their hash inside the WAD and still load");
                     }
+                    catch (Exception ex) { progress?.Report($"{wadName}: unreadable ({ex.Message})"); failed++; }
+
+                    wads++;
+                    projectWads.Add(wadName);
                 }
                 catch (Exception ex)
                 {
-                    // One unreadable WAD (e.g. LT rejects a duplicate chunk hash in a hand-built mod)
-                    // must not abort the whole import — skip it and let the rest through.
+                    // One bad WAD must not abort the whole import - skip it and let the rest through.
                     progress?.Report($"Skipped {wadName}: {ex.Message}");
                     failed++;
                 }
-                finally { try { File.Delete(tmp); } catch { } }
             }
             else
             {
@@ -139,7 +152,7 @@ public static class FantomeImporter
                 }
             }
 
-            if (Directory.Exists(outDir)) { wads++; folders.Add(Sanitize(wadBase)); }
+            if (packedFile is null && Directory.Exists(outDir)) { wads++; folders.Add(Sanitize(wadBase)); }
         }
 
         // ---- RAW/ → loose files, copied as-is (mount resolves them by relative path) ----
@@ -170,7 +183,13 @@ public static class FantomeImporter
         if (gameDirectory is not null && Directory.Exists(gameDirectory))
         {
             var installWads = GameInstallLocator.ListWads(gameDirectory);
-            foreach (var folder in folders)
+            // M299: packed WADs no longer register a folder, so match against BOTH lists. Missing this
+            // would silently drop the read-only Riot reference, and the symptom would be assets that
+            // resolve from the mod but not from the game - i.e. a half-rendered map, blamed on the mod.
+            var wadBaseNames = projectWads.Select(w =>
+                w.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase)
+                    ? w[..^".wad.client".Length] : w);
+            foreach (var folder in folders.Concat(wadBaseNames))
             {
                 if (folder is "RAW") continue;
                 // GameWad.Name is the base name WITHOUT the .wad.client suffix (e.g. "Katarina")
@@ -186,6 +205,7 @@ public static class FantomeImporter
             Name = name,
             RootPath = root,
             ProjectFolders = folders,
+            ProjectWads = projectWads,
             ReferenceWads = references,
             GameDirectory = gameDirectory,
             OutputDirectory = Path.Combine(root, "Build"),
