@@ -47,6 +47,7 @@
 - Unreal-style **New Project wizard**: pick a template (Champion Skin / Map / VFX / Audio / UI / Empty), choose your **LIVE or PBE** client (auto-detected), tick the WADs you want, pick which content categories to extract — get a ready-to-edit mod project (cslol-style folders + read-only Riot references).
 - **Import .fantome**: convert any existing mod package into an editable project — mod name/author/thumbnail carry over, WADs unpack with resolved file names, and matching Riot WADs attach as references. Full round trip: *import → edit → Build Package → new .fantome*.
 - Non-destructive by design: Riot files are never modified; edits become **project overrides** that build into a distributable `.wad.client` / `.fantome` package.
+- **Automatic Riot patch rebasing**: when the installed client advances, project `.bin` edits are three-way merged onto Riot's new originals, backed up, validated, and rebuilt as WAD + `.fantome`. Conflicts and retained full-replacement assets are reported for review; the behavior can be disabled per project.
 - **First-run setup wizard** gets a fresh install working in a few clicks: hashes, audio decoder, optional preview map (re-run any time via *Help ▸ Setup Wizard*).
 
 **Maps**
@@ -107,6 +108,7 @@ ReyEngine does not transfer any personal data to networked systems. It makes a f
 
 - **Update check** — on startup (and via *Help ▸ About*), it queries the public GitHub Releases API for this repository to see whether a newer version exists. Only the request itself is sent; no personal or usage data is transmitted.
 - **Hash sync** — when you choose to sync hash tables, it downloads public hash lists from [CommunityDragon](https://communitydragon.org).
+- **Project patch update** — for projects with automatic patch rebasing enabled, opening the project checks CommunityDragon's public patch list and downloads the old Riot `.bin` originals needed for a local three-way merge. No project files are uploaded.
 - **Setup downloads** — the setup wizard downloads [vgmstream](https://github.com/vgmstream/vgmstream) and the optional [map asset pack](https://github.com/TheKillerey/ReyEngine/releases/tag/maps) from GitHub when you click their buttons.
 
 ReyEngine only reads your local League of Legends installation and writes to the project/output folders you select. Uninstall by deleting the extracted program folder.

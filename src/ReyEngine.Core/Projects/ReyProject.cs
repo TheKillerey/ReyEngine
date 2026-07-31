@@ -27,6 +27,17 @@ public sealed class ReyProject
     public List<string> ReferenceWads { get; set; } = new();
     public List<string> RecentAssets { get; set; } = new();
 
+    // M308: automatic Riot-patch rebasing. This is the base version the editable project currently
+    // targets, not the mod's marketing version. New projects capture it from the selected game install;
+    // legacy projects can infer it once from a patch-style ModVersion such as 16.10.0.
+    public string? RiotPatchVersion { get; set; }
+    public bool AutoUpdateOnRiotPatch { get; set; } = true;
+    public bool AutoBuildAfterPatchUpdate { get; set; } = true;
+    public string? LastPatchUpdateUtc { get; set; }
+    public string? LastPatchUpdateSummary { get; set; }
+    public string? LastPatchBackupDirectory { get; set; }
+    public bool PatchUpdateNeedsReview { get; set; }
+
     /// <summary>M171: texture recolours, stored as DESCRIPTIONS of the edit rather than as the edited
     /// files. Every one is re-derived from the pristine source, so re-opening a project and nudging a
     /// slider costs exactly one BC generation instead of one more each time.</summary>

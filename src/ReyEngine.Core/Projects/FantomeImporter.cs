@@ -256,8 +256,10 @@ public static class FantomeImporter
             ModHeart = heart,
             ModHome = home,
             ThumbnailPath = thumb,
-            ProjectVersion = 1,
+            ProjectVersion = ReyProjectService.CurrentProjectVersion,
         };
+        if (RiotPatchVersionDetector.Detect(gameDirectory) is { } installed)
+            project.RiotPatchVersion = RiotPatchVersionDetector.InferProjectBaseline(project.ModVersion, installed.Patch);
         ReyProjectService.Save(project, Path.Combine(root, ReyProjectService.FolderMetaDir, ReyProjectService.FolderMetaFile));
         return new FantomeImportResult(root, name, wads, extracted, raw, failed);
     }

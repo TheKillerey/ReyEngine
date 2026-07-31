@@ -77,7 +77,8 @@ public static class ProjectCreator
             OutputDirectory = Path.Combine(root, "Build"),
             ModName = spec.ProjectName,
             ModAuthor = spec.Author,
-            ProjectVersion = 1,
+            ProjectVersion = ReyProjectService.CurrentProjectVersion,
+            RiotPatchVersion = RiotPatchVersionDetector.Detect(spec.GameDirectory)?.Patch,
         };
         ReyProjectService.Save(project, Path.Combine(root, ReyProjectService.FolderMetaDir, ReyProjectService.FolderMetaFile));
         return new ProjectCreationResult(root, extracted, failed);

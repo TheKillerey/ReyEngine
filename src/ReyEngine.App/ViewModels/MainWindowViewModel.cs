@@ -6789,6 +6789,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// directly (never through the mounts, which would return the project's own override).</summary>
     private byte[]? ReadRiotOriginalBytes(WadAssetEntry entry)
     {
+        // Prefer already-open reference/fallback mounts. The old wizard reopened a multi-hundred-MB WAD
+        // for every bin, turning an update into repeated archive parsing when the exact source was mounted.
+        if (_mounts is not null)
+        {
+            if (_mounts.TryGet(entry.PathHash, out var mounted))
+                foreach (var source in new[] { mounted.Source }.Concat(mounted.AllSources).Distinct())
+                    if (source.Kind == AssetSourceKind.RiotReference && source.Contains(entry.PathHash))
+                        try { return source.Read(entry.PathHash); } catch { }
+            try { if (_mounts.ReadFallback(entry.PathHash) is { } fallback) return fallback; } catch { }
+        }
         foreach (var wadPath in Project.ReferenceWads)
         {
             try
@@ -7422,52 +7432,300 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void OpenPatchUpdateWizard()
     {
         if (!ContentLoaded) { _log.Warn("PatchUpdate", "Open a project first."); return; }
-        if (Project.RootPath is null || Project.ProjectFolders.Count == 0)
-        { _log.Warn("PatchUpdate", "The wizard needs a folder project."); return; }
+        if (Project.RootPath is null || Project.ProjectFolders.Count + Project.ProjectWads.Count == 0)
+        { _log.Warn("PatchUpdate", "The wizard needs an editable folder project or project WAD."); return; }
 
+        var patchProject = Project;
+        var installed = RiotPatchVersionDetector.Detect(patchProject.GameDirectory);
+
+        var vm = CreatePatchUpdateViewModel(patchProject, installed?.Patch);
+
+        var win = new Views.PatchUpdateWindow { DataContext = vm };
+        if (PromptOwner is not null) win.Show(PromptOwner); else win.Show();
+        _ = vm.InitAsync();
+    }
+
+    private PatchUpdateWindowViewModel CreatePatchUpdateViewModel(ReyProject patchProject, string? targetPatch)
+    {
+        bool Active() => ReferenceEquals(Project, patchProject);
         var vm = new PatchUpdateWindowViewModel
         {
+            SelectedPatch = patchProject.RiotPatchVersion,
+            TargetPatch = targetPatch,
             ListPatches = Services.CommunityDragonClient.ListPatchesAsync,
             DownloadOld = (patch, rel) => Services.CommunityDragonClient.DownloadBinAsync(
                 patch, rel, Services.CommunityDragonClient.DefaultCacheDir),
-            ReadCurrentOriginal = ReadRiotOriginalBytes,
-            ReadProjectBytes = ReadAsset,
-            SaveBytes = SaveMapBinBytesAsync,
-            RunValidate = ValidateProjectBins,
+            ReadCurrentOriginal = entry => Active() ? ReadRiotOriginalBytes(entry) : null,
+            ReadProjectBytes = hash => Active() ? ReadAsset(hash)
+                : throw new InvalidOperationException("A different project was opened while the patch update was running."),
+            SaveBytes = (entry, bytes) => Active() ? SaveMapBinBytesAsync(entry, bytes) : Task.FromResult(false),
+            RunValidate = () => Active() ? ValidateProjectBins() : Task.CompletedTask,
             Resolve = ResolveBinName,
         };
-        string? backupDir = null;   // one folder per wizard run, created lazily
-        vm.Backup = (rel, bytes) =>
+
+        string route = $"{patchProject.RiotPatchVersion ?? "unknown"}-to-{targetPatch ?? "unknown"}";
+        string backupDir = Path.Combine(patchProject.RootPath!, ".reyengine", "backups",
+            $"patch-update-{route}-{DateTime.Now:yyyyMMdd-HHmmss}");
+        vm.BackupDirectory = backupDir;
+        vm.Backup = (row, bytes) =>
         {
             try
             {
-                backupDir ??= Path.Combine(Project.RootPath!, ".reyengine", "backups",
-                    $"patch-update-{DateTime.Now:yyyyMMdd-HHmmss}");
+                string rel = row.ProjectRel.Length > 0 ? row.ProjectRel : row.Rel;
                 var dest = Path.Combine(backupDir, rel.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                 File.WriteAllBytes(dest, bytes);
                 return dest;
             }
-            catch (Exception ex) { _log.Warn("PatchUpdate", $"Backup of {rel} failed: {ex.Message}"); return null; }
+            catch (Exception ex)
+            {
+                _log.Warn("PatchUpdate", $"Backup of {row.Rel} failed: {ex.Message}");
+                return null;
+            }
         };
 
-        foreach (var folder in Project.ProjectFolders)
+        int projectFiles = 0;
+        var binHashes = new HashSet<ulong>();
+        foreach (var folder in patchProject.ProjectFolders)
         {
-            string root = Path.Combine(Project.RootPath!, folder);
+            string root = Path.Combine(patchProject.RootPath!, folder);
             if (!Directory.Exists(root)) continue;
-            foreach (var file in Directory.EnumerateFiles(root, "*.bin", SearchOption.AllDirectories))
+            string[] projectBins;
+            try
+            {
+                projectFiles += Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Count();
+                projectBins = Directory.GetFiles(root, "*.bin", SearchOption.AllDirectories);
+            }
+            catch (Exception ex)
+            {
+                _log.Warn("PatchUpdate", $"Could not scan {root}: {ex.Message}");
+                continue;
+            }
+            foreach (var file in projectBins)
             {
                 string rel = Path.GetRelativePath(root, file).Replace('\\', '/');
-                if (!rel.Contains('/')) continue;   // loose unresolved-chunk dumps, not real bins
-                if (TryResolveEntry(HashAlgorithms.WadPath(rel), out var entry))
-                    vm.Bins.Add(new PatchUpdateBinRowViewModel { Rel = rel, Entry = entry });
+                if (!rel.Contains('/')) continue;
+                ulong hash = HashAlgorithms.WadPath(rel);
+                if (binHashes.Add(hash) && TryResolveEntry(hash, out var entry))
+                    vm.Bins.Add(new PatchUpdateBinRowViewModel
+                    { Rel = rel, ProjectRel = $"{folder}/{rel}", Entry = entry });
             }
         }
-        if (vm.Bins.Count == 0) { _log.Warn("PatchUpdate", "No project .bin files found."); return; }
 
+        // Packed editable WAD projects use hash overrides for rebased bins; BuildProjectCore applies
+        // those overrides while repacking, so they can participate without destructively unpacking the WAD.
+        if (_mounts is not null)
+            foreach (var wad in _mounts.Mounts.OfType<WadMount>().Where(m => m.Kind == AssetSourceKind.ProjectWad))
+            {
+                projectFiles += wad.Archive.Entries.Count;
+                foreach (var sourceEntry in wad.Archive.Entries)
+                {
+                    if (!sourceEntry.IsResolved || !sourceEntry.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)
+                        || !sourceEntry.Path.Contains('/') || !binHashes.Add(sourceEntry.PathHash))
+                        continue;
+                    if (TryResolveEntry(sourceEntry.PathHash, out var entry))
+                        vm.Bins.Add(new PatchUpdateBinRowViewModel
+                        {
+                            Rel = sourceEntry.Path,
+                            ProjectRel = $"{wad.Name}/{sourceEntry.Path}",
+                            Entry = entry,
+                        });
+                }
+            }
+        vm.RetainedAssetCount = Math.Max(0, projectFiles - vm.Bins.Count);
+        vm.RunCompleted = result => CompletePatchUpdateAsync(patchProject, vm, result);
+        return vm;
+    }
+
+    private async Task CompletePatchUpdateAsync(ReyProject patchProject, PatchUpdateWindowViewModel vm,
+        PatchUpdateRunResult result)
+    {
+        if (!result.Success)
+        {
+            _log.Error("PatchUpdate", result.Summary);
+            return;
+        }
+        if (vm.TargetPatch is not { } targetPatch)
+        {
+            _log.Warn("PatchUpdate", "The files were updated, but the installed Riot patch could not be detected; the project baseline was not changed.");
+            return;
+        }
+
+        try
+        {
+            string backupDir = vm.BackupDirectory ?? Path.Combine(patchProject.RootPath!, ".reyengine", "backups",
+                $"patch-update-{DateTime.Now:yyyyMMdd-HHmmss}");
+            Directory.CreateDirectory(backupDir);
+            if (patchProject.ProjectFilePath is { } projectFile && File.Exists(projectFile))
+                File.Copy(projectFile, Path.Combine(backupDir, "project.before-update.json"), overwrite: true);
+
+            string? oldPatch = patchProject.RiotPatchVersion;
+            patchProject.RiotPatchVersion = targetPatch;
+            patchProject.LastPatchUpdateUtc = DateTime.UtcNow.ToString("O");
+            patchProject.LastPatchUpdateSummary = result.Summary;
+            patchProject.LastPatchBackupDirectory = backupDir;
+            patchProject.PatchUpdateNeedsReview = result.NeedsReview;
+            if (oldPatch is not null
+                && RiotPatchVersionDetector.TryNormalize(patchProject.ModVersion, out var modPatch)
+                && string.Equals(modPatch, oldPatch, StringComparison.Ordinal))
+                patchProject.ModVersion = targetPatch + ".0";
+            if (ReferenceEquals(Project, patchProject)) _overrides.SaveTo(patchProject);
+            if (patchProject.ProjectFilePath is { } path) ReyProjectService.Save(patchProject, path);
+
+            string reports = ProjectWorkspace.ReportsDir(patchProject);
+            string reportFile = Path.Combine(reports, $"patch-update-{oldPatch ?? "unknown"}-to-{targetPatch}.txt");
+            var reportLines = new List<string>
+            {
+                $"Project: {patchProject.Name}",
+                $"Patch: {oldPatch ?? "unknown"} -> {targetPatch}",
+                $"UTC: {patchProject.LastPatchUpdateUtc}",
+                $"Backup: {backupDir}",
+                $"Other retained assets: {vm.RetainedAssetCount:n0}",
+                "",
+                result.Summary,
+                "",
+            };
+            foreach (var row in vm.Bins)
+            {
+                reportLines.Add($"[{row.Status}] {row.ProjectRel}");
+                if (row.Detail.Length > 0)
+                    reportLines.AddRange(row.Detail.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                        .Select(line => "  " + line));
+            }
+            File.WriteAllLines(reportFile, reportLines);
+
+            _log.Success("PatchUpdate", $"{patchProject.Name}: {oldPatch ?? "unknown"} -> {targetPatch}. {result.Summary}");
+            if (ReferenceEquals(Project, patchProject))
+            {
+                RefreshBrowser();
+                UpdateTitle();
+                if (patchProject.AutoBuildAfterPatchUpdate) await BuildUpdatedProjectArtifactsAsync(patchProject);
+            }
+        }
+        catch (Exception ex) { _log.Error("PatchUpdate", $"Could not finalize patch tracking: {ex.Message}"); }
+    }
+
+    private async Task<bool> BuildUpdatedProjectArtifactsAsync(ReyProject patchProject)
+    {
+        if (!ReferenceEquals(Project, patchProject) || patchProject.RootPath is null) return false;
+        var buildRoot = patchProject.OutputDirectory ?? Path.Combine(patchProject.RootPath, "Build");
+        if (BuildSafety.IsInsideGameInstall(buildRoot))
+        {
+            patchProject.PatchUpdateNeedsReview = true;
+            patchProject.LastPatchUpdateSummary += " Automatic build was blocked because its output folder is inside the Riot install.";
+            if (patchProject.ProjectFilePath is { } path) ReyProjectService.Save(patchProject, path);
+            _log.Error("PatchUpdate", "Automatic build blocked because the output folder is inside the Riot install.");
+            return false;
+        }
+
+        string name = patchProject.EffectiveModName;
+        string author = string.IsNullOrWhiteSpace(patchProject.ModAuthor) ? "Unknown" : patchProject.ModAuthor!;
+        string fantomePath = Path.Combine(buildRoot, SanitizeFileName($"{name} by {author}.fantome"));
+        var meta = new FantomeMeta
+        {
+            Name = name,
+            Author = author,
+            Version = string.IsNullOrWhiteSpace(patchProject.ModVersion) ? "1.0.0" : patchProject.ModVersion,
+            Description = patchProject.ModDescription ?? "",
+            Heart = patchProject.ModHeart,
+            Home = patchProject.ModHome,
+        };
+        var thumbnail = LoadThumbnailPng(patchProject.ThumbnailPath);
+        IsBuilding = true;
+        Status = $"Rebuilding {name} for Riot {patchProject.RiotPatchVersion}...";
+        var progress = BuildProgressSink();
+        try
+        {
+            Directory.CreateDirectory(buildRoot);
+            await Task.Run(() =>
+            {
+                var wads = BuildProjectCore(buildRoot, progress);
+                if (wads.Count == 0) throw new InvalidOperationException("No WAD was produced from the updated project.");
+                progress.Report((0.98, $"Packaging {Path.GetFileName(fantomePath)}..."));
+                FantomeExporter.Export(meta, wads, thumbnail, fantomePath);
+            });
+            Status = $"Updated package ready: {Path.GetFileName(fantomePath)}";
+            _log.Success("PatchUpdate", $"Automatically rebuilt WAD output and {fantomePath} ({new FileInfo(fantomePath).Length / 1048576.0:0.0} MB).");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            patchProject.PatchUpdateNeedsReview = true;
+            patchProject.LastPatchUpdateSummary += $" Automatic build failed: {ex.Message}";
+            if (patchProject.ProjectFilePath is { } path) ReyProjectService.Save(patchProject, path);
+            _log.Error("PatchUpdate", $"The project update succeeded, but automatic packaging failed: {ex.Message}");
+            return false;
+        }
+        finally { IsBuilding = false; }
+    }
+
+    private async Task CheckForAutomaticPatchUpdateAsync(ReyProject openedProject)
+    {
+        try { await CheckForAutomaticPatchUpdateCoreAsync(openedProject); }
+        catch (Exception ex)
+        {
+            _log.Error("PatchUpdate", $"Automatic patch update stopped safely: {ex.Message}");
+        }
+    }
+
+    private async Task CheckForAutomaticPatchUpdateCoreAsync(ReyProject openedProject)
+    {
+        var installed = RiotPatchVersionDetector.Detect(openedProject.GameDirectory);
+        if (installed is null)
+        {
+            _log.Warn("PatchUpdate", "Could not detect the installed Riot patch; automatic updating is paused.");
+            return;
+        }
+
+        string? baseline = openedProject.RiotPatchVersion;
+        if (!RiotPatchVersionDetector.TryNormalize(baseline, out var normalizedBaseline))
+        {
+            baseline = RiotPatchVersionDetector.InferProjectBaseline(openedProject.ModVersion, installed.Patch);
+            if (baseline is null)
+            {
+                openedProject.RiotPatchVersion = installed.Patch;
+                if (openedProject.ProjectFilePath is { } path) ReyProjectService.Save(openedProject, path);
+                _log.Info("PatchUpdate", $"Patch tracking enabled at {installed.Patch}. This legacy project has no patch-style version, so no historical base was guessed; set Project Base Patch once if it was built for an older client.");
+                return;
+            }
+            openedProject.RiotPatchVersion = baseline;
+            if (openedProject.ProjectFilePath is { } inferredPath) ReyProjectService.Save(openedProject, inferredPath);
+            _log.Info("PatchUpdate", $"Inferred legacy project base patch {baseline} from mod version {openedProject.ModVersion}.");
+        }
+        else baseline = normalizedBaseline;
+
+        int comparison = RiotPatchVersionDetector.Compare(baseline, installed.Patch);
+        if (comparison == 0) return;
+        if (comparison > 0)
+        {
+            _log.Warn("PatchUpdate", $"Project targets Riot {baseline}, but the selected game install is older ({installed.Patch}); automatic downgrade is blocked.");
+            return;
+        }
+        if (!openedProject.AutoUpdateOnRiotPatch)
+        {
+            _log.Info("PatchUpdate", $"Riot {installed.Patch} is installed; this project still targets {baseline}. Automatic updating is disabled in Project Settings.");
+            return;
+        }
+        if (!ReferenceEquals(Project, openedProject)) return;
+
+        _log.Info("PatchUpdate", $"Riot patch changed {baseline} -> {installed.Patch}; preparing an automatic transactional rebase.");
+        var vm = CreatePatchUpdateViewModel(openedProject, installed.Patch);
+        await vm.InitAsync();
+        if (!vm.CanRun)
+        {
+            _log.Error("PatchUpdate", vm.Status);
+            if (ReferenceEquals(Project, openedProject)) ShowPatchUpdateWindow(vm);
+            return;
+        }
+
+        var result = await vm.RunUpdateAsync();
+        if (result is { NeedsReview: true } && ReferenceEquals(Project, openedProject)) ShowPatchUpdateWindow(vm);
+    }
+
+    private void ShowPatchUpdateWindow(PatchUpdateWindowViewModel vm)
+    {
         var win = new Views.PatchUpdateWindow { DataContext = vm };
         if (PromptOwner is not null) win.Show(PromptOwner); else win.Show();
-        _ = vm.InitAsync();
     }
 
     /// <summary>M94: convert a .fantome mod package into an editable folder project under
@@ -7526,6 +7784,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Status = $"Project '{project.Name}' — {_mounts!.Count:n0} assets across {_mounts.Mounts.Count} mount(s)";
             _log.Success("Project", $"Opened '{project.Name}': {project.ProjectFolders.Count} folder(s), {project.ProjectWads.Count} WAD(s), {project.ReferenceWads.Count} Riot reference(s); {_mounts.Count:n0} assets mounted.");
             StartProjectWatchers();   // M100: auto-refresh the browser on external file changes
+            _ = CheckForAutomaticPatchUpdateAsync(project);
             if (project.ReferenceWads.Count == 0)
                 _log.Info("Project", "No Riot references yet — add one via Project ▸ Manage Riot References to preview/copy source assets.");
         }

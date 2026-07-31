@@ -4,7 +4,7 @@
         xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         x:Class="ReyEngine.App.Views.PatchUpdateWindow"
         x:DataType="vm:PatchUpdateWindowViewModel"
-        Title="ReyEngine — Patch Update Wizard" Width="720" Height="560"
+        Title="ReyEngine — Patch Update Wizard" Width="720" Height="610"
         WindowStartupLocation="CenterOwner"
         ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}">
@@ -31,12 +31,26 @@
         <!-- patch pick -->
         <Border Classes="card">
           <StackPanel Spacing="6">
-            <TextBlock Classes="cardTitle" Text="OLD PATCH" />
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Text="{Binding PatchRoute}" FontSize="11"
+                         Foreground="{DynamicResource ReyAccentBrush}" />
+              <TextBlock Classes="cardTitle" Text="RIOT PATCH REBASE" />
+            </DockPanel>
             <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
                        Text="The patch this mod was BUILT for (its last known working patch). For every project .bin, the wizard downloads that patch's original from CommunityDragon, diffs it against your file to isolate the mod's actual edits, and re-applies exactly those edits onto the current patch's original. Your current files are backed up to .reyengine/backups/ first." />
             <ComboBox ItemsSource="{Binding Patches}" SelectedItem="{Binding SelectedPatch}"
                       FontSize="11" HorizontalAlignment="Stretch" MaxDropDownHeight="380"
                       IsEnabled="{Binding PatchesLoaded}" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Spacing="4">
+            <TextBlock Classes="cardTitle" Text="FULL REPLACEMENTS" />
+            <TextBlock Text="{Binding RetainedAssetsText}" FontSize="10" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Text="Textures, meshes, mapgeo, audio and other complete replacements remain the mod's authored files. They do not need a three-way structural merge; the rebuilt WAD carries them forward unchanged."
+                       FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
           </StackPanel>
         </Border>
 
