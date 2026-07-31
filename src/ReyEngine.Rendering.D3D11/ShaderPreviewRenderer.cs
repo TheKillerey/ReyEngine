@@ -434,9 +434,16 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     private void CreateStaticStates()
     {
+        // M294: ANISOTROPIC, now that there is a mip chain for it to work with.
+        //
+        // Trilinear alone picks one mip per pixel from the WORST-axis footprint, so a ground plane seen at
+        // a grazing angle - which is most of a map from a normal camera - is forced to a blurry mip to
+        // stop it aliasing along the other axis. Anisotropy samples the elongated footprint properly and
+        // is what keeps distant ground readable rather than merely un-aliased. 8x is the usual quality
+        // knee; the cost is trivial next to this renderer's per-frame readback.
         var sd = new SamplerDesc
         {
-            Filter = Filter.MinMagMipLinear,
+            Filter = Filter.Anisotropic, MaxAnisotropy = 8,
             AddressU = TextureAddressMode.Wrap, AddressV = TextureAddressMode.Wrap, AddressW = TextureAddressMode.Wrap,
             MaxLOD = float.MaxValue, ComparisonFunc = ComparisonFunc.Never,
         };
@@ -1626,18 +1633,45 @@ float4 psmain_tex(VTexOut i) : SV_Target
             return null;
         }
 
+        // M294: a full MIP CHAIN. These were created MipLevels = 1, so however far the camera flew the
+        // sampler still read the top level - a texel shrinking below a pixel with nothing to filter it
+        // against, which is minification aliasing and reads as "the map gets pixelated when I fly away".
+        // The sampler was already asking for trilinear (Filter.MinMagMipLinear); there was simply nothing
+        // for it to filter between. The GL viewport has always built mips here
+        // (ViewportMeshRenderer GenerateMipmap + LinearMipmapLinear), which is why this was DX11-only.
+        //
+        // GenerateMips dictates the rest of the description: it needs a render-target bind, the
+        // GenerateMips misc flag and Usage.Default, so the texture can no longer be Immutable and mip 0
+        // is uploaded after creation rather than as initial data.
+        bool mipped = w > 1 && h > 1;
         var desc = new Texture2DDesc
         {
-            Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1,
+            Width = (uint)w, Height = (uint)h,
+            MipLevels = mipped ? 0u : 1u,          // 0 = full chain down to 1x1
+            ArraySize = 1,
             Format = Format.FormatR8G8B8A8Unorm, SampleDesc = new SampleDesc(1, 0),
-            Usage = Usage.Immutable, BindFlags = (uint)BindFlag.ShaderResource,
+            Usage = mipped ? Usage.Default : Usage.Immutable,
+            BindFlags = (uint)(mipped ? BindFlag.ShaderResource | BindFlag.RenderTarget
+                                      : BindFlag.ShaderResource),
+            MiscFlags = (uint)(mipped ? ResourceMiscFlag.GenerateMips : 0),
         };
+
         ComPtr<ID3D11Texture2D> tex = default;
         int hr;
-        fixed (byte* p = rgba)
+        if (mipped)
         {
-            var sub = new SubresourceData { PSysMem = p, SysMemPitch = (uint)(w * 4) };
-            hr = _device.CreateTexture2D(in desc, in sub, ref tex);
+            hr = _device.CreateTexture2D(in desc, null, ref tex);
+            if (hr >= 0)
+                fixed (byte* p = rgba)
+                    _ctx.UpdateSubresource(tex, 0, (Box*)null, p, (uint)(w * 4), 0u);
+        }
+        else
+        {
+            fixed (byte* p = rgba)
+            {
+                var sub = new SubresourceData { PSysMem = p, SysMemPitch = (uint)(w * 4) };
+                hr = _device.CreateTexture2D(in desc, in sub, ref tex);
+            }
         }
         if (hr < 0) { Log($"CreateTexture2D failed 0x{hr:X8} for {w}x{h}"); return null; }
 
@@ -1645,6 +1679,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
         hr = _device.CreateShaderResourceView(tex, null, ref srv);
         tex.Dispose();
         if (hr < 0) { Log($"CreateShaderResourceView failed 0x{hr:X8} for {w}x{h}"); return null; }
+        if (mipped) _ctx.GenerateMips(srv);
         return srv;
     }
 
