@@ -101,6 +101,33 @@ public static class FantomeImporter
                     using var wad = WadArchive.Open(tmp, resolver);
                     // M298: a WAD that had to be repaired to be readable is worth saying so.
                     if (wad.RepairNote is { } repaired) progress?.Report($"{wadName}: {repaired}");
+
+                    // M301: before writing anything, ask the mod's own .bin files to name the chunks the
+                    // hash database could not. A custom asset is unknown to the database precisely BECAUSE
+                    // it is custom, but the mod's bins reference it by literal path - so the real name is
+                    // already in the archive. Recovers 200 of 756 on the reported mod, and they are
+                    // overwhelmingly the textures (.dds/.tex) the user could not find.
+                    var unresolvedHashes = wad.Entries.Where(e => !e.IsResolved)
+                                                      .Select(e => e.PathHash).ToHashSet();
+                    Dictionary<ulong, string> recovered = new();
+                    if (unresolvedHashes.Count > 0)
+                    {
+                        progress?.Report($"Recovering names from {wadBase}'s own .bin files…");
+                        // Only bins carry paths, so only chunks that COULD be one are read - unresolved, or
+                        // resolved to a .bin. That is still a superset of every bin in the archive, so the
+                        // result is identical, but it avoids decompressing the textures and meshes twice.
+                        var binCandidates = wad.Entries
+                            .Where(e => !e.IsResolved
+                                     || e.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
+                            .Select(e => e.PathHash);
+                        recovered = WadPathRecovery.Recover(
+                            binCandidates, unresolvedHashes,
+                            h => { try { return wad.Extract(h); } catch { return null; } });
+                        if (recovered.Count > 0)
+                            progress?.Report($"{wadName}: recovered real paths for {recovered.Count:n0} of "
+                                + $"{unresolvedHashes.Count:n0} unnamed chunk(s) from the mod's .bin files");
+                    }
+
                     int done = 0, sniffed = 0, anonymous = 0;
                     foreach (var we in wad.Entries)
                     {
@@ -109,6 +136,8 @@ public static class FantomeImporter
                             string target;
                             if (we.IsResolved)
                                 target = Path.Combine(outDir, we.Path.Replace('/', Path.DirectorySeparatorChar));
+                            else if (recovered.TryGetValue(we.PathHash, out var real))
+                                target = Path.Combine(outDir, SafeRelative(real));
                             else
                             {
                                 // Read it once, name it from what it is, then write the same bytes.
@@ -246,6 +275,25 @@ public static class FantomeImporter
         int i = 2;
         while (Directory.Exists(root)) root = Path.Combine(parent, $"{name} ({i++})");
         return root;
+    }
+
+    /// <summary>M301: turn a path recovered from archive BYTES into a safe relative path.
+    ///
+    /// <para>A resolved path comes from the hash database and is trusted. A recovered one is a printable run
+    /// scraped out of a .bin, so it is attacker-shaped input: "..\..\windows\system32\x.dll" hashes just
+    /// as happily as a real path, and combining it unchecked would write outside the project. Each segment
+    /// is scrubbed and any traversal segment dropped.</para></summary>
+    private static string SafeRelative(string path)
+    {
+        var parts = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var clean = new List<string>(parts.Length);
+        foreach (var raw in parts)
+        {
+            if (raw is "." or "..") continue;
+            string seg = Sanitize(raw);                 // strips ':' too, so a drive letter cannot survive
+            if (seg.Length > 0) clean.Add(seg);
+        }
+        return clean.Count == 0 ? "recovered.bin" : Path.Combine(clean.ToArray());
     }
 
     private static string Sanitize(string name)
