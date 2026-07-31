@@ -31,7 +31,11 @@ public sealed class OrbitCamera
     /// deliberately wants a coarser near plane at range still gets one - it just cannot survive a zoom.
     /// The 0.02 floor keeps the far/near ratio finite when Distance reaches its own floor.</para>
     /// </summary>
-    public float EffectiveNear => MathF.Min(Near, MathF.Max(0.02f, Distance * 0.01f));
+    /// <para>M291: the coefficient dropped from 0.01 to 0.0025 and the floor from 0.02 to 0.01, so the
+    /// near plane starts shrinking four times further out. At framing range the result is unchanged -
+    /// <see cref="Near"/> still caps it at 1 - so distant rendering is untouched; it only bites once the
+    /// camera is genuinely close, which is where meshes were being cut away.</para>
+    public float EffectiveNear => MathF.Min(Near, MathF.Max(0.01f, Distance * 0.0025f));
 
     /// <summary>World units per second of WASD fly (user-adjustable via RMB+wheel).</summary>
     public float FlySpeed = 600f;
@@ -100,4 +104,38 @@ public sealed class OrbitCamera
         Matrix4x4.CreatePerspectiveFieldOfView(FieldOfView, aspect <= 0 ? 1f : aspect, EffectiveNear, Far);
 
     public Matrix4x4 ViewProjection(float aspect) => View * Projection(aspect);
+
+    /// <summary>
+    /// <para>M291: the same frustum in the OPENGL depth convention - clip z spanning [-w, w] rather than
+    /// [0, w].</para>
+    ///
+    /// <para><see cref="Projection"/> comes from <c>Matrix4x4.CreatePerspectiveFieldOfView</c>, and
+    /// System.Numerics follows Direct3D: it maps the frustum to z in [0, w]. That is right for D3D11 and
+    /// wrong for GL, whose fixed-function clip and <c>glDepthRange</c> both assume [-w, w]. Feeding the
+    /// D3D matrix to GL does not clip anything away - [0, w] is a strict subset of [-w, w] - but every
+    /// visible fragment then lands in the upper HALF of the depth buffer, throwing away a whole bit of
+    /// precision and doubling z-fighting. That cost rises exactly as the near plane shrinks, which is why
+    /// it is fixed here alongside the near-plane change rather than separately.</para>
+    ///
+    /// <para>The usual remedy, <c>glClipControl(ZERO_TO_ONE)</c>, is deliberately NOT used: it is desktop
+    /// GL 4.5 and this renderer targets GLES/ANGLE, where it does not exist. Emitting the correct matrix
+    /// costs nothing and works everywhere.</para>
+    /// </summary>
+    public Matrix4x4 ProjectionGl(float aspect)
+    {
+        float a = aspect <= 0 ? 1f : aspect;
+        float n = EffectiveNear, f = Far;
+        float h = 1f / MathF.Tan(FieldOfView * 0.5f);
+        var m = Matrix4x4.Identity;
+        m.M11 = h / a;
+        m.M22 = h;
+        // The only rows that differ from the D3D form: D3D uses f/(n-f) and n*f/(n-f).
+        m.M33 = (f + n) / (n - f);
+        m.M34 = -1f;
+        m.M43 = 2f * f * n / (n - f);
+        m.M44 = 0f;
+        return m;
+    }
+
+    public Matrix4x4 ViewProjectionGl(float aspect) => View * ProjectionGl(aspect);
 }

@@ -25,7 +25,12 @@ public class OrbitCameraNearTests
         cam.Distance = 200_000f;
         cam.Near = 2_000f;
 
-        Assert.Equal(2_000f, cam.EffectiveNear, 3);      // at range, unchanged
+        // M291 lowered the coefficient from 0.01 to 0.0025, so the near plane now starts shrinking four
+        // times further out: at this range it is 200_000 * 0.0025 = 500 rather than the caller's 2_000
+        // ceiling. Still far below Far, so distant rendering is unaffected; the ceiling remains an upper
+        // bound and is asserted as such rather than as an exact value.
+        Assert.Equal(500f, cam.EffectiveNear, 3);
+        Assert.True(cam.EffectiveNear <= cam.Near, "the caller's ceiling must remain an upper bound");
 
         cam.Distance = 500f;                              // fly in to inspect a prop
         Assert.True(cam.EffectiveNear <= 5f,
@@ -47,8 +52,47 @@ public class OrbitCameraNearTests
         var cam = new OrbitCamera { Near = 1f };
         cam.Zoom(0.0001f);                                // slam into the distance floor
         Assert.True(cam.Distance >= 1f, $"distance floor breached: {cam.Distance}");
-        Assert.True(cam.EffectiveNear >= 0.02f, $"near floor breached: {cam.EffectiveNear}");
+        Assert.True(cam.EffectiveNear >= 0.01f, $"near floor breached: {cam.EffectiveNear}");   // M291: 0.02 -> 0.01
         Assert.True(cam.EffectiveNear < cam.Far);
+    }
+
+    /// <summary>
+    /// M291: each graphics API gets the depth range it actually expects.
+    ///
+    /// <para>System.Numerics builds Direct3D-convention projections (clip z in [0, w]). Handing that to
+    /// OpenGL, whose clip and glDepthRange both assume [-w, w], does not clip anything away - so nothing
+    /// LOOKS wrong - it just squeezes every visible fragment into the upper half of the depth buffer and
+    /// doubles z-fighting. A silent one-bit precision loss is exactly the kind of thing that needs a test
+    /// rather than an eye.</para>
+    /// </summary>
+    [Fact]
+    public void EachProjectionUsesTheDepthRangeItsApiExpects()
+    {
+        var cam = new OrbitCamera { Distance = 1_000f, Near = 1f };
+        const float aspect = 16f / 9f;
+        float n = cam.EffectiveNear, f = cam.Far;
+
+        var d3d = cam.Projection(aspect);
+        var gl = cam.ProjectionGl(aspect);
+
+        // Depth of a view-space point after projection, as normalised device z. The camera looks down -Z.
+        static float Ndc(System.Numerics.Matrix4x4 m, float viewZ)
+        {
+            var c = System.Numerics.Vector4.Transform(
+                new System.Numerics.Vector4(0f, 0f, -viewZ, 1f), m);
+            return c.Z / c.W;
+        }
+
+        Assert.Equal(0f, Ndc(d3d, n), 3);     // D3D: near -> 0
+        Assert.Equal(1f, Ndc(d3d, f), 3);     //      far  -> 1
+        Assert.Equal(-1f, Ndc(gl, n), 3);     // GL:   near -> -1
+        Assert.Equal(1f, Ndc(gl, f), 3);      //       far  -> +1
+
+        // Only the depth rows may differ - if the horizontal or vertical scale drifted, the two viewports
+        // would disagree about field of view and every screen-space comparison between them would be void.
+        Assert.Equal(d3d.M11, gl.M11, 5);
+        Assert.Equal(d3d.M22, gl.M22, 5);
+        Assert.Equal(-1f, gl.M34, 5);
     }
 
     /// <summary>The point of the change: you can get closer than before, on any mesh.</summary>

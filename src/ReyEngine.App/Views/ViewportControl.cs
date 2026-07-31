@@ -556,7 +556,9 @@ public sealed class ViewportControl : OpenGlControlBase
     public void SyncPickMatrices(double width, double height)
     {
         float aspect = height <= 0 ? 1f : (float)(width / height);
-        CachePickMatrices(Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjection(aspect), width, height);
+        // M291: the GL-convention matrix, and it MUST be the same one the frame renders with - picking that
+        // used a different depth convention would miss along the ray.
+        CachePickMatrices(Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjectionGl(aspect), width, height);
     }
 
     public bool TryGetPickRay(Point screenPos, out Vector3 rayOrigin, out Vector3 rayDir)
@@ -830,7 +832,7 @@ public sealed class ViewportControl : OpenGlControlBase
 
         float aspect = h == 0 ? 1f : (float)w / h;
         // League's engine is -X oriented; mirror world X so assets match their in-game orientation.
-        var viewProj = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjection(aspect);
+        var viewProj = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.ViewProjectionGl(aspect);   // M291
 
         // M122: sky first - rotation-only view (same X-mirror), depth writes off, scene overdraws it.
         if (_skyboxRenderer is { } sky)
@@ -849,7 +851,7 @@ public sealed class ViewportControl : OpenGlControlBase
             {
                 var viewRot = _camera.View;
                 viewRot.M41 = 0f; viewRot.M42 = 0f; viewRot.M43 = 0f;
-                sky.Render(Matrix4x4.CreateScale(-1f, 1f, 1f) * viewRot, _camera.Projection(aspect));
+                sky.Render(Matrix4x4.CreateScale(-1f, 1f, 1f) * viewRot, _camera.ProjectionGl(aspect));   // M291
             }
         }
 

@@ -43,7 +43,12 @@ public static class Dx11SceneBuilder
         ShaderDescription VsDesc, ShaderDescription PsDesc,
         IReadOnlyList<(string Target, string Key)> Textures,
         IReadOnlyList<(string Name, float[] Value)> Parameters,
-        MaterialProfile Profile);
+        MaterialProfile Profile,
+        /// <summary>M292: the mapgeo group this slice was merged from. MergeSlices keys on visibility
+        /// identity, so every group in the run resolves the same and this one index speaks for all of
+        /// them - which is what lets the host drive Visible from the per-group array the GL viewport
+        /// already uses, instead of DX11 re-deriving the dragon/baron/region rules.</summary>
+        int GroupIndex = -1);
 
     /// <summary>Everything a scene needs that does not touch D3D.</summary>
     public sealed class PreparedScene
@@ -171,7 +176,7 @@ public static class Dx11SceneBuilder
             scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,
                 new ShaderDescription(full, DxbcStage.Vertex, vp.Key, vp.BlobIndex, b.Macros, vs),
                 new ShaderDescription(full, DxbcStage.Pixel, pp.Key, pp.BlobIndex, b.Macros, ps),
-                wanted, parameters, b.Profile));
+                wanted, parameters, b.Profile, slice.Group));
         }
 
         DecodeTextures(distinct, readAsset, scene);
@@ -246,6 +251,7 @@ public static class Dx11SceneBuilder
             }
 
             mat.Bounds = SliceBounds(scene.Mesh, s.Start, s.Count);   // M245 frustum culling
+            mat.MapGroupIndex = s.GroupIndex;                          // M292: lets the host filter it
 
             // M279: the material's authored depth-write decides BOTH of these, and the two have to agree.
             //
@@ -337,25 +343,51 @@ public static class Dx11SceneBuilder
     /// <summary>M226: coalesce runs that are already adjacent AND want the same atlas page. The lightmap
     /// has to be part of the key: it is a per-GROUP property, and keying it by material name handed 71.5%
     /// of Map12's lit groups another mesh's atlas page.</summary>
-    private static List<(string Material, int Start, int Count, string Lightmap)> MergeSlices(MapGeoAsset map)
+    /// <para>M292: the merge is ALSO keyed on the group's visibility identity - its effective visibility
+    /// bitmask, its controller hash and its render region - and each merged run remembers the first group
+    /// it came from.</para>
+    ///
+    /// <para>Visibility is a per-GROUP property, and one material carries a single Visible flag, so a run
+    /// that spans groups with different visibility cannot express them: hiding a dragon layer would have
+    /// to hide its neighbours too, or not hide anything. Keying on the identity keeps every run
+    /// homogeneous, which is what makes a per-material flag sufficient. Note this method deliberately does
+    /// not know the RULES - only that groups differing in these three inputs must not be fused - so the
+    /// rules stay in MapVisibilityResolver, shared with the OpenGL viewport.</para>
+    private static List<(string Material, int Start, int Count, string Lightmap, int Group)> MergeSlices(MapGeoAsset map)
     {
+        // Sourced exactly as MainWindowViewModel.ApplyMapVisibility does, including the live per-mesh
+        // edits, or the two viewports would disagree about which layer a group belongs to.
+        var meshByIdx = map.Meshes.ToDictionary(m => m.Index);
+        (int Flags, uint Ctrl, uint Region) Identity(MapGeoGroup g)
+        {
+            int flags = g.VisibilityFlags;
+            uint ctrl = g.ControllerHash, region = 0;
+            if (g.MeshIndex >= 0 && meshByIdx.TryGetValue(g.MeshIndex, out var src))
+            { flags = src.EffectiveVisibility; ctrl = src.EffectiveController; region = src.RegionHash; }
+            return (flags, ctrl, region);
+        }
+
         var ordered = map.Groups
-            .Select(g => (g.Material, Start: g.StartIndex, Count: g.IndexCount, Lightmap: g.LightmapTexture))
+            .Select((g, i) => (g.Material, Start: g.StartIndex, Count: g.IndexCount,
+                               Lightmap: g.LightmapTexture, Group: i, Id: Identity(g)))
             .OrderBy(x => x.Start)
             .ToList();
 
-        var merged = new List<(string Material, int Start, int Count, string Lightmap)>();
+        var merged = new List<(string Material, int Start, int Count, string Lightmap, int Group)>();
+        (int Flags, uint Ctrl, uint Region) lastId = default;
         foreach (var s in ordered)
         {
             if (merged.Count > 0)
             {
                 var p = merged[^1];
                 if (p.Start + p.Count == s.Start
+                    && lastId == s.Id
                     && string.Equals(p.Material, s.Material, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(p.Lightmap, s.Lightmap, StringComparison.OrdinalIgnoreCase))
                 { merged[^1] = p with { Count = p.Count + s.Count }; continue; }
             }
-            merged.Add((s.Material, s.Start, s.Count, s.Lightmap));
+            merged.Add((s.Material, s.Start, s.Count, s.Lightmap, s.Group));
+            lastId = s.Id;
         }
         return merged;
     }

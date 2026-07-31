@@ -143,6 +143,13 @@ public sealed unsafe class PreviewMaterial : IDisposable
 
     public bool Visible { get; set; } = true;
 
+    /// <summary>M292: the mapgeo GROUP this material was built from, or -1 for anything that is not map
+    /// geometry - particles, mesh emitters, editor overlays. The host uses it to drive
+    /// <see cref="Visible"/> from the very same per-group array the OpenGL viewport consumes, so the two
+    /// viewports cannot disagree about dragon layers, baron state or render regions. The -1 default is
+    /// what keeps a blanket visibility sweep from stomping particle materials that manage their own.</summary>
+    public int MapGroupIndex { get; set; } = -1;
+
     /// <summary>M264: read this draw's geometry from the renderer's DYNAMIC buffer rather than the static
     /// scene mesh. Set by anything that rewrites its vertices every frame - particles today.</summary>
     public bool UsesDynamicMesh { get; set; }
@@ -311,6 +318,16 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     // M283: mesh-primitive particle emitters. A separate pipeline again, and separate GEOMETRY - these
     // draw a real .skn, not a billboard, so they cannot live in the shared quad buffer the way every other
     // particle does. Ported from the GL mesh program (VfxParticleRenderer.cs:891-1023, 1310-1413).
+    // M293: the bucket grid. Its own buffer and pipeline because the payload is a raw pos3+bary3 float
+    // array (6 floats/vertex) straight from the view-model, not the fat PreviewVertex the scene and the
+    // overlay share - so it cannot ride either of their input layouts.
+    private ComPtr<ID3D11VertexShader> _gridVs;
+    private ComPtr<ID3D11PixelShader> _gridPs;
+    private ComPtr<ID3D11InputLayout> _gridLayout;
+    private ComPtr<ID3D11Buffer> _gridVb;
+    private int _gridVertexCount, _gridVbCapacity;
+    private bool _gridTried;
+
     private ComPtr<ID3D11VertexShader> _meshVs;
     private ComPtr<ID3D11PixelShader> _meshPs;
     private ComPtr<ID3D11InputLayout> _meshLayout;
@@ -1682,6 +1699,175 @@ float4 psmain(VOut i) : SV_Target
     if (gMisc.y != 0.0) t *= gTexMult.Sample(gSamp, i.uvMult);
     return t * gColor;
 }";
+
+    /// <summary>M293: the bucket grid, matching what the GL viewport actually draws.
+    ///
+    /// <para>GL does NOT draw lines for this - it draws a triangle soup carrying barycentric coordinates
+    /// and discards the interior, which gives a full wireframe at triangle-raster cost
+    /// (ViewportMeshRenderer BucketWireVert/BucketWireFrag). Porting the look means porting that trick, so
+    /// this is the same barycentric edge test with the same clip-space depth bias, not a line list.</para></summary>
+    private const string GridHlsl = @"
+cbuffer GridCB : register(b0)
+{
+    row_major float4x4 gMvp;
+    float4 gColor;
+};
+struct VIn  { float3 pos : POSITION; float2 bary : TEXCOORD0; };
+struct VOut { float4 pos : SV_Position; float3 bary : TEXCOORD0; };
+
+VOut vsmain(VIn i)
+{
+    VOut o;
+    o.pos = mul(float4(i.pos, 1.0), gMvp);
+    // The same small bias GL applies, so the grid sits on the ground rather than z-fighting with it.
+    o.pos.z -= 0.0006 * o.pos.w;
+    o.bary = float3(i.bary, 1.0 - i.bary.x - i.bary.y);
+    return o;
+}
+
+float4 psmain(VOut i) : SV_Target
+{
+    float3 d = fwidth(i.bary);
+    float3 a = smoothstep(float3(0,0,0), d * 1.5, i.bary);
+    float edge = min(min(a.x, a.y), a.z);
+    if (edge > 0.95) discard;          // interior: keep only the wire
+    return float4(gColor.rgb, gColor.a * (1.0 - edge));
+}";
+
+    private bool EnsureGrid()
+    {
+        if (_gridTried) return _gridVs.Handle is not null;
+        _gridTried = true;
+
+        ID3D10Blob* vsCode = null, psCode = null, errs = null;
+        var src = System.Text.Encoding.ASCII.GetBytes(GridHlsl);
+        try
+        {
+            var compiler = D3DCompiler.GetApi();
+            fixed (byte* sp = src)
+            {
+                var e1 = System.Text.Encoding.ASCII.GetBytes("vsmain\0");
+                var t1 = System.Text.Encoding.ASCII.GetBytes("vs_5_0\0");
+                fixed (byte* ep = e1) fixed (byte* tp = t1)
+                    if (compiler.Compile(sp, (nuint)src.Length, (byte*)null, null, (ID3DInclude*)null,
+                            ep, tp, 0u, 0u, &vsCode, &errs) < 0 || vsCode is null)
+                    { Log("bucket grid vs failed to compile"); return false; }
+                var e2 = System.Text.Encoding.ASCII.GetBytes("psmain\0");
+                var t2 = System.Text.Encoding.ASCII.GetBytes("ps_5_0\0");
+                fixed (byte* ep = e2) fixed (byte* tp = t2)
+                    if (compiler.Compile(sp, (nuint)src.Length, (byte*)null, null, (ID3DInclude*)null,
+                            ep, tp, 0u, 0u, &psCode, &errs) < 0 || psCode is null)
+                    { Log("bucket grid ps failed to compile"); return false; }
+            }
+        }
+        catch (Exception ex) { Log("bucket grid: the HLSL compiler is unavailable: " + ex.Message); return false; }
+
+        ComPtr<ID3D11VertexShader> vs = default;
+        if (_device.CreateVertexShader(vsCode->GetBufferPointer(), vsCode->GetBufferSize(),
+                ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref vs) < 0) { Log("grid CreateVertexShader failed"); return false; }
+        _gridVs = vs;
+        ComPtr<ID3D11PixelShader> ps = default;
+        if (_device.CreatePixelShader(psCode->GetBufferPointer(), psCode->GetBufferSize(),
+                ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref ps) < 0) { Log("grid CreatePixelShader failed"); return false; }
+        _gridPs = ps;
+
+        var semPos = System.Text.Encoding.ASCII.GetBytes("POSITION\0");
+        var semUv = System.Text.Encoding.ASCII.GetBytes("TEXCOORD\0");
+        fixed (byte* sp0 = semPos)
+        fixed (byte* sp1 = semUv)
+        {
+            var els = stackalloc InputElementDesc[2];
+            els[0] = new InputElementDesc
+            {
+                SemanticName = sp0, SemanticIndex = 0, Format = Format.FormatR32G32B32Float,
+                InputSlot = 0, AlignedByteOffset = 0,
+                InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0,
+            };
+            els[1] = new InputElementDesc
+            {
+                SemanticName = sp1, SemanticIndex = 0, Format = Format.FormatR32G32Float,
+                InputSlot = 0, AlignedByteOffset = 12,   // pos3 then the first two barycentrics
+                InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0,
+            };
+            ComPtr<ID3D11InputLayout> layout = default;
+            if (_device.CreateInputLayout(els, 2, vsCode->GetBufferPointer(), vsCode->GetBufferSize(), ref layout) < 0)
+            { Log("grid CreateInputLayout failed"); return false; }
+            _gridLayout = layout;
+        }
+
+        Log("bucket grid pipeline built");
+        return true;
+    }
+
+    /// <summary>Upload the grid's pos3+bary3 soup. Null or empty clears it. The payload is multi-megabyte,
+    /// so callers should skip re-sending the same array - see the ReferenceEquals guard the GL host uses.</summary>
+    public void SetBucketGrid(float[]? posBary)
+    {
+        _gridVertexCount = 0;
+        if (posBary is null || posBary.Length < 18) return;   // fewer than one triangle
+        if (!EnsureGrid()) return;
+
+        int verts = posBary.Length / 6;
+        int bytes = verts * 5 * sizeof(float);     // pos3 + bary2 is all the layout reads
+        if (_gridVbCapacity < bytes || _gridVb.Handle is null)
+        {
+            _gridVb.Dispose();
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)bytes, Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> vb = default;
+            if (_device.CreateBuffer(in desc, null, ref vb) < 0) { Log("grid vertex buffer failed"); return; }
+            _gridVb = vb; _gridVbCapacity = bytes;
+        }
+
+        // Repack 6 floats/vertex down to 5: the third barycentric is derived in the shader, so shipping it
+        // would be a third of this buffer wasted on a value that is 1 - x - y.
+        var packed = new float[verts * 5];
+        for (int v = 0; v < verts; v++)
+        {
+            packed[v * 5 + 0] = posBary[v * 6 + 0];
+            packed[v * 5 + 1] = posBary[v * 6 + 1];
+            packed[v * 5 + 2] = posBary[v * 6 + 2];
+            packed[v * 5 + 3] = posBary[v * 6 + 3];
+            packed[v * 5 + 4] = posBary[v * 6 + 4];
+        }
+
+        var map = new MappedSubresource();
+        if (_ctx.Map(_gridVb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        fixed (float* p = packed)
+            System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
+        _ctx.Unmap(_gridVb, 0);
+        _gridVertexCount = verts;
+    }
+
+    public int BucketGridVertexCount => _gridVertexCount;
+
+    private int DrawBucketGrid(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_gridVertexCount == 0 || _gridVb.Handle is null || !EnsureGrid()) return 0;
+        if (!EnsureOverlay()) return 0;   // shares the overlay's cbuffer, blend and depth states
+
+        SetOverlayCb(Matrix4x4.Multiply(view, proj), new Vector4(0.62f, 0.45f, 0.95f, 0.85f));
+
+        _ctx.IASetInputLayout(_gridLayout);
+        _ctx.VSSetShader(_gridVs, null, 0);
+        _ctx.PSSetShader(_gridPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+        _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+
+        uint stride = 5 * sizeof(float), offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _gridVb, in stride, in offset);
+
+        // Depth TESTED but not written, and alpha blended - the same state GL draws it under, so the grid
+        // is occluded by geometry in front of it without disturbing anything drawn after.
+        _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        _ctx.OMSetDepthStencilState(_overlayDepth, 0);
+        _ctx.Draw((uint)_gridVertexCount, 0);
+        return 1;
+    }
 
     private bool EnsureMesh()
     {
@@ -3094,7 +3280,8 @@ float4 psmain(VOut i) : SV_Target
             // M269: editor furniture last, over the finished shading.
             HighlightDraws = DrawHighlight(view, proj);
             IconDraws = DrawIcons(view, proj);
-            DrawCalls += HighlightDraws + IconDraws;
+            int gridDraws = DrawBucketGrid(view, proj);   // M293
+            DrawCalls += HighlightDraws + IconDraws + gridDraws;
 
             _ctx.CopyResource(_stage, _rt);
             MappedSubresource map = default;
@@ -3251,6 +3438,7 @@ float4 psmain(VOut i) : SV_Target
         _overlayCb.Dispose(); _overlayDepth.Dispose(); _overlayDepthNoTest.Dispose(); _overlayBlend.Dispose();
         _distortVs.Dispose(); _distortPs.Dispose(); _distortLayout.Dispose(); _distortCb.Dispose();
         _sceneCopySrv.Dispose(); _sceneCopy.Dispose();
+        _gridVs.Dispose(); _gridPs.Dispose(); _gridLayout.Dispose(); _gridVb.Dispose();
         _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();
         _meshCullCw.Dispose(); _meshCullCcw.Dispose();
         ReleaseMeshGeometry();

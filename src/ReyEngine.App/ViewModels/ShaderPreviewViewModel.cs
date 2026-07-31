@@ -268,9 +268,32 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     {
         int w = (int)Math.Round(widthDip * scaling);
         int h = (int)Math.Round(heightDip * scaling);
-        _renderWidth = Math.Clamp(w, 160, 2560);
-        _renderHeight = Math.Clamp(h, 120, 1600);
+
+        // M290: a minimised window reports a zero or negative surface. Keep the last good size rather than
+        // clamping up to a fake one - a render at 160x120 while minimised is wasted work, and a zero-sized
+        // target is a device error.
+        if (w <= 0 || h <= 0) { _surfaceValid = false; return; }
+        _surfaceValid = true;
+
+        // Cap by AREA, preserving the aspect ratio. Clamping width and height independently (2560x1600)
+        // changes the shape of the image, and the preview Image is Stretch="Fill" - so a wide or maximised
+        // window did not merely render at a lower resolution, it rendered the scene squashed. Capping the
+        // pixel count instead keeps the cost bounded and the aspect exact.
+        const long MaxPixels = 2560L * 1600L;
+        long px = (long)w * h;
+        if (px > MaxPixels)
+        {
+            double k = Math.Sqrt(MaxPixels / (double)px);
+            w = (int)Math.Round(w * k);
+            h = (int)Math.Round(h * k);
+        }
+        _renderWidth = Math.Max(16, w);
+        _renderHeight = Math.Max(16, h);
     }
+
+    /// <summary>False while the host surface has no area - minimised, or not laid out yet. The frame loop
+    /// skips rendering rather than driving the device at a made-up size.</summary>
+    private bool _surfaceValid = true;
 
     private readonly HashSet<Avalonia.Input.Key> _heldKeys = new();
 
@@ -1731,6 +1754,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             MathF.Cos((float)SunElevation) * MathF.Cos((float)SunAzimuth)));
 
         ApplyOverrides();
+
+        // M290: nothing to draw into while the window is minimised. Rendering anyway costs a full frame
+        // and a readback for pixels no one can see, and would size the target from a stale surface.
+        if (!_surfaceValid) return;
 
         int w = _renderWidth, h = _renderHeight;
         var unbound = new List<string>();

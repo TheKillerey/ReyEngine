@@ -30,7 +30,18 @@ public partial class ReyTitleBar : UserControl
 
     private void OnDrag(object? sender, PointerPressedEventArgs e)
     {
-        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && VisualRoot is Window w)
-            w.BeginMoveDrag(e);
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed || VisualRoot is not Window w) return;
+
+        // M290: double-click toggles maximise, the way every title bar does. The native caption buttons
+        // are overlaid on the extended client area and still work, but this bar swallowed the double-click
+        // into a move-drag, so the most reflexive way to maximise a window did nothing. Shared here rather
+        // than per window, since every secondary window wears this bar.
+        if (e.ClickCount >= 2 && w.CanResize)
+        {
+            w.WindowState = w.WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+            e.Handled = true;
+            return;
+        }
+        w.BeginMoveDrag(e);
     }
 }

@@ -31,22 +31,29 @@
       </Grid>
     </StackPanel>
 
-    <!-- view toggles (what renders in the viewport) -->
-    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="3" Margin="8,0,8,4">
-      <ToggleButton Classes="vp" Content="✨ Particles" IsChecked="{Binding ShowParticles}" FontSize="9" Padding="6,1"
+    <!-- view toggles (what renders in the viewport)
+
+         M290: a WrapPanel, not a horizontal StackPanel. A StackPanel never wraps and never shrinks its
+         children, so once the panel was narrower than the six buttons laid end to end the last ones -
+         "Grid" and "Hear" - were simply clipped off the right edge, reachable only by widening the whole
+         window. Wrapping puts them on a second row instead, so every toggle stays reachable at any panel
+         width. Spacing is per-button margin rather than the panel's own spacing properties, which differ
+         across Avalonia versions. -->
+    <WrapPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,0,5,4">
+      <ToggleButton Classes="vp" Content="✨ Particles" IsChecked="{Binding ShowParticles}" FontSize="9" Padding="6,1" Margin="0,0,3,3"
                     ToolTip.Tip="Show particle markers in the viewport" />
-      <ToggleButton Classes="vp" Content="▶ Play All" IsChecked="{Binding PlayAllParticles}" FontSize="9" Padding="6,1"
+      <ToggleButton Classes="vp" Content="▶ Play All" IsChecked="{Binding PlayAllParticles}" FontSize="9" Padding="6,1" Margin="0,0,3,3"
                     ToolTip.Tip="Simulate every placed particle system; only near, on-screen placements stay active" />
-      <ToggleButton Classes="vp" Content="🎭 Props" IsChecked="{Binding ShowPropMeshes}" FontSize="9" Padding="6,1"
+      <ToggleButton Classes="vp" Content="🎭 Props" IsChecked="{Binding ShowPropMeshes}" FontSize="9" Padding="6,1" Margin="0,0,3,3"
                     ToolTip.Tip="Render the actual prop meshes (Baron, dragons, camps…) at their placements" />
-      <ToggleButton Classes="vp" Content="▶ Anim" IsChecked="{Binding PlayPropAnimations}" FontSize="9" Padding="6,1"
+      <ToggleButton Classes="vp" Content="▶ Anim" IsChecked="{Binding PlayPropAnimations}" FontSize="9" Padding="6,1" Margin="0,0,3,3"
                     IsEnabled="{Binding ShowPropMeshes}"
                     ToolTip.Tip="Play each prop's idle animation (Baron breathing, camps shuffling…). Needs Props enabled." />
-      <ToggleButton Classes="vp" Content="⌗ Grid" IsChecked="{Binding ShowBucketGrid}" FontSize="9" Padding="6,1"
+      <ToggleButton Classes="vp" Content="⌗ Grid" IsChecked="{Binding ShowBucketGrid}" FontSize="9" Padding="6,1" Margin="0,0,3,3"
                     ToolTip.Tip="Show the mapgeo's scene bucket grid (League's culling grid) as a ground overlay" />
-      <ToggleButton Classes="vp" Content="🔊 Hear" IsChecked="{Binding AmbienceEnabled}" FontSize="9" Padding="6,1"
+      <ToggleButton Classes="vp" Content="🔊 Hear" IsChecked="{Binding AmbienceEnabled}" FontSize="9" Padding="6,1" Margin="0,0,3,3"
                     ToolTip.Tip="Positional ambience: loop the nearest sound placements with distance-based volume as you fly the camera (needs vgmstream-cli)" />
-    </StackPanel>
+    </WrapPanel>
 
     <!-- the hierarchy -->
     <TreeView x:Name="MapContentTree"

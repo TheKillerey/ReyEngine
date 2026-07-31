@@ -44,6 +44,27 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// the builder needs the full surface and hiding it behind a facade would only duplicate it.</summary>
     public ShaderPreviewRenderer Renderer => _renderer;
 
+    /// <summary>
+    /// <para>M292: apply the map's per-group visibility - dragon layer, baron state, render regions - to
+    /// the D3D11 materials.</para>
+    ///
+    /// <para><paramref name="visible"/> is the SAME array the OpenGL viewport consumes
+    /// (<c>MainWindowViewModel.CurrentModelSubmeshVisible</c>, produced by
+    /// <c>MapVisibilityResolver</c>). None of those rules are re-implemented here: DX11 only has to map a
+    /// material back to its group, which <c>PreviewMaterial.MapGroupIndex</c> carries. Anything that is
+    /// not map geometry - particle emitters, mesh emitters, overlays - reports -1 and is left alone,
+    /// because those own their Visible flag and a blanket sweep would fight them.</para>
+    /// </summary>
+    public void ApplyGroupVisibility(IReadOnlyList<bool>? visible)
+    {
+        foreach (var m in _renderer.Materials)
+        {
+            int g = m.MapGroupIndex;
+            if (g < 0) continue;
+            m.Visible = visible is null || g >= visible.Count || visible[g];
+        }
+    }
+
     /// <summary>M249: what happened the last time a scene was built, and whether one is loaded at all.</summary>
     public string SceneReport { get; set; } = "";
     public bool HasScene { get; set; }

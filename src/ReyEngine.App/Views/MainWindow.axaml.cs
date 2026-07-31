@@ -36,6 +36,11 @@ public partial class MainWindow : Window
     // M248 (phase 6, step 1): the side-by-side D3D11 surface. Null until the toggle is first turned on -
     // a user who never touches it never creates a D3D11 device.
     private Dx11ViewportSurface? _dx11;
+
+    /// <summary>M293: last bucket-grid array handed to D3D11, compared by REFERENCE. The array is
+    /// multi-megabyte and is rebuilt only when the grid actually changes, so re-uploading it every frame
+    /// would dominate the frame for a buffer whose contents are identical.</summary>
+    private float[]? _lastDx11BucketGrid;
     private bool _dx11FrameQueued;
     private bool _closed;
 
@@ -180,6 +185,19 @@ public partial class MainWindow : Window
         // highlight ends up pointing at geometry that is no longer there.
         _dx11.Renderer.SetHighlightRanges(vm.Dx11HighlightRanges);
         _dx11.Renderer.SetIcons(vm.Dx11Icons(Viewport.Camera.Distance));
+        // M292: dragon / baron / render-region filtering, from the same array the GL viewport binds to.
+        // Per frame for the same reason the highlight is: the selection, the layer combos and the scene
+        // rebuild all move independently, and a rebuild would otherwise come back with everything visible.
+        _dx11.ApplyGroupVisibility(vm.CurrentModelSubmeshVisible);
+
+        // M293: the bucket grid, from the same array the GL viewport is bound to. Re-uploaded only when
+        // the ARRAY ITSELF changes - it is multi-megabyte, and the GL host guards it the same way for the
+        // same reason. Toggling the grid off publishes null, which clears it.
+        if (!ReferenceEquals(_lastDx11BucketGrid, vm.BucketGridLines))
+        {
+            _lastDx11BucketGrid = vm.BucketGridLines;
+            _dx11.Renderer.SetBucketGrid(vm.BucketGridLines);
+        }
 
         // Pushed per frame rather than on load: the cache is opened lazily the first time a scene is built,
         // which can be after this surface has already drawn its first frames.
