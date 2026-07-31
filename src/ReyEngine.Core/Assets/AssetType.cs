@@ -54,7 +54,23 @@ public static class AssetTypeDetector
         {
             if (Eq(d[4..8], "anmd") || Eq(d[4..8], "canm")) return AssetType.Animation;
             if (Eq(d[4..8], "sklt")) return AssetType.Skeleton;
-            if (Eq(d[4..8], "Mesh")) return AssetType.SkinnedMesh;
+            // M300: "r3d2Mesh" is the STATIC mesh (.scb). A skinned mesh (.skn) is 0x00112233, handled
+            // below - this arm used to claim .skn and would have named every .scb wrongly.
+            if (Eq(d[4..8], "Mesh")) return AssetType.StaticMesh;
+            // Wwise package: "r3d2" followed by a version dword rather than a four-character tag.
+            if (d.Length >= 8 && BinaryPrimitives.ReadUInt32LittleEndian(d[4..8]) == 1) return AssetType.Audio;
+        }
+        // Text formats, checked before the binary magics so a leading brace is not mistaken for one.
+        if (d.Length >= 13 && Eq(d[..13], "[ObjectBegin]")) return AssetType.StaticMesh;   // .sco
+        if (d.Length >= 1 && (d[0] == (byte)'{' || d[0] == (byte)'['))
+        {
+            // The reference extractor leaves these extensionless; they are plainly JSON. Byte codes
+            // rather than escapes: space, CR, LF, tab.
+            for (int i = 1; i < Math.Min(d.Length, 64); i++)
+            {
+                if (d[i] == (byte)'"') return AssetType.Json;
+                if (d[i] is not (0x20 or 0x0D or 0x0A or 0x09)) break;
+            }
         }
         if (d.Length >= 4)
         {
@@ -69,6 +85,47 @@ public static class AssetTypeDetector
             if (m == 0x00112233) return AssetType.SkinnedMesh;
         }
         return AssetType.Unknown;
+    }
+
+    /// <summary>M300: the file extension a sniffed type should be written with.
+    ///
+    /// <para>Used when a WAD chunk's path hash is unknown, so the only name available is the hash. Writing
+    /// every such chunk as ".bin" is what made a mod's CUSTOM textures unfindable - custom paths are
+    /// exactly the ones a hash database does not know, so the files most worth finding were the ones
+    /// disguised. Null means genuinely unidentified, and those keep ".bin" rather than being given a
+    /// guessed extension that would be worse than an honest unknown.</para></summary>
+    public static string? ExtensionFor(AssetType type) => type switch
+    {
+        AssetType.Dds => "dds",
+        AssetType.Texture => "tex",
+        AssetType.Bin => "bin",
+        AssetType.SkinnedMesh => "skn",
+        AssetType.Skeleton => "skl",
+        AssetType.Animation => "anm",
+        AssetType.MapGeometry => "mapgeo",
+        AssetType.StaticMesh => "scb",
+        AssetType.Image => "png",
+        AssetType.Audio => "bnk",
+        AssetType.Json => "json",
+        _ => null,
+    };
+
+    /// <summary>M300: the extension to write a chunk under when its path is unknown.
+    ///
+    /// <para>Not just <see cref="ExtensionFor"/> of the sniffed type, because extension and type are not
+    /// one to one: ".scb" and ".sco" are both StaticMesh (one binary, one text) and ".bnk" and ".wpk" are
+    /// both Audio. Collapsing those through the enum would name a .sco as .scb - not fatal, but wrong in
+    /// a way that would quietly mislead anyone browsing the folder.</para></summary>
+    public static string? FileExtensionFromMagic(ReadOnlySpan<byte> d)
+    {
+        if (d.Length >= 13 && Eq(d[..13], "[ObjectBegin]")) return "sco";     // text static mesh
+        if (d.Length >= 8 && Eq(d[..4], "r3d2"))
+        {
+            if (Eq(d[4..8], "Mesh")) return "scb";                            // binary static mesh
+            if (BinaryPrimitives.ReadUInt32LittleEndian(d[4..8]) == 1) return "wpk";
+        }
+        if (d.Length >= 4 && Eq(d[..4], "BKHD")) return "bnk";
+        return ExtensionFor(FromMagic(d));
     }
 
     /// <summary>Best guess: trust a known extension, fall back to magic sniffing.</summary>
