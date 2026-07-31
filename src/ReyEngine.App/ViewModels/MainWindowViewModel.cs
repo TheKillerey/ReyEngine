@@ -1968,6 +1968,146 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return result;
     }
 
+    /// <summary>
+    /// M312 experimental: give lightmapped SRX_DynamicEffect map groups a custom DX11 permutation, stage
+    /// it as a ShaderCache companion WAD, then clear NO_BAKED_LIGHTING only on materials the generated
+    /// cache positively covers. Riot's installed cache is never edited.
+    /// </summary>
+    public async Task<string> EnableExperimentalDynamicEffectLightmapsAsync()
+    {
+        if (_currentMap is not { } map || _currentMapEntry is not { } mapEntry)
+            return "Load a map first.";
+        if (!Project.IsFolderProject || Project.RootPath is not { } root)
+            return "Experimental shader-cache patches require a saved folder project.";
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+            return "No materials.bin was found alongside this mapgeo.";
+
+        string? finalDir = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
+        if (finalDir is null)
+            return "Set the League game folder in Project Settings first.";
+
+        byte[] originalBin;
+        Formats.Materials.MaterialDocument document;
+        try
+        {
+            originalBin = ReadAsset(binEntry.PathHash);
+            document = Formats.Materials.MaterialDocument.Parse(originalBin, ResolveBinName);
+        }
+        catch (Exception ex) { return "Materials could not be read: " + ex.Message; }
+
+        var lightmappedNames = map.Groups
+            .Where(g => !string.IsNullOrWhiteSpace(g.LightmapTexture))
+            .Select(g => g.Material)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidates = document.Materials
+            .Where(m => lightmappedNames.Contains(m.Name)
+                     && string.Equals(m.RenderShader ?? m.ShaderName,
+                         Services.ExperimentalDynamicEffectShaderService.RenderShader,
+                         StringComparison.OrdinalIgnoreCase)
+                     && m.MacroOn(Formats.Materials.MaterialBinding.MacroNoBakedLighting))
+            .ToList();
+        if (candidates.Count == 0)
+            return "No lightmapped SRX_DynamicEffect material still uses NO_BAKED_LIGHTING on this map.";
+
+        Services.ExperimentalDynamicEffectPatch patch;
+        try
+        {
+            patch = await Task.Run(() =>
+            {
+                using var cache = Formats.Shaders.ShaderCacheReader.Open(finalDir, _resolver.Database, out var cacheError)
+                    ?? throw new InvalidOperationException(cacheError);
+                using var definitions = new DisposableShaderDefinitions(finalDir);
+                return Services.ExperimentalDynamicEffectShaderService.Build(cache, definitions.Value, candidates);
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Shader", "Experimental DynamicEffect patch failed: " + ex.Message);
+            return "Shader patch generation failed: " + ex.Message;
+        }
+
+        int cleared = 0;
+        foreach (var material in candidates)
+            if (patch.SupportedMaterials.Contains(material.Name)
+                && material.RemoveMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting))
+                cleared++;
+        if (cleared == 0) return "The cache patch did not cover any selected material; nothing was changed.";
+
+        byte[] changedBin;
+        try
+        {
+            changedBin = document.Serialize();
+            _ = Formats.Materials.MaterialDocument.Parse(changedBin, ResolveBinName);
+        }
+        catch (Exception ex) { return "The material rewrite did not validate: " + ex.Message; }
+
+        string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        string backupRoot = Path.Combine(root, ".reyengine", "backups", "dynamic-effect-lightmap-" + stamp);
+        string shaderFolder = Path.Combine(root, "ShaderCache.dx11");
+        try
+        {
+            Directory.CreateDirectory(backupRoot);
+            File.WriteAllBytes(Path.Combine(backupRoot, Path.GetFileName(binEntry.Path)), originalBin);
+
+            // Persist the companion folder before touching the material. A failed save or partial shader
+            // write then leaves the still-unlit material safe; the crash-sensitive macro is cleared last.
+            if (!Project.ProjectFolders.Contains("ShaderCache.dx11", StringComparer.OrdinalIgnoreCase))
+                Project.ProjectFolders.Add("ShaderCache.dx11");
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+
+            foreach (var asset in patch.Assets)
+            {
+                string destination = Path.Combine(shaderFolder,
+                    asset.Path.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(destination))
+                {
+                    string backup = Path.Combine(backupRoot, "ShaderCache.dx11",
+                        asset.Path.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+                    File.Copy(destination, backup, overwrite: true);
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.WriteAllBytes(destination, asset.Bytes);
+            }
+
+            WriteBakedAsset(binEntry.Path, changedBin, ".bin");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Shader", "Could not stage the experimental cache patch: " + ex.Message);
+            return "Could not stage the shader patch: " + ex.Message;
+        }
+
+        try
+        {
+            BuildMounts();
+            BuildProjectTree();
+            UpdateTitle();
+        }
+        catch (Exception ex)
+        {
+            // The patch is already transactionally complete on disk. A remount failure must not imply
+            // that it was rolled back; rebuilding/reopening the project will pick up the staged files.
+            _log.Warn("Shader", "Shader patch was staged, but the project view did not refresh: " + ex.Message);
+        }
+
+        string result = $"Experimental DynamicEffect lightmaps enabled on {cleared:n0} material(s). "
+                      + $"Generated {patch.Detail} and staged ShaderCache.dx11.wad.client content. "
+                      + "Build Package, install both WADs, and test in Practice Tool.";
+        _log.Warn("Shader", result + $" Backup: {backupRoot}");
+        return result;
+    }
+
+    /// <summary>ShaderPermutationIndex has a Dispose method for its LeagueToolkit WAD but predates the
+    /// IDisposable interface. This tiny adapter keeps worker ownership explicit.</summary>
+    private sealed class DisposableShaderDefinitions : IDisposable
+    {
+        public Formats.Materials.ShaderPermutationIndex Value { get; }
+        public DisposableShaderDefinitions(string finalDir) => Value = new(finalDir);
+        public void Dispose() => Value.Dispose();
+    }
+
     /// <summary>M166: the shipped shader-permutation set, used to decide whether clearing a macro would
     /// leave the material asking for a shader the client cannot load. Built once per game directory.</summary>
     // ---- M249 (phase 6, step 2): hand the open map to the side-by-side D3D11 surface ----
@@ -2608,17 +2748,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void OpenTextureRecolor()
     {
-        if (_currentMap is null) { _log.Warn("Recolor", "Open a map (.mapgeo) first — the tool recolours the textures that map paints with."); return; }
+        if (_currentMap is null) { _log.Warn("Recolor", "Open a map (.mapgeo) first — the tool recolours its surfaces, placed mobs / props and lightmaps."); return; }
         ShowTextureRecolorWindow?.Invoke();
     }
 
     /// <summary>
-    /// <para>Every texture the open map actually paints with, ranked by how much of the map each one
-    /// covers — plus, since M280, every baked LIGHTMAP atlas the map references. Normal maps, masks and
+    /// <para>Every colour-bearing texture used by the open map, its placed mobs / animated props and its
+    /// baked LIGHTMAP atlases, ranked by how many scene references each one has. Normal maps, masks and
     /// gradients stay excluded: those are data rather than colour, and hue-shifting them would corrupt
-    /// the lighting instead of recolouring the map. A lightmap atlas is different from those — it IS a
-    /// colour (baked ambient/bounced light), stored in an ordinary .tex container, so it goes through the
-    /// exact same <see cref="TextureRecolor.Apply"/> path as a diffuse texture with no special-casing.</para>
+    /// the lighting instead of recolouring the map. Prop textures are resolved from the same placed skin
+    /// bins and champion material bindings as the viewport, so Baron, dragons, camps and shopkeepers do
+    /// not silently keep their original diffuse colour.</para>
     ///
     /// <para>Recolouring one tints the map's baked lighting rather than its surfaces — warming or
     /// cooling shadowed areas, for instance — which is a genuinely different effect from recolouring a
@@ -2631,7 +2771,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return Array.Empty<RecolorTargetViewModel>();
 
         var recolored = Project.TextureRecolors.Select(r => r.PathHash).ToHashSet();
-        var list = new List<RecolorTargetViewModel>();
+        var candidates = new Dictionary<ulong, RecolorCandidate>();
+
+        void Add(string? path, int mapUses = 0, int propUses = 0, int lightmapUses = 0)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            string clean = path.Replace('\\', '/').Trim();
+            ulong hash = HashAlgorithms.WadPath(clean);
+            if (!candidates.TryGetValue(hash, out var candidate))
+                candidates[hash] = candidate = new RecolorCandidate(clean);
+            candidate.MapUses += mapUses;
+            candidate.PropUses += propUses;
+            candidate.LightmapUses += lightmapUses;
+        }
 
         // ---- diffuse: every texture a material actually samples ----
         // Guarded rather than an early return for the whole method — a map whose materials.bin fails to
@@ -2644,25 +2796,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var tex in materialToTexture.Values)
                 if (!string.IsNullOrEmpty(tex)) byPath[tex] = byPath.GetValueOrDefault(tex) + 1;
 
-            foreach (var (path, uses) in byPath)
-            {
-                ulong hash = HashAlgorithms.WadPath(path);
-                // Triage on the header alone — a map's texture list is long and decoding all of it just to
-                // populate a list would stall the window for seconds. Anything we cannot write back is
-                // left out entirely rather than offered and then silently skipped.
-                var bytes = TryReadAssetBytes(hash);
-                if (bytes is null || !TextureRecolor.IsSupported(bytes)) continue;
+            foreach (var (path, uses) in byPath) Add(path, mapUses: uses);
+        }
 
-                list.Add(new RecolorTargetViewModel
-                {
-                    Target = new RecolorTarget(hash, path),
-                    Name = Path.GetFileName(path),
-                    Folder = Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "",
-                    Kind = RecolorTargetKind.Diffuse,
-                    UsedBy = uses,
-                    IsRecolored = recolored.Contains(hash),
-                });
-            }
+        // ---- mobs / animated props: diffuse textures from every placed character skin ----
+        // Resolve each unique skin bin once. PropTextureCatalog also includes SkinMeshProperties.texture,
+        // the fallback used by submeshes without a material override, and aggregates repeated placements.
+        if (CurrentModelProps is { Count: > 0 } props)
+        {
+            var propTextures = PropTextureCatalog.Discover(
+                props.GroupBy(prop => prop.Skin, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new PropSkinUsage(group.Key, group.Count())),
+                skin => ReadAssetByPath($"data/{skin.ToLowerInvariant()}.bin"),
+                ResolveBinName);
+            foreach (var texture in propTextures) Add(texture.AssetPath, propUses: texture.Placements);
         }
 
         // ---- lightmaps: every baked-light atlas the map references ----
@@ -2670,29 +2817,47 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // this map has" cannot drift into two different answers depending on which tool you opened.
         foreach (var atlas in Formats.Baking.LightBaker.EnumerateAtlases(map))
         {
-            ulong hash = HashAlgorithms.WadPath(atlas);
+            int uses = map.Groups.Count(g => string.Equals(g.LightmapTexture, atlas, StringComparison.OrdinalIgnoreCase));
+            Add(atlas, lightmapUses: uses);
+        }
+
+        // Header triage happens once after all discovery passes. A texture shared by map geometry and a
+        // prop becomes one row (MAP+PROP), one write and one project record rather than two competing rows.
+        var list = new List<RecolorTargetViewModel>(candidates.Count);
+        foreach (var (hash, candidate) in candidates)
+        {
             var bytes = TryReadAssetBytes(hash);
             if (bytes is null || !TextureRecolor.IsSupported(bytes)) continue;
-
-            int uses = map.Groups.Count(g => string.Equals(g.LightmapTexture, atlas, StringComparison.OrdinalIgnoreCase));
+            var kind = candidate.LightmapUses > 0
+                ? RecolorTargetKind.Lightmap
+                : candidate.MapUses > 0 && candidate.PropUses > 0
+                    ? RecolorTargetKind.MapAndPropDiffuse
+                    : candidate.PropUses > 0 ? RecolorTargetKind.PropDiffuse : RecolorTargetKind.Diffuse;
             list.Add(new RecolorTargetViewModel
             {
-                Target = new RecolorTarget(hash, atlas),
-                Name = Path.GetFileName(atlas),
-                Folder = Path.GetDirectoryName(atlas)?.Replace('\\', '/') ?? "",
-                Kind = RecolorTargetKind.Lightmap,
-                UsedBy = uses,
+                Target = new RecolorTarget(hash, candidate.Path),
+                Name = Path.GetFileName(candidate.Path),
+                Folder = Path.GetDirectoryName(candidate.Path)?.Replace('\\', '/') ?? "",
+                Kind = kind,
+                MapUses = candidate.MapUses,
+                PropUses = candidate.PropUses,
+                LightmapUses = candidate.LightmapUses,
                 IsRecolored = recolored.Contains(hash),
             });
         }
 
-        // Diffuse first (unchanged relative order from before M280), lightmaps trailing as their own
-        // cluster — there is no section header in the list, so grouping by sort order is what keeps the
-        // two kinds from interleaving, and the per-row badge is what tells them apart at a glance.
         return list.OrderBy(t => t.Kind)
                    .ThenByDescending(t => t.UsedBy)
                    .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
                    .ToList();
+    }
+
+    private sealed class RecolorCandidate(string path)
+    {
+        public string Path { get; } = path;
+        public int MapUses { get; set; }
+        public int PropUses { get; set; }
+        public int LightmapUses { get; set; }
     }
 
     private byte[]? TryReadAssetBytes(ulong hash)

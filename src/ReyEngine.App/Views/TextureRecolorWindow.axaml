@@ -41,7 +41,7 @@
       <!-- ================= column 1 : which textures ================= -->
       <Border Grid.Column="0" Classes="card" Padding="12" CornerRadius="6" Margin="0,0,7,0">
         <DockPanel>
-          <TextBlock DockPanel.Dock="Top" Text="TEXTURES &amp; LIGHTMAPS IN THIS MAP" FontSize="10" FontWeight="Bold"
+          <TextBlock DockPanel.Dock="Top" Text="MAP, MOB / PROP &amp; LIGHTMAP TEXTURES" FontSize="10" FontWeight="Bold"
                      Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,0,8" />
 
           <TextBox DockPanel.Dock="Top" Text="{Binding Filter}" Watermark="Filter by name or folder…"
@@ -72,14 +72,13 @@
                     <TextBlock Text="{Binding Subtitle}" FontSize="9" TextTrimming="CharacterEllipsis"
                                Foreground="{DynamicResource ReyTextDimBrush}" />
                   </StackPanel>
-                  <!-- M280: a lightmap recolours BAKED LIGHT, not a surface - worth flagging on the row
-                       itself rather than only in the subtitle, since a short map name gives Subtitle no
-                       "group" count to hint at it. -->
+                  <!-- Colour-bearing placed-character textures and baked light are separate target kinds,
+                       so the row states what the selected adjustment will affect. -->
                   <Border Grid.Column="2" Background="{DynamicResource ReyAccentBrush}" CornerRadius="3"
                           Padding="4,1" Margin="0,0,6,0" VerticalAlignment="Center"
-                          IsVisible="{Binding IsLightmap}"
-                          ToolTip.Tip="Baked lightmap atlas - recolouring this tints the map's ambient/bounced light, not a surface.">
-                    <TextBlock Text="LM" FontSize="8" FontWeight="Bold" Foreground="{DynamicResource ReyBgBrush}" />
+                          IsVisible="{Binding HasKindBadge}"
+                          ToolTip.Tip="{Binding KindTip}">
+                    <TextBlock Text="{Binding KindBadge}" FontSize="8" FontWeight="Bold" Foreground="{DynamicResource ReyBgBrush}" />
                   </Border>
                   <TextBlock Grid.Column="3" Text="●" FontSize="10" VerticalAlignment="Center"
                              Foreground="{DynamicResource ReyAccentBrush}" IsVisible="{Binding IsRecolored}"

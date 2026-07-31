@@ -71,6 +71,26 @@
           </StackPanel>
         </Border>
 
+        <!-- M313: independent of layout generation. DynamicEffect meshes may already have UV7 and an
+             atlas, or the layout safety pass may have left their NO_BAKED_LIGHTING macro in place. -->
+        <Border Classes="card" Padding="14" CornerRadius="6"
+                BorderBrush="{DynamicResource ReyWarningBrush}" BorderThickness="1">
+          <StackPanel Spacing="10">
+            <TextBlock Text="EXPERIMENTAL DYNAMICEFFECT LIGHTMAPS" FontSize="10" FontWeight="Bold"
+                       Foreground="{DynamicResource ReyWarningBrush}" />
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="This is separate from UV generation. SRX_DynamicEffect meshes keep their generated or existing UV7 layout, while this action supplies the DX11 shader permutations Riot did not cook and then safely enables their baked-light sampling." />
+            <Button Classes="tool" Content="Enable DynamicEffect Lightmaps (Experimental)"
+                    Command="{Binding EnableExperimentalDynamicEffectCommand}"
+                    IsEnabled="{Binding !IsPatchingDynamicEffect}"
+                    HorizontalAlignment="Stretch" FontSize="11" Padding="10,5"
+                    ToolTip.Tip="Creates an opt-in ShaderCache.dx11.wad.client companion. Riot's installed shader cache is never edited. Build and test in Practice Tool after enabling." />
+            <TextBlock Text="Compiling and validating shader cache…" FontSize="10"
+                       IsVisible="{Binding IsPatchingDynamicEffect}"
+                       Foreground="{DynamicResource ReyAccentBrush}" />
+          </StackPanel>
+        </Border>
+
         <!-- ATLAS -->
         <Border Classes="card" Padding="14" CornerRadius="6">
           <StackPanel Spacing="10">

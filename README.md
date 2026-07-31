@@ -56,6 +56,7 @@
 - **Add new meshes to a map**: import `.obj` / `.scb` / `.sco`, place with the gizmo, assign a map material, save — appended straight into the mapgeo.
 - **Bucket grids**: view the real 3D culling bake, and regenerate grids after editing geometry.
 - **Dynamic lights**: load classic Riot `Light.dat` point lights, fit them to any map (scale/offset), full lighting panel (sun, sky, lightmap brightness).
+- **Recolor Textures** adjusts map surfaces, placed mobs / animated props and baked lightmaps together, with presets and `.cube` colour grades always re-derived from Riot's originals.
 - **Classic NVR maps**: the old-format Dominion / Crystal Scar loads with faithful four-blend ground shading — used as the Model Preview backdrop (separate ~66 MB [map asset pack](https://github.com/TheKillerey/ReyEngine/releases/tag/maps)).
 
 **Model Preview**

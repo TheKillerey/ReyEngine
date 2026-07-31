@@ -15,11 +15,10 @@ using ReyEngine.Core.Decoding;
 
 namespace ReyEngine.App.ViewModels;
 
-/// <summary>M280 (lightmap recolour): what kind of texture a row is, purely for labelling — both kinds
-/// go through the identical decode/adjust/encode path, since a baked lightmap is an ordinary .tex
-/// container and <see cref="ReyEngine.Core.Decoding.TextureRecolor"/> never inspects what a texture is
-/// used for.</summary>
-public enum RecolorTargetKind { Diffuse, Lightmap }
+/// <summary>What kind of scene colour a row controls. Map surfaces, placed-character diffuse textures
+/// and lightmaps all use the identical decode/adjust/encode path; the kind is for grouping and clear UI
+/// labelling, not a different codec.</summary>
+public enum RecolorTargetKind { Diffuse, MapAndPropDiffuse, PropDiffuse, Lightmap }
 
 /// <summary>One texture in the recolour list.</summary>
 public sealed partial class RecolorTargetViewModel : ObservableObject
@@ -29,10 +28,19 @@ public sealed partial class RecolorTargetViewModel : ObservableObject
     public required string Folder { get; init; }
     public RecolorTargetKind Kind { get; init; } = RecolorTargetKind.Diffuse;
     public bool IsLightmap => Kind == RecolorTargetKind.Lightmap;
-    /// <summary>How many of the map's materials sample this texture (Diffuse), or how many mesh groups
-    /// point their baked-light UVs at this atlas (Lightmap) — either way, the practical measure of how
-    /// much of the map a change to it will repaint.</summary>
-    public int UsedBy { get; init; }
+    public bool IsProp => Kind is RecolorTargetKind.PropDiffuse or RecolorTargetKind.MapAndPropDiffuse;
+    public bool HasKindBadge => IsLightmap || IsProp;
+    public string KindBadge => IsLightmap ? "LM" : Kind == RecolorTargetKind.MapAndPropDiffuse ? "MAP+PROP" : "PROP";
+    public string KindTip => IsLightmap
+        ? "Baked lightmap atlas - recolouring this tints ambient and bounced light."
+        : Kind == RecolorTargetKind.MapAndPropDiffuse
+            ? "Diffuse colour used by both map geometry and placed mobs or animated props."
+            : "Diffuse colour used by placed mobs or animated props.";
+    public int MapUses { get; init; }
+    public int PropUses { get; init; }
+    public int LightmapUses { get; init; }
+    /// <summary>Total material, placement and lightmap-group references, used for ranking.</summary>
+    public int UsedBy => MapUses + PropUses + LightmapUses;
     /// <summary>Set when this texture already carries a saved recolour.</summary>
     [ObservableProperty] private bool _isRecolored;
     [ObservableProperty] private bool _isSelected = true;
@@ -41,14 +49,17 @@ public sealed partial class RecolorTargetViewModel : ObservableObject
     {
         get
         {
-            string unit = Kind == RecolorTargetKind.Lightmap ? "group" : "material";
-            return UsedBy > 1 ? $"{Folder}  ·  {UsedBy} {unit}s" : Folder;
+            var uses = new List<string>();
+            if (MapUses > 0) uses.Add($"{MapUses:n0} map material{(MapUses == 1 ? "" : "s")}");
+            if (PropUses > 0) uses.Add($"{PropUses:n0} mob/prop placement{(PropUses == 1 ? "" : "s")}");
+            if (LightmapUses > 0) uses.Add($"{LightmapUses:n0} lightmap group{(LightmapUses == 1 ? "" : "s")}");
+            return uses.Count > 0 ? $"{Folder}  ·  {string.Join(" · ", uses)}" : Folder;
         }
     }
 }
 
-/// <summary>M171: the Recolor Textures tool. Picks up every texture the open map paints with, applies one
-/// colour adjustment across the chosen ones, and writes them into the project.
+/// <summary>M171/M311: the Recolor Textures tool. Picks up map surfaces, placed mobs / animated props and
+/// lightmaps, applies one colour adjustment across the chosen textures, and writes them into the project.
 ///
 /// The whole tool is built around NOT editing its own output. The sliders are a description of the edit;
 /// applying them always starts from the pristine Riot texture. That is what makes the tool safe to leave
@@ -171,10 +182,14 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
     {
         int chosen = _allTargets.Count(t => t.IsSelected);
         int recolored = _allTargets.Count(t => t.IsRecolored);
+        int propTextures = _allTargets.Count(t => t.IsProp);
+        int lightmaps = _allTargets.Count(t => t.IsLightmap);
         ListSummary = _allTargets.Count == 0
             ? "No textures — open a map first."
             : $"{chosen:n0} of {_allTargets.Count:n0} selected"
               + (Targets.Count != _allTargets.Count ? $"  ·  {Targets.Count:n0} shown" : "")
+              + (propTextures > 0 ? $"  ·  {propTextures:n0} mob/prop" : "")
+              + (lightmaps > 0 ? $"  ·  {lightmaps:n0} lightmap" : "")
               + (recolored > 0 ? $"  ·  {recolored:n0} already recoloured" : "");
         OnPropertyChanged(nameof(CanApply));
         ApplyCommand.NotifyCanExecuteChanged();
