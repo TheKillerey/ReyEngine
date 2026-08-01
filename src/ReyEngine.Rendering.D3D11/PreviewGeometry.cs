@@ -303,8 +303,9 @@ public static class PreviewGeometry
                 ? new Vector3(grassPivots[i * 3], grassPivots[i * 3 + 1], grassPivots[i * 3 + 2]) - centre
                 : pos;
 
-            // M224: onto TEXCOORD7, which is what the shaders actually read. The decoder has already
-            // applied the per-mesh atlas scale/bias, so these are final atlas coordinates.
+            // M320: onto RAW TEXCOORD7, which is the common source Riot's shader independently transforms
+            // for BAKED_LIGHT_SCALE_AND_BIAS and BAKED_PAINT_UV_SCALE_BIAS. Non-map callers may still pass
+            // final UVs; their scene builder leaves both transforms at identity.
             if (lightmapUvs is not null && lightmapUvs.Length >= (i + 1) * 2)
                 verts[i].Uv7 = new Vector2(lightmapUvs[i * 2], lightmapUvs[i * 2 + 1]);
             if (colors is not null && colors.Length >= (i + 1) * 4)

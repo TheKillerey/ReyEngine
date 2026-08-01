@@ -660,7 +660,8 @@ public sealed class ViewportControl : OpenGlControlBase
             if (Mesh is { } m)
             {
                 var subs = m.SubMeshes.Select(s => (s.StartIndex, s.IndexCount)).ToList();
-                _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax, subs, m.Colors, m.LightmapUvs);
+                _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax,
+                    subs, m.Colors, m.LightmapUvs, m.BakedPaintUvs);
                 _markerSize = Math.Clamp(m.Radius * 0.004f, 4f, 90f); // fixed from the mesh so toggling Show doesn't resize markers
                 _needFrame = true;
                 _texturesDirty = true;

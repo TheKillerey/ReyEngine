@@ -16,6 +16,11 @@ public sealed class MapGeoAsset
     public bool HasVertexColor { get; init; }
     public float[]? LightmapUvs { get; init; }    // 2 floats / vertex, atlas-mapped (uv7*scale+bias); null if none
     public bool HasLightmap { get; init; }
+    /// <summary>M320: raw Texcoord7 before either baked-light or baked-paint atlas transforms. Riot's DX11
+    /// shaders apply both per-mesh transforms independently to this same source channel.</summary>
+    public float[]? RawLightmapUvs { get; init; }
+    /// <summary>M320: final BakedTerrain UVs (raw Texcoord7 * BakedPaintScale + BakedPaintBias) for GL.</summary>
+    public float[]? BakedPaintUvs { get; init; }
     /// <summary>M230: Texcoord5 - the grass clump pivot, 3 floats / vertex, already mesh-transformed. Shared
     /// by every blade in a clump. Only VertexDeform meshes author it; null when no mesh in the file does.</summary>
     public float[]? GrassPivots { get; init; }
@@ -178,6 +183,9 @@ public sealed record MapGeoGroup(
     /// <summary>Atlas transform consumed by BAKED_PAINT_UV_SCALE_BIAS.</summary>
     public Vector2 BakedPaintScale { get; init; } = Vector2.One;
     public Vector2 BakedPaintBias { get; init; } = Vector2.Zero;
+    /// <summary>Per-mesh transform for the BakedLight atlas. DX11 consumes the raw Texcoord7 plus this.</summary>
+    public Vector2 LightmapScale { get; init; } = Vector2.One;
+    public Vector2 LightmapBias { get; init; } = Vector2.Zero;
 }
 
 /// <summary>One source mapgeo mesh: its baked vertex range + original transform, for selection/move.</summary>

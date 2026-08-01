@@ -68,4 +68,44 @@ public class BakedTerrainBindingTests
         var result = Assert.IsAssignableFrom<ICollection>(merge!.Invoke(null, new object[] { map }));
         Assert.Single(result.Cast<object>());
     }
+
+    [Fact]
+    public void Dx11_does_not_merge_adjacent_meshes_with_different_lightmap_transforms()
+    {
+        static MapGeoGroup Group(int start, Vector2 scale) => new("mat", start, 3)
+        {
+            LightmapTexture = "atlas/light.tex",
+            LightmapScale = scale,
+            LightmapBias = new Vector2(0.001f),
+        };
+
+        var map = new MapGeoAsset
+        {
+            Positions = Array.Empty<float>(), Normals = Array.Empty<float>(), Uvs = Array.Empty<float>(),
+            Indices = new uint[6], Groups = new[] { Group(0, new Vector2(0.5f)), Group(3, new Vector2(0.25f)) },
+        };
+
+        var merge = typeof(Dx11SceneBuilder).GetMethod("MergeSlices", BindingFlags.NonPublic | BindingFlags.Static);
+        var result = Assert.IsAssignableFrom<ICollection>(merge!.Invoke(null, new object[] { map }));
+        Assert.Equal(2, result.Count);
+    }
+
+    [Fact]
+    public void Dx11_ignores_unused_lightmap_transform_when_no_lightmap_exists()
+    {
+        var map = new MapGeoAsset
+        {
+            Positions = Array.Empty<float>(), Normals = Array.Empty<float>(), Uvs = Array.Empty<float>(),
+            Indices = new uint[6],
+            Groups = new[]
+            {
+                new MapGeoGroup("mat", 0, 3) { LightmapScale = new Vector2(0.25f) },
+                new MapGeoGroup("mat", 3, 3) { LightmapScale = new Vector2(0.75f) },
+            },
+        };
+
+        var merge = typeof(Dx11SceneBuilder).GetMethod("MergeSlices", BindingFlags.NonPublic | BindingFlags.Static);
+        var result = Assert.IsAssignableFrom<ICollection>(merge!.Invoke(null, new object[] { map }));
+        Assert.Single(result.Cast<object>());
+    }
 }

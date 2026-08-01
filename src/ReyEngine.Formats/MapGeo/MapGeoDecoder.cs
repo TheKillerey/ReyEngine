@@ -31,6 +31,10 @@ public static class MapGeoDecoder
         bool anyColor = false;
         var lightmapUvs = new List<float>();   // atlas-mapped lightmap UV (0,0 when a mesh has none)
         bool anyLightmap = false;
+        var rawLightmapUvs = new List<float>(); // raw Texcoord7, shared source for light + baked paint
+        bool anyRawLightmapUv = false;
+        var bakedPaintUvs = new List<float>();  // atlas-mapped BakedTerrain UV
+        bool anyBakedPaintUv = false;
         // M230: Texcoord5 is the GRASS CLUMP PIVOT - see the read below. Falls back to the vertex's own
         // position, which makes the deform a no-op rather than a divide by zero.
         var grassPivots = new List<float>();
@@ -69,14 +73,26 @@ public static class MapGeoDecoder
                 var meshCol = view.TryGetAccessor(ElementName.PrimaryColor, out var cAcc) ? ReadColor(cAcc, vc) : null;
                 if (meshCol is not null) anyColor = true;
 
+                string? bakedPaintTex = null;
+                foreach (var textureOverride in mesh.TextureOverrides)
+                    if (textureOverrideNames.TryGetValue(textureOverride.Index, out var sampler)
+                        && sampler.Equals("BAKED_DIFFUSE_TEXTURE", StringComparison.OrdinalIgnoreCase))
+                    {
+                        bakedPaintTex = textureOverride.Texture;
+                        break;
+                    }
+
                 // Baked lightmap: a dedicated UV channel (Texcoord7) + the BakedLight channel's atlas
                 // texture + scale/bias. Final atlas UV = uv * scale + bias (see Map12/Bilgewater).
                 var lm = mesh.BakedLight;
-                bool meshHasLm = !string.IsNullOrEmpty(lm.Texture)
-                                 && view.TryGetAccessor(ElementName.Texcoord7, out var lmAcc);
-                Vector2[]? meshLmUv = meshHasLm ? ReadVector2(view.GetAccessor(ElementName.Texcoord7), vc) : null;
+                bool meshHasUv7 = view.TryGetAccessor(ElementName.Texcoord7, out var lmAcc);
+                Vector2[]? meshRawUv7 = meshHasUv7 ? ReadVector2(lmAcc, vc) : null;
+                bool meshHasLm = !string.IsNullOrEmpty(lm.Texture) && meshRawUv7 is not null;
+                bool meshHasBakedPaint = !string.IsNullOrEmpty(bakedPaintTex) && meshRawUv7 is not null;
                 string lmTex = meshHasLm ? lm.Texture : "";
                 if (meshHasLm) anyLightmap = true;
+                if (meshHasUv7) anyRawLightmapUv = true;
+                if (meshHasBakedPaint) anyBakedPaintUv = true;
 
                 // M230: Texcoord5, and it is NOT a UV. Only meshes drawn with Shaders/StaticMesh/VertexDeform
                 // carry it, and staticmesh/vertexdeform's vertex shader spends it as a POSITION:
@@ -121,12 +137,26 @@ public static class MapGeoDecoder
                     if (meshCol is not null) { var c = meshCol[i]; colors.Add(c.X); colors.Add(c.Y); colors.Add(c.Z); colors.Add(c.W); }
                     else { colors.Add(1f); colors.Add(1f); colors.Add(1f); colors.Add(1f); }
 
-                    if (meshLmUv is not null)
+                    if (meshRawUv7 is not null && meshHasLm)
                     {
-                        lightmapUvs.Add(meshLmUv[i].X * lm.Scale.X + lm.Bias.X);
-                        lightmapUvs.Add(meshLmUv[i].Y * lm.Scale.Y + lm.Bias.Y);
+                        lightmapUvs.Add(meshRawUv7[i].X * lm.Scale.X + lm.Bias.X);
+                        lightmapUvs.Add(meshRawUv7[i].Y * lm.Scale.Y + lm.Bias.Y);
                     }
                     else { lightmapUvs.Add(0f); lightmapUvs.Add(0f); }
+
+                    if (meshRawUv7 is not null)
+                    {
+                        rawLightmapUvs.Add(meshRawUv7[i].X);
+                        rawLightmapUvs.Add(meshRawUv7[i].Y);
+                    }
+                    else { rawLightmapUvs.Add(0f); rawLightmapUvs.Add(0f); }
+
+                    if (meshRawUv7 is not null && meshHasBakedPaint)
+                    {
+                        bakedPaintUvs.Add(meshRawUv7[i].X * mesh.BakedPaintScale.X + mesh.BakedPaintBias.X);
+                        bakedPaintUvs.Add(meshRawUv7[i].Y * mesh.BakedPaintScale.Y + mesh.BakedPaintBias.Y);
+                    }
+                    else { bakedPaintUvs.Add(0f); bakedPaintUvs.Add(0f); }
 
                     // Same transform as the position, because it IS a position in that space.
                     if (meshPivot is not null)
@@ -147,15 +177,6 @@ public static class MapGeoDecoder
                 foreach (var en in AllElementNames)
                     if (view.TryGetAccessor(en, out _)) attrs.Add(en.ToString());
                 string? slTex = mesh.StationaryLight.Texture is { Length: > 0 } s ? s : null;
-                string? bakedPaintTex = null;
-                foreach (var textureOverride in mesh.TextureOverrides)
-                    if (textureOverrideNames.TryGetValue(textureOverride.Index, out var sampler)
-                        && sampler.Equals("BAKED_DIFFUSE_TEXTURE", StringComparison.OrdinalIgnoreCase))
-                    {
-                        bakedPaintTex = textureOverride.Texture;
-                        break;
-                    }
-
                 meshes.Add(new MapGeoMesh
                 {
                     Index = meshIndex, Name = meshName, VertexStart = baseVertex, VertexCount = vc,
@@ -193,6 +214,8 @@ public static class MapGeoDecoder
                             BakedPaintTexture = bakedPaintTex ?? "",
                             BakedPaintScale = mesh.BakedPaintScale,
                             BakedPaintBias = mesh.BakedPaintBias,
+                            LightmapScale = lm.Scale,
+                            LightmapBias = lm.Bias,
                         });
                     }
                 }
@@ -206,6 +229,8 @@ public static class MapGeoDecoder
                         BakedPaintTexture = bakedPaintTex ?? "",
                         BakedPaintScale = mesh.BakedPaintScale,
                         BakedPaintBias = mesh.BakedPaintBias,
+                        LightmapScale = lm.Scale,
+                        LightmapBias = lm.Bias,
                     });
                 }
 
@@ -282,6 +307,8 @@ public static class MapGeoDecoder
             HasVertexColor = anyColor,
             LightmapUvs = anyLightmap ? lightmapUvs.ToArray() : null,
             HasLightmap = anyLightmap,
+            RawLightmapUvs = anyRawLightmapUv ? rawLightmapUvs.ToArray() : null,
+            BakedPaintUvs = anyBakedPaintUv ? bakedPaintUvs.ToArray() : null,
             GrassPivots = anyGrassPivot ? grassPivots.ToArray() : null,
             HasGrassPivot = anyGrassPivot,
             Indices = indices.ToArray(),

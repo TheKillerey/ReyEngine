@@ -5953,6 +5953,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     Uvs = m.Uvs,
                     Colors = m.Colors,
                     LightmapUvs = m.LightmapUvs,
+                    BakedPaintUvs = m.BakedPaintUvs,
                     Indices = m.Indices,
                     VertexCount = m.VertexCount,
                     SubMeshes = m.Groups.Select(g => new SubMeshInfo(g.Material, g.StartIndex, g.IndexCount, 0)).ToList(),
@@ -6334,10 +6335,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (mirroredByMesh.TryGetValue(map.Groups[i].MeshIndex, out var mir) && mir)
                 submeshMats[i] = submeshMats[i] with { Mirrored = true };
 
-            // M319: DefaultEnv_Flat_BakedTerrain deliberately points its material sampler at black.tex.
-            // The actual atlas is a per-MESH BAKED_DIFFUSE_TEXTURE override in the mapgeo, and its
-            // BAKED_PAINT_UV_SCALE_BIAS is per mesh too. Applying both here makes the GL approximation
-            // sample the same atlas rectangle as Riot's shader instead of showing a black ground plane.
+            // M319/M320: DefaultEnv_Flat_BakedTerrain deliberately points its material sampler at
+            // black.tex. The actual atlas is a per-MESH BAKED_DIFFUSE_TEXTURE override in mapgeo.
+            // Its final UV is decoded separately from raw Texcoord7 and selected by UsesBakedPaint;
+            // ordinary material UV transforms continue to operate on Texcoord0.
             var bakedPaintPath = map.Groups[i].BakedPaintTexture;
             if (!string.IsNullOrEmpty(bakedPaintPath))
             {
@@ -6345,8 +6346,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (bakedPaint is not null) result[i] = bakedPaint;
                 submeshMats[i] = submeshMats[i] with
                 {
-                    UvScale = map.Groups[i].BakedPaintScale,
-                    UvOffset = map.Groups[i].BakedPaintBias,
+                    UsesBakedPaint = true,
                 };
                 if (bakedPaint is not null) bakedPaintGroups++;
             }

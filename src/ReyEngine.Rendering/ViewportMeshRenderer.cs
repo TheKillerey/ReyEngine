@@ -18,6 +18,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mMask, _mGradient, _mEmissive, _mHasMask, _mHasGradient, _mHasEmissive;
     private int _mMatCap, _mMatCapMask, _mHasMatCap, _mHasMatCapMask, _mView;
     private int _mUvScaleOffset, _mUvRot, _mUsesRim, _mUsesSpec;   // M32: per-material UV + feature flags
+    private int _mUsesBakedPaint;                                  // M320: base texture samples transformed Texcoord7
     private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
     private int _mVertexBakedLight, _mVertexBakedScale;            // M89: NVR vertex-colour baked light
     private int _mVertexLightmap, _mVertexLightmapScale;           // M142.4: PrimaryColor AS baked lightmap
@@ -70,8 +71,8 @@ public sealed class ViewportMeshRenderer : IDisposable
     private Vector3 _sunColor = new(0.75f);
     private Vector3 _skyLight = new(0.35f);
 
-    private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo;
-    private bool _hasVertexColor, _hasLightmapUv;
+    private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo, _bakedPaintUvVbo;
+    private bool _hasVertexColor, _hasLightmapUv, _hasBakedPaintUv;
     private int _indexCount, _wireIndexCount;
     private bool _hasMesh;
     private float[]? _interleaved; // kept so per-frame skinning can update pos+normal in place
@@ -173,6 +174,7 @@ public sealed class ViewportMeshRenderer : IDisposable
         // M150: shaderMacros NO_BAKED_LIGHTING / DISABLE_DEPTH_FOG.
         public bool NoBakedLighting;
         public bool DisableDepthFog;
+        public bool UsesBakedPaint;   // M320: diffuse comes from mesh-owned atlas on transformed Texcoord7
 
         public static SubmeshDraw Create(int start, int count) =>
             new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One, AlphaCutoff = 0.35f };
@@ -199,7 +201,8 @@ public sealed class ViewportMeshRenderer : IDisposable
         bool CompositeGround = false,
         // M150: Riot shaderMacros — NO_BAKED_LIGHTING ignores the baked lightmap on this surface,
         // DISABLE_DEPTH_FOG excludes it from distance fog (skyboxes, FX, water use these).
-        bool NoBakedLighting = false, bool DisableDepthFog = false)
+        bool NoBakedLighting = false, bool DisableDepthFog = false,
+        bool UsesBakedPaint = false)
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
@@ -210,6 +213,7 @@ layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUv;
 layout(location = 3) in vec4 aColor;   // PrimaryColor (defaults to white via VertexAttrib4f when absent)
 layout(location = 4) in vec2 aLmUv;    // baked-lightmap atlas UV (already uv7*scale+bias; 0 when absent)
+layout(location = 5) in vec2 aBakedPaintUv; // mesh-owned baked diffuse UV (uv7*paintScale+paintBias)
 uniform mat4 uMvp;
 uniform mat4 uModel;
 out vec3 vN;
@@ -217,11 +221,13 @@ out vec2 vUv;
 out vec3 vWorld;
 out vec4 vColor;
 out vec2 vLmUv;
+out vec2 vBakedPaintUv;
 void main() {
     vN = mat3(uModel) * aNormal;
     vUv = aUv;
     vColor = aColor;
     vLmUv = aLmUv;
+    vBakedPaintUv = aBakedPaintUv;
     vWorld = (uModel * vec4(aPos, 1.0)).xyz;
     gl_Position = uMvp * vec4(aPos, 1.0);
 }";
@@ -239,6 +245,7 @@ in vec2 vUv;
 in vec3 vWorld;
 in vec4 vColor;
 in vec2 vLmUv;
+in vec2 vBakedPaintUv;
 out vec4 FragColor;
 uniform vec3 uLight;
 uniform vec3 uSunColor;
@@ -263,6 +270,7 @@ uniform vec4 uUvScaleOffset;   // xy = scale, zw = offset (identity = 1,1,0,0)
 uniform float uUvRot;          // radians, rotate about (0.5, 0.5); 0 = none
 uniform int uUsesRim;          // fresnel rim highlight only when the material profile asks for it
 uniform int uUsesSpec;         // specular highlight only when the material profile asks for it
+uniform int uUsesBakedPaint;   // base texture uses mesh-owned transformed Texcoord7 instead of Texcoord0
 uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map baked-term/mask data)
 uniform int uVertexBakedLight; // M89: 1 = add PrimaryColor as a baked light term (NVR ground shading)
 uniform float uVertexBakedScale;
@@ -347,7 +355,7 @@ void main() {
     // with an away-pointing normal (dark/black). gl_FrontFacing tells us which side we're on; flip so the
     // normal faces the viewer. Single-sided materials keep their normal (their backfaces are culled anyway).
     if (uTwoSided == 1 && !gl_FrontFacing) n = -n;
-    vec2 uv = xformUv(vUv);
+    vec2 uv = uUsesBakedPaint == 1 ? vBakedPaintUv : xformUv(vUv);
     // M34 texture address: decals use Clamp so their out-of-[0,1] UVs show the decal ONCE (edge texel,
     // usually transparent -> cut out) instead of GL_REPEAT tiling it across the whole mesh.
     if (uClampUv.x > 0.5) uv.x = clamp(uv.x, 0.0, 1.0);
@@ -708,6 +716,7 @@ void main() { FragColor = uColor; }";
         _mUvRot = gl.GetUniformLocation(_meshProgram, "uUvRot");
         _mUsesRim = gl.GetUniformLocation(_meshProgram, "uUsesRim");
         _mUsesSpec = gl.GetUniformLocation(_meshProgram, "uUsesSpec");
+        _mUsesBakedPaint = gl.GetUniformLocation(_meshProgram, "uUsesBakedPaint");
         _mHasVertexColor = gl.GetUniformLocation(_meshProgram, "uHasVertexColor");
         _mVertexBakedLight = gl.GetUniformLocation(_meshProgram, "uVertexBakedLight");
         _mVertexBakedScale = gl.GetUniformLocation(_meshProgram, "uVertexBakedScale");
@@ -1009,7 +1018,7 @@ void main(){
 
     public unsafe void SetMesh(float[] positions, float[] normals, float[] uvs, uint[] indices,
         int vertexCount, Vector3 min, Vector3 max, IReadOnlyList<(int start, int count)> submeshes,
-        float[]? colors = null, float[]? lightmapUvs = null)
+        float[]? colors = null, float[]? lightmapUvs = null, float[]? bakedPaintUvs = null)
     {
         if (!_ready) return;
         DeleteMeshBuffers();
@@ -1079,6 +1088,25 @@ void main(){
         {
             _gl.DisableVertexAttribArray(4);
             _gl.VertexAttrib2(4, 0f, 0f);
+        }
+
+        // M320: BakedTerrain samples the SAME raw Texcoord7 as BakedLight, but with its own atlas
+        // transform. The decoder supplies the final paint UV separately so GL can keep its existing final
+        // lightmap UV stream and still match Riot's shader exactly.
+        _hasBakedPaintUv = bakedPaintUvs is { Length: > 0 } && bakedPaintUvs.Length >= vertexCount * 2;
+        if (_hasBakedPaintUv)
+        {
+            _bakedPaintUvVbo = _gl.GenBuffer();
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _bakedPaintUvVbo);
+            fixed (float* bp = bakedPaintUvs)
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(bakedPaintUvs!.Length * sizeof(float)), bp, BufferUsageARB.StaticDraw);
+            _gl.EnableVertexAttribArray(5);
+            _gl.VertexAttribPointer(5, 2, VertexAttribPointerType.Float, false, 2 * sizeof(float), (void*)0);
+        }
+        else
+        {
+            _gl.DisableVertexAttribArray(5);
+            _gl.VertexAttrib2(5, 0f, 0f);
         }
 
         _ebo = _gl.GenBuffer();
@@ -1506,6 +1534,7 @@ void main(){
         _submeshes[index].CompositeGround = mat.CompositeGround;   // M142
         _submeshes[index].NoBakedLighting = mat.NoBakedLighting;   // M150
         _submeshes[index].DisableDepthFog = mat.DisableDepthFog;
+        _submeshes[index].UsesBakedPaint = mat.UsesBakedPaint;
         _drawOrderDirty = true;
     }
 
@@ -1531,6 +1560,7 @@ void main(){
             _submeshes[i].CompositeGround = false;   // M142
             _submeshes[i].NoBakedLighting = false;   // M150
             _submeshes[i].DisableDepthFog = false;
+            _submeshes[i].UsesBakedPaint = false;
         }
         _drawOrderDirty = true;
     }
@@ -1996,6 +2026,7 @@ void main(){
                     _gl.Uniform1(_mUvRot, s.UvRotationRadians);
                     _gl.Uniform1(_mUsesRim, s.UsesRim ? 1 : 0);
                     _gl.Uniform1(_mUsesSpec, s.UsesSpecular ? 1 : 0);
+                    _gl.Uniform1(_mUsesBakedPaint, (s.UsesBakedPaint && _hasBakedPaintUv) ? 1 : 0);
                     _gl.Uniform1(_mAlphaMode, s.AlphaMode);   // M34: 0 opaque · 1 cutout · 2 transparent
                     _gl.Uniform1(_mAlphaCutoff, s.AlphaCutoff);
                     _gl.Uniform1(_mHasGrassTint, (s.UsesGrassTint && _grassTintTex != 0) ? 1 : 0);   // M78
@@ -2120,6 +2151,7 @@ void main(){
             _gl.Uniform1(_mHasMatCap, 0); _gl.Uniform1(_mHasMatCapMask, 0); _gl.Uniform1(_mHasLightmap, 0);
             _gl.Uniform1(_mHasGrassTint, 0);   // M78: props never grass-tint
             _gl.Uniform1(_mUsesRim, 0); _gl.Uniform1(_mUsesSpec, 0);
+            _gl.Uniform1(_mUsesBakedPaint, 0);
             _gl.Uniform1(_mAlphaMode, 1); _gl.Uniform1(_mAlphaCutoff, 0.35f);   // cutout so fur/wing alpha reads
             _gl.Uniform4(_mUvScaleOffset, 1f, 1f, 0f, 0f); _gl.Uniform1(_mUvRot, 0f);
             _gl.Uniform2(_mClampUv, 0f, 0f); _gl.Uniform4(_mTint, 1f, 1f, 1f, 1f); _gl.Uniform1(_mTintTextured, 0); _gl.Uniform1(_mMirrored, 0);
@@ -2390,9 +2422,11 @@ void main(){
         _gl.DeleteBuffer(_wireEbo);
         if (_colorVbo != 0) { _gl.DeleteBuffer(_colorVbo); _colorVbo = 0; }
         if (_lightmapUvVbo != 0) { _gl.DeleteBuffer(_lightmapUvVbo); _lightmapUvVbo = 0; }
+        if (_bakedPaintUvVbo != 0) { _gl.DeleteBuffer(_bakedPaintUvVbo); _bakedPaintUvVbo = 0; }
         _gl.DeleteVertexArray(_vao);
         _hasVertexColor = false;
         _hasLightmapUv = false;
+        _hasBakedPaintUv = false;
         _hasMesh = false;
     }
 

@@ -96,9 +96,10 @@ public static class Dx11SceneBuilder
     {
         var t0 = DateTime.UtcNow;
 
+        bool usesRawUv7 = map.RawLightmapUvs is not null;
         var mesh = PreviewGeometry.FromLeagueArrays(
             "viewport", map.Positions.Length / 3,
-            map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices,
+            map.Positions, map.Normals, map.Uvs, map.Colors, map.RawLightmapUvs ?? map.LightmapUvs, map.Indices,
             grassPivots: map.GrassPivots,
             // M253: authored world coordinates, NOT recentred. The editor camera is shared with the GL
             // viewport, which draws the map where the data puts it.
@@ -194,6 +195,16 @@ public static class Dx11SceneBuilder
             if (perms is not null && perms.TryGetParameterDefaults(b.RenderShader!, out var defs))
                 foreach (var (dn, dv) in defs)
                     if (!authored.Contains(dn)) parameters.Add((dn, dv));
+
+            // M320: the Riot shader receives RAW Texcoord7 and applies the baked-light and baked-paint
+            // atlas transforms separately. Older/synthetic callers without RawLightmapUvs retain the
+            // renderer's identity fallback because their LightmapUvs are already transformed.
+            if (usesRawUv7 && slice.Lightmap.Length > 0)
+            {
+                parameters.RemoveAll(x => x.Item1.Equals("BAKED_LIGHT_SCALE_AND_BIAS", StringComparison.OrdinalIgnoreCase));
+                parameters.Add(("BAKED_LIGHT_SCALE_AND_BIAS",
+                    BakedPaintUvScaleBias(slice.LightmapScale, slice.LightmapBias)));
+            }
 
             if (slice.BakedPaint.Length > 0)
             {
@@ -387,6 +398,7 @@ public static class Dx11SceneBuilder
     /// not know the RULES - only that groups differing in these three inputs must not be fused - so the
     /// rules stay in MapVisibilityResolver, shared with the OpenGL viewport.</para>
     private static List<(string Material, int Start, int Count, string Lightmap,
+        Vector2 LightmapScale, Vector2 LightmapBias,
         string BakedPaint, Vector2 BakedPaintScale, Vector2 BakedPaintBias, int Group)> MergeSlices(MapGeoAsset map)
     {
         // Sourced exactly as MainWindowViewModel.ApplyMapVisibility does, including the live per-mesh
@@ -404,6 +416,7 @@ public static class Dx11SceneBuilder
         var ordered = map.Groups
             .Select((g, i) => (g.Material, Start: g.StartIndex, Count: g.IndexCount,
                                Lightmap: g.LightmapTexture,
+                               g.LightmapScale, g.LightmapBias,
                                BakedPaint: g.BakedPaintTexture,
                                g.BakedPaintScale, g.BakedPaintBias,
                                Group: i, Id: Identity(g)))
@@ -411,6 +424,7 @@ public static class Dx11SceneBuilder
             .ToList();
 
         var merged = new List<(string Material, int Start, int Count, string Lightmap,
+            Vector2 LightmapScale, Vector2 LightmapBias,
             string BakedPaint, Vector2 BakedPaintScale, Vector2 BakedPaintBias, int Group)>();
         (int Flags, uint Ctrl, uint Region) lastId = default;
         foreach (var s in ordered)
@@ -422,6 +436,8 @@ public static class Dx11SceneBuilder
                     && lastId == s.Id
                     && string.Equals(p.Material, s.Material, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(p.Lightmap, s.Lightmap, StringComparison.OrdinalIgnoreCase)
+                    && (p.Lightmap.Length == 0
+                        || p.LightmapScale == s.LightmapScale && p.LightmapBias == s.LightmapBias)
                     && string.Equals(p.BakedPaint, s.BakedPaint, StringComparison.OrdinalIgnoreCase)
                     // Scale/bias only affect a real baked-paint binding. Ignoring the unused values keeps
                     // ordinary adjacent meshes coalesced exactly as before M319.
@@ -429,7 +445,7 @@ public static class Dx11SceneBuilder
                         || p.BakedPaintScale == s.BakedPaintScale && p.BakedPaintBias == s.BakedPaintBias))
                 { merged[^1] = p with { Count = p.Count + s.Count }; continue; }
             }
-            merged.Add((s.Material, s.Start, s.Count, s.Lightmap,
+            merged.Add((s.Material, s.Start, s.Count, s.Lightmap, s.LightmapScale, s.LightmapBias,
                 s.BakedPaint, s.BakedPaintScale, s.BakedPaintBias, s.Group));
             lastId = s.Id;
         }
