@@ -1911,6 +1911,35 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var (name, p) in profs)
                 if (p.IsVertexDeform) excludeMaterials.Add(name);
 
+        // M314: DynamicEffect historically flowed through this builder automatically, but its new
+        // lightmap cannot render in game without our experimental DX11 companion cache. Make the
+        // geometry an explicit creator opt-in instead of silently committing to that second step.
+        if (!settings.IncludeDynamicEffectMeshes)
+        {
+            if (!TryResolveMaterialsBin(entry.Path, out var layoutBinEntry))
+            {
+                _log.Error("Layout", "No materials.bin was found, so DynamicEffect meshes cannot be safely filtered.");
+                return null;
+            }
+            try
+            {
+                var layoutDocument = Formats.Materials.MaterialDocument.Parse(
+                    ReadAsset(layoutBinEntry.PathHash), ResolveBinName);
+                foreach (var material in layoutDocument.Materials)
+                    if (string.Equals(material.RenderShader ?? material.ShaderName,
+                            Services.ExperimentalDynamicEffectShaderService.RenderShader,
+                            StringComparison.OrdinalIgnoreCase))
+                        excludeMaterials.Add(material.Name);
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Layout", "DynamicEffect materials could not be identified for layout filtering: " + ex.Message);
+                return null;
+            }
+        }
+
+        string atlasFolder = settings.ResolveOutputFolder(entry.Path);
+        int atlasStartIndex = NextGeneratedAtlasIndex(_currentMap, atlasFolder);
         var (result, bytes) = await Task.Run(() =>
         {
             // TryReadEditable refuses anything we cannot reproduce byte-for-byte, so we never rewrite a
@@ -1923,10 +1952,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 AtlasResolution = settings.AtlasResolution,
                 TexelDensity = settings.TexelDensity,
                 Padding = settings.Padding,
-                AtlasPathFormat = settings.ResolveOutputFolder(entry.Path) + "{0}.tex",
-                // M163: don't spend atlas space on surfaces nothing will sample — VertexDeform foliage
-                // (it sways at runtime, so baked light would slide off it) and NO_BAKED_LIGHTING
-                // materials. Render-region meshes are skipped by the builder's own default.
+                AtlasStartIndex = atlasStartIndex,
+                AtlasPathFormat = atlasFolder + "{0}.tex",
+                // M163/M314: don't spend atlas space on moving VertexDeform foliage or on the
+                // DynamicEffect materials the creator left opted out. Render-region meshes are skipped
+                // by the builder's own default.
                 ExcludeMaterials = excludeMaterials,
             });
             return (r, map.Write());
@@ -1956,7 +1986,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (result.Warnings.Count > 5) _log.Warn("Layout", $"(+{result.Warnings.Count - 5} more warnings)");
         _log.Success("Layout", $"Generated a lightmap layout: {result.MeshesLaidOut} mesh(es) over {result.AtlasCount} atlas(es) " +
                                $"from {result.GeometriesUnwrapped} unique geometries" +
-                               (result.MeshesExcluded > 0 ? $", {result.MeshesExcluded} excluded (foliage / render regions)" : "") +
+                               (result.MeshesExcluded > 0 ? $", {result.MeshesExcluded} excluded (material filter / render regions)" : "") +
                                (result.MeshesSkipped > 0 ? $", {result.MeshesSkipped} skipped" : "") +
                                (macrosCleared > 0 ? $"; cleared NO_BAKED_LIGHTING on {macrosCleared} material(s)" : "") +
                                $". Mapgeo rewritten ({bytes.Length:n0} bytes) — now bake into it.");
@@ -1966,6 +1996,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(NeedsLightmapLayout));
         OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
         return result;
+    }
+
+    /// <summary>M314: incremental layout passes must not reuse atlas 0. This is what allows a creator
+    /// to opt DynamicEffect meshes in after first generating a conservative static-only layout.</summary>
+    private static int NextGeneratedAtlasIndex(Formats.MapGeo.MapGeoAsset map, string atlasFolder)
+    {
+        int next = 0;
+        foreach (string path in map.Groups.Select(g => g.LightmapTexture))
+        {
+            if (string.IsNullOrWhiteSpace(path)
+                || !path.StartsWith(atlasFolder, StringComparison.OrdinalIgnoreCase)) continue;
+            string file = Path.GetFileName(path);
+            int dot = file.IndexOf('.');
+            string indexText = dot < 0 ? Path.GetFileNameWithoutExtension(file) : file[..dot];
+            if (int.TryParse(indexText, out int index) && index >= next) next = index + 1;
+        }
+        return next;
     }
 
     /// <summary>

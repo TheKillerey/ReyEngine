@@ -35,6 +35,11 @@ public sealed class BakeSettings
     /// <summary>Write the full mip chain. Riot's atlases always carry one (12 levels at 2048).</summary>
     public bool GenerateMips { get; set; } = true;
 
+    /// <summary>M314: opt SRX_DynamicEffect meshes into layout generation. These materials need the
+    /// experimental companion shader-cache patch before the game can sample their generated atlas, so
+    /// fresh layouts keep them excluded unless the creator explicitly enables both parts of the workflow.</summary>
+    public bool IncludeDynamicEffectMeshes { get; set; }
+
     // ---- quality ----
 
     /// <summary>Shadow-ray samples per texel for the sun. 1 = hard shadows; higher softens the

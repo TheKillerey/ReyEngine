@@ -83,6 +83,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
             Status = r is null
                 ? "Could not generate a layout for this map — see the console for why."
                 : $"Layout generated: {r.MeshesLaidOut} mesh(es) over {r.AtlasCount} atlas(es)" +
+                  (r.MeshesExcluded > 0 ? $"; {r.MeshesExcluded} intentionally excluded" : "") +
                   (r.Warnings.Count > 0 ? $" ({r.Warnings.Count} warning(s), see console)" : "") + ". Now bake.";
             Stage = r is null ? "Failed" : "Layout ready";
         }
@@ -98,6 +99,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
     [ObservableProperty] private int _dilation = 2;
     [ObservableProperty] private bool _compressBc3 = true;
     [ObservableProperty] private bool _generateMips = true;
+    [ObservableProperty] private bool _includeDynamicEffectMeshes;
 
     // ---- quality ----
     [ObservableProperty] private int _sunSamples = 16;
@@ -142,6 +144,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
         Dilation = Dilation,
         CompressBc3 = CompressBc3,
         GenerateMips = GenerateMips,
+        IncludeDynamicEffectMeshes = IncludeDynamicEffectMeshes,
         SunSamples = SunSamples,
         PointLightSamples = PointLightSamples,
         AmbientOcclusionSamples = AmbientOcclusionSamples,
@@ -179,7 +182,8 @@ public sealed partial class LightBakeViewModel : ObservableObject
         LayoutSummary = !layout.MapOpen ? ""
             : layout.Missing == 0
                 ? $"All {layout.Total} mesh(es) already have lightmap UVs — nothing to generate."
-                : $"{layout.Missing} of {layout.Total} mesh(es) have no lightmap UVs.";
+                : $"{layout.Missing} of {layout.Total} mesh(es) have no lightmap UVs. "
+                  + "Animated, render-region, or opted-out DynamicEffect meshes can remain intentionally excluded.";
 
         var inputs = SafeGatherForEstimate();
         if (inputs is null)
