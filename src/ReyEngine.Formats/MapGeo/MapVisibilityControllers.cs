@@ -4,86 +4,68 @@ using ReyEngine.Formats.Meta;
 
 namespace ReyEngine.Formats.MapGeo;
 
-/// <summary>The dragon + baron layer bits a mesh's visibility controller resolves to.</summary>
-public sealed class BaronResolution
+/// <summary>The per-axis masks produced by one map visibility controller graph.</summary>
+public sealed class VisibilityControllerResolution
 {
-    public int DragonBits;
-    public int BaronBits;
-    public bool NotVisible;   // ParentMode 3: visible OUTSIDE the resolved bits rather than within them
+    public Dictionary<uint, int> AxisBits { get; } = new();
+    public bool NotVisible;
 
-    public static readonly BaronResolution Unconstrained = new();
-
-    /// <summary>True if this mesh should show for the chosen baron state (bit 0 = "All").</summary>
-    public bool VisibleForBaron(int baronBit)
-    {
-        if (baronBit == 0 || BaronBits == 0) return true; // no selection, or not baron-constrained
-        bool inSet = (BaronBits & baronBit) != 0;
-        return NotVisible ? !inSet : inSet;
-    }
+    public int BitsFor(uint axisHash) => AxisBits.GetValueOrDefault(axisHash);
+    public void Add(uint axisHash, int bits) => AxisBits[axisHash] = BitsFor(axisHash) | bits;
+    public static readonly VisibilityControllerResolution Unconstrained = new();
 }
 
 /// <summary>
-/// Decodes League map visibility controllers (the baron-pit override system) out of a map's
-/// <c>.materials.bin</c> objects, then resolves a mesh's <c>VisibilityControllerPathHash</c> into its
-/// dragon + baron layer bits. Mirrors the MapgeoAddon baron-hash parser:
-/// <list type="bullet">
-/// <item>Dragon Layer Controller (0xc406a533): field 0x27639032 = dragon bit.</item>
-/// <item>Baron Layer Controller (0xec733fe2): field 0x8bff8cdf = baron bit.</item>
-/// <item>ChildMapVisibilityController (0xe21083b5): Parents (0x3044938a) links + ParentMode (0xc9d3f06a) — recurse.</item>
-/// </list>
+/// Decodes visibility-controller graphs from a map's sibling bins. The state names and available bits come
+/// from the shipping map bin; these hidden controller classes only connect a graph leaf to one of those axes.
 /// </summary>
 public sealed class MapVisibilityControllers
 {
-    private const uint DragonController = 0xc406a533;
-    private const uint BaronController = 0xec733fe2;
-    private const uint ChildController = 0xe21083b5;
+    private const uint PrimaryController = 0xc406a533;
+    private const uint BaronPitController = 0xec733fe2;
+    private const uint ChildController = 0xe21083b5;       // ChildMapVisibilityController
     private const uint FieldParents = 0x3044938a;
     private const uint FieldParentMode = 0xc9d3f06a;
-    private const uint FieldDragonBit = 0x27639032;
-    private const uint FieldBaronBit = 0x8bff8cdf;
+    private const uint FieldPrimaryBits = 0x27639032;
+    private const uint FieldBaronPitBits = 0x8bff8cdf;     // recovered: baronpitflags
 
     private readonly Dictionary<uint, BinTreeObject> _controllers = new();
-    private readonly Dictionary<uint, BaronResolution> _cache = new();
+    private readonly Dictionary<uint, VisibilityControllerResolution> _cache = new();
+    private readonly MapVisibilityDefinition _definition;
+
+    private MapVisibilityControllers(MapVisibilityDefinition definition) => _definition = definition;
 
     public int Count => _controllers.Count;
-    public int BaronControllerCount => _controllers.Values.Count(o => o.ClassHash == BaronController);
+    public int LeafControllerCount => _controllers.Values.Count(o => o.ClassHash is PrimaryController or BaronPitController);
 
-    /// <summary>M105: one known controller, resolved for display in the layer-assignment dropdown.</summary>
-    public readonly record struct ControllerInfo(uint Hash, string Kind, int DragonBits, int BaronBits, bool NotVisible)
+    public readonly record struct ControllerInfo(uint Hash, string Kind, IReadOnlyList<string> States, bool NotVisible)
     {
-        public string Label
-        {
-            get
-            {
-                int dragonBits = DragonBits, baronBits = BaronBits;   // structs can't capture 'this' in lambdas
-                var dragons = MapVisibility.Dragons.Where(d => (dragonBits & d.Bit) != 0).Select(d => d.Name).ToList();
-                var barons = MapVisibility.Barons.Where(b => (baronBits & b.Bit) != 0).Select(b => b.Name).ToList();
-                var parts = new List<string> { $"{Kind} 0x{Hash:x8}" };
-                if (dragons.Count > 0) parts.Add("dragon " + string.Join("/", dragons));
-                if (barons.Count > 0) parts.Add("baron " + string.Join("/", barons));
-                if (NotVisible) parts.Add("inverted");
-                return string.Join(" · ", parts);
-            }
-        }
+        public string Label => string.Join(" / ", new[] { $"{Kind} 0x{Hash:x8}" }
+            .Concat(States)
+            .Concat(NotVisible ? new[] { "inverted" } : Array.Empty<string>()));
     }
 
-    /// <summary>Every controller found in the map's bins, baron controllers first (M105).</summary>
-    public IReadOnlyList<ControllerInfo> List() =>
-        _controllers.Values
-            .Select(o => 
+    public IReadOnlyList<ControllerInfo> List() => _controllers.Values
+        .Select(o =>
+        {
+            var resolution = Resolve(o.PathHash);
+            var states = new List<string>();
+            foreach (var axis in _definition.Axes)
             {
-                var r = Resolve(o.PathHash);
-                string kind = o.ClassHash == BaronController ? "Baron" : o.ClassHash == DragonController ? "Dragon" : "Child";
-                return new ControllerInfo(o.PathHash, kind, r.DragonBits, r.BaronBits, r.NotVisible);
-            })
-            .OrderBy(ci => ci.Kind == "Baron" ? 0 : ci.Kind == "Dragon" ? 1 : 2)
-            .ThenBy(ci => ci.Hash)
-            .ToList();
+                int bits = resolution.BitsFor(axis.DefinitionFieldHash);
+                var names = axis.Layers.Where(l => (bits & l.Bit) != 0).Select(l => l.Name).ToList();
+                if (names.Count > 0) states.Add($"{axis.Name}: {string.Join(", ", names)}");
+            }
+            string kind = o.ClassHash == ChildController ? "Combined" : "Layer";
+            return new ControllerInfo(o.PathHash, kind, states, resolution.NotVisible);
+        })
+        .OrderBy(ci => ci.Kind)
+        .ThenBy(ci => ci.Hash)
+        .ToList();
 
-    /// <summary>Index every controller object found across the given bin blobs (tolerant parse).</summary>
-    public static MapVisibilityControllers Build(IEnumerable<byte[]> bins)
+    public static MapVisibilityControllers Build(IEnumerable<byte[]> bins, MapVisibilityDefinition? definition = null)
     {
-        var m = new MapVisibilityControllers();
+        var result = new MapVisibilityControllers(definition ?? MapVisibilityDefinition.Empty);
         foreach (var data in bins)
         {
             if (data is not { Length: > 0 }) continue;
@@ -91,38 +73,38 @@ public sealed class MapVisibilityControllers
             try { bin = SafeBinTree.Parse(data); }
             catch { continue; }
             foreach (var o in bin.Objects.Values)
-                if (o.ClassHash is DragonController or BaronController or ChildController)
-                    m._controllers[o.PathHash] = o; // later bins win on duplicate hash
+                if (o.ClassHash is PrimaryController or BaronPitController or ChildController)
+                    result._controllers[o.PathHash] = o;
         }
-        return m;
+        return result;
     }
 
-    public BaronResolution Resolve(uint controllerHash)
+    public VisibilityControllerResolution Resolve(uint controllerHash)
     {
-        if (controllerHash == 0) return BaronResolution.Unconstrained;
+        if (controllerHash == 0) return VisibilityControllerResolution.Unconstrained;
         if (_cache.TryGetValue(controllerHash, out var hit)) return hit;
-        var r = new BaronResolution();
-        Resolve(controllerHash, r, new HashSet<uint>());
-        _cache[controllerHash] = r;
-        return r;
+        var result = new VisibilityControllerResolution();
+        Resolve(controllerHash, result, new HashSet<uint>());
+        _cache[controllerHash] = result;
+        return result;
     }
 
-    private void Resolve(uint hash, BaronResolution r, HashSet<uint> visited)
+    private void Resolve(uint hash, VisibilityControllerResolution result, HashSet<uint> visited)
     {
         if (hash == 0 || !visited.Add(hash) || !_controllers.TryGetValue(hash, out var o)) return;
         switch (o.ClassHash)
         {
-            case DragonController:
-                if (TryU8(o, FieldDragonBit, out var d)) r.DragonBits |= d;
+            case PrimaryController:
+                if (TryU8(o, FieldPrimaryBits, out var primary)) result.Add(MapVisibility.PrimaryAxisHash, primary);
                 break;
-            case BaronController:
-                if (TryU8(o, FieldBaronBit, out var b)) r.BaronBits |= b;
+            case BaronPitController:
+                if (TryU8(o, FieldBaronPitBits, out var secondary)) result.Add(MapVisibility.BaronPitAxisHash, secondary);
                 break;
             case ChildController:
-                if (TryU32(o, FieldParentMode, out var pm) && pm == 3) r.NotVisible = true;
-                if (o.Properties.TryGetValue(FieldParents, out var p) && p is BinTreeContainer c)
-                    foreach (var el in c.Elements.OfType<BinTreeObjectLink>())
-                        Resolve(el.Value, r, visited);
+                if (TryU32(o, FieldParentMode, out var mode) && mode == 3) result.NotVisible = true;
+                if (o.Properties.TryGetValue(FieldParents, out var p) && p is BinTreeContainer parents)
+                    foreach (var link in parents.Elements.OfType<BinTreeObjectLink>())
+                        Resolve(link.Value, result, visited);
                 break;
         }
     }
@@ -130,12 +112,14 @@ public sealed class MapVisibilityControllers
     private static bool TryU8(BinTreeObject o, uint field, out int value)
     {
         if (o.Properties.TryGetValue(field, out var p) && p is BinTreeU8 u) { value = u.Value; return true; }
-        value = 0; return false;
+        value = 0;
+        return false;
     }
 
     private static bool TryU32(BinTreeObject o, uint field, out uint value)
     {
         if (o.Properties.TryGetValue(field, out var p) && p is BinTreeU32 u) { value = u.Value; return true; }
-        value = 0; return false;
+        value = 0;
+        return false;
     }
 }

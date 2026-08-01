@@ -14,21 +14,20 @@
                FontSize="11" FontWeight="SemiBold" Margin="8,4,8,2" />
 
     <!-- scene-level visibility layers -->
-    <StackPanel DockPanel.Dock="Top" Margin="8,2,8,4" Spacing="3">
+    <StackPanel DockPanel.Dock="Top" Margin="8,2,8,4" Spacing="3" IsVisible="{Binding HasVisibilityAxes}">
       <TextBlock Classes="cardTitle" Text="VISIBILITY LAYERS" />
-      <Grid ColumnDefinitions="*,*">
-        <StackPanel Grid.Column="0" Margin="0,0,3,0">
-          <TextBlock Text="Dragon" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
-          <ComboBox ItemsSource="{Binding DragonOptions}" SelectedIndex="{Binding SelectedDragonIndex}"
-                    FontSize="10" HorizontalAlignment="Stretch" />
-        </StackPanel>
-        <StackPanel Grid.Column="1" Margin="3,0,0,0">
-          <TextBlock Text="Baron" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
-          <ComboBox ItemsSource="{Binding BaronOptions}" SelectedIndex="{Binding SelectedBaronIndex}"
-                    FontSize="10" HorizontalAlignment="Stretch"
-                    ToolTip.Tip="Baron pit state. Resolves the map's visibility controllers (Base/Cup/Tunnel/Upgraded) and hides meshes that don't belong to the selected state." />
-        </StackPanel>
-      </Grid>
+      <ItemsControl ItemsSource="{Binding VisibilityAxes}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <StackPanel Margin="0,0,0,3">
+              <TextBlock Text="{Binding Name}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <ComboBox ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}"
+                        FontSize="10" HorizontalAlignment="Stretch"
+                        ToolTip.Tip="States are read from this map's shipping .bin and applied through its mapgeo masks and visibility controllers." />
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
     </StackPanel>
 
     <!-- view toggles (what renders in the viewport)

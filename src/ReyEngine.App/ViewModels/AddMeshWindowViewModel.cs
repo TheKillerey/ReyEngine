@@ -94,10 +94,11 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
 
     private ImportedScene? _scene;
 
-    public AddMeshWindowViewModel()
+    public void SetVisibilityLayers(IEnumerable<VisibilityLayer> layers)
     {
-        foreach (var d in MapVisibility.Dragons)
-            Layers.Add(new LayerToggle { Name = d.Name, Bit = d.Bit });
+        Layers.Clear();
+        foreach (var layer in layers)
+            Layers.Add(new LayerToggle { Name = layer.Name, Bit = layer.Bit });
     }
 
     [RelayCommand]

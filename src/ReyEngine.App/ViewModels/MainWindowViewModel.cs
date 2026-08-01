@@ -249,17 +249,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M195 (4.4): particles now resolve through the SAME controller path meshes already use
     /// (see UpdateSubmeshVisibility). 4,237 placements bind a VisibilityController that this ignored, so
-    /// they stayed visible under every baron/dragon selection while the meshes around them switched.
-    /// Placements with no controller fall through to the dragon-bit test exactly as before.</summary>
+    /// they stayed visible while the meshes around them switched. Placements use the same map-defined
+    /// axes and controller graph as geometry.</summary>
     private bool IsParticleVisible(MapParticlePlacement particle) =>
         particle.VisibilityControllerHash == 0
-            ? MapVisibility.VisibleForDragon(particle.VisibilityFlags, CurrentDragonBit)
-            : (_visibilityResolver ??= new MapVisibilityResolver(_mapControllers))
-                .IsVisible(particle.VisibilityFlags, particle.VisibilityControllerHash,
-                           CurrentDragonBit, SelectedBaronIndex <= 0 ? 0 : MapVisibility.Barons[SelectedBaronIndex - 1].Bit);
+            ? MapVisibility.VisibleForMask(particle.VisibilityFlags, _mapVisibility.Primary, CurrentPrimaryVisibilityBit)
+            : (_visibilityResolver ??= new MapVisibilityResolver(_mapControllers, _mapVisibility))
+                .IsVisible(particle.VisibilityFlags, particle.VisibilityControllerHash, CurrentVisibilitySelections);
 
     private bool IsSoundVisible(MapSoundPlacement sound) =>
-        MapVisibility.VisibleForDragon(sound.VisibilityFlags, CurrentDragonBit);
+        MapVisibility.VisibleForMask(sound.VisibilityFlags, _mapVisibility.Primary, CurrentPrimaryVisibilityBit);
 
     private void UpdateParticleMarkers() =>
         ParticleMarkers = (ShowParticles && MapContent.HasParticles)
@@ -1278,6 +1277,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 .Where(sh => sh.Category is "StaticMesh" or "Environment")
                 .Select(sh => sh.Name).ToList(),
         };
+        vm.SetVisibilityLayers(_mapVisibility.Primary?.Layers ?? Array.Empty<VisibilityLayer>());
         vm.PickFile = async title => await Dialogs.OpenFileAsync(title,
             new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
             { Patterns = new[] { "*.fbx", "*.glb", "*.gltf", "*.obj", "*.scb", "*.sco" } },
@@ -3236,6 +3236,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
     private MapVisibilityControllers? _mapControllers;
     private MapVisibilityResolver? _visibilityResolver;
+    private MapVisibilityDefinition _mapVisibility = MapVisibilityDefinition.Empty;
     private ShaderDatabase? _shaderDb;
 
     public MainWindowViewModel()
@@ -3396,7 +3397,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>A cached map viewport scene — lets a map tab restore fully (edits/selection/visibility) on
     /// re-activation instead of re-decoding, so it "stays loaded" while other assets are inspected.</summary>
     private sealed record MapScene(
-        MapGeoAsset Map, byte[] MapBytes, WadAssetEntry Entry, MapVisibilityControllers? Controllers,
+        MapGeoAsset Map, byte[] MapBytes, WadAssetEntry Entry, MapVisibilityDefinition Visibility,
+        MapVisibilityControllers? Controllers,
         MeshAsset Mesh, IReadOnlyList<TextureImage?>? Textures,
         IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials,
         IReadOnlyList<TextureImage?>? Lightmaps,
@@ -3407,7 +3409,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyDictionary<uint, VfxSystemDefinition> VfxSystems,
         IReadOnlyList<MapCubemapProbe>? Probes, IReadOnlyList<MapAnimatedProp>? Props,
         IReadOnlyList<MapSoundPlacement>? Sounds,
-        int DragonIndex, int BaronIndex, bool HasMoves, int[] SelectedMeshIndices,
+        int[] VisibilityIndices, bool HasMoves, int[] SelectedMeshIndices,
         List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces);
 
     /// <summary>User opened an asset — create or focus its tab and activate it.</summary>
@@ -3556,13 +3558,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (_currentMap is not { } map || _currentMapBytes is null || _currentMapEntry is not { } entry || CurrentMesh is not { } mesh)
             return null;
-        return new MapScene(map, _currentMapBytes, entry, _mapControllers, mesh,
+        return new MapScene(map, _currentMapBytes, entry, _mapVisibility, _mapControllers, mesh,
             CurrentModelTextures, CurrentModelSubmeshMaterials, CurrentModelLightmapTextures,
             _mapFlowMasks, _mapFlowGrads, _mapTerrainTops, _mapTerrainExtras,
             CurrentLightmapScale, CurrentSunProperties,
             CurrentModelParticles, _vfxSystems, CurrentModelProbes, CurrentModelProps,
             CurrentModelSounds,
-            SelectedDragonIndex, SelectedBaronIndex, HasMapMoves,
+            VisibilityAxes.Select(a => a.SelectedIndex).ToArray(), HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList());
     }
@@ -3575,8 +3577,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         InvalidateRayIndex();
         PrebuildRayIndex(s.Map, MeshVerticesRevision);   // M172a
         HasMapGeo = true;   // M79
+        _mapVisibility = s.Visibility;
         _mapControllers = s.Controllers;
-        _visibilityResolver = new MapVisibilityResolver(s.Controllers);
+        _visibilityResolver = new MapVisibilityResolver(s.Controllers, s.Visibility);
+        RebuildVisibilityAxes(s.Visibility, s.VisibilityIndices);
         CurrentMesh = s.Mesh;
         CurrentModelTextures = s.Textures;
         ClearSecondaryTextures();
@@ -3608,8 +3612,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .Select(i => s.Map.Meshes.FirstOrDefault(x => x.Index == i))
             .Where(m => m is not null).Select(m => m!).ToList();
         _selection.SetMany(meshes);
-        SelectedDragonIndex = s.DragonIndex;
-        SelectedBaronIndex = s.BaronIndex;
         ApplyMapVisibility();   // recompute the visibility array from the restored filters
         MeshVerticesRevision++; // re-upload possibly-edited vertices
         _log.Info("MapGeo", $"Restored map tab '{s.MapName}' ({s.Map.MeshCount:n0} meshes).");
@@ -4327,8 +4329,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _currentMap = null;
         InvalidateRayIndex();
         _currentMapProfiles = null;
+        _mapVisibility = MapVisibilityDefinition.Empty;
         _mapControllers = null;
         _visibilityResolver = null;
+        RebuildVisibilityAxes(_mapVisibility);
+        VisibilityLayerBits.Clear();
+        LayerControllerChoices.Clear();
+        _layerControllerHashes.Clear();
         _currentMapBytes = null;
         _currentMapEntry = null;
         MapGeneration++;
@@ -4388,20 +4395,59 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MapGeoInspector.Clear();
     }
 
-    // ---- Map dragon/baron visibility layers (M22) ----------------------
+    // ---- Data-driven map visibility layers ---------------------------------------------------------
 
-    public IReadOnlyList<string> DragonOptions { get; } =
-        new[] { "All Layers" }.Concat(MapVisibility.Dragons.Select(d => d.Name)).ToList();
-    public IReadOnlyList<string> BaronOptions { get; } =
-        new[] { "All" }.Concat(MapVisibility.Barons.Select(b => b.Name)).ToList();
+    public sealed partial class VisibilityAxisViewModel : ObservableObject
+    {
+        private readonly MainWindowViewModel _owner;
+        public MapVisibilityAxis Axis { get; }
+        public string Name => Axis.Name;
+        public IReadOnlyList<string> Options { get; }
+        [ObservableProperty] private int _selectedIndex;
 
-    [ObservableProperty] private int _selectedDragonIndex;
-    [ObservableProperty] private int _selectedBaronIndex;
+        internal VisibilityAxisViewModel(MainWindowViewModel owner, MapVisibilityAxis axis)
+        {
+            _owner = owner;
+            Axis = axis;
+            Options = new[] { "All" }.Concat(axis.Layers.Select(l => l.Name)).ToList();
+        }
 
-    partial void OnSelectedDragonIndexChanged(int value) => ApplyMapVisibility();
-    partial void OnSelectedBaronIndexChanged(int value) => ApplyMapVisibility();
+        public int SelectedBit => SelectedIndex <= 0 || SelectedIndex > Axis.Layers.Count
+            ? 0 : Axis.Layers[SelectedIndex - 1].Bit;
 
-    /// <summary>Compute per-group visibility from the selected dragon + baron layers and push it to the viewport.</summary>
+        partial void OnSelectedIndexChanged(int value)
+        {
+            if (!_owner._visibilityUiLoading) _owner.ApplyMapVisibility();
+        }
+    }
+
+    public ObservableCollection<VisibilityAxisViewModel> VisibilityAxes { get; } = new();
+    [ObservableProperty] private bool _hasVisibilityAxes;
+    private bool _visibilityUiLoading;
+
+    private IReadOnlyDictionary<uint, int> CurrentVisibilitySelections =>
+        VisibilityAxes.ToDictionary(a => a.Axis.DefinitionFieldHash, a => a.SelectedBit);
+
+    private int CurrentPrimaryVisibilityBit => VisibilityAxes.FirstOrDefault(a => a.Axis.IsPrimary)?.SelectedBit ?? 0;
+
+    private void RebuildVisibilityAxes(MapVisibilityDefinition definition, IReadOnlyList<int>? selectedIndices = null)
+    {
+        _visibilityUiLoading = true;
+        try
+        {
+            VisibilityAxes.Clear();
+            for (int i = 0; i < definition.Axes.Count; i++)
+            {
+                var vm = new VisibilityAxisViewModel(this, definition.Axes[i]);
+                vm.SelectedIndex = selectedIndices is not null && i < selectedIndices.Count ? selectedIndices[i] : 0;
+                VisibilityAxes.Add(vm);
+            }
+            HasVisibilityAxes = VisibilityAxes.Count > 0;
+        }
+        finally { _visibilityUiLoading = false; }
+    }
+
+    /// <summary>Compute per-group visibility from the map-defined axes and push it to the viewport.</summary>
     // M104: render regions (mapgeo v18 renderRegionHash). Off hides every region-assigned mesh, leaving
     // the region-independent base geometry — the fastest way to see what a region is contributing.
     [ObservableProperty] private bool _renderRegionsEnabled = true;
@@ -4411,9 +4457,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void ApplyMapVisibility()
     {
         if (_currentMap is not { } map) { CurrentModelSubmeshVisible = null; return; }
-        int dragonBit = SelectedDragonIndex <= 0 ? 0 : MapVisibility.Dragons[SelectedDragonIndex - 1].Bit;
-        int baronBit = SelectedBaronIndex <= 0 ? 0 : MapVisibility.Barons[SelectedBaronIndex - 1].Bit;
-        var resolver = _visibilityResolver ??= new MapVisibilityResolver(_mapControllers);
+        var selections = CurrentVisibilitySelections;
+        var resolver = _visibilityResolver ??= new MapVisibilityResolver(_mapControllers, _mapVisibility);
         var regionOf = map.Meshes.ToDictionary(m => m.Index, m => m.RegionHash);
         // M105: pending layer edits preview live — the group snapshot keeps the FILE's values, so the
         // check reads the mesh's effective (edited) mask/controller when there is one.
@@ -4427,7 +4472,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             uint ctrl = g.ControllerHash;
             if (g.MeshIndex >= 0 && meshByIdx.TryGetValue(g.MeshIndex, out var src))
             { flags = src.EffectiveVisibility; ctrl = src.EffectiveController; }
-            vis[i] = resolver.IsVisible(flags, ctrl, dragonBit, baronBit);
+            vis[i] = resolver.IsVisible(flags, ctrl, selections);
             if (vis[i] && !RenderRegionsEnabled && g.MeshIndex >= 0
                 && regionOf.TryGetValue(g.MeshIndex, out var region) && region != 0)
                 vis[i] = false;
@@ -4441,11 +4486,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (AmbienceEnabled) UpdateAmbience(_lastCamPosForAudio, force: true);
     }
 
-    /// <summary>Current dragon/baron bits from the selectors (0 = "All").</summary>
-    private int CurrentDragonBit => SelectedDragonIndex <= 0 ? 0 : MapVisibility.Dragons[SelectedDragonIndex - 1].Bit;
-    private int CurrentBaronBit => SelectedBaronIndex <= 0 ? 0 : MapVisibility.Barons[SelectedBaronIndex - 1].Bit;
-
-    /// <summary>Visibility diagnostic for the primary-selected mesh under the current dragon/baron filters (M33).</summary>
+    /// <summary>Visibility diagnostic for the primary-selected mesh under the current map filters.</summary>
     [ObservableProperty] private string _meshVisibilityReason = "";
 
     /// <summary>The full mesh-details inspector for the selected mapgeo mesh (M33).</summary>
@@ -4468,7 +4509,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_selection.Primary is not { } m || _visibilityResolver is null)
         { MeshVisibilityReason = ""; MeshDetails.Clear(); return; }
         // M105: diagnose the EFFECTIVE (edited) values so the details row matches what the viewport shows
-        var d = _visibilityResolver.Resolve(m.EffectiveVisibility, m.EffectiveController, CurrentDragonBit, CurrentBaronBit);
+        var d = _visibilityResolver.Resolve(m.EffectiveVisibility, m.EffectiveController, CurrentVisibilitySelections);
         MeshVisibilityReason = d.Reason;
         if (_selection.Count == 1)
         {
@@ -4499,8 +4540,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    /// <summary>The 8 dragon-layer checkboxes (state mirrors the primary selected mesh).</summary>
-    public ObservableCollection<LayerBitViewModel> DragonLayerBits { get; } = new();
+    /// <summary>The primary map-axis checkboxes (state mirrors the primary selected mesh).</summary>
+    public ObservableCollection<LayerBitViewModel> VisibilityLayerBits { get; } = new();
 
     /// <summary>Controller choices for the selected mesh — "None" + every controller in the map's bins.</summary>
     public ObservableCollection<string> LayerControllerChoices { get; } = new();
@@ -4517,16 +4558,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _layerUiLoading = true;
         try
         {
-            if (DragonLayerBits.Count == 0)
-                foreach (var d in MapVisibility.Dragons)
-                    DragonLayerBits.Add(new LayerBitViewModel(this, d.Name, d.Bit));
+            var declared = _mapVisibility.Primary?.Layers ?? Array.Empty<VisibilityLayer>();
+            if (!VisibilityLayerBits.Select(b => b.Bit).SequenceEqual(declared.Select(d => d.Bit)))
+            {
+                VisibilityLayerBits.Clear();
+                foreach (var layer in declared)
+                    VisibilityLayerBits.Add(new LayerBitViewModel(this, layer.Name, layer.Bit));
+            }
 
             if (_selection.Primary is not { } m || _currentMap is null)
             { HasLayerSelection = false; LayerSummary = ""; return; }
 
             HasLayerSelection = true;
             int flags = m.EffectiveVisibility;
-            foreach (var b in DragonLayerBits)
+            foreach (var b in VisibilityLayerBits)
             {
                 b.Loading = true;
                 b.IsOn = (flags & b.Bit) != 0;
@@ -4551,18 +4596,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             int selCount = _selection.Count;
             int edited = _currentMap.Meshes.Count(x => x.HasLayerEdit);
-            LayerSummary = $"{MapVisibility.DragonLabel(flags)} · mask 0b{Convert.ToString(flags & 0xFF, 2).PadLeft(8, '0')}"
+            LayerSummary = $"{MapVisibility.Label(flags, _mapVisibility.Primary)} · mask 0b{Convert.ToString(flags & 0xFF, 2).PadLeft(8, '0')}"
                            + (selCount > 1 ? $" · applies to {selCount} selected meshes" : "")
                            + (edited > 0 ? $" · {edited} unsaved layer edit(s)" : "");
         }
         finally { _layerUiLoading = false; }
     }
 
-    /// <summary>Set/clear one dragon bit on every selected mesh (one undo step).</summary>
+    /// <summary>Set/clear one primary visibility bit on every selected mesh (one undo step).</summary>
     internal void SetLayerBitOnSelection(int bit, bool on)
     {
         if (_layerUiLoading) return;
-        ApplyLayerEdit($"{(on ? "Add to" : "Remove from")} {MapVisibility.Dragons.First(d => d.Bit == bit).Name} Layer", m =>
+        string name = _mapVisibility.Primary?.Layers.FirstOrDefault(d => d.Bit == bit).Name ?? $"bit {bit}";
+        ApplyLayerEdit($"{(on ? "Add to" : "Remove from")} {name} Layer", m =>
         {
             int flags = m.EffectiveVisibility;
             m.VisibilityEdit = on ? flags | bit : flags & ~bit;
@@ -4680,8 +4726,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Diagnostics", ex.Message); }
     }
 
-    /// <summary>Index the baron/dragon visibility controllers from the map's sibling .bin files.</summary>
-    private void BuildMapControllers(string mapgeoPath)
+    /// <summary>Read the shipping map's visibility axes, then index controller graphs from sibling bins.</summary>
+    private void BuildMapVisibility(string mapgeoPath, MapGeoAsset map)
     {
         var dir = mapgeoPath[..(mapgeoPath.LastIndexOf('/') + 1)];
         var bins = new List<byte[]>();
@@ -4691,12 +4737,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             try { bins.Add(ReadAsset(e.PathHash)); } catch { /* skip unreadable bins */ }
         }
-        _mapControllers = MapVisibilityControllers.Build(bins);
-        _visibilityResolver = new MapVisibilityResolver(_mapControllers);
-        if (_mapControllers.BaronControllerCount > 0)
-            _log.Info("MapGeo", $"Baron visibility: {_mapControllers.Count} controllers ({_mapControllers.BaronControllerCount} baron) from {bins.Count} bin(s).");
-        else
-            _log.Info("MapGeo", $"No baron visibility controllers found in this map's bins — baron filter inactive (dragon layers still work).");
+        byte[]? shippingBin = null;
+        var match = System.Text.RegularExpressions.Regex.Match(mapgeoPath, @"/mapgeometry/map(?<id>\d+)/", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (match.Success)
+            shippingBin = ReadAssetByPath($"data/maps/shipping/map{match.Groups["id"].Value}/map{match.Groups["id"].Value}.bin");
+        _mapVisibility = MapVisibility.Parse(shippingBin, ResolveBinName);
+        if (!_mapVisibility.HasAxes) _mapVisibility = MapVisibility.Infer(map.Meshes.Select(m => m.VisibilityFlags));
+
+        _mapControllers = MapVisibilityControllers.Build(bins, _mapVisibility);
+        _visibilityResolver = new MapVisibilityResolver(_mapControllers, _mapVisibility);
+        RebuildVisibilityAxes(_mapVisibility);
+        LayerControllerChoices.Clear();
+        _layerControllerHashes.Clear();
+        VisibilityLayerBits.Clear();
+
+        string axes = _mapVisibility.HasAxes
+            ? string.Join(", ", _mapVisibility.Axes.Select(a => $"{a.Name} ({a.Layers.Count} states, initial {a.InitialMask})"))
+            : "none";
+        _log.Info("MapGeo", $"Visibility axes: {axes}; {_mapControllers.Count} controller(s) from {bins.Count} sibling bin(s).");
     }
 
     /// <summary>Build the Map Content layer-group outline (Meshes → Layer Groups → mesh names).</summary>
@@ -4708,7 +4766,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 var vm = new MapLayerGroupViewModel
                 {
-                    Name = $"{MapVisibility.DragonLabel(g.Key)} — {g.Count()} mesh(es)",
+                    Name = $"{MapVisibility.Label(g.Key, _mapVisibility.Primary)} — {g.Count()} mesh(es)",
                     Bit = g.Key,
                 };
                 foreach (var mesh in g.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase))
@@ -5930,10 +5988,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MapContent.ShowMap(entry.DisplayName, map.Groups
                     .Select((g, i) => new MapPieceViewModel { Name = string.IsNullOrEmpty(g.Material) ? $"Mesh {i}" : g.Material, Info = $"{g.IndexCount / 3:n0} tris" })
                     .ToList());
+                BuildMapVisibility(entry.Path, map);
                 BuildMapLayerGroups(map);
-                BuildMapControllers(entry.Path);
-                SelectedBaronIndex = 0;
-                SelectedDragonIndex = 0; // handlers call ApplyMapVisibility; _currentMap is already set
                 ApplyMapVisibility();    // ensure reset even if the index was already 0
                 _log.Success("MapGeo", $"{entry.DisplayName}: v{map.Version}, {map.MeshCount:n0} meshes, {map.VertexCount:n0} verts, {map.TriangleCount:n0} tris, {map.MaterialCount} materials" +
                                        (map.Warnings.Count > 0 ? $", {map.Warnings.Count} warnings" : ""));
