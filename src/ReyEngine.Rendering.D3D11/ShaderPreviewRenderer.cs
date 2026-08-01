@@ -1680,11 +1680,20 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// <summary>Scene path: <paramref name="key"/> is the asset path, so the view is created once and
     /// shared.</summary>
     public void SetTexture(PreviewMaterial m, string reflectedName, string key, byte[] rgba, int width, int height)
+        => SetTextureCore(m, reflectedName, key, rgba, width, height, textureArray: false);
+
+    /// <summary>M321: bind one decoded image through a Texture2DArray SRV. Riot's map-wide
+    /// TERRAIN_BLEND_SharedTexture is declared as a 2D array even when the map ships only one slice.</summary>
+    public void SetTextureArray(PreviewMaterial m, string reflectedName, string key, byte[] rgba, int width, int height)
+        => SetTextureCore(m, reflectedName, key, rgba, width, height, textureArray: true);
+
+    private void SetTextureCore(PreviewMaterial m, string reflectedName, string key,
+        byte[] rgba, int width, int height, bool textureArray)
     {
         // ALWAYS create. Skipping the work on a cache hit is the CALLER's job, via TryBindCached - if this
         // reused the pooled view whenever the key existed, re-binding a different image to the same slot
         // from the Textures tab would silently keep showing the old one.
-        var made = MakeTexture(rgba, width, height);
+        var made = MakeTexture(rgba, width, height, textureArray);
         if (made is null) return;                           // creation failed and was reported
 
         // A view already under this key may still be referenced by materials bound earlier, so it is
@@ -1726,7 +1735,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// before, so a failed creation still got stored under its key and then bound as a null resource -
     /// which samples BLACK rather than falling through to the white stand-in. BuildMaterial already checks
     /// its shader HRESULTs; this was the one place that did not.</summary>
-    private ComPtr<ID3D11ShaderResourceView>? MakeTexture(byte[] rgba, int w, int h)
+    private ComPtr<ID3D11ShaderResourceView>? MakeTexture(byte[] rgba, int w, int h, bool textureArray = false)
     {
         if (w <= 0 || h <= 0 || rgba.Length < w * h * 4)
         {
@@ -1777,7 +1786,26 @@ float4 psmain_tex(VTexOut i) : SV_Target
         if (hr < 0) { Log($"CreateTexture2D failed 0x{hr:X8} for {w}x{h}"); return null; }
 
         ComPtr<ID3D11ShaderResourceView> srv = default;
-        hr = _device.CreateShaderResourceView(tex, null, ref srv);
+        if (textureArray)
+        {
+            var srvDesc = new ShaderResourceViewDesc
+            {
+                Format = desc.Format,
+                ViewDimension = D3DSrvDimension.D3D11SrvDimensionTexture2Darray,
+                Anonymous = new ShaderResourceViewDescUnion
+                {
+                    Texture2DArray = new Tex2DArraySrv
+                    {
+                        MostDetailedMip = 0,
+                        MipLevels = mipped ? uint.MaxValue : 1u,
+                        FirstArraySlice = 0,
+                        ArraySize = 1,
+                    },
+                },
+            };
+            hr = _device.CreateShaderResourceView(tex, in srvDesc, ref srv);
+        }
+        else hr = _device.CreateShaderResourceView(tex, null, ref srv);
         tex.Dispose();
         if (hr < 0) { Log($"CreateShaderResourceView failed 0x{hr:X8} for {w}x{h}"); return null; }
         if (mipped) _ctx.GenerateMips(srv);

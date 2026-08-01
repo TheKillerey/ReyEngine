@@ -92,7 +92,8 @@ public static class Dx11SceneBuilder
         ShaderPermutationIndex? perms,
         MapGeoAsset map,
         IReadOnlyList<MaterialBinding> materials,
-        Func<ulong, byte[]?> readAsset)
+        Func<ulong, byte[]?> readAsset,
+        string? mapGeoPath = null)
     {
         var t0 = DateTime.UtcNow;
 
@@ -156,6 +157,13 @@ public static class Dx11SceneBuilder
                 string? target = ResolveTextureTarget(slot.SamplerName, ps);
                 if (target is not null) wanted.Add((target, slot.Path!.ToLowerInvariant()));
             }
+            // M321: this shader's painted RGB mask is engine-owned rather than a samplerValues entry.
+            // The runtime derives its asset from the active mapgeo and binds it as a one-slice Texture2DArray.
+            if (b.Profile.TerrainWorldProjectedMask && !string.IsNullOrEmpty(mapGeoPath)
+                && ps.Textures.FirstOrDefault(t => t.Name.Equals("TERRAIN_BLEND_SharedTexture",
+                    StringComparison.OrdinalIgnoreCase)) is { } terrainBlend)
+                wanted.Add((terrainBlend.Name,
+                    MapGeoMaterialResolver.TerrainBlendTexturePathFor(mapGeoPath).ToLowerInvariant()));
             if (slice.Lightmap.Length > 0
                 && ps.Textures.FirstOrDefault(t => t.Name.Contains("BAKED_LIGHT", StringComparison.OrdinalIgnoreCase))
                     is { } lmSlot)
@@ -211,6 +219,14 @@ public static class Dx11SceneBuilder
                 parameters.RemoveAll(x => x.Item1.Equals("BAKED_PAINT_UV_SCALE_BIAS", StringComparison.OrdinalIgnoreCase));
                 parameters.Add(("BAKED_PAINT_UV_SCALE_BIAS",
                     BakedPaintUvScaleBias(slice.BakedPaintScale, slice.BakedPaintBias)));
+            }
+
+            if (b.Profile.TerrainWorldProjectedMask)
+            {
+                // Map21's 2048 paint texture covers the canonical 0..16000 terrain square. The compiled
+                // shader does worldXZ * TERRAIN_XFORM.xy + .zw before sampling array slice zero.
+                parameters.RemoveAll(x => x.Item1.Equals("TERRAIN_XFORM", StringComparison.OrdinalIgnoreCase));
+                parameters.Add(("TERRAIN_XFORM", new[] { 1f / 16000f, 1f / 16000f, 0f, 0f }));
             }
 
             scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,
@@ -343,9 +359,14 @@ public static class Dx11SceneBuilder
 
             foreach (var (target, key) in s.Textures)
             {
-                if (renderer.TryBindCached(mat, target, key)) { textures++; continue; }
+                bool terrainArray = target.Equals("TERRAIN_BLEND_SharedTexture", StringComparison.OrdinalIgnoreCase);
+                string poolKey = terrainArray ? key + "\0array" : key;
+                if (renderer.TryBindCached(mat, target, poolKey)) { textures++; continue; }
                 if (!scene.Textures.TryGetValue(key, out var img)) continue;
-                renderer.SetTexture(mat, target, key, img.Rgba, img.Width, img.Height);
+                if (terrainArray)
+                    renderer.SetTextureArray(mat, target, poolKey, img.Rgba, img.Width, img.Height);
+                else
+                    renderer.SetTexture(mat, target, poolKey, img.Rgba, img.Width, img.Height);
                 textures++;
             }
 

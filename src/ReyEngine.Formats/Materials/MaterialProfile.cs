@@ -63,6 +63,14 @@ public sealed record MaterialProfile(
     float TerrainRMaskMultiplier = 1f,
     float TerrainGMaskMultiplier = 1f,
     float TerrainBMaskMultiplier = 1f,
+    // M321: 4TextureBlend_WorldProjected has no material Mask_Texture. Riot supplies a map-wide
+    // TERRAIN_BLEND texture and samples it from world XZ / 16000, then height-weights the layer alphas.
+    bool TerrainWorldProjectedMask = false,
+    Vector3 TerrainBlendPowers = default,
+    bool TerrainUseTop = true,
+    bool TerrainUseExtras = true,
+    bool TerrainUseAlphaOverlay = false,
+    Vector2 TerrainOverlayRange = default,
     // M78: VertexDeform grass/foliage materials with USE_GRASS_TINT_MAP multiply the map's world-space
     // grass-tint texture (mGrassTintTexture) into their diffuse — matches the MapgeoAddon semantics.
     bool UsesGrassTint = false,
@@ -254,6 +262,8 @@ public static class MaterialProfiles
             terrain.IsTerrainBlend, terrain.MaskPath, terrain.BottomPath, terrain.MiddlePath, terrain.TopPath,
             terrain.ExtrasPath, terrain.BottomTiling, terrain.MiddleTiling, terrain.TopTiling, terrain.ExtrasTiling,
             terrain.WorldScale, terrain.RMultiplier, terrain.GMultiplier, terrain.BMultiplier,
+            terrain.WorldProjectedMask, terrain.BlendPowers, terrain.UseTop, terrain.UseExtras,
+            terrain.UseAlphaOverlay, terrain.OverlayRange,
             grassTint,
             vertexDeform,                                      // M163
             b.MacroOn(MaterialBinding.MacroNoBakedLighting),   // M150
@@ -264,7 +274,8 @@ public static class MaterialProfiles
     private static (bool IsTerrainBlend, string? MaskPath, string? BottomPath, string? MiddlePath,
         string? TopPath, string? ExtrasPath, Vector2 BottomTiling, Vector2 MiddleTiling,
         Vector2 TopTiling, Vector2 ExtrasTiling, float WorldScale, float RMultiplier,
-        float GMultiplier, float BMultiplier) ClassifyTerrainBlend(MaterialBinding b)
+        float GMultiplier, float BMultiplier, bool WorldProjectedMask, Vector3 BlendPowers,
+        bool UseTop, bool UseExtras, bool UseAlphaOverlay, Vector2 OverlayRange) ClassifyTerrainBlend(MaterialBinding b)
     {
         TextureSlot? Slot(string name) => b.Slots.FirstOrDefault(s => s.SamplerName.Equals(name, OIC));
         var mask = Slot("Mask_Texture");
@@ -272,10 +283,14 @@ public static class MaterialProfiles
         var middle = Slot("Middle_Texture");
         var top = Slot("Top_Texture");
         var extras = Slot("Extras_Texture");
-        bool exactShader = (b.RenderShader ?? "").Equals("0xe25b830f", OIC);
-        bool samplerSignature = mask is not null && bottom is not null && middle is not null && top is not null && extras is not null;
-        if (!(exactShader || samplerSignature) || !samplerSignature)
-            return (false, null, null, null, null, null, default, default, default, default, 1f, 1f, 1f, 1f);
+        string shader = b.RenderShader ?? b.ShaderName ?? "";
+        bool namedWorldProjected = shader.Contains("4TextureBlend_WorldProjected", OIC);
+        bool legacyExactShader = shader.Equals("0xe25b830f", OIC);
+        bool hasLayers = bottom is not null && middle is not null && top is not null && extras is not null;
+        bool samplerSignature = hasLayers && (mask is not null || namedWorldProjected);
+        if (!(legacyExactShader || namedWorldProjected || samplerSignature) || !samplerSignature)
+            return (false, null, null, null, null, null, default, default, default, default,
+                1f, 1f, 1f, 1f, false, default, true, true, false, default);
 
         Vector4 Param(string name, Vector4 fallback)
         {
@@ -285,10 +300,12 @@ public static class MaterialProfiles
         static Vector2 Tiling(Vector4 value) => new(
             value.X != 0f ? value.X : 1f,
             value.Y != 0f ? value.Y : (value.X != 0f ? value.X : 1f));
+        bool Switch(string name, bool fallback) =>
+            b.Switches.TryGetValue(name, out bool enabled) ? enabled : fallback;
 
         var worldScale = Param("WS_Multiplier", new Vector4(1f, 0f, 0f, 0f)).X;
         if (worldScale == 0f) worldScale = 1f;
-        return (true, mask!.Path, bottom!.Path, middle!.Path, top!.Path, extras!.Path,
+        return (true, mask?.Path, bottom!.Path, middle!.Path, top!.Path, extras!.Path,
             Tiling(Param("Bottom_Tiling", Vector4.One)),
             Tiling(Param("Mid_Tiling", Vector4.One)),
             Tiling(Param("Top_Tiling", Vector4.One)),
@@ -296,7 +313,18 @@ public static class MaterialProfiles
             worldScale,
             Param("R_mask_multiplier", Vector4.One).X,
             Param("G_mask_multiplier", Vector4.One).X,
-            Param("B_mask_multiplier", Vector4.One).X);
+            Param("B_mask_multiplier", Vector4.One).X,
+            mask is null && namedWorldProjected,
+            new Vector3(
+                Param("Red_Blend_Power", new Vector4(1f, 0f, 0f, 0f)).X,
+                Param("Green_Blend_Power", new Vector4(1f, 0f, 0f, 0f)).X,
+                Param("Blue_Blend_Power", new Vector4(1f, 0f, 0f, 0f)).X),
+            Switch("USE_TOP", true),
+            Switch("USE_EXTRAS", true),
+            Switch("USE_A_AS_OVERLAY", false),
+            new Vector2(
+                Param("OV_Low", Vector4.Zero).X,
+                Param("OV_High", Vector4.One).X));
     }
 
     /// <summary>M44: detect + read a Flowmap_River water material (Bloom_FlowMapRiver_*). A flowmap material

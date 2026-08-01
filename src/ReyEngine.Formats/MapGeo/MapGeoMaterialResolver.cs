@@ -17,6 +17,17 @@ public static class MapGeoMaterialResolver
         return dot < 0 ? mapgeoPath + ".materials.bin" : mapgeoPath[..dot] + ".materials.bin";
     }
 
+    /// <summary>M321: map-wide paint mask supplied to TERRAIN_BLEND_SharedTexture by the game. Unlike a
+    /// material sampler, this path is derived from the mapgeo asset being rendered.</summary>
+    public static string TerrainBlendTexturePathFor(string mapgeoPath)
+    {
+        string normalized = mapgeoPath.Replace('\\', '/').TrimStart('/');
+        if (normalized.StartsWith("data/", StringComparison.OrdinalIgnoreCase)) normalized = normalized[5..];
+        int dot = normalized.LastIndexOf(".mapgeo", StringComparison.OrdinalIgnoreCase);
+        string stem = dot >= 0 ? normalized[..dot] : normalized;
+        return "assets/maps/terrainpaint/" + stem + "_array_1_of_1.tex";
+    }
+
     /// <summary>material name → diffuse texture path.</summary>
     public static Dictionary<string, string> Resolve(byte[] materialsBinData, IEnumerable<string> materialNames)
     {

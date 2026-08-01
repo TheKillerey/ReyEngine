@@ -2202,7 +2202,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var result = Services.Dx11SceneBuilder.Commit(
             renderer,
-            Services.Dx11SceneBuilder.Prepare(_dx11ShaderCache, ShaderPerms(), map, doc.Materials, TryReadAssetBytes),
+            Services.Dx11SceneBuilder.Prepare(_dx11ShaderCache, ShaderPerms(), map, doc.Materials,
+                TryReadAssetBytes, mapEntry.Path),
             AppInfo.DisplayVersion);
 
         _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
@@ -2249,7 +2250,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             try
             {
                 var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName);
-                prepared = Services.Dx11SceneBuilder.Prepare(cache, perms, map, doc.Materials, TryReadAssetBytes);
+                prepared = Services.Dx11SceneBuilder.Prepare(cache, perms, map, doc.Materials,
+                    TryReadAssetBytes, mapEntry.Path);
             }
             catch (Exception ex) { error = ex.Message; }
         });
@@ -4252,7 +4254,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
                 var m2t = MapGeoMaterialResolver.Resolve(bytes, names);
                 var profiles = MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName);
-                CurrentModelTextures = BuildMapTextures(map, m2t, profiles, names.Count);
+                CurrentModelTextures = BuildMapTextures(map, m2t, profiles, names.Count, _currentMapEntry?.Path);
             }
             else { _log.Info("Material", "Nothing in the viewport to preview — select the matching .skn/.mapgeo."); return; }
             _log.Success("Material", "Applied material edits to the viewport (live).");
@@ -6058,7 +6060,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return (null, sunProperties);
         }
         _currentMaterialToTexture = materialToTexture;   // M172c: the paint session needs per-submesh paths
-        return (BuildMapTextures(map, materialToTexture, profiles, names.Count), sunProperties);
+        return (BuildMapTextures(map, materialToTexture, profiles, names.Count, mapEntry.Path), sunProperties);
     }
 
     /// <summary>Resolve map material→texture (+ M32 profiles), falling back to the original game
@@ -6257,7 +6259,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Per-group diffuse textures from resolved map material→texture map (override-aware loads).
     /// Also publishes the per-group preview materials (UV transform + specular flag) from the profiles (M32).</summary>
     private IReadOnlyList<TextureImage?> BuildMapTextures(MapGeoAsset map, Dictionary<string, string> materialToTexture,
-        Dictionary<string, MaterialProfile> profilesByName, int materialCount)
+        Dictionary<string, MaterialProfile> profilesByName, int materialCount, string? mapGeoPath)
     {
         var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
         TextureImage? Load(string path)
@@ -6293,7 +6295,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (prof.IsTerrainBlend)
                 {
                     if (!string.IsNullOrEmpty(prof.TerrainBottomPath)) result[i] = Load(prof.TerrainBottomPath);
-                    if (!string.IsNullOrEmpty(prof.TerrainMaskPath)) flowMaps[i] = Load(prof.TerrainMaskPath);
+                    string? terrainMask = prof.TerrainMaskPath;
+                    if (prof.TerrainWorldProjectedMask && !string.IsNullOrEmpty(mapGeoPath))
+                        terrainMask = MapGeoMaterialResolver.TerrainBlendTexturePathFor(mapGeoPath);
+                    if (!string.IsNullOrEmpty(terrainMask)) flowMaps[i] = Load(terrainMask);
                     if (!string.IsNullOrEmpty(prof.TerrainMiddlePath)) flowNormals[i] = Load(prof.TerrainMiddlePath);
                     if (!string.IsNullOrEmpty(prof.TerrainTopPath)) terrainTops[i] = Load(prof.TerrainTopPath);
                     if (!string.IsNullOrEmpty(prof.TerrainExtrasPath)) terrainExtras[i] = Load(prof.TerrainExtrasPath);
@@ -6661,6 +6666,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             TerrainWorldScale: p.TerrainWorldScale,
             TerrainMaskMultipliers: new System.Numerics.Vector3(
                 p.TerrainRMaskMultiplier, p.TerrainGMaskMultiplier, p.TerrainBMaskMultiplier),
+            TerrainWorldProjectedMask: p.TerrainWorldProjectedMask,
+            TerrainBlendPowers: p.TerrainBlendPowers,
+            TerrainUseTop: p.TerrainUseTop,
+            TerrainUseExtras: p.TerrainUseExtras,
+            TerrainUseAlphaOverlay: p.TerrainUseAlphaOverlay,
+            TerrainOverlayRange: p.TerrainOverlayRange,
             UsesGrassTint: p.UsesGrassTint,    // M78
             NoBakedLighting: p.NoBakedLighting,   // M150: shaderMacros NO_BAKED_LIGHTING
             DisableDepthFog: p.DisableDepthFog);  //           DISABLE_DEPTH_FOG
