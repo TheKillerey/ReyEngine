@@ -1,3 +1,4 @@
+using System.Numerics;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -26,6 +27,40 @@ public static class MapGeoMaterialResolver
         int dot = normalized.LastIndexOf(".mapgeo", StringComparison.OrdinalIgnoreCase);
         string stem = dot >= 0 ? normalized[..dot] : normalized;
         return "assets/maps/terrainpaint/" + stem + "_array_1_of_1.tex";
+    }
+
+    /// <summary>M322: derive the shared terrain-paint world transform from the meshes that use it.
+    /// Riot terrain canvases are square and use one origin for world X/Z. Some maps only occupy part of
+    /// that square on one axis, so taking independent mesh minima would move the paint on that axis.</summary>
+    public static Vector4 TerrainBlendWorldTransformFor(MapGeoAsset map, IEnumerable<string> materialNames)
+    {
+        var wanted = materialNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var meshIds = map.Groups
+            .Where(g => wanted.Contains(g.Material) && g.MeshIndex >= 0)
+            .Select(g => g.MeshIndex)
+            .ToHashSet();
+        var meshes = map.Meshes.Where(m => meshIds.Contains(m.Index)).ToArray();
+        if (meshes.Length == 0) return new Vector4(1f / 16000f, 1f / 16000f, 0f, 0f);
+
+        float origin = meshes.Min(m => MathF.Min(m.BoundsMin.X, m.BoundsMin.Z));
+        float end = meshes.Max(m => MathF.Max(m.BoundsMax.X, m.BoundsMax.Z));
+
+        // Source bounds commonly stop a unit or two inside clean authored canvas edges. Recover those
+        // edges when the measurement is close, e.g. Map21 -598.509..15401.969 -> -600..15400.
+        static float SnapHundred(float value)
+        {
+            float snapped = MathF.Round(value / 100f) * 100f;
+            return MathF.Abs(value - snapped) <= 5f ? snapped : value;
+        }
+        origin = SnapHundred(origin);
+        end = SnapHundred(end);
+        float extent = end - origin;
+        if (!float.IsFinite(extent) || extent <= 1f)
+            return new Vector4(1f / 16000f, 1f / 16000f, 0f, 0f);
+
+        float scale = 1f / extent;
+        float bias = -origin * scale;
+        return new Vector4(scale, scale, bias, bias);
     }
 
     /// <summary>material name → diffuse texture path.</summary>

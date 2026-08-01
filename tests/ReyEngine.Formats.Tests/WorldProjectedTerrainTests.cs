@@ -64,4 +64,30 @@ public class WorldProjectedTerrainTests
         Assert.Equal("assets/maps/terrainpaint/maps/mapgeometry/map21/base_array_1_of_1.tex",
             MapGeoMaterialResolver.TerrainBlendTexturePathFor("data/maps/mapgeometry/map21/base.mapgeo"));
     }
+
+    [Fact]
+    public void Terrain_world_transform_includes_the_authored_canvas_origin()
+    {
+        var map = new MapGeoAsset
+        {
+            Positions = Array.Empty<float>(), Normals = Array.Empty<float>(), Uvs = Array.Empty<float>(),
+            Indices = Array.Empty<uint>(),
+            Groups = new[] { new MapGeoGroup("Ground_Blend", 0, 0, MeshIndex: 10) },
+            Meshes = new[]
+            {
+                new MapGeoMesh
+                {
+                    Index = 10, Name = "ground", VertexStart = 0, VertexCount = 0,
+                    Transform = Matrix4x4.Identity, Pivot = Vector3.Zero,
+                    // Real Map21 bounds: the small discrepancy from clean canvas edges is mesh geometry.
+                    BoundsMin = new Vector3(-598.5092f, -698f, 2919.911f),
+                    BoundsMax = new Vector3(15401.969f, -29f, 10988.031f),
+                },
+            },
+        };
+
+        var transform = MapGeoMaterialResolver.TerrainBlendWorldTransformFor(map, new[] { "Ground_Blend" });
+
+        Assert.Equal(new Vector4(1f / 16000f, 1f / 16000f, 0.0375f, 0.0375f), transform);
+    }
 }

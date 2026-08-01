@@ -37,7 +37,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mIsTerrainBlend, _mTerrainWorldScale;             // terrain shader 0xe25b830f
     private int _mTerrainBottomTiling, _mTerrainMiddleTiling, _mTerrainTopTiling, _mTerrainExtrasTiling;
     private int _mTerrainMaskMultipliers;
-    private int _mTerrainWorldMask, _mTerrainBlendPowers, _mTerrainUseTop, _mTerrainUseExtras;
+    private int _mTerrainWorldMask, _mTerrainWorldMaskTransform, _mTerrainBlendPowers, _mTerrainUseTop, _mTerrainUseExtras;
     private int _mTerrainUseAlphaOverlay, _mTerrainOverlayRange;
     private int _mLightmapScale;                                  // M45: MapSunProperties.lightMapColorScale
     private int _lMvp, _lColor;
@@ -169,6 +169,7 @@ public sealed class ViewportMeshRenderer : IDisposable
         public float TerrainWorldScale;
         public Vector3 TerrainMaskMultipliers;
         public bool TerrainWorldProjectedMask;
+        public Vector4 TerrainWorldMaskTransform;
         public Vector3 TerrainBlendPowers;
         public bool TerrainUseTop;
         public bool TerrainUseExtras;
@@ -203,7 +204,8 @@ public sealed class ViewportMeshRenderer : IDisposable
         bool IsTerrainBlend = false, Vector2 TerrainBottomTiling = default, Vector2 TerrainMiddleTiling = default,
         Vector2 TerrainTopTiling = default, Vector2 TerrainExtrasTiling = default, float TerrainWorldScale = 1f,
         Vector3 TerrainMaskMultipliers = default,
-        bool TerrainWorldProjectedMask = false, Vector3 TerrainBlendPowers = default,
+        bool TerrainWorldProjectedMask = false, Vector4 TerrainWorldMaskTransform = default,
+        Vector3 TerrainBlendPowers = default,
         bool TerrainUseTop = true, bool TerrainUseExtras = true, bool TerrainUseAlphaOverlay = false,
         Vector2 TerrainOverlayRange = default,
         bool UsesGrassTint = false,   // M78: multiply the map's world-space grass tint into the diffuse
@@ -338,6 +340,7 @@ uniform vec2 uTerrainTopTiling;
 uniform vec2 uTerrainExtrasTiling;
 uniform vec3 uTerrainMaskMultipliers;
 uniform int uTerrainWorldMask;
+uniform vec4 uTerrainWorldMaskTransform;
 uniform vec3 uTerrainBlendPowers;
 uniform int uTerrainUseTop;
 uniform int uTerrainUseExtras;
@@ -433,14 +436,16 @@ void main() {
 
     // Terrain layers are planar world-space textures. Jade materials carry a regular Mask_Texture sampled
     // by UV0. 4TextureBlend_WorldProjected instead consumes the map-wide TERRAIN_BLEND paint texture at
-    // worldXZ / 16000 and combines its RGB with the detail textures' alpha height channels.
+    // the active map's world-to-canvas transform and combines its RGB with the detail textures' alpha heights.
     if (uIsTerrainBlend == 1) {
         vec2 worldUv = vWorld.xz * uTerrainWorldScale;
         vec4 bottom = (uHasTex == 1) ? texture(uTex, worldUv * uTerrainBottomTiling) : vec4(uBaseColor, 1.0);
         vec4 middle = (uHasGradient == 1) ? texture(uGradient, worldUv * uTerrainMiddleTiling) : bottom;
         vec4 top = (uHasEmissive == 1) ? texture(uEmissive, worldUv * uTerrainTopTiling) : middle;
         vec4 extras = (uHasMatCap == 1) ? texture(uMatCap, worldUv * uTerrainExtrasTiling) : top;
-        vec2 maskUv = uTerrainWorldMask == 1 ? clamp(vWorld.xz / 16000.0, 0.0, 1.0) : uv;
+        vec2 maskUv = uTerrainWorldMask == 1
+            ? clamp(vWorld.xz * uTerrainWorldMaskTransform.xy + uTerrainWorldMaskTransform.zw, 0.0, 1.0)
+            : uv;
         vec4 painted = (uHasMask == 1) ? texture(uMask, maskUv) : vec4(0.0);
         vec3 weights;
         if (uTerrainWorldMask == 1) {
@@ -784,6 +789,7 @@ void main() { FragColor = uColor; }";
         _mTerrainExtrasTiling = gl.GetUniformLocation(_meshProgram, "uTerrainExtrasTiling");
         _mTerrainMaskMultipliers = gl.GetUniformLocation(_meshProgram, "uTerrainMaskMultipliers");
         _mTerrainWorldMask = gl.GetUniformLocation(_meshProgram, "uTerrainWorldMask");
+        _mTerrainWorldMaskTransform = gl.GetUniformLocation(_meshProgram, "uTerrainWorldMaskTransform");
         _mTerrainBlendPowers = gl.GetUniformLocation(_meshProgram, "uTerrainBlendPowers");
         _mTerrainUseTop = gl.GetUniformLocation(_meshProgram, "uTerrainUseTop");
         _mTerrainUseExtras = gl.GetUniformLocation(_meshProgram, "uTerrainUseExtras");
@@ -1570,6 +1576,7 @@ void main(){
         _submeshes[index].TerrainWorldScale = mat.TerrainWorldScale;
         _submeshes[index].TerrainMaskMultipliers = mat.TerrainMaskMultipliers;
         _submeshes[index].TerrainWorldProjectedMask = mat.TerrainWorldProjectedMask;
+        _submeshes[index].TerrainWorldMaskTransform = mat.TerrainWorldMaskTransform;
         _submeshes[index].TerrainBlendPowers = mat.TerrainBlendPowers;
         _submeshes[index].TerrainUseTop = mat.TerrainUseTop;
         _submeshes[index].TerrainUseExtras = mat.TerrainUseExtras;
@@ -2099,6 +2106,9 @@ void main(){
                         _gl.Uniform3(_mTerrainMaskMultipliers, s.TerrainMaskMultipliers.X,
                             s.TerrainMaskMultipliers.Y, s.TerrainMaskMultipliers.Z);
                         _gl.Uniform1(_mTerrainWorldMask, s.TerrainWorldProjectedMask ? 1 : 0);
+                        _gl.Uniform4(_mTerrainWorldMaskTransform, s.TerrainWorldMaskTransform.X,
+                            s.TerrainWorldMaskTransform.Y, s.TerrainWorldMaskTransform.Z,
+                            s.TerrainWorldMaskTransform.W);
                         _gl.Uniform3(_mTerrainBlendPowers, s.TerrainBlendPowers.X,
                             s.TerrainBlendPowers.Y, s.TerrainBlendPowers.Z);
                         _gl.Uniform1(_mTerrainUseTop, s.TerrainUseTop ? 1 : 0);

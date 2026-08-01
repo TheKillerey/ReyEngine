@@ -64,7 +64,8 @@ public sealed record MaterialProfile(
     float TerrainGMaskMultiplier = 1f,
     float TerrainBMaskMultiplier = 1f,
     // M321: 4TextureBlend_WorldProjected has no material Mask_Texture. Riot supplies a map-wide
-    // TERRAIN_BLEND texture and samples it from world XZ / 16000, then height-weights the layer alphas.
+    // TERRAIN_BLEND texture and samples it through the map's world-to-canvas transform, then height-weights
+    // the layer alphas.
     bool TerrainWorldProjectedMask = false,
     Vector3 TerrainBlendPowers = default,
     bool TerrainUseTop = true,

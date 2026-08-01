@@ -109,6 +109,8 @@ public static class Dx11SceneBuilder
         var merged = MergeSlices(map);
         var byName = new Dictionary<string, MaterialBinding>(StringComparer.OrdinalIgnoreCase);
         foreach (var m in materials) byName[m.Name] = m;
+        var terrainWorldTransform = MapGeoMaterialResolver.TerrainBlendWorldTransformFor(map,
+            materials.Where(m => m.Profile.TerrainWorldProjectedMask).Select(m => m.Name));
 
         // Every distinct texture path the scene will need, collected first so the decode can be one
         // parallel pass rather than interleaved with shader resolution.
@@ -223,10 +225,14 @@ public static class Dx11SceneBuilder
 
             if (b.Profile.TerrainWorldProjectedMask)
             {
-                // Map21's 2048 paint texture covers the canonical 0..16000 terrain square. The compiled
-                // shader does worldXZ * TERRAIN_XFORM.xy + .zw before sampling array slice zero.
+                // The compiled shader does worldXZ * TERRAIN_XFORM.xy + .zw before sampling array slice
+                // zero. M322 derives both the scale and the non-zero canvas origin from the terrain mesh.
                 parameters.RemoveAll(x => x.Item1.Equals("TERRAIN_XFORM", StringComparison.OrdinalIgnoreCase));
-                parameters.Add(("TERRAIN_XFORM", new[] { 1f / 16000f, 1f / 16000f, 0f, 0f }));
+                parameters.Add(("TERRAIN_XFORM", new[]
+                {
+                    terrainWorldTransform.X, terrainWorldTransform.Y,
+                    terrainWorldTransform.Z, terrainWorldTransform.W,
+                }));
             }
 
             scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,

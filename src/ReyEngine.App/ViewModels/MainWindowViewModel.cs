@@ -6277,6 +6277,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var terrainTops = new TextureImage?[map.Groups.Count];   // slot 3 (emissive reused by terrain branch)
         var terrainExtras = new TextureImage?[map.Groups.Count]; // slot 4 (matcap reused by terrain branch)
         var submeshMats = new ViewportMeshRenderer.SubmeshMaterial[map.Groups.Count];
+        var terrainWorldTransform = MapGeoMaterialResolver.TerrainBlendWorldTransformFor(map,
+            profilesByName.Where(x => x.Value.TerrainWorldProjectedMask).Select(x => x.Key));
         // Per-mesh mirrored (negative-determinant) flag, for the two-sided/mirrored render state (M34).
         var mirroredByMesh = map.Meshes.ToDictionary(m => m.Index, m => m.IsMirrored);
         int lmGroups = 0, flowGroups = 0, terrainGroups = 0, bakedPaintGroups = 0;
@@ -6287,7 +6289,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 result[i] = Load(path);
             if (profilesByName.TryGetValue(matName, out var prof))
             {
-                submeshMats[i] = ToSubmeshMaterial(prof);
+                submeshMats[i] = ToSubmeshMaterial(prof, terrainWorldTransform);
                 LogUvTransform(prof, matName);
 
                 // Shader 0xe25b830f: load the opaque terrain splat layers. Renderer slots are deliberately
@@ -6636,7 +6638,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .First();
     }
 
-    private static ViewportMeshRenderer.SubmeshMaterial ToSubmeshMaterial(MaterialProfile p) =>
+    private static ViewportMeshRenderer.SubmeshMaterial ToSubmeshMaterial(MaterialProfile p,
+        System.Numerics.Vector4 terrainWorldMaskTransform = default) =>
         new(p.UsesRim, p.UsesSpecular, p.UvScale, p.UvOffset, p.UvRotationDegrees,
             AlphaMode: p.RenderMode switch
             {
@@ -6667,6 +6670,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             TerrainMaskMultipliers: new System.Numerics.Vector3(
                 p.TerrainRMaskMultiplier, p.TerrainGMaskMultiplier, p.TerrainBMaskMultiplier),
             TerrainWorldProjectedMask: p.TerrainWorldProjectedMask,
+            TerrainWorldMaskTransform: terrainWorldMaskTransform,
             TerrainBlendPowers: p.TerrainBlendPowers,
             TerrainUseTop: p.TerrainUseTop,
             TerrainUseExtras: p.TerrainUseExtras,
