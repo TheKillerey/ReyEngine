@@ -123,6 +123,12 @@ public class ExperimentalShaderPatchTests
         var vertex = DxbcReflection.Parse(compiled!.Vertex);
         var pixel = DxbcReflection.Parse(compiled.Pixel);
         var flow = DxbcReflection.Parse(compiled.FlowRipplePixel);
+        Assert.True(DxbcChecksum.IsValid(compiled.Vertex));
+        Assert.True(DxbcChecksum.IsValid(compiled.Pixel));
+        Assert.True(DxbcChecksum.IsValid(compiled.FlowRipplePixel));
+        Assert.Equal("$Globals", vertex.ConstantBuffers.Single(cb => cb.BindPoint == 1).Name);
+        Assert.Equal("$Globals", pixel.ConstantBuffers.Single(cb => cb.BindPoint == 0).Name);
+        Assert.Equal("$Globals", flow.ConstantBuffers.Single(cb => cb.BindPoint == 0).Name);
         Assert.Contains(vertex.Inputs, i => i.Semantic == "TEXCOORD" && i.Index == 7);
         Assert.Contains(pixel.Textures, r => r.Name == "BAKED_LIGHT__TX");
         Assert.Contains(pixel.Textures, r => r.Name == "DiffuseTexture__TX");
@@ -136,5 +142,14 @@ public class ExperimentalShaderPatchTests
         Assert.Equal(16, globals.Variables.Single(v => v.Name == "BaseTex_TintColor").Offset);
         var frame = pixel.ConstantBuffers.Single(cb => cb.BindPoint == 1);
         Assert.Equal(128, frame.Variables.Single(v => v.Name == "LIGHT_MAP_COLOR_SCALE_AND_INTENSITY").Offset);
+
+        // Renaming the compiler-reserved RDEF symbol changes metadata after D3DCompile. Prove the actual
+        // driver accepts the resulting blobs, rather than trusting the reflection parser alone.
+        using var renderer = new ShaderPreviewRenderer();
+        Assert.True(renderer.Initialize(out var deviceError), deviceError);
+        var load = renderer.LoadShaders(vertex, pixel);
+        Assert.True(load.Success, load.Error);
+        var flowLoad = renderer.LoadShaders(vertex, flow);
+        Assert.True(flowLoad.Success, flowLoad.Error);
     }
 }

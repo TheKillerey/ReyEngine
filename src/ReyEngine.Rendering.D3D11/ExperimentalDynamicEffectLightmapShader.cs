@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using ReyEngine.Formats.Shaders;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D.Compilers;
 
@@ -22,7 +23,75 @@ public static unsafe class ExperimentalDynamicEffectLightmapShader
         if (!TryCompile("#define COMPILE_PIXEL 1\n" + Source, "psmain", "ps_5_0", out var ps, out error)) return false;
         if (!TryCompile("#define COMPILE_PIXEL 1\n#define FLOW_RIPPLE_ON 1\n" + Source,
                 "psmain", "ps_5_0", out var flow, out error)) return false;
+        if (!TryRenameGlobalBuffer(vs!, "MaterialVertexCB", out vs, out error)) return false;
+        if (!TryRenameGlobalBuffer(ps!, "MaterialPixelCB", out ps, out error)) return false;
+        if (!TryRenameGlobalBuffer(flow!, "MaterialPixelCB", out flow, out error)) return false;
         compiled = new Compiled(vs!, ps!, flow!);
+        return true;
+    }
+
+    /// <summary>
+    /// Riot's material binder identifies the material cbuffer by the reflected name <c>$Globals</c>.
+    /// HLSL reserves that compiler-generated name and rejects it in source, so compile with a longer legal
+    /// identifier and shorten its null-terminated RDEF string in place. Offsets and bytecode stay unchanged;
+    /// only reflection metadata changes. D3D11 shader creation is covered by the Windows regression test.
+    /// </summary>
+    private static bool TryRenameGlobalBuffer(byte[] bytecode, string compiledName,
+        out byte[]? rewritten, out string? error)
+    {
+        rewritten = null;
+        error = null;
+        const string riotName = "$Globals";
+        byte[] from = Encoding.ASCII.GetBytes(compiledName);
+        byte[] to = Encoding.ASCII.GetBytes(riotName);
+        if (to.Length > from.Length)
+        {
+            error = $"RDEF name {riotName} is longer than {compiledName}";
+            return false;
+        }
+
+        var rdef = DxbcReflection.Chunks(bytecode).SingleOrDefault(c => c.Tag == "RDEF");
+        if (rdef.Tag is null)
+        {
+            error = "compiled shader has no RDEF chunk";
+            return false;
+        }
+
+        rewritten = (byte[])bytecode.Clone();
+        int replacements = 0;
+        int end = rdef.Offset + rdef.Size;
+        for (int at = rdef.Offset; at + from.Length < end; at++)
+        {
+            if (rewritten[at + from.Length] != 0
+                || !rewritten.AsSpan(at, from.Length).SequenceEqual(from)) continue;
+
+            to.CopyTo(rewritten, at);
+            rewritten.AsSpan(at + to.Length, from.Length - to.Length).Clear();
+            replacements++;
+            at += from.Length;
+        }
+
+        if (replacements == 0)
+        {
+            rewritten = null;
+            error = $"compiled shader RDEF does not contain {compiledName}";
+            return false;
+        }
+
+        var reflection = DxbcReflection.Parse(rewritten);
+        if (!reflection.ConstantBuffers.Any(cb => cb.Name == riotName)
+            || reflection.ConstantBuffers.Any(cb => cb.Name == compiledName))
+        {
+            rewritten = null;
+            error = $"compiled shader RDEF did not validate after renaming {compiledName} to {riotName}";
+            return false;
+        }
+        if (!DxbcChecksum.TryUpdate(rewritten) || !DxbcChecksum.IsValid(rewritten))
+        {
+            rewritten = null;
+            error = "failed to rebuild the compiled shader's DXBC checksum";
+            return false;
+        }
         return true;
     }
 
