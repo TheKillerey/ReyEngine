@@ -63,6 +63,44 @@ public class MapVisibilityTests
         Assert.Equal(2, layer.Bit);
     }
 
+    [Fact]
+    public void SecondaryStatesDoNotAlsoActivateTheirInitialBaseController()
+    {
+        var secondary = new MapVisibilityAxis(MapVisibility.BaronPitAxisHash, "Baron Pit", 1, false,
+            new[] { new VisibilityLayer("Base", 1), new VisibilityLayer("Cup", 2) });
+        var definition = new MapVisibilityDefinition(new[] { secondary });
+        byte[] controllersBin = Write(new BinTree(new[]
+        {
+            new BinTreeObject(0x100, 0xec733fe2, new BinTreeProperty[] { new BinTreeU8(0x8bff8cdf, 1) }),
+        }, Array.Empty<string>()));
+        var resolver = new MapVisibilityResolver(MapVisibilityControllers.Build(new[] { controllersBin }, definition), definition);
+
+        Assert.True(resolver.IsVisible(255, 0x100, new Dictionary<uint, int> { [MapVisibility.BaronPitAxisHash] = 1 }));
+        Assert.False(resolver.IsVisible(255, 0x100, new Dictionary<uint, int> { [MapVisibility.BaronPitAxisHash] = 2 }));
+    }
+
+    [Fact]
+    public void InvertedCustomControllerExcludesOnlyItsOwnPrimaryState()
+    {
+        var primary = new MapVisibilityAxis(MapVisibility.PrimaryAxisHash, "Map Visibility", 1, true,
+            new[] { new VisibilityLayer("Base", 1), new VisibilityLayer("Infernal", 2), new VisibilityLayer("Mountain", 4) });
+        var definition = new MapVisibilityDefinition(new[] { primary });
+        byte[] controllersBin = Write(new BinTree(new[]
+        {
+            new BinTreeObject(0x200, 0xc406a533, new BinTreeProperty[] { new BinTreeU8(0x27639032, 4) }),
+            new BinTreeObject(0x201, 0xe21083b5, new BinTreeProperty[]
+            {
+                new BinTreeContainer(0x3044938a, BinPropertyType.ObjectLink,
+                    new BinTreeProperty[] { new BinTreeObjectLink(0, 0x200) }),
+                new BinTreeU32(0xc9d3f06a, 3),
+            }),
+        }, Array.Empty<string>()));
+        var resolver = new MapVisibilityResolver(MapVisibilityControllers.Build(new[] { controllersBin }, definition), definition);
+
+        Assert.True(resolver.IsVisible(123, 0x201, new Dictionary<uint, int> { [MapVisibility.PrimaryAxisHash] = 2 }));
+        Assert.False(resolver.IsVisible(123, 0x201, new Dictionary<uint, int> { [MapVisibility.PrimaryAxisHash] = 4 }));
+    }
+
     private static BinTreeStruct Definition(uint field, params (string? Name, string? Public, int Bit, uint Hash)[] states) =>
         new(field, H("MapVisibilityFlagDefinitions"), new BinTreeProperty[]
         {

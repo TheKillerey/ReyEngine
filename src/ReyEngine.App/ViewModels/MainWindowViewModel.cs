@@ -4731,12 +4731,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var dir = mapgeoPath[..(mapgeoPath.LastIndexOf('/') + 1)];
         var bins = new List<byte[]>();
+        WadAssetEntry? primaryMaterials = TryResolveMaterialsBin(mapgeoPath, out var resolvedMaterials)
+            ? resolvedMaterials : null;
         foreach (var e in AssetEntries.Where(e => e.IsResolved
                      && e.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)
-                     && e.Path.StartsWith(dir, StringComparison.OrdinalIgnoreCase)))
+                     && e.Path.StartsWith(dir, StringComparison.OrdinalIgnoreCase)
+                     && (primaryMaterials is null || e.PathHash != primaryMaterials.PathHash))
+                 .OrderBy(e => e.Path, StringComparer.OrdinalIgnoreCase))
         {
             try { bins.Add(ReadAsset(e.PathHash)); } catch { /* skip unreadable bins */ }
         }
+        // The mapgeo's own effective .materials.bin is authoritative for duplicate controller object
+        // hashes. Add it last because MapVisibilityControllers deliberately uses later-bin-wins merging.
+        // This matters for old/custom rifts whose controller graphs differ from current Riot Map11.
+        if (primaryMaterials is not null)
+            try { bins.Add(ReadAsset(primaryMaterials.PathHash)); } catch { /* no controller data */ }
         byte[]? shippingBin = null;
         var match = System.Text.RegularExpressions.Regex.Match(mapgeoPath, @"/mapgeometry/map(?<id>\d+)/", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (match.Success)
@@ -8039,6 +8048,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project = project;
             _overrides.LoadFrom(project);
             _archive?.Dispose(); _archive = null;
+            Documents.Clear(); ActiveDocument = null; // same path hash in another project is different content
             BuildMounts();
             BuildProjectTree();
             ClearViewport(); Inspector.Clear(); BinEditor.Clear(); MaterialEditor.Clear();

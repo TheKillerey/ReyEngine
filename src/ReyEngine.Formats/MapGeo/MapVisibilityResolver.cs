@@ -65,7 +65,10 @@ public sealed class MapVisibilityResolver
             bool axisVisible;
             if (controllerBits != 0)
             {
-                int activeMask = selected | axis.InitialMask;
+                // InitialVisibilityMask is the permanent foundation for the PRIMARY mapgeo mask. Secondary
+                // controller axes are exclusive states: selecting Cup/Tunnel/Upgraded must not also match
+                // their initial Base controller. This is the same split used by Riot's MapgeoAddon.
+                int activeMask = selected | (axis.IsPrimary ? axis.InitialMask : 0);
                 bool inSet = (controllerBits & activeMask) != 0;
                 axisVisible = controller.NotVisible ? !inSet : inSet;
                 if (!axisVisible) reasons.Add($"controller hides {axis.Name} '{selectedName}'");
