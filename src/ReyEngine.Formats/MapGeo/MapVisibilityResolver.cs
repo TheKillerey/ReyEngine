@@ -1,120 +1,94 @@
 namespace ReyEngine.Formats.MapGeo;
 
-/// <summary>Explains why a mesh is visible or hidden under the current dragon + baron selection.</summary>
+/// <summary>Explains final map visibility for a mesh or placement.</summary>
 public sealed class VisibilityDiagnostic
 {
     public int Flags;
     public string FlagLabel = "";
     public uint ControllerHash;
     public bool HasController;
-    public int ControllerDragonBits;
-    public int ControllerBaronBits;
     public bool ControllerNotVisible;
-
-    public int DragonBit;
-    public string DragonName = "All";
-    public int BaronBit;
-    public string BaronName = "All";
-
-    public bool DragonVisible;
-    public bool BaronVisible;
-    public bool Visible => DragonVisible && BaronVisible;
+    public string ControllerSummary = "none";
+    public string FilterSummary = "All";
+    public bool Visible;
     public string Reason = "";
 }
 
-/// <summary>
-/// Resolves a mapgeo mesh/group's final visibility from ALL relevant inputs together (M33): its per-mesh
-/// dragon layer bitmask AND its baron/visibility <see cref="MapVisibilityControllers">controller</see>.
-/// Produces a <see cref="VisibilityDiagnostic"/> so the UI can show exactly why a mesh is on or off.
-/// Lives in Formats (not Core) because it depends on the mesh/controller types decoded here.
-/// </summary>
+/// <summary>Shared data-driven map visibility evaluation used by both renderers and every placeable type.</summary>
 public sealed class MapVisibilityResolver
 {
     private readonly MapVisibilityControllers? _controllers;
+    private readonly MapVisibilityDefinition _definition;
 
-    public MapVisibilityResolver(MapVisibilityControllers? controllers) => _controllers = controllers;
-
-    /// <summary>Fast boolean check used by the per-submesh visibility array.</summary>
-    public bool IsVisible(int flags, uint controllerHash, int dragonBit, int baronBit)
-        => Resolve(flags, controllerHash, dragonBit, baronBit).Visible;
-
-    public VisibilityDiagnostic Resolve(int flags, uint controllerHash, int dragonBit, int baronBit)
+    public MapVisibilityResolver(MapVisibilityControllers? controllers, MapVisibilityDefinition? definition = null)
     {
-        var d = new VisibilityDiagnostic
+        _controllers = controllers;
+        _definition = definition ?? MapVisibilityDefinition.Empty;
+    }
+
+    public bool IsVisible(int flags, uint controllerHash, IReadOnlyDictionary<uint, int>? selections)
+        => Resolve(flags, controllerHash, selections).Visible;
+
+    public VisibilityDiagnostic Resolve(int flags, uint controllerHash, IReadOnlyDictionary<uint, int>? selections)
+    {
+        var primary = _definition.Primary;
+        var result = new VisibilityDiagnostic
         {
             Flags = flags,
-            FlagLabel = MapVisibility.DragonLabel(flags),
+            FlagLabel = MapVisibility.Label(flags, primary),
             ControllerHash = controllerHash,
             HasController = controllerHash != 0,
-            DragonBit = dragonBit,
-            DragonName = NameForDragon(dragonBit),
-            BaronBit = baronBit,
-            BaronName = NameForBaron(baronBit),
         };
+        var controller = controllerHash != 0
+            ? _controllers?.Resolve(controllerHash) ?? VisibilityControllerResolution.Unconstrained
+            : VisibilityControllerResolution.Unconstrained;
+        result.ControllerNotVisible = controller.NotVisible;
 
-        var ctrl = (controllerHash != 0 ? _controllers?.Resolve(controllerHash) : null) ?? BaronResolution.Unconstrained;
-        d.ControllerDragonBits = ctrl.DragonBits;
-        d.ControllerBaronBits = ctrl.BaronBits;
-        d.ControllerNotVisible = ctrl.NotVisible;
-
-        // Mirrors MapgeoAddon.update_environment_visibility exactly.
-        // STEP 1 — dragon. The Base bit stays visible under every dragon (the foundation), UNLESS the mesh's
-        // visibility controller carries dragon bits: then the controller OVERRIDES the bitmask (this is how a
-        // base mesh gets disabled), applying ParentMode 3 as an inversion. A controller dragon set that
-        // includes Base (bit 1) counts as "in-list" for any dragon.
-        bool controllerOverrodeDragon = false;
-        if (dragonBit == 0)
+        var filterParts = new List<string>();
+        var controllerParts = new List<string>();
+        var reasons = new List<string>();
+        bool visible = true;
+        foreach (var axis in _definition.Axes)
         {
-            d.DragonVisible = true; // "All" — no dragon filter
+            int selected = selections?.GetValueOrDefault(axis.DefinitionFieldHash) ?? 0;
+            string selectedName = selected == 0 ? "All" : axis.Layers.FirstOrDefault(l => l.Bit == selected).Name ?? $"bit {selected}";
+            filterParts.Add($"{axis.Name}: {selectedName}");
+
+            int controllerBits = controller.BitsFor(axis.DefinitionFieldHash);
+            if (controllerBits != 0)
+            {
+                var names = axis.Layers.Where(l => (controllerBits & l.Bit) != 0).Select(l => l.Name).ToList();
+                controllerParts.Add($"{axis.Name}: {(names.Count > 0 ? string.Join(", ", names) : controllerBits.ToString())}");
+            }
+            if (selected == 0) continue;
+
+            bool axisVisible;
+            if (controllerBits != 0)
+            {
+                // InitialVisibilityMask is the permanent foundation for the PRIMARY mapgeo mask. Secondary
+                // controller axes are exclusive states: selecting Cup/Tunnel/Upgraded must not also match
+                // their initial Base controller. This is the same split used by Riot's MapgeoAddon.
+                int activeMask = selected | (axis.IsPrimary ? axis.InitialMask : 0);
+                bool inSet = (controllerBits & activeMask) != 0;
+                axisVisible = controller.NotVisible ? !inSet : inSet;
+                if (!axisVisible) reasons.Add($"controller hides {axis.Name} '{selectedName}'");
+            }
+            else if (axis.IsPrimary)
+            {
+                axisVisible = MapVisibility.VisibleForMask(flags, axis, selected);
+                if (!axisVisible) reasons.Add($"mesh mask {flags} does not include {axis.Name} '{selectedName}' or initial mask {axis.InitialMask}");
+            }
+            else axisVisible = true;
+            visible &= axisVisible;
         }
-        else if (d.HasController && ctrl.DragonBits != 0)
-        {
-            controllerOverrodeDragon = true;
-            bool inList = (ctrl.DragonBits & MapVisibility.BaseBit) != 0 || (ctrl.DragonBits & dragonBit) != 0;
-            d.DragonVisible = ctrl.NotVisible ? !inList : inList;
-        }
-        else
-        {
-            d.DragonVisible = MapVisibility.VisibleForDragon(flags, dragonBit); // bitmask; Base foundation on
-        }
 
-        // STEP 2 — baron. Controller baron bits + ParentMode (bit 0 / no baron bits = "All" = visible).
-        d.BaronVisible = ctrl.VisibleForBaron(baronBit);
-
-        d.Reason = BuildReason(d, controllerOverrodeDragon);
-        return d;
-    }
-
-    private static string BuildReason(VisibilityDiagnostic d, bool controllerOverrodeDragon)
-    {
-        if (!d.DragonVisible)
-            return controllerOverrodeDragon
-                ? $"hidden: controller {(d.ControllerNotVisible ? "excludes" : "restricts to")} dragon bits {d.ControllerDragonBits}, which {(d.ControllerNotVisible ? "includes" : "omits")} '{d.DragonName}'"
-                : $"hidden: dragon '{d.DragonName}' (bit {d.DragonBit}) is not in the mesh's layer mask {d.Flags} [{d.FlagLabel}]";
-        if (!d.BaronVisible)
-            return d.ControllerNotVisible
-                ? $"hidden: controller excludes baron '{d.BaronName}' (controller baron bits {d.ControllerBaronBits}, inverted)"
-                : $"hidden: baron '{d.BaronName}' (bit {d.BaronBit}) is not in the controller's baron bits {d.ControllerBaronBits}";
-
-        string why = d.DragonBit == 0 ? "no dragon filter"
-            : controllerOverrodeDragon ? $"controller dragon bits {d.ControllerDragonBits} allow '{d.DragonName}'"
-            : (d.Flags & MapVisibility.BaseBit) != 0 && (d.Flags & d.DragonBit) == 0 ? $"Base foundation (layer mask {d.Flags}) is visible under every dragon"
-            : $"layer mask {d.Flags} [{d.FlagLabel}] includes '{d.DragonName}'";
-        string baronWhy = d.BaronBit == 0 ? "no baron filter" : "controller allows this baron state";
-        return $"visible: {why}; {baronWhy}";
-    }
-
-    private static string NameForDragon(int bit)
-    {
-        if (bit == 0) return "All";
-        foreach (var l in MapVisibility.Dragons) if (l.Bit == bit) return l.Name;
-        return $"bit {bit}";
-    }
-
-    private static string NameForBaron(int bit)
-    {
-        if (bit == 0) return "All";
-        foreach (var l in MapVisibility.Barons) if (l.Bit == bit) return l.Name;
-        return $"bit {bit}";
+        result.Visible = visible;
+        result.FilterSummary = filterParts.Count == 0 ? "No map visibility layers" : string.Join(" / ", filterParts);
+        result.ControllerSummary = controllerParts.Count == 0 ? "none" : string.Join(" / ", controllerParts)
+            + (controller.NotVisible ? " / inverted (ParentMode 3)" : "");
+        result.Reason = visible
+            ? $"visible: {(filterParts.Count == 0 ? "map declares no visibility filter" : string.Join("; ", filterParts))}"
+            : "hidden: " + string.Join("; ", reasons);
+        return result;
     }
 }

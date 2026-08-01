@@ -10,7 +10,7 @@ public sealed record MeshDetailRow(string Label, string Value, bool Emphasis = f
 
 /// <summary>
 /// Read-only detail view of the selected MAPGEO mesh/group (M33): name, material + source, counts, bounds,
-/// transform, pivot, dragon/baron visibility (+ the resolver's reason), vertex attributes, lightmap/UV
+/// transform, pivot, map-defined visibility (+ the resolver's reason), vertex attributes, lightmap/UV
 /// availability, and render flags. Populated by <see cref="MainWindowViewModel"/> on selection/filter change.
 /// </summary>
 public sealed partial class MeshDetailsViewModel : ViewModelBase
@@ -69,11 +69,11 @@ public sealed partial class MeshDetailsViewModel : ViewModelBase
         Add("Mirrored", m.IsMirrored ? "YES (negative determinant)" : "no", em: m.IsMirrored);
 
         // ---- visibility ----
-        Add("Dragon layers", $"{vis.FlagLabel} · mask {vis.Flags} (0b{System.Convert.ToString(vis.Flags & 0xFF, 2).PadLeft(8, '0')})");
+        Add("Visibility layers", $"{vis.FlagLabel} · mask {vis.Flags} (0b{System.Convert.ToString(vis.Flags & 0xFF, 2).PadLeft(8, '0')})");
         Add("Controller", vis.HasController
-            ? $"0x{vis.ControllerHash:x8} · dragon bits {vis.ControllerDragonBits} · baron bits {vis.ControllerBaronBits}{(vis.ControllerNotVisible ? " · inverted (ParentMode 3)" : "")}"
+            ? $"0x{vis.ControllerHash:x8} · {vis.ControllerSummary}"
             : "none");
-        Add("Filter", $"dragon '{vis.DragonName}' · baron '{vis.BaronName}'");
+        Add("Filter", vis.FilterSummary);
         Add("Visible now", vis.Visible ? "VISIBLE" : "HIDDEN", em: true);
         Add("Reason", vis.Reason);
 

@@ -135,16 +135,16 @@
       </StackPanel>
     </Border>
 
-    <!-- M105: MAP LAYERS — assign the selected meshes to dragon layers / a baron visibility
+    <!-- M105: MAP LAYERS — assign selected meshes to map-defined layers / a visibility
          controller. Edits preview live and save with "Save to Mod". -->
     <Border Classes="card" IsVisible="{Binding HasLayerSelection}">
       <StackPanel Spacing="4">
         <TextBlock Classes="cardTitle" Text="MAP LAYERS" />
         <TextBlock Text="{Binding LayerSummary}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" />
 
-        <TextBlock Text="Dragon layers (mesh shows when its layer is active)" FontSize="9"
+        <TextBlock Text="Map visibility layers (from the shipping map .bin)" FontSize="9"
                    Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
-        <ItemsControl ItemsSource="{Binding DragonLayerBits}">
+        <ItemsControl ItemsSource="{Binding VisibilityLayerBits}">
           <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
             <DataTemplate>
@@ -153,18 +153,18 @@
           </ItemsControl.ItemTemplate>
         </ItemsControl>
 
-        <TextBlock Text="Visibility controller (baron pit states, timed events)" FontSize="9"
+        <TextBlock Text="Visibility controller (combined states and timed events)" FontSize="9"
                    Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <ComboBox ItemsSource="{Binding LayerControllerChoices}" SelectedIndex="{Binding SelectedLayerControllerIndex}"
                   FontSize="10" HorizontalAlignment="Stretch"
-                  ToolTip.Tip="Controllers come from this map's .bin files. 'None' keeps the mesh purely on the dragon-layer mask." />
+                  ToolTip.Tip="Controllers come from this map's .bin files. 'None' keeps the mesh on its mapgeo visibility mask." />
 
         <CheckBox Content="Disable backface culling (two-sided)" IsChecked="{Binding MeshBackfaceDisabled}" FontSize="10"
                   Margin="0,2,0,0" ToolTip.Tip="The mapgeo's own per-mesh backface flag (M102)" />
 
         <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
           <Button Content="All Layers" Command="{Binding SetLayersAllCommand}" FontSize="10" Padding="8,2"
-                  ToolTip.Tip="Mask 255 — visible on every dragon configuration" />
+                  ToolTip.Tip="Mask 255 — visible for every declared map state" />
           <Button Content="Reset Edits" Command="{Binding ResetLayerEditsCommand}" FontSize="10" Padding="8,2"
                   ToolTip.Tip="Discard pending layer edits on the selected meshes (back to the file's values)" />
           <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="10" Padding="8,2"

@@ -36,6 +36,43 @@ public class ExperimentalShaderPatchTests
     }
 
     [Fact]
+    public void PlannerDoesNotPinObservedRuntimeAxisToShaderDefault()
+    {
+        var toc = Toc(
+            ("ENV_TRANSITION", "1"), ("ENV_TRANSITION", "0"),
+            ("FLAG_ANIMATION_ON", "1"), ("FLAG_ANIMATION_ON", "0"),
+            ("FOLIAGEWIND_ANIMATION_ON", "0"), ("FOLIAGEWIND_ANIMATION_ON", "1"),
+            ("NO_BAKED_LIGHTING", "1"),
+            ("TWO_D_DEFORM_ON", "1"), ("TWO_D_DEFORM_ON", "0"),
+            ("USE_ROTATION", "0"), ("USE_WORLD_OFFSET", "1"),
+            ("USE_SINUSOIDAL_MOVEMENT", "1"), ("USE_SINUSOIDAL_MOVEMENT", "0"),
+            ("USE_TRANSLATION", "1"),
+            ("VERTEX_ANIMATION_ON", "1"), ("VERTEX_ANIMATION_ON", "0"));
+        var switches = new Dictionary<string, bool>
+        {
+            ["FLAG_ANIMATION_ON"] = false,
+            ["FOLIAGEWIND_ANIMATION_ON"] = false,
+            ["NO_BAKED_LIGHTING"] = true,
+            ["TWO_D_DEFORM_ON"] = false,
+            ["USE_ROTATION"] = false,
+            ["USE_WORLD_OFFSET"] = true,
+            ["USE_SINUSOIDAL_MOVEMENT"] = false,
+            ["USE_TRANSLATION"] = true,
+            ["VERTEX_ANIMATION_ON"] = false,
+        };
+        var defaults = new Dictionary<string, bool> { ["ENV_TRANSITION"] = false };
+        var absent = new HashSet<string> { "NO_BAKED_LIGHTING" };
+        var runtime = new HashSet<string> { "ENV_TRANSITION" };
+
+        var candidates = ShaderPermutationPlanner.EnumerateCandidates(
+            toc, null, switches, null, defaults, out _, forcedAbsent: absent, forcedFree: runtime);
+
+        var live = Assert.Single(candidates, c => c.Key == 0x8adf585ed8c8b38aUL);
+        Assert.Contains("ENV_TRANSITION=1", live.Defines);
+        Assert.Equal(new[] { "ENV_TRANSITION=1" }, live.InferredDefines);
+    }
+
+    [Fact]
     public void TocWriterRoundTripsAddedKeysAndBlobCount()
     {
         var source = Toc(("A", "1"), ("B", "0"));
@@ -86,6 +123,12 @@ public class ExperimentalShaderPatchTests
         var vertex = DxbcReflection.Parse(compiled!.Vertex);
         var pixel = DxbcReflection.Parse(compiled.Pixel);
         var flow = DxbcReflection.Parse(compiled.FlowRipplePixel);
+        Assert.True(DxbcChecksum.IsValid(compiled.Vertex));
+        Assert.True(DxbcChecksum.IsValid(compiled.Pixel));
+        Assert.True(DxbcChecksum.IsValid(compiled.FlowRipplePixel));
+        Assert.Equal("$Globals", vertex.ConstantBuffers.Single(cb => cb.BindPoint == 1).Name);
+        Assert.Equal("$Globals", pixel.ConstantBuffers.Single(cb => cb.BindPoint == 0).Name);
+        Assert.Equal("$Globals", flow.ConstantBuffers.Single(cb => cb.BindPoint == 0).Name);
         Assert.Contains(vertex.Inputs, i => i.Semantic == "TEXCOORD" && i.Index == 7);
         Assert.Contains(pixel.Textures, r => r.Name == "BAKED_LIGHT__TX");
         Assert.Contains(pixel.Textures, r => r.Name == "DiffuseTexture__TX");
@@ -99,5 +142,14 @@ public class ExperimentalShaderPatchTests
         Assert.Equal(16, globals.Variables.Single(v => v.Name == "BaseTex_TintColor").Offset);
         var frame = pixel.ConstantBuffers.Single(cb => cb.BindPoint == 1);
         Assert.Equal(128, frame.Variables.Single(v => v.Name == "LIGHT_MAP_COLOR_SCALE_AND_INTENSITY").Offset);
+
+        // Renaming the compiler-reserved RDEF symbol changes metadata after D3DCompile. Prove the actual
+        // driver accepts the resulting blobs, rather than trusting the reflection parser alone.
+        using var renderer = new ShaderPreviewRenderer();
+        Assert.True(renderer.Initialize(out var deviceError), deviceError);
+        var load = renderer.LoadShaders(vertex, pixel);
+        Assert.True(load.Success, load.Error);
+        var flowLoad = renderer.LoadShaders(vertex, flow);
+        Assert.True(flowLoad.Success, flowLoad.Error);
     }
 }
