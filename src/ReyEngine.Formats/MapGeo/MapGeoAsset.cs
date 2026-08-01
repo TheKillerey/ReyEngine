@@ -207,11 +207,16 @@ public sealed class MapGeoMesh
     public Vector3 BoundsMin { get; init; }
     public Vector3 BoundsMax { get; init; }
     public string[] Attributes { get; init; } = System.Array.Empty<string>();  // vertex elements present
-    public bool HasLightmapUv { get; init; }     // Texcoord1
+    public bool HasLightmapUv { get; init; }     // Texcoord7
     public bool HasVertexColor { get; init; }    // PrimaryColor
     public string RenderFlags { get; init; } = "";
     public bool DisableBackfaceCulling { get; init; }
-    public string? StationaryLightTexture { get; init; }  // baked lightmap (empty/null on modern SR)
+    /// <summary>Optional stationary-light atlas. This is a separate mapgeo channel from BakedLight.</summary>
+    public string? StationaryLightTexture { get; init; }
+    /// <summary>Mesh-owned BakedLight atlas sampled on Texcoord7 by any shader permutation that declares it.</summary>
+    public string? BakedLightTexture { get; init; }
+    public Vector2 BakedLightScale { get; init; } = Vector2.One;
+    public Vector2 BakedLightBias { get; init; } = Vector2.Zero;
     /// <summary>M319: mesh-owned BAKED_DIFFUSE_TEXTURE path used by DefaultEnv_Flat_BakedTerrain.</summary>
     public string? BakedPaintTexture { get; init; }
     public Vector2 BakedPaintScale { get; init; } = Vector2.One;

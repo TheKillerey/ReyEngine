@@ -49,7 +49,15 @@ public sealed partial class MeshDetailsViewModel : ViewModelBase
         Add("Vertex color", m.HasVertexColor ? "yes" : "no");
         Add("Normals", m.Attributes.Contains("Normal") ? "yes" : "no");
         Add("Tangents", m.Attributes.Contains("Tangent") ? "yes" : "no");
-        Add("Lightmap texture", string.IsNullOrEmpty(m.StationaryLightTexture) ? "none (no baked lightmap)" : m.StationaryLightTexture!);
+        if (!string.IsNullOrEmpty(m.BakedLightTexture))
+        {
+            Add("Baked light texture", m.BakedLightTexture!, em: true);
+            Add("Baked light UV", $"scale ({m.BakedLightScale.X:0.######}, {m.BakedLightScale.Y:0.######}) · " +
+                                  $"bias ({m.BakedLightBias.X:0.######}, {m.BakedLightBias.Y:0.######})");
+        }
+        else Add("Baked light texture", "none");
+        if (!string.IsNullOrEmpty(m.StationaryLightTexture))
+            Add("Stationary light texture", m.StationaryLightTexture!);
         if (!string.IsNullOrEmpty(m.BakedPaintTexture))
         {
             Add("Baked terrain texture", m.BakedPaintTexture!, em: true);

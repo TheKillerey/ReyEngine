@@ -2,6 +2,7 @@ using System.Collections;
 using System.Numerics;
 using System.Reflection;
 using ReyEngine.App.Services;
+using ReyEngine.App.ViewModels;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Shaders;
 
@@ -11,6 +12,29 @@ namespace ReyEngine.Formats.Tests;
 /// black.tex while each mapgeo mesh overrides BAKED_DIFFUSE_TEXTURE and supplies its own atlas transform.</summary>
 public class BakedTerrainBindingTests
 {
+    [Fact]
+    public void Mesh_inspector_distinguishes_baked_light_from_stationary_light_and_baked_paint()
+    {
+        var mesh = new MapGeoMesh
+        {
+            Index = 0, Name = "lit", VertexStart = 0, VertexCount = 3,
+            Transform = Matrix4x4.Identity, Pivot = Vector3.Zero,
+            BakedLightTexture = "maps/lightmaps/map22/0.tex",
+            BakedLightScale = new Vector2(0.25f, 0.5f),
+            BakedLightBias = new Vector2(0.125f, 0.25f),
+            StationaryLightTexture = "maps/stationary/map22/0.tex",
+            BakedPaintTexture = "maps/paint/map22/0.tex",
+        };
+        var vm = new MeshDetailsViewModel();
+
+        vm.Load(mesh, "mat", null, new VisibilityDiagnostic { Visible = true });
+
+        Assert.Contains(vm.Rows, r => r.Label == "Baked light texture" && r.Value == mesh.BakedLightTexture);
+        Assert.Contains(vm.Rows, r => r.Label == "Baked light UV" && r.Value.Contains("scale") && r.Value.Contains("bias"));
+        Assert.Contains(vm.Rows, r => r.Label == "Stationary light texture" && r.Value == mesh.StationaryLightTexture);
+        Assert.Contains(vm.Rows, r => r.Label == "Baked terrain texture" && r.Value == mesh.BakedPaintTexture);
+    }
+
     [Fact]
     public void Dx11_uses_the_reflected_baked_diffuse_target_and_xyzw_uv_layout()
     {
