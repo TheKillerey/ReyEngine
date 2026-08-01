@@ -16,6 +16,14 @@ public static class MapGeoDecoder
         using var ms = new MemoryStream(data, writable: false);
         var env = new EnvironmentAsset(ms);
 
+        // M319: v17+ stores mesh texture overrides indirectly. The asset-level table says what sampler
+        // index 0 means (Map21/IoniaBase: BAKED_DIFFUSE_TEXTURE); each mesh then supplies index 0 plus its
+        // own BakedPaint atlas path. LeagueToolkit exposes both halves but nothing joined them, so the
+        // decoder discarded the real texture and the viewport rendered the material's black placeholder.
+        var textureOverrideNames = env.ShaderTextureOverrides
+            .GroupBy(x => x.Index)
+            .ToDictionary(g => g.Key, g => g.First().Name);
+
         var positions = new List<float>();
         var normals = new List<float>();
         var uvs = new List<float>();
@@ -139,6 +147,14 @@ public static class MapGeoDecoder
                 foreach (var en in AllElementNames)
                     if (view.TryGetAccessor(en, out _)) attrs.Add(en.ToString());
                 string? slTex = mesh.StationaryLight.Texture is { Length: > 0 } s ? s : null;
+                string? bakedPaintTex = null;
+                foreach (var textureOverride in mesh.TextureOverrides)
+                    if (textureOverrideNames.TryGetValue(textureOverride.Index, out var sampler)
+                        && sampler.Equals("BAKED_DIFFUSE_TEXTURE", StringComparison.OrdinalIgnoreCase))
+                    {
+                        bakedPaintTex = textureOverride.Texture;
+                        break;
+                    }
 
                 meshes.Add(new MapGeoMesh
                 {
@@ -158,6 +174,9 @@ public static class MapGeoDecoder
                     RenderFlags = mesh.RenderFlags.ToString(),
                     DisableBackfaceCulling = mesh.DisableBackfaceCulling,
                     StationaryLightTexture = slTex,
+                    BakedPaintTexture = bakedPaintTex,
+                    BakedPaintScale = mesh.BakedPaintScale,
+                    BakedPaintBias = mesh.BakedPaintBias,
                 });
                 if (mesh.Submeshes.Count > 0)
                 {
@@ -169,7 +188,12 @@ public static class MapGeoDecoder
                         int end = sub.StartIndex + sub.IndexCount;
                         for (int k = sub.StartIndex; k < end && k < ia.Count; k++)
                             indices.Add((uint)(ia[k] + baseVertex));
-                        groups.Add(new MapGeoGroup(material, gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex, lmTex));
+                        groups.Add(new MapGeoGroup(material, gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex, lmTex)
+                        {
+                            BakedPaintTexture = bakedPaintTex ?? "",
+                            BakedPaintScale = mesh.BakedPaintScale,
+                            BakedPaintBias = mesh.BakedPaintBias,
+                        });
                     }
                 }
                 else
@@ -177,7 +201,12 @@ public static class MapGeoDecoder
                     int gStart = indices.Count;
                     for (int k = 0; k < ia.Count; k++)
                         indices.Add((uint)(ia[k] + baseVertex));
-                    groups.Add(new MapGeoGroup("", gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex, lmTex));
+                    groups.Add(new MapGeoGroup("", gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex, lmTex)
+                    {
+                        BakedPaintTexture = bakedPaintTex ?? "",
+                        BakedPaintScale = mesh.BakedPaintScale,
+                        BakedPaintBias = mesh.BakedPaintBias,
+                    });
                 }
 
                 meshCount++;

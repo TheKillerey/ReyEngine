@@ -6276,7 +6276,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var submeshMats = new ViewportMeshRenderer.SubmeshMaterial[map.Groups.Count];
         // Per-mesh mirrored (negative-determinant) flag, for the two-sided/mirrored render state (M34).
         var mirroredByMesh = map.Meshes.ToDictionary(m => m.Index, m => m.IsMirrored);
-        int lmGroups = 0, flowGroups = 0, terrainGroups = 0;
+        int lmGroups = 0, flowGroups = 0, terrainGroups = 0, bakedPaintGroups = 0;
         for (int i = 0; i < map.Groups.Count; i++)
         {
             var matName = map.Groups[i].Material;
@@ -6334,6 +6334,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (mirroredByMesh.TryGetValue(map.Groups[i].MeshIndex, out var mir) && mir)
                 submeshMats[i] = submeshMats[i] with { Mirrored = true };
 
+            // M319: DefaultEnv_Flat_BakedTerrain deliberately points its material sampler at black.tex.
+            // The actual atlas is a per-MESH BAKED_DIFFUSE_TEXTURE override in the mapgeo, and its
+            // BAKED_PAINT_UV_SCALE_BIAS is per mesh too. Applying both here makes the GL approximation
+            // sample the same atlas rectangle as Riot's shader instead of showing a black ground plane.
+            var bakedPaintPath = map.Groups[i].BakedPaintTexture;
+            if (!string.IsNullOrEmpty(bakedPaintPath))
+            {
+                var bakedPaint = Load(bakedPaintPath);
+                if (bakedPaint is not null) result[i] = bakedPaint;
+                submeshMats[i] = submeshMats[i] with
+                {
+                    UvScale = map.Groups[i].BakedPaintScale,
+                    UvOffset = map.Groups[i].BakedPaintBias,
+                };
+                if (bakedPaint is not null) bakedPaintGroups++;
+            }
+
             // Baked lightmap: the group's BakedLight atlas (mesh already carries the uv7*scale+bias UVs).
             var lmPath = map.Groups[i].LightmapTexture;
             if (!string.IsNullOrEmpty(lmPath)) { lightmaps[i] = Load(lmPath); if (lightmaps[i] is not null) lmGroups++; }
@@ -6370,7 +6387,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                                (spec > 0 ? $", {spec} group(s) with specular." : ".") +
                                (lmGroups > 0 ? $" {lmGroups} group(s) with baked lightmaps." : "") +
                                (flowGroups > 0 ? $" {flowGroups} flowmap-water group(s)." : "") +
-                               (terrainGroups > 0 ? $" {terrainGroups} terrain-blend group(s)." : ""));
+                               (terrainGroups > 0 ? $" {terrainGroups} terrain-blend group(s)." : "") +
+                               (bakedPaintGroups > 0 ? $" {bakedPaintGroups} baked-terrain group(s)." : ""));
         return result;
     }
 

@@ -170,7 +170,15 @@ public sealed record MapBucketGridInfo(
 public sealed record MapGeoGroup(
     string Material, int StartIndex, int IndexCount,
     string Name = "", int VisibilityFlags = 255, uint ControllerHash = 0, int MeshIndex = -1,
-    string LightmapTexture = "");
+    string LightmapTexture = "")
+{
+    /// <summary>M319: the per-mesh BAKED_DIFFUSE_TEXTURE override. Mapgeo v17+ stores the sampler name
+    /// once on the asset and stores only (sampler index, texture path) on each mesh.</summary>
+    public string BakedPaintTexture { get; init; } = "";
+    /// <summary>Atlas transform consumed by BAKED_PAINT_UV_SCALE_BIAS.</summary>
+    public Vector2 BakedPaintScale { get; init; } = Vector2.One;
+    public Vector2 BakedPaintBias { get; init; } = Vector2.Zero;
+}
 
 /// <summary>One source mapgeo mesh: its baked vertex range + original transform, for selection/move.</summary>
 public sealed class MapGeoMesh
@@ -196,6 +204,10 @@ public sealed class MapGeoMesh
     public string RenderFlags { get; init; } = "";
     public bool DisableBackfaceCulling { get; init; }
     public string? StationaryLightTexture { get; init; }  // baked lightmap (empty/null on modern SR)
+    /// <summary>M319: mesh-owned BAKED_DIFFUSE_TEXTURE path used by DefaultEnv_Flat_BakedTerrain.</summary>
+    public string? BakedPaintTexture { get; init; }
+    public Vector2 BakedPaintScale { get; init; } = Vector2.One;
+    public Vector2 BakedPaintBias { get; init; } = Vector2.Zero;
 
     // ---- M34 transform diagnostics ----
     /// <summary>Signed determinant of the mesh's world transform (from the file, before edits).</summary>

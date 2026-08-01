@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Text;
 using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Hashing;
@@ -159,6 +160,16 @@ public static class Dx11SceneBuilder
                     is { } lmSlot)
                 wanted.Add((lmSlot.Name, slice.Lightmap.ToLowerInvariant()));
 
+            // M319: the material intentionally carries black.tex as a fallback. The real baked terrain
+            // atlas is a per-mesh mapgeo texture override, so it must replace (not accompany) the material
+            // binding at BAKED_DIFFUSE_TEXTURE__TX.
+            if (slice.BakedPaint.Length > 0
+                && BakedPaintTextureTarget(ps) is { } paintTarget)
+            {
+                wanted.RemoveAll(x => x.Target.Equals(paintTarget, StringComparison.OrdinalIgnoreCase));
+                wanted.Add((paintTarget, slice.BakedPaint.ToLowerInvariant()));
+            }
+
             foreach (var (_, key) in wanted) distinct.Add(key);
 
             // M255: the material's OWN parameters. Missing these is what made the viewport draw black
@@ -183,6 +194,13 @@ public static class Dx11SceneBuilder
             if (perms is not null && perms.TryGetParameterDefaults(b.RenderShader!, out var defs))
                 foreach (var (dn, dv) in defs)
                     if (!authored.Contains(dn)) parameters.Add((dn, dv));
+
+            if (slice.BakedPaint.Length > 0)
+            {
+                parameters.RemoveAll(x => x.Item1.Equals("BAKED_PAINT_UV_SCALE_BIAS", StringComparison.OrdinalIgnoreCase));
+                parameters.Add(("BAKED_PAINT_UV_SCALE_BIAS",
+                    BakedPaintUvScaleBias(slice.BakedPaintScale, slice.BakedPaintBias)));
+            }
 
             scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,
                 new ShaderDescription(full, DxbcStage.Vertex, vp.Key, vp.BlobIndex, b.Macros, vs),
@@ -368,7 +386,8 @@ public static class Dx11SceneBuilder
     /// homogeneous, which is what makes a per-material flag sufficient. Note this method deliberately does
     /// not know the RULES - only that groups differing in these three inputs must not be fused - so the
     /// rules stay in MapVisibilityResolver, shared with the OpenGL viewport.</para>
-    private static List<(string Material, int Start, int Count, string Lightmap, int Group)> MergeSlices(MapGeoAsset map)
+    private static List<(string Material, int Start, int Count, string Lightmap,
+        string BakedPaint, Vector2 BakedPaintScale, Vector2 BakedPaintBias, int Group)> MergeSlices(MapGeoAsset map)
     {
         // Sourced exactly as MainWindowViewModel.ApplyMapVisibility does, including the live per-mesh
         // edits, or the two viewports would disagree about which layer a group belongs to.
@@ -384,11 +403,15 @@ public static class Dx11SceneBuilder
 
         var ordered = map.Groups
             .Select((g, i) => (g.Material, Start: g.StartIndex, Count: g.IndexCount,
-                               Lightmap: g.LightmapTexture, Group: i, Id: Identity(g)))
+                               Lightmap: g.LightmapTexture,
+                               BakedPaint: g.BakedPaintTexture,
+                               g.BakedPaintScale, g.BakedPaintBias,
+                               Group: i, Id: Identity(g)))
             .OrderBy(x => x.Start)
             .ToList();
 
-        var merged = new List<(string Material, int Start, int Count, string Lightmap, int Group)>();
+        var merged = new List<(string Material, int Start, int Count, string Lightmap,
+            string BakedPaint, Vector2 BakedPaintScale, Vector2 BakedPaintBias, int Group)>();
         (int Flags, uint Ctrl, uint Region) lastId = default;
         foreach (var s in ordered)
         {
@@ -398,10 +421,16 @@ public static class Dx11SceneBuilder
                 if (p.Start + p.Count == s.Start
                     && lastId == s.Id
                     && string.Equals(p.Material, s.Material, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(p.Lightmap, s.Lightmap, StringComparison.OrdinalIgnoreCase))
+                    && string.Equals(p.Lightmap, s.Lightmap, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(p.BakedPaint, s.BakedPaint, StringComparison.OrdinalIgnoreCase)
+                    // Scale/bias only affect a real baked-paint binding. Ignoring the unused values keeps
+                    // ordinary adjacent meshes coalesced exactly as before M319.
+                    && (p.BakedPaint.Length == 0
+                        || p.BakedPaintScale == s.BakedPaintScale && p.BakedPaintBias == s.BakedPaintBias))
                 { merged[^1] = p with { Count = p.Count + s.Count }; continue; }
             }
-            merged.Add((s.Material, s.Start, s.Count, s.Lightmap, s.Group));
+            merged.Add((s.Material, s.Start, s.Count, s.Lightmap,
+                s.BakedPaint, s.BakedPaintScale, s.BakedPaintBias, s.Group));
             lastId = s.Id;
         }
         return merged;
@@ -417,6 +446,16 @@ public static class Dx11SceneBuilder
         return ps.Textures.FirstOrDefault(t =>
             t.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase))?.Name;
     }
+
+    /// <summary>M319: reflected texture target used by DefaultEnv_Flat_BakedTerrain. Public because the
+    /// binding contract is GPU-free and regression-tested without creating a D3D device.</summary>
+    public static string? BakedPaintTextureTarget(DxbcShader ps) => ps.Textures.FirstOrDefault(t =>
+        t.Name.Equals("BAKED_DIFFUSE_TEXTURE__TX", StringComparison.OrdinalIgnoreCase)
+        || t.Name.Equals("BAKED_DIFFUSE_TEXTURE", StringComparison.OrdinalIgnoreCase))?.Name;
+
+    /// <summary>M319: layout of the shader's BAKED_PAINT_UV_SCALE_BIAS float4.</summary>
+    public static float[] BakedPaintUvScaleBias(Vector2 scale, Vector2 bias) =>
+        new[] { scale.X, scale.Y, bias.X, bias.Y };
 
     private static (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max)? SliceBounds(
         PreviewMesh mesh, int start, int count)

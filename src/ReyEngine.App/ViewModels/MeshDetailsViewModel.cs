@@ -45,11 +45,17 @@ public sealed partial class MeshDetailsViewModel : ViewModelBase
 
         Add("Vertex attributes", m.Attributes.Length > 0 ? string.Join(", ", m.Attributes) : "(none)");
         Add("UV0 (Texcoord0)", m.Attributes.Contains("Texcoord0") ? "yes" : "no");
-        Add("Lightmap UV (Texcoord1)", m.HasLightmapUv ? "yes" : "no");
+        Add("Lightmap UV (Texcoord7)", m.HasLightmapUv ? "yes" : "no");
         Add("Vertex color", m.HasVertexColor ? "yes" : "no");
         Add("Normals", m.Attributes.Contains("Normal") ? "yes" : "no");
         Add("Tangents", m.Attributes.Contains("Tangent") ? "yes" : "no");
         Add("Lightmap texture", string.IsNullOrEmpty(m.StationaryLightTexture) ? "none (no baked lightmap)" : m.StationaryLightTexture!);
+        if (!string.IsNullOrEmpty(m.BakedPaintTexture))
+        {
+            Add("Baked terrain texture", m.BakedPaintTexture!, em: true);
+            Add("Baked terrain UV", $"scale ({m.BakedPaintScale.X:0.######}, {m.BakedPaintScale.Y:0.######}) Â· " +
+                                     $"bias ({m.BakedPaintBias.X:0.######}, {m.BakedPaintBias.Y:0.######})");
+        }
         Add("Render flags", string.IsNullOrEmpty(m.RenderFlags) ? "(none)" : m.RenderFlags);
 
         // ---- M34 render state (from the material) + transform diagnostics (from the mesh) ----
