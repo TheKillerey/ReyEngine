@@ -7,6 +7,7 @@ public static class ReyProjectService
     public const string Extension = ".reyproject";
     public const string FolderMetaDir = ".reyengine";
     public const string FolderMetaFile = "project.json";
+    public const int CurrentProjectVersion = 2;
 
     /// <summary>Open (or initialise) a project folder. Creates <c>.reyengine/project.json</c> if absent.</summary>
     public static ReyProject OpenFolder(string root)
@@ -28,8 +29,9 @@ public static class ReyProjectService
                 ProjectFolders = scan.Folders,
                 OutputDirectory = Path.Combine(root, "Build"),
                 GameDirectory = ReyProject.GuessGameDirectory(),
-                ProjectVersion = 1,
+                ProjectVersion = CurrentProjectVersion,
             };
+            project.RiotPatchVersion = RiotPatchVersionDetector.Detect(project.GameDirectory)?.Patch;
         }
         project.RootPath = root;
         project.ProjectFilePath = metaPath;
@@ -59,6 +61,7 @@ public static class ReyProjectService
     {
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        project.ProjectVersion = Math.Max(project.ProjectVersion, CurrentProjectVersion);
         project.ProjectFilePath = path;
         File.WriteAllText(path, JsonSerializer.Serialize(project, Options));
         project.IsDirty = false;

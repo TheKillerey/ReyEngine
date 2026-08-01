@@ -3,7 +3,7 @@
         xmlns:local="clr-namespace:ReyEngine.App.Views"
         x:Class="ReyEngine.App.Views.ProjectSettingsWindow"
         Title="Project Settings"
-        Width="540" Height="640"
+        Width="540" Height="740"
         WindowStartupLocation="CenterOwner"
         ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}"
@@ -59,6 +59,19 @@
       <CheckBox Content="Clean unknown files when packing (only known game formats go into the WAD)"
                 IsChecked="{Binding PackKnownTypesOnly}" FontSize="11"
                 ToolTip.Tip="Skips editor leftovers — notes, PSDs, temp files — anything that isn't a game format (.tex/.dds/.bin/.skn/.anm/…). Every skipped file is listed in the console." />
+
+      <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,8" />
+      <TextBlock Text="RIOT PATCH UPDATES" FontSize="11" FontWeight="SemiBold"
+                 Foreground="{DynamicResource ReyTextDimBrush}" />
+      <TextBlock Text="Project base patch" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
+      <TextBox Text="{Binding RiotPatchVersion}" Width="160" HorizontalAlignment="Left" Watermark="16.15"
+               ToolTip.Tip="The Riot patch whose originals this project currently targets. Legacy projects may need this set once." />
+      <CheckBox Content="Automatically rebase when the installed Riot patch changes"
+                IsChecked="{Binding AutoUpdateOnRiotPatch}" FontSize="11" />
+      <CheckBox Content="Automatically rebuild WADs and .fantome after a successful update"
+                IsChecked="{Binding AutoBuildAfterPatchUpdate}" FontSize="11" />
+      <TextBlock Text="Bin edits use a transactional three-way merge. Full texture, mesh, mapgeo and audio replacements are retained and repacked unchanged. Backups and a report are stored under .reyengine."
+                 FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
 
       <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,12,0,0">
         <Button Content="Cancel" Command="{Binding CancelCommand}" Padding="14,5" />

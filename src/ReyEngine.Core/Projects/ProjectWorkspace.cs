@@ -15,7 +15,9 @@ public static class ProjectWorkspace
     /// falling back to the shared data root when no project is saved.</summary>
     public static string ReportsDir(ReyProject project)
     {
-        var root = project.WorkspaceDirectory ?? ReyPaths.DataRoot;
+        // Folder projects store project.json inside <root>/.reyengine. Using WorkspaceDirectory there
+        // would accidentally create .reyengine/.reyengine/reports.
+        var root = project.RootPath ?? project.WorkspaceDirectory ?? ReyPaths.DataRoot;
         var dir = Path.Combine(root, ".reyengine", "reports");
         Directory.CreateDirectory(dir);
         return dir;
