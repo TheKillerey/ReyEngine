@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using ReyEngine.Formats.Shaders;
+using ReyEngine.Formats.Materials;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
 using Silk.NET.Direct3D.Compilers;
@@ -151,6 +152,13 @@ public sealed unsafe class PreviewMaterial : IDisposable
     public int IndexCount { get; set; } = -1;
 
     public bool Visible { get; set; } = true;
+
+    /// <summary>Use the StaticMaterialDef pass's authored color blend factors instead of the generic
+    /// SrcAlpha/InvSrcAlpha preview state. This is how Map22 shadow receivers multiply over the textured
+    /// arena beneath them rather than covering it with their white helper texture.</summary>
+    public bool UsesAuthoredColorBlend { get; set; }
+    public MaterialBlendFactor SourceColorBlend { get; set; } = MaterialBlendFactor.One;
+    public MaterialBlendFactor DestinationColorBlend { get; set; } = MaterialBlendFactor.Zero;
 
     /// <summary>M292: the mapgeo GROUP this material was built from, or -1 for anything that is not map
     /// geometry - particles, mesh emitters, editor overlays. The host uses it to drive
@@ -565,6 +573,8 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     /// <summary>M232: the additive blend state, selected per material by <see cref="PreviewMaterial.Additive"/>.</summary>
     private ComPtr<ID3D11BlendState> _blendAdditive;
+    private readonly Dictionary<(MaterialBlendFactor Src, MaterialBlendFactor Dst), ComPtr<ID3D11BlendState>>
+        _authoredBlendStates = new();
 
     public void ClearMaterials()
     {
@@ -1680,11 +1690,20 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// <summary>Scene path: <paramref name="key"/> is the asset path, so the view is created once and
     /// shared.</summary>
     public void SetTexture(PreviewMaterial m, string reflectedName, string key, byte[] rgba, int width, int height)
+        => SetTextureCore(m, reflectedName, key, rgba, width, height, textureArray: false);
+
+    /// <summary>M321: bind one decoded image through a Texture2DArray SRV. Riot's map-wide
+    /// TERRAIN_BLEND_SharedTexture is declared as a 2D array even when the map ships only one slice.</summary>
+    public void SetTextureArray(PreviewMaterial m, string reflectedName, string key, byte[] rgba, int width, int height)
+        => SetTextureCore(m, reflectedName, key, rgba, width, height, textureArray: true);
+
+    private void SetTextureCore(PreviewMaterial m, string reflectedName, string key,
+        byte[] rgba, int width, int height, bool textureArray)
     {
         // ALWAYS create. Skipping the work on a cache hit is the CALLER's job, via TryBindCached - if this
         // reused the pooled view whenever the key existed, re-binding a different image to the same slot
         // from the Textures tab would silently keep showing the old one.
-        var made = MakeTexture(rgba, width, height);
+        var made = MakeTexture(rgba, width, height, textureArray);
         if (made is null) return;                           // creation failed and was reported
 
         // A view already under this key may still be referenced by materials bound earlier, so it is
@@ -1726,7 +1745,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// before, so a failed creation still got stored under its key and then bound as a null resource -
     /// which samples BLACK rather than falling through to the white stand-in. BuildMaterial already checks
     /// its shader HRESULTs; this was the one place that did not.</summary>
-    private ComPtr<ID3D11ShaderResourceView>? MakeTexture(byte[] rgba, int w, int h)
+    private ComPtr<ID3D11ShaderResourceView>? MakeTexture(byte[] rgba, int w, int h, bool textureArray = false)
     {
         if (w <= 0 || h <= 0 || rgba.Length < w * h * 4)
         {
@@ -1777,7 +1796,26 @@ float4 psmain_tex(VTexOut i) : SV_Target
         if (hr < 0) { Log($"CreateTexture2D failed 0x{hr:X8} for {w}x{h}"); return null; }
 
         ComPtr<ID3D11ShaderResourceView> srv = default;
-        hr = _device.CreateShaderResourceView(tex, null, ref srv);
+        if (textureArray)
+        {
+            var srvDesc = new ShaderResourceViewDesc
+            {
+                Format = desc.Format,
+                ViewDimension = D3DSrvDimension.D3D11SrvDimensionTexture2Darray,
+                Anonymous = new ShaderResourceViewDescUnion
+                {
+                    Texture2DArray = new Tex2DArraySrv
+                    {
+                        MostDetailedMip = 0,
+                        MipLevels = mipped ? uint.MaxValue : 1u,
+                        FirstArraySlice = 0,
+                        ArraySize = 1,
+                    },
+                },
+            };
+            hr = _device.CreateShaderResourceView(tex, in srvDesc, ref srv);
+        }
+        else hr = _device.CreateShaderResourceView(tex, null, ref srv);
         tex.Dispose();
         if (hr < 0) { Log($"CreateShaderResourceView failed 0x{hr:X8} for {w}x{h}"); return null; }
         if (mipped) _ctx.GenerateMips(srv);
@@ -2726,6 +2764,43 @@ float4 psmain(VOut i) : SV_Target
 
     private (bool wire, bool cull, bool depth, bool blend, bool mirror)? _stateKey;
 
+    private static Blend D3DColorBlend(MaterialBlendFactor factor) => factor switch
+    {
+        MaterialBlendFactor.Zero => Blend.Zero,
+        MaterialBlendFactor.One => Blend.One,
+        MaterialBlendFactor.SourceColor => Blend.SrcColor,
+        MaterialBlendFactor.OneMinusSourceColor => Blend.InvSrcColor,
+        MaterialBlendFactor.DestinationColor => Blend.DestColor,
+        MaterialBlendFactor.OneMinusDestinationColor => Blend.InvDestColor,
+        MaterialBlendFactor.SourceAlpha => Blend.SrcAlpha,
+        MaterialBlendFactor.OneMinusSourceAlpha => Blend.InvSrcAlpha,
+        MaterialBlendFactor.DestinationAlpha => Blend.DestAlpha,
+        MaterialBlendFactor.OneMinusDestinationAlpha => Blend.InvDestAlpha,
+        _ => Blend.One,
+    };
+
+    private ComPtr<ID3D11BlendState> AuthoredBlendState(
+        MaterialBlendFactor source, MaterialBlendFactor destination)
+    {
+        var key = (source, destination);
+        if (_authoredBlendStates.TryGetValue(key, out var existing)) return existing;
+
+        var desc = new BlendDesc();
+        desc.RenderTarget[0] = new RenderTargetBlendDesc
+        {
+            BlendEnable = true,
+            SrcBlend = D3DColorBlend(source), DestBlend = D3DColorBlend(destination), BlendOp = BlendOp.Add,
+            // StaticMaterialDef only authors the COLOR factors. Keep the established alpha equation;
+            // it preserves coverage without inventing a second enum from absent data.
+            SrcBlendAlpha = Blend.One, DestBlendAlpha = Blend.InvSrcAlpha, BlendOpAlpha = BlendOp.Add,
+            RenderTargetWriteMask = (byte)ColorWriteEnable.All,
+        };
+        ComPtr<ID3D11BlendState> state = default;
+        if (_device.CreateBlendState(in desc, ref state) < 0) return default;
+        _authoredBlendStates[key] = state;
+        return state;
+    }
+
     private void UpdateStates(PreviewSettings s)
     {
         // M216: these were disposed and recreated every single frame. They only depend on four toggles.
@@ -3517,6 +3592,11 @@ float4 psmain(VOut i) : SV_Target
             // them. Non-particle materials leave Additive false and get exactly the previous behaviour.
             if (mat.Additive && _blendAdditive.Handle is not null)
                 _ctx.OMSetBlendState(_blendAdditive, factor, 0xFFFFFFFF);
+            else if (s.AlphaBlend && mat.UsesAuthoredColorBlend)
+            {
+                var authoredBlend = AuthoredBlendState(mat.SourceColorBlend, mat.DestinationColorBlend);
+                _ctx.OMSetBlendState(authoredBlend.Handle is not null ? authoredBlend : _blend, factor, 0xFFFFFFFF);
+            }
             else
                 _ctx.OMSetBlendState(_blend, factor, 0xFFFFFFFF);
 
@@ -3768,6 +3848,8 @@ float4 psmain(VOut i) : SV_Target
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClampU.Dispose(); _linearClampV.Dispose(); _linearClamp.Dispose();
         _comparison.Dispose();
+        foreach (var state in _authoredBlendStates.Values) state.Dispose();
+        _authoredBlendStates.Clear();
         _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
         _blendAdditive.Dispose(); _depthStateNoWrite.Dispose();
         _ctx.Dispose(); _device.Dispose();

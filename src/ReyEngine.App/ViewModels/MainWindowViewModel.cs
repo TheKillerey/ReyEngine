@@ -2202,7 +2202,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var result = Services.Dx11SceneBuilder.Commit(
             renderer,
-            Services.Dx11SceneBuilder.Prepare(_dx11ShaderCache, ShaderPerms(), map, doc.Materials, TryReadAssetBytes),
+            Services.Dx11SceneBuilder.Prepare(_dx11ShaderCache, ShaderPerms(), map, doc.Materials,
+                TryReadAssetBytes, mapEntry.Path),
             AppInfo.DisplayVersion);
 
         _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
@@ -2249,7 +2250,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             try
             {
                 var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName);
-                prepared = Services.Dx11SceneBuilder.Prepare(cache, perms, map, doc.Materials, TryReadAssetBytes);
+                prepared = Services.Dx11SceneBuilder.Prepare(cache, perms, map, doc.Materials,
+                    TryReadAssetBytes, mapEntry.Path);
             }
             catch (Exception ex) { error = ex.Message; }
         });
@@ -4252,7 +4254,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
                 var m2t = MapGeoMaterialResolver.Resolve(bytes, names);
                 var profiles = MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName);
-                CurrentModelTextures = BuildMapTextures(map, m2t, profiles, names.Count);
+                CurrentModelTextures = BuildMapTextures(map, m2t, profiles, names.Count, _currentMapEntry?.Path);
             }
             else { _log.Info("Material", "Nothing in the viewport to preview — select the matching .skn/.mapgeo."); return; }
             _log.Success("Material", "Applied material edits to the viewport (live).");
@@ -5953,6 +5955,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     Uvs = m.Uvs,
                     Colors = m.Colors,
                     LightmapUvs = m.LightmapUvs,
+                    BakedPaintUvs = m.BakedPaintUvs,
                     Indices = m.Indices,
                     VertexCount = m.VertexCount,
                     SubMeshes = m.Groups.Select(g => new SubMeshInfo(g.Material, g.StartIndex, g.IndexCount, 0)).ToList(),
@@ -6057,7 +6060,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return (null, sunProperties);
         }
         _currentMaterialToTexture = materialToTexture;   // M172c: the paint session needs per-submesh paths
-        return (BuildMapTextures(map, materialToTexture, profiles, names.Count), sunProperties);
+        return (BuildMapTextures(map, materialToTexture, profiles, names.Count, mapEntry.Path), sunProperties);
     }
 
     /// <summary>Resolve map material→texture (+ M32 profiles), falling back to the original game
@@ -6256,7 +6259,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Per-group diffuse textures from resolved map material→texture map (override-aware loads).
     /// Also publishes the per-group preview materials (UV transform + specular flag) from the profiles (M32).</summary>
     private IReadOnlyList<TextureImage?> BuildMapTextures(MapGeoAsset map, Dictionary<string, string> materialToTexture,
-        Dictionary<string, MaterialProfile> profilesByName, int materialCount)
+        Dictionary<string, MaterialProfile> profilesByName, int materialCount, string? mapGeoPath)
     {
         var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
         TextureImage? Load(string path)
@@ -6274,9 +6277,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var terrainTops = new TextureImage?[map.Groups.Count];   // slot 3 (emissive reused by terrain branch)
         var terrainExtras = new TextureImage?[map.Groups.Count]; // slot 4 (matcap reused by terrain branch)
         var submeshMats = new ViewportMeshRenderer.SubmeshMaterial[map.Groups.Count];
+        var terrainWorldTransform = MapGeoMaterialResolver.TerrainBlendWorldTransformFor(map,
+            profilesByName.Where(x => x.Value.TerrainWorldProjectedMask).Select(x => x.Key));
         // Per-mesh mirrored (negative-determinant) flag, for the two-sided/mirrored render state (M34).
         var mirroredByMesh = map.Meshes.ToDictionary(m => m.Index, m => m.IsMirrored);
-        int lmGroups = 0, flowGroups = 0, terrainGroups = 0;
+        int lmGroups = 0, flowGroups = 0, terrainGroups = 0, bakedPaintGroups = 0;
         for (int i = 0; i < map.Groups.Count; i++)
         {
             var matName = map.Groups[i].Material;
@@ -6284,7 +6289,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 result[i] = Load(path);
             if (profilesByName.TryGetValue(matName, out var prof))
             {
-                submeshMats[i] = ToSubmeshMaterial(prof);
+                submeshMats[i] = ToSubmeshMaterial(prof, terrainWorldTransform);
                 LogUvTransform(prof, matName);
 
                 // Shader 0xe25b830f: load the opaque terrain splat layers. Renderer slots are deliberately
@@ -6292,7 +6297,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (prof.IsTerrainBlend)
                 {
                     if (!string.IsNullOrEmpty(prof.TerrainBottomPath)) result[i] = Load(prof.TerrainBottomPath);
-                    if (!string.IsNullOrEmpty(prof.TerrainMaskPath)) flowMaps[i] = Load(prof.TerrainMaskPath);
+                    string? terrainMask = prof.TerrainMaskPath;
+                    if (prof.TerrainWorldProjectedMask && !string.IsNullOrEmpty(mapGeoPath))
+                        terrainMask = MapGeoMaterialResolver.TerrainBlendTexturePathFor(mapGeoPath);
+                    if (!string.IsNullOrEmpty(terrainMask)) flowMaps[i] = Load(terrainMask);
                     if (!string.IsNullOrEmpty(prof.TerrainMiddlePath)) flowNormals[i] = Load(prof.TerrainMiddlePath);
                     if (!string.IsNullOrEmpty(prof.TerrainTopPath)) terrainTops[i] = Load(prof.TerrainTopPath);
                     if (!string.IsNullOrEmpty(prof.TerrainExtrasPath)) terrainExtras[i] = Load(prof.TerrainExtrasPath);
@@ -6334,6 +6342,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (mirroredByMesh.TryGetValue(map.Groups[i].MeshIndex, out var mir) && mir)
                 submeshMats[i] = submeshMats[i] with { Mirrored = true };
 
+            // M319/M320: DefaultEnv_Flat_BakedTerrain deliberately points its material sampler at
+            // black.tex. The actual atlas is a per-MESH BAKED_DIFFUSE_TEXTURE override in mapgeo.
+            // Its final UV is decoded separately from raw Texcoord7 and selected by UsesBakedPaint;
+            // ordinary material UV transforms continue to operate on Texcoord0.
+            var bakedPaintPath = map.Groups[i].BakedPaintTexture;
+            if (!string.IsNullOrEmpty(bakedPaintPath))
+            {
+                var bakedPaint = Load(bakedPaintPath);
+                if (bakedPaint is not null) result[i] = bakedPaint;
+                submeshMats[i] = submeshMats[i] with
+                {
+                    UsesBakedPaint = true,
+                };
+                if (bakedPaint is not null) bakedPaintGroups++;
+            }
+
             // Baked lightmap: the group's BakedLight atlas (mesh already carries the uv7*scale+bias UVs).
             var lmPath = map.Groups[i].LightmapTexture;
             if (!string.IsNullOrEmpty(lmPath)) { lightmaps[i] = Load(lmPath); if (lightmaps[i] is not null) lmGroups++; }
@@ -6370,7 +6394,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                                (spec > 0 ? $", {spec} group(s) with specular." : ".") +
                                (lmGroups > 0 ? $" {lmGroups} group(s) with baked lightmaps." : "") +
                                (flowGroups > 0 ? $" {flowGroups} flowmap-water group(s)." : "") +
-                               (terrainGroups > 0 ? $" {terrainGroups} terrain-blend group(s)." : ""));
+                               (terrainGroups > 0 ? $" {terrainGroups} terrain-blend group(s)." : "") +
+                               (bakedPaintGroups > 0 ? $" {bakedPaintGroups} baked-terrain group(s)." : ""));
         return result;
     }
 
@@ -6613,7 +6638,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .First();
     }
 
-    private static ViewportMeshRenderer.SubmeshMaterial ToSubmeshMaterial(MaterialProfile p) =>
+    private static ViewportMeshRenderer.SubmeshMaterial ToSubmeshMaterial(MaterialProfile p,
+        System.Numerics.Vector4 terrainWorldMaskTransform = default) =>
         new(p.UsesRim, p.UsesSpecular, p.UvScale, p.UvOffset, p.UvRotationDegrees,
             AlphaMode: p.RenderMode switch
             {
@@ -6643,9 +6669,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             TerrainWorldScale: p.TerrainWorldScale,
             TerrainMaskMultipliers: new System.Numerics.Vector3(
                 p.TerrainRMaskMultiplier, p.TerrainGMaskMultiplier, p.TerrainBMaskMultiplier),
+            TerrainWorldProjectedMask: p.TerrainWorldProjectedMask,
+            TerrainWorldMaskTransform: terrainWorldMaskTransform,
+            TerrainBlendPowers: p.TerrainBlendPowers,
+            TerrainUseTop: p.TerrainUseTop,
+            TerrainUseExtras: p.TerrainUseExtras,
+            TerrainUseAlphaOverlay: p.TerrainUseAlphaOverlay,
+            TerrainOverlayRange: p.TerrainOverlayRange,
             UsesGrassTint: p.UsesGrassTint,    // M78
             NoBakedLighting: p.NoBakedLighting,   // M150: shaderMacros NO_BAKED_LIGHTING
-            DisableDepthFog: p.DisableDepthFog);  //           DISABLE_DEPTH_FOG
+            DisableDepthFog: p.DisableDepthFog,   //           DISABLE_DEPTH_FOG
+            SrcBlendFactor: p.SrcBlendFactor,
+            DstBlendFactor: p.DstBlendFactor);
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 

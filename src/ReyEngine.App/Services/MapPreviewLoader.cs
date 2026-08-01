@@ -264,6 +264,11 @@ public static class MapPreviewLoader
                 DoubleSided = nvr.SubmeshDoubleSided[i],
                 AlphaMode = alphaMode,
                 AlphaCutoff = 0.25f,
+                // This legacy path synthesises decal render state rather than reading a
+                // StaticMaterialDef pass, so spell out the ordinary straight-alpha pair. An absent
+                // authored factor means One/Zero and is reserved for real material definitions.
+                SrcBlendFactor = alphaMode >= 2 ? 6 : -1,
+                DstBlendFactor = alphaMode >= 2 ? 7 : -1,
                 ClampU = decal,
                 ClampV = decal,
             };

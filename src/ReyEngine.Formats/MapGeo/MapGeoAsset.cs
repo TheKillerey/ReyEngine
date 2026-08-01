@@ -16,6 +16,11 @@ public sealed class MapGeoAsset
     public bool HasVertexColor { get; init; }
     public float[]? LightmapUvs { get; init; }    // 2 floats / vertex, atlas-mapped (uv7*scale+bias); null if none
     public bool HasLightmap { get; init; }
+    /// <summary>M320: raw Texcoord7 before either baked-light or baked-paint atlas transforms. Riot's DX11
+    /// shaders apply both per-mesh transforms independently to this same source channel.</summary>
+    public float[]? RawLightmapUvs { get; init; }
+    /// <summary>M320: final BakedTerrain UVs (raw Texcoord7 * BakedPaintScale + BakedPaintBias) for GL.</summary>
+    public float[]? BakedPaintUvs { get; init; }
     /// <summary>M230: Texcoord5 - the grass clump pivot, 3 floats / vertex, already mesh-transformed. Shared
     /// by every blade in a clump. Only VertexDeform meshes author it; null when no mesh in the file does.</summary>
     public float[]? GrassPivots { get; init; }
@@ -170,7 +175,18 @@ public sealed record MapBucketGridInfo(
 public sealed record MapGeoGroup(
     string Material, int StartIndex, int IndexCount,
     string Name = "", int VisibilityFlags = 255, uint ControllerHash = 0, int MeshIndex = -1,
-    string LightmapTexture = "");
+    string LightmapTexture = "")
+{
+    /// <summary>M319: the per-mesh BAKED_DIFFUSE_TEXTURE override. Mapgeo v17+ stores the sampler name
+    /// once on the asset and stores only (sampler index, texture path) on each mesh.</summary>
+    public string BakedPaintTexture { get; init; } = "";
+    /// <summary>Atlas transform consumed by BAKED_PAINT_UV_SCALE_BIAS.</summary>
+    public Vector2 BakedPaintScale { get; init; } = Vector2.One;
+    public Vector2 BakedPaintBias { get; init; } = Vector2.Zero;
+    /// <summary>Per-mesh transform for the BakedLight atlas. DX11 consumes the raw Texcoord7 plus this.</summary>
+    public Vector2 LightmapScale { get; init; } = Vector2.One;
+    public Vector2 LightmapBias { get; init; } = Vector2.Zero;
+}
 
 /// <summary>One source mapgeo mesh: its baked vertex range + original transform, for selection/move.</summary>
 public sealed class MapGeoMesh
@@ -191,11 +207,20 @@ public sealed class MapGeoMesh
     public Vector3 BoundsMin { get; init; }
     public Vector3 BoundsMax { get; init; }
     public string[] Attributes { get; init; } = System.Array.Empty<string>();  // vertex elements present
-    public bool HasLightmapUv { get; init; }     // Texcoord1
+    public bool HasLightmapUv { get; init; }     // Texcoord7
     public bool HasVertexColor { get; init; }    // PrimaryColor
     public string RenderFlags { get; init; } = "";
     public bool DisableBackfaceCulling { get; init; }
-    public string? StationaryLightTexture { get; init; }  // baked lightmap (empty/null on modern SR)
+    /// <summary>Optional stationary-light atlas. This is a separate mapgeo channel from BakedLight.</summary>
+    public string? StationaryLightTexture { get; init; }
+    /// <summary>Mesh-owned BakedLight atlas sampled on Texcoord7 by any shader permutation that declares it.</summary>
+    public string? BakedLightTexture { get; init; }
+    public Vector2 BakedLightScale { get; init; } = Vector2.One;
+    public Vector2 BakedLightBias { get; init; } = Vector2.Zero;
+    /// <summary>M319: mesh-owned BAKED_DIFFUSE_TEXTURE path used by DefaultEnv_Flat_BakedTerrain.</summary>
+    public string? BakedPaintTexture { get; init; }
+    public Vector2 BakedPaintScale { get; init; } = Vector2.One;
+    public Vector2 BakedPaintBias { get; init; } = Vector2.Zero;
 
     // ---- M34 transform diagnostics ----
     /// <summary>Signed determinant of the mesh's world transform (from the file, before edits).</summary>

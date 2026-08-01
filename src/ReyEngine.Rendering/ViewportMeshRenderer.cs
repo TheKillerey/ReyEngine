@@ -1,6 +1,7 @@
 using System.Numerics;
 using Silk.NET.OpenGL;
 using ReyEngine.Formats.Lighting;
+using ReyEngine.Formats.Materials;
 
 namespace ReyEngine.Rendering;
 
@@ -18,6 +19,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mMask, _mGradient, _mEmissive, _mHasMask, _mHasGradient, _mHasEmissive;
     private int _mMatCap, _mMatCapMask, _mHasMatCap, _mHasMatCapMask, _mView;
     private int _mUvScaleOffset, _mUvRot, _mUsesRim, _mUsesSpec;   // M32: per-material UV + feature flags
+    private int _mUsesBakedPaint;                                  // M320: base texture samples transformed Texcoord7
     private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
     private int _mVertexBakedLight, _mVertexBakedScale;            // M89: NVR vertex-colour baked light
     private int _mVertexLightmap, _mVertexLightmapScale;           // M142.4: PrimaryColor AS baked lightmap
@@ -36,6 +38,8 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mIsTerrainBlend, _mTerrainWorldScale;             // terrain shader 0xe25b830f
     private int _mTerrainBottomTiling, _mTerrainMiddleTiling, _mTerrainTopTiling, _mTerrainExtrasTiling;
     private int _mTerrainMaskMultipliers;
+    private int _mTerrainWorldMask, _mTerrainWorldMaskTransform, _mTerrainBlendPowers, _mTerrainUseTop, _mTerrainUseExtras;
+    private int _mTerrainUseAlphaOverlay, _mTerrainOverlayRange;
     private int _mLightmapScale;                                  // M45: MapSunProperties.lightMapColorScale
     private int _lMvp, _lColor;
     private float _time;                                          // M44: animation clock (seconds), fed to uTime
@@ -70,8 +74,8 @@ public sealed class ViewportMeshRenderer : IDisposable
     private Vector3 _sunColor = new(0.75f);
     private Vector3 _skyLight = new(0.35f);
 
-    private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo;
-    private bool _hasVertexColor, _hasLightmapUv;
+    private uint _vao, _vbo, _ebo, _wireEbo, _colorVbo, _lightmapUvVbo, _bakedPaintUvVbo;
+    private bool _hasVertexColor, _hasLightmapUv, _hasBakedPaintUv;
     private int _indexCount, _wireIndexCount;
     private bool _hasMesh;
     private float[]? _interleaved; // kept so per-frame skinning can update pos+normal in place
@@ -140,6 +144,8 @@ public sealed class ViewportMeshRenderer : IDisposable
         public bool UsesRim;
         public bool UsesSpecular;
         public int AlphaMode;           // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
+        public int SrcBlendFactor;
+        public int DstBlendFactor;
         public float AlphaCutoff;       // M34: alpha-test threshold for cutout (default 0.35)
         public bool UsesGrassTint;      // M78: multiply the map's world-space grass tint into the diffuse
         public bool DoubleSided;        // M34: two-sided material (cullEnable=false) — never culled
@@ -165,6 +171,13 @@ public sealed class ViewportMeshRenderer : IDisposable
         public Vector2 TerrainExtrasTiling;
         public float TerrainWorldScale;
         public Vector3 TerrainMaskMultipliers;
+        public bool TerrainWorldProjectedMask;
+        public Vector4 TerrainWorldMaskTransform;
+        public Vector3 TerrainBlendPowers;
+        public bool TerrainUseTop;
+        public bool TerrainUseExtras;
+        public bool TerrainUseAlphaOverlay;
+        public Vector2 TerrainOverlayRange;
 
         // M142: Map10 height-blended ground. Riot bakes the 4-layer height blend into one ground atlas
         // (compositeColorMap) indexed by the 2nd UV set; this submesh's diffuse slot holds that atlas.
@@ -173,9 +186,15 @@ public sealed class ViewportMeshRenderer : IDisposable
         // M150: shaderMacros NO_BAKED_LIGHTING / DISABLE_DEPTH_FOG.
         public bool NoBakedLighting;
         public bool DisableDepthFog;
+        public bool UsesBakedPaint;   // M320: diffuse comes from mesh-owned atlas on transformed Texcoord7
 
         public static SubmeshDraw Create(int start, int count) =>
-            new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One, AlphaCutoff = 0.35f };
+            new()
+            {
+                Start = start, Count = count, Visible = true,
+                UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One, AlphaCutoff = 0.35f,
+                SrcBlendFactor = -1, DstBlendFactor = -1,
+            };
     }
 
     /// <summary>Per-submesh preview material data pushed from the App's resolved <c>MaterialProfile</c> (M32/M34).
@@ -193,13 +212,19 @@ public sealed class ViewportMeshRenderer : IDisposable
         bool IsTerrainBlend = false, Vector2 TerrainBottomTiling = default, Vector2 TerrainMiddleTiling = default,
         Vector2 TerrainTopTiling = default, Vector2 TerrainExtrasTiling = default, float TerrainWorldScale = 1f,
         Vector3 TerrainMaskMultipliers = default,
+        bool TerrainWorldProjectedMask = false, Vector4 TerrainWorldMaskTransform = default,
+        Vector3 TerrainBlendPowers = default,
+        bool TerrainUseTop = true, bool TerrainUseExtras = true, bool TerrainUseAlphaOverlay = false,
+        Vector2 TerrainOverlayRange = default,
         bool UsesGrassTint = false,   // M78: multiply the map's world-space grass tint into the diffuse
         // M142: Map10 height-blended ground — this submesh's diffuse slot holds the baked ground atlas
         // (compositeColorMap), sampled by the 2nd UV set instead of the tiling primary UV.
         bool CompositeGround = false,
         // M150: Riot shaderMacros — NO_BAKED_LIGHTING ignores the baked lightmap on this surface,
         // DISABLE_DEPTH_FOG excludes it from distance fog (skyboxes, FX, water use these).
-        bool NoBakedLighting = false, bool DisableDepthFog = false)
+        bool NoBakedLighting = false, bool DisableDepthFog = false,
+        bool UsesBakedPaint = false,
+        int SrcBlendFactor = -1, int DstBlendFactor = -1)
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
@@ -210,6 +235,7 @@ layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUv;
 layout(location = 3) in vec4 aColor;   // PrimaryColor (defaults to white via VertexAttrib4f when absent)
 layout(location = 4) in vec2 aLmUv;    // baked-lightmap atlas UV (already uv7*scale+bias; 0 when absent)
+layout(location = 5) in vec2 aBakedPaintUv; // mesh-owned baked diffuse UV (uv7*paintScale+paintBias)
 uniform mat4 uMvp;
 uniform mat4 uModel;
 out vec3 vN;
@@ -217,11 +243,13 @@ out vec2 vUv;
 out vec3 vWorld;
 out vec4 vColor;
 out vec2 vLmUv;
+out vec2 vBakedPaintUv;
 void main() {
     vN = mat3(uModel) * aNormal;
     vUv = aUv;
     vColor = aColor;
     vLmUv = aLmUv;
+    vBakedPaintUv = aBakedPaintUv;
     vWorld = (uModel * vec4(aPos, 1.0)).xyz;
     gl_Position = uMvp * vec4(aPos, 1.0);
 }";
@@ -239,6 +267,7 @@ in vec2 vUv;
 in vec3 vWorld;
 in vec4 vColor;
 in vec2 vLmUv;
+in vec2 vBakedPaintUv;
 out vec4 FragColor;
 uniform vec3 uLight;
 uniform vec3 uSunColor;
@@ -263,6 +292,7 @@ uniform vec4 uUvScaleOffset;   // xy = scale, zw = offset (identity = 1,1,0,0)
 uniform float uUvRot;          // radians, rotate about (0.5, 0.5); 0 = none
 uniform int uUsesRim;          // fresnel rim highlight only when the material profile asks for it
 uniform int uUsesSpec;         // specular highlight only when the material profile asks for it
+uniform int uUsesBakedPaint;   // base texture uses mesh-owned transformed Texcoord7 instead of Texcoord0
 uniform int uHasVertexColor;   // 1 when the mesh carries PrimaryColor (map baked-term/mask data)
 uniform int uVertexBakedLight; // M89: 1 = add PrimaryColor as a baked light term (NVR ground shading)
 uniform float uVertexBakedScale;
@@ -318,6 +348,13 @@ uniform vec2 uTerrainMiddleTiling;
 uniform vec2 uTerrainTopTiling;
 uniform vec2 uTerrainExtrasTiling;
 uniform vec3 uTerrainMaskMultipliers;
+uniform int uTerrainWorldMask;
+uniform vec4 uTerrainWorldMaskTransform;
+uniform vec3 uTerrainBlendPowers;
+uniform int uTerrainUseTop;
+uniform int uTerrainUseExtras;
+uniform int uTerrainUseAlphaOverlay;
+uniform vec2 uTerrainOverlayRange;
 
 // League MatCap_Tex: a spheremap of fake studio lighting sampled by the view-space normal.
 vec3 matcapColour(vec3 worldN) {
@@ -347,7 +384,7 @@ void main() {
     // with an away-pointing normal (dark/black). gl_FrontFacing tells us which side we're on; flip so the
     // normal faces the viewer. Single-sided materials keep their normal (their backfaces are culled anyway).
     if (uTwoSided == 1 && !gl_FrontFacing) n = -n;
-    vec2 uv = xformUv(vUv);
+    vec2 uv = uUsesBakedPaint == 1 ? vBakedPaintUv : xformUv(vUv);
     // M34 texture address: decals use Clamp so their out-of-[0,1] UVs show the decal ONCE (edge texel,
     // usually transparent -> cut out) instead of GL_REPEAT tiling it across the whole mesh.
     if (uClampUv.x > 0.5) uv.x = clamp(uv.x, 0.0, 1.0);
@@ -406,19 +443,36 @@ void main() {
         alpha = 1.0;
     }
 
-    // The mask uses the mesh UV atlas. Detail layers are planar world-space textures and are stacked in
-    // authored order: R selects Middle, G selects Top, B selects Extras. The pass blend flag describes this
-    // internal texture blend; the final terrain surface remains opaque.
+    // Terrain layers are planar world-space textures. Jade materials carry a regular Mask_Texture sampled
+    // by UV0. 4TextureBlend_WorldProjected instead consumes the map-wide TERRAIN_BLEND paint texture at
+    // the active map's world-to-canvas transform and combines its RGB with the detail textures' alpha heights.
     if (uIsTerrainBlend == 1) {
         vec2 worldUv = vWorld.xz * uTerrainWorldScale;
-        vec3 bottom = (uHasTex == 1) ? texture(uTex, worldUv * uTerrainBottomTiling).rgb : uBaseColor;
-        vec3 middle = (uHasGradient == 1) ? texture(uGradient, worldUv * uTerrainMiddleTiling).rgb : bottom;
-        vec3 top = (uHasEmissive == 1) ? texture(uEmissive, worldUv * uTerrainTopTiling).rgb : middle;
-        vec3 extras = (uHasMatCap == 1) ? texture(uMatCap, worldUv * uTerrainExtrasTiling).rgb : top;
-        vec3 weights = (uHasMask == 1) ? texture(uMask, uv).rgb * uTerrainMaskMultipliers : vec3(0.0);
-        base = mix(bottom, middle, clamp(weights.r, 0.0, 1.0));
-        base = mix(base, top, clamp(weights.g, 0.0, 1.0));
-        base = mix(base, extras, clamp(weights.b, 0.0, 1.0));
+        vec4 bottom = (uHasTex == 1) ? texture(uTex, worldUv * uTerrainBottomTiling) : vec4(uBaseColor, 1.0);
+        vec4 middle = (uHasGradient == 1) ? texture(uGradient, worldUv * uTerrainMiddleTiling) : bottom;
+        vec4 top = (uHasEmissive == 1) ? texture(uEmissive, worldUv * uTerrainTopTiling) : middle;
+        vec4 extras = (uHasMatCap == 1) ? texture(uMatCap, worldUv * uTerrainExtrasTiling) : top;
+        vec2 maskUv = uTerrainWorldMask == 1
+            ? clamp(vWorld.xz * uTerrainWorldMaskTransform.xy + uTerrainWorldMaskTransform.zw, 0.0, 1.0)
+            : uv;
+        vec4 painted = (uHasMask == 1) ? texture(uMask, maskUv) : vec4(0.0);
+        vec3 weights;
+        if (uTerrainWorldMask == 1) {
+            vec3 heights = vec3(middle.a, top.a, extras.a);
+            weights = pow(max(painted.rgb * (heights * 4.0 + 1.0), vec3(0.01)),
+                          max(uTerrainBlendPowers, vec3(0.0001)));
+        } else {
+            weights = painted.rgb * uTerrainMaskMultipliers;
+        }
+        base = mix(bottom.rgb, middle.rgb, clamp(weights.r, 0.0, 1.0));
+        if (uTerrainUseTop == 1) base = mix(base, top.rgb, clamp(weights.g, 0.0, 1.0));
+        if (uTerrainUseExtras == 1) base = mix(base, extras.rgb, clamp(weights.b, 0.0, 1.0));
+        if (uTerrainUseAlphaOverlay == 1) {
+            float overlay = mix(uTerrainOverlayRange.x, uTerrainOverlayRange.y, bottom.a);
+            vec3 low = 2.0 * base * overlay;
+            vec3 high = 1.0 - 2.0 * (1.0 - base) * (1.0 - overlay);
+            base = mix(low, high, step(vec3(0.5), base));
+        }
         alpha = 1.0;
     }
 
@@ -708,6 +762,7 @@ void main() { FragColor = uColor; }";
         _mUvRot = gl.GetUniformLocation(_meshProgram, "uUvRot");
         _mUsesRim = gl.GetUniformLocation(_meshProgram, "uUsesRim");
         _mUsesSpec = gl.GetUniformLocation(_meshProgram, "uUsesSpec");
+        _mUsesBakedPaint = gl.GetUniformLocation(_meshProgram, "uUsesBakedPaint");
         _mHasVertexColor = gl.GetUniformLocation(_meshProgram, "uHasVertexColor");
         _mVertexBakedLight = gl.GetUniformLocation(_meshProgram, "uVertexBakedLight");
         _mVertexBakedScale = gl.GetUniformLocation(_meshProgram, "uVertexBakedScale");
@@ -742,6 +797,13 @@ void main() { FragColor = uColor; }";
         _mTerrainTopTiling = gl.GetUniformLocation(_meshProgram, "uTerrainTopTiling");
         _mTerrainExtrasTiling = gl.GetUniformLocation(_meshProgram, "uTerrainExtrasTiling");
         _mTerrainMaskMultipliers = gl.GetUniformLocation(_meshProgram, "uTerrainMaskMultipliers");
+        _mTerrainWorldMask = gl.GetUniformLocation(_meshProgram, "uTerrainWorldMask");
+        _mTerrainWorldMaskTransform = gl.GetUniformLocation(_meshProgram, "uTerrainWorldMaskTransform");
+        _mTerrainBlendPowers = gl.GetUniformLocation(_meshProgram, "uTerrainBlendPowers");
+        _mTerrainUseTop = gl.GetUniformLocation(_meshProgram, "uTerrainUseTop");
+        _mTerrainUseExtras = gl.GetUniformLocation(_meshProgram, "uTerrainUseExtras");
+        _mTerrainUseAlphaOverlay = gl.GetUniformLocation(_meshProgram, "uTerrainUseAlphaOverlay");
+        _mTerrainOverlayRange = gl.GetUniformLocation(_meshProgram, "uTerrainOverlayRange");
         _mLightmapScale = gl.GetUniformLocation(_meshProgram, "uLightmapScale");
         _mGrassTint = gl.GetUniformLocation(_meshProgram, "uGrassTint");         // M78
         _mHasGrassTint = gl.GetUniformLocation(_meshProgram, "uHasGrassTint");
@@ -1009,7 +1071,7 @@ void main(){
 
     public unsafe void SetMesh(float[] positions, float[] normals, float[] uvs, uint[] indices,
         int vertexCount, Vector3 min, Vector3 max, IReadOnlyList<(int start, int count)> submeshes,
-        float[]? colors = null, float[]? lightmapUvs = null)
+        float[]? colors = null, float[]? lightmapUvs = null, float[]? bakedPaintUvs = null)
     {
         if (!_ready) return;
         DeleteMeshBuffers();
@@ -1079,6 +1141,25 @@ void main(){
         {
             _gl.DisableVertexAttribArray(4);
             _gl.VertexAttrib2(4, 0f, 0f);
+        }
+
+        // M320: BakedTerrain samples the SAME raw Texcoord7 as BakedLight, but with its own atlas
+        // transform. The decoder supplies the final paint UV separately so GL can keep its existing final
+        // lightmap UV stream and still match Riot's shader exactly.
+        _hasBakedPaintUv = bakedPaintUvs is { Length: > 0 } && bakedPaintUvs.Length >= vertexCount * 2;
+        if (_hasBakedPaintUv)
+        {
+            _bakedPaintUvVbo = _gl.GenBuffer();
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _bakedPaintUvVbo);
+            fixed (float* bp = bakedPaintUvs)
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(bakedPaintUvs!.Length * sizeof(float)), bp, BufferUsageARB.StaticDraw);
+            _gl.EnableVertexAttribArray(5);
+            _gl.VertexAttribPointer(5, 2, VertexAttribPointerType.Float, false, 2 * sizeof(float), (void*)0);
+        }
+        else
+        {
+            _gl.DisableVertexAttribArray(5);
+            _gl.VertexAttrib2(5, 0f, 0f);
         }
 
         _ebo = _gl.GenBuffer();
@@ -1482,6 +1563,8 @@ void main(){
         _submeshes[index].UsesRim = mat.UsesRim;
         _submeshes[index].UsesSpecular = mat.UsesSpecular;
         _submeshes[index].AlphaMode = mat.AlphaMode;
+        _submeshes[index].SrcBlendFactor = mat.SrcBlendFactor;
+        _submeshes[index].DstBlendFactor = mat.DstBlendFactor;
         _submeshes[index].AlphaCutoff = mat.AlphaCutoff;
         _submeshes[index].UsesGrassTint = mat.UsesGrassTint;   // M78
         _submeshes[index].DoubleSided = mat.DoubleSided;
@@ -1503,9 +1586,17 @@ void main(){
         _submeshes[index].TerrainExtrasTiling = mat.TerrainExtrasTiling;
         _submeshes[index].TerrainWorldScale = mat.TerrainWorldScale;
         _submeshes[index].TerrainMaskMultipliers = mat.TerrainMaskMultipliers;
+        _submeshes[index].TerrainWorldProjectedMask = mat.TerrainWorldProjectedMask;
+        _submeshes[index].TerrainWorldMaskTransform = mat.TerrainWorldMaskTransform;
+        _submeshes[index].TerrainBlendPowers = mat.TerrainBlendPowers;
+        _submeshes[index].TerrainUseTop = mat.TerrainUseTop;
+        _submeshes[index].TerrainUseExtras = mat.TerrainUseExtras;
+        _submeshes[index].TerrainUseAlphaOverlay = mat.TerrainUseAlphaOverlay;
+        _submeshes[index].TerrainOverlayRange = mat.TerrainOverlayRange;
         _submeshes[index].CompositeGround = mat.CompositeGround;   // M142
         _submeshes[index].NoBakedLighting = mat.NoBakedLighting;   // M150
         _submeshes[index].DisableDepthFog = mat.DisableDepthFog;
+        _submeshes[index].UsesBakedPaint = mat.UsesBakedPaint;
         _drawOrderDirty = true;
     }
 
@@ -1519,6 +1610,8 @@ void main(){
             _submeshes[i].UsesRim = false;
             _submeshes[i].UsesSpecular = false;
             _submeshes[i].AlphaMode = 0;
+            _submeshes[i].SrcBlendFactor = -1;
+            _submeshes[i].DstBlendFactor = -1;
             _submeshes[i].AlphaCutoff = 0.35f;
             _submeshes[i].UsesGrassTint = false;   // M78
             _submeshes[i].DoubleSided = false;
@@ -1531,6 +1624,7 @@ void main(){
             _submeshes[i].CompositeGround = false;   // M142
             _submeshes[i].NoBakedLighting = false;   // M150
             _submeshes[i].DisableDepthFog = false;
+            _submeshes[i].UsesBakedPaint = false;
         }
         _drawOrderDirty = true;
     }
@@ -1874,6 +1968,21 @@ void main(){
     public unsafe void Render(Matrix4x4 viewProjection, bool wireframe, bool showBounds, bool showBones)
         => Render(viewProjection, Matrix4x4.Identity, Vector3.Zero, 0, wireframe, showBounds, showBones);
 
+    private static BlendingFactor GlBlendFactor(MaterialBlendFactor factor) => factor switch
+    {
+        MaterialBlendFactor.Zero => BlendingFactor.Zero,
+        MaterialBlendFactor.One => BlendingFactor.One,
+        MaterialBlendFactor.SourceColor => BlendingFactor.SrcColor,
+        MaterialBlendFactor.OneMinusSourceColor => BlendingFactor.OneMinusSrcColor,
+        MaterialBlendFactor.DestinationColor => BlendingFactor.DstColor,
+        MaterialBlendFactor.OneMinusDestinationColor => BlendingFactor.OneMinusDstColor,
+        MaterialBlendFactor.SourceAlpha => BlendingFactor.SrcAlpha,
+        MaterialBlendFactor.OneMinusSourceAlpha => BlendingFactor.OneMinusSrcAlpha,
+        MaterialBlendFactor.DestinationAlpha => BlendingFactor.DstAlpha,
+        MaterialBlendFactor.OneMinusDestinationAlpha => BlendingFactor.OneMinusDstAlpha,
+        _ => BlendingFactor.One,
+    };
+
     public unsafe void Render(Matrix4x4 viewProjection, Vector3 camPos, int previewMode, bool wireframe, bool showBounds, bool showBones)
         => Render(viewProjection, Matrix4x4.Identity, camPos, previewMode, wireframe, showBounds, showBones);
 
@@ -1996,6 +2105,7 @@ void main(){
                     _gl.Uniform1(_mUvRot, s.UvRotationRadians);
                     _gl.Uniform1(_mUsesRim, s.UsesRim ? 1 : 0);
                     _gl.Uniform1(_mUsesSpec, s.UsesSpecular ? 1 : 0);
+                    _gl.Uniform1(_mUsesBakedPaint, (s.UsesBakedPaint && _hasBakedPaintUv) ? 1 : 0);
                     _gl.Uniform1(_mAlphaMode, s.AlphaMode);   // M34: 0 opaque · 1 cutout · 2 transparent
                     _gl.Uniform1(_mAlphaCutoff, s.AlphaCutoff);
                     _gl.Uniform1(_mHasGrassTint, (s.UsesGrassTint && _grassTintTex != 0) ? 1 : 0);   // M78
@@ -2023,6 +2133,16 @@ void main(){
                         _gl.Uniform2(_mTerrainExtrasTiling, s.TerrainExtrasTiling.X, s.TerrainExtrasTiling.Y);
                         _gl.Uniform3(_mTerrainMaskMultipliers, s.TerrainMaskMultipliers.X,
                             s.TerrainMaskMultipliers.Y, s.TerrainMaskMultipliers.Z);
+                        _gl.Uniform1(_mTerrainWorldMask, s.TerrainWorldProjectedMask ? 1 : 0);
+                        _gl.Uniform4(_mTerrainWorldMaskTransform, s.TerrainWorldMaskTransform.X,
+                            s.TerrainWorldMaskTransform.Y, s.TerrainWorldMaskTransform.Z,
+                            s.TerrainWorldMaskTransform.W);
+                        _gl.Uniform3(_mTerrainBlendPowers, s.TerrainBlendPowers.X,
+                            s.TerrainBlendPowers.Y, s.TerrainBlendPowers.Z);
+                        _gl.Uniform1(_mTerrainUseTop, s.TerrainUseTop ? 1 : 0);
+                        _gl.Uniform1(_mTerrainUseExtras, s.TerrainUseExtras ? 1 : 0);
+                        _gl.Uniform1(_mTerrainUseAlphaOverlay, s.TerrainUseAlphaOverlay ? 1 : 0);
+                        _gl.Uniform2(_mTerrainOverlayRange, s.TerrainOverlayRange.X, s.TerrainOverlayRange.Y);
                     }
                     _gl.Uniform1(_mCompositeGround, s.CompositeGround ? 1 : 0);   // M142: Map10 baked ground
                     // M150: DISABLE_DEPTH_FOG excludes this surface from the scene's distance fog.
@@ -2065,10 +2185,17 @@ void main(){
                 if (anyTransparent)
                 {
                     _gl.Enable(EnableCap.Blend);
-                    _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
                     _gl.DepthMask(false);
                     foreach (var s in _submeshes)
-                        if (s.Visible && s.AlphaMode >= 2 && InView(s)) { DrawSubmesh(s); DrawCalls++; }
+                        if (s.Visible && s.AlphaMode >= 2 && InView(s))
+                        {
+                            _gl.BlendFuncSeparate(
+                                GlBlendFactor(MaterialBlendFactors.Source(s.SrcBlendFactor)),
+                                GlBlendFactor(MaterialBlendFactors.Destination(s.DstBlendFactor)),
+                                BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+                            DrawSubmesh(s);
+                            DrawCalls++;
+                        }
                     _gl.DepthMask(true);
                 }
                 _gl.Disable(EnableCap.CullFace); // restore default so the line/gizmo overlays are unaffected
@@ -2120,6 +2247,7 @@ void main(){
             _gl.Uniform1(_mHasMatCap, 0); _gl.Uniform1(_mHasMatCapMask, 0); _gl.Uniform1(_mHasLightmap, 0);
             _gl.Uniform1(_mHasGrassTint, 0);   // M78: props never grass-tint
             _gl.Uniform1(_mUsesRim, 0); _gl.Uniform1(_mUsesSpec, 0);
+            _gl.Uniform1(_mUsesBakedPaint, 0);
             _gl.Uniform1(_mAlphaMode, 1); _gl.Uniform1(_mAlphaCutoff, 0.35f);   // cutout so fur/wing alpha reads
             _gl.Uniform4(_mUvScaleOffset, 1f, 1f, 0f, 0f); _gl.Uniform1(_mUvRot, 0f);
             _gl.Uniform2(_mClampUv, 0f, 0f); _gl.Uniform4(_mTint, 1f, 1f, 1f, 1f); _gl.Uniform1(_mTintTextured, 0); _gl.Uniform1(_mMirrored, 0);
@@ -2390,9 +2518,11 @@ void main(){
         _gl.DeleteBuffer(_wireEbo);
         if (_colorVbo != 0) { _gl.DeleteBuffer(_colorVbo); _colorVbo = 0; }
         if (_lightmapUvVbo != 0) { _gl.DeleteBuffer(_lightmapUvVbo); _lightmapUvVbo = 0; }
+        if (_bakedPaintUvVbo != 0) { _gl.DeleteBuffer(_bakedPaintUvVbo); _bakedPaintUvVbo = 0; }
         _gl.DeleteVertexArray(_vao);
         _hasVertexColor = false;
         _hasLightmapUv = false;
+        _hasBakedPaintUv = false;
         _hasMesh = false;
     }
 

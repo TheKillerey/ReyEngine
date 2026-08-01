@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Text;
 using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Hashing;
@@ -91,13 +92,15 @@ public static class Dx11SceneBuilder
         ShaderPermutationIndex? perms,
         MapGeoAsset map,
         IReadOnlyList<MaterialBinding> materials,
-        Func<ulong, byte[]?> readAsset)
+        Func<ulong, byte[]?> readAsset,
+        string? mapGeoPath = null)
     {
         var t0 = DateTime.UtcNow;
 
+        bool usesRawUv7 = map.RawLightmapUvs is not null;
         var mesh = PreviewGeometry.FromLeagueArrays(
             "viewport", map.Positions.Length / 3,
-            map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices,
+            map.Positions, map.Normals, map.Uvs, map.Colors, map.RawLightmapUvs ?? map.LightmapUvs, map.Indices,
             grassPivots: map.GrassPivots,
             // M253: authored world coordinates, NOT recentred. The editor camera is shared with the GL
             // viewport, which draws the map where the data puts it.
@@ -106,6 +109,8 @@ public static class Dx11SceneBuilder
         var merged = MergeSlices(map);
         var byName = new Dictionary<string, MaterialBinding>(StringComparer.OrdinalIgnoreCase);
         foreach (var m in materials) byName[m.Name] = m;
+        var terrainWorldTransform = MapGeoMaterialResolver.TerrainBlendWorldTransformFor(map,
+            materials.Where(m => m.Profile.TerrainWorldProjectedMask).Select(m => m.Name));
 
         // Every distinct texture path the scene will need, collected first so the decode can be one
         // parallel pass rather than interleaved with shader resolution.
@@ -154,10 +159,27 @@ public static class Dx11SceneBuilder
                 string? target = ResolveTextureTarget(slot.SamplerName, ps);
                 if (target is not null) wanted.Add((target, slot.Path!.ToLowerInvariant()));
             }
+            // M321: this shader's painted RGB mask is engine-owned rather than a samplerValues entry.
+            // The runtime derives its asset from the active mapgeo and binds it as a one-slice Texture2DArray.
+            if (b.Profile.TerrainWorldProjectedMask && !string.IsNullOrEmpty(mapGeoPath)
+                && ps.Textures.FirstOrDefault(t => t.Name.Equals("TERRAIN_BLEND_SharedTexture",
+                    StringComparison.OrdinalIgnoreCase)) is { } terrainBlend)
+                wanted.Add((terrainBlend.Name,
+                    MapGeoMaterialResolver.TerrainBlendTexturePathFor(mapGeoPath).ToLowerInvariant()));
             if (slice.Lightmap.Length > 0
                 && ps.Textures.FirstOrDefault(t => t.Name.Contains("BAKED_LIGHT", StringComparison.OrdinalIgnoreCase))
                     is { } lmSlot)
                 wanted.Add((lmSlot.Name, slice.Lightmap.ToLowerInvariant()));
+
+            // M319: the material intentionally carries black.tex as a fallback. The real baked terrain
+            // atlas is a per-mesh mapgeo texture override, so it must replace (not accompany) the material
+            // binding at BAKED_DIFFUSE_TEXTURE__TX.
+            if (slice.BakedPaint.Length > 0
+                && BakedPaintTextureTarget(ps) is { } paintTarget)
+            {
+                wanted.RemoveAll(x => x.Target.Equals(paintTarget, StringComparison.OrdinalIgnoreCase));
+                wanted.Add((paintTarget, slice.BakedPaint.ToLowerInvariant()));
+            }
 
             foreach (var (_, key) in wanted) distinct.Add(key);
 
@@ -183,6 +205,35 @@ public static class Dx11SceneBuilder
             if (perms is not null && perms.TryGetParameterDefaults(b.RenderShader!, out var defs))
                 foreach (var (dn, dv) in defs)
                     if (!authored.Contains(dn)) parameters.Add((dn, dv));
+
+            // M320: the Riot shader receives RAW Texcoord7 and applies the baked-light and baked-paint
+            // atlas transforms separately. Older/synthetic callers without RawLightmapUvs retain the
+            // renderer's identity fallback because their LightmapUvs are already transformed.
+            if (usesRawUv7 && slice.Lightmap.Length > 0)
+            {
+                parameters.RemoveAll(x => x.Item1.Equals("BAKED_LIGHT_SCALE_AND_BIAS", StringComparison.OrdinalIgnoreCase));
+                parameters.Add(("BAKED_LIGHT_SCALE_AND_BIAS",
+                    BakedPaintUvScaleBias(slice.LightmapScale, slice.LightmapBias)));
+            }
+
+            if (slice.BakedPaint.Length > 0)
+            {
+                parameters.RemoveAll(x => x.Item1.Equals("BAKED_PAINT_UV_SCALE_BIAS", StringComparison.OrdinalIgnoreCase));
+                parameters.Add(("BAKED_PAINT_UV_SCALE_BIAS",
+                    BakedPaintUvScaleBias(slice.BakedPaintScale, slice.BakedPaintBias)));
+            }
+
+            if (b.Profile.TerrainWorldProjectedMask)
+            {
+                // The compiled shader does worldXZ * TERRAIN_XFORM.xy + .zw before sampling array slice
+                // zero. M322 derives both the scale and the non-zero canvas origin from the terrain mesh.
+                parameters.RemoveAll(x => x.Item1.Equals("TERRAIN_XFORM", StringComparison.OrdinalIgnoreCase));
+                parameters.Add(("TERRAIN_XFORM", new[]
+                {
+                    terrainWorldTransform.X, terrainWorldTransform.Y,
+                    terrainWorldTransform.Z, terrainWorldTransform.W,
+                }));
+            }
 
             scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,
                 new ShaderDescription(full, DxbcStage.Vertex, vp.Key, vp.BlobIndex, b.Macros, vs),
@@ -293,19 +344,23 @@ public static class Dx11SceneBuilder
             // 24 to 93, because the tail cannot be grouped by pipeline. Frame time did not move out of the
             // harness's own repeat spread.
             //
-            // NOT honoured here, deliberately. Per-material back-face culling: one rasterizer state is
+            // Still not honoured here, deliberately. Per-material back-face culling: one rasterizer state is
             // built from PreviewSettings, and StateDescription.Geometry's cull-off is an M240 decision
             // carrying its own live-game evidence, so it has to be settled on that evidence rather than
-            // smuggled in behind a decal fix (it is also 95% of materials, not 17%). Blend FACTORS other
-            // than SrcAlpha/InvSrcAlpha: 52 of 9,036 materials censused across four maps author anything
-            // else, all of them on Map22. Back-to-front sorting inside the transparent tail: the GL path
-            // does not do it either, so doing it here would break the parity this change just bought.
+            // smuggled in behind a decal fix (it is also 95% of materials, not 17%). Back-to-front sorting
+            // inside the transparent tail: the GL path does not do it either, so doing it here would break
+            // the parity this change just bought. Authored blend factors are now applied below: Map22's
+            // DstColor/Zero shadow receivers proved that forcing every pass to SrcAlpha/InvSrcAlpha is not
+            // merely an approximation; it replaces the linked board texture with an opaque white helper.
             // And the alpha CUTOUT needs nothing at all - it is a discard compiled into Riot's own pixel
             // shader ("lt r1.x, r0.w, cb0[2].x" then "discard_nz"), driven by the AlphaTestValue this
             // builder already puts in mat.Params, so it was never a blend-state question.
             bool depthWrite = s.Profile.DepthWrite;
             mat.WritesDepth = depthWrite;
             mat.SortableByPipeline = depthWrite;
+            mat.UsesAuthoredColorBlend = !depthWrite && s.Profile.BlendEnabled;
+            mat.SourceColorBlend = s.Profile.SourceColorBlend;
+            mat.DestinationColorBlend = s.Profile.DestinationColorBlend;
             if (!depthWrite) transparent++;
             mat.SamplerAddress = SamplerAddressFor(s.Profile);
             if (mat.SamplerAddress != PreviewSamplerAddress.Wrap) clamped++;
@@ -314,9 +369,14 @@ public static class Dx11SceneBuilder
 
             foreach (var (target, key) in s.Textures)
             {
-                if (renderer.TryBindCached(mat, target, key)) { textures++; continue; }
+                bool terrainArray = target.Equals("TERRAIN_BLEND_SharedTexture", StringComparison.OrdinalIgnoreCase);
+                string poolKey = terrainArray ? key + "\0array" : key;
+                if (renderer.TryBindCached(mat, target, poolKey)) { textures++; continue; }
                 if (!scene.Textures.TryGetValue(key, out var img)) continue;
-                renderer.SetTexture(mat, target, key, img.Rgba, img.Width, img.Height);
+                if (terrainArray)
+                    renderer.SetTextureArray(mat, target, poolKey, img.Rgba, img.Width, img.Height);
+                else
+                    renderer.SetTexture(mat, target, poolKey, img.Rgba, img.Width, img.Height);
                 textures++;
             }
 
@@ -368,7 +428,9 @@ public static class Dx11SceneBuilder
     /// homogeneous, which is what makes a per-material flag sufficient. Note this method deliberately does
     /// not know the RULES - only that groups differing in these three inputs must not be fused - so the
     /// rules stay in MapVisibilityResolver, shared with the OpenGL viewport.</para>
-    private static List<(string Material, int Start, int Count, string Lightmap, int Group)> MergeSlices(MapGeoAsset map)
+    private static List<(string Material, int Start, int Count, string Lightmap,
+        Vector2 LightmapScale, Vector2 LightmapBias,
+        string BakedPaint, Vector2 BakedPaintScale, Vector2 BakedPaintBias, int Group)> MergeSlices(MapGeoAsset map)
     {
         // Sourced exactly as MainWindowViewModel.ApplyMapVisibility does, including the live per-mesh
         // edits, or the two viewports would disagree about which layer a group belongs to.
@@ -384,11 +446,17 @@ public static class Dx11SceneBuilder
 
         var ordered = map.Groups
             .Select((g, i) => (g.Material, Start: g.StartIndex, Count: g.IndexCount,
-                               Lightmap: g.LightmapTexture, Group: i, Id: Identity(g)))
+                               Lightmap: g.LightmapTexture,
+                               g.LightmapScale, g.LightmapBias,
+                               BakedPaint: g.BakedPaintTexture,
+                               g.BakedPaintScale, g.BakedPaintBias,
+                               Group: i, Id: Identity(g)))
             .OrderBy(x => x.Start)
             .ToList();
 
-        var merged = new List<(string Material, int Start, int Count, string Lightmap, int Group)>();
+        var merged = new List<(string Material, int Start, int Count, string Lightmap,
+            Vector2 LightmapScale, Vector2 LightmapBias,
+            string BakedPaint, Vector2 BakedPaintScale, Vector2 BakedPaintBias, int Group)>();
         (int Flags, uint Ctrl, uint Region) lastId = default;
         foreach (var s in ordered)
         {
@@ -398,10 +466,18 @@ public static class Dx11SceneBuilder
                 if (p.Start + p.Count == s.Start
                     && lastId == s.Id
                     && string.Equals(p.Material, s.Material, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(p.Lightmap, s.Lightmap, StringComparison.OrdinalIgnoreCase))
+                    && string.Equals(p.Lightmap, s.Lightmap, StringComparison.OrdinalIgnoreCase)
+                    && (p.Lightmap.Length == 0
+                        || p.LightmapScale == s.LightmapScale && p.LightmapBias == s.LightmapBias)
+                    && string.Equals(p.BakedPaint, s.BakedPaint, StringComparison.OrdinalIgnoreCase)
+                    // Scale/bias only affect a real baked-paint binding. Ignoring the unused values keeps
+                    // ordinary adjacent meshes coalesced exactly as before M319.
+                    && (p.BakedPaint.Length == 0
+                        || p.BakedPaintScale == s.BakedPaintScale && p.BakedPaintBias == s.BakedPaintBias))
                 { merged[^1] = p with { Count = p.Count + s.Count }; continue; }
             }
-            merged.Add((s.Material, s.Start, s.Count, s.Lightmap, s.Group));
+            merged.Add((s.Material, s.Start, s.Count, s.Lightmap, s.LightmapScale, s.LightmapBias,
+                s.BakedPaint, s.BakedPaintScale, s.BakedPaintBias, s.Group));
             lastId = s.Id;
         }
         return merged;
@@ -417,6 +493,16 @@ public static class Dx11SceneBuilder
         return ps.Textures.FirstOrDefault(t =>
             t.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase))?.Name;
     }
+
+    /// <summary>M319: reflected texture target used by DefaultEnv_Flat_BakedTerrain. Public because the
+    /// binding contract is GPU-free and regression-tested without creating a D3D device.</summary>
+    public static string? BakedPaintTextureTarget(DxbcShader ps) => ps.Textures.FirstOrDefault(t =>
+        t.Name.Equals("BAKED_DIFFUSE_TEXTURE__TX", StringComparison.OrdinalIgnoreCase)
+        || t.Name.Equals("BAKED_DIFFUSE_TEXTURE", StringComparison.OrdinalIgnoreCase))?.Name;
+
+    /// <summary>M319: layout of the shader's BAKED_PAINT_UV_SCALE_BIAS float4.</summary>
+    public static float[] BakedPaintUvScaleBias(Vector2 scale, Vector2 bias) =>
+        new[] { scale.X, scale.Y, bias.X, bias.Y };
 
     private static (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max)? SliceBounds(
         PreviewMesh mesh, int start, int count)
