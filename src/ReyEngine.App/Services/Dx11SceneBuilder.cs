@@ -344,19 +344,23 @@ public static class Dx11SceneBuilder
             // 24 to 93, because the tail cannot be grouped by pipeline. Frame time did not move out of the
             // harness's own repeat spread.
             //
-            // NOT honoured here, deliberately. Per-material back-face culling: one rasterizer state is
+            // Still not honoured here, deliberately. Per-material back-face culling: one rasterizer state is
             // built from PreviewSettings, and StateDescription.Geometry's cull-off is an M240 decision
             // carrying its own live-game evidence, so it has to be settled on that evidence rather than
-            // smuggled in behind a decal fix (it is also 95% of materials, not 17%). Blend FACTORS other
-            // than SrcAlpha/InvSrcAlpha: 52 of 9,036 materials censused across four maps author anything
-            // else, all of them on Map22. Back-to-front sorting inside the transparent tail: the GL path
-            // does not do it either, so doing it here would break the parity this change just bought.
+            // smuggled in behind a decal fix (it is also 95% of materials, not 17%). Back-to-front sorting
+            // inside the transparent tail: the GL path does not do it either, so doing it here would break
+            // the parity this change just bought. Authored blend factors are now applied below: Map22's
+            // DstColor/Zero shadow receivers proved that forcing every pass to SrcAlpha/InvSrcAlpha is not
+            // merely an approximation; it replaces the linked board texture with an opaque white helper.
             // And the alpha CUTOUT needs nothing at all - it is a discard compiled into Riot's own pixel
             // shader ("lt r1.x, r0.w, cb0[2].x" then "discard_nz"), driven by the AlphaTestValue this
             // builder already puts in mat.Params, so it was never a blend-state question.
             bool depthWrite = s.Profile.DepthWrite;
             mat.WritesDepth = depthWrite;
             mat.SortableByPipeline = depthWrite;
+            mat.UsesAuthoredColorBlend = !depthWrite && s.Profile.BlendEnabled;
+            mat.SourceColorBlend = s.Profile.SourceColorBlend;
+            mat.DestinationColorBlend = s.Profile.DestinationColorBlend;
             if (!depthWrite) transparent++;
             mat.SamplerAddress = SamplerAddressFor(s.Profile);
             if (mat.SamplerAddress != PreviewSamplerAddress.Wrap) clamped++;

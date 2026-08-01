@@ -1138,7 +1138,7 @@
                                                    Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
                                         <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
                                                   ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding SrcColorBlendFactor}"
-                                                  ToolTip.Tip="Only 6 (SrcAlpha) and 7 (OneMinusSrcAlpha) occur in Riot's own map materials — the other names are inferred from that ordering" />
+                                                  ToolTip.Tip="Riot blend factor. Map22 shadow receivers use 4 (DstColor); normal alpha materials use 6 (SrcAlpha)." />
                                       </Grid>
                                       <Grid ColumnDefinitions="Auto,*">
                                         <TextBlock Grid.Column="0" Text="Dst blend" FontSize="9" VerticalAlignment="Center"

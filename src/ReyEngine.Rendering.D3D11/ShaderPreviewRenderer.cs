@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using ReyEngine.Formats.Shaders;
+using ReyEngine.Formats.Materials;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
 using Silk.NET.Direct3D.Compilers;
@@ -151,6 +152,13 @@ public sealed unsafe class PreviewMaterial : IDisposable
     public int IndexCount { get; set; } = -1;
 
     public bool Visible { get; set; } = true;
+
+    /// <summary>Use the StaticMaterialDef pass's authored color blend factors instead of the generic
+    /// SrcAlpha/InvSrcAlpha preview state. This is how Map22 shadow receivers multiply over the textured
+    /// arena beneath them rather than covering it with their white helper texture.</summary>
+    public bool UsesAuthoredColorBlend { get; set; }
+    public MaterialBlendFactor SourceColorBlend { get; set; } = MaterialBlendFactor.One;
+    public MaterialBlendFactor DestinationColorBlend { get; set; } = MaterialBlendFactor.Zero;
 
     /// <summary>M292: the mapgeo GROUP this material was built from, or -1 for anything that is not map
     /// geometry - particles, mesh emitters, editor overlays. The host uses it to drive
@@ -565,6 +573,8 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
 
     /// <summary>M232: the additive blend state, selected per material by <see cref="PreviewMaterial.Additive"/>.</summary>
     private ComPtr<ID3D11BlendState> _blendAdditive;
+    private readonly Dictionary<(MaterialBlendFactor Src, MaterialBlendFactor Dst), ComPtr<ID3D11BlendState>>
+        _authoredBlendStates = new();
 
     public void ClearMaterials()
     {
@@ -2754,6 +2764,43 @@ float4 psmain(VOut i) : SV_Target
 
     private (bool wire, bool cull, bool depth, bool blend, bool mirror)? _stateKey;
 
+    private static Blend D3DColorBlend(MaterialBlendFactor factor) => factor switch
+    {
+        MaterialBlendFactor.Zero => Blend.Zero,
+        MaterialBlendFactor.One => Blend.One,
+        MaterialBlendFactor.SourceColor => Blend.SrcColor,
+        MaterialBlendFactor.OneMinusSourceColor => Blend.InvSrcColor,
+        MaterialBlendFactor.DestinationColor => Blend.DestColor,
+        MaterialBlendFactor.OneMinusDestinationColor => Blend.InvDestColor,
+        MaterialBlendFactor.SourceAlpha => Blend.SrcAlpha,
+        MaterialBlendFactor.OneMinusSourceAlpha => Blend.InvSrcAlpha,
+        MaterialBlendFactor.DestinationAlpha => Blend.DestAlpha,
+        MaterialBlendFactor.OneMinusDestinationAlpha => Blend.InvDestAlpha,
+        _ => Blend.One,
+    };
+
+    private ComPtr<ID3D11BlendState> AuthoredBlendState(
+        MaterialBlendFactor source, MaterialBlendFactor destination)
+    {
+        var key = (source, destination);
+        if (_authoredBlendStates.TryGetValue(key, out var existing)) return existing;
+
+        var desc = new BlendDesc();
+        desc.RenderTarget[0] = new RenderTargetBlendDesc
+        {
+            BlendEnable = true,
+            SrcBlend = D3DColorBlend(source), DestBlend = D3DColorBlend(destination), BlendOp = BlendOp.Add,
+            // StaticMaterialDef only authors the COLOR factors. Keep the established alpha equation;
+            // it preserves coverage without inventing a second enum from absent data.
+            SrcBlendAlpha = Blend.One, DestBlendAlpha = Blend.InvSrcAlpha, BlendOpAlpha = BlendOp.Add,
+            RenderTargetWriteMask = (byte)ColorWriteEnable.All,
+        };
+        ComPtr<ID3D11BlendState> state = default;
+        if (_device.CreateBlendState(in desc, ref state) < 0) return default;
+        _authoredBlendStates[key] = state;
+        return state;
+    }
+
     private void UpdateStates(PreviewSettings s)
     {
         // M216: these were disposed and recreated every single frame. They only depend on four toggles.
@@ -3545,6 +3592,11 @@ float4 psmain(VOut i) : SV_Target
             // them. Non-particle materials leave Additive false and get exactly the previous behaviour.
             if (mat.Additive && _blendAdditive.Handle is not null)
                 _ctx.OMSetBlendState(_blendAdditive, factor, 0xFFFFFFFF);
+            else if (s.AlphaBlend && mat.UsesAuthoredColorBlend)
+            {
+                var authoredBlend = AuthoredBlendState(mat.SourceColorBlend, mat.DestinationColorBlend);
+                _ctx.OMSetBlendState(authoredBlend.Handle is not null ? authoredBlend : _blend, factor, 0xFFFFFFFF);
+            }
             else
                 _ctx.OMSetBlendState(_blend, factor, 0xFFFFFFFF);
 
@@ -3796,6 +3848,8 @@ float4 psmain(VOut i) : SV_Target
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClampU.Dispose(); _linearClampV.Dispose(); _linearClamp.Dispose();
         _comparison.Dispose();
+        foreach (var state in _authoredBlendStates.Values) state.Dispose();
+        _authoredBlendStates.Clear();
         _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
         _blendAdditive.Dispose(); _depthStateNoWrite.Dispose();
         _ctx.Dispose(); _device.Dispose();

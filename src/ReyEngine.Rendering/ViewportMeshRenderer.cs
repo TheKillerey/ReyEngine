@@ -1,6 +1,7 @@
 using System.Numerics;
 using Silk.NET.OpenGL;
 using ReyEngine.Formats.Lighting;
+using ReyEngine.Formats.Materials;
 
 namespace ReyEngine.Rendering;
 
@@ -143,6 +144,8 @@ public sealed class ViewportMeshRenderer : IDisposable
         public bool UsesRim;
         public bool UsesSpecular;
         public int AlphaMode;           // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
+        public int SrcBlendFactor;
+        public int DstBlendFactor;
         public float AlphaCutoff;       // M34: alpha-test threshold for cutout (default 0.35)
         public bool UsesGrassTint;      // M78: multiply the map's world-space grass tint into the diffuse
         public bool DoubleSided;        // M34: two-sided material (cullEnable=false) — never culled
@@ -186,7 +189,12 @@ public sealed class ViewportMeshRenderer : IDisposable
         public bool UsesBakedPaint;   // M320: diffuse comes from mesh-owned atlas on transformed Texcoord7
 
         public static SubmeshDraw Create(int start, int count) =>
-            new() { Start = start, Count = count, Visible = true, UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One, AlphaCutoff = 0.35f };
+            new()
+            {
+                Start = start, Count = count, Visible = true,
+                UvScaleOffset = new Vector4(1, 1, 0, 0), Tint = Vector4.One, AlphaCutoff = 0.35f,
+                SrcBlendFactor = -1, DstBlendFactor = -1,
+            };
     }
 
     /// <summary>Per-submesh preview material data pushed from the App's resolved <c>MaterialProfile</c> (M32/M34).
@@ -215,7 +223,8 @@ public sealed class ViewportMeshRenderer : IDisposable
         // M150: Riot shaderMacros — NO_BAKED_LIGHTING ignores the baked lightmap on this surface,
         // DISABLE_DEPTH_FOG excludes it from distance fog (skyboxes, FX, water use these).
         bool NoBakedLighting = false, bool DisableDepthFog = false,
-        bool UsesBakedPaint = false)
+        bool UsesBakedPaint = false,
+        int SrcBlendFactor = -1, int DstBlendFactor = -1)
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
@@ -1554,6 +1563,8 @@ void main(){
         _submeshes[index].UsesRim = mat.UsesRim;
         _submeshes[index].UsesSpecular = mat.UsesSpecular;
         _submeshes[index].AlphaMode = mat.AlphaMode;
+        _submeshes[index].SrcBlendFactor = mat.SrcBlendFactor;
+        _submeshes[index].DstBlendFactor = mat.DstBlendFactor;
         _submeshes[index].AlphaCutoff = mat.AlphaCutoff;
         _submeshes[index].UsesGrassTint = mat.UsesGrassTint;   // M78
         _submeshes[index].DoubleSided = mat.DoubleSided;
@@ -1599,6 +1610,8 @@ void main(){
             _submeshes[i].UsesRim = false;
             _submeshes[i].UsesSpecular = false;
             _submeshes[i].AlphaMode = 0;
+            _submeshes[i].SrcBlendFactor = -1;
+            _submeshes[i].DstBlendFactor = -1;
             _submeshes[i].AlphaCutoff = 0.35f;
             _submeshes[i].UsesGrassTint = false;   // M78
             _submeshes[i].DoubleSided = false;
@@ -1955,6 +1968,21 @@ void main(){
     public unsafe void Render(Matrix4x4 viewProjection, bool wireframe, bool showBounds, bool showBones)
         => Render(viewProjection, Matrix4x4.Identity, Vector3.Zero, 0, wireframe, showBounds, showBones);
 
+    private static BlendingFactor GlBlendFactor(MaterialBlendFactor factor) => factor switch
+    {
+        MaterialBlendFactor.Zero => BlendingFactor.Zero,
+        MaterialBlendFactor.One => BlendingFactor.One,
+        MaterialBlendFactor.SourceColor => BlendingFactor.SrcColor,
+        MaterialBlendFactor.OneMinusSourceColor => BlendingFactor.OneMinusSrcColor,
+        MaterialBlendFactor.DestinationColor => BlendingFactor.DstColor,
+        MaterialBlendFactor.OneMinusDestinationColor => BlendingFactor.OneMinusDstColor,
+        MaterialBlendFactor.SourceAlpha => BlendingFactor.SrcAlpha,
+        MaterialBlendFactor.OneMinusSourceAlpha => BlendingFactor.OneMinusSrcAlpha,
+        MaterialBlendFactor.DestinationAlpha => BlendingFactor.DstAlpha,
+        MaterialBlendFactor.OneMinusDestinationAlpha => BlendingFactor.OneMinusDstAlpha,
+        _ => BlendingFactor.One,
+    };
+
     public unsafe void Render(Matrix4x4 viewProjection, Vector3 camPos, int previewMode, bool wireframe, bool showBounds, bool showBones)
         => Render(viewProjection, Matrix4x4.Identity, camPos, previewMode, wireframe, showBounds, showBones);
 
@@ -2157,10 +2185,17 @@ void main(){
                 if (anyTransparent)
                 {
                     _gl.Enable(EnableCap.Blend);
-                    _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
                     _gl.DepthMask(false);
                     foreach (var s in _submeshes)
-                        if (s.Visible && s.AlphaMode >= 2 && InView(s)) { DrawSubmesh(s); DrawCalls++; }
+                        if (s.Visible && s.AlphaMode >= 2 && InView(s))
+                        {
+                            _gl.BlendFuncSeparate(
+                                GlBlendFactor(MaterialBlendFactors.Source(s.SrcBlendFactor)),
+                                GlBlendFactor(MaterialBlendFactors.Destination(s.DstBlendFactor)),
+                                BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+                            DrawSubmesh(s);
+                            DrawCalls++;
+                        }
                     _gl.DepthMask(true);
                 }
                 _gl.Disable(EnableCap.CullFace); // restore default so the line/gizmo overlays are unaffected

@@ -82,7 +82,9 @@ public sealed record MaterialProfile(
     bool IsVertexDeform = false,
     // M150: shaderMacros that decide how the surface reacts to the SCENE rather than how it shades.
     bool NoBakedLighting = false,   // NO_BAKED_LIGHTING  — ignore the baked lightmap
-    bool DisableDepthFog = false)   // DISABLE_DEPTH_FOG  — exclude from distance fog
+    bool DisableDepthFog = false,   // DISABLE_DEPTH_FOG  — exclude from distance fog
+    int SrcBlendFactor = -1,
+    int DstBlendFactor = -1)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -96,6 +98,8 @@ public sealed record MaterialProfile(
     public bool DepthWrite => RenderMode is not (MaterialRenderMode.Transparent or MaterialRenderMode.TransparentCutout);
     /// <summary>Alpha-test/cutout (fixed shader threshold; no explicit cutoff value exists in the schema).</summary>
     public bool AlphaCutout => RenderMode is MaterialRenderMode.Cutout or MaterialRenderMode.TransparentCutout;
+    public MaterialBlendFactor SourceColorBlend => MaterialBlendFactors.Source(SrcBlendFactor);
+    public MaterialBlendFactor DestinationColorBlend => MaterialBlendFactors.Destination(DstBlendFactor);
 
     /// <summary>True when the UV transform actually changes the mapping (identity 1,1/0,0 is not flagged,
     /// even if a UV param is present but set to identity).</summary>
@@ -268,7 +272,9 @@ public static class MaterialProfiles
             grassTint,
             vertexDeform,                                      // M163
             b.MacroOn(MaterialBinding.MacroNoBakedLighting),   // M150
-            b.MacroOn(MaterialBinding.MacroDisableDepthFog));
+            b.MacroOn(MaterialBinding.MacroDisableDepthFog),
+            b.SrcBlendFactor,
+            b.DstBlendFactor);
     }
 
     /// <summary>Detect shader 0xe25b830f and read its authored terrain layer paths, tiling, and RGB mask weights.</summary>

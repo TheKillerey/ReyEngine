@@ -45,10 +45,13 @@ public class MapMaterialDepthWriteTests
 
     /// <summary>One StaticMaterialDef whose first technique's first pass carries the render state, which is
     /// where Riot actually puts it - the class hash is only ever "StaticMaterialDef".</summary>
-    private static byte[] Bin(string name, bool blendEnable, float? alphaTestValue, bool linkShader)
+    private static byte[] Bin(string name, bool blendEnable, float? alphaTestValue, bool linkShader,
+        int? srcBlend = null, int? dstBlend = null)
     {
         var passProps = new List<BinTreeProperty> { new BinTreeBool(H("blendEnable"), blendEnable) };
         if (linkShader) passProps.Add(new BinTreeObjectLink(H("shader"), ShaderLinkHash));
+        if (srcBlend is { } src) passProps.Add(new BinTreeU32(H("srcColorBlendFactor"), (uint)src));
+        if (dstBlend is { } dst) passProps.Add(new BinTreeU32(H("dstColorBlendFactor"), (uint)dst));
 
         var objProps = new List<BinTreeProperty>
         {
@@ -84,9 +87,10 @@ public class MapMaterialDepthWriteTests
         return ms.ToArray();
     }
 
-    private static MaterialProfile Profile(string name, bool blendEnable, float? alphaTestValue, bool linkShader = true)
+    private static MaterialProfile Profile(string name, bool blendEnable, float? alphaTestValue,
+        bool linkShader = true, int? srcBlend = null, int? dstBlend = null)
     {
-        var doc = MaterialDocument.Parse(Bin(name, blendEnable, alphaTestValue, linkShader), Resolve);
+        var doc = MaterialDocument.Parse(Bin(name, blendEnable, alphaTestValue, linkShader, srcBlend, dstBlend), Resolve);
         var b = Assert.Single(doc.Materials);
         Assert.Equal(MaterialSourceKind.MapMaterials, doc.Kind);
         return b.Profile;
@@ -135,5 +139,26 @@ public class MapMaterialDepthWriteTests
         Assert.Equal(MaterialRenderMode.Opaque, p.RenderMode);
         Assert.True(p.DepthWrite);
         Assert.False(p.AlphaCutout, "solid ground must not discard - that was the latent over-cut of M34");
+    }
+
+    [Fact]
+    public void Map22_shadow_receiver_preserves_destination_color_multiply_and_default_zero_destination()
+    {
+        var p = Profile("TFT_ArenaSkin_EsportsParis_Shadow_Mat", blendEnable: true,
+            alphaTestValue: null, linkShader: false, srcBlend: 4);
+
+        Assert.Equal(MaterialBlendFactor.DestinationColor, p.SourceColorBlend);
+        Assert.Equal(MaterialBlendFactor.Zero, p.DestinationColorBlend);
+        Assert.False(p.DepthWrite);
+    }
+
+    [Fact]
+    public void Common_alpha_pair_is_preserved_without_collapsing_it_to_the_multiply_mode()
+    {
+        var p = Profile("soft_decal", blendEnable: true, alphaTestValue: null,
+            linkShader: false, srcBlend: 6, dstBlend: 7);
+
+        Assert.Equal(MaterialBlendFactor.SourceAlpha, p.SourceColorBlend);
+        Assert.Equal(MaterialBlendFactor.OneMinusSourceAlpha, p.DestinationColorBlend);
     }
 }

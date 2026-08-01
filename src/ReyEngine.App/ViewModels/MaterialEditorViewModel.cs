@@ -503,9 +503,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         AfterRenderStateEdit();
     }
 
-    /// <summary>Riot's blend-factor enum. Only 6 (SrcAlpha) and 7 (OneMinusSrcAlpha) actually occur in
-    /// Riot's shipped map materials — the other names are inferred from that ordering, so treat them as
-    /// a best guess. -1 means the field isn't present on this pass.</summary>
+    /// <summary>Riot's blend-factor enum. Map22 also uses 4 (DstColor) for multiplicative shadow receivers
+    /// and 1 (One) for additive passes, in addition to the common 6/7 alpha pair. -1 means absent.</summary>
     public static IReadOnlyList<string> BlendFactorNames { get; } = new[]
     {
         "0 Zero", "1 One", "2 SrcColor", "3 OneMinusSrcColor", "4 DstColor", "5 OneMinusDstColor",

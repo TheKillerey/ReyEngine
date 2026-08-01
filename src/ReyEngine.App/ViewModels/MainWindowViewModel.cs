@@ -6678,7 +6678,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             TerrainOverlayRange: p.TerrainOverlayRange,
             UsesGrassTint: p.UsesGrassTint,    // M78
             NoBakedLighting: p.NoBakedLighting,   // M150: shaderMacros NO_BAKED_LIGHTING
-            DisableDepthFog: p.DisableDepthFog);  //           DISABLE_DEPTH_FOG
+            DisableDepthFog: p.DisableDepthFog,   //           DISABLE_DEPTH_FOG
+            SrcBlendFactor: p.SrcBlendFactor,
+            DstBlendFactor: p.DstBlendFactor);
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 
