@@ -2050,11 +2050,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .Where(m => lightmappedNames.Contains(m.Name)
                      && string.Equals(m.RenderShader ?? m.ShaderName,
                          Services.ExperimentalDynamicEffectShaderService.RenderShader,
-                         StringComparison.OrdinalIgnoreCase)
-                     && m.MacroOn(Formats.Materials.MaterialBinding.MacroNoBakedLighting))
+                         StringComparison.OrdinalIgnoreCase))
             .ToList();
         if (candidates.Count == 0)
-            return "No lightmapped SRX_DynamicEffect material still uses NO_BAKED_LIGHTING on this map.";
+            return "No lightmapped SRX_DynamicEffect material was found on this map.";
 
         Services.ExperimentalDynamicEffectPatch patch;
         try
@@ -2078,15 +2077,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (patch.SupportedMaterials.Contains(material.Name)
                 && material.RemoveMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting))
                 cleared++;
-        if (cleared == 0) return "The cache patch did not cover any selected material; nothing was changed.";
 
-        byte[] changedBin;
-        try
+        byte[]? changedBin = null;
+        if (cleared > 0)
         {
-            changedBin = document.Serialize();
-            _ = Formats.Materials.MaterialDocument.Parse(changedBin, ResolveBinName);
+            try
+            {
+                changedBin = document.Serialize();
+                _ = Formats.Materials.MaterialDocument.Parse(changedBin, ResolveBinName);
+            }
+            catch (Exception ex) { return "The material rewrite did not validate: " + ex.Message; }
         }
-        catch (Exception ex) { return "The material rewrite did not validate: " + ex.Message; }
 
         string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         string backupRoot = Path.Combine(root, ".reyengine", "backups", "dynamic-effect-lightmap-" + stamp);
@@ -2118,7 +2119,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 File.WriteAllBytes(destination, asset.Bytes);
             }
 
-            WriteBakedAsset(binEntry.Path, changedBin, ".bin");
+            if (changedBin is not null) WriteBakedAsset(binEntry.Path, changedBin, ".bin");
         }
         catch (Exception ex)
         {
@@ -2139,7 +2140,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Warn("Shader", "Shader patch was staged, but the project view did not refresh: " + ex.Message);
         }
 
-        string result = $"Experimental DynamicEffect lightmaps enabled on {cleared:n0} material(s). "
+        string result = $"Experimental DynamicEffect lightmaps enabled on {patch.SupportedMaterials.Count:n0} material(s)"
+                      + (cleared > 0 ? $"; removed NO_BAKED_LIGHTING from {cleared:n0}" : "; shader cache refreshed") + ". "
                       + $"Generated {patch.Detail} and staged ShaderCache.dx11.wad.client content. "
                       + "Build Package, install both WADs, and test in Practice Tool.";
         _log.Warn("Shader", result + $" Backup: {backupRoot}");

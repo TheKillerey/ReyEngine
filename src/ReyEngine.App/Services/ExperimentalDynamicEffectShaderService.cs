@@ -25,6 +25,11 @@ public static class ExperimentalDynamicEffectShaderService
     private const string GeneratedShader = "assets/shaders/generated/" + RenderShader;
     private static readonly HashSet<string> ForceNoBakedAbsent =
         new(StringComparer.OrdinalIgnoreCase) { MaterialBinding.MacroNoBakedLighting };
+    // The client overrides this shader default while loading the environment. A real game log requested
+    // ENV_TRANSITION=1 even though shaders.bin defaulted it to 0; pinning that default omitted the key and
+    // crashed League before the map loaded.
+    private static readonly HashSet<string> RuntimeMainPassAxes =
+        new(StringComparer.OrdinalIgnoreCase) { "ENV_TRANSITION" };
 
     private enum CustomKind { Vertex, Pixel, FlowRipplePixel }
 
@@ -39,7 +44,7 @@ public static class ExperimentalDynamicEffectShaderService
             .Select(g => g.First())
             .ToList();
         if (targets.Count == 0)
-            throw new InvalidOperationException("no SRX_DynamicEffect material with NO_BAKED_LIGHTING was selected");
+            throw new InvalidOperationException("no SRX_DynamicEffect material was selected");
 
         if (!ExperimentalDynamicEffectLightmapShader.TryCompile(out var compiled, out var compileError))
             throw new InvalidOperationException("custom HLSL compilation failed: " + compileError);
@@ -98,13 +103,14 @@ public static class ExperimentalDynamicEffectShaderService
             definitions.TryGetShaderDefs(RenderShader, out var features, out var defaults);
             var candidates = ShaderPermutationPlanner.EnumerateCandidates(
                 toc, material.Macros, material.Switches, features, defaults,
-                out var planWhy, forcedAbsent: ForceNoBakedAbsent);
+                out var planWhy, forcedAbsent: ForceNoBakedAbsent, forcedFree: RuntimeMainPassAxes);
             if (candidates.Count == 0)
                 throw new InvalidOperationException($"{material.Name}: {stage} define planning failed: {planWhy}");
 
             bool suppliedMainPass = false;
             foreach (var candidate in candidates)
             {
+                bool usesCustomShader = candidate.InferredDefines.All(IsRuntimeMainPassDefine);
                 var sourceDefines = candidate.Defines.Append(MaterialBinding.MacroNoBakedLighting + "=1")
                     .OrderBy(x => x, StringComparer.Ordinal)
                     .ToList();
@@ -114,12 +120,12 @@ public static class ExperimentalDynamicEffectShaderService
                 ulong targetKey = candidate.Key;
                 if (originalByKey.ContainsKey(targetKey))
                 {
-                    if (candidate.InferredDefines.Count == 0) suppliedMainPass = true;
+                    if (usesCustomShader) suppliedMainPass = true;
                     continue;
                 }
 
                 uint blobIndex;
-                if (candidate.InferredDefines.Count == 0)
+                if (usesCustomShader)
                 {
                     CustomKind kind = stage == DxbcStage.Vertex ? CustomKind.Vertex
                         : SwitchOn(material, "FLOW_RIPPLE_ON") ? CustomKind.FlowRipplePixel
@@ -190,12 +196,21 @@ public static class ExperimentalDynamicEffectShaderService
         return new StageResult(output, supported, additions.Count, customBlobs.Count);
     }
 
+    // The patch operation is intentionally idempotent. A successfully patched project has already removed
+    // NO_BAKED_LIGHTING, but still needs to be able to regenerate its companion cache after the planner or
+    // Riot's shader cache changes. BuildStage reconstructs every source key by adding the macro explicitly.
     private static bool IsTarget(MaterialBinding material) =>
-        string.Equals(material.RenderShader ?? material.ShaderName, RenderShader, StringComparison.OrdinalIgnoreCase)
-        && material.MacroOn(MaterialBinding.MacroNoBakedLighting);
+        string.Equals(material.RenderShader ?? material.ShaderName, RenderShader, StringComparison.OrdinalIgnoreCase);
 
     private static bool SwitchOn(MaterialBinding material, string name) =>
         material.Switches.TryGetValue(name, out bool enabled) && enabled;
+
+    private static bool IsRuntimeMainPassDefine(string define)
+    {
+        int equals = define.IndexOf('=');
+        string name = equals < 0 ? define : define[..equals];
+        return RuntimeMainPassAxes.Contains(name);
+    }
 
     private static string Signature(MaterialBinding material) =>
         string.Join(";", material.Macros.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)

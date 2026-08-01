@@ -36,6 +36,43 @@ public class ExperimentalShaderPatchTests
     }
 
     [Fact]
+    public void PlannerDoesNotPinObservedRuntimeAxisToShaderDefault()
+    {
+        var toc = Toc(
+            ("ENV_TRANSITION", "1"), ("ENV_TRANSITION", "0"),
+            ("FLAG_ANIMATION_ON", "1"), ("FLAG_ANIMATION_ON", "0"),
+            ("FOLIAGEWIND_ANIMATION_ON", "0"), ("FOLIAGEWIND_ANIMATION_ON", "1"),
+            ("NO_BAKED_LIGHTING", "1"),
+            ("TWO_D_DEFORM_ON", "1"), ("TWO_D_DEFORM_ON", "0"),
+            ("USE_ROTATION", "0"), ("USE_WORLD_OFFSET", "1"),
+            ("USE_SINUSOIDAL_MOVEMENT", "1"), ("USE_SINUSOIDAL_MOVEMENT", "0"),
+            ("USE_TRANSLATION", "1"),
+            ("VERTEX_ANIMATION_ON", "1"), ("VERTEX_ANIMATION_ON", "0"));
+        var switches = new Dictionary<string, bool>
+        {
+            ["FLAG_ANIMATION_ON"] = false,
+            ["FOLIAGEWIND_ANIMATION_ON"] = false,
+            ["NO_BAKED_LIGHTING"] = true,
+            ["TWO_D_DEFORM_ON"] = false,
+            ["USE_ROTATION"] = false,
+            ["USE_WORLD_OFFSET"] = true,
+            ["USE_SINUSOIDAL_MOVEMENT"] = false,
+            ["USE_TRANSLATION"] = true,
+            ["VERTEX_ANIMATION_ON"] = false,
+        };
+        var defaults = new Dictionary<string, bool> { ["ENV_TRANSITION"] = false };
+        var absent = new HashSet<string> { "NO_BAKED_LIGHTING" };
+        var runtime = new HashSet<string> { "ENV_TRANSITION" };
+
+        var candidates = ShaderPermutationPlanner.EnumerateCandidates(
+            toc, null, switches, null, defaults, out _, forcedAbsent: absent, forcedFree: runtime);
+
+        var live = Assert.Single(candidates, c => c.Key == 0x8adf585ed8c8b38aUL);
+        Assert.Contains("ENV_TRANSITION=1", live.Defines);
+        Assert.Equal(new[] { "ENV_TRANSITION=1" }, live.InferredDefines);
+    }
+
+    [Fact]
     public void TocWriterRoundTripsAddedKeysAndBlobCount()
     {
         var source = Toc(("A", "1"), ("B", "0"));

@@ -24,7 +24,8 @@ public static class ShaderPermutationPlanner
         IReadOnlyDictionary<string, bool>? switchDefaults,
         out string explanation,
         long maxCombinations = 2_000_000,
-        IReadOnlySet<string>? forcedAbsent = null)
+        IReadOnlySet<string>? forcedAbsent = null,
+        IReadOnlySet<string>? forcedFree = null)
     {
         var fixedParts = new List<string>();
         var freeAxes = new List<(string Name, List<string?> Options)>();
@@ -33,6 +34,18 @@ public static class ShaderPermutationPlanner
         {
             var values = valuesReadOnly.ToList();
             if (forcedAbsent is not null && forcedAbsent.Contains(name)) continue;
+
+            // A shader definition's value is only its initial/default value. The live renderer can still
+            // override selected axes per pass or per environment. Callers that have observed such an axis
+            // at runtime must be able to enumerate it before the material/default pinning below narrows the
+            // cache patch to one value and omits a valid live permutation.
+            if (forcedFree is not null && forcedFree.Contains(name))
+            {
+                var options = new List<string?> { null };
+                options.AddRange(values);
+                freeAxes.Add((name, options));
+                continue;
+            }
 
             if (macros is not null && macros.TryGetValue(name, out var macroValue))
             {
