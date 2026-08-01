@@ -53,6 +53,9 @@ public static class MapGeoLightmapBuilder
         /// <summary>M163: skip meshes assigned to a render region (v18 renderRegionHash != 0) — that
         /// geometry is swapped per game mode, so one baked atlas cannot be right for it.</summary>
         public bool SkipRenderRegionMeshes { get; set; } = true;
+        /// <summary>First atlas number assigned by this pass. Incremental layout generation uses the
+        /// next unused index so a later opt-in cannot overlap or overwrite an earlier atlas.</summary>
+        public int AtlasStartIndex { get; set; }
         /// <summary>Atlas path template; {0} is the atlas index.</summary>
         public string AtlasPathFormat { get; set; } = "ASSETS/Maps/Lightmaps/Maps/MapGeometry/Custom/{0}.tex";
     }
@@ -118,7 +121,7 @@ public static class MapGeoLightmapBuilder
         {
             float inv = 1f / settings.AtlasResolution;
             map.SetBakedLight(mesh,
-                string.Format(settings.AtlasPathFormat, atlasIndex),
+                string.Format(settings.AtlasPathFormat, settings.AtlasStartIndex + atlasIndex),
                 new Vector2(size.X * inv, size.Y * inv),
                 new Vector2(origin.X * inv, origin.Y * inv));
         }

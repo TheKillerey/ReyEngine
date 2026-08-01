@@ -61,6 +61,11 @@
             <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyWarningBrush}"
                        IsVisible="{Binding CanGenerateLayout}"
                        Text="This REWRITES the .mapgeo (new UV2 + geometry) AND the materials .bin (clears NO_BAKED_LIGHTING, or the new atlases would never be sampled) — unlike baking, which only writes textures. The rewrite is verified to decode and carry a usable layout before anything is saved, and Riot's originals stay untouched in the reference WAD. Test in-game before relying on it." />
+            <CheckBox IsChecked="{Binding IncludeDynamicEffectMeshes}"
+                      IsVisible="{Binding CanGenerateLayout}"
+                      Content="Generate lightmap UVs for SRX_DynamicEffect meshes (Experimental)"
+                      FontSize="11" Foreground="{DynamicResource ReyTextBrush}"
+                      ToolTip.Tip="Off by default. When enabled, uncovered DynamicEffect meshes receive UV7 and atlas assignments. You must also enable the experimental DynamicEffect shader patch below before building the mod." />
             <Button Classes="primary" Content="⚙ Generate Lightmap Layout"
                     Command="{Binding GenerateLayoutCommand}"
                     IsVisible="{Binding CanGenerateLayout}" IsEnabled="{Binding !IsGeneratingLayout}"
