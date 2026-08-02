@@ -609,6 +609,7 @@ public partial class MainWindow : Window
             var recolorVm = new TextureRecolorViewModel(
                 vm.GatherRecolorTargets, vm.ReadRecolorBase, vm.MakeRecolorService,
                 vm.PersistRecolors, vm.RevertRecolors, r => vm.OnRecolorFinished(r),
+                vm.GetRecolorSourceWarning,
                 () => vm.Dialogs.OpenFileAsync("Load a .cube colour grade",
                     new Avalonia.Platform.Storage.FilePickerFileType("Colour lookup table")
                     { Patterns = new[] { "*.cube", "*.CUBE" } }));

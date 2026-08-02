@@ -165,6 +165,9 @@
                              FormatString="0" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
             </Grid>
 
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="A sample count of 0 disables only that ray-traced shadow or AO pass. Sun, sky and point-light colour still bake into every eligible atlas." />
+
             <Grid ColumnDefinitions="150,*">
               <TextBlock Grid.Column="0" Text="AO radius" VerticalAlignment="Center" FontSize="11"
                          Foreground="{DynamicResource ReyTextBrush}" />

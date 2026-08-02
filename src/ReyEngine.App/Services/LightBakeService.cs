@@ -24,7 +24,9 @@ public sealed class LightBakeInputs
     public IReadOnlyList<bool>? GroupOccluderEnabled { get; init; }
 }
 
-public sealed record LightBakeResult(int AtlasCount, long TotalBytes, bool WroteLightGrid, string OutputDescription);
+public sealed record LightBakeResult(
+    int AtlasCount, int ReferencedAtlasCount, int SkippedAtlasCount,
+    long TotalBytes, bool WroteLightGrid, string OutputDescription);
 
 /// <summary>M158: drives a bake from the app's live map + lighting state. WHERE each baked file lands is
 /// the host's decision — passed in as <c>writeAsset</c> — so a folder project gets the atlas at its real
@@ -111,7 +113,7 @@ public sealed class LightBakeService
         IProgress<BakeProgress>? progress = null, CancellationToken ct = default)
     {
         long totalBytes = 0;
-        int atlasCount = await LightBaker.BakeExistingLayoutAsync(
+        var atlasSummary = await LightBaker.BakeExistingLayoutAsync(
             inputs.Map, inputs.GroupLightmapEnabled, inputs.GroupOccluderEnabled,
             inputs.Lighting, settings, inputs.MapgeoPath,
             baked =>
@@ -135,7 +137,12 @@ public sealed class LightBakeService
             wroteGrid = true;
         }
 
-        return new LightBakeResult(atlasCount, totalBytes, wroteGrid,
-            $"{atlasCount} atlas(es){(wroteGrid ? " + lightgrid" : "")} → {settings.ResolveOutputFolder(inputs.MapgeoPath)}");
+        string atlasDescription = atlasSummary.SkippedAtlases == 0
+            ? $"{atlasSummary.BakedAtlases} atlas(es)"
+            : $"{atlasSummary.BakedAtlases} of {atlasSummary.ReferencedAtlases} atlas(es); {atlasSummary.SkippedAtlases} skipped";
+        return new LightBakeResult(
+            atlasSummary.BakedAtlases, atlasSummary.ReferencedAtlases, atlasSummary.SkippedAtlases,
+            totalBytes, wroteGrid,
+            $"{atlasDescription}{(wroteGrid ? " + lightgrid" : "")} → {settings.ResolveOutputFolder(inputs.MapgeoPath)}");
     }
 }

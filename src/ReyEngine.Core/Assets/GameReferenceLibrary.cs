@@ -1,5 +1,12 @@
 namespace ReyEngine.Core.Assets;
 
+/// <summary>Result of checking whether a configured League folder can provide original game assets.</summary>
+public sealed record GameReferenceStatus(
+    bool IsValid,
+    string? GameDirectory,
+    string? FinalDirectory,
+    string Message);
+
 /// <summary>
 /// Discovers the original Riot game WADs to use as read-only fallback references, so a mod project
 /// that only ships its changed files can still resolve everything else (skin bins, textures, meshes)
@@ -33,6 +40,40 @@ public static class GameReferenceLibrary
             AddIf("Maps", "Shipping", name + ".en_US.wad.client");
         }
         return result;
+    }
+
+    /// <summary>
+    /// Validate and normalize a folder selected by a user. The picker asks for the League <c>Game</c>
+    /// folder, but accepting the install root or DATA/FINAL as input makes recovery from an existing
+    /// misconfiguration painless. A usable install must have the shared WADs Riot still guarantees;
+    /// finding just one stale WAD is not reported as a healthy reference library. Common.wad.client is
+    /// deliberately optional because current Live installs no longer ship it.
+    /// </summary>
+    public static GameReferenceStatus Inspect(string? gameDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(gameDirectory))
+            return new(false, null, null, "No League game folder is configured.");
+
+        string selected;
+        try { selected = Path.GetFullPath(gameDirectory.Trim().Trim('"')); }
+        catch (Exception ex) { return new(false, null, null, $"The configured path is invalid ({ex.Message})."); }
+
+        if (!Directory.Exists(selected))
+            return new(false, null, null, $"The configured folder does not exist: {selected}");
+
+        string? final = FindFinalDir(selected);
+        if (final is null)
+            return new(false, null, null,
+                $"No League DATA/FINAL installation was found under: {selected}");
+
+        string[] required = ["DATA.wad.client", "Global.wad.client"];
+        var missing = required.Where(name => !File.Exists(Path.Combine(final, name))).ToArray();
+        string game = NormalizeGameDirectory(selected, final);
+        if (missing.Length > 0)
+            return new(false, game, final,
+                $"The League installation is incomplete or outdated; missing {string.Join(", ", missing)} under {final}.");
+
+        return new(true, game, final, $"League game assets found under {final}.");
     }
 
     /// <summary>Locate the compiled DX11 shader cache WAD in the game install (for the shader database).</summary>
@@ -69,6 +110,16 @@ public static class GameReferenceLibrary
     /// <c>gameDirectory + "/DATA/FINAL"</c> silently found nothing on two of the three supported layouts -
     /// and a cleanup scan that indexes no game WADs would have called real Riot content unused.</para>
     public static string? FindFinalDirectory(string? gameDirectory) => FindFinalDir(gameDirectory);
+
+    private static string NormalizeGameDirectory(string selected, string final)
+    {
+        var finalInfo = new DirectoryInfo(final);
+        if (finalInfo.Name.Equals("FINAL", OIC)
+            && finalInfo.Parent?.Name.Equals("DATA", OIC) == true
+            && finalInfo.Parent.Parent is { } game)
+            return game.FullName;
+        return selected;
+    }
 
     private static string? FindFinalDir(string? gameDirectory)
     {

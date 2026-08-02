@@ -3,7 +3,7 @@
         xmlns:local="clr-namespace:ReyEngine.App.Views"
         x:Class="ReyEngine.App.Views.ProjectSettingsWindow"
         Title="Project Settings"
-        Width="540" Height="640"
+        Width="540" Height="690"
         WindowStartupLocation="CenterOwner"
         ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}"
@@ -48,6 +48,11 @@
         <TextBox Text="{Binding GameDirectory}" Width="380" />
         <Button Content="Browse…" Command="{Binding BrowseGameCommand}" />
       </StackPanel>
+      <TextBlock Text="{Binding GameDirectoryMessage}" FontSize="10" TextWrapping="Wrap"
+                 Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding HasGameDirectoryError}" />
+      <TextBlock Text="{Binding GameDirectoryMessage}" FontSize="10" TextWrapping="Wrap"
+                 Foreground="{DynamicResource ReyAccentBrush}"
+                 IsVisible="{Binding HasGameDirectoryError, Converter={x:Static BoolConverters.Not}}" />
 
       <TextBlock Text="Build output folder" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
       <StackPanel Orientation="Horizontal" Spacing="6">

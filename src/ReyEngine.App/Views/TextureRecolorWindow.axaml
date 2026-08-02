@@ -36,6 +36,18 @@
       </DockPanel>
     </Border>
 
+    <Border DockPanel.Dock="Top" Margin="14,12,14,0" Padding="10,8" CornerRadius="5"
+            BorderBrush="{DynamicResource ReyWarningBrush}" BorderThickness="1"
+            Background="{DynamicResource ReyPanelAltBrush}"
+            IsVisible="{Binding HasSourceWarning}">
+      <StackPanel Spacing="3">
+        <TextBlock Text="GAME ASSET FOLDER NEEDS ATTENTION" FontSize="10" FontWeight="Bold"
+                   Foreground="{DynamicResource ReyWarningBrush}" />
+        <TextBlock Text="{Binding SourceWarningText}" FontSize="10" TextWrapping="Wrap"
+                   Foreground="{DynamicResource ReyTextBrush}" />
+      </StackPanel>
+    </Border>
+
     <Grid Margin="14" ColumnDefinitions="300,*,268">
 
       <!-- ================= column 1 : which textures ================= -->

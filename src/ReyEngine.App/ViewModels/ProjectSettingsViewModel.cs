@@ -2,6 +2,7 @@ using Avalonia.Platform.Storage;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.App.Services;
+using ReyEngine.Core.Assets;
 using ReyEngine.Core.Projects;
 
 namespace ReyEngine.App.ViewModels;
@@ -19,6 +20,8 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     [ObservableProperty] private string _home = "";
     [ObservableProperty] private string _thumbnailPath = "";
     [ObservableProperty] private string _gameDirectory = "";
+    [ObservableProperty] private bool _hasGameDirectoryError;
+    [ObservableProperty] private string _gameDirectoryMessage = "";
     [ObservableProperty] private string _outputDirectory = "";
     [ObservableProperty] private bool _packKnownTypesOnly = true;   // M132
 
@@ -38,6 +41,19 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         _gameDirectory = p.GameDirectory ?? "";
         _outputDirectory = p.OutputDirectory ?? "";
         _packKnownTypesOnly = p.PackKnownTypesOnly;
+        ValidateGameDirectory();
+    }
+
+    partial void OnGameDirectoryChanged(string value) => ValidateGameDirectory();
+
+    private GameReferenceStatus ValidateGameDirectory()
+    {
+        var status = GameReferenceLibrary.Inspect(GameDirectory);
+        HasGameDirectoryError = !status.IsValid;
+        GameDirectoryMessage = status.IsValid
+            ? $"Verified: {status.GameDirectory}"
+            : status.Message + " Select the League of Legends\\Game folder containing DATA\\FINAL.";
+        return status;
     }
 
     public void ApplyTo(ReyProject p)
@@ -49,7 +65,9 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         p.ModHeart = string.IsNullOrWhiteSpace(Heart) ? null : Heart.Trim();
         p.ModHome = string.IsNullOrWhiteSpace(Home) ? null : Home.Trim();
         p.ThumbnailPath = string.IsNullOrWhiteSpace(ThumbnailPath) ? null : ThumbnailPath.Trim();
-        if (!string.IsNullOrWhiteSpace(GameDirectory)) p.GameDirectory = GameDirectory.Trim();
+        var gameStatus = GameReferenceLibrary.Inspect(GameDirectory);
+        if (gameStatus.IsValid) p.GameDirectory = gameStatus.GameDirectory;
+        else if (string.IsNullOrWhiteSpace(GameDirectory)) p.GameDirectory = null;
         if (!string.IsNullOrWhiteSpace(OutputDirectory)) p.OutputDirectory = OutputDirectory.Trim();
         p.PackKnownTypesOnly = PackKnownTypesOnly;
     }
@@ -66,7 +84,11 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     private async Task BrowseGame()
     {
         var f = await _dialogs.OpenFolderAsync("Select the League of Legends 'Game' folder");
-        if (f is not null) GameDirectory = f;
+        if (f is not null)
+        {
+            var status = GameReferenceLibrary.Inspect(f);
+            GameDirectory = status.IsValid ? status.GameDirectory! : f;
+        }
     }
 
     [RelayCommand]
@@ -79,6 +101,7 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     [RelayCommand]
     private void Save()
     {
+        if (!string.IsNullOrWhiteSpace(GameDirectory) && !ValidateGameDirectory().IsValid) return;
         Saved = true;
         CloseRequested?.Invoke();
     }

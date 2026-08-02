@@ -858,11 +858,13 @@
                       Command="{Binding ClearConsoleCommand}" Margin="0,4,8,0" FontSize="11" />
             </Grid>
             <ListBox Classes="console" ItemsSource="{Binding Console.Entries}"
-                     Background="Transparent" BorderThickness="0" Padding="6,0">
+                     Background="Transparent" BorderThickness="0" Padding="6,0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
               <ListBox.ItemTemplate>
                 <DataTemplate>
                   <TextBlock Text="{Binding}"
                              FontFamily="Cascadia Mono, Consolas, monospace" FontSize="12"
+                             TextWrapping="Wrap" Margin="0,1" HorizontalAlignment="Stretch"
                              Foreground="{Binding Level, Converter={StaticResource LevelToBrush}}" />
                 </DataTemplate>
               </ListBox.ItemTemplate>

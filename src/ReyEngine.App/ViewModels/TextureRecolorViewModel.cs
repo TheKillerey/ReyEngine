@@ -73,6 +73,7 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
     private readonly Action<TextureAdjustment, IReadOnlyList<RecolorTarget>> _persist;
     private readonly Func<IReadOnlyList<RecolorTarget>, int> _revert;
     private readonly Action<RecolorRunResult> _onDone;
+    private readonly Func<string?> _sourceWarning;
     private readonly Func<Task<string?>>? _pickLutFile;
 
     private CancellationTokenSource? _cts;
@@ -87,6 +88,7 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
         Action<TextureAdjustment, IReadOnlyList<RecolorTarget>> persist,
         Func<IReadOnlyList<RecolorTarget>, int> revert,
         Action<RecolorRunResult> onDone,
+        Func<string?> sourceWarning,
         Func<Task<string?>>? pickLutFile = null)
     {
         _pickLutFile = pickLutFile;
@@ -96,6 +98,7 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
         _persist = persist;
         _revert = revert;
         _onDone = onDone;
+        _sourceWarning = sourceWarning;
         _ = RefreshAsync();
     }
 
@@ -107,6 +110,8 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
     [ObservableProperty] private string _filter = "";
     [ObservableProperty] private RecolorTargetViewModel? _selected;
     [ObservableProperty] private string _listSummary = "";
+    [ObservableProperty] private bool _hasSourceWarning;
+    [ObservableProperty] private string _sourceWarningText = "";
 
     partial void OnFilterChanged(string value) => ApplyFilter();
 
@@ -142,6 +147,7 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
     {
         if (IsLoading) return;
         IsLoading = true;
+        RefreshSourceWarning();
         ListSummary = "Reading the map's textures…";
         try
         {
@@ -154,6 +160,12 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
         }
         catch (Exception ex) { ListSummary = "Could not read the texture list: " + ex.Message; }
         finally { IsLoading = false; }
+    }
+
+    private void RefreshSourceWarning()
+    {
+        SourceWarningText = _sourceWarning() ?? "";
+        HasSourceWarning = SourceWarningText.Length > 0;
     }
 
     /// <summary>Ticking a row's checkbox has to move the summary and re-arm Apply/Revert; watching the
@@ -383,15 +395,20 @@ public sealed partial class TextureRecolorViewModel : ObservableObject
             });
 
             var result = await service.RunAsync(targets, adjustment, progress, _cts.Token);
-            _persist(adjustment, targets);
+            _persist(adjustment, result.WrittenTargets);
 
+            var writtenHashes = result.WrittenTargets.Select(t => t.PathHash).ToHashSet();
             foreach (var t in _allTargets)
-                if (t.IsSelected) t.IsRecolored = true;
+                if (writtenHashes.Contains(t.Target.PathHash)) t.IsRecolored = true;
 
             Status = $"{result.Written:n0} texture(s) recoloured"
                      + (result.Skipped > 0 ? $", {result.Skipped:n0} skipped" : "")
                      + (result.Failed > 0 ? $", {result.Failed:n0} failed" : "")
                      + $"  ({result.BytesWritten / 1048576.0:F1} MB).";
+            if (result.MissingSources > 0)
+                Status += $" {result.MissingSources:n0} original source(s) were missing. "
+                          + "Fix Project > Set Game Folder, select the League of Legends\\Game folder containing DATA\\FINAL, "
+                          + "then reopen the map, refresh this list, and retry.";
             _onDone(result);
             UpdateSummary();
         }
