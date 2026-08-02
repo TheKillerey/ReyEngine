@@ -42,6 +42,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private readonly AssetOverrideStore _overrides = new();
     private readonly ReyEngine.App.Services.ThumbnailService _thumbnails; // Content Browser lazy thumbnails
     private readonly Dictionary<ulong, AssetNodeViewModel> _nodesByHash = new();
+    private WorkshopCatalogService? _workshopCatalog;
 
     private bool ContentLoaded => _archive is not null || _mounts is not null;
 
@@ -1107,7 +1108,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 if (!v.IsEditorVisible || v.IsDisabled || v.IsRemoved) continue;
                 if (!IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags)) continue;
-                if (!_vfxSystems.TryGetValue(v.Placement.SystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
+                if (!_vfxSystems.TryGetValue(v.EffectiveSystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
                 items.Add(new VfxPlaybackItem(s, v.CurrentTransform, ResolveSystemTextures(s), ResolveSystemMeshes(s),
                     ResolveSystemMultTextures(s), ResolveSystemDistortionTextures(s), ResolveSystemColorTextures(s),
                     ResolveSystemErosionTextures(s), ResolveSystemPaletteTextures(s),
@@ -1119,7 +1120,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
 
         if (!PlayParticlePreview || SelectedParticleNode is not { IsEditorVisible: true, IsDisabled: false, IsRemoved: false } node
-            || !_vfxSystems.TryGetValue(node.Placement.SystemHash, out var sys) || sys.Emitters.Count == 0)
+            || !_vfxSystems.TryGetValue(node.EffectiveSystemHash, out var sys) || sys.Emitters.Count == 0)
         {
             CurrentParticlePlayback = null;
             return;
@@ -1378,6 +1379,169 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Wired by MainWindow — owns the Add Mesh window instance.</summary>
     public Action<AddMeshWindowViewModel>? ShowAddMeshWindow;
+
+    [RelayCommand]
+    private void OpenWorkshop()
+    {
+        string? final = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
+        if (final is null)
+        {
+            _log.Error("Workshop", "Set a valid League game folder first (Project > Set Game Folder). The Workshop indexes DATA/FINAL.");
+            return;
+        }
+
+        _workshopCatalog ??= new WorkshopCatalogService(_resolver.Database, ResolveBinName);
+        var vm = new WorkshopViewModel(_workshopCatalog, final)
+        {
+            AddMaterial = ImportWorkshopMaterialAsync,
+            AddParticle = ImportWorkshopParticleAsync,
+        };
+        ShowWorkshopWindow?.Invoke(vm);
+        _ = vm.InitializeAsync();
+    }
+
+    public Action<WorkshopViewModel>? ShowWorkshopWindow;
+
+    private async Task<string> ImportWorkshopMaterialAsync(WorkshopMaterialTemplate template, string newName)
+    {
+        if (_currentMapEntry is not { } mapEntry || _currentMap is null)
+            throw new InvalidOperationException("Open the destination map before adding a material.");
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+            throw new InvalidOperationException("The open map has no companion materials .bin.");
+        if (!await EnsureProjectSavedAsync())
+            throw new InvalidOperationException("Save the project before adding Workshop content.");
+
+        byte[] target = GetAssetBytes(binEntry);
+        byte[] source = _workshopCatalog?.ReadBin(template.SourceBinHash, template.SourceWad)
+            ?? throw new InvalidOperationException("The template source bin is no longer available. Rebuild the Workshop catalog.");
+        byte[]? imported = MapMaterialFactory.ImportMaterial(target, source, template.MaterialHash,
+            template.MaterialName, newName, out var error);
+        if (imported is null) throw new InvalidOperationException(error ?? "The material could not be imported.");
+
+        var staged = StageWorkshopAssets(template.TexturePaths, mapEntry);
+        if (staged.Missing.Count > 0)
+            throw new InvalidOperationException("Required texture(s) were not found in the installed patch: "
+                + string.Join(", ", staged.Missing.Take(4)) + (staged.Missing.Count > 4 ? "..." : ""));
+        if (!await SaveMapBinBytesAsync(binEntry, imported))
+            throw new InvalidOperationException("The edited materials bin could not be saved.");
+
+        FinishWorkshopMutation();
+        await LoadMapGeoAsync(mapEntry);
+        _log.Success("Workshop", $"Added material '{newName}' from {template.Shader} with {staged.Written} asset(s).");
+        return $"Added '{newName}' to the current map. {staged.Written} texture asset(s) copied.";
+    }
+
+    private async Task<string> ImportWorkshopParticleAsync(WorkshopParticleTemplate template, string newName)
+    {
+        if (_currentMapEntry is not { } mapEntry || _currentMap is not { } map)
+            throw new InvalidOperationException("Open the destination map before adding a particle.");
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+            throw new InvalidOperationException("The open map has no companion materials .bin.");
+        if (!await EnsureProjectSavedAsync())
+            throw new InvalidOperationException("Save the project before adding Workshop content.");
+
+        byte[] target = GetAssetBytes(binEntry);
+        var closure = _workshopCatalog?.ReadBinClosure(template.SourceBinHash, template.SourceWad)
+            ?? Array.Empty<byte[]>();
+        if (closure.Count == 0)
+            throw new InvalidOperationException("The template source bins are no longer available. Rebuild the Workshop catalog.");
+
+        var graph = BinObjectGraphImporter.Import(target, closure, new[] { template.SystemHash }, out var graphError)
+            ?? throw new InvalidOperationException(graphError ?? "The particle object graph could not be imported.");
+        var tree = SafeBinTree.Parse(graph.Bytes);
+        var id = MapPlaceableWriter.NewParticleId(tree, HashAlgorithms.Fnv1a(newName));
+        if (!id.IsValid)
+            throw new InvalidOperationException("This map has no MapPlaceableContainer, so it cannot safely hold particle placements.");
+
+        var transform = System.Numerics.Matrix4x4.Identity;
+        transform.Translation = GizmoPivot ?? map.Center;
+        var edit = new MapPlacementEdit(id)
+        {
+            CreateParticle = true,
+            Name = newName,
+            Transform = transform,
+            SystemLink = template.SystemHash,
+        };
+        byte[] placed = MapPlaceableWriter.WriteEdits(graph.Bytes, new[] { edit }, out var placeError)
+            ?? throw new InvalidOperationException(placeError ?? "The particle placement could not be created.");
+
+        var staged = StageWorkshopAssets(graph.AssetPaths, mapEntry);
+        if (staged.Missing.Count > 0)
+            throw new InvalidOperationException("Required particle asset(s) were not found in the installed patch: "
+                + string.Join(", ", staged.Missing.Take(4)) + (staged.Missing.Count > 4 ? "..." : ""));
+        if (!await SaveMapBinBytesAsync(binEntry, placed))
+            throw new InvalidOperationException("The edited materials bin could not be saved.");
+
+        FinishWorkshopMutation();
+        await LoadMapGeoAsync(mapEntry);
+        var added = MapContent.AllParticles.FirstOrDefault(x => x.Placement.Id == id);
+        if (added is not null) SelectedParticleNode = added;
+        _log.Success("Workshop", $"Added particle '{newName}': {graph.ImportedObjects} object(s), {staged.Written} asset(s).");
+        return $"Added '{newName}' at the viewport focus. {graph.ImportedObjects} linked object(s) and {staged.Written} asset(s) imported.";
+    }
+
+    private (int Written, IReadOnlyList<string> Missing) StageWorkshopAssets(
+        IEnumerable<string> paths, WadAssetEntry destinationMap)
+    {
+        if (_workshopCatalog is null) return (0, paths.ToArray());
+        var missing = new List<string>();
+        var sources = new List<(string Path, byte[] Bytes)>();
+        foreach (string raw in paths.Where(p => !string.IsNullOrWhiteSpace(p))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            string path = raw.Trim().Replace('\\', '/').TrimStart('/');
+            if (path.Length == 0 || path.Split('/').Any(part => part == "..")) { missing.Add(raw); continue; }
+            byte[]? bytes = _workshopCatalog.ReadAsset(path);
+            if (bytes is null) { missing.Add(path); continue; }
+            sources.Add((path, bytes));
+        }
+        // Preflight the complete dependency set before touching the project. A failed import should not
+        // leave half of a particle's textures behind as unexplained dead files.
+        if (missing.Count > 0) return (0, missing);
+
+        int written = 0;
+        foreach (var (path, bytes) in sources)
+        {
+            ulong hash = HashAlgorithms.WadPath(path);
+
+            if (Project.IsFolderProject && Project.RootPath is { } root)
+            {
+                string folder = RiotWadFolderName(destinationMap);
+                string baseDir = Path.GetFullPath(Path.Combine(root, folder));
+                string file = Path.GetFullPath(Path.Combine(baseDir, path.Replace('/', Path.DirectorySeparatorChar)));
+                if (!file.StartsWith(baseDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                { missing.Add(path); continue; }
+                if (File.Exists(file)) continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllBytes(file, bytes);
+                if (!Project.ProjectFolders.Contains(folder, StringComparer.OrdinalIgnoreCase)) Project.ProjectFolders.Add(folder);
+                ClearShadowOverride(hash, Path.GetExtension(path));
+                written++;
+                continue;
+            }
+
+            if (_overrides.TryGet(hash, out var existing) && File.Exists(existing.OverrideFile)) continue;
+            string stored = ProjectWorkspace.StoreOverrideBytes(Project, hash, bytes, Path.GetExtension(path));
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = hash,
+                ResolvedPath = path,
+                OverrideFile = stored,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            written++;
+        }
+        return (written, missing);
+    }
+
+    private void FinishWorkshopMutation()
+    {
+        Project.IsDirty = true;
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        BuildMounts();
+        BuildProjectTree();
+        UpdateTitle();
+    }
 
     /// <summary>M123: run the confirmed plan — create the new materials in the map's .materials.bin,
     /// bring imported textures into the project as plain DDS, then stage every included mesh.</summary>

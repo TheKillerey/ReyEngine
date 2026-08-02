@@ -88,6 +88,9 @@
       <!-- M143: grouped by purpose — open-an-editor and per-asset actions up top (used constantly),
            the occasional utilities tucked into submenus. Build Package lives in Project + the toolbar. -->
       <MenuItem Header="_Tools">
+        <MenuItem Header="Workshop..." Command="{Binding OpenWorkshopCommand}"
+                  ToolTip.Tip="Browse one real game material per shader and every unique installed particle, then add a complete template directly to the open map" />
+        <Separator />
         <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"
                   ToolTip.Tip="Open the active document's .bin in the Particle Editor (works for skin bins and map materials.bin that contain VFX systems)" />
         <MenuItem Header="Open in HUD Editor" Command="{Binding OpenInHudEditorCommand}"
@@ -570,6 +573,9 @@
               <Button Classes="tool" Content="➕ Add Mesh" Command="{Binding AddMeshToMapCommand}"
                       IsVisible="{Binding HasMapGeo}" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Import a mesh (.obj / .scb / .sco) and append it to this map. Place it with the gizmo, pick its material in the inspector, then Save to Mod." />
+              <Button Classes="tool" Content="Workshop" Command="{Binding OpenWorkshopCommand}"
+                      IsVisible="{Binding HasMapGeo}" FontSize="11" Padding="8,3" Margin="0"
+                      ToolTip.Tip="Add a complete Riot material or particle template directly to this map" />
               <Button Classes="tool" Content="⛶ Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Frame the camera on the loaded content" />
             </StackPanel>

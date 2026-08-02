@@ -1,0 +1,196 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.WorkshopWindow"
+        x:DataType="vm:WorkshopViewModel"
+        Title="ReyEngine - Workshop" Width="1280" Height="820" MinWidth="980" MinHeight="640"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="18,14">
+      <Grid ColumnDefinitions="Auto,*,340,Auto" RowDefinitions="Auto,Auto">
+        <StackPanel Grid.Column="0" Grid.RowSpan="2" Margin="0,0,22,0">
+          <TextBlock Text="WORKSHOP" FontSize="22" FontWeight="Bold" LetterSpacing="2"
+                     Foreground="{DynamicResource ReyAccentBrush}" />
+          <TextBlock Text="Riot-authored templates, ready for this map" FontSize="10"
+                     Foreground="{DynamicResource ReyTextDimBrush}" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal" Spacing="5">
+          <ToggleButton Content="Materials" Command="{Binding ShowMaterialsCommand}"
+                        IsChecked="{Binding IsMaterialsTab, Mode=OneWay}" Padding="18,6" />
+          <ToggleButton Content="Particles" Command="{Binding ShowParticlesCommand}"
+                        IsChecked="{Binding IsParticlesTab, Mode=OneWay}" Padding="18,6" />
+        </StackPanel>
+        <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CatalogSummary}" Margin="4,5,12,0"
+                   Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
+        <TextBox Grid.Column="2" Grid.RowSpan="2" Text="{Binding Search}" Watermark="Search shader, material or particle..."
+                 VerticalAlignment="Center" Padding="11,7" />
+        <Button Grid.Column="3" Grid.RowSpan="2" Content="Rebuild from patch" Command="{Binding RebuildCatalogCommand}"
+                Margin="8,0,0,0" VerticalAlignment="Center" Padding="12,7"
+                ToolTip.Tip="Discard the cache and scan every installed game WAD again" />
+      </Grid>
+    </Border>
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="16,8">
+      <Grid RowDefinitions="Auto,Auto">
+        <TextBlock Text="{Binding Status}" FontSize="10" TextWrapping="Wrap"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <ProgressBar Grid.Row="1" Height="3" Margin="0,6,0,0" Minimum="0" Maximum="100"
+                     Value="{Binding ProgressPercent}" IsVisible="{Binding Running}" />
+      </Grid>
+    </Border>
+
+    <Grid ColumnDefinitions="440,*">
+      <Border Grid.Column="0" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,1,0"
+              Background="{DynamicResource ReyPanelBrush}">
+        <Grid>
+          <ListBox ItemsSource="{Binding Materials}" SelectedItem="{Binding SelectedMaterial}"
+                   IsVisible="{Binding IsMaterialsTab}" Margin="10" Background="Transparent">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:WorkshopMaterialViewModel">
+                <Border Padding="11,9" Margin="0,0,0,4" CornerRadius="5"
+                        Background="{DynamicResource ReyPanelAltBrush}">
+                  <Grid ColumnDefinitions="82,*">
+                    <Border Width="76" Height="44" CornerRadius="4" Background="{DynamicResource ReyBgBrush}">
+                      <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="10,0,0,0" Spacing="2">
+                      <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" />
+                      <TextBlock Text="{Binding Category}" FontSize="9" TextTrimming="CharacterEllipsis"
+                                 Foreground="{DynamicResource ReyAccentBrush}" />
+                      <TextBlock Text="{Binding Detail}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                    </StackPanel>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <Grid IsVisible="{Binding IsParticlesTab}" RowDefinitions="Auto,*">
+            <CheckBox Content="Visual particles only" IsChecked="{Binding VisualParticlesOnly}"
+                      Margin="18,12,12,4" FontSize="10" />
+            <ListBox Grid.Row="1" ItemsSource="{Binding Particles}" SelectedItem="{Binding SelectedParticle}"
+                     Margin="10,4,10,10" Background="Transparent">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:WorkshopParticleViewModel">
+                  <Border Padding="11,9" Margin="0,0,0,4" CornerRadius="5"
+                          Background="{DynamicResource ReyPanelAltBrush}">
+                    <Grid ColumnDefinitions="82,*">
+                      <Border Width="76" Height="44" CornerRadius="4" Background="{DynamicResource ReyBgBrush}">
+                        <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                      </Border>
+                      <StackPanel Grid.Column="1" Margin="10,0,0,0" Spacing="2">
+                        <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Path}" FontSize="9" TextTrimming="CharacterEllipsis"
+                                   Foreground="{DynamicResource ReyAccentBrush}" />
+                        <TextBlock Text="{Binding Detail}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                      </StackPanel>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </Grid>
+      </Border>
+
+      <Grid Grid.Column="1" Margin="24" IsVisible="{Binding IsMaterialsTab}" RowDefinitions="Auto,*,Auto">
+        <StackPanel>
+          <TextBlock Text="MATERIAL TEMPLATE" Classes="cardTitle" />
+          <TextBlock Text="One real in-game test material per unique shader. Its authored texture slots, parameters, switches and render state are preserved."
+                     TextWrapping="Wrap" Margin="0,5,0,14" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
+        </StackPanel>
+        <Grid Grid.Row="1" RowDefinitions="Auto,Auto,*">
+          <Border Height="300" MaxWidth="620" HorizontalAlignment="Stretch" CornerRadius="8"
+                  BorderBrush="{DynamicResource ReyBorderAccentBrush}" BorderThickness="1"
+                  Background="{DynamicResource ReyPanelAltBrush}">
+            <Grid>
+              <Image Source="{Binding SelectedMaterial.Thumbnail}" Stretch="UniformToFill" />
+              <Border VerticalAlignment="Bottom" Padding="18,24,18,14">
+                <Border.Background>
+                  <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                    <GradientStop Offset="0" Color="#00101014" />
+                    <GradientStop Offset="1" Color="#F0101014" />
+                  </LinearGradientBrush>
+                </Border.Background>
+                <StackPanel>
+                  <TextBlock Text="{Binding SelectedMaterial.Name}" FontSize="24" FontWeight="Bold" />
+                  <TextBlock Text="{Binding SelectedMaterial.Template.Shader}" FontSize="10"
+                             Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+            </Grid>
+          </Border>
+          <Border Grid.Row="1" Classes="card" Margin="0,16,0,0">
+            <StackPanel Spacing="6">
+              <TextBlock Text="{Binding SelectedMaterial.Detail}" FontSize="11" />
+              <TextBlock Text="{Binding SelectedMaterial.Source}" FontSize="9" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+            </StackPanel>
+          </Border>
+        </Grid>
+        <Border Grid.Row="2" Classes="card" Margin="0,18,0,0">
+          <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+            <TextBlock Text="NEW MAP MATERIAL NAME" Classes="cardTitle" />
+            <TextBox Grid.Row="1" Text="{Binding NewMaterialName}" Margin="0,7,12,0" Padding="8,5" />
+            <Button Grid.Column="1" Grid.RowSpan="2" Classes="primary" Content="Add material to map"
+                    Command="{Binding AddSelectedMaterialCommand}" IsEnabled="{Binding CanAddMaterial}"
+                    Padding="18,8" VerticalAlignment="Bottom" />
+          </Grid>
+        </Border>
+      </Grid>
+
+      <Grid Grid.Column="1" Margin="24" IsVisible="{Binding IsParticlesTab}" RowDefinitions="Auto,*,Auto">
+        <StackPanel>
+          <TextBlock Text="PARTICLE TEMPLATE" Classes="cardTitle" />
+          <TextBlock Text="Every unique installed VFX system. Adding one imports its complete linked object graph and assets, then places it at the viewport focus."
+                     TextWrapping="Wrap" Margin="0,5,0,14" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
+        </StackPanel>
+        <Grid Grid.Row="1" RowDefinitions="Auto,Auto,*">
+          <Border Height="300" MaxWidth="620" HorizontalAlignment="Stretch" CornerRadius="8"
+                  BorderBrush="{DynamicResource ReyBorderAccentBrush}" BorderThickness="1"
+                  Background="{DynamicResource ReyPanelAltBrush}">
+            <Grid>
+              <Image Source="{Binding SelectedParticle.Thumbnail}" Stretch="UniformToFill" />
+              <Border VerticalAlignment="Bottom" Padding="18,24,18,14">
+                <Border.Background>
+                  <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                    <GradientStop Offset="0" Color="#00101014" />
+                    <GradientStop Offset="1" Color="#F0101014" />
+                  </LinearGradientBrush>
+                </Border.Background>
+                <StackPanel>
+                  <TextBlock Text="{Binding SelectedParticle.Name}" FontSize="24" FontWeight="Bold" />
+                  <TextBlock Text="{Binding SelectedParticle.Path}" FontSize="10"
+                             Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+            </Grid>
+          </Border>
+          <Border Grid.Row="1" Classes="card" Margin="0,16,0,0">
+            <StackPanel Spacing="6">
+              <TextBlock Text="{Binding SelectedParticle.Detail}" FontSize="11" />
+              <TextBlock Text="Linked systems and every explicit texture, mesh or audio asset path are copied into the current map's package."
+                         FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+            </StackPanel>
+          </Border>
+        </Grid>
+        <Border Grid.Row="2" Classes="card" Margin="0,18,0,0">
+          <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+            <TextBlock Text="NEW PLACEMENT NAME" Classes="cardTitle" />
+            <TextBox Grid.Row="1" Text="{Binding NewParticleName}" Margin="0,7,12,0" Padding="8,5" />
+            <Button Grid.Column="1" Grid.RowSpan="2" Classes="primary" Content="Add particle to map"
+                    Command="{Binding AddSelectedParticleCommand}" IsEnabled="{Binding CanAddParticle}"
+                    Padding="18,8" VerticalAlignment="Bottom" />
+          </Grid>
+        </Border>
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>

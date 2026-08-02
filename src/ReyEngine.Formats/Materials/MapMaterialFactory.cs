@@ -13,6 +13,38 @@ namespace ReyEngine.Formats.Materials;
 /// </summary>
 public static class MapMaterialFactory
 {
+    /// <summary>Clone a proven StaticMaterialDef from any game bin into a map materials bin. Unlike
+    /// <see cref="CloneMaterial"/>, the template does not have to already belong to the target map.</summary>
+    public static byte[]? ImportMaterial(byte[] targetMaterialsBin, byte[] sourceBin,
+        uint templateHash, string templateName, string newName, out string? error)
+    {
+        error = null;
+        try
+        {
+            var target = SafeBinTree.Parse(targetMaterialsBin);
+            var source = SafeBinTree.Parse(sourceBin);
+            if (!source.Objects.TryGetValue(templateHash, out var template))
+                template = source.Objects.Values.FirstOrDefault(o => o.PathHash == HashAlgorithms.Fnv1a(templateName));
+            if (template is null) { error = $"Template material '{templateName}' was not found in its source bin."; return null; }
+
+            uint newHash = HashAlgorithms.Fnv1a(newName);
+            if (target.Objects.ContainsKey(newHash)) { error = $"A material named '{newName}' already exists."; return null; }
+            var clone = new BinTreeObject(newHash, template.ClassHash,
+                template.Properties.Select(kv => BinTreeCloner.Clone(kv.Value, kv.Key)));
+            uint nameField = HashAlgorithms.Fnv1a("name");
+            if (clone.Properties.TryGetValue(nameField, out var name) && name is BinTreeString text)
+                text.Value = newName;
+            target.Objects[newHash] = clone;
+
+            using var output = new MemoryStream();
+            target.Write(output);
+            var bytes = output.ToArray();
+            _ = SafeBinTree.Parse(bytes);
+            return bytes;
+        }
+        catch (Exception ex) { error = ex.Message; return null; }
+    }
+
     /// <summary>Write an RGBA image as an uncompressed BGRA .dds (the game loads plain DDS fine).</summary>
     public static byte[] WriteDds(int width, int height, byte[] rgba)
     {

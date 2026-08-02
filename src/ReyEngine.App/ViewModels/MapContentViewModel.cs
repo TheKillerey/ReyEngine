@@ -31,6 +31,7 @@ public sealed partial class ParticlePlacementViewModel : MapOutlinerItemViewMode
     public required MapParticlePlacement Placement { get; init; }
     public string Name => Placement.Name;
     public string SystemName => Placement.SystemName;
+    public uint EffectiveSystemHash => EditedSystemHash != 0 ? EditedSystemHash : Placement.SystemHash;
 
     // ---- M204: the verbs MapPlaceableWriter has supported since M199 but nothing could reach ----------
     // Each is null/false until the user touches it, so "edited" stays distinguishable from "same as
@@ -52,6 +53,7 @@ public sealed partial class ParticlePlacementViewModel : MapOutlinerItemViewMode
     {
         OnPropertyChanged(nameof(HasEdits));
         OnPropertyChanged(nameof(IsRelinked));
+        OnPropertyChanged(nameof(EffectiveSystemHash));
         StateChanged?.Invoke(this);
     }
     [ObservableProperty] private int? _editedVisibilityFlags;

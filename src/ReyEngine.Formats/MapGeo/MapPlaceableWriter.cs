@@ -34,6 +34,9 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     /// including the ones ReyEngine does not model - and the edit's other verbs are then applied on top.
     /// <see cref="Id"/> must name a key that does not already exist in the container.</summary>
     public MapPlacementId? CloneOf { get; init; }
+    /// <summary>Create a minimal MapParticle instead of cloning an existing placement. Used when the
+    /// Workshop adds the first particle to a map.</summary>
+    public bool CreateParticle { get; init; }
 }
 
 /// <summary>
@@ -66,6 +69,8 @@ public static class MapPlaceableWriter
     private static readonly uint F_visibilityFlags = HashAlgorithms.Fnv1a("mVisibilityFlags");
     private static readonly uint F_characterRecord = HashAlgorithms.Fnv1a("characterRecord");
     private static readonly uint F_skin = HashAlgorithms.Fnv1a("skin");
+    private static readonly uint F_groupName = HashAlgorithms.Fnv1a("groupName");
+    private static readonly uint ParticleClass = HashAlgorithms.Fnv1a("MapParticle");
 
     /// <summary>Apply the edits. Returns the new bytes, or null with a reason.</summary>
     public static byte[]? WriteEdits(byte[] materialsBin, IReadOnlyList<MapPlacementEdit> edits, out string? error)
@@ -140,6 +145,20 @@ public static class MapPlaceableWriter
         return candidate;
     }
 
+    /// <summary>Allocate a placement identity in the map's first placeable container. Returns default when
+    /// the map has no container at all.</summary>
+    public static MapPlacementId NewParticleId(BinTree tree, uint seed)
+    {
+        var container = tree.Objects.Values.FirstOrDefault(o => o.ClassHash == ContainerClass
+            && o.Properties.GetValueOrDefault(F_items) is BinTreeMap);
+        if (container is null) return default;
+        var items = (BinTreeMap)container.Properties[F_items];
+        var used = items.Where(e => e.Key is BinTreeHash).Select(e => ((BinTreeHash)e.Key).Value).ToHashSet();
+        uint candidate = seed * 2654435761u + 0x9E3779B9u;
+        while (candidate == 0 || used.Contains(candidate)) candidate++;
+        return new MapPlacementId(container.PathHash, candidate);
+    }
+
     private static bool TryApply(BinTree tree, MapPlacementEdit edit)
     {
         if (!edit.Id.IsValid) return false;
@@ -162,6 +181,27 @@ public static class MapPlaceableWriter
                 .Select(e => new KeyValuePair<BinTreeProperty, BinTreeProperty>(e.Key, e.Value))
                 .Append(new KeyValuePair<BinTreeProperty, BinTreeProperty>(new BinTreeHash(0, edit.Id.ItemKey), copy));
             items = new BinTreeMap(F_items, items.KeyType, items.ValueType, withClone);
+            container.Properties[F_items] = items;
+        }
+        else if (edit.CreateParticle)
+        {
+            if (items.Any(e => e.Key is BinTreeHash k && k.Value == edit.Id.ItemKey)
+                || edit.Transform is null || edit.SystemLink is null) return false;
+            var properties = new List<BinTreeProperty>
+            {
+                new BinTreeString(F_name, edit.Name ?? "Workshop_Particle"),
+                new BinTreeString(F_groupName, "Workshop"),
+                new BinTreeMatrix44(F_transform, edit.Transform.Value),
+                new BinTreeObjectLink(F_system, edit.SystemLink.Value),
+            };
+            // Absent is Riot's authored "ordinary/default visibility" state. Writing the editor's
+            // permissive read fallback (255) would invent a value not present on shipped placements.
+            if (edit.VisibilityFlags is { } authoredVisibility)
+                properties.Add(new BinTreeU8(F_visibilityFlags, (byte)Math.Clamp(authoredVisibility, 0, 255)));
+            var particle = new BinTreeStruct(0, ParticleClass, properties);
+            items = new BinTreeMap(F_items, items.KeyType, items.ValueType,
+                items.Select(e => new KeyValuePair<BinTreeProperty, BinTreeProperty>(e.Key, e.Value))
+                    .Append(new(new BinTreeHash(0, edit.Id.ItemKey), particle)));
             container.Properties[F_items] = items;
         }
 
@@ -211,7 +251,7 @@ public static class MapPlaceableWriter
         var editedByContainer = edits.GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
         // M206: a clone's key is absent from `before` on purpose, so it must not read as an intruder.
-        var addedByContainer = edits.Where(e => e.CloneOf is not null).GroupBy(e => e.Id.ContainerHash)
+        var addedByContainer = edits.Where(e => e.CloneOf is not null || e.CreateParticle).GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
 
         if (before.Objects.Count != after.Objects.Count)

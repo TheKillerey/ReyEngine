@@ -335,4 +335,32 @@ public class MapPlaceableWriterTests
         Assert.Same(bin, MapPlaceableWriter.WriteEdits(bin, Array.Empty<MapPlacementEdit>(), out var err));
         Assert.Null(err);
     }
+
+    [Fact]
+    public void WorkshopCanCreateANewMinimalParticle()
+    {
+        var bin = BuildBin(Matrix4x4.Identity);
+        var tree = new BinTree(new MemoryStream(bin, writable: false));
+        var id = MapPlaceableWriter.NewParticleId(tree, H("Workshop_Spark"));
+        var transform = Matrix4x4.CreateTranslation(10, 20, 30);
+
+        var output = MapPlaceableWriter.WriteEdits(bin, new[]
+        {
+            new MapPlacementEdit(id)
+            {
+                CreateParticle = true,
+                Name = "Workshop_Spark",
+                Transform = transform,
+                SystemLink = 0x12345678u,
+            },
+        }, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(output);
+        var added = Read(output!, id.ItemKey);
+        Assert.NotNull(added);
+        Assert.Equal("Workshop_Spark", added!.Value.Name);
+        Assert.Equal(transform, added.Value.Transform);
+        Assert.Equal(0x12345678u, added.Value.System);
+    }
 }
