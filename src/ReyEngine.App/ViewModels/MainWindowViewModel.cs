@@ -38,6 +38,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private readonly WadPathResolver _resolver;
     private WadArchive? _archive;
     private AssetMountService? _mounts;          // project mode: the virtual file system
+    private string? _lastGameFallbackNotice;
     private readonly AssetOverrideStore _overrides = new();
     private readonly ReyEngine.App.Services.ThumbnailService _thumbnails; // Content Browser lazy thumbnails
     private readonly Dictionary<ulong, AssetNodeViewModel> _nodesByHash = new();
@@ -2967,6 +2968,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return canWrite ? new Services.TextureRecolorService(CheckOutRecolorBase, WriteRecoloredAsset) : null;
     }
 
+    /// <summary>Actionable source-health message shown by the recolour tool before a large run.</summary>
+    public string? GetRecolorSourceWarning()
+    {
+        var status = GameReferenceLibrary.Inspect(Project.GameDirectory);
+        string? problem = status.IsValid ? null : status.Message;
+        if (status.IsValid && status.FinalDirectory is { } final
+            && _currentMapEntry is { } entry
+            && MapNameFromAssetPath(entry.Path) is { } mapName)
+        {
+            string mapWad = Path.Combine(final, "Maps", "Shipping", mapName + ".wad.client");
+            if (!File.Exists(mapWad))
+                problem = $"The configured League folder does not contain the required {mapName}.wad.client.";
+        }
+        if (problem is null) return null;
+        return problem + " Recolouring may fail for textures that only exist in Riot's WADs."
+               + Environment.NewLine + "1. Open Project > Set Game Folder...."
+               + Environment.NewLine + "2. Select the League of Legends\\Game folder that contains DATA\\FINAL."
+               + Environment.NewLine + "3. Reopen the map, press Refresh here, and retry.";
+    }
+
     /// <summary>Write a recoloured texture where it belongs. Unlike a baked lightmap — a brand-new file
     /// with no home of its own — a recoloured texture already exists in a Riot WAD, so it is staged under
     /// THAT wad's folder and replaces the chunk the game actually reads.</summary>
@@ -3078,13 +3099,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (result is not null)
         {
-            _log.Success("Recolor", $"{result.Written:n0} texture(s) recoloured"
+            string summary = $"{result.Written:n0} texture(s) recoloured"
                 + (result.Skipped > 0 ? $", {result.Skipped:n0} skipped" : "")
                 + (result.Failed > 0 ? $", {result.Failed:n0} failed" : "")
-                + $" ({result.BytesWritten / 1048576.0:F1} MB).");
+                + $" ({result.BytesWritten / 1048576.0:F1} MB).";
+            if (result.Failed > 0) _log.Error("Recolor", summary);
+            else _log.Success("Recolor", summary);
+            if (result.MissingSources > 0)
+                _log.Error("Recolor",
+                    $"{result.MissingSources:n0} original texture source(s) could not be read. "
+                    + "Fix: Project > Set Game Folder..., select the League of Legends\\Game folder containing DATA\\FINAL, "
+                    + "then reopen the map, refresh Recolor Textures, and retry.");
             foreach (var note in result.Notes) _log.Warn("Recolor", note);
         }
 
+        if (result is not null && result.Written == 0) return;
         Project.IsDirty = true;
         if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
         if (Project.IsFolderProject) { BuildMounts(); BuildProjectTree(); }
@@ -8164,19 +8193,83 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_mounts is null) return;
         var mapNames = Project.ProjectFolders.Concat(Project.ProjectWads)
             .Select(p => p == "." ? Project.Name : Path.GetFileNameWithoutExtension(p).Replace(".wad", "", StringComparison.OrdinalIgnoreCase))
-            .Append(Project.Name);
+            .Append(Project.Name)
+            // A project folder is not always named Map11. Recover the target WAD from resolved asset
+            // paths such as data/maps/mapgeometry/map11/base_srx.mapgeo as well.
+            .Concat(_mounts.Mounts
+                .Where(m => m.Kind != AssetSourceKind.RiotReference)
+                .SelectMany(m => m.Enumerate())
+                .Select(a => MapNameFromAssetPath(a.VirtualPath))
+                .OfType<string>())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
-        int n = 0;
-        foreach (var wad in GameReferenceLibrary.Discover(Project.GameDirectory, mapNames))
+        var status = GameReferenceLibrary.Inspect(Project.GameDirectory);
+        if (!status.IsValid)
         {
-            if (Project.ReferenceWads.Contains(wad, StringComparer.OrdinalIgnoreCase)) continue; // already an explicit reference
-            try { _mounts.AddFallback(new WadMount(WadArchive.Open(wad), AssetSourceKind.RiotReference, editable: false, name: Path.GetFileName(wad))); n++; }
+            LogGameFallbackOnce("error", status.Message
+                + " Missing skins, props, materials and textures will not resolve. "
+                + "Fix: Project > Set Game Folder..., select the League of Legends\\Game folder containing DATA\\FINAL, then reopen the map.");
+            return;
+        }
+
+        int mounted = 0;
+        var discovered = GameReferenceLibrary.Discover(status.GameDirectory, mapNames);
+        foreach (var wad in discovered)
+        {
+            if (Project.ReferenceWads.Contains(wad, StringComparer.OrdinalIgnoreCase)) continue;
+            try
+            {
+                _mounts.AddFallback(new WadMount(WadArchive.Open(wad), AssetSourceKind.RiotReference,
+                    editable: false, name: Path.GetFileName(wad)));
+                mounted++;
+            }
             catch (Exception ex) { _log.Warn("Project", $"game fallback {Path.GetFileName(wad)}: {ex.Message}"); }
         }
-        if (n > 0)
-            _log.Info("Project", $"Mounted {n} game WAD(s) as read-only fallback — missing skin bins/textures resolve from the original game files. (Set the game folder via Tools if assets are still missing.)");
-        else if (string.IsNullOrEmpty(Project.GameDirectory))
-            _log.Warn("Project", "No game folder configured — missing base assets (textures/skin bins not in the mod) won't resolve. Set it so ReyEngine can fall back to the original WADs.");
+
+        var missingMapWads = mapNames
+            .Where(n => System.Text.RegularExpressions.Regex.IsMatch(n, @"^map\d+$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            .Where(n => !File.Exists(Path.Combine(status.FinalDirectory!, "Maps", "Shipping", n + ".wad.client")))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (missingMapWads.Length > 0)
+            LogGameFallbackOnce("error",
+                $"The League folder was recognized, but required map WAD(s) are missing: {string.Join(", ", missingMapWads.Select(n => n + ".wad.client"))}. "
+                + "The folder may point to an old or incomplete install; map recolouring and asset resolution can fail. "
+                + "Update League or use Project > Set Game Folder... to select the active League of Legends\\Game folder, then reopen the map.");
+        else if (discovered.Count > 0)
+            LogGameFallbackOnce("info",
+                $"Game asset folder verified: {status.GameDirectory}. {discovered.Count:n0} relevant WAD(s) found"
+                + (mounted != discovered.Count
+                    ? $", {mounted:n0} added as fallback (the rest are already explicit references)"
+                    : " and mounted as read-only fallback") + ".");
+        else
+            LogGameFallbackOnce("error",
+                $"The game folder is valid, but no relevant WADs were found under {status.FinalDirectory}. "
+                + "Update League, then reopen the project. If the install moved, use Project > Set Game Folder....");
+    }
+
+    private static string? MapNameFromAssetPath(string path)
+    {
+        var segments = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i + 1 < segments.Length; i++)
+            if ((segments[i].Equals("mapgeometry", StringComparison.OrdinalIgnoreCase)
+                 || segments[i].Equals("shipping", StringComparison.OrdinalIgnoreCase))
+                && System.Text.RegularExpressions.Regex.IsMatch(segments[i + 1], @"^map\d+$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                return segments[i + 1];
+        return null;
+    }
+
+    private void LogGameFallbackOnce(string level, string message)
+    {
+        string key = level + "|" + message;
+        if (string.Equals(_lastGameFallbackNotice, key, StringComparison.Ordinal)) return;
+        _lastGameFallbackNotice = key;
+        if (level == "error") _log.Error("Project", message);
+        else _log.Info("Project", message);
     }
 
     private void BuildProjectTree()
@@ -8272,15 +8365,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var folder = await Dialogs.OpenFolderAsync("Select the League of Legends 'Game' folder (for reference fallback)");
         if (folder is null) return;
-        Project.GameDirectory = folder;
-        var probe = GameReferenceLibrary.Discover(folder, Project.ProjectFolders.Append(Project.Name));
-        if (probe.Count == 0) { _log.Warn("Project", $"No game WADs found under {folder}. Pick the 'Game' folder (it should contain DATA/FINAL)."); return; }
+        var status = GameReferenceLibrary.Inspect(folder);
+        if (!status.IsValid)
+        {
+            _log.Error("Project", status.Message
+                + " Select the League of Legends\\Game folder containing DATA\\FINAL. The previous setting was kept.");
+            return;
+        }
+        Project.GameDirectory = status.GameDirectory;
+        var probe = GameReferenceLibrary.Discover(status.GameDirectory, Project.ProjectFolders.Append(Project.Name));
+        _lastGameFallbackNotice = null;
         if (ProjectMode)
         {
             ReyProjectService.Save(Project, Project.ProjectFilePath!);
             BuildMounts(); BuildProjectTree();
         }
-        _log.Success("Project", $"Game folder set: {folder} — {probe.Count} reference WAD(s) available as fallback. Reload the asset to apply.");
+        _log.Success("Project", $"Game folder set and verified: {status.GameDirectory} — {probe.Count} reference WAD(s) available. Reopen the map before retrying Recolor Textures.");
     }
 
     // ---- Riot shader database (M18) -------------------------------------

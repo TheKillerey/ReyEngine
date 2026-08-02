@@ -12,7 +12,8 @@ public sealed record RecolorTarget(ulong PathHash, string AssetPath);
 public sealed record RecolorProgress(int Done, int Total, string Current);
 
 public sealed record RecolorRunResult(
-    int Written, int Skipped, int Failed, long BytesWritten, IReadOnlyList<string> Notes);
+    int Written, int Skipped, int Failed, int MissingSources, long BytesWritten,
+    IReadOnlyList<string> Notes, IReadOnlyList<RecolorTarget> WrittenTargets);
 
 /// <summary>M171: applies one <see cref="TextureAdjustment"/> across a set of textures and writes each
 /// result where the host says it belongs.
@@ -53,9 +54,10 @@ public sealed class TextureRecolorService
         IProgress<RecolorProgress>? progress = null, CancellationToken ct = default)
         => Task.Run(() =>
         {
-            int written = 0, skipped = 0, failed = 0;
+            int written = 0, skipped = 0, failed = 0, missingSources = 0;
             long bytes = 0;
             var notes = new List<string>();
+            var writtenTargets = new List<RecolorTarget>();
 
             for (int start = 0; start < targets.Count; start += BatchSize)
             {
@@ -68,8 +70,20 @@ public sealed class TextureRecolorService
                 for (int i = 0; i < count; i++)
                 {
                     var t = targets[start + i];
-                    try { sources[i] = _readBase(t)!; }
-                    catch (Exception ex) { Note(notes, $"{t.AssetPath}: could not read source ({ex.Message})"); }
+                    try
+                    {
+                        sources[i] = _readBase(t)!;
+                        if (sources[i] is null)
+                        {
+                            missingSources++;
+                            Note(notes, $"{t.AssetPath}: original source was not found in the configured game files");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        missingSources++;
+                        Note(notes, $"{t.AssetPath}: could not read original source ({ex.Message})");
+                    }
                 }
 
                 // 2. decode / adjust / encode (parallel — this is the whole cost)
@@ -98,13 +112,14 @@ public sealed class TextureRecolorService
                         _writeAsset(t.AssetPath, outcome.Bytes!, ".tex");
                         written++;
                         bytes += outcome.Bytes!.Length;
+                        writtenTargets.Add(t);
                     }
                     catch (Exception ex) { failed++; Note(notes, $"{t.AssetPath}: write failed ({ex.Message})"); }
                 }
             }
 
             progress?.Report(new RecolorProgress(targets.Count, targets.Count, ""));
-            return new RecolorRunResult(written, skipped, failed, bytes, notes);
+            return new RecolorRunResult(written, skipped, failed, missingSources, bytes, notes, writtenTargets);
         }, ct);
 
     /// <summary>Keep the note list bounded — a whole-map run over a broken folder could otherwise produce
