@@ -37,6 +37,7 @@ public sealed class ShaderPermutationIndex
     private readonly Dictionary<string, Dictionary<string, string>> _featureDefines = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Dictionary<string, bool>> _switchDefaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Dictionary<string, float[]>> _paramDefaults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Dictionary<string, string>> _textureDefaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly WadFile? _cache;
     private readonly Dictionary<ulong, string> _cachePaths = new();
 
@@ -83,56 +84,17 @@ public sealed class ShaderPermutationIndex
             ms.Position = 0;
             var tree = new BinTree(ms);
 
-            uint fdHash = HashAlgorithms.Fnv1a("featureDefines");
-            uint swHash = HashAlgorithms.Fnv1a("staticSwitches");
-            uint nameHash = HashAlgorithms.Fnv1a("name");
-            uint defHash = HashAlgorithms.Fnv1a("onByDefault");
             uint pathHash = HashAlgorithms.Fnv1a("objectPath");
-            uint paramsHash = HashAlgorithms.Fnv1a("parameters");
-            uint dataHash = HashAlgorithms.Fnv1a("data");
 
             foreach (var (_, obj) in tree.Objects)
             {
                 string? shaderPath = obj.Properties.TryGetValue(pathHash, out var op) && op is BinTreeString ops ? ops.Value : null;
                 if (shaderPath is null) continue;
-
-                var fd = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                if (obj.Properties.TryGetValue(fdHash, out var fdp) && fdp is BinTreeMap map)
-                    foreach (var e in map)
-                        if (e.Key is BinTreeString k && e.Value is BinTreeString v) fd[k.Value] = v.Value;
-
-                var sd = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-                if (obj.Properties.TryGetValue(swHash, out var swp) && swp is BinTreeContainer c)
-                    foreach (var el in c.Elements.OfType<BinTreeStruct>())
-                    {
-                        string? sn = el.Properties.TryGetValue(nameHash, out var np) && np is BinTreeString ns ? ns.Value : null;
-                        bool on = el.Properties.TryGetValue(defHash, out var dp)
-                                  && (dp is BinTreeBool b ? b.Value : dp is BinTreeBitBool bb && bb.Value);
-                        if (sn is not null) sd[sn] = on;
-                    }
-
-                // M257: the shader's own PARAMETER DEFAULTS. Each entry of `parameters` is a struct with a
-                // `name` string and a `data` Vector4 - e.g. albedoNewMin = <0.1,0,0,0>, rimOffset =
-                // <0.3,0,0,0>. Present on 343 of the 347 shader definitions.
-                //
-                // These are what a material means when it does not author a parameter. Without them the
-                // constant is simply left unwritten, i.e. zero - and zero is not "unspecified", it is a
-                // value the shader will happily multiply by. The same failure as M255's TintColor, one
-                // level further out.
-                var pd = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
-                if (obj.Properties.TryGetValue(paramsHash, out var prp) && prp is BinTreeContainer pc)
-                    foreach (var el in pc.Elements.OfType<BinTreeStruct>())
-                    {
-                        string? pn = el.Properties.TryGetValue(nameHash, out var pnp) && pnp is BinTreeString pns
-                            ? pns.Value : null;
-                        if (pn is null) continue;
-                        if (el.Properties.TryGetValue(dataHash, out var dv) && dv is BinTreeVector4 v4)
-                            pd[pn] = new[] { v4.Value.X, v4.Value.Y, v4.Value.Z, v4.Value.W };
-                    }
-
-                _featureDefines[shaderPath] = fd;
-                _switchDefaults[shaderPath] = sd;
-                _paramDefaults[shaderPath] = pd;
+                var defaults = ReadDefinitionDefaults(obj);
+                _featureDefines[shaderPath] = defaults.FeatureDefines;
+                _switchDefaults[shaderPath] = defaults.Switches;
+                _paramDefaults[shaderPath] = defaults.Parameters;
+                _textureDefaults[shaderPath] = defaults.Textures;
             }
         }
         catch { /* best effort — an unreadable shaders.bin just means fewer fixed defines */ }
@@ -317,6 +279,79 @@ public sealed class ShaderPermutationIndex
 
     private static readonly Dictionary<string, float[]> EmptyParams = new();
 
+    /// <summary>The shader's own fallback texture paths from <c>textures[].defaultTexturePath</c>.
+    /// A raw shader preview has no material to supply these, so leaving them unread changes the shader's
+    /// authored starting point into a set of white stand-ins.</summary>
+    public bool TryGetTextureDefaults(string shader, out IReadOnlyDictionary<string, string> defaults)
+    {
+        if (_textureDefaults.TryGetValue(shader, out var d)) { defaults = d; return true; }
+        defaults = EmptyTextures;
+        return false;
+    }
+
+    private static readonly Dictionary<string, string> EmptyTextures = new();
+
+    /// <summary>Convert a generated-cache name back to the <c>objectPath</c> spelling used by
+    /// <c>shaders.bin</c>.</summary>
+    public static string DefinitionPathForCacheShader(string cacheShader)
+    {
+        string path = Shaders.ShaderCacheReader.StripStage(cacheShader).Replace('\\', '/');
+        const string generated = "assets/shaders/generated/";
+        return path.StartsWith(generated, StringComparison.OrdinalIgnoreCase)
+            ? path[generated.Length..]
+            : path;
+    }
+
+    /// <summary>All authored defaults from one <c>CustomShaderDef</c>. Public so the byte-level contract
+    /// can be regression-tested without constructing a WAD.</summary>
+    public static ShaderDefinitionDefaults ReadDefinitionDefaults(BinTreeObject obj)
+    {
+        uint fdHash = HashAlgorithms.Fnv1a("featureDefines");
+        uint swHash = HashAlgorithms.Fnv1a("staticSwitches");
+        uint nameHash = HashAlgorithms.Fnv1a("name");
+        uint defHash = HashAlgorithms.Fnv1a("onByDefault");
+        uint paramsHash = HashAlgorithms.Fnv1a("parameters");
+        uint dataHash = HashAlgorithms.Fnv1a("data");
+        uint texturesHash = HashAlgorithms.Fnv1a("textures");
+        uint texturePathHash = HashAlgorithms.Fnv1a("defaultTexturePath");
+
+        var features = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (obj.Properties.TryGetValue(fdHash, out var fdp) && fdp is BinTreeMap map)
+            foreach (var e in map)
+                if (e.Key is BinTreeString k && e.Value is BinTreeString v) features[k.Value] = v.Value;
+
+        var switches = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        if (obj.Properties.TryGetValue(swHash, out var swp) && swp is BinTreeContainer switchesContainer)
+            foreach (var el in switchesContainer.Elements.OfType<BinTreeStruct>())
+            {
+                string? name = el.Properties.TryGetValue(nameHash, out var np) && np is BinTreeString ns ? ns.Value : null;
+                bool on = el.Properties.TryGetValue(defHash, out var dp)
+                          && (dp is BinTreeBool b ? b.Value : dp is BinTreeBitBool bb && bb.Value);
+                if (name is not null) switches[name] = on;
+            }
+
+        // M257: parameters[].data is the value a material means when it authors nothing.
+        var parameters = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+        if (obj.Properties.TryGetValue(paramsHash, out var prp) && prp is BinTreeContainer paramsContainer)
+            foreach (var el in paramsContainer.Elements.OfType<BinTreeStruct>())
+            {
+                string? name = el.Properties.TryGetValue(nameHash, out var np) && np is BinTreeString ns ? ns.Value : null;
+                if (name is not null && el.Properties.TryGetValue(dataHash, out var dv) && dv is BinTreeVector4 v4)
+                    parameters[name] = new[] { v4.Value.X, v4.Value.Y, v4.Value.Z, v4.Value.W };
+            }
+
+        var textures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (obj.Properties.TryGetValue(texturesHash, out var txp) && txp is BinTreeContainer texturesContainer)
+            foreach (var el in texturesContainer.Elements.OfType<BinTreeStruct>())
+            {
+                string? name = el.Properties.TryGetValue(nameHash, out var np) && np is BinTreeString ns ? ns.Value : null;
+                string? path = el.Properties.TryGetValue(texturePathHash, out var pp) && pp is BinTreeString ps ? ps.Value : null;
+                if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(path)) textures[name] = path;
+            }
+
+        return new ShaderDefinitionDefaults(features, switches, parameters, textures);
+    }
+
     public bool TryGetShaderDefs(string shader,
         out IReadOnlyDictionary<string, string> featureDefines,
         out IReadOnlyDictionary<string, bool> switchDefaults)
@@ -330,3 +365,9 @@ public sealed class ShaderPermutationIndex
 
     public void Dispose() => _cache?.Dispose();
 }
+
+public sealed record ShaderDefinitionDefaults(
+    Dictionary<string, string> FeatureDefines,
+    Dictionary<string, bool> Switches,
+    Dictionary<string, float[]> Parameters,
+    Dictionary<string, string> Textures);

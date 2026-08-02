@@ -464,10 +464,19 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         _cache.ReadTocOrPartner(value.Full, DxbcStage.Vertex, out _vsName);
         _cache.ReadTocOrPartner(value.Full, DxbcStage.Pixel, out _psName);
 
-        Fill(VertexPermutations, ShaderCacheReader.TocPathFor(_vsName, DxbcStage.Vertex));
-        Fill(PixelPermutations, ShaderCacheReader.TocPathFor(_psName, DxbcStage.Pixel));
-        SelectedVertexPerm = VertexPermutations.FirstOrDefault();
-        SelectedPixelPerm = PixelPermutations.FirstOrDefault();
+        var vsToc = Fill(VertexPermutations, ShaderCacheReader.TocPathFor(_vsName, DxbcStage.Vertex));
+        var psToc = Fill(PixelPermutations, ShaderCacheReader.TocPathFor(_psName, DxbcStage.Pixel));
+
+        // A TOC's first row is storage order, not the shader default. Reconstruct the complete
+        // featureDefine + onByDefault set from shaders.bin and select the cooked blobs it resolves to.
+        string definition = ShaderPermutationIndex.DefinitionPathForCacheShader(value.Full);
+        IReadOnlyDictionary<string, string>? features = null;
+        IReadOnlyDictionary<string, bool>? switches = null;
+        _perms?.TryGetShaderDefs(definition, out features, out switches);
+        SelectedVertexPerm = DefaultPermutation(vsToc, VertexPermutations, features, switches,
+            out _defaultVsExplanation);
+        SelectedPixelPerm = DefaultPermutation(psToc, PixelPermutations, features, switches,
+            out _defaultPsExplanation);
 
         Status = $"{VertexPermutations.Count:n0} vertex / {PixelPermutations.Count:n0} pixel permutations cooked.";
         if (!string.Equals(_vsName, _psName, StringComparison.OrdinalIgnoreCase))
@@ -479,19 +488,45 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// 371 shaders that pair both stages; different for the stage-split hlsl/ families.</summary>
     private string _vsName = "";
     private string _psName = "";
+    private string _defaultVsExplanation = "shader definition unavailable";
+    private string _defaultPsExplanation = "shader definition unavailable";
 
     private static string ShortName(string full) => full.Split('/').LastOrDefault() ?? full;
 
-    private void Fill(ObservableCollection<PermutationRow> into, string tocPath)
+    private ShaderStageToc? Fill(ObservableCollection<PermutationRow> into, string tocPath)
     {
         var toc = _cache!.ReadToc(tocPath);
-        if (toc is null) return;
+        if (toc is null) return null;
         var described = ShaderCacheReader.DescribePermutations(toc, out bool truncated, 200_000);
         int i = 0;
         foreach (var p in described) into.Add(new PermutationRow { Perm = p, Ordinal = i++ });
         if (truncated)
             Status = "Permutation define sets could not be recovered (the define pool is too large to enumerate); "
                      + "blob indices are still exact.";
+        return toc;
+    }
+
+    private static PermutationRow? DefaultPermutation(ShaderStageToc? toc,
+        ObservableCollection<PermutationRow> rows,
+        IReadOnlyDictionary<string, string>? features,
+        IReadOnlyDictionary<string, bool>? switches,
+        out string explanation)
+    {
+        string why = "stage TOC unavailable";
+        if (toc is not null)
+        {
+            var resolved = ShaderCacheReader.ResolvePermutation(
+                toc, null, null, features, switches, out why);
+            if (resolved is not null)
+            {
+                explanation = why;
+                return rows.FirstOrDefault(r => r.Perm.Key == resolved.Key)
+                       ?? new PermutationRow { Perm = resolved, Ordinal = -1 };
+            }
+        }
+
+        explanation = why + "; using the first cooked blob";
+        return rows.FirstOrDefault();
     }
 
     partial void OnBinFilterChanged(string value) => ApplyBinFilter();
@@ -1034,7 +1069,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         string exact = samplerName + "__TX";
         foreach (var refl in new[] { ps, vs })
             foreach (var t in refl.Textures)
-                if (t.Name.Equals(exact, StringComparison.OrdinalIgnoreCase)) return t.Name;
+                if (t.Name.Equals(exact, StringComparison.OrdinalIgnoreCase)
+                    || t.Name.Equals(samplerName, StringComparison.OrdinalIgnoreCase)) return t.Name;
 
         // the champion convention: an unqualified "texture" means the diffuse
         if (!samplerName.Equals("texture", StringComparison.OrdinalIgnoreCase)) return null;
@@ -1436,6 +1472,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         _quadFacing = null;                 // M231: force the billboard to rebuild for the current camera
         FocusCamera();
         BuildSlots();
+        _appliedDefaults = ApplyShaderDefinitionDefaults();
         BuildMetadata(vsPath, psPath, report);
 
         if (!_renderer.BuildComparisonShader(_vs, out var cerr))
@@ -1445,8 +1482,11 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
         IsLoaded = true;
         HasError = false;
-        Status = $"Loaded. {report.Steps.Count} pipeline objects created"
-                 + (report.Warnings.Count > 0 ? $", {report.Warnings.Count} warning(s)." : ".");
+        Status = $"Loaded with shader defaults: {_appliedDefaults.TextureCount} texture(s), "
+                 + $"{_appliedDefaults.ParameterCount} parameter(s), {report.Steps.Count} pipeline objects"
+                 + (_appliedDefaults.MissingTextures > 0
+                     ? $", {_appliedDefaults.MissingTextures} default texture(s) missing."
+                     : report.Warnings.Count > 0 ? $", {report.Warnings.Count} warning(s)." : ".");
         AppendLog();
     }
 
@@ -1496,6 +1536,16 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     public string? DefaultShaderHint { get; private set; }
 
     [RelayCommand] private void Reload() => Load();
+
+    /// <summary>Discard manual permutation, texture and constant choices and reconstruct the shader's
+    /// authored starting state from shaders.bin.</summary>
+    [RelayCommand]
+    private void LoadShaderDefaults()
+    {
+        if (SelectedShader is null) return;
+        OnSelectedShaderChanged(SelectedShader);
+        Load();
+    }
 
     /// <summary>M233: start the selected VFX system playing through Riot's quad_vs/quad_ps.</summary>
     [RelayCommand]
@@ -1552,6 +1602,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
     private void BuildSlots()
     {
+        _renderer.Overrides.Clear();
         TextureSlots.Clear();
         Constants.Clear();
         foreach (var refl in new[] { _vs, _ps })
@@ -1571,6 +1622,71 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         }
     }
 
+    private readonly record struct AppliedShaderDefaults(
+        string DefinitionPath, int TextureCount, int ParameterCount, int MissingTextures);
+
+    private AppliedShaderDefaults _appliedDefaults;
+
+    /// <summary>Apply the defaults authored on the shader definition itself. A material loaded afterwards
+    /// replaces these values slot by slot, which is the game's fallback order: shader, then material.</summary>
+    private AppliedShaderDefaults ApplyShaderDefinitionDefaults()
+    {
+        if (SelectedShader is null || _vs is null || _ps is null)
+            return default;
+
+        string definition = ShaderPermutationIndex.DefinitionPathForCacheShader(SelectedShader.Full);
+        int textures = 0, parameters = 0, missing = 0;
+
+        if (_perms is not null && _perms.TryGetParameterDefaults(definition, out var paramDefaults))
+            foreach (var (name, value) in paramDefaults)
+            {
+                var row = Constants.FirstOrDefault(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (row is null) continue;
+                row.Value = string.Join(" ", value.Select(v =>
+                    v.ToString("R", System.Globalization.CultureInfo.InvariantCulture)));
+                parameters++;
+            }
+
+        if (_perms is not null && _perms.TryGetTextureDefaults(definition, out var textureDefaults))
+            foreach (var (sampler, path) in textureDefaults)
+            {
+                string? target = ResolveTextureTarget(sampler, _ps, _vs);
+                var row = target is null ? null : TextureSlots.FirstOrDefault(t =>
+                    t.Name.Equals(target, StringComparison.OrdinalIgnoreCase));
+                if (row is null) continue; // this permutation compiled the sampler out
+
+                if (_readAsset is null)
+                {
+                    row.Source = $"shader default unavailable (no asset mounts): {path}";
+                    missing++;
+                    continue;
+                }
+
+                try
+                {
+                    var data = _readAsset(HashAlgorithms.WadPath(path.ToLowerInvariant()));
+                    if (data is null || data.Length == 0)
+                    {
+                        row.Source = $"shader default missing: {path}";
+                        missing++;
+                        continue;
+                    }
+
+                    var image = TextureDecoder.Decode(data);
+                    _renderer.SetTexture(target!, image.Rgba, image.Width, image.Height);
+                    row.Source = $"shader default: {path} ({image.Width}x{image.Height})";
+                    textures++;
+                }
+                catch (Exception ex)
+                {
+                    row.Source = $"shader default failed: {path} ({ex.Message})";
+                    missing++;
+                }
+            }
+
+        return new AppliedShaderDefaults(definition, textures, parameters, missing);
+    }
+
     private void BuildMetadata(string vsPath, string psPath, ShaderLoadReport report)
     {
         var sb = new StringBuilder();
@@ -1578,6 +1694,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         sb.AppendLine();
         Describe(sb, "VERTEX", vsPath, SelectedVertexPerm, _vs);
         Describe(sb, "PIXEL", psPath, SelectedPixelPerm, _ps);
+        DescribeShaderDefaults(sb);
 
         if (report.Steps.Count > 0)
         {
@@ -1599,6 +1716,36 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         }
         Metadata = sb.ToString();
         RebuildBindings();
+    }
+
+    private void DescribeShaderDefaults(StringBuilder sb)
+    {
+        if (SelectedShader is null) return;
+        string definition = ShaderPermutationIndex.DefinitionPathForCacheShader(SelectedShader.Full);
+        sb.AppendLine("SHADER DEFAULTS (data/shaders/shaders.bin)");
+        sb.AppendLine($"   definition  {definition}");
+        sb.AppendLine($"   vertex      {_defaultVsExplanation}");
+        sb.AppendLine($"   pixel       {_defaultPsExplanation}");
+
+        if (_perms is not null && _perms.TryGetShaderDefs(definition, out var features, out var switches))
+        {
+            sb.AppendLine($"   defines     {(features.Count == 0 ? "(none)" : string.Join(", ", features.Select(x => $"{x.Key}={x.Value}")))}");
+            sb.AppendLine($"   switches    {(switches.Count == 0 ? "(none)" : string.Join(", ", switches.Select(x => $"{x.Key}={(x.Value ? 1 : 0)}")))}");
+        }
+        else sb.AppendLine("   defines     unavailable");
+
+        if (_perms is not null && _perms.TryGetTextureDefaults(definition, out var textures))
+        {
+            sb.AppendLine("   textures");
+            foreach (var (name, path) in textures) sb.AppendLine($"      {name,-28} {path}");
+        }
+        if (_perms is not null && _perms.TryGetParameterDefaults(definition, out var parameters))
+        {
+            sb.AppendLine("   parameters");
+            foreach (var (name, value) in parameters)
+                sb.AppendLine($"      {name,-28} {string.Join(" ", value.Select(v => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture)))}");
+        }
+        sb.AppendLine();
     }
 
     private static void Describe(StringBuilder sb, string label, string path, PermutationRow? perm, DxbcShader? sh)
