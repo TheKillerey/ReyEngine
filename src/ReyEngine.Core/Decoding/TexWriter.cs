@@ -38,8 +38,8 @@ public static class TexWriter
     /// <summary>M171: the format a .tex is ALREADY stored in, so a rewrite can preserve it. Without this
     /// every edited texture silently becomes BC3 — and 37.9% of Map11 is BC1, which would roughly double
     /// those files. Null when the bytes are not a TEX container or carry a format we cannot write
-    /// (measured: 3 Map11 files are format 14, a 16-byte-block normal-map format LeagueToolkit cannot
-    /// even decode; they must be skipped, never rewritten as something else).</summary>
+    /// (measured: format 14 is a 16-byte-block BC5 normal map which TextureDecoder can read, but the
+    /// editor cannot safely rewrite yet; it must be skipped, never converted to something else).</summary>
     public static TexFormat? DetectFormat(byte[] tex)
     {
         if (tex is null || tex.Length < 12) return null;
