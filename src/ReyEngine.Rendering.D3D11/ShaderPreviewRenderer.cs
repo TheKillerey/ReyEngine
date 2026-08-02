@@ -308,6 +308,8 @@ public sealed unsafe class PreviewMaterial : IDisposable
 /// </summary>
 public sealed unsafe class ShaderPreviewRenderer : IDisposable
 {
+    private static readonly float[] NeutralIblCubemapScales = Repeat(new[] { 1f, 1f, 1f, 1f }, 32);
+
     private SilkD3D11? _d3d;
     private ComPtr<ID3D11Device> _device;
     private ComPtr<ID3D11DeviceContext> _ctx;
@@ -417,6 +419,9 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     public IReadOnlyList<PreviewMaterial> Materials => _materials;
 
     private ComPtr<ID3D11ShaderResourceView> _white;
+    private ComPtr<ID3D11ShaderResourceView> _whiteArray;
+    private ComPtr<ID3D11ShaderResourceView> _whiteCube;
+    private ComPtr<ID3D11ShaderResourceView> _whiteCubeArray;
     private ComPtr<ID3D11ShaderResourceView> _identityRamp;
 
     public string DeviceDescription { get; private set; } = "(no device)";
@@ -535,10 +540,14 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
         _device.CreateSamplerState(in cmp, ref s5);
         _comparison = s5;
 
-        // an opaque white 1x1 stands in for every texture the material does not supply, so a missing
-        // binding shows as "unlit but present" rather than as a black or undefined surface
+        // Opaque white stand-ins must match the reflected resource DIMENSION. D3D11 accepts a Texture2D
+        // SRV at a Texture2DArray/TextureCubeArray slot, but sampling the mismatched view returns zero.
+        // PBR shaders then multiply their otherwise valid albedo by a black IBL/terrain sample.
         var px = new byte[] { 255, 255, 255, 255 };
         _white = MakeTexture(px, 1, 1) ?? default;
+        _whiteArray = MakeTexture(px, 1, 1, resourceDimension: 5) ?? default;
+        _whiteCube = MakeTexture(px, 1, 1, resourceDimension: 9) ?? default;
+        _whiteCubeArray = MakeTexture(px, 1, 1, resourceDimension: 10) ?? default;
 
         // M221: the colour-remap ramp stand-in must be TRANSPARENT, and the shader says so itself.
         //
@@ -1679,7 +1688,13 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// what the bench wants; a scene binds per material instead.</summary>
     public void SetTexture(string reflectedName, byte[] rgba, int width, int height)
     {
-        foreach (var m in _materials) SetTexture(m, reflectedName, rgba, width, height);
+        foreach (var m in _materials)
+        {
+            uint dimension = m.PsRefl.Textures.Concat(m.VsRefl.Textures)
+                .FirstOrDefault(t => t.Name.Equals(reflectedName, StringComparison.OrdinalIgnoreCase))?.Dimension ?? 4;
+            SetTextureCore(m, reflectedName, $"\0bench:{reflectedName}:{dimension}",
+                rgba, width, height, dimension);
+        }
         if (_materials.Count > 0) Log($"bound texture '{reflectedName}' ({width}x{height})");
     }
 
@@ -1690,20 +1705,20 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// <summary>Scene path: <paramref name="key"/> is the asset path, so the view is created once and
     /// shared.</summary>
     public void SetTexture(PreviewMaterial m, string reflectedName, string key, byte[] rgba, int width, int height)
-        => SetTextureCore(m, reflectedName, key, rgba, width, height, textureArray: false);
+        => SetTextureCore(m, reflectedName, key, rgba, width, height, resourceDimension: 4);
 
     /// <summary>M321: bind one decoded image through a Texture2DArray SRV. Riot's map-wide
     /// TERRAIN_BLEND_SharedTexture is declared as a 2D array even when the map ships only one slice.</summary>
     public void SetTextureArray(PreviewMaterial m, string reflectedName, string key, byte[] rgba, int width, int height)
-        => SetTextureCore(m, reflectedName, key, rgba, width, height, textureArray: true);
+        => SetTextureCore(m, reflectedName, key, rgba, width, height, resourceDimension: 5);
 
     private void SetTextureCore(PreviewMaterial m, string reflectedName, string key,
-        byte[] rgba, int width, int height, bool textureArray)
+        byte[] rgba, int width, int height, uint resourceDimension)
     {
         // ALWAYS create. Skipping the work on a cache hit is the CALLER's job, via TryBindCached - if this
         // reused the pooled view whenever the key existed, re-binding a different image to the same slot
         // from the Textures tab would silently keep showing the old one.
-        var made = MakeTexture(rgba, width, height, textureArray);
+        var made = MakeTexture(rgba, width, height, resourceDimension: resourceDimension);
         if (made is null) return;                           // creation failed and was reported
 
         // A view already under this key may still be referenced by materials bound earlier, so it is
@@ -1745,7 +1760,8 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// before, so a failed creation still got stored under its key and then bound as a null resource -
     /// which samples BLACK rather than falling through to the white stand-in. BuildMaterial already checks
     /// its shader HRESULTs; this was the one place that did not.</summary>
-    private ComPtr<ID3D11ShaderResourceView>? MakeTexture(byte[] rgba, int w, int h, bool textureArray = false)
+    private ComPtr<ID3D11ShaderResourceView>? MakeTexture(
+        byte[] rgba, int w, int h, uint resourceDimension = 4)
     {
         if (w <= 0 || h <= 0 || rgba.Length < w * h * 4)
         {
@@ -1763,27 +1779,36 @@ float4 psmain_tex(VTexOut i) : SV_Target
         // GenerateMips dictates the rest of the description: it needs a render-target bind, the
         // GenerateMips misc flag and Usage.Default, so the texture can no longer be Immutable and mip 0
         // is uploaded after creation rather than as initial data.
+        bool cube = resourceDimension is 9 or 10;
+        uint arraySize = cube ? 6u : 1u;
         bool mipped = w > 1 && h > 1;
+        uint mipCount = 1;
+        for (int mw = w, mh = h; mipped && (mw > 1 || mh > 1);)
+        {
+            mw = Math.Max(1, mw / 2); mh = Math.Max(1, mh / 2); mipCount++;
+        }
         var desc = new Texture2DDesc
         {
             Width = (uint)w, Height = (uint)h,
             MipLevels = mipped ? 0u : 1u,          // 0 = full chain down to 1x1
-            ArraySize = 1,
+            ArraySize = arraySize,
             Format = Format.FormatR8G8B8A8Unorm, SampleDesc = new SampleDesc(1, 0),
-            Usage = mipped ? Usage.Default : Usage.Immutable,
+            Usage = mipped || cube ? Usage.Default : Usage.Immutable,
             BindFlags = (uint)(mipped ? BindFlag.ShaderResource | BindFlag.RenderTarget
                                       : BindFlag.ShaderResource),
-            MiscFlags = (uint)(mipped ? ResourceMiscFlag.GenerateMips : 0),
+            MiscFlags = (uint)((mipped ? ResourceMiscFlag.GenerateMips : 0)
+                               | (cube ? ResourceMiscFlag.Texturecube : 0)),
         };
 
         ComPtr<ID3D11Texture2D> tex = default;
         int hr;
-        if (mipped)
+        if (mipped || cube)
         {
             hr = _device.CreateTexture2D(in desc, null, ref tex);
             if (hr >= 0)
                 fixed (byte* p = rgba)
-                    _ctx.UpdateSubresource(tex, 0, (Box*)null, p, (uint)(w * 4), 0u);
+                    for (uint slice = 0; slice < arraySize; slice++)
+                        _ctx.UpdateSubresource(tex, slice * mipCount, (Box*)null, p, (uint)(w * 4), 0u);
         }
         else
         {
@@ -1796,7 +1821,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
         if (hr < 0) { Log($"CreateTexture2D failed 0x{hr:X8} for {w}x{h}"); return null; }
 
         ComPtr<ID3D11ShaderResourceView> srv = default;
-        if (textureArray)
+        if (resourceDimension == 5)
         {
             var srvDesc = new ShaderResourceViewDesc
             {
@@ -1810,6 +1835,42 @@ float4 psmain_tex(VTexOut i) : SV_Target
                         MipLevels = mipped ? uint.MaxValue : 1u,
                         FirstArraySlice = 0,
                         ArraySize = 1,
+                    },
+                },
+            };
+            hr = _device.CreateShaderResourceView(tex, in srvDesc, ref srv);
+        }
+        else if (resourceDimension == 9)
+        {
+            var srvDesc = new ShaderResourceViewDesc
+            {
+                Format = desc.Format,
+                ViewDimension = (D3DSrvDimension)9,
+                Anonymous = new ShaderResourceViewDescUnion
+                {
+                    TextureCube = new TexcubeSrv
+                    {
+                        MostDetailedMip = 0,
+                        MipLevels = mipped ? uint.MaxValue : 1u,
+                    },
+                },
+            };
+            hr = _device.CreateShaderResourceView(tex, in srvDesc, ref srv);
+        }
+        else if (resourceDimension == 10)
+        {
+            var srvDesc = new ShaderResourceViewDesc
+            {
+                Format = desc.Format,
+                ViewDimension = (D3DSrvDimension)10,
+                Anonymous = new ShaderResourceViewDescUnion
+                {
+                    TextureCubeArray = new TexcubeArraySrv
+                    {
+                        MostDetailedMip = 0,
+                        MipLevels = mipped ? uint.MaxValue : 1u,
+                        First2DArrayFace = 0,
+                        NumCubes = 1,
                     },
                 },
             };
@@ -2978,6 +3039,26 @@ float4 psmain(VOut i) : SV_Target
                     // mProj is for.
                     "MPROJ" => Mat(ParticleStyleProjection(mat) ? vp : proj, s),
 
+                    // Engine/map-owned transforms. The shader definition cannot author these because
+                    // their real values come from the loaded map. Identity is the neutral bench value:
+                    // it preserves UVs instead of collapsing every lookup onto texel (0,0).
+                    "NAV_GRID_XFORM" or "BAKED_PAINT_UV_SCALE_BIAS" or "TERRAIN_XFORM"
+                        => new[] { 1f, 1f, 0f, 0f },
+
+                    // The standalone preview has no terrain depth raster or Teemo gameplay overlay.
+                    // Zero is the correct disabled value, but bind it explicitly so it is not reported as
+                    // a missing input and cannot hide a genuinely destructive unbound constant.
+                    "CONSTANT_DEPTH_BIAS" or "SLOPE_SCALED_DEPTH_BIAS" or "TEEMO_ACTIVE"
+                        => new[] { 0f, 0f, 0f, 0f },
+
+                    // A one-texel neutral light-region texture has size 1x1. Zero makes reciprocal-size
+                    // arithmetic non-finite in map PBR shaders even when the stand-in texture is white.
+                    "LIGHT_REGION_TEXTURE_SIZE" => new[] { 1f, 1f, 0f, 0f },
+
+                    // The engine normally fills one scale per IBL cube. All-zero scales erase the entire
+                    // indirect-light contribution, which leaves PBR materials black despite valid albedo.
+                    "IBL_CUBEMAP_SCALES" => NeutralIblCubemapScales,
+
                     // M256: the shadow plumbing. These are PLACEHOLDERS, and worth being plain about why:
                     // the preview renders no shadow pass, so there is no shadow camera to derive them from.
                     // Their job is to be finite and non-degenerate, not to be right - and with the M254
@@ -3784,7 +3865,7 @@ float4 psmain(VOut i) : SV_Target
         if (refl is null) return;
         foreach (var t in refl.Textures)
         {
-            var srv = mat.Textures.TryGetValue(t.Name, out var bound) ? bound : StandIn(t.Name);
+            var srv = mat.Textures.TryGetValue(t.Name, out var bound) ? bound : StandIn(t);
             if (pixel) _ctx.PSSetShaderResources(t.BindPoint, 1, ref srv);
             else _ctx.VSSetShaderResources(t.BindPoint, 1, ref srv);
         }
@@ -3813,8 +3894,17 @@ float4 psmain(VOut i) : SV_Target
 
     /// <summary>The stand-in for a texture nothing supplied. White for almost everything; an identity
     /// ramp for the colour remap, where white would replace the whole image.</summary>
-    private ComPtr<ID3D11ShaderResourceView> StandIn(string name) =>
-        name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase) ? _identityRamp : _white;
+    private ComPtr<ID3D11ShaderResourceView> StandIn(DxbcResource resource)
+    {
+        if (resource.Name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase)) return _identityRamp;
+        return resource.Dimension switch
+        {
+            5 => _whiteArray,
+            9 => _whiteCube,
+            10 => _whiteCubeArray,
+            _ => _white,
+        };
+    }
 
 
     /// <summary>Which reflected textures currently have nothing bound (they sample a stand-in).</summary>
@@ -3828,6 +3918,9 @@ float4 psmain(VOut i) : SV_Target
         ClearMaterials();
         ClearTextures();
         _white.Dispose();
+        _whiteArray.Dispose();
+        _whiteCube.Dispose();
+        _whiteCubeArray.Dispose();
         _identityRamp.Dispose();
         // M242: the cache owns shader objects that no material releases, so it must be drained here or
         // every pipeline ever built leaks for the lifetime of the process.

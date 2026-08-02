@@ -1610,7 +1610,19 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             if (refl is null) continue;
             foreach (var t in refl.Textures)
                 if (TextureSlots.All(r => !r.Name.Equals(t.Name, StringComparison.OrdinalIgnoreCase)))
-                    TextureSlots.Add(new TextureSlotRow { Name = t.Name, Slot = t.BindPoint, Dimension = t.DimensionName });
+                    TextureSlots.Add(new TextureSlotRow
+                    {
+                        Name = t.Name,
+                        Slot = t.BindPoint,
+                        Dimension = t.DimensionName,
+                        Source = t.DimensionName switch
+                        {
+                            "tex2darray" => "(white 1x1 array stand-in)",
+                            "texcube" => "(white 1x1 cube stand-in)",
+                            "texcubearray" => "(white 1x1 cube-array stand-in)",
+                            _ => "(white 1x1)",
+                        },
+                    });
             foreach (var cb in refl.ConstantBuffers)
                 foreach (var v in cb.Variables)
                     if (Constants.All(r => !r.Name.Equals(v.Name, StringComparison.OrdinalIgnoreCase)))
@@ -2025,7 +2037,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         foreach (var slot in TextureSlots)
         {
             _renderer.SetTexture(slot.Name, tex, T, T);
-            slot.Source = "checker 64x64 (half-scale)";
+            slot.Source = $"checker 64x64 {slot.Dimension} (half-scale)";
         }
         RebuildBindings();
         AppendLog();

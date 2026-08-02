@@ -337,6 +337,9 @@ public static class PreviewGeometry
         // M232: Uv0 is a float4 now - z is the flipbook frame, w the erosion drive. Both default to 0,
         // which is frame 0 and no erosion, i.e. what every non-particle mesh wants.
         Uv0 = new Vector4(uv.X, uv.Y, 0f, 0f), Uv1 = uv, Uv2 = uv, Uv3 = uv,
+        // Standalone baked-paint/lightmap shaders read TEXCOORD7. A built-in test mesh has no atlas,
+        // so its ordinary 0..1 UV is the honest identity input; leaving this zero samples one corner.
+        Uv7 = uv,
         Color = Vector4.One,
         BlendWeight = new Vector4(1f, 0f, 0f, 0f),
         B0 = 0, B1 = 0, B2 = 0, B3 = 0,
