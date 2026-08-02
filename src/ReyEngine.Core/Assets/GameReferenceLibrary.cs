@@ -45,8 +45,9 @@ public static class GameReferenceLibrary
     /// <summary>
     /// Validate and normalize a folder selected by a user. The picker asks for the League <c>Game</c>
     /// folder, but accepting the install root or DATA/FINAL as input makes recovery from an existing
-    /// misconfiguration painless. A usable install must have the three shared WADs on which asset
-    /// lookup depends; finding just one stale WAD is not reported as a healthy reference library.
+    /// misconfiguration painless. A usable install must have the shared WADs Riot still guarantees;
+    /// finding just one stale WAD is not reported as a healthy reference library. Common.wad.client is
+    /// deliberately optional because current Live installs no longer ship it.
     /// </summary>
     public static GameReferenceStatus Inspect(string? gameDirectory)
     {
@@ -65,7 +66,7 @@ public static class GameReferenceLibrary
             return new(false, null, null,
                 $"No League DATA/FINAL installation was found under: {selected}");
 
-        string[] required = ["DATA.wad.client", "Common.wad.client", "Global.wad.client"];
+        string[] required = ["DATA.wad.client", "Global.wad.client"];
         var missing = required.Where(name => !File.Exists(Path.Combine(final, name))).ToArray();
         string game = NormalizeGameDirectory(selected, final);
         if (missing.Length > 0)

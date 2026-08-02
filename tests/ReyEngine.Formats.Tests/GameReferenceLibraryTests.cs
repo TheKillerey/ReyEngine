@@ -23,7 +23,7 @@ public sealed class GameReferenceLibraryTests : IDisposable
     }
 
     [Fact]
-    public void Inspect_RejectsFolderWithOnlyOneStaleWad()
+    public void Inspect_RejectsFolderWithOnlyDataWad()
     {
         string game = Path.Combine(_root, "League of Legends", "Game");
         string final = Path.Combine(game, "DATA", "FINAL");
@@ -33,8 +33,18 @@ public sealed class GameReferenceLibraryTests : IDisposable
         var status = GameReferenceLibrary.Inspect(game);
 
         Assert.False(status.IsValid);
-        Assert.Contains("Common.wad.client", status.Message);
         Assert.Contains("Global.wad.client", status.Message);
+    }
+
+    [Fact]
+    public void Inspect_AcceptsCurrentLiveLayoutWithoutRetiredCommonWad()
+    {
+        string game = CreateInstall(includeCommon: false);
+
+        var status = GameReferenceLibrary.Inspect(game);
+
+        Assert.True(status.IsValid);
+        Assert.DoesNotContain("Common.wad.client", status.Message);
     }
 
     [Fact]
@@ -51,12 +61,14 @@ public sealed class GameReferenceLibraryTests : IDisposable
         Assert.Contains(wads, path => string.Equals(path, map11, StringComparison.OrdinalIgnoreCase));
     }
 
-    private string CreateInstall()
+    private string CreateInstall(bool includeCommon = true)
     {
         string game = Path.Combine(_root, "League of Legends", "Game");
         string final = Path.Combine(game, "DATA", "FINAL");
         Directory.CreateDirectory(final);
-        foreach (string name in new[] { "DATA.wad.client", "Common.wad.client", "Global.wad.client" })
+        var names = new List<string> { "DATA.wad.client", "Global.wad.client" };
+        if (includeCommon) names.Add("Common.wad.client");
+        foreach (string name in names)
             File.WriteAllBytes(Path.Combine(final, name), []);
         return game;
     }
