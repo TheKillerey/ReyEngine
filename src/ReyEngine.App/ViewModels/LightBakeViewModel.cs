@@ -74,12 +74,14 @@ public sealed partial class LightBakeViewModel : ObservableObject
     private async Task GenerateLayoutAsync()
     {
         if (_generateLayout is null || IsGeneratingLayout) return;
+        bool generated = false;
         IsGeneratingLayout = true;
         Stage = "Generating lightmap layout";
         Status = "";
         try
         {
             var r = await _generateLayout(ToSettings());
+            generated = r is not null;
             Status = r is null
                 ? "Could not generate a layout for this map — see the console for why."
                 : $"Layout generated: {r.MeshesLaidOut} mesh(es) over {r.AtlasCount} atlas(es)" +
@@ -88,7 +90,19 @@ public sealed partial class LightBakeViewModel : ObservableObject
             Stage = r is null ? "Failed" : "Layout ready";
         }
         catch (Exception ex) { Stage = "Failed"; Status = "Layout generation failed: " + ex.Message; }
-        finally { IsGeneratingLayout = false; Refresh(); }
+        finally
+        {
+            IsGeneratingLayout = false;
+            Refresh();
+            if (generated && !CanBake)
+            {
+                Stage = IncludeDynamicEffectMeshes ? "DynamicEffect shader step required" : "No eligible atlas groups";
+                Status += IncludeDynamicEffectMeshes
+                    ? " The UV layout is ready, but its DynamicEffect materials still disable baked lighting. "
+                      + "Press Enable DynamicEffect Lightmaps (Experimental) below, wait for the map to reload, then bake."
+                    : " The layout has no material-eligible atlas groups; see the bake eligibility message below.";
+            }
+        }
     }
 
     // ---- atlas ----
@@ -205,15 +219,24 @@ public sealed partial class LightBakeViewModel : ObservableObject
         }
         else ExposureNote = "Manual exposure.";
 
-        int atlasCount = LightBaker.EnumerateAtlases(inputs.Map).Count;
+        var coverage = LightBaker.AnalyzeCoverage(inputs.Map, inputs.GroupLightmapEnabled);
+        int atlasCount = coverage.BakeableAtlases;
         long grid = s.BakeLightGrid ? (long)LightGridWidth * LightGridHeight * 24 + 32 : 0;
         long total = perAtlas * atlasCount + grid;
-        Estimate = atlasCount == 0
+        Estimate = coverage.ReferencedAtlases == 0
             ? "This map has no lightmap atlases to bake into."
-            : $"{atlasCount} atlas(es) × {Mb(perAtlas)} = {Mb(perAtlas * atlasCount)}" +
+            : atlasCount == 0
+                ? $"{coverage.ReferencedAtlases} atlas(es) referenced, but 0 are bakeable: every atlas group is filtered by its material or mesh settings."
+            : $"{atlasCount} bakeable atlas(es)"
+              + (coverage.SkippedAtlases.Count > 0 ? $" of {coverage.ReferencedAtlases} referenced" : "")
+              + $" × {Mb(perAtlas)} = {Mb(perAtlas * atlasCount)}" +
               (grid > 0 ? $" + {Mb(grid)} lightgrid" : "") + $"  →  {Mb(total)} total.";
         CanBake = atlasCount > 0;
         BlockReason = atlasCount > 0 ? ""
+            : coverage.ReferencedAtlases > 0
+                ? $"All {coverage.ReferencedAtlases} referenced atlas(es) have no eligible triangles. "
+                  + "Their materials still disable baked lighting (or the meshes are intentionally filtered). "
+                  + "For SRX_DynamicEffect, press Enable DynamicEffect Lightmaps (Experimental), wait for the map reload, then retry."
             : CanGenerateLayout
                 ? "This map has no lightmap layout. Generate one below — it unwraps UV2s, packs atlas regions and REWRITES the mapgeo, then you can bake."
                 : "No lightmap atlases in this map.";
@@ -253,8 +276,12 @@ public sealed partial class LightBakeViewModel : ObservableObject
             var settings = ToSettings();
             var result = await Task.Run(() => service.BakeAsync(inputs, settings, progress, _cts.Token), _cts.Token);
             Progress = 1;
-            Stage = "Done";
-            Status = $"Baked {result.OutputDescription} ({Mb(result.TotalBytes)}).";
+            Stage = result.AtlasCount > 0 ? "Done" : "No atlases baked";
+            Status = result.AtlasCount > 0
+                ? $"Baked {result.OutputDescription} ({Mb(result.TotalBytes)})."
+                : $"Baked 0 of {result.ReferencedAtlasCount} referenced atlas(es); {result.SkippedAtlasCount} had no material-eligible triangles. "
+                  + "For SRX_DynamicEffect, enable its experimental lightmap shader, wait for the map reload, and retry."
+                  + (result.WroteLightGrid ? " The lightgrid was written." : "");
             _onBaked(result);
         }
         catch (OperationCanceledException)

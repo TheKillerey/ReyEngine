@@ -2141,6 +2141,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Warn("Shader", "Shader patch was staged, but the project view did not refresh: " + ex.Message);
         }
 
+        // The bake filter is built from the loaded material profiles. Remounting alone leaves those
+        // profiles carrying the pre-patch NO_BAKED_LIGHTING value, so the UI can claim five referenced
+        // atlases and the baker still excludes every triangle. Reload before the command returns; the
+        // Light Baking window refresh that follows now sees the rewritten materials immediately.
+        await LoadMapGeoAsync(mapEntry);
+
         string result = $"Experimental DynamicEffect lightmaps enabled on {patch.SupportedMaterials.Count:n0} material(s)"
                       + (cleared > 0 ? $"; removed NO_BAKED_LIGHTING from {cleared:n0}" : "; shader cache refreshed") + ". "
                       + $"Generated {patch.Detail} and staged ShaderCache.dx11.wad.client content. "
@@ -2363,9 +2369,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // Stage under the SAME WAD folder the map itself lives in (Map12.wad.client → "Map12"): the
             // game loads a map's lightmaps from that same wad.
             string folderName = RiotWadFolderName(mapEntry);
+            // A newly generated atlas has no Riot source hash yet. More subtly, after a rewritten
+            // mapgeo is remounted its source chain can temporarily lack the original WAD as well; using
+            // "Overrides" then puts only the last new atlas into Overrides.wad.client while its siblings
+            // land in Map11. The map path is authoritative about its home shipping WAD.
+            if (folderName == "Overrides" && MapNameFromAssetPath(mapEntry.Path) is { } mapName)
+                folderName = mapName;
             string dest = Path.Combine(root, folderName, assetPath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.WriteAllBytes(dest, bytes);
+            if (folderName != "Overrides")
+            {
+                // Repair output created by the old fallback above. The correct copy is durable before
+                // the stale loose fallback is removed, so an interrupted bake never loses the atlas.
+                string stale = Path.Combine(root, "Overrides", assetPath.Replace('/', Path.DirectorySeparatorChar));
+                if (!string.Equals(stale, dest, StringComparison.OrdinalIgnoreCase) && File.Exists(stale))
+                    File.Delete(stale);
+            }
             if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase))
                 Project.ProjectFolders.Add(folderName);
             // A hashed override (ProjectOverride, priority 0) outranks a folder file (ProjectFolder,
@@ -2405,7 +2425,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public void OnLightBakeFinished(Services.LightBakeResult result)
     {
-        _log.Success("Bake", result.OutputDescription + $" ({result.AtlasCount} atlas(es)).");
+        if (result.AtlasCount == 0)
+            _log.Error("Bake", $"Baked 0 of {result.ReferencedAtlasCount} referenced atlas(es); "
+                + $"{result.SkippedAtlasCount} had no material-eligible triangles. "
+                + "For SRX_DynamicEffect, use Enable DynamicEffect Lightmaps (Experimental), wait for the map reload, then retry."
+                + (result.WroteLightGrid ? " The lightgrid was written." : ""));
+        else if (result.SkippedAtlasCount > 0)
+            _log.Warn("Bake", result.OutputDescription
+                + $" ({result.AtlasCount} baked, {result.SkippedAtlasCount} skipped). "
+                + "Skipped atlases contain only materials or meshes that currently opt out of baked lighting.");
+        else
+            _log.Success("Bake", result.OutputDescription + $" ({result.AtlasCount} atlas(es)).");
+        if (result.TotalBytes == 0) return;
         Project.IsDirty = true;
         if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
         // Re-index: a folder project just gained new files on disk that the mounts don't know about yet;

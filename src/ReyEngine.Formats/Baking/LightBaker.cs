@@ -18,6 +18,13 @@ public sealed class BakedAtlas
 
 public sealed record BakeProgress(int AtlasIndex, int AtlasCount, string Texture, string Stage);
 
+/// <summary>How many referenced atlas pages can actually receive triangles under the material filter.</summary>
+public sealed record BakeAtlasCoverage(
+    int ReferencedAtlases, int BakeableAtlases, IReadOnlyList<string> SkippedAtlases);
+
+/// <summary>What an atlas bake actually completed, including pages skipped by material eligibility.</summary>
+public sealed record LightBakeSummary(int ReferencedAtlases, int BakedAtlases, int SkippedAtlases);
+
 /// <summary>M158: bakes lighting into a map's EXISTING lightmap atlas layout.
 ///
 /// Scope note, deliberately: this rewrites atlas IMAGES only. It does not unwrap UVs, pack charts, or
@@ -41,6 +48,33 @@ public static class LightBaker
              .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
              .ToList();
 
+    /// <summary>
+    /// Count pages with at least one eligible index group. Merely having an atlas path is not enough:
+    /// DynamicEffect materials can receive generated UV7 and a BakedLight reference while still keeping
+    /// NO_BAKED_LIGHTING until the experimental shader companion has been staged. The old UI counted
+    /// those pages as bakeable, then the bake correctly filtered every triangle and reported zero.
+    /// </summary>
+    public static BakeAtlasCoverage AnalyzeCoverage(
+        MapGeoAsset asset, IReadOnlyList<bool>? groupLightmapEnabled)
+    {
+        var atlases = EnumerateAtlases(asset);
+        var skipped = new List<string>();
+        foreach (string texture in atlases)
+        {
+            bool eligible = false;
+            for (int gi = 0; gi < asset.Groups.Count; gi++)
+            {
+                var group = asset.Groups[gi];
+                if (!string.Equals(group.LightmapTexture, texture, StringComparison.OrdinalIgnoreCase)) continue;
+                if (groupLightmapEnabled is not null
+                    && gi < groupLightmapEnabled.Count && !groupLightmapEnabled[gi]) continue;
+                if (group.IndexCount >= 3) { eligible = true; break; }
+            }
+            if (!eligible) skipped.Add(texture);
+        }
+        return new BakeAtlasCoverage(atlases.Count, atlases.Count - skipped.Count, skipped);
+    }
+
     /// <summary>Bake every atlas the map uses, handing each one to <paramref name="onAtlas"/> as soon as
     /// it is done.
     ///
@@ -53,7 +87,7 @@ public static class LightBaker
     /// light into texels nothing ever reads while the meshes stay unlit.</param>
     /// <param name="occluderGroupEnabled">Per-group flag: false where the group must NOT cast shadows
     /// (alpha-card foliage). Null = everything occludes.</param>
-    public static async Task<int> BakeExistingLayoutAsync(
+    public static async Task<LightBakeSummary> BakeExistingLayoutAsync(
         MapGeoAsset asset,
         IReadOnlyList<bool>? groupLightmapEnabled,
         IReadOnlyList<bool>? occluderGroupEnabled,
@@ -66,10 +100,10 @@ public static class LightBaker
     {
         ArgumentNullException.ThrowIfNull(asset);
         ArgumentNullException.ThrowIfNull(onAtlas);
-        if (asset.LightmapUvs is null) return 0;
+        if (asset.LightmapUvs is null) return new(0, 0, 0);
 
         var atlases = EnumerateAtlases(asset);
-        if (atlases.Count == 0) return 0;
+        if (atlases.Count == 0) return new(0, 0, 0);
 
         settings = ResolveExposure(settings, lighting);
 
@@ -102,7 +136,12 @@ public static class LightBaker
             progress?.Report(new BakeProgress(ai, atlases.Count, texture, "Rasterizing"));
 
             var tris = CollectTriangles(asset, groupLightmapEnabled, texture, shadingNormals);
-            if (tris.Count == 0) continue;
+            if (tris.Count == 0)
+            {
+                progress?.Report(new BakeProgress(ai + 1, atlases.Count, texture,
+                    "Skipped: no material-eligible triangles"));
+                continue;
+            }
 
             progress?.Report(new BakeProgress(ai, atlases.Count, texture, $"Shading {tris.Count} triangles"));
             var surface = AtlasRasterizer.Rasterize(
@@ -125,7 +164,7 @@ public static class LightBaker
         }
 
         progress?.Report(new BakeProgress(atlases.Count, atlases.Count, "", "Done"));
-        return done;
+        return new LightBakeSummary(atlases.Count, done, atlases.Count - done);
     }
 
     /// <summary>Bake the probe volume: for every cell, shoot the six ambient-cube directions from a
