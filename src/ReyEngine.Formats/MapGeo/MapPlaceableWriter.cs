@@ -22,6 +22,10 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     /// <summary>Re-point the placement at a different VFX system (the <c>system</c> object link).</summary>
     public uint? SystemLink { get; init; }
     public string? Name { get; init; }
+    /// <summary>Replacement map visibility mask. Zero disables the placement without deleting it.</summary>
+    public int? VisibilityFlags { get; init; }
+    /// <summary>Replacement character skin path on an animated prop / mob placement.</summary>
+    public string? Skin { get; init; }
     /// <summary>Delete the placement from its container.</summary>
     public bool Remove { get; init; }
 
@@ -59,6 +63,9 @@ public static class MapPlaceableWriter
     private static readonly uint F_colorModulate = HashAlgorithms.Fnv1a("colorModulate");
     private static readonly uint F_system = HashAlgorithms.Fnv1a("system");
     private static readonly uint F_name = HashAlgorithms.Fnv1a("name");
+    private static readonly uint F_visibilityFlags = HashAlgorithms.Fnv1a("mVisibilityFlags");
+    private static readonly uint F_characterRecord = HashAlgorithms.Fnv1a("characterRecord");
+    private static readonly uint F_skin = HashAlgorithms.Fnv1a("skin");
 
     /// <summary>Apply the edits. Returns the new bytes, or null with a reason.</summary>
     public static byte[]? WriteEdits(byte[] materialsBin, IReadOnlyList<MapPlacementEdit> edits, out string? error)
@@ -176,6 +183,23 @@ public static class MapPlaceableWriter
         if (edit.ColorModulate is { } c) s.Properties[F_colorModulate] = new BinTreeVector4(F_colorModulate, c);
         if (edit.SystemLink is { } link) s.Properties[F_system] = new BinTreeObjectLink(F_system, link);
         if (edit.Name is { } n) s.Properties[F_name] = new BinTreeString(F_name, n);
+        if (edit.VisibilityFlags is { } visibility)
+        {
+            int maskValue = Math.Clamp(visibility, 0, 255);
+            s.Properties[F_visibilityFlags] = s.Properties.GetValueOrDefault(F_visibilityFlags) switch
+            {
+                BinTreeU16 => new BinTreeU16(F_visibilityFlags, (ushort)maskValue),
+                BinTreeU32 => new BinTreeU32(F_visibilityFlags, (uint)maskValue),
+                _ => new BinTreeU8(F_visibilityFlags, (byte)maskValue),
+            };
+        }
+        if (edit.Skin is { } skin)
+        {
+            var characterData = s.Properties.Values.OfType<BinTreeStruct>()
+                .FirstOrDefault(x => x.Properties.ContainsKey(F_characterRecord));
+            if (characterData is null) return false;
+            characterData.Properties[F_skin] = new BinTreeString(F_skin, skin);
+        }
         return true;
     }
 

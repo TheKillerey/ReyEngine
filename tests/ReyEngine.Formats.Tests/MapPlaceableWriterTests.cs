@@ -126,6 +126,59 @@ public class MapPlaceableWriterTests
     }
 
     [Fact]
+    public void VisibilityZeroDisablesWithoutRemovingThePlacement()
+    {
+        var bin = BuildBin(Matrix4x4.Identity);
+        var outBytes = MapPlaceableWriter.WriteEdits(bin,
+            new[] { new MapPlacementEdit(new MapPlacementId(ContainerHash, KeyA)) { VisibilityFlags = 0 } },
+            out var err);
+
+        Assert.Null(err);
+        Assert.NotNull(Read(outBytes!, KeyA));
+        var tree = new BinTree(new MemoryStream(outBytes!, false));
+        var map = (BinTreeMap)tree.Objects[ContainerHash].Properties[H("items")];
+        var placement = (BinTreeStruct)map.Single(e => ((BinTreeHash)e.Key).Value == KeyA).Value;
+        Assert.Equal(0, ((BinTreeU8)placement.Properties[H("mVisibilityFlags")]).Value);
+    }
+
+    [Fact]
+    public void PropSkinEditChangesOnlyNestedSkinPath()
+    {
+        var characterData = new BinTreeEmbedded(H("characterData"), H("CharacterData"), new BinTreeProperty[]
+        {
+            new BinTreeString(H("characterRecord"), "Characters/SRU_Baron/CharacterRecords/Root"),
+            new BinTreeString(H("skin"), "Characters/SRU_Baron/Skins/Skin0"),
+        });
+        var prop = new BinTreeStruct(0, H("MapCharacter"), new BinTreeProperty[]
+        {
+            new BinTreeString(H("name"), "Baron"),
+            new BinTreeMatrix44(H("transform"), Matrix4x4.Identity),
+            characterData,
+        });
+        var items = new BinTreeMap(H("items"), BinPropertyType.Hash, BinPropertyType.Struct, new[]
+        {
+            new KeyValuePair<BinTreeProperty, BinTreeProperty>(new BinTreeHash(0, KeyA), prop),
+        });
+        using var source = new MemoryStream();
+        new BinTree(new[] { new BinTreeObject(ContainerHash, H("MapPlaceableContainer"), new BinTreeProperty[] { items }) },
+            Array.Empty<string>()).Write(source);
+
+        const string replacement = "Characters/SRU_Baron/Skins/Skin4";
+        var outBytes = MapPlaceableWriter.WriteEdits(source.ToArray(),
+            new[] { new MapPlacementEdit(new MapPlacementId(ContainerHash, KeyA)) { Skin = replacement } }, out var err);
+
+        Assert.Null(err);
+        var tree = new BinTree(new MemoryStream(outBytes!, false));
+        var outputItems = (BinTreeMap)tree.Objects[ContainerHash].Properties[H("items")];
+        var outputProp = (BinTreeStruct)outputItems.Single().Value;
+        var outputCharacter = outputProp.Properties.Values.OfType<BinTreeStruct>()
+            .Single(s => s.Properties.ContainsKey(H("characterRecord")));
+        Assert.Equal(replacement, ((BinTreeString)outputCharacter.Properties[H("skin")]).Value);
+        Assert.Equal("Characters/SRU_Baron/CharacterRecords/Root",
+            ((BinTreeString)outputCharacter.Properties[H("characterRecord")]).Value);
+    }
+
+    [Fact]
     public void RemoveDropsOnlyTheTargetedPlacement()
     {
         var bin = BuildBin(Matrix4x4.Identity);

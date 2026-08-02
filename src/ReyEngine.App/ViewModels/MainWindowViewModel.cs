@@ -252,18 +252,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// (see UpdateSubmeshVisibility). 4,237 placements bind a VisibilityController that this ignored, so
     /// they stayed visible while the meshes around them switched. Placements use the same map-defined
     /// axes and controller graph as geometry.</summary>
-    private bool IsParticleVisible(MapParticlePlacement particle) =>
+    private bool IsParticleVisible(MapParticlePlacement particle, int? visibilityOverride = null) =>
         particle.VisibilityControllerHash == 0
-            ? MapVisibility.VisibleForMask(particle.VisibilityFlags, _mapVisibility.Primary, CurrentPrimaryVisibilityBit)
+            ? MapVisibility.VisibleForMask(visibilityOverride ?? particle.VisibilityFlags, _mapVisibility.Primary, CurrentPrimaryVisibilityBit)
             : (_visibilityResolver ??= new MapVisibilityResolver(_mapControllers, _mapVisibility))
-                .IsVisible(particle.VisibilityFlags, particle.VisibilityControllerHash, CurrentVisibilitySelections);
+                .IsVisible(visibilityOverride ?? particle.VisibilityFlags, particle.VisibilityControllerHash, CurrentVisibilitySelections);
 
-    private bool IsSoundVisible(MapSoundPlacement sound) =>
-        MapVisibility.VisibleForMask(sound.VisibilityFlags, _mapVisibility.Primary, CurrentPrimaryVisibilityBit);
+    private bool IsSoundVisible(MapSoundPlacement sound, int? visibilityOverride = null) =>
+        MapVisibility.VisibleForMask(visibilityOverride ?? sound.VisibilityFlags, _mapVisibility.Primary, CurrentPrimaryVisibilityBit);
 
     private void UpdateParticleMarkers() =>
         ParticleMarkers = (ShowParticles && MapContent.HasParticles)
-            ? MapContent.AllParticles.Where(v => IsParticleVisible(v.Placement)).Select(v => v.CurrentPosition).ToList() : null;
+            ? MapContent.AllParticles.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved
+                && IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags)).Select(v => v.CurrentPosition).ToList() : null;
 
     // ---- M38: cubemap probes + animated props (placed characters) ----
     [ObservableProperty] private IReadOnlyList<MapCubemapProbe>? _currentModelProbes;
@@ -509,12 +510,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public void UpdateAmbience(System.Numerics.Vector3 camPos, bool force = false)
     {
         _lastCamPosForAudio = camPos;
-        if (!AmbienceEnabled || _mapAudioBanks is null || !Sound.IsAvailable || CurrentModelSounds is not { } sounds) return;
+        if (!AmbienceEnabled || _mapAudioBanks is null || !Sound.IsAvailable) return;
 
         const int maxVoices = 6;
-        var nearest = sounds
-            .Where(IsSoundVisible)
-            .Select((s, i) => (Sound: s, Index: i, Dist: System.Numerics.Vector3.Distance(s.Position, camPos)))
+        var nearest = MapContent.Sounds
+            .Select((vm, i) => (Vm: vm, Index: i))
+            .Where(x => x.Vm.IsEditorVisible && !x.Vm.IsDisabled && !x.Vm.IsRemoved
+                && IsSoundVisible(x.Vm.Sound, x.Vm.EffectiveVisibilityFlags))
+            .Select(x => (Sound: x.Vm.Sound, x.Index, Dist: System.Numerics.Vector3.Distance(x.Vm.Position, camPos)))
             .Where(x => x.Dist < x.Sound.Radius)
             .OrderBy(x => x.Dist)
             .Take(maxVoices)
@@ -652,6 +655,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private AnimatedPropViewModel? _selectedPropNode;
     [ObservableProperty] private CubemapProbeViewModel? _selectedProbe;
     [ObservableProperty] private string _selectedPlaceableInfo = "";
+    public ObservableCollection<string> PropSkinChoices { get; } = new();
 
     partial void OnCurrentModelProbesChanged(IReadOnlyList<MapCubemapProbe>? value)
     { MapContent.SetProbes(value ?? Array.Empty<MapCubemapProbe>()); UpdatePlaceableMarkers(); }
@@ -672,7 +676,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             PublishAddedMeshPreview();   // keep any added meshes visible even with props off
             return;
         }
-        var snapshot = props.ToList();
+        var snapshot = MapContent.AllProps
+            .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved)
+            .Select(p => p.Prop with { Skin = p.EffectiveSkin, VisibilityFlags = p.EffectiveVisibilityFlags })
+            .ToList();
         var (set, resolved, failed) = await System.Threading.Tasks.Task.Run(() => BuildPropRenderSet(snapshot));
         if (!ShowPropMeshes) return;   // toggled off while decoding
         _propInstances = set?.Instances ?? (IReadOnlyList<PropInstanceData>)System.Array.Empty<PropInstanceData>();   // M79
@@ -774,17 +781,97 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private void UpdatePlaceableMarkers()
     {
-        PropMarkers = (ShowPlaceables && ShowPropIcons && MapContent.HasProps) ? MapContent.AllProps.Select(p => p.Position).ToList() : null;
-        ProbeMarkers = (ShowPlaceables && MapContent.HasProbes) ? MapContent.Probes.Select(p => p.Position).ToList() : null;
+        PropMarkers = (ShowPlaceables && ShowPropIcons && MapContent.HasProps) ? MapContent.AllProps
+            .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved).Select(p => p.Position).ToList() : null;
+        ProbeMarkers = (ShowPlaceables && MapContent.HasProbes) ? MapContent.Probes
+            .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved).Select(p => p.Position).ToList() : null;
         SoundMarkers = (ShowPlaceables && ShowSoundIcons && MapContent.HasSounds)
-            ? MapContent.Sounds.Where(s => IsSoundVisible(s.Sound)).Select(s => s.Position).ToList() : null;   // M55
+            ? MapContent.Sounds.Where(s => s.IsEditorVisible && !s.IsDisabled && !s.IsRemoved
+                && IsSoundVisible(s.Sound, s.EffectiveVisibilityFlags)).Select(s => s.Position).ToList() : null;   // M55
+    }
+
+    /// <summary>One refresh path for the eye, runtime Disable, and pending Delete controls shared by all
+    /// Map Content leaves. The eye never dirties a file. Disable writes a zero visibility mask and can be
+    /// restored; Delete is kept separate and removes the object only when map edits are saved.</summary>
+    private void OnMapContentItemStateChanged(MapOutlinerItemViewModel item)
+    {
+        switch (item)
+        {
+            case ParticlePlacementViewModel p:
+                if (p.IsDisabled != (p.EffectiveVisibilityFlags == 0))
+                    p.EditedVisibilityFlags = p.IsDisabled ? 0 : (p.Placement.VisibilityFlags == 0 ? 255 : null);
+                break;
+            case AnimatedPropViewModel p:
+                if (p.IsDisabled != (p.EffectiveVisibilityFlags == 0))
+                    p.EditedVisibilityFlags = p.IsDisabled ? 0 : (p.Prop.VisibilityFlags == 0 ? 255 : null);
+                break;
+            case CubemapProbeViewModel p:
+                if (p.IsDisabled != (p.EffectiveVisibilityFlags == 0))
+                    p.EditedVisibilityFlags = p.IsDisabled ? 0 : (p.Probe.VisibilityFlags == 0 ? 255 : null);
+                break;
+            case MapSoundViewModel s:
+                if (s.Sound.FromParticleSystem)
+                {
+                    var owner = MapContent.AllParticles.FirstOrDefault(p => p.Placement.Name == s.Sound.Name
+                        && p.Placement.Transform == s.Sound.Transform);
+                    if (owner is not null)
+                    {
+                        owner.EditedVisibilityFlags = s.EditedVisibilityFlags;
+                        owner.IsDisabled = s.IsDisabled;
+                        owner.IsRemoved = s.IsRemoved;
+                    }
+                    break;
+                }
+                if (s.IsDisabled != (s.EffectiveVisibilityFlags == 0))
+                    s.EditedVisibilityFlags = s.IsDisabled ? 0 : (s.Sound.VisibilityFlags == 0 ? 255 : null);
+                break;
+            case MapPieceViewModel piece when _currentMap is { } map
+                && map.Meshes.FirstOrDefault(m => m.Index == piece.MeshIndex) is { } mesh:
+                if (piece.IsDisabled != (mesh.EffectiveVisibility == 0))
+                    mesh.VisibilityEdit = piece.IsDisabled ? 0 : (mesh.VisibilityFlags == 0 ? 255 : null);
+                HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes)
+                    || MapContent.AllMapPieces.Any(x => x.IsRemoved);
+                ApplyMapVisibility();
+                break;
+            case AddedMapMeshViewModel added:
+                if (added.IsDisabled)
+                {
+                    if (added.VisibilityMask != 0) added.EnabledVisibilityMask = added.VisibilityMask;
+                    added.VisibilityMask = 0;
+                }
+                else added.VisibilityMask = added.EnabledVisibilityMask;
+                PublishAddedMeshPreview();
+                break;
+        }
+
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits)
+            || MapContent.Sounds.Any(v => v.HasEdits)
+            || MapContent.AllProps.Any(v => v.HasEdits)
+            || MapContent.Probes.Any(v => v.HasEdits);
+        UpdateParticleMarkers();
+        UpdatePlaceableMarkers();
+        RebuildParticlePlayback();
+        if (AmbienceEnabled) UpdateAmbience(_lastCamPosForAudio, force: true);
+        if (item is AnimatedPropViewModel) _ = RefreshPropMeshesAsync();
+        RefreshPlacementLayerEditor();
     }
 
     partial void OnSelectedPropTreeItemChanged(object? value)
     { if (value is AnimatedPropViewModel p) SelectedPropNode = p; }
     partial void OnSelectedPropNodeChanged(AnimatedPropViewModel? value)
     {
+        PropSkinChoices.Clear();
         if (value is not { } p) return;
+        var marker = $"characters/{p.Prop.CharacterName}/skins/";
+        foreach (var path in AssetEntries.Where(e => e.IsResolved
+                     && e.Path.Contains(marker, StringComparison.OrdinalIgnoreCase)
+                     && e.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
+                 .Select(e => e.Path.StartsWith("data/", StringComparison.OrdinalIgnoreCase) ? e.Path[5..] : e.Path)
+                 .Select(path => path[..^4])
+                 .Append(p.Prop.Skin)
+                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            PropSkinChoices.Add(path);
         SelectedProbe = null;
         _selection.Clear();                       // M50b: exclusive selection
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
@@ -1018,8 +1105,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var items = new List<VfxPlaybackItem>();
             foreach (var v in MapContent.AllParticles)
             {
-                if (v.IsRemoved) continue;   // M204: deleted placements stop rendering before the save
-                if (!IsParticleVisible(v.Placement)) continue;
+                if (!v.IsEditorVisible || v.IsDisabled || v.IsRemoved) continue;
+                if (!IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags)) continue;
                 if (!_vfxSystems.TryGetValue(v.Placement.SystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
                 items.Add(new VfxPlaybackItem(s, v.CurrentTransform, ResolveSystemTextures(s), ResolveSystemMeshes(s),
                     ResolveSystemMultTextures(s), ResolveSystemDistortionTextures(s), ResolveSystemColorTextures(s),
@@ -1031,7 +1118,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        if (!PlayParticlePreview || SelectedParticleNode is not { } node
+        if (!PlayParticlePreview || SelectedParticleNode is not { IsEditorVisible: true, IsDisabled: false, IsRemoved: false } node
             || !_vfxSystems.TryGetValue(node.Placement.SystemHash, out var sys) || sys.Emitters.Count == 0)
         {
             CurrentParticlePlayback = null;
@@ -1097,6 +1184,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Placement = node.Placement with { Id = new MapPlacementId(node.Placement.Id.ContainerHash, key) },
             CloneSource = node.Placement.Id,
             Offset = new System.Numerics.Vector3(100f, 0f, 0f),
+            StateChanged = OnMapContentItemStateChanged,
         };
         MapContent.AddParticlePlacement(copy);
         SelectedParticleNode = copy;
@@ -1354,6 +1442,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     Material = material,
                     Offset = place - center,
                     VisibilityMask = plan.VisibilityMask,
+                    EnabledVisibilityMask = plan.VisibilityMask,
+                    StateChanged = OnMapContentItemStateChanged,
                 };
                 MapContent.AddedMeshes.Add(vm);
                 staged++;
@@ -1453,6 +1543,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var instances = new List<PropInstanceData>(_propInstances);
         foreach (var a in MapContent.AddedMeshes)
         {
+            if (!a.IsEditorVisible || a.IsDisabled || a.IsRemoved) continue;
             var mesh = new PropMesh(a.Name + "|" + a.Indices.Length,
                 a.Positions, a.Normals, a.Uvs, System.Array.ConvertAll(a.Indices, i => (uint)i),
                 new[] { new PropSubmesh(0, a.Indices.Length, null) });
@@ -3411,6 +3502,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var n in nodes) _thumbnails.Request(n.ThumbnailPath, bmp => n.Thumbnail = bmp);
         };
         MapContent.OpenMap = OpenAssetDocument;
+        MapContent.ItemStateChanged = OnMapContentItemStateChanged;
         LoadRecentProjects(RecentProjects.Load());
     }
 
@@ -4396,6 +4488,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _visibilityResolver = null;
         RebuildVisibilityAxes(_mapVisibility);
         VisibilityLayerBits.Clear();
+        PlacementVisibilityLayerBits.Clear();
+        HasPlacementLayerSelection = false;
+        PlacementLayerSummary = "";
         LayerControllerChoices.Clear();
         _layerControllerHashes.Clear();
         _currentMapBytes = null;
@@ -4432,6 +4527,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentPropMeshes = null;
         ShowPropMeshes = false;
         MapContent.AddedMeshes.Clear();                                    // M79
+        SetMapContentSelection(Array.Empty<MapOutlinerItemViewModel>(), null);
         SelectedAddedMesh = null;
         HasMapGeo = false;
         _propInstances = System.Array.Empty<PropInstanceData>();
@@ -4525,6 +4621,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M105: pending layer edits preview live — the group snapshot keeps the FILE's values, so the
         // check reads the mesh's effective (edited) mask/controller when there is one.
         var meshByIdx = map.Meshes.ToDictionary(m => m.Index);
+        var hiddenByUser = MapContent.AllMapPieces
+            .Where(p => !p.IsEditorVisible || p.IsDisabled || p.IsRemoved)
+            .Select(p => p.MeshIndex).ToHashSet();
         HasRenderRegions = regionOf.Values.Any(r => r != 0);
         var vis = new bool[map.Groups.Count];
         for (int i = 0; i < vis.Length; i++)
@@ -4535,6 +4634,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (g.MeshIndex >= 0 && meshByIdx.TryGetValue(g.MeshIndex, out var src))
             { flags = src.EffectiveVisibility; ctrl = src.EffectiveController; }
             vis[i] = resolver.IsVisible(flags, ctrl, selections);
+            if (hiddenByUser.Contains(g.MeshIndex)) vis[i] = false;
             if (vis[i] && !RenderRegionsEnabled && g.MeshIndex >= 0
                 && regionOf.TryGetValue(g.MeshIndex, out var region) && region != 0)
                 vis[i] = false;
@@ -4604,6 +4704,92 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>The primary map-axis checkboxes (state mirrors the primary selected mesh).</summary>
     public ObservableCollection<LayerBitViewModel> VisibilityLayerBits { get; } = new();
+
+    public sealed partial class PlacementLayerBitViewModel : ObservableObject
+    {
+        private readonly MainWindowViewModel _owner;
+        public string Name { get; }
+        public int Bit { get; }
+        public bool Loading;
+        [ObservableProperty] private bool _isOn;
+        public PlacementLayerBitViewModel(MainWindowViewModel owner, string name, int bit)
+        { _owner = owner; Name = name; Bit = bit; }
+        partial void OnIsOnChanged(bool value)
+        { if (!Loading) _owner.SetPlacementLayerBit(Bit, value); }
+    }
+
+    public ObservableCollection<PlacementLayerBitViewModel> PlacementVisibilityLayerBits { get; } = new();
+    [ObservableProperty] private bool _hasPlacementLayerSelection;
+    [ObservableProperty] private string _placementLayerSummary = "";
+
+    private static int PlacementFlags(MapOutlinerItemViewModel item) => item switch
+    {
+        ParticlePlacementViewModel p => p.EffectiveVisibilityFlags,
+        MapSoundViewModel s => s.EffectiveVisibilityFlags,
+        AnimatedPropViewModel p => p.EffectiveVisibilityFlags,
+        CubemapProbeViewModel p => p.EffectiveVisibilityFlags,
+        _ => 255,
+    };
+
+    private IEnumerable<MapOutlinerItemViewModel> SelectedPlacementLeaves() => _mapContentSelection.Where(item =>
+        item is ParticlePlacementViewModel or MapSoundViewModel or AnimatedPropViewModel or CubemapProbeViewModel);
+
+    private static void SetPlacementFlags(MapOutlinerItemViewModel item, int? flags)
+    {
+        switch (item)
+        {
+            case ParticlePlacementViewModel p: p.EditedVisibilityFlags = flags; break;
+            case MapSoundViewModel s: s.EditedVisibilityFlags = flags; break;
+            case AnimatedPropViewModel p: p.EditedVisibilityFlags = flags; break;
+            case CubemapProbeViewModel p: p.EditedVisibilityFlags = flags; break;
+        }
+    }
+
+    private void RefreshPlacementLayerEditor()
+    {
+        // Some maps author mVisibilityFlags without a discoverable controller/layer-name table. Keep the
+        // field editable there too: named bits come from the shipping map when available, raw bit names are
+        // the lossless fallback rather than hiding the feature altogether.
+        IReadOnlyList<VisibilityLayer> declared = _mapVisibility.Primary?.Layers is { Count: > 0 } named
+            ? named
+            : Enumerable.Range(0, 8).Select(i => new VisibilityLayer($"Bit {i}", 1 << i)).ToArray();
+        if (!PlacementVisibilityLayerBits.Select(b => b.Bit).SequenceEqual(declared.Select(d => d.Bit)))
+        {
+            PlacementVisibilityLayerBits.Clear();
+            foreach (var layer in declared)
+                PlacementVisibilityLayerBits.Add(new PlacementLayerBitViewModel(this, layer.Name, layer.Bit));
+        }
+        var selected = SelectedPlacementLeaves().ToList();
+        HasPlacementLayerSelection = selected.Count > 0;
+        if (!HasPlacementLayerSelection) { PlacementLayerSummary = ""; return; }
+        int flags = PlacementFlags(selected[^1]);
+        foreach (var bit in PlacementVisibilityLayerBits)
+        {
+            bit.Loading = true;
+            bit.IsOn = (flags & bit.Bit) != 0;
+            bit.Loading = false;
+        }
+        PlacementLayerSummary = $"{MapVisibility.Label(flags, _mapVisibility.Primary)} · mask 0b{Convert.ToString(flags & 0xFF, 2).PadLeft(8, '0')}"
+            + (selected.Count > 1 ? $" · applies to {selected.Count} selected objects" : "");
+    }
+
+    private void SetPlacementLayerBit(int bit, bool on)
+    {
+        foreach (var item in SelectedPlacementLeaves().ToList())
+        {
+            int flags = PlacementFlags(item);
+            SetPlacementFlags(item, on ? flags | bit : flags & ~bit);
+        }
+        RefreshPlacementLayerEditor();
+    }
+
+    [RelayCommand]
+    private void SetPlacementLayersAll()
+    { foreach (var item in SelectedPlacementLeaves().ToList()) SetPlacementFlags(item, 255); RefreshPlacementLayerEditor(); }
+
+    [RelayCommand]
+    private void ResetPlacementLayerEdits()
+    { foreach (var item in SelectedPlacementLeaves().ToList()) SetPlacementFlags(item, null); RefreshPlacementLayerEditor(); }
 
     /// <summary>Controller choices for the selected mesh — "None" + every controller in the map's bins.</summary>
     public ObservableCollection<string> LayerControllerChoices { get; } = new();
@@ -4874,6 +5060,130 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // ---- Multi-selection + batch transform (M30) -----------------------
     private readonly SelectionSet<MapGeoMesh> _selection = new();
     private bool _syncingTreeSelection;   // reentrancy guard: tree<->selection sync must not recurse
+    private readonly List<MapOutlinerItemViewModel> _mapContentSelection = new();
+    private MapOutlinerItemViewModel? _mapContentAnchor;
+    private bool _outlinerMultiSelecting;
+
+    public IReadOnlyList<MapOutlinerItemViewModel> SelectedMapContentItems => _mapContentSelection;
+    public bool HasMapContentSelection => _mapContentSelection.Count > 0;
+    public string MapContentSelectionText => _mapContentSelection.Count switch
+    {
+        0 => "",
+        1 => "1 selected",
+        var count => $"{count} selected",
+    };
+
+    private void RaiseMapContentSelection()
+    {
+        OnPropertyChanged(nameof(SelectedMapContentItems));
+        OnPropertyChanged(nameof(HasMapContentSelection));
+        OnPropertyChanged(nameof(MapContentSelectionText));
+        DeleteMapContentSelectionCommand.NotifyCanExecuteChanged();
+        DisableMapContentSelectionCommand.NotifyCanExecuteChanged();
+        EnableMapContentSelectionCommand.NotifyCanExecuteChanged();
+        HideMapContentSelectionCommand.NotifyCanExecuteChanged();
+        ShowMapContentSelectionCommand.NotifyCanExecuteChanged();
+    }
+
+    private void SetMapContentSelection(IEnumerable<MapOutlinerItemViewModel> items, MapOutlinerItemViewModel? anchor)
+    {
+        foreach (var old in _mapContentSelection) old.IsSelected = false;
+        _mapContentSelection.Clear();
+        foreach (var item in items.Distinct()) { item.IsSelected = true; _mapContentSelection.Add(item); }
+        _mapContentAnchor = anchor;
+        RaiseMapContentSelection();
+        RefreshPlacementLayerEditor();
+    }
+
+    private List<MapOutlinerItemViewModel> FlatMapContentItems() =>
+        MapContent.AllMapPieces.Cast<MapOutlinerItemViewModel>()
+            .Concat(MapContent.AllParticles)
+            .Concat(MapContent.AllProps)
+            .Concat(MapContent.Probes)
+            .Concat(MapContent.Sounds)
+            .Concat(MapContent.AddedMeshes)
+            .ToList();
+
+    /// <summary>Ctrl/Shift selection owned by the outliner because Avalonia TreeView itself is single-select.</summary>
+    public void SelectMapContentFromTree(MapOutlinerItemViewModel item, bool toggle, bool range)
+    {
+        var next = _mapContentSelection.ToList();
+        if (range)
+        {
+            var flat = FlatMapContentItems();
+            int to = flat.IndexOf(item);
+            int from = _mapContentAnchor is null ? to : flat.IndexOf(_mapContentAnchor);
+            if (to >= 0)
+            {
+                if (from < 0) from = to;
+                next = flat.Skip(Math.Min(from, to)).Take(Math.Abs(to - from) + 1).ToList();
+            }
+        }
+        else if (toggle)
+        {
+            if (!next.Remove(item)) next.Add(item);
+            _mapContentAnchor = item;
+        }
+        else next = new List<MapOutlinerItemViewModel> { item };
+
+        SetMapContentSelection(next, _mapContentAnchor ?? item);
+        var selectedMeshes = _mapContentSelection.OfType<MapPieceViewModel>()
+            .Select(p => _currentMap?.Meshes.FirstOrDefault(m => m.Index == p.MeshIndex))
+            .Where(m => m is not null).Cast<MapGeoMesh>().ToList();
+        _outlinerMultiSelecting = true;
+        try
+        {
+            _selection.SetMany(selectedMeshes);
+            SelectedOutlinerItem = item;
+        }
+        finally { _outlinerMultiSelecting = false; }
+    }
+
+    private bool CanEditMapContentSelection() => _mapContentSelection.Count > 0;
+
+    [RelayCommand(CanExecute = nameof(CanEditMapContentSelection))]
+    private void HideMapContentSelection()
+    { foreach (var item in _mapContentSelection.ToList()) item.IsEditorVisible = false; }
+
+    [RelayCommand(CanExecute = nameof(CanEditMapContentSelection))]
+    private void ShowMapContentSelection()
+    { foreach (var item in _mapContentSelection.ToList()) item.IsEditorVisible = true; }
+
+    [RelayCommand(CanExecute = nameof(CanEditMapContentSelection))]
+    private void DisableMapContentSelection()
+    { foreach (var item in _mapContentSelection.ToList()) item.IsDisabled = true; }
+
+    [RelayCommand(CanExecute = nameof(CanEditMapContentSelection))]
+    private void EnableMapContentSelection()
+    { foreach (var item in _mapContentSelection.ToList()) item.IsDisabled = false; }
+
+    [RelayCommand(CanExecute = nameof(CanEditMapContentSelection))]
+    private async Task DeleteMapContentSelection()
+    {
+        var selected = _mapContentSelection.ToList();
+        if (selected.Count == 0) return;
+        if (PromptOwner is not null && !await Views.PromptWindow.ConfirmAsync(PromptOwner, "Delete Map Objects",
+                $"Mark {selected.Count} selected object(s) for deletion?\n\nThe viewport updates immediately. The map files are changed only when you save map edits.", "Delete"))
+            return;
+
+        foreach (var item in selected)
+        {
+            if (item is AddedMapMeshViewModel added) MapContent.AddedMeshes.Remove(added);
+            else item.IsRemoved = true;
+        }
+        OnPropertyChanged(nameof(HasAddedMeshes));
+        PublishAddedMeshPreview();
+        ApplyMapVisibility();
+        _log.Info("Map Content", $"Marked {selected.Count} object(s) for deletion. Save Map Content Edits to persist.");
+    }
+
+    [RelayCommand]
+    private async Task SaveMapContentEdits()
+    {
+        if (HasMapMoves || MapContent.AllMapPieces.Any(p => p.IsRemoved) || MapContent.AddedMeshes.Count > 0)
+            await SaveMeshMoves();
+        if (HasParticleMoves) await SaveParticleMoves();
+    }
 
     [ObservableProperty] private IReadOnlyList<(System.Numerics.Vector3 min, System.Numerics.Vector3 max)>? _selectionBoxes;
     [ObservableProperty] private System.Numerics.Vector3? _groupBoundsMin;
@@ -4900,11 +5210,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnSelectedOutlinerItemChanged(object? value)
     {
         if (_syncingTreeSelection) return;
+        if (!_outlinerMultiSelecting && value is MapOutlinerItemViewModel leaf)
+            SetMapContentSelection(new[] { leaf }, leaf);
         switch (value)
         {
             case MapPieceViewModel { MeshIndex: >= 0 } p when _currentMap is { } map
                 && map.Meshes.FirstOrDefault(x => x.Index == p.MeshIndex) is { } m:
-                _selection.SetSingle(m);
+                if (!_outlinerMultiSelecting) _selection.SetSingle(m);
                 break;
             case ParticlePlacementViewModel pp:
                 SelectedParticleNode = pp;
@@ -4987,15 +5299,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (d <= PickPixels && d < bestPxD) { bestPxD = d; bestPx = node; }
             }
             if (ShowParticles && MapContent.HasParticles)
-                foreach (var p in MapContent.AllParticles.Where(v => IsParticleVisible(v.Placement))) TestPx(p, p.CurrentPosition);
+                foreach (var p in MapContent.AllParticles.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved
+                    && IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags))) TestPx(p, p.CurrentPosition);
             if (ShowPlaceables && MapContent.HasProps)
-                foreach (var p in MapContent.AllProps) TestPx(p, p.Position);
+                foreach (var p in MapContent.AllProps.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) TestPx(p, p.Position);
             if (ShowPlaceables && MapContent.HasProbes)
-                foreach (var p in MapContent.Probes) TestPx(p, p.Position);
+                foreach (var p in MapContent.Probes.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) TestPx(p, p.Position);
             if (ShowPlaceables && MapContent.HasSounds)
-                foreach (var s in MapContent.Sounds.Where(v => IsSoundVisible(v.Sound))) TestPx(s, s.Position);
+                foreach (var s in MapContent.Sounds.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved
+                    && IsSoundVisible(v.Sound, v.EffectiveVisibilityFlags))) TestPx(s, s.Position);
             // M123e: staged (not yet saved) meshes are click-selectable at their world center
-            foreach (var a in MapContent.AddedMeshes) TestPx(a, a.LocalCenter + a.Offset);
+            foreach (var a in MapContent.AddedMeshes.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) TestPx(a, a.LocalCenter + a.Offset);
             if (bestPx is not null) { SelectedOutlinerItem = bestPx; return; }
         }
 
@@ -5019,13 +5333,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (d <= radius) { bestT = t; bestNode = node; }
         }
         if (ShowParticles && MapContent.HasParticles && !additive)
-            foreach (var p in MapContent.AllParticles.Where(v => IsParticleVisible(v.Placement))) Test(p, p.CurrentPosition);
+            foreach (var p in MapContent.AllParticles.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved
+                && IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags))) Test(p, p.CurrentPosition);
         if (ShowPlaceables && MapContent.HasProps && !additive)
-            foreach (var p in MapContent.AllProps) Test(p, p.Position);
+            foreach (var p in MapContent.AllProps.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) Test(p, p.Position);
         if (ShowPlaceables && MapContent.HasProbes && !additive)
-            foreach (var p in MapContent.Probes) Test(p, p.Position);
+            foreach (var p in MapContent.Probes.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) Test(p, p.Position);
         if (ShowPlaceables && MapContent.HasSounds && !additive)
-            foreach (var s in MapContent.Sounds.Where(v => IsSoundVisible(v.Sound))) Test(s, s.Position);   // M55/M60
+            foreach (var s in MapContent.Sounds.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved
+                && IsSoundVisible(v.Sound, v.EffectiveVisibilityFlags))) Test(s, s.Position);   // M55/M60
         // M153: point lights pick like any other placement, so you can click one in the viewport.
         if (ShowDynamicLights && !additive)
             foreach (var l in MapContent.Lights) Test(l, l.Position);
@@ -5057,6 +5373,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (mesh is null) return;
         if (additive) _selection.Toggle(mesh);
         else _selection.SetSingle(mesh);
+        SetMapContentSelection(MapContent.AllMapPieces
+            .Where(p => _selection.Items.Any(selected => selected.Index == p.MeshIndex)).ToList(),
+            MapContent.AllMapPieces.FirstOrDefault(p => p.MeshIndex == _selection.Primary?.Index));
         var name = mesh.Name?.Length > 0 ? mesh.Name : $"#{meshIndex}";
         _log.Info("MapGeo", additive ? $"{(_selection.Contains(mesh) ? "Added" : "Removed")} '{name}' ({_selection.Count} selected)."
                                       : $"Selected '{name}' (viewport click).");
@@ -5066,7 +5385,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public void ToggleMeshSelectionFromTree(MapPieceViewModel piece)
     {
         if (_currentMap is not { } map || piece.MeshIndex < 0) return;
-        if (map.Meshes.FirstOrDefault(x => x.Index == piece.MeshIndex) is { } m) _selection.Toggle(m);
+        if (map.Meshes.FirstOrDefault(x => x.Index == piece.MeshIndex) is { } m)
+        {
+            _selection.Toggle(m);
+            SetMapContentSelection(MapContent.AllMapPieces
+                .Where(p => _selection.Items.Any(selected => selected.Index == p.MeshIndex)).ToList(), piece);
+        }
     }
 
     /// <summary>Central selection handler (raised by <see cref="SelectionSet{T}.Changed"/>): re-derive the
@@ -5101,6 +5425,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _syncingTreeSelection = true;
         SelectedOutlinerItem = null;   // drop the outliner row highlight too
         _syncingTreeSelection = false;
+        SetMapContentSelection(Array.Empty<MapOutlinerItemViewModel>(), null);
     }
 
     /// <summary>Mirror the SelectionSet onto the tree: mark selected rows' <c>IsSelected</c>, and keep the
@@ -5119,6 +5444,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedTreeItem = primaryPiece; // scrolls/anchors the tree to the primary without re-triggering select
         SelectedOutlinerItem = primaryPiece; // M51: unified hierarchy mirrors the selection
         _syncingTreeSelection = false;
+        if (!_outlinerMultiSelecting && _mapContentSelection.All(item => item is MapPieceViewModel))
+            SetMapContentSelection(MapContent.AllMapPieces.Where(p => p.IsSelected).ToList(), primaryPiece);
     }
 
     /// <summary>Recompute the per-mesh selection highlight boxes (live vertex bounds), the combined group
@@ -5518,7 +5845,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         bool hasMoves = MapGeoWriter.HasMoves(map.Meshes);
         bool hasLayers = MapGeoLayerWriter.HasEdits(map.Meshes);
         var added = MapContent.AddedMeshes.ToList();
-        if (!hasMoves && !hasLayers && added.Count == 0) { _log.Info("MapGeo", "No map edits to save."); return; }
+        var removedIndices = MapContent.AllMapPieces.Where(p => p.IsRemoved).Select(p => p.MeshIndex).Distinct().ToList();
+        if (!hasMoves && !hasLayers && added.Count == 0 && removedIndices.Count == 0) { _log.Info("MapGeo", "No map edits to save."); return; }
         if (!GuardEditable(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
@@ -5557,7 +5885,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
                 // M123: the appended meshes are the LAST N — give them their chosen layer masks
                 // before the grids bake per-face visibility from the mesh flags.
-                bool anyMask = added.Any(a => a.VisibilityMask is not 255 and not 0);
+                bool anyMask = added.Any(a => a.VisibilityMask != 255);
                 if (anyMask && reMap.Meshes.Count >= added.Count)
                 {
                     for (int i = 0; i < added.Count; i++)
@@ -5577,6 +5905,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2);
             }
 
+            // 3) Blender-style pending deletion: remove only the selected mesh records. Their buffers stay
+            // in the file unreferenced so no surviving mesh ID has to be rewritten; bucket grids are then
+            // rebuilt from the remaining environment meshes.
+            if (removedIndices.Count > 0)
+            {
+                var stripped = MapGeoMeshRemover.Remove(bytes, removedIndices, out var removeError);
+                if (stripped is null) { _log.Error("MapGeo", $"Could not remove selected meshes: {removeError}"); return; }
+                var remainingMap = await Task.Run(() => MapGeoDecoder.Decode(stripped));
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap);
+            }
+
             var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
             _overrides.Set(new ProjectAssetOverride
             {
@@ -5591,7 +5930,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             UndoService.MarkSaved();
             int moves = map.Meshes.Count(x => x.IsMoved);
             int layers = map.Meshes.Count(x => x.HasLayerEdit);
-            _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {layers} layer edit(s) + {added.Count} added mesh(es) to override ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the added meshes as native geometry.");
+            _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {layers} layer edit(s) + {added.Count} added + {removedIndices.Count} deleted mesh(es) to override ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the resulting native geometry.");
         }
         catch (Exception ex) { _log.Error("MapGeo", ex.Message); }
     }
@@ -5607,11 +5946,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // so saving both collided. Identity is now (container, item key), which is unique, so the collision
         // cannot happen. A derived sound has no placement id of its own, though: it is a view of the
         // particle, so moving the particle is still what moves it, and only standalone MapAudio saves here.
-        var movedSounds = MapContent.Sounds.Where(s => s.IsMoved && !s.Sound.FromParticleSystem).ToList();
-        int derivedSounds = MapContent.Sounds.Count(s => s.IsMoved && s.Sound.FromParticleSystem);
+        var movedSounds = MapContent.Sounds.Where(s => s.HasEdits && !s.Sound.FromParticleSystem).ToList();
+        var editedProps = MapContent.AllProps.Where(p => p.HasEdits).ToList();
+        var editedProbes = MapContent.Probes.Where(p => p.HasEdits).ToList();
+        int derivedSounds = MapContent.Sounds.Count(s => s.HasEdits && s.Sound.FromParticleSystem);
         if (derivedSounds > 0)
             _log.Info("Sounds", $"{derivedSounds} moved sound(s) follow their particle system and are saved with it.");
-        if (moved.Count == 0 && movedSounds.Count == 0) { _log.Info("Particles", "No placement edits to save."); return; }
+        if (moved.Count == 0 && movedSounds.Count == 0 && editedProps.Count == 0 && editedProbes.Count == 0)
+        { _log.Info("Map Content", "No placement edits to save."); return; }
+        foreach (var prop in editedProps.Where(p => !string.IsNullOrWhiteSpace(p.EditedSkin)
+                     && !p.EffectiveSkin.Equals(p.Prop.Skin, StringComparison.OrdinalIgnoreCase)))
+        {
+            string path = prop.EffectiveSkin.Replace('\\', '/').TrimStart('/');
+            if (!path.StartsWith("data/", StringComparison.OrdinalIgnoreCase)) path = "data/" + path;
+            if (!path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) path += ".bin";
+            if (ReadAssetByPath(path) is null)
+            {
+                _log.Error("Props", $"Skin '{prop.EffectiveSkin}' does not resolve to an installed/project skin bin. Nothing was saved.");
+                return;
+            }
+        }
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) { _log.Error("Particles", "No materials .bin to save into."); return; }
         if (!GuardEditable(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
@@ -5632,6 +5986,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 Name = v.EditedName is { } n && n != v.Placement.Name ? n : null,
                 ColorModulate = v.ParsedTint,
                 SystemLink = v.EditedSystemHash != 0 ? v.EditedSystemHash : null,
+                VisibilityFlags = v.EditedVisibilityFlags,
                 Remove = v.IsRemoved,
             })
             .ToList();
@@ -5649,11 +6004,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 var t = s.Sound.Transform;
                 t.Translation = s.Position;
-                return new MapPlacementEdit(s.Sound.Id) { Transform = t };
+                return new MapPlacementEdit(s.Sound.Id)
+                {
+                    Transform = s.IsMoved ? t : null,
+                    VisibilityFlags = s.EditedVisibilityFlags,
+                    Remove = s.IsRemoved,
+                };
             }));
         int unaddressableSounds = movedSounds.Count(s => !s.Sound.Id.IsValid);
         if (unaddressableSounds > 0)
             _log.Warn("Sounds", $"{unaddressableSounds} moved sound(s) have no identity in the bin and were skipped.");
+
+        placementEdits.AddRange(editedProps.Where(p => p.Prop.Id.IsValid).Select(p => new MapPlacementEdit(p.Prop.Id)
+        {
+            Skin = !string.IsNullOrWhiteSpace(p.EditedSkin)
+                && !p.EffectiveSkin.Equals(p.Prop.Skin, StringComparison.OrdinalIgnoreCase) ? p.EffectiveSkin : null,
+            VisibilityFlags = p.EditedVisibilityFlags,
+            Remove = p.IsRemoved,
+        }));
+        placementEdits.AddRange(editedProbes.Where(p => p.Probe.Id.IsValid).Select(p => new MapPlacementEdit(p.Probe.Id)
+        {
+            VisibilityFlags = p.EditedVisibilityFlags,
+            Remove = p.IsRemoved,
+        }));
+        int unaddressableOthers = editedProps.Count(p => !p.Prop.Id.IsValid) + editedProbes.Count(p => !p.Probe.Id.IsValid);
+        if (unaddressableOthers > 0)
+            _log.Warn("Map Content", $"{unaddressableOthers} prop/probe placement(s) have no identity and were skipped.");
 
         var source = GetAssetBytes(binEntry);
         string? err = null;
@@ -5676,7 +6052,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project.IsDirty = true;
             UpdateTitle();
             HasParticleMoves = false;
-            _log.Success("Particles", $"Saved {placementEdits.Count} placement edit(s) to the materials.bin override. Build Package will include it.");
+            _log.Success("Map Content", $"Saved {placementEdits.Count} placement edit(s) to the materials.bin override. Build Package will include it.");
         }
         catch (Exception ex) { _log.Error("Particles", ex.Message); }
     }

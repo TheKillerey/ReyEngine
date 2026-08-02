@@ -9,7 +9,8 @@ using ReyEngine.Formats.Vfx;
 namespace ReyEngine.Formats.MapGeo;
 
 /// <summary>A placed cubemap reflection probe (M38): captures the environment for reflections at a point.</summary>
-public sealed record MapCubemapProbe(string Name, Vector3 Position, Matrix4x4 Transform, string? CubemapPath)
+public sealed record MapCubemapProbe(string Name, Vector3 Position, Matrix4x4 Transform, string? CubemapPath,
+    int VisibilityFlags = 255, bool HasVisibilityFlags = false, MapPlacementId Id = default)
 {
     /// <summary>Leaf file name of the baked cubemap (for display), or null.</summary>
     public string? CubemapFile => CubemapPath is null ? null
@@ -28,9 +29,11 @@ public sealed record MapSoundPlacement(
     /// <summary>M202: where this placement lives in the tree, so saving does not have to find it by its
     /// transform bytes. Default (invalid) for sounds DERIVED from a particle system - those are a view of
     /// the particle and have no MapAudio entry of their own, so the particle is what gets saved.</summary>
-    MapPlacementId Id = default);
+    MapPlacementId Id = default,
+    bool HasVisibilityFlags = false);
 
-public sealed record MapAnimatedProp(string Name, Vector3 Position, Matrix4x4 Transform, string CharacterRecord, string Skin)
+public sealed record MapAnimatedProp(string Name, Vector3 Position, Matrix4x4 Transform, string CharacterRecord, string Skin,
+    int VisibilityFlags = 255, bool HasVisibilityFlags = false, MapPlacementId Id = default)
 {
     /// <summary>Short character identity, e.g. "SRU_Baron" from "Characters/SRU_Baron/CharacterRecords/Root".</summary>
     public string CharacterName
@@ -65,6 +68,7 @@ public static class MapPlaceableExtractor
     private static readonly uint F_name = HashAlgorithms.Fnv1a("name");
     private static readonly uint F_characterRecord = HashAlgorithms.Fnv1a("characterRecord");
     private static readonly uint F_skin = HashAlgorithms.Fnv1a("skin");
+    private static readonly uint F_visibilityFlags = HashAlgorithms.Fnv1a("mVisibilityFlags");
     private static readonly uint F_cubemapTexture = 0xfe380acfu;   // texture path string on MapCubemapProbe
 
     public static (IReadOnlyList<MapCubemapProbe> Probes, IReadOnlyList<MapAnimatedProp> Props, IReadOnlyList<MapSoundPlacement> Sounds) Extract(byte[] materialsBin)
@@ -86,12 +90,23 @@ public static class MapPlaceableExtractor
                 if (it.GetType().GetProperty("Value")?.GetValue(it) is not BinTreeStruct s) continue;
                 if (s.ClassHash == 0) continue;   // null map entries (thousands per bin) — skip
                 var transform = s.Properties.TryGetValue(F_transform, out var tp) && tp is BinTreeMatrix44 m ? m.Value : Matrix4x4.Identity;
+                var id = new MapPlacementId(o.PathHash,
+                    it.GetType().GetProperty("Key")?.GetValue(it) is BinTreeHash kh ? kh.Value : 0u);
+                bool hasVisibility = s.Properties.TryGetValue(F_visibilityFlags, out var visibilityProperty);
+                int visibility = visibilityProperty switch
+                {
+                    BinTreeU8 u8 => u8.Value,
+                    BinTreeU16 u16 => u16.Value,
+                    BinTreeU32 u32 => unchecked((int)u32.Value),
+                    _ => 255,
+                };
 
                 if (s.ClassHash == CubemapProbeClass)
                 {
                     probes.Add(new MapCubemapProbe(
                         NameOf(s), transform.Translation, transform,
-                        (Get(s, F_cubemapTexture) as BinTreeString)?.Value));
+                        (Get(s, F_cubemapTexture) as BinTreeString)?.Value,
+                        visibility, hasVisibility, id));
                 }
                 else if (s.ClassHash == MapAudioClass)
                 {
@@ -99,12 +114,14 @@ public static class MapPlaceableExtractor
                         NameOf(s),
                         (Get(s, F_eventName) as BinTreeString)?.Value ?? "",
                         transform.Translation, transform,
-                        Id: new MapPlacementId(o.PathHash,
-                            it.GetType().GetProperty("Key")?.GetValue(it) is BinTreeHash kh ? kh.Value : 0u)));
+                        VisibilityFlags: visibility,
+                        Id: id,
+                        HasVisibilityFlags: hasVisibility));
                 }
                 else if (FindCharacterData(s) is ({ } cr, var skin))
                 {
-                    props.Add(new MapAnimatedProp(NameOf(s), transform.Translation, transform, cr, skin ?? ""));
+                    props.Add(new MapAnimatedProp(NameOf(s), transform.Translation, transform, cr, skin ?? "",
+                        visibility, hasVisibility, id));
                 }
             }
         }
