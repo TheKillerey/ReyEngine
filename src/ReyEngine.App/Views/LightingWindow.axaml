@@ -4,8 +4,8 @@
         xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         x:Class="ReyEngine.App.Views.LightingWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="ReyEngine — Lighting" Width="960" Height="540"
-        MinWidth="820" MinHeight="480"
+        Title="ReyEngine — Lighting" Width="1040" Height="760"
+        MinWidth="760" MinHeight="420"
         WindowStartupLocation="CenterOwner"
         ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}">
@@ -29,8 +29,10 @@
       </DockPanel>
     </Border>
 
-    <!-- 16:9 body: three columns, so nothing needs scrolling at the default size -->
-    <Grid Margin="14" ColumnDefinitions="*,*,*" RowDefinitions="Auto,*">
+    <!-- Colour pickers and populated light tables are taller than compact windows. Keep the footer
+         fixed and scroll the complete body so settings in every column remain reachable. -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <Grid Margin="14" MinWidth="720" ColumnDefinitions="*,*,*" RowDefinitions="Auto,*">
 
       <!-- ================= column 1 : the map's own light ================= -->
       <StackPanel Grid.Column="0" Grid.Row="0" Grid.RowSpan="2" Margin="0,0,7,0" Spacing="10">
@@ -105,8 +107,7 @@
       </StackPanel>
 
       <!-- ================= column 2 : point lights ================= -->
-      <ScrollViewer Grid.Column="1" Grid.Row="0" Grid.RowSpan="2" Margin="7,0" VerticalScrollBarVisibility="Auto">
-        <StackPanel Spacing="10">
+      <StackPanel Grid.Column="1" Grid.Row="0" Grid.RowSpan="2" Margin="7,0" Spacing="10">
           <Border Classes="card" Padding="12" CornerRadius="6">
             <StackPanel Spacing="4">
               <TextBlock Text="POINT LIGHTS" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
@@ -148,8 +149,7 @@
               <Slider Minimum="-20000" Maximum="20000" Value="{Binding DynamicLightOffsetZ}" />
             </StackPanel>
           </Border>
-        </StackPanel>
-      </ScrollViewer>
+      </StackPanel>
 
       <!-- ================= column 3 : the light table ================= -->
       <StackPanel Grid.Column="2" Grid.Row="0" Grid.RowSpan="2" Margin="7,0,0,0" Spacing="10">
@@ -220,5 +220,6 @@
         </Border>
       </StackPanel>
     </Grid>
+    </ScrollViewer>
   </DockPanel>
 </Window>
