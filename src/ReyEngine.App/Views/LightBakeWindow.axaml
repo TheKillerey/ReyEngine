@@ -65,7 +65,7 @@
                       IsVisible="{Binding CanGenerateLayout}"
                       Content="Generate lightmap UVs for SRX_DynamicEffect meshes (Experimental)"
                       FontSize="11" Foreground="{DynamicResource ReyTextBrush}"
-                      ToolTip.Tip="Off by default. When enabled, uncovered DynamicEffect meshes receive UV7 and atlas assignments. You must also enable the experimental DynamicEffect shader patch below before building the mod." />
+                      ToolTip.Tip="Off by default. When enabled, uncovered DynamicEffect meshes receive UV7 and atlas assignments. You must also enable the experimental shader lightmap patch below before building the mod." />
             <Button Classes="primary" Content="⚙ Generate Lightmap Layout"
                     Command="{Binding GenerateLayoutCommand}"
                     IsVisible="{Binding CanGenerateLayout}" IsEnabled="{Binding !IsGeneratingLayout}"
@@ -76,22 +76,22 @@
           </StackPanel>
         </Border>
 
-        <!-- M313: independent of layout generation. DynamicEffect meshes may already have UV7 and an
-             atlas, or the layout safety pass may have left their NO_BAKED_LIGHTING macro in place. -->
+        <!-- Independent of layout generation. Legacy SRX materials may already have UV7 and an atlas,
+             while still carrying NO_BAKED_LIGHTING because Riot did not cook the required permutation. -->
         <Border Classes="card" Padding="14" CornerRadius="6"
                 BorderBrush="{DynamicResource ReyWarningBrush}" BorderThickness="1">
           <StackPanel Spacing="10">
-            <TextBlock Text="EXPERIMENTAL DYNAMICEFFECT LIGHTMAPS" FontSize="10" FontWeight="Bold"
+            <TextBlock Text="EXPERIMENTAL SHADER LIGHTMAPS" FontSize="10" FontWeight="Bold"
                        Foreground="{DynamicResource ReyWarningBrush}" />
             <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
-                       Text="This is separate from UV generation. SRX_DynamicEffect meshes keep their generated or existing UV7 layout, while this action supplies the DX11 shader permutations Riot did not cook and then safely enables their baked-light sampling." />
-            <Button Classes="tool" Content="Enable DynamicEffect Lightmaps (Experimental)"
-                    Command="{Binding EnableExperimentalDynamicEffectCommand}"
-                    IsEnabled="{Binding !IsPatchingDynamicEffect}"
+                       Text="This is separate from UV generation. It supplies missing DX11 lightmap permutations for SRX_DynamicEffect, SRX_Blend_Master and SRX_Blend_Chemtech_Decal, then enables baked-light sampling only on materials the companion cache covers." />
+            <Button Classes="tool" Content="Enable Experimental Shader Lightmaps"
+                    Command="{Binding EnableExperimentalShadersCommand}"
+                    IsEnabled="{Binding !IsPatchingShaders}"
                     HorizontalAlignment="Stretch" FontSize="11" Padding="10,5"
                     ToolTip.Tip="Creates an opt-in ShaderCache.dx11.wad.client companion. Riot's installed shader cache is never edited. Build and test in Practice Tool after enabling." />
             <TextBlock Text="Compiling and validating shader cache…" FontSize="10"
-                       IsVisible="{Binding IsPatchingDynamicEffect}"
+                       IsVisible="{Binding IsPatchingShaders}"
                        Foreground="{DynamicResource ReyAccentBrush}" />
           </StackPanel>
         </Border>

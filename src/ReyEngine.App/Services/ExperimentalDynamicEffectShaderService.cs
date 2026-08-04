@@ -4,16 +4,6 @@ using ReyEngine.Rendering.D3D11;
 
 namespace ReyEngine.App.Services;
 
-public sealed record ExperimentalShaderAsset(string Path, byte[] Bytes);
-
-public sealed record ExperimentalDynamicEffectPatch(
-    IReadOnlyList<ExperimentalShaderAsset> Assets,
-    IReadOnlySet<string> SupportedMaterials,
-    int VertexKeysAdded,
-    int PixelKeysAdded,
-    int CustomBlobsAdded,
-    string Detail);
-
 /// <summary>
 /// M312: constructs a companion patch for the missing baked-light SRX_DynamicEffect permutations. Riot's
 /// source cache remains read-only; the returned TOCs and last blob containers are staged into a separate
@@ -33,7 +23,7 @@ public static class ExperimentalDynamicEffectShaderService
 
     private enum CustomKind { Vertex, Pixel, FlowRipplePixel }
 
-    public static ExperimentalDynamicEffectPatch Build(
+    public static ExperimentalLightmapShaderPatch Build(
         ShaderCacheReader cache,
         ShaderPermutationIndex definitions,
         IReadOnlyList<MaterialBinding> materials)
@@ -66,7 +56,7 @@ public static class ExperimentalDynamicEffectShaderService
 
         var vertex = stageResults[DxbcStage.Vertex];
         var pixel = stageResults[DxbcStage.Pixel];
-        return new ExperimentalDynamicEffectPatch(
+        return new ExperimentalLightmapShaderPatch(
             assets,
             supported,
             vertex.KeysAdded,

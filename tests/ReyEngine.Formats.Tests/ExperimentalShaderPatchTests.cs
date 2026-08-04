@@ -152,4 +152,50 @@ public class ExperimentalShaderPatchTests
         var flowLoad = renderer.LoadShaders(vertex, flow);
         Assert.True(flowLoad.Success, flowLoad.Error);
     }
+
+    [Fact]
+    public void ExperimentalSrxBlendShadersCompileWithTheLightmapContractOnWindows()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        Assert.True(ExperimentalSrxBlendLightmapShader.TryCompile(out var compiled, out var error), error);
+
+        foreach (var vertexBytes in new[] { compiled!.Vertex, compiled.ChemtechVertex })
+        {
+            var vertex = DxbcReflection.Parse(vertexBytes);
+            Assert.True(DxbcChecksum.IsValid(vertexBytes));
+            Assert.Equal("$Globals", vertex.ConstantBuffers.Single(cb => cb.BindPoint == 1).Name);
+            Assert.Contains(vertex.Inputs, i => i.Semantic == "TEXCOORD" && i.Index == 7);
+        }
+
+        foreach (var pixelBytes in new[] { compiled.MasterPixel, compiled.ChemtechPixel })
+        {
+            var pixel = DxbcReflection.Parse(pixelBytes);
+            Assert.True(DxbcChecksum.IsValid(pixelBytes));
+            Assert.Equal("$Globals", pixel.ConstantBuffers.Single(cb => cb.BindPoint == 0).Name);
+            Assert.Contains(pixel.Textures, r => r.Name == "BAKED_LIGHT__TX");
+        }
+
+        var master = DxbcReflection.Parse(compiled.MasterPixel);
+        Assert.Contains(master.Textures, r => r.Name == "DiffuseTexture__TX");
+        var chemtech = DxbcReflection.Parse(compiled.ChemtechPixel);
+        Assert.Contains(chemtech.Textures, r => r.Name == "Diffuse_Texture__TX");
+        Assert.Contains(chemtech.Textures, r => r.Name == "EmissionMaskTex__TX");
+        Assert.Contains(chemtech.Textures, r => r.Name == "EmissionTex__TX");
+        Assert.Contains(chemtech.Textures, r => r.Name == "TERRAIN_BLEND_SharedTexture" && r.Dimension == 5);
+        var masterGlobals = master.ConstantBuffers.Single(cb => cb.Name == "$Globals");
+        Assert.Equal(0, masterGlobals.Variables.Single(v => v.Name == "BAKED_LIGHT_SCALE_AND_BIAS").Offset);
+        var chemtechGlobals = chemtech.ConstantBuffers.Single(cb => cb.Name == "$Globals");
+        Assert.Equal(0, chemtechGlobals.Variables.Single(v => v.Name == "BAKED_LIGHT_SCALE_AND_BIAS").Offset);
+        Assert.Equal(16, chemtechGlobals.Variables.Single(v => v.Name == "Tint_Color").Offset);
+        Assert.Equal(32, chemtechGlobals.Variables.Single(v => v.Name == "EmissionColor").Offset);
+        Assert.Equal(128, chemtech.ConstantBuffers.Single(cb => cb.BindPoint == 1)
+            .Variables.Single(v => v.Name == "LIGHT_MAP_COLOR_SCALE_AND_INTENSITY").Offset);
+
+        using var renderer = new ShaderPreviewRenderer();
+        Assert.True(renderer.Initialize(out var deviceError), deviceError);
+        var masterLoad = renderer.LoadShaders(DxbcReflection.Parse(compiled.Vertex), master);
+        Assert.True(masterLoad.Success, masterLoad.Error);
+        var chemtechLoad = renderer.LoadShaders(DxbcReflection.Parse(compiled.ChemtechVertex), chemtech);
+        Assert.True(chemtechLoad.Success, chemtechLoad.Error);
+    }
 }

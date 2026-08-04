@@ -2272,11 +2272,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// M312 experimental: give lightmapped SRX_DynamicEffect map groups a custom DX11 permutation, stage
-    /// it as a ShaderCache companion WAD, then clear NO_BAKED_LIGHTING only on materials the generated
-    /// cache positively covers. Riot's installed cache is never edited.
+    /// Give lightmapped legacy SRX materials custom DX11 permutations, stage them as a ShaderCache
+    /// companion WAD, then clear NO_BAKED_LIGHTING only on materials the generated cache positively
+    /// covers. The operation remains repeatable after the macro was cleared so a creator can refresh the
+    /// companion after a Riot patch. Riot's installed cache is never edited.
     /// </summary>
-    public async Task<string> EnableExperimentalDynamicEffectLightmapsAsync()
+    public async Task<string> EnableExperimentalLightmapShadersAsync()
     {
         if (_currentMap is not { } map || _currentMapEntry is not { } mapEntry)
             return "Load a map first.";
@@ -2304,33 +2305,50 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var candidates = document.Materials
             .Where(m => lightmappedNames.Contains(m.Name)
-                     && string.Equals(m.RenderShader ?? m.ShaderName,
-                         Services.ExperimentalDynamicEffectShaderService.RenderShader,
-                         StringComparison.OrdinalIgnoreCase))
+                     && (string.Equals(m.RenderShader ?? m.ShaderName,
+                             Services.ExperimentalDynamicEffectShaderService.RenderShader,
+                             StringComparison.OrdinalIgnoreCase)
+                         || Services.ExperimentalSrxBlendShaderService.Supports(m)))
             .ToList();
         if (candidates.Count == 0)
-            return "No lightmapped SRX_DynamicEffect material was found on this map.";
+            return "No lightmapped material needing a supported experimental shader was found on this map.";
 
-        Services.ExperimentalDynamicEffectPatch patch;
+        IReadOnlyList<Services.ExperimentalLightmapShaderPatch> patches;
         try
         {
-            patch = await Task.Run(() =>
+            patches = await Task.Run(() =>
             {
                 using var cache = Formats.Shaders.ShaderCacheReader.Open(finalDir, _resolver.Database, out var cacheError)
                     ?? throw new InvalidOperationException(cacheError);
                 using var definitions = new DisposableShaderDefinitions(finalDir);
-                return Services.ExperimentalDynamicEffectShaderService.Build(cache, definitions.Value, candidates);
+                var built = new List<Services.ExperimentalLightmapShaderPatch>();
+                var dynamicEffect = candidates.Where(m => string.Equals(m.RenderShader ?? m.ShaderName,
+                        Services.ExperimentalDynamicEffectShaderService.RenderShader,
+                        StringComparison.OrdinalIgnoreCase)).ToList();
+                var srxBlend = candidates.Where(Services.ExperimentalSrxBlendShaderService.Supports).ToList();
+                if (dynamicEffect.Count > 0)
+                    built.Add(Services.ExperimentalDynamicEffectShaderService.Build(
+                        cache, definitions.Value, dynamicEffect));
+                if (srxBlend.Count > 0)
+                    built.Add(Services.ExperimentalSrxBlendShaderService.Build(
+                        cache, definitions.Value, srxBlend));
+                return (IReadOnlyList<Services.ExperimentalLightmapShaderPatch>)built;
             });
         }
         catch (Exception ex)
         {
-            _log.Error("Shader", "Experimental DynamicEffect patch failed: " + ex.Message);
+            _log.Error("Shader", "Experimental lightmap shader patch failed: " + ex.Message);
             return "Shader patch generation failed: " + ex.Message;
         }
 
+        var supportedMaterials = patches.SelectMany(p => p.SupportedMaterials)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var patchAssets = patches.SelectMany(p => p.Assets)
+            .GroupBy(a => a.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.Single()).ToList();
         int cleared = 0;
         foreach (var material in candidates)
-            if (patch.SupportedMaterials.Contains(material.Name)
+            if (supportedMaterials.Contains(material.Name)
                 && material.RemoveMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting))
                 cleared++;
 
@@ -2346,7 +2364,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
 
         string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        string backupRoot = Path.Combine(root, ".reyengine", "backups", "dynamic-effect-lightmap-" + stamp);
+        string backupRoot = Path.Combine(root, ".reyengine", "backups", "experimental-lightmaps-" + stamp);
         string shaderFolder = Path.Combine(root, "ShaderCache.dx11");
         try
         {
@@ -2360,7 +2378,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project.IsDirty = true;
             if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
 
-            foreach (var asset in patch.Assets)
+            foreach (var asset in patchAssets)
             {
                 string destination = Path.Combine(shaderFolder,
                     asset.Path.Replace('/', Path.DirectorySeparatorChar));
@@ -2402,9 +2420,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // Light Baking window refresh that follows now sees the rewritten materials immediately.
         await LoadMapGeoAsync(mapEntry);
 
-        string result = $"Experimental DynamicEffect lightmaps enabled on {patch.SupportedMaterials.Count:n0} material(s)"
+        string detail = string.Join("; ", patches.Select(p => p.Detail));
+        string result = $"Experimental lightmap shaders enabled on {supportedMaterials.Count:n0} material(s)"
                       + (cleared > 0 ? $"; removed NO_BAKED_LIGHTING from {cleared:n0}" : "; shader cache refreshed") + ". "
-                      + $"Generated {patch.Detail} and staged ShaderCache.dx11.wad.client content. "
+                      + $"Generated {detail} and staged ShaderCache.dx11.wad.client content. "
                       + "Build Package, install both WADs, and test in Practice Tool.";
         _log.Warn("Shader", result + $" Backup: {backupRoot}");
         return result;
@@ -2683,7 +2702,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (result.AtlasCount == 0)
             _log.Error("Bake", $"Baked 0 of {result.ReferencedAtlasCount} referenced atlas(es); "
                 + $"{result.SkippedAtlasCount} had no material-eligible triangles. "
-                + "For SRX_DynamicEffect, use Enable DynamicEffect Lightmaps (Experimental), wait for the map reload, then retry."
+                + "Use Enable Experimental Shader Lightmaps, wait for the map reload, then retry."
                 + (result.WroteLightGrid ? " The lightgrid was written." : ""));
         else if (result.SkippedAtlasCount > 0)
             _log.Warn("Bake", result.OutputDescription

@@ -643,7 +643,7 @@ public partial class MainWindow : Window
             var bakeVm = new LightBakeViewModel(vm.GatherBakeInputs, vm.MakeBakeService, vm.OnLightBakeFinished,
                 vm.GenerateLightmapLayoutAsync,
                 () => (vm.HasMapForLayout, vm.MeshesWithoutLightmapUv, vm.MapMeshCountForLayout),
-                vm.EnableExperimentalDynamicEffectLightmapsAsync);
+                vm.EnableExperimentalLightmapShadersAsync);
             _lightBakeWindow = new LightBakeWindow { DataContext = bakeVm };
             _lightBakeWindow.Closed += (_, _) => _lightBakeWindow = null;
             _lightBakeWindow.Show(this);
