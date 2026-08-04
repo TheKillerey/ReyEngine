@@ -270,7 +270,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     }
 
     public string Name => Model.Name;
-    public string ShaderName => Model.ShaderName;
+    public string ShaderName => Model.RenderShader ?? Model.ShaderName;
     public string AssignedTo => Model.AssignedTo;
 
     // ---- M52: shader selector ----
@@ -449,9 +449,24 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     /// <summary>Refresh shader-related display after ChangeShader swapped the pass link.</summary>
     public void RaiseShaderChanged()
     {
+        EditedShader = Model.RenderShader ?? "";
         OnPropertyChanged(nameof(CurrentShaderText));
         OnPropertyChanged(nameof(ShaderName));
         OnPropertyChanged(nameof(IsDirty));
+    }
+
+    /// <summary>Bring the row collection in sync after a headless bulk conversion added target slots.</summary>
+    internal void SynchronizeConvertedMaterial(ShaderCatalog? catalog)
+    {
+        for (int i = Slots.Count - 1; i >= 0; i--)
+            if (!Model.Slots.Any(slot => ReferenceEquals(slot, Slots[i].Model)))
+                Slots.RemoveAt(i);
+        foreach (var slot in Model.Slots)
+            if (!Slots.Any(vm => ReferenceEquals(vm.Model, slot)))
+                Slots.Add(new TextureSlotViewModel(slot, Owner!) { Binding = this });
+        RaiseShaderChanged();
+        RefreshShaderDef(catalog);
+        RaiseDirty();
     }
     public bool HasAssignment => !string.IsNullOrEmpty(Model.AssignedTo);
     public bool HasParameters => Parameters.Count > 0;
@@ -690,6 +705,55 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     }
 }
 
+/// <summary>One undo step for a whole-document shader conversion, including target sampler aliases.</summary>
+internal sealed class BulkMaterialShaderCommand : IEditorCommand
+{
+    internal sealed record Entry(MaterialBinding Material, string SourceShader, string TargetShader,
+        IReadOnlyList<TextureSlot> AddedSamplers);
+
+    private readonly IReadOnlyList<Entry> _entries;
+    private readonly Action _refresh;
+
+    public BulkMaterialShaderCommand(IReadOnlyList<Entry> entries, object? context, Action refresh)
+    {
+        _entries = entries;
+        Context = context;
+        _refresh = refresh;
+    }
+
+    public string Name => $"Replace Shader on {_entries.Count:n0} Materials";
+    public object? Context { get; }
+
+    public void Execute()
+    {
+        foreach (var entry in _entries)
+        {
+            if (!entry.Material.SetRenderShader(entry.TargetShader))
+                throw new InvalidOperationException($"Could not restore target shader on '{entry.Material.Name}'.");
+            foreach (var sampler in entry.AddedSamplers)
+                if (!entry.Material.ReinsertSampler(sampler))
+                    throw new InvalidOperationException($"Could not restore sampler '{sampler.SamplerName}'.");
+        }
+        _refresh();
+    }
+
+    public void Undo()
+    {
+        foreach (var entry in _entries)
+        {
+            foreach (var sampler in entry.AddedSamplers)
+                if (!entry.Material.RemoveSampler(sampler))
+                    throw new InvalidOperationException($"Could not remove sampler '{sampler.SamplerName}'.");
+            if (!entry.Material.SetRenderShader(entry.SourceShader))
+                throw new InvalidOperationException($"Could not restore source shader on '{entry.Material.Name}'.");
+        }
+        _refresh();
+    }
+
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
+
 /// <summary>
 /// Material-centric editor for a champion skin .bin or a map .materials.bin. Edits texture-slot
 /// paths + numeric params on a live BinTree (via <see cref="MaterialDocument"/>); Apply re-resolves
@@ -725,7 +789,46 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     // ---- M52: shader selector — swap the pass shader + auto-add the samplers that shader uses ----
     /// <summary>Distinct shaders seen in the loaded document (the realistic choices for this map/skin).</summary>
     public ObservableCollection<string> KnownShaders { get; } = new();
+    /// <summary>Only shaders currently assigned in this document; used by the bulk replacement source.</summary>
+    public ObservableCollection<string> UsedShaders { get; } = new();
     private readonly Dictionary<string, HashSet<string>> _shaderSamplers = new(StringComparer.OrdinalIgnoreCase);
+
+    // ---- M335: replace every material using one shader ------------------------------------------
+    [ObservableProperty] private string? _bulkSourceShader;
+    [ObservableProperty] private string _bulkTargetShader = "";
+    [ObservableProperty] private int _bulkShaderMatchCount;
+    [ObservableProperty] private string _bulkShaderSummary = "Choose a source shader and replacement.";
+    [ObservableProperty] private string _bulkShaderStatus = "";
+
+    public bool CanBulkReplaceShader => BulkShaderMatchCount > 0
+        && !string.IsNullOrWhiteSpace(BulkTargetShader)
+        && !string.Equals(BulkSourceShader, BulkTargetShader.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    partial void OnBulkSourceShaderChanged(string? value)
+    {
+        BulkShaderStatus = "";
+        UpdateBulkShaderPreview();
+    }
+
+    partial void OnBulkTargetShaderChanged(string value)
+    {
+        BulkShaderStatus = "";
+        UpdateBulkShaderPreview();
+    }
+
+    private void UpdateBulkShaderPreview()
+    {
+        BulkShaderMatchCount = string.IsNullOrWhiteSpace(BulkSourceShader)
+            ? 0
+            : Materials.Count(m => m.Model.CanChangeShader
+                && string.Equals(m.Model.RenderShader, BulkSourceShader,
+                StringComparison.OrdinalIgnoreCase));
+        BulkShaderSummary = BulkShaderMatchCount == 0
+            ? "No material uses the selected source shader."
+            : $"{BulkShaderMatchCount:n0} material(s) across the entire open file will change. "
+              + "Texture values, parameters, switches, macros and render state are retained.";
+        OnPropertyChanged(nameof(CanBulkReplaceShader));
+    }
 
     // ---- M103: the full League shader list, read from the selected game install ----
 
@@ -771,7 +874,9 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     /// the dropdown offers every shader the client has, not just the ones this file happens to use.</summary>
     private void BuildShaderIndex()
     {
+        string? previousSource = BulkSourceShader;
         KnownShaders.Clear();
+        UsedShaders.Clear();
         _shaderSamplers.Clear();
         if (_doc is not null)
             foreach (var b in _doc.Materials)
@@ -782,10 +887,78 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
                 foreach (var s in b.Slots) set.Add(s.SamplerName);
             }
 
-        var names = new SortedSet<string>(_shaderSamplers.Keys, StringComparer.OrdinalIgnoreCase);
+        var used = new SortedSet<string>(_shaderSamplers.Keys, StringComparer.OrdinalIgnoreCase);
+        foreach (var n in used) UsedShaders.Add(n);
+        var names = new SortedSet<string>(used, StringComparer.OrdinalIgnoreCase);
         if (Catalog is not null)
             foreach (var sh in Catalog.Shaders) names.Add(sh.Name);
         foreach (var n in names) KnownShaders.Add(n);
+
+        BulkSourceShader = previousSource is not null && used.Contains(previousSource)
+            ? previousSource
+            : _doc?.Materials.Where(m => !string.IsNullOrWhiteSpace(m.RenderShader))
+                .GroupBy(m => m.RenderShader!, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(g => g.Count())
+                .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.Key)
+                .FirstOrDefault();
+        UpdateBulkShaderPreview();
+    }
+
+    /// <summary>
+    /// Replace the pass shader on every matching material, including materials hidden by the selected-mesh
+    /// filter. The core converter keeps the existing material object intact and only adds missing target
+    /// sampler bindings, copying semantic texture paths (diffuse/normal/mask/emission) when names differ.
+    /// </summary>
+    [RelayCommand]
+    private void BulkReplaceShader()
+    {
+        string source = BulkSourceShader?.Trim() ?? "";
+        string target = BulkTargetShader.Trim();
+        if (source.Length == 0 || target.Length == 0)
+        {
+            BulkShaderStatus = "Choose both a source and replacement shader.";
+            return;
+        }
+        if (source.Equals(target, StringComparison.OrdinalIgnoreCase))
+        {
+            BulkShaderStatus = "Source and replacement shader are the same.";
+            return;
+        }
+
+        var beforeSlots = Materials
+            .Where(m => string.Equals(m.Model.RenderShader, source, StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(m => m.Model,
+                m => m.Model.Slots.ToHashSet(ReferenceEqualityComparer.Instance));
+        var targetDef = Catalog?.Find(target);
+        _shaderSamplers.TryGetValue(target, out var learnedSamplers);
+        var result = MaterialShaderConverter.Convert(
+            Materials.Select(m => m.Model), source, target, targetDef, learnedSamplers);
+
+        var commandEntries = result.ChangedMaterials.Select(model =>
+            new BulkMaterialShaderCommand.Entry(model, source, target,
+                model.Slots.Where(slot => !beforeSlots[model].Contains(slot)).ToArray())).ToList();
+
+        void RefreshConvertedRows()
+        {
+            foreach (var entry in commandEntries)
+            {
+                var vm = Materials.First(m => ReferenceEquals(m.Model, entry.Material));
+                _doc?.Reclassify(entry.Material);
+                vm.SynchronizeConvertedMaterial(Catalog);
+            }
+            BuildShaderIndex();
+            RefreshShaderDefs();
+            NotifyChanged();
+        }
+
+        if (commandEntries.Count > 0)
+            UndoService?.PushApplied(new BulkMaterialShaderCommand(commandEntries, DocContext, RefreshConvertedRows));
+        RefreshConvertedRows();
+        BulkShaderStatus = result.Summary + " Existing parameters, switches, macros and render state were preserved."
+            + (targetDef is null
+                ? " The replacement is not in the selected shader catalogue; verify its bindings before saving."
+                : " Missing target samplers used compatible authored textures or the shader defaults.");
     }
 
     /// <summary>Switch a material to another shader and add any sampler slots that the target shader's
@@ -894,6 +1067,8 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         Materials.Clear();
         HasMaterials = false; IsDirty = false; Search = ""; Summary = ""; UnresolvedCount = 0;
         HasBinIssues = false; BinIssuesLabel = "";
+        UsedShaders.Clear(); KnownShaders.Clear(); BulkSourceShader = null; BulkTargetShader = "";
+        BulkShaderStatus = ""; UpdateBulkShaderPreview();
     }
 
     public byte[]? Serialize() => _doc?.Serialize();

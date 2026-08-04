@@ -1067,6 +1067,40 @@
                           <TextBlock Text="The sampler slots below are the material's bound textures (required samplers). Switch the viewport to 'Riot Approx' to preview." FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
                         </StackPanel>
                       </Border>
+                      <!-- M335: whole-document shader conversion. This intentionally ignores the selected-
+                           mesh filter: every material using the source shader must change together. -->
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6">
+                        <StackPanel Spacing="5">
+                          <TextBlock Text="BULK SHADER REPLACE" FontSize="10" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <TextBlock Text="Replace the shader on every matching material in this map. Compatible authored values are kept; missing target samplers use a matching texture or the shader default."
+                                     FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <Grid ColumnDefinitions="72,*" RowDefinitions="Auto,Auto" RowSpacing="4">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="From" FontSize="10"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <ComboBox Grid.Row="0" Grid.Column="1"
+                                      ItemsSource="{Binding MaterialEditor.UsedShaders}"
+                                      SelectedItem="{Binding MaterialEditor.BulkSourceShader, Mode=TwoWay}"
+                                      FontSize="10" HorizontalAlignment="Stretch" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="To" FontSize="10"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <AutoCompleteBox Grid.Row="1" Grid.Column="1"
+                                             Text="{Binding MaterialEditor.BulkTargetShader, Mode=TwoWay}"
+                                             ItemsSource="{Binding MaterialEditor.KnownShaders}" FilterMode="Contains"
+                                             Watermark="Shaders/StaticMesh/..." FontSize="10" />
+                          </Grid>
+                          <TextBlock Text="{Binding MaterialEditor.BulkShaderSummary}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                          <Button Classes="tool" Content="Replace all matching materials"
+                                  Command="{Binding MaterialEditor.BulkReplaceShaderCommand}"
+                                  IsEnabled="{Binding MaterialEditor.CanBulkReplaceShader}"
+                                  HorizontalAlignment="Stretch"
+                                  ToolTip.Tip="Changes the live material document as one undoable operation. Review it in the viewport, then use Save To Override." />
+                          <TextBlock Text="{Binding MaterialEditor.BulkShaderStatus}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
+                                     IsVisible="{Binding MaterialEditor.BulkShaderStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                      </Border>
                       <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6" IsVisible="{Binding MaterialEditor.HasUnresolved}">
                         <TextBlock Text="⚠ Some texture paths don't resolve in this WAD — see the ⚠ slots below." Foreground="#FFB454" FontSize="11" TextWrapping="Wrap" />
                       </Border>
