@@ -6347,6 +6347,123 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MeshPreviewViewModel MeshPreview { get; } = new();
     public Action? ShowMeshPreviewWindow;   // wired by MainWindow (owns the window instance)
 
+    /// <summary>Convert an old room.nvr/room.wgeo into the currently open project's mapgeo. Ordinary
+    /// destination geometry is replaced, while v18 render-region meshes remain part of the destination.</summary>
+    [RelayCommand]
+    private async Task PortLegacyMap()
+    {
+        if (!ProjectMode || _currentMapEntry is not { } initialMap || _currentMapBytes is null)
+        { _log.Warn("Legacy Port", "Open a project mapgeo first."); return; }
+        if (!await EnsureProjectSavedAsync()) return;
+        if (!TryResolveMaterialsBin(initialMap.Path, out var initialBin))
+        { _log.Error("Legacy Port", "The open map has no companion materials .bin."); return; }
+
+        WadAssetEntry mapEntry = initialMap, binEntry = initialBin;
+
+        var folder = await Dialogs.OpenFolderAsync("Select a legacy LEVELS/MapN folder containing Scene/room.nvr or room.wgeo");
+        if (folder is null) return;
+
+        if (MaterialEditor.Catalog is null && MaterialEditor.SelectedShaderEnvironment is { } environment)
+            await LoadShaderCatalogAsync(environment);
+        if (MaterialEditor.Catalog is not { } catalog)
+        { _log.Error("Legacy Port", "No League shader catalogue is available. Set a valid game folder and retry."); return; }
+
+        Status = "Converting legacy map...";
+        LegacyMapPortResult result;
+        try
+        {
+            byte[] mapBytes = GetAssetBytes(mapEntry);
+            result = await Task.Run(() => LegacyMapPorter.Port(folder, mapBytes, mapEntry.Path));
+        }
+        catch (Exception ex)
+        { _log.Error("Legacy Port", ex.Message); Status = "Legacy map conversion failed."; return; }
+
+        var missingShaders = result.Materials.Where(m => catalog.Find(m.Shader) is null)
+            .Select(m => m.Shader).Distinct().ToList();
+        if (missingShaders.Count > 0)
+        { _log.Error("Legacy Port", "The selected client does not ship required shader(s): " + string.Join(", ", missingShaders)); return; }
+
+        if (PromptOwner is not null && !await Views.PromptWindow.ConfirmAsync(PromptOwner, "Port Legacy Map",
+            $"Import {result.SourceFormat} into '{mapEntry.DisplayName}'?\n\n" +
+            $"{result.SourceMeshCount:n0} legacy objects become {result.ImportedMeshCount:n0} optimized mapgeo meshes.\n" +
+            $"{result.Textures.Count:n0} unique textures and {result.Materials.Count:n0} shared materials will be added.\n" +
+            $"{result.RemovedBaseMeshCount:n0} ordinary destination meshes will be replaced.\n" +
+            $"{result.PreservedRenderRegionMeshCount:n0} render-region meshes will be preserved.\n\n" +
+            "This writes only to the project; Riot files are not changed.", "Port Map"))
+        { Status = "Legacy map port cancelled."; return; }
+
+        // Only now mutate project state. Copying references is part of the confirmed port; Riot's WAD
+        // itself remains read-only, and cancelling above leaves the project completely unchanged.
+        var copyEntries = new[] { initialMap, initialBin }
+            .Where(e => e.SourceKind == AssetSourceKind.RiotReference).ToList();
+        if (copyEntries.Count > 0)
+        {
+            bool copyFailed = false;
+            _copyBatch = true;
+            try
+            {
+                foreach (var entry in copyEntries)
+                {
+                    if (!_nodesByHash.TryGetValue(entry.PathHash, out var node)
+                        || !await CopyOneAssetToProject(node, replaceExisting: false))
+                    { _log.Error("Legacy Port", $"Could not copy '{entry.DisplayName}' into the project."); copyFailed = true; break; }
+                }
+            }
+            finally { _copyBatch = false; }
+            BuildMounts(); BuildProjectTree();
+            if (copyFailed) return;
+            if (!TryResolveEntry(initialMap.PathHash, out mapEntry)
+                || !TryResolveEntry(initialBin.PathHash, out binEntry))
+            { _log.Error("Legacy Port", "The project copies could not be remounted."); return; }
+        }
+
+        try
+        {
+            byte[] binBytes = GetAssetBytes(binEntry);
+            int created = 0, reused = 0;
+            foreach (var material in result.Materials)
+            {
+                if (MapMaterialFactory.ContainsMaterial(binBytes, material.Name)) { reused++; continue; }
+                var next = MapMaterialFactory.CreateFromShader(binBytes, material.Name, catalog.Find(material.Shader)!, out var error,
+                    material.Samplers, material.Parameters, material.Switches, material.Macros);
+                if (next is null) throw new InvalidDataException($"Material '{material.Name}': {error}");
+                binBytes = next; created++;
+            }
+
+            foreach (var texture in result.Textures)
+                WriteBakedAsset(texture.TargetPath, texture.Bytes, Path.GetExtension(texture.TargetPath));
+
+            if (!await SaveMapBinBytesAsync(binEntry, binBytes))
+                throw new InvalidDataException("The companion materials bin could not be saved.");
+
+            if (TryWriteToProjectFile(mapEntry, result.MapGeoBytes, out var mapFile))
+                _log.Success("Legacy Port", $"Saved converted mapgeo to {mapFile}.");
+            else
+            {
+                string dest = ProjectWorkspace.StoreOverrideBytes(Project, mapEntry.PathHash, result.MapGeoBytes, ".mapgeo");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = mapEntry.PathHash,
+                    ResolvedPath = mapEntry.IsResolved ? mapEntry.Path : null,
+                    OverrideFile = dest,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+            }
+
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            BuildMounts(); BuildProjectTree(); UpdateTitle();
+            foreach (string warning in result.Warnings.Take(12)) _log.Warn("Legacy Port", warning);
+            if (result.Warnings.Count > 12) _log.Warn("Legacy Port", $"{result.Warnings.Count - 12:n0} additional warning(s) omitted.");
+            _log.Success("Legacy Port", $"{result.SourceFormat} port complete: {result.ImportedMeshCount:n0} meshes, " +
+                $"{result.Textures.Count:n0} unique textures, {created:n0} material(s) created, {reused:n0} reused; " +
+                $"{result.PreservedRenderRegionMeshCount:n0} render-region meshes retained.");
+            if (TryResolveEntry(mapEntry.PathHash, out var reloaded)) await LoadMapGeoAsync(reloaded);
+            Status = "Legacy map port complete.";
+        }
+        catch (Exception ex) { _log.Error("Legacy Port", ex.Message); Status = "Legacy map port failed."; }
+    }
+
     /// <summary>M141: open a legacy (NVR) map folder — LEVELS/&lt;Map&gt; with Scene/room.nvr — as a
     /// standalone map in the Model Preview window. Reuses the M88/M89 NVR loader (mesh + per-submesh
     /// textures + lights); the preview auto-frames the whole map.</summary>
@@ -6903,7 +7020,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         int lmGroups = 0, flowGroups = 0, terrainGroups = 0, bakedPaintGroups = 0;
         for (int i = 0; i < map.Groups.Count; i++)
         {
-            var matName = map.Groups[i].Material;
+            var group = map.Groups[i];
+            var matName = group.Material;
+            string? Override(params string[] names)
+            {
+                foreach (string name in names)
+                    if (group.TextureOverrides.TryGetValue(name, out string? value)
+                        && !string.IsNullOrWhiteSpace(value)) return value;
+                return null;
+            }
             if (materialToTexture.TryGetValue(matName, out var path))
                 result[i] = Load(path);
             if (profilesByName.TryGetValue(matName, out var prof))
@@ -6915,14 +7040,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // reused because regular emissive/matcap effects are disabled inside the terrain branch.
                 if (prof.IsTerrainBlend)
                 {
-                    if (!string.IsNullOrEmpty(prof.TerrainBottomPath)) result[i] = Load(prof.TerrainBottomPath);
+                    string? bottom = Override("Bottom_Texture") ?? prof.TerrainBottomPath;
+                    string? middle = Override("Middle_Texture") ?? prof.TerrainMiddlePath;
+                    string? top = Override("Top_Texture") ?? prof.TerrainTopPath;
+                    string? extras = Override("Extras_Texture") ?? prof.TerrainExtrasPath;
+                    if (!string.IsNullOrEmpty(bottom)) result[i] = Load(bottom);
                     string? terrainMask = prof.TerrainMaskPath;
                     if (prof.TerrainWorldProjectedMask && !string.IsNullOrEmpty(mapGeoPath))
                         terrainMask = MapGeoMaterialResolver.TerrainBlendTexturePathFor(mapGeoPath);
                     if (!string.IsNullOrEmpty(terrainMask)) flowMaps[i] = Load(terrainMask);
-                    if (!string.IsNullOrEmpty(prof.TerrainMiddlePath)) flowNormals[i] = Load(prof.TerrainMiddlePath);
-                    if (!string.IsNullOrEmpty(prof.TerrainTopPath)) terrainTops[i] = Load(prof.TerrainTopPath);
-                    if (!string.IsNullOrEmpty(prof.TerrainExtrasPath)) terrainExtras[i] = Load(prof.TerrainExtrasPath);
+                    if (!string.IsNullOrEmpty(middle)) flowNormals[i] = Load(middle);
+                    if (!string.IsNullOrEmpty(top)) terrainTops[i] = Load(top);
+                    if (!string.IsNullOrEmpty(extras)) terrainExtras[i] = Load(extras);
                     terrainGroups++;
                 }
 
@@ -6957,6 +7086,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 }
             }
             else submeshMats[i] = ViewportMeshRenderer.SubmeshMaterial.Default;
+
+            // Mapgeo v17+ can replace any authored material sampler per mesh. Legacy ports depend on
+            // this to share one material per shader role while retaining every object's own texture.
+            // Apply this after the material profile so the mesh override remains authoritative.
+            if (Override("DiffuseTexture", "Diffuse_Texture", "_MainTex") is { } diffuseOverride)
+                result[i] = Load(diffuseOverride);
 
             if (mirroredByMesh.TryGetValue(map.Groups[i].MeshIndex, out var mir) && mir)
                 submeshMats[i] = submeshMats[i] with { Mirrored = true };

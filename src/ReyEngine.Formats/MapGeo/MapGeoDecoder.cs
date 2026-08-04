@@ -73,14 +73,12 @@ public static class MapGeoDecoder
                 var meshCol = view.TryGetAccessor(ElementName.PrimaryColor, out var cAcc) ? ReadColor(cAcc, vc) : null;
                 if (meshCol is not null) anyColor = true;
 
-                string? bakedPaintTex = null;
+                var meshTextureOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var textureOverride in mesh.TextureOverrides)
                     if (textureOverrideNames.TryGetValue(textureOverride.Index, out var sampler)
-                        && sampler.Equals("BAKED_DIFFUSE_TEXTURE", StringComparison.OrdinalIgnoreCase))
-                    {
-                        bakedPaintTex = textureOverride.Texture;
-                        break;
-                    }
+                        && !string.IsNullOrWhiteSpace(sampler) && !string.IsNullOrWhiteSpace(textureOverride.Texture))
+                        meshTextureOverrides[sampler] = textureOverride.Texture;
+                meshTextureOverrides.TryGetValue("BAKED_DIFFUSE_TEXTURE", out string? bakedPaintTex);
 
                 // Baked lightmap: a dedicated UV channel (Texcoord7) + the BakedLight channel's atlas
                 // texture + scale/bias. Final atlas UV = uv * scale + bias (see Map12/Bilgewater).
@@ -199,6 +197,7 @@ public static class MapGeoDecoder
                     BakedLightScale = lm.Scale,
                     BakedLightBias = lm.Bias,
                     BakedPaintTexture = bakedPaintTex,
+                    TextureOverrides = meshTextureOverrides,
                     BakedPaintScale = mesh.BakedPaintScale,
                     BakedPaintBias = mesh.BakedPaintBias,
                 });
@@ -215,6 +214,7 @@ public static class MapGeoDecoder
                         groups.Add(new MapGeoGroup(material, gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex, lmTex)
                         {
                             BakedPaintTexture = bakedPaintTex ?? "",
+                            TextureOverrides = meshTextureOverrides,
                             BakedPaintScale = mesh.BakedPaintScale,
                             BakedPaintBias = mesh.BakedPaintBias,
                             LightmapScale = lm.Scale,
@@ -230,6 +230,7 @@ public static class MapGeoDecoder
                     groups.Add(new MapGeoGroup("", gStart, indices.Count - gStart, meshName, vis, ctrl, meshIndex, lmTex)
                     {
                         BakedPaintTexture = bakedPaintTex ?? "",
+                        TextureOverrides = meshTextureOverrides,
                         BakedPaintScale = mesh.BakedPaintScale,
                         BakedPaintBias = mesh.BakedPaintBias,
                         LightmapScale = lm.Scale,

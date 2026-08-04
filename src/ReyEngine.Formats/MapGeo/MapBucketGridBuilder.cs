@@ -53,9 +53,11 @@ public static class MapBucketGridBuilder
     private const float MinimumBucketSize = 0.01f;
     private const float IntersectionEpsilon = 0.0001f;
 
-    public static IReadOnlyList<MapBucketGridData> Rebuild(MapGeoAsset asset)
+    public static IReadOnlyList<MapBucketGridData> Rebuild(MapGeoAsset asset, float targetBucketSize = TargetBucketSize)
     {
         ArgumentNullException.ThrowIfNull(asset);
+        if (!float.IsFinite(targetBucketSize) || targetBucketSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(targetBucketSize));
 
         var trianglesByGrid = new Dictionary<MapBucketGridKey, List<Triangle>>();
         foreach (var group in asset.Groups)
@@ -99,11 +101,11 @@ public static class MapBucketGridBuilder
             .OrderBy(pair => pair.Key == default ? 0 : 1)
             .ThenBy(pair => pair.Key.ControllerHash)
             .ThenBy(pair => pair.Key.RegionHash)
-            .Select(pair => BuildGrid(asset, pair.Key, pair.Value))
+            .Select(pair => BuildGrid(asset, pair.Key, pair.Value, targetBucketSize))
             .ToArray();
     }
 
-    private static MapBucketGridData BuildGrid(MapGeoAsset asset, MapBucketGridKey key, List<Triangle> triangles)
+    private static MapBucketGridData BuildGrid(MapGeoAsset asset, MapBucketGridKey key, List<Triangle> triangles, float targetBucketSize)
     {
         float minX = float.MaxValue, minZ = float.MaxValue;
         float maxX = float.MinValue, maxZ = float.MinValue;
@@ -119,7 +121,7 @@ public static class MapBucketGridBuilder
         float rangeX = maxX - minX;
         float rangeZ = maxZ - minZ;
         int side = Math.Clamp(
-            (int)MathF.Ceiling(MathF.Max(rangeX, rangeZ) / TargetBucketSize),
+            (int)MathF.Ceiling(MathF.Max(rangeX, rangeZ) / targetBucketSize),
             MinimumBucketsPerSide,
             MaximumBucketsPerSide);
 

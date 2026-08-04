@@ -90,6 +90,8 @@
       <MenuItem Header="_Tools">
         <MenuItem Header="Workshop..." Command="{Binding OpenWorkshopCommand}"
                   ToolTip.Tip="Browse one real game material per shader and every unique installed particle, then add a complete template directly to the open map" />
+        <MenuItem Header="Port Legacy NVR / WGEO into Open Map..." Command="{Binding PortLegacyMapCommand}"
+                  ToolTip.Tip="Replace the open mapgeo's ordinary geometry from an old room.nvr or room.wgeo, port unique textures and shared editable materials, and retain the destination render regions" />
         <Separator />
         <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"
                   ToolTip.Tip="Open the active document's .bin in the Particle Editor (works for skin bins and map materials.bin that contain VFX systems)" />
