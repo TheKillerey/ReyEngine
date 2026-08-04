@@ -6386,7 +6386,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (PromptOwner is not null && !await Views.PromptWindow.ConfirmAsync(PromptOwner, "Port Legacy Map",
             $"Import {result.SourceFormat} into '{mapEntry.DisplayName}'?\n\n" +
             $"{result.SourceMeshCount:n0} legacy objects become {result.ImportedMeshCount:n0} optimized mapgeo meshes.\n" +
-            $"{result.Textures.Count:n0} unique textures and {result.Materials.Count:n0} shared materials will be added.\n" +
+            $"{result.Textures.Count:n0} unique textures and {result.Materials.Count:n0} deduplicated materials will be added.\n" +
             $"{result.RemovedBaseMeshCount:n0} ordinary destination meshes will be replaced.\n" +
             $"{result.PreservedRenderRegionMeshCount:n0} render-region meshes will be preserved.\n\n" +
             "This writes only to the project; Riot files are not changed.", "Port Map"))

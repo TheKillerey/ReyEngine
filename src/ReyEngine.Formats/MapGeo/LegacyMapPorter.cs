@@ -59,7 +59,7 @@ public static class LegacyMapPorter
         if (!MapGeoBinary.TryReadEditable(destinationMapGeo, out var target))
             throw new InvalidDataException("The destination mapgeo is not byte-exact editable; the legacy port was not applied.");
         if (target.Version < 17)
-            throw new InvalidDataException("Per-mesh legacy texture overrides require a mapgeo v17 or v18 destination.");
+            throw new InvalidDataException("The legacy porter currently requires a mapgeo v17 or v18 destination.");
 
         var textureIndex = new LegacyTextureIndex(Path.GetDirectoryName(source)!);
         var nvrMaterials = isNvr ? ParseNvrMaterials(sourceBytes) : new(StringComparer.OrdinalIgnoreCase);
@@ -251,9 +251,9 @@ public static class LegacyMapPorter
         target.Meshes = preserved;
         target.Compact();
 
-        var materialNames = BuildMaterialNames(slug, built.Select(x => x.Key.Role).Distinct());
+        var materialNames = BuildMaterialNames(slug, built.Select(x => new MaterialKey(x.Key.Role, x.Key.TextureSet)));
         foreach (var acc in built)
-            AddMesh(target, acc, materialNames[acc.Key.Role]);
+            AddMesh(target, acc, materialNames[new MaterialKey(acc.Key.Role, acc.Key.TextureSet)]);
 
         byte[] ported = target.Write();
         var decoded = MapGeoDecoder.Decode(ported);
@@ -287,17 +287,23 @@ public static class LegacyMapPorter
         };
     }
 
-    private static Dictionary<LegacyMaterialRole, string> BuildMaterialNames(string slug, IEnumerable<LegacyMaterialRole> roles) =>
-        roles.ToDictionary(r => r, r => $"LegacyPort/{slug}/{r}");
+    private static Dictionary<MaterialKey, string> BuildMaterialNames(string slug, IEnumerable<MaterialKey> keys) =>
+        keys.Distinct().ToDictionary(k => k, k =>
+        {
+            string source = k.Role + "|" + k.TextureSet;
+            string digest = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(source)).AsSpan(0, 6))
+                .ToLowerInvariant();
+            return $"LegacyPort/{slug}/{k.Role}_{digest}";
+        });
 
     private static IReadOnlyList<LegacyMaterialPlan> BuildMaterialPlans(
-        IReadOnlyDictionary<LegacyMaterialRole, string> names, IReadOnlyList<MeshAccumulator> meshes)
+        IReadOnlyDictionary<MaterialKey, string> names, IReadOnlyList<MeshAccumulator> meshes)
     {
         var result = new List<LegacyMaterialPlan>();
-        foreach (var (role, name) in names)
+        foreach (var (key, name) in names)
         {
-            var sample = meshes.First(m => m.Key.Role == role).Samplers;
-            string shader = role switch
+            var sample = meshes.First(m => m.Key.Role == key.Role && m.Key.TextureSet == key.TextureSet).Samplers;
+            string shader = key.Role switch
             {
                 LegacyMaterialRole.VertexLit => VertexLitShader,
                 LegacyMaterialRole.Cutout => CutoutShader,
@@ -305,10 +311,10 @@ public static class LegacyMapPorter
                 LegacyMaterialRole.FourBlendTerrain => TerrainShader,
                 _ => OpaqueShader,
             };
-            var parameters = role == LegacyMaterialRole.FourBlendTerrain
+            var parameters = key.Role == LegacyMaterialRole.FourBlendTerrain
                 ? new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase) { ["WS_Multiplier"] = new(0.01f, 0, 0, 0) }
                 : new Dictionary<string, Vector4>();
-            var switches = role == LegacyMaterialRole.FourBlendTerrain
+            var switches = key.Role == LegacyMaterialRole.FourBlendTerrain
                 ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["USE_TOP"] = true, ["USE_EXTRAS"] = true }
                 : new Dictionary<string, bool>();
             result.Add(new LegacyMaterialPlan(name, shader, new Dictionary<string, string>(sample), parameters, switches,
@@ -378,21 +384,7 @@ public static class LegacyMapPorter
             Hash = HashAlgorithms.Fnv1a(material), Material = material, StartIndex = 0,
             IndexCount = source.Indices.Count, MinVertex = 0, MaxVertex = source.VertexCount - 1,
         });
-        foreach (var (sampler, texture) in source.Samplers)
-        {
-            int index = EnsureShaderOverride(target, sampler);
-            mesh.TextureOverrides.Add(new MapGeoBinary.ShaderOverride { Index = index, Name = texture });
-        }
         target.Meshes.Add(mesh);
-    }
-
-    private static int EnsureShaderOverride(MapGeoBinary target, string sampler)
-    {
-        var found = target.ShaderOverrides.FirstOrDefault(x => x.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase));
-        if (found is not null) return found.Index;
-        int index = target.ShaderOverrides.Count == 0 ? 0 : target.ShaderOverrides.Max(x => x.Index) + 1;
-        target.ShaderOverrides.Add(new MapGeoBinary.ShaderOverride { Index = index, Name = sampler });
-        return index;
     }
 
     private sealed record NvrMaterial(string Base, string Blend, string Color1, string Color2, string Color3);
@@ -496,6 +488,7 @@ public static class LegacyMapPorter
     }
 
     private readonly record struct SurfaceKey(LegacyMaterialRole Role, string TextureSet, bool DoubleSided);
+    private readonly record struct MaterialKey(LegacyMaterialRole Role, string TextureSet);
     private readonly record struct LegacyVertex(
         Vector3 Position, Vector3 Normal, Vector2 Uv, Vector4 Color, Vector3 Pivot, bool HasNormal);
 
