@@ -53,11 +53,37 @@ public sealed class LegacyMapPorterTests
     }
 
     [Fact]
-    public void AlphaTestDecalsDoNotAuthorUnavailableNoBakePermutation()
+    public void AlphaTestRolesDoNotAuthorUnavailableNoBakePermutation()
     {
         Assert.False(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.Decal));
-        Assert.True(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.Normal));
+        Assert.False(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.Normal));
         Assert.True(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.Grass));
         Assert.True(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.FourBlendTerrain));
+    }
+
+    [Fact]
+    public void ShaderMappingAuthorsNeutralTintAndUsefulAlphaCutoffs()
+    {
+        static LegacyMaterialPlan Plan(string name, LegacyMaterialRole role) => new(name, role, "old",
+            new Dictionary<string, string>(), new Dictionary<string, System.Numerics.Vector4>(),
+            new Dictionary<string, bool>(), new Dictionary<string, bool>());
+        var source = new LegacyMapPortResult(Array.Empty<byte>(), Array.Empty<LegacyTextureCopy>(), new[]
+        {
+            Plan("normal", LegacyMaterialRole.Normal), Plan("decal", LegacyMaterialRole.Decal),
+            Plan("grass", LegacyMaterialRole.Grass), Plan("terrain", LegacyMaterialRole.FourBlendTerrain),
+        }, "room.nvr", "NVR", 4, 4, 0, 0, 4, Array.Empty<string>());
+
+        var mapped = LegacyMapPorter.ApplyShaderOptions(source, LegacyPortShaderOptions.Defaults);
+
+        foreach (var material in mapped.Materials)
+            Assert.Equal(System.Numerics.Vector4.One, material.Parameters["TintColor"]);
+        Assert.Equal(0.35f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Normal)
+            .Parameters["AlphaTestValue"].X);
+        Assert.Equal(0.005f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Decal)
+            .Parameters["AlphaTestValue"].X);
+        Assert.Equal(0.01f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.FourBlendTerrain)
+            .Parameters["WS_Multiplier"].X);
+        Assert.DoesNotContain("NO_BAKED_LIGHTING",
+            mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Normal).Macros.Keys);
     }
 }

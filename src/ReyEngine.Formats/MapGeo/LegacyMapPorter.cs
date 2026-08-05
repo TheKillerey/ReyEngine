@@ -92,9 +92,11 @@ public static class LegacyMapPorter
     public static readonly Vector3 LegacyPositionCorrection = new(600.406f, -66.972f, 293.744f);
     private const int MaxVertices = 65535;
 
-    /// <summary>Whether a generated material can use the importer's no-lightmap default. Cutout/decal
-    /// materials must leave the macro absent because League does not ship that shader permutation.</summary>
-    public static bool UsesNoBakedLightingByDefault(LegacyMaterialRole role) => role != LegacyMaterialRole.Decal;
+    /// <summary>Whether the default shader for a generated role has a cooked no-lightmap permutation.
+    /// League 16.15 does not ship NO_BAKED_LIGHTING for DefaultEnv_Flat_AlphaTest, which is used by both
+    /// normal imported surfaces and decals. Authoring the macro on either role crashes map loading.</summary>
+    public static bool UsesNoBakedLightingByDefault(LegacyMaterialRole role) =>
+        role is LegacyMaterialRole.Grass or LegacyMaterialRole.FourBlendTerrain;
     private static readonly IReadOnlySet<string> JadeContainerBushMaterials = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         // Map453's gameplay brush is intentionally DefaultEnv_Flat, not VertexDeform. Do not broaden
@@ -125,8 +127,36 @@ public static class LegacyMapPorter
         };
         return result with
         {
-            Materials = result.Materials.Select(material => material with { Shader = ShaderFor(material.Role) }).ToList(),
+            Materials = result.Materials.Select(material => material with
+            {
+                Shader = ShaderFor(material.Role),
+                Parameters = MaterialParameters(material.Role, material.Parameters),
+                Macros = UsesNoBakedLightingByDefault(material.Role)
+                    ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true }
+                    : new Dictionary<string, bool>(),
+            }).ToList(),
         };
+    }
+
+    /// <summary>Neutral authored values for generated legacy materials. shaders.bin declares zero for
+    /// TintColor on DefaultEnv_Flat_AlphaTest; copying that definition literally makes DX11 multiply every
+    /// imported diffuse by black. Riot's real materials author the neutral tint explicitly, so generated
+    /// materials must do the same. Extra names are harmless because CreateFromShader only writes parameters
+    /// actually declared by the selected shader.</summary>
+    private static IReadOnlyDictionary<string, Vector4> MaterialParameters(
+        LegacyMaterialRole role, IReadOnlyDictionary<string, Vector4>? existing = null)
+    {
+        var parameters = existing is null
+            ? new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, Vector4>(existing, StringComparer.OrdinalIgnoreCase);
+        parameters["TintColor"] = Vector4.One;
+        parameters["Tint"] = Vector4.One;
+        if (role == LegacyMaterialRole.FourBlendTerrain)
+            parameters["WS_Multiplier"] = new Vector4(0.01f, 0, 0, 0);
+        else
+            parameters["AlphaTestValue"] = new Vector4(
+                role == LegacyMaterialRole.Decal ? 0.005f : 0.35f, 0, 0, 0);
+        return parameters;
     }
 
     /// <summary>Translate only the newly imported legacy meshes into the modern map coordinate frame.
@@ -509,18 +539,14 @@ public static class LegacyMapPorter
             IReadOnlyDictionary<string, string> samplerPlan = key.Role == LegacyMaterialRole.FourBlendTerrain
                 ? new Dictionary<string, string>(sample)
                 : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["__diffuse__"] = sample.Values.First() };
-            var parameters = key.Role == LegacyMaterialRole.FourBlendTerrain
-                ? new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase) { ["WS_Multiplier"] = new(0.01f, 0, 0, 0) }
-                : key.Role == LegacyMaterialRole.Decal
-                    ? new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase) { ["AlphaTestValue"] = new(0.005f, 0, 0, 0) }
-                    : new Dictionary<string, Vector4>();
+            var parameters = MaterialParameters(key.Role);
             var switches = key.Role == LegacyMaterialRole.FourBlendTerrain
                 ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["USE_TOP"] = true, ["USE_EXTRAS"] = true }
                 : new Dictionary<string, bool>();
             bool decal = key.Role == LegacyMaterialRole.Decal;
             // League 16.15 has no cooked DefaultEnv_Flat_AlphaTest permutation carrying
-            // NO_BAKED_LIGHTING=1. Authoring it crashes during map loading. Imported cutouts therefore
-            // use the cooked absent-macro permutation; the other legacy roles retain the macro.
+            // NO_BAKED_LIGHTING=1. Both ordinary imported surfaces and decals use that shader by default,
+            // so only the grass and terrain roles may author the macro.
             IReadOnlyDictionary<string, bool> macros = UsesNoBakedLightingByDefault(key.Role)
                 ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true }
                 : new Dictionary<string, bool>();
