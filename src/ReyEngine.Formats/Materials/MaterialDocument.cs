@@ -336,6 +336,7 @@ public sealed class MaterialDocument
             materials.Add(new MaterialBinding(name, renderShader ?? shader, subs, isDefault, slots, parameters)
             {
                 ObjectPathHash = pathHash,
+                MaterialObject = isStaticMat ? o : null,
                 SamplerContainer = samplers,
                 NameFieldHash = nameFieldHash,
                 PathFieldHash = pathFieldHash,
@@ -454,7 +455,11 @@ public sealed class MaterialBinding
     public IReadOnlyDictionary<string, string> Macros { get; init; } = EmptyMacros;
     private static readonly IReadOnlyDictionary<string, string> EmptyMacros = new Dictionary<string, string>();
     public IReadOnlyList<MaterialMacro> MacroEntries { get; init; } = Array.Empty<MaterialMacro>();
-    internal BinTreeMap? MacroMap { get; init; }
+    private BinTreeMap? _macroMap;
+    internal BinTreeMap? MacroMap { get => _macroMap; init => _macroMap = value; }
+    /// <summary>The owning StaticMaterialDef. Used to create an absent optional shaderMacros map only
+    /// when the user adds the first macro, keeping untouched documents byte-exact.</summary>
+    internal BinTreeObject? MaterialObject { get; init; }
 
     /// <summary>True when a macro is present AND set to a truthy value ("1"/"true"). Reads the LIVE
     /// entries, not the parse-time snapshot, so an edit is reflected immediately (the viewport
@@ -471,9 +476,9 @@ public sealed class MaterialBinding
     /// <summary>Riot's define for "exclude this surface from distance fog".</summary>
     public const string MacroDisableDepthFog = "DISABLE_DEPTH_FOG";
 
-    /// <summary>Macros live in a map, so unlike switches there is no prototype to clone — a material can
-    /// always gain one as long as it has the shaderMacros field.</summary>
-    public bool CanEditMacros => MacroMap is not null;
+    /// <summary>Macros live in a string map, so every StaticMaterialDef can gain one even when Riot
+    /// omitted the optional shaderMacros field.</summary>
+    public bool CanEditMacros => MaterialObject is not null;
 
     // ---- M103: editable feature switches ----
     /// <summary>The material's switches as live, toggleable entries.</summary>
@@ -529,11 +534,20 @@ public sealed class MaterialBinding
     /// Values are Riot's "0"/"1" strings.</summary>
     public MaterialMacro? SetMacro(string name, bool on)
     {
-        if (MacroMap is null || string.IsNullOrWhiteSpace(name)) return null;
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        if (_macroMap is null)
+        {
+            if (MaterialObject is null) return null;
+            uint field = HashAlgorithms.Fnv1aRaw("shaderMacros");
+            _macroMap = new BinTreeMap(field, BinPropertyType.String, BinPropertyType.String,
+                Array.Empty<KeyValuePair<BinTreeProperty, BinTreeProperty>>());
+            MaterialObject.Properties[field] = _macroMap;
+            _structurallyEdited = true;
+        }
         string value = on ? "1" : "0";
         _macroRemoved.Remove(name);
 
-        foreach (var e in MacroMap)
+        foreach (var e in _macroMap)
             if (e.Key is BinTreeString k && k.Value.Equals(name, StringComparison.OrdinalIgnoreCase))
             {
                 if (e.Value is BinTreeString vs) vs.Value = value;
@@ -542,30 +556,28 @@ public sealed class MaterialBinding
                 return hit;
             }
 
-        // Not present yet — clone an existing entry's schema so the new pair matches the map's key/value types.
-        var proto = MacroMap.FirstOrDefault();
-        if (proto.Key is not BinTreeString || proto.Value is not BinTreeString) return null;
-        var newKey = (BinTreeString)BinTreeCloner.Clone(proto.Key, 0);
-        var newVal = (BinTreeString)BinTreeCloner.Clone(proto.Value, 0);
-        newKey.Value = name;
-        newVal.Value = value;
-        MacroMap.Add(newKey, newVal);
+        // String-to-string is the field's fixed schema; direct construction also works for an empty map.
+        var newKey = new BinTreeString(0, name);
+        var newVal = new BinTreeString(0, value);
+        _macroMap.Add(newKey, newVal);
         var macro = new MaterialMacro(name, value);
         _macroEdits.Add(macro);
+        _structurallyEdited = true;
         return macro;
     }
 
     /// <summary>Remove a shaderMacro entirely (absent = the shader's default, which differs from "0").</summary>
     public bool RemoveMacro(string name)
     {
-        if (MacroMap is null) return false;
+        if (_macroMap is null) return false;
         BinTreeProperty? key = null;
-        foreach (var e in MacroMap)
+        foreach (var e in _macroMap)
             if (e.Key is BinTreeString k && k.Value.Equals(name, StringComparison.OrdinalIgnoreCase)) { key = e.Key; break; }
         if (key is null) return false;
-        MacroMap.Remove(key);
+        _macroMap.Remove(key);
         _macroEdits.RemoveAll(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         _macroRemoved.Add(name);
+        _structurallyEdited = true;
         return true;
     }
 
@@ -730,7 +742,7 @@ public sealed class MaterialBinding
     public TextureSlot? MatCapMask => _slots.FirstOrDefault(s => s.IsMatCapMask);
 
     public bool IsDirty => _structurallyEdited || _slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty)
-                           || SwitchEntries.Any(s => s.IsDirty);
+                           || SwitchEntries.Any(s => s.IsDirty) || AllMacros.Any(m => m.IsDirty);
     private bool _structurallyEdited;
 
     /// <summary>True when this material exposes editable sampler slots that can be added/removed.</summary>
@@ -786,6 +798,7 @@ public sealed class MaterialBinding
         foreach (var s in _slots) s.Revert();
         foreach (var p in Parameters) p.Revert();
         foreach (var w in SwitchEntries) w.Revert();
+        foreach (var m in AllMacros) m.Revert();
     }
 
     // ---- M55: parameter add/remove (same clone-the-schema approach as samplers) ----

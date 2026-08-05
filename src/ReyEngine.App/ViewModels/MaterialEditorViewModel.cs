@@ -327,7 +327,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     private static readonly string[] KnownMacros =
     {
         MaterialBinding.MacroNoBakedLighting, MaterialBinding.MacroDisableDepthFog,
-        "PREMULTIPLIED_ALPHA", "DISABLE_FOW",
+        "PREMULTIPLIED_ALPHA", "DISABLE_FOW", "DISABLE_SHADOWS", "LOW_QUALITY_MODE",
+        "USE_DYNAMIC_LIGHTING", "CLOUD_SHADOWS", "NUM_BLEND_WEIGHTS",
     };
 
     public ObservableCollection<string> MissingMacros { get; } = new();

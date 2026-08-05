@@ -1337,6 +1337,8 @@
                                   <StackPanel Spacing="2" IsVisible="{Binding HasMissingMacros}">
                                     <TextBlock Text="ADD SHADER MACRO" FontSize="8" FontWeight="SemiBold"
                                                Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <TextBlock Text="Macros select precompiled DX11 permutations. Unsupported combinations can crash in-game."
+                                               FontSize="8" TextWrapping="Wrap" Foreground="#FFB454" />
                                     <ItemsControl ItemsSource="{Binding MissingMacros}">
                                       <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                                       <ItemsControl.ItemTemplate>

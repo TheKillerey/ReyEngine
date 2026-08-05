@@ -91,6 +91,10 @@ public static class LegacyMapPorter
     /// to (8064.653, -22.399, 2066.135), or (+127.286, 0, +55.988).</summary>
     public static readonly Vector3 LegacyPositionCorrection = new(600.406f, -66.972f, 293.744f);
     private const int MaxVertices = 65535;
+
+    /// <summary>Whether a generated material can use the importer's no-lightmap default. Cutout/decal
+    /// materials must leave the macro absent because League does not ship that shader permutation.</summary>
+    public static bool UsesNoBakedLightingByDefault(LegacyMaterialRole role) => role != LegacyMaterialRole.Decal;
     private static readonly IReadOnlySet<string> JadeContainerBushMaterials = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         // Map453's gameplay brush is intentionally DefaultEnv_Flat, not VertexDeform. Do not broaden
@@ -514,8 +518,14 @@ public static class LegacyMapPorter
                 ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["USE_TOP"] = true, ["USE_EXTRAS"] = true }
                 : new Dictionary<string, bool>();
             bool decal = key.Role == LegacyMaterialRole.Decal;
+            // League 16.15 has no cooked DefaultEnv_Flat_AlphaTest permutation carrying
+            // NO_BAKED_LIGHTING=1. Authoring it crashes during map loading. Imported cutouts therefore
+            // use the cooked absent-macro permutation; the other legacy roles retain the macro.
+            IReadOnlyDictionary<string, bool> macros = UsesNoBakedLightingByDefault(key.Role)
+                ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true }
+                : new Dictionary<string, bool>();
             result.Add(new LegacyMaterialPlan(name, key.Role, shader, samplerPlan, parameters, switches,
-                new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true },
+                macros,
                 BlendEnabled: decal, SourceBlendFactor: decal ? 6 : null, DestinationBlendFactor: decal ? 7 : null));
         }
         return result;

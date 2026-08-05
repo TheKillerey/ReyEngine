@@ -51,4 +51,13 @@ public sealed class LegacyMapPorterTests
         Assert.Equal("grass_shader", mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Grass).Shader);
         Assert.Equal("terrain_shader", mapped.Materials.Single(m => m.Role == LegacyMaterialRole.FourBlendTerrain).Shader);
     }
+
+    [Fact]
+    public void AlphaTestDecalsDoNotAuthorUnavailableNoBakePermutation()
+    {
+        Assert.False(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.Decal));
+        Assert.True(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.Normal));
+        Assert.True(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.Grass));
+        Assert.True(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.FourBlendTerrain));
+    }
 }
