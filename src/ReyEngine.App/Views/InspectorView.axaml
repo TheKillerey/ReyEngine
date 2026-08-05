@@ -21,26 +21,50 @@
               <TabControl SelectedIndex="{Binding InspectorTab}" Padding="0">
                 <TabItem FontSize="12">
                   <TabItem.Header><TextBlock Text="Overview" FontSize="12" /></TabItem.Header>
-                  <StackPanel Spacing="10" Margin="0,8,0,0">
-
-              <!-- mesh stats (SKN) -->
+                  <StackPanel Spacing="8" Margin="0,8,0,0">
+              <!-- M351f: Overview in the redesign language - each card is a chevron section
+                   (the M351e vocabulary), and the stats are labelled rows instead of the old
+                   preformatted monospace blobs. The facts were discrete in the view-model right
+                   up until a StringBuilder flattened them; now they stay rows all the way. -->
               <Border Classes="card" IsVisible="{Binding MeshInspector.HasMesh}">
-                <StackPanel Spacing="7">
-                  <TextBlock Classes="cardTitle" Text="MESH" />
-                  <TextBlock Classes="mono" Text="{Binding MeshInspector.Stats}" />
-                  <TextBlock Text="{Binding MeshInspector.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
-                  <Button Classes="tool" Content="Assign Skeleton…" HorizontalAlignment="Left"
-                          Command="{Binding AssignSkeletonCommand}" />
-                  <TextBlock Text="Submeshes / materials" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
-                  <TextBlock Classes="mono" Text="{Binding MeshInspector.SubMeshes}"
-                             Foreground="{DynamicResource ReyTextBrush}" TextWrapping="Wrap" />
-                </StackPanel>
+                <Expander IsExpanded="True" FontSize="11">
+                  <Expander.Header><TextBlock Classes="cardTitle" Text="MESH" /></Expander.Header>
+                  <StackPanel Spacing="4" Margin="0,4,0,0">
+              <ItemsControl ItemsSource="{Binding MeshInspector.Rows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:StatRow">
+                    <Grid ColumnDefinitions="90,*" Margin="0,1">
+                      <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
+                                 FontFamily="Cascadia Mono, Consolas, monospace" TextWrapping="Wrap" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock Text="{Binding MeshInspector.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
+              <Button Classes="tool" Content="Assign Skeleton…" HorizontalAlignment="Left"
+                      Command="{Binding AssignSkeletonCommand}" />
+              <TextBlock Text="SUBMESHES / MATERIALS" FontSize="9" FontWeight="SemiBold" Margin="0,4,0,0"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+              <ItemsControl ItemsSource="{Binding MeshInspector.SubMeshRows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:StatRow">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,1">
+                      <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
+                                 TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" />
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" Margin="8,0,0,0"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+                  </StackPanel>
+                </Expander>
               </Border>
-
-              <!-- animation -->
               <Border Classes="card" IsVisible="{Binding MeshInspector.HasMesh}">
-              <StackPanel Spacing="6">
-                <TextBlock Classes="cardTitle" Text="ANIMATION" />
+                <Expander IsExpanded="True" FontSize="11">
+                  <Expander.Header><TextBlock Classes="cardTitle" Text="ANIMATION" /></Expander.Header>
+                  <StackPanel Spacing="4" Margin="0,4,0,0">
                 <TextBlock Text="{Binding Animation.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
 
                 <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Select animation…"
@@ -81,17 +105,18 @@
                   <Slider Minimum="0.1" Maximum="2" Value="{Binding Animation.Speed, Mode=TwoWay}" Width="130" />
                   <TextBlock Text="{Binding Animation.Speed, StringFormat='{}{0:0.0}x'}" Foreground="{DynamicResource ReyTextBrush}" FontSize="11" VerticalAlignment="Center" />
                 </StackPanel>
-              </StackPanel>
+                  </StackPanel>
+                </Expander>
               </Border>
-
-              <!-- champion VFX (M37) — play the loaded skin's effects at the model -->
               <Border Classes="card" IsVisible="{Binding HasChampionVfx}">
-              <StackPanel Spacing="6">
-                <Grid ColumnDefinitions="*,Auto">
-                  <TextBlock Classes="cardTitle" Grid.Column="0" Text="CHAMPION VFX" VerticalAlignment="Center" />
-                  <Button Grid.Column="1" Classes="tool" Content="⏹ Stop" Command="{Binding StopChampionVfxCommand}" FontSize="10" Padding="8,1" />
-                </Grid>
-                <TextBlock Text="Select an effect to play it at the model origin." Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" TextWrapping="Wrap" />
+                <Expander IsExpanded="True" FontSize="11">
+                  <Expander.Header><TextBlock Classes="cardTitle" Text="CHAMPION VFX" /></Expander.Header>
+                  <StackPanel Spacing="4" Margin="0,4,0,0">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0" Text="Select an effect to play it at the model origin." VerticalAlignment="Center"
+                           Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" TextWrapping="Wrap" />
+                <Button Grid.Column="1" Classes="tool" Content="⏹ Stop" Command="{Binding StopChampionVfxCommand}" FontSize="10" Padding="8,1" />
+              </Grid>
                 <ListBox ItemsSource="{Binding ChampionVfxSystems}" SelectedItem="{Binding SelectedChampionVfx, Mode=TwoWay}"
                          MaxHeight="220" Background="Transparent" FontSize="11">
                   <ListBox.ItemTemplate>
@@ -100,19 +125,29 @@
                     </DataTemplate>
                   </ListBox.ItemTemplate>
                 </ListBox>
-              </StackPanel>
+                  </StackPanel>
+                </Expander>
               </Border>
-
-              <!-- mapgeo stats -->
               <Border Classes="card" IsVisible="{Binding MapGeoInspector.HasMap}">
-              <StackPanel Spacing="7">
-                <TextBlock Classes="cardTitle" Text="MAP GEOMETRY" />
-                <TextBlock Classes="mono" Text="{Binding MapGeoInspector.Stats}" TextWrapping="Wrap" />
+                <Expander IsExpanded="True" FontSize="11">
+                  <Expander.Header><TextBlock Classes="cardTitle" Text="MAP GEOMETRY" /></Expander.Header>
+                  <StackPanel Spacing="4" Margin="0,4,0,0">
+              <ItemsControl ItemsSource="{Binding MapGeoInspector.Rows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:StatRow">
+                    <Grid ColumnDefinitions="90,*" Margin="0,1">
+                      <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
+                                 FontFamily="Cascadia Mono, Consolas, monospace" TextWrapping="Wrap" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
                 <TextBlock Text="{Binding MapGeoInspector.Warnings}" Foreground="{DynamicResource ReyAccent2Brush}"
                            FontSize="11" TextWrapping="Wrap" IsVisible="{Binding MapGeoInspector.HasWarnings}" />
-              </StackPanel>
+                  </StackPanel>
+                </Expander>
               </Border>
-
                   </StackPanel>
                 </TabItem>
 
