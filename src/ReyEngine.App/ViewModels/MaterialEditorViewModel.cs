@@ -781,6 +781,37 @@ internal sealed class BulkMaterialShaderCommand : IEditorCommand
     public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
 }
 
+internal sealed class BulkCommonMaterialSetupCommand : IEditorCommand
+{
+    internal sealed record Entry(MaterialBinding Material, LeagueShaderDef Shader,
+        ShaderMaterialSetup Before, ShaderMaterialSetup CommonSetup);
+
+    private readonly IReadOnlyList<Entry> _entries;
+    private readonly Action _refresh;
+    public string Name => $"Apply Riot Setup to {_entries.Count:n0} Materials";
+    public object? Context { get; }
+
+    public BulkCommonMaterialSetupCommand(IReadOnlyList<Entry> entries, object? context, Action refresh)
+    { _entries = entries; Context = context; _refresh = refresh; }
+
+    public void Execute()
+    {
+        foreach (var entry in _entries)
+            ShaderMaterialSetups.Apply(entry.Material, entry.Shader, entry.CommonSetup);
+        _refresh();
+    }
+
+    public void Undo()
+    {
+        foreach (var entry in _entries)
+            ShaderMaterialSetups.Restore(entry.Material, entry.Before);
+        _refresh();
+    }
+
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
+
 /// <summary>
 /// Material-centric editor for a champion skin .bin or a map .materials.bin. Edits texture-slot
 /// paths + numeric params on a live BinTree (via <see cref="MaterialDocument"/>); Apply re-resolves
@@ -826,6 +857,16 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     [ObservableProperty] private int _bulkShaderMatchCount;
     [ObservableProperty] private string _bulkShaderSummary = "Choose a source shader and replacement.";
     [ObservableProperty] private string _bulkShaderStatus = "";
+    [ObservableProperty] private bool _isApplyingCommonSetups;
+    [ObservableProperty] private string _bulkCommonSetupStatus = "";
+
+    public bool CanApplyCommonSetupsToAll => HasMaterials && HasCatalog
+        && RequestCommonShaderSetup is not null && !IsApplyingCommonSetups;
+
+    partial void OnHasMaterialsChanged(bool value) =>
+        OnPropertyChanged(nameof(CanApplyCommonSetupsToAll));
+    partial void OnIsApplyingCommonSetupsChanged(bool value) =>
+        OnPropertyChanged(nameof(CanApplyCommonSetupsToAll));
 
     public bool CanBulkReplaceShader => BulkShaderMatchCount > 0
         && !string.IsNullOrWhiteSpace(BulkTargetShader)
@@ -888,6 +929,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
             : $"{catalog.Environment}: {catalog.Shaders.Count:n0} shaders · {string.Join(", ", catalog.Categories)}";
         BuildShaderIndex();
         RefreshShaderDefs();
+        OnPropertyChanged(nameof(CanApplyCommonSetupsToAll));
     }
 
     /// <summary>Re-evaluate every material against the catalogue (after a load or an environment switch).</summary>
@@ -1075,6 +1117,91 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
             + " Existing texture paths were kept.";
     }
 
+    [RelayCommand]
+    private async Task ApplyCommonSetupsToAll()
+    {
+        if (_doc is null || !HasMaterials)
+        {
+            BulkCommonSetupStatus = "No material document is loaded.";
+            return;
+        }
+        if (Catalog is null || RequestCommonShaderSetup is null)
+        {
+            BulkCommonSetupStatus = "Load the shader catalogue first.";
+            return;
+        }
+
+        IsApplyingCommonSetups = true;
+        BulkCommonSetupStatus = "Loading the most-used Riot setups…";
+        try
+        {
+            var groups = Materials
+                .Where(vm => vm.Model.IsStaticMaterialDef
+                    && !string.IsNullOrWhiteSpace(vm.Model.RenderShader))
+                .GroupBy(vm => vm.Model.RenderShader!, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var entries = new List<BulkCommonMaterialSetupCommand.Entry>();
+            int unchanged = 0, skipped = Materials.Count - groups.Sum(group => group.Count());
+            int setupGroups = 0, index = 0;
+
+            foreach (var group in groups)
+            {
+                index++;
+                BulkCommonSetupStatus = $"Loading shader setup {index:n0} of {groups.Count:n0}: {group.Key}";
+                if (Catalog.Find(group.Key) is not { } shader)
+                {
+                    skipped += group.Count();
+                    continue;
+                }
+
+                ShaderMaterialSetup? setup;
+                try { setup = await RequestCommonShaderSetup(group.Key); }
+                catch { setup = null; }
+                if (setup is null)
+                {
+                    skipped += group.Count();
+                    continue;
+                }
+                setupGroups++;
+
+                foreach (var vm in group)
+                {
+                    var before = ShaderMaterialSetups.Capture(vm.Model);
+                    if (ShaderMaterialSetups.CanonicalSignature(before)
+                        == ShaderMaterialSetups.CanonicalSignature(setup))
+                    {
+                        unchanged++;
+                        continue;
+                    }
+                    ShaderMaterialSetups.Apply(vm.Model, shader, setup);
+                    entries.Add(new BulkCommonMaterialSetupCommand.Entry(vm.Model, shader, before, setup));
+                }
+            }
+
+            void RefreshRows()
+            {
+                foreach (var vm in Materials)
+                {
+                    _doc.Reclassify(vm.Model);
+                    vm.SynchronizeCommonSetup(Catalog);
+                }
+                NotifyChanged();
+            }
+
+            if (entries.Count > 0)
+                UndoService?.PushApplied(new BulkCommonMaterialSetupCommand(entries, DocContext, RefreshRows));
+            RefreshRows();
+            BulkCommonSetupStatus = $"Applied Riot setups to {entries.Count:n0} material(s) across "
+                + $"{setupGroups:n0} shader(s); {unchanged:n0} already matched, {skipped:n0} skipped. "
+                + "All texture paths were kept. This is one Undo operation.";
+        }
+        finally
+        {
+            IsApplyingCommonSetups = false;
+        }
+    }
+
     /// <summary>M50c: auto-load the diffuse thumbnail of one material — used when the user opens a
     /// material from the selected mesh's MATERIALS card, so the texture preview shows immediately.</summary>
     public void AutoPreviewDiffuse(string materialName)
@@ -1139,6 +1266,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         HasBinIssues = false; BinIssuesLabel = "";
         UsedShaders.Clear(); KnownShaders.Clear(); BulkSourceShader = null; BulkTargetShader = "";
         BulkShaderStatus = ""; UpdateBulkShaderPreview();
+        BulkCommonSetupStatus = ""; IsApplyingCommonSetups = false;
     }
 
     public byte[]? Serialize() => _doc?.Serialize();

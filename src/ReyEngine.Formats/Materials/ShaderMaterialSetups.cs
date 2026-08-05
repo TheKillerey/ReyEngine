@@ -58,13 +58,37 @@ public static class ShaderMaterialSetups
         // A parameter from the previous shader is harmless to the GPU but misleading in the editor and
         // can be mistaken for a supported control, so remove it when the new shader does not declare it.
         foreach (var parameter in material.Parameters
-                     .Where(p => !declaredParameters.Contains(p.Name)).ToList())
+                     .Where(p => p.TryGetVector4(out _) && !declaredParameters.Contains(p.Name)).ToList())
             if (material.RemoveParameter(parameter)) removed++;
 
         foreach (var (name, value) in setup.Parameters)
             if (declaredParameters.Contains(name) && material.SetVectorParameter(name, value) is not null)
                 parameters++;
 
+        var featureResult = ApplyFeaturesAndRenderState(material, setup);
+        switches += featureResult.Switches;
+        macros += featureResult.Macros;
+        removed += featureResult.Removed;
+
+        return new ShaderMaterialSetupApplyResult(parameters, switches, macros, removed);
+    }
+
+    /// <summary>Restore an earlier captured setup exactly. This is used by the editor's one-step bulk undo;
+    /// unlike <see cref="Apply"/>, its parameter allow-list is the snapshot itself rather than shaders.bin.</summary>
+    public static void Restore(MaterialBinding material, ShaderMaterialSetup snapshot)
+    {
+        foreach (var parameter in material.Parameters
+                     .Where(p => p.TryGetVector4(out _) && !snapshot.Parameters.ContainsKey(p.Name)).ToList())
+            material.RemoveParameter(parameter);
+        foreach (var (name, value) in snapshot.Parameters)
+            material.SetVectorParameter(name, value);
+        ApplyFeaturesAndRenderState(material, snapshot);
+    }
+
+    private static (int Switches, int Macros, int Removed) ApplyFeaturesAndRenderState(
+        MaterialBinding material, ShaderMaterialSetup setup)
+    {
+        int removed = 0, switches = 0, macros = 0;
         foreach (var old in material.AllSwitches.ToList())
             if (!setup.Switches.ContainsKey(old.Name) && material.RemoveSwitch(old)) removed++;
         foreach (var (name, on) in setup.Switches)
@@ -91,6 +115,6 @@ public static class ShaderMaterialSetups
             material.SetPassU32("dstColorBlendFactor", (uint)setup.DestinationBlendFactor);
         else material.RemovePassProperty("dstColorBlendFactor");
 
-        return new ShaderMaterialSetupApplyResult(parameters, switches, macros, removed);
+        return (switches, macros, removed);
     }
 }

@@ -209,6 +209,54 @@ public class MaterialShaderConverterTests
         Assert.Equal("1", saved.Macros[MaterialBinding.MacroNoBakedLighting]);
     }
 
+    [Fact]
+    public async Task Editor_can_apply_common_setups_to_every_loaded_material_as_one_undo_step()
+    {
+        var doc = MaterialDocument.Parse(BuildMaterials(), Resolve);
+        var undo = new UndoRedoService();
+        var sourceDef = new LeagueShaderDef(SourceShader, "StaticMesh", new(),
+            new() { new ShaderParamDef("TintColor", 0, 0, 0, 0) }, new());
+        var otherDef = new LeagueShaderDef(OtherShader, "StaticMesh", new(),
+            new() { new ShaderParamDef("TintColor", 0, 0, 0, 0) }, new());
+        var sourceSetup = new ShaderMaterialSetup(
+            new Dictionary<string, Vector4> { ["TintColor"] = Vector4.One }, new(), new(),
+            BlendEnable: false, CullEnable: true, SourceBlendFactor: -1, DestinationBlendFactor: -1);
+        var otherSetup = new ShaderMaterialSetup(
+            new Dictionary<string, Vector4> { ["TintColor"] = new(0.5f) }, new(), new(),
+            BlendEnable: false, CullEnable: true, SourceBlendFactor: -1, DestinationBlendFactor: -1);
+        var requests = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var editor = new MaterialEditorViewModel { UndoService = undo };
+        editor.Load(doc, new WadAssetEntry { Path = "base_srx.materials.bin" });
+        editor.SetCatalog(new ShaderCatalog { Shaders = new() { sourceDef, otherDef } });
+        editor.RequestCommonShaderSetup = shader =>
+        {
+            requests[shader] = requests.GetValueOrDefault(shader) + 1;
+            return Task.FromResult<ShaderMaterialSetup?>(shader == SourceShader ? sourceSetup : otherSetup);
+        };
+        editor.SetMeshFilter(new[] { "source_a" }); // bulk action must intentionally ignore this filter
+        var texturePaths = doc.Materials.ToDictionary(m => m.Name, m => m.Slots.Select(s => s.Path).ToArray());
+
+        await editor.ApplyCommonSetupsToAllCommand.ExecuteAsync(null);
+
+        Assert.Equal(3, doc.Materials.Count);
+        Assert.All(doc.Materials.Where(m => m.RenderShader == SourceShader),
+            m => Assert.Equal(Vector4.One, VectorValue(Assert.Single(m.Parameters))));
+        Assert.Equal(new Vector4(0.5f), VectorValue(Assert.Single(
+            doc.Materials.Single(m => m.RenderShader == OtherShader).Parameters)));
+        Assert.All(doc.Materials, m => Assert.Equal(texturePaths[m.Name], m.Slots.Select(s => s.Path)));
+        Assert.All(requests.Values, count => Assert.Equal(1, count));
+        Assert.Equal(2, requests.Count);
+        Assert.Equal("Apply Riot Setup to 3 Materials", undo.UndoName);
+        Assert.Contains("3 material(s)", editor.BulkCommonSetupStatus);
+
+        Assert.True(undo.Undo());
+        Assert.All(doc.Materials, m =>
+            Assert.Equal(new Vector4(0.2f, 0.4f, 0.6f, 0.8f), VectorValue(Assert.Single(m.Parameters))));
+        Assert.True(undo.Redo());
+        Assert.All(doc.Materials.Where(m => m.RenderShader == SourceShader),
+            m => Assert.Equal(Vector4.One, VectorValue(Assert.Single(m.Parameters))));
+    }
+
     private static TextureSlot Slot(MaterialBinding material, string name) =>
         material.Slots.Single(s => s.SamplerName.Equals(name, StringComparison.OrdinalIgnoreCase));
 

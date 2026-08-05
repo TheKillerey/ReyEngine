@@ -1069,6 +1069,21 @@
                           <TextBlock Text="The sampler slots below are the material's bound textures (required samplers). Switch the viewport to 'Riot Approx' to preview." FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
                         </StackPanel>
                       </Border>
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6">
+                        <StackPanel Spacing="5">
+                          <TextBlock Text="BULK MATERIAL SETUP" FontSize="10" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <TextBlock Text="Apply each shader's most-used shipped Riot parameters, switches, macros and render state to every material in the currently loaded file. This ignores the selected-mesh filter and preserves all texture paths."
+                                     FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <Button Classes="tool" Content="Apply Riot setups to all loaded materials"
+                                  Command="{Binding MaterialEditor.ApplyCommonSetupsToAllCommand}"
+                                  IsEnabled="{Binding MaterialEditor.CanApplyCommonSetupsToAll}"
+                                  HorizontalAlignment="Stretch" />
+                          <TextBlock Text="{Binding MaterialEditor.BulkCommonSetupStatus}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
+                                     IsVisible="{Binding MaterialEditor.BulkCommonSetupStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                      </Border>
                       <!-- M335: whole-document shader conversion. This intentionally ignores the selected-
                            mesh filter: every material using the source shader must change together. -->
                       <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6">
