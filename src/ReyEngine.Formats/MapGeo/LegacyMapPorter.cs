@@ -113,10 +113,18 @@ public static class LegacyMapPorter
             }
             byte[] bytes = File.ReadAllBytes(file);
             string ext = Path.GetExtension(file).ToLowerInvariant();
-            if (ext == ".tga")
+            if (ext == ".dds")
             {
-                // The current client does not reliably stream loose TGA resources. Convert the legacy
-                // source to a mipmapped BC3 TEX once; DDS/TEX sources stay byte-exact.
+                // Modern map materials should not keep legacy container types. DXT1/DXT5 blocks can be
+                // moved losslessly into TEX after reversing their mip order; unusual DDS formats use
+                // the RGBA/BC3 fallback. Existing TEX inputs remain byte-exact.
+                if (!TexWriter.TryWrapDds(bytes, out var converted))
+                    converted = TexWriter.Write(TextureDecoder.Decode(bytes), TexFormat.Bc3, mipmaps: true);
+                bytes = converted;
+                ext = ".tex";
+            }
+            else if (ext == ".tga")
+            {
                 bytes = TexWriter.Write(TextureDecoder.Decode(bytes), TexFormat.Bc3, mipmaps: true);
                 ext = ".tex";
             }
