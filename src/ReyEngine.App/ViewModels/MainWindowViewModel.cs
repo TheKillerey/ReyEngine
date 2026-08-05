@@ -6378,19 +6378,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex)
         { _log.Error("Legacy Port", ex.Message); Status = "Legacy map conversion failed."; return; }
 
+        var shaderChoices = catalog.Shaders
+            .Where(shader => shader.Category.Equals("StaticMesh", StringComparison.OrdinalIgnoreCase))
+            .Select(shader => shader.Name)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        LegacyMapPortShaderSelection? selection = null;
+        if (PromptOwner is not null)
+        {
+            selection = await Views.LegacyMapPortWindow.ShowAsync(PromptOwner, result, shaderChoices);
+            if (selection is null) { Status = "Legacy map port cancelled."; return; }
+        }
+        result = LegacyMapPorter.ApplyShaderOptions(result, selection?.RoleShaders ?? LegacyPortShaderOptions.Defaults);
+        if (selection is not null)
+            result = result with
+            {
+                Materials = result.Materials.Select(material => selection.MaterialShaders.TryGetValue(material.Name, out string? shader)
+                    ? material with { Shader = shader }
+                    : material).ToList(),
+            };
+
         var missingShaders = result.Materials.Where(m => catalog.Find(m.Shader) is null)
             .Select(m => m.Shader).Distinct().ToList();
         if (missingShaders.Count > 0)
         { _log.Error("Legacy Port", "The selected client does not ship required shader(s): " + string.Join(", ", missingShaders)); return; }
-
-        if (PromptOwner is not null && !await Views.PromptWindow.ConfirmAsync(PromptOwner, "Port Legacy Map",
-            $"Import {result.SourceFormat} into '{mapEntry.DisplayName}'?\n\n" +
-            $"{result.SourceMeshCount:n0} legacy objects become {result.ImportedMeshCount:n0} optimized mapgeo meshes.\n" +
-            $"{result.Textures.Count:n0} unique textures and {result.Materials.Count:n0} deduplicated materials will be added.\n" +
-            $"{result.RemovedBaseMeshCount:n0} ordinary destination meshes will be replaced.\n" +
-            $"{result.PreservedRenderRegionMeshCount:n0} render-region meshes will be preserved.\n\n" +
-            "This writes only to the project; Riot files are not changed.", "Port Map"))
-        { Status = "Legacy map port cancelled."; return; }
 
         // Only now mutate project state. Copying references is part of the confirmed port; Riot's WAD
         // itself remains read-only, and cancelling above leaves the project completely unchanged.
@@ -6420,14 +6431,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             byte[] binBytes = GetAssetBytes(binEntry);
-            int created = 0, reused = 0;
+            int created = 0, updated = 0;
             foreach (var material in result.Materials)
             {
-                if (MapMaterialFactory.ContainsMaterial(binBytes, material.Name)) { reused++; continue; }
+                bool existed = MapMaterialFactory.ContainsMaterial(binBytes, material.Name);
                 var next = MapMaterialFactory.CreateFromShader(binBytes, material.Name, catalog.Find(material.Shader)!, out var error,
-                    material.Samplers, material.Parameters, material.Switches, material.Macros);
+                    material.Samplers, material.Parameters, material.Switches, material.Macros,
+                    replaceExisting: true, blendEnable: material.BlendEnabled,
+                    sourceBlendFactor: material.SourceBlendFactor,
+                    destinationBlendFactor: material.DestinationBlendFactor);
                 if (next is null) throw new InvalidDataException($"Material '{material.Name}': {error}");
-                binBytes = next; created++;
+                binBytes = next;
+                if (existed) updated++; else created++;
             }
 
             foreach (var texture in result.Textures)
@@ -6456,7 +6471,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (string warning in result.Warnings.Take(12)) _log.Warn("Legacy Port", warning);
             if (result.Warnings.Count > 12) _log.Warn("Legacy Port", $"{result.Warnings.Count - 12:n0} additional warning(s) omitted.");
             _log.Success("Legacy Port", $"{result.SourceFormat} port complete: {result.ImportedMeshCount:n0} meshes, " +
-                $"{result.Textures.Count:n0} unique textures, {created:n0} material(s) created, {reused:n0} reused; " +
+                $"{result.Textures.Count:n0} unique textures, {created:n0} material(s) created, {updated:n0} updated; " +
                 $"{result.PreservedRenderRegionMeshCount:n0} render-region meshes retained.");
             if (TryResolveEntry(mapEntry.PathHash, out var reloaded)) await LoadMapGeoAsync(reloaded);
             Status = "Legacy map port complete.";

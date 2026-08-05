@@ -7,17 +7,34 @@ using ReyEngine.Core.Hashing;
 
 namespace ReyEngine.Formats.MapGeo;
 
-public enum LegacyMaterialRole { Opaque, VertexLit, Cutout, Grass, FourBlendTerrain }
+public enum LegacyMaterialRole { Normal, Decal, Grass, FourBlendTerrain }
+
+public sealed record LegacyPortShaderOptions(
+    string NormalShader,
+    string DecalShader,
+    string GrassShader,
+    string TerrainShader)
+{
+    public static LegacyPortShaderOptions Defaults { get; } = new(
+        LegacyMapPorter.NormalShader,
+        LegacyMapPorter.DecalShader,
+        LegacyMapPorter.GrassShader,
+        LegacyMapPorter.TerrainShader);
+}
 
 public sealed record LegacyTextureCopy(string SourcePath, string TargetPath, byte[] Bytes);
 
 public sealed record LegacyMaterialPlan(
     string Name,
+    LegacyMaterialRole Role,
     string Shader,
     IReadOnlyDictionary<string, string> Samplers,
     IReadOnlyDictionary<string, Vector4> Parameters,
     IReadOnlyDictionary<string, bool> Switches,
-    IReadOnlyDictionary<string, bool> Macros);
+    IReadOnlyDictionary<string, bool> Macros,
+    bool BlendEnabled = false,
+    int? SourceBlendFactor = null,
+    int? DestinationBlendFactor = null);
 
 public sealed record LegacyMapPortResult(
     byte[] MapGeoBytes,
@@ -40,12 +57,26 @@ public sealed record LegacyMapPortResult(
 /// </summary>
 public static class LegacyMapPorter
 {
-    private const string OpaqueShader = "Shaders/StaticMesh/DefaultEnv_Flat";
-    private const string VertexLitShader = "Shaders/StaticMesh/Env_Diffuse_VertexColor_Multiply";
-    private const string CutoutShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest_DoubleSided";
-    private const string GrassShader = "Shaders/StaticMesh/VertexDeform";
-    private const string TerrainShader = "Shaders/StaticMesh/4TextureBlend_WorldProjected";
+    public const string NormalShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest";
+    public const string DecalShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest";
+    public const string GrassShader = "Shaders/StaticMesh/VertexDeform";
+    public const string TerrainShader = "Shaders/StaticMesh/4TextureBlend_WorldProjected";
     private const int MaxVertices = 65535;
+
+    public static LegacyMapPortResult ApplyShaderOptions(LegacyMapPortResult result, LegacyPortShaderOptions options)
+    {
+        string ShaderFor(LegacyMaterialRole role) => role switch
+        {
+            LegacyMaterialRole.Decal => options.DecalShader,
+            LegacyMaterialRole.Grass => options.GrassShader,
+            LegacyMaterialRole.FourBlendTerrain => options.TerrainShader,
+            _ => options.NormalShader,
+        };
+        return result with
+        {
+            Materials = result.Materials.Select(material => material with { Shader = ShaderFor(material.Role) }).ToList(),
+        };
+    }
 
     public static LegacyMapPortResult Port(string sourceRoot, byte[] destinationMapGeo,
         string? destinationMapGeoPath = null)
@@ -126,7 +157,6 @@ public static class LegacyMapPorter
                 var normals = view.TryGetAccessor(ElementName.Normal, out var nAcc) ? ReadVector3(nAcc, vertexCount) : null;
                 var uv0 = view.TryGetAccessor(ElementName.Texcoord0, out var uvAcc) ? ReadVector2(uvAcc, vertexCount) : null;
                 var uv7 = view.TryGetAccessor(ElementName.Texcoord7, out var uv7Acc) ? ReadVector2(uv7Acc, vertexCount) : null;
-                var colors = view.TryGetAccessor(ElementName.PrimaryColor, out var cAcc) ? ReadColor(cAcc, vertexCount) : null;
                 var transform = mesh.Transform;
                 var normalMatrix = Matrix4x4.Invert(transform, out var inverse)
                     ? Matrix4x4.Transpose(inverse) : transform;
@@ -154,9 +184,8 @@ public static class LegacyMapPorter
                     bool cutout = !fourBlend && HasCutoutAlpha(DecodeTexture(baseRef));
                     LegacyMaterialRole role = fourBlend ? LegacyMaterialRole.FourBlendTerrain
                         : cutout && LooksLikeGrass(materialName, baseRef) ? LegacyMaterialRole.Grass
-                        : cutout ? LegacyMaterialRole.Cutout
-                        : isNvr && colors is not null ? LegacyMaterialRole.VertexLit
-                        : LegacyMaterialRole.Opaque;
+                        : cutout && LooksLikeDecal(materialName, baseRef) ? LegacyMaterialRole.Decal
+                        : LegacyMaterialRole.Normal;
 
                     var samplers = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     TextureImage? blendMask = null;
@@ -167,7 +196,7 @@ public static class LegacyMapPorter
                         string? middle = PortTexture(raw.Color1);
                         string? top = PortTexture(raw.Color2);
                         string? extras = PortTexture(raw.Color3);
-                        if (middle is null || top is null || extras is null) { warnings.Add($"Ground material '{materialName}' was missing a layer; imported as opaque."); role = LegacyMaterialRole.VertexLit; samplers["Diffuse_Texture"] = baseTarget; }
+                        if (middle is null || top is null || extras is null) { warnings.Add($"Ground material '{materialName}' was missing a layer; imported as a normal alpha-tested surface."); role = LegacyMaterialRole.Normal; samplers["DiffuseTexture"] = baseTarget; }
                         else
                         {
                             samplers["Bottom_Texture"] = baseTarget;
@@ -176,10 +205,10 @@ public static class LegacyMapPorter
                             samplers["Extras_Texture"] = extras;
                         }
                     }
-                    else samplers[role == LegacyMaterialRole.VertexLit ? "Diffuse_Texture" : "DiffuseTexture"] = baseTarget;
+                    else samplers["DiffuseTexture"] = baseTarget;
 
                     var key = new SurfaceKey(role, string.Join("|", samplers.Select(kv => kv.Key + "=" + kv.Value)),
-                        mesh.DisableBackfaceCulling || role is LegacyMaterialRole.Cutout or LegacyMaterialRole.Grass);
+                        mesh.DisableBackfaceCulling || role == LegacyMaterialRole.Grass);
                     if (!accumulators.TryGetValue(key, out var chunks)) accumulators[key] = chunks = new();
                     if (chunks.Count == 0) chunks.Add(new MeshAccumulator(key, samplers));
 
@@ -207,7 +236,6 @@ public static class LegacyMapPorter
                             Vector4 color = role switch
                             {
                                 LegacyMaterialRole.FourBlendTerrain when blendMask is not null => Sample(blendMask, uv7![index]),
-                                LegacyMaterialRole.VertexLit => colors?[index] ?? Vector4.One,
                                 _ => Vector4.One,
                             };
                             return new LegacyVertex(p, n, uv, color, meshPivot, normals is not null);
@@ -265,7 +293,7 @@ public static class LegacyMapPorter
         if (preservedAfter != preservedCount)
             throw new InvalidDataException($"Render-region verification failed: retained {preservedAfter} of {preservedCount} meshes.");
 
-        var materialPlans = BuildMaterialPlans(materialNames, built);
+        var materialPlans = BuildMaterialPlans(materialNames, built, LegacyPortShaderOptions.Defaults);
         return new LegacyMapPortResult(ported, textureCopies.Values.ToList(), materialPlans, source,
             isWgeo ? "WGEO" : "NVR", environment.Meshes.Count, built.Count, removed, preservedCount,
             sourceMaterialCount, warnings.Distinct().ToList());
@@ -297,7 +325,8 @@ public static class LegacyMapPorter
         });
 
     private static IReadOnlyList<LegacyMaterialPlan> BuildMaterialPlans(
-        IReadOnlyDictionary<MaterialKey, string> names, IReadOnlyList<MeshAccumulator> meshes)
+        IReadOnlyDictionary<MaterialKey, string> names, IReadOnlyList<MeshAccumulator> meshes,
+        LegacyPortShaderOptions options)
     {
         var result = new List<LegacyMaterialPlan>();
         foreach (var (key, name) in names)
@@ -305,20 +334,26 @@ public static class LegacyMapPorter
             var sample = meshes.First(m => m.Key.Role == key.Role && m.Key.TextureSet == key.TextureSet).Samplers;
             string shader = key.Role switch
             {
-                LegacyMaterialRole.VertexLit => VertexLitShader,
-                LegacyMaterialRole.Cutout => CutoutShader,
-                LegacyMaterialRole.Grass => GrassShader,
-                LegacyMaterialRole.FourBlendTerrain => TerrainShader,
-                _ => OpaqueShader,
+                LegacyMaterialRole.Decal => options.DecalShader,
+                LegacyMaterialRole.Grass => options.GrassShader,
+                LegacyMaterialRole.FourBlendTerrain => options.TerrainShader,
+                _ => options.NormalShader,
             };
+            IReadOnlyDictionary<string, string> samplerPlan = key.Role == LegacyMaterialRole.FourBlendTerrain
+                ? new Dictionary<string, string>(sample)
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["__diffuse__"] = sample.Values.First() };
             var parameters = key.Role == LegacyMaterialRole.FourBlendTerrain
                 ? new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase) { ["WS_Multiplier"] = new(0.01f, 0, 0, 0) }
-                : new Dictionary<string, Vector4>();
+                : key.Role == LegacyMaterialRole.Decal
+                    ? new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase) { ["AlphaTestValue"] = new(0.005f, 0, 0, 0) }
+                    : new Dictionary<string, Vector4>();
             var switches = key.Role == LegacyMaterialRole.FourBlendTerrain
                 ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["USE_TOP"] = true, ["USE_EXTRAS"] = true }
                 : new Dictionary<string, bool>();
-            result.Add(new LegacyMaterialPlan(name, shader, new Dictionary<string, string>(sample), parameters, switches,
-                new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true }));
+            bool decal = key.Role == LegacyMaterialRole.Decal;
+            result.Add(new LegacyMaterialPlan(name, key.Role, shader, samplerPlan, parameters, switches,
+                new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true },
+                BlendEnabled: decal, SourceBlendFactor: decal ? 6 : null, DestinationBlendFactor: decal ? 7 : null));
         }
         return result;
     }
@@ -326,7 +361,7 @@ public static class LegacyMapPorter
     private static void AddMesh(MapGeoBinary target, MeshAccumulator source, string material)
     {
         source.FinishNormals();
-        bool hasColor = source.Key.Role is LegacyMaterialRole.VertexLit or LegacyMaterialRole.FourBlendTerrain;
+        bool hasColor = source.Key.Role == LegacyMaterialRole.FourBlendTerrain;
         bool hasGrassPivot = source.Key.Role == LegacyMaterialRole.Grass;
         var decl = new MapGeoBinary.VertexDeclaration { Usage = 0 };
         decl.Elements.Add((MapGeoBinary.ElemPosition, MapGeoBinary.FmtXYZ_Float32));
@@ -439,8 +474,19 @@ public static class LegacyMapPorter
             || value.Contains("plant", StringComparison.Ordinal)
             || value.Contains("fern", StringComparison.Ordinal)
             || value.Contains("brush", StringComparison.Ordinal)
+            || value.Contains("bush", StringComparison.Ordinal)
+            || value.Contains("shrub", StringComparison.Ordinal)
             || value.Contains("weed", StringComparison.Ordinal)
             || value.Contains("reed", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeDecal(string material, string? texture)
+    {
+        string value = (material + " " + texture).ToLowerInvariant();
+        return value.Contains("decal", StringComparison.Ordinal)
+            || value.Contains("overlay", StringComparison.Ordinal)
+            || value.Contains("roadmark", StringComparison.Ordinal)
+            || value.Contains("road_mark", StringComparison.Ordinal);
     }
 
     private static Vector4 Sample(TextureImage image, Vector2 uv)
@@ -562,11 +608,4 @@ public static class LegacyMapPorter
         return result;
     }
 
-    private static Vector4[] ReadColor(VertexElementAccessor accessor, int count)
-    {
-        var result = new Vector4[count];
-        try { var values = accessor.AsBgraU8Array(); for (int i = 0; i < count; i++) result[i] = new(values[i].r / 255f, values[i].g / 255f, values[i].b / 255f, values[i].a / 255f); }
-        catch { try { var values = accessor.AsVector4Array(); for (int i = 0; i < count; i++) result[i] = values[i]; } catch { Array.Fill(result, Vector4.One); } }
-        return result;
-    }
 }

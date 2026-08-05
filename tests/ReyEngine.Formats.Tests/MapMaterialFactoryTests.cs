@@ -79,4 +79,46 @@ public sealed class MapMaterialFactoryTests
         Assert.Equal("NO_BAKED_LIGHTING", Assert.IsType<BinTreeString>(macro.Key).Value);
         Assert.Equal("1", Assert.IsType<BinTreeString>(macro.Value).Value);
     }
+
+    [Fact]
+    public void CreatesDecalBlendStateAndCanReplaceAnEarlierGuessedMaterial()
+    {
+        const string name = "LegacyPort/map11/Decal_test";
+        var target = Write(new BinTreeObject(0x100u, H("MapSunProperties"), Array.Empty<BinTreeProperty>()));
+        var alpha = new LeagueShaderDef("Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest", "StaticMesh",
+            new() { new ShaderTextureDef("DiffuseTexture", "ASSETS/Shared/Materials/white.tex") },
+            new() { new ShaderParamDef("AlphaTestValue", 0.3f, 0, 0, 0) }, new());
+
+        var created = MapMaterialFactory.CreateFromShader(target, name, alpha, out var error,
+            new Dictionary<string, string> { ["__diffuse__"] = "assets/maps/legacy/decal.dds" },
+            new Dictionary<string, Vector4> { ["AlphaTestValue"] = new(0.005f, 0, 0, 0) },
+            replaceExisting: true, blendEnable: true, sourceBlendFactor: 6, destinationBlendFactor: 7);
+
+        Assert.Null(error);
+        var material = SafeBinTree.Parse(created!).Objects[H(name)];
+        var techniques = Assert.IsType<BinTreeContainer>(material.Properties[H("techniques")]);
+        var technique = Assert.Single(techniques.Elements.OfType<BinTreeStruct>());
+        var passes = Assert.IsType<BinTreeContainer>(technique.Properties[H("passes")]);
+        var pass = Assert.Single(passes.Elements.OfType<BinTreeStruct>());
+        Assert.True(Assert.IsType<BinTreeBool>(pass.Properties[H("blendEnable")]).Value);
+        Assert.Equal(6u, Assert.IsType<BinTreeU32>(pass.Properties[H("srcColorBlendFactor")]).Value);
+        Assert.Equal(7u, Assert.IsType<BinTreeU32>(pass.Properties[H("dstColorBlendFactor")]).Value);
+
+        var replacement = new LeagueShaderDef("Shaders/StaticMesh/VertexDeform", "StaticMesh",
+            new() { new ShaderTextureDef("DiffuseTexture", "ASSETS/Shared/Materials/white.tex") }, new(), new());
+        var replaced = MapMaterialFactory.CreateFromShader(created!, name, replacement, out error,
+            new Dictionary<string, string> { ["__diffuse__"] = "assets/maps/legacy/grass.dds" },
+            replaceExisting: true, blendEnable: false);
+
+        Assert.Null(error);
+        var tree = SafeBinTree.Parse(replaced!);
+        Assert.Equal(2, tree.Objects.Count);
+        material = tree.Objects[H(name)];
+        techniques = Assert.IsType<BinTreeContainer>(material.Properties[H("techniques")]);
+        technique = Assert.Single(techniques.Elements.OfType<BinTreeStruct>());
+        passes = Assert.IsType<BinTreeContainer>(technique.Properties[H("passes")]);
+        pass = Assert.Single(passes.Elements.OfType<BinTreeStruct>());
+        Assert.Equal(H(replacement.Name), Assert.IsType<BinTreeObjectLink>(pass.Properties[H("shader")]).Value);
+        Assert.False(Assert.IsType<BinTreeBool>(pass.Properties[H("blendEnable")]).Value);
+    }
 }

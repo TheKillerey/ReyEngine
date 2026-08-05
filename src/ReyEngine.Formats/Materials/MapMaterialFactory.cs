@@ -138,21 +138,29 @@ public static class MapMaterialFactory
             samplerOverrides: diffuseOverride is null ? null : new Dictionary<string, string> { ["__diffuse__"] = diffuseOverride });
 
     /// <summary>Create a material from a shader while applying authored sampler, parameter, switch and
-    /// macro defaults. Used by the legacy-map porter: the mapgeo owns the per-mesh texture overrides,
-    /// while this creates only one editable material per rendering role.</summary>
+    /// macro and render-state defaults. The legacy porter uses this to bind each content-unique texture
+    /// set through a real runtime material and to replace an earlier automatic shader choice safely.</summary>
     public static byte[]? CreateFromShader(byte[] materialsBin, string newName,
         Shaders.LeagueShaderDef shader, out string? error,
         IReadOnlyDictionary<string, string>? samplerOverrides,
         IReadOnlyDictionary<string, System.Numerics.Vector4>? parameterOverrides = null,
         IReadOnlyDictionary<string, bool>? switches = null,
-        IReadOnlyDictionary<string, bool>? macros = null)
+        IReadOnlyDictionary<string, bool>? macros = null,
+        bool replaceExisting = false,
+        bool? blendEnable = null,
+        int? sourceBlendFactor = null,
+        int? destinationBlendFactor = null)
     {
         error = null;
         try
         {
             var tree = SafeBinTree.Parse(materialsBin);   // tolerant - see CloneMaterial (M123d)
             uint newHash = HashAlgorithms.Fnv1a(newName);
-            if (tree.Objects.ContainsKey(newHash)) { error = $"A material named '{newName}' already exists."; return null; }
+            if (tree.Objects.ContainsKey(newHash))
+            {
+                if (!replaceExisting) { error = $"A material named '{newName}' already exists."; return null; }
+                tree.Objects.Remove(newHash);
+            }
 
             uint F(string n) => HashAlgorithms.Fnv1a(n);
             const uint SamplerClass = 0x0904b150;   // StaticMaterialShaderSamplerDef
@@ -210,10 +218,17 @@ public static class MapMaterialFactory
                 .Select(kv => new KeyValuePair<BinTreeProperty, BinTreeProperty>(
                     new BinTreeString(0, kv.Key), new BinTreeString(0, kv.Value ? "1" : "0"))).ToList();
 
-            var pass = new BinTreeStruct(0, PassClass, new BinTreeProperty[]
+            var passProperties = new List<BinTreeProperty>
             {
                 new BinTreeObjectLink(F("shader"), HashAlgorithms.Fnv1a(shader.Name)),
-            });
+            };
+            if (blendEnable is { } blend)
+                passProperties.Add(new BinTreeBool(F("blendEnable"), blend));
+            if (sourceBlendFactor is { } source)
+                passProperties.Add(new BinTreeU32(F("srcColorBlendFactor"), (uint)source));
+            if (destinationBlendFactor is { } destination)
+                passProperties.Add(new BinTreeU32(F("dstColorBlendFactor"), (uint)destination));
+            var pass = new BinTreeStruct(0, PassClass, passProperties);
             var technique = new BinTreeStruct(0, TechClass, new BinTreeProperty[]
             {
                 new BinTreeString(F("name"), "normal"),
