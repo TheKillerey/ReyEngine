@@ -2,6 +2,7 @@ using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Meta;
 
 namespace ReyEngine.Formats.Tests;
 
@@ -52,5 +53,35 @@ public sealed class MaterialMacroEditingTests
         var persisted = Assert.Single(reparsed.Materials).AllMacros.Single();
         Assert.Equal(MaterialBinding.MacroNoBakedLighting, persisted.Name);
         Assert.True(persisted.On);
+
+        var savedTree = new BinTree(new MemoryStream(document.Serialize(), writable: false));
+        var savedMaterial = Assert.Single(savedTree.Objects).Value;
+        Assert.IsType<BinTreeMap>(savedMaterial.Properties[H("shaderMacros")]);
+        Assert.False(savedMaterial.Properties.ContainsKey(HashAlgorithms.Fnv1aRaw("shaderMacros")));
+    }
+
+    [Fact]
+    public void EditingLegacyRawHashedMacroMapMovesItToTheCanonicalSchemaField()
+    {
+        uint rawField = HashAlgorithms.Fnv1aRaw("shaderMacros");
+        var macro = new KeyValuePair<BinTreeProperty, BinTreeProperty>(
+            new BinTreeString(0, MaterialBinding.MacroNoBakedLighting), new BinTreeString(0, "0"));
+        var material = new BinTreeObject(H("Maps/Test/RawMacro"), H("StaticMaterialDef"), new BinTreeProperty[]
+        {
+            new BinTreeString(H("name"), "Maps/Test/RawMacro"),
+            new BinTreeMap(rawField, BinPropertyType.String, BinPropertyType.String, new[] { macro }),
+        });
+        using var stream = new MemoryStream();
+        new BinTree(new[] { material }, Array.Empty<string>()).Write(stream);
+        string? Resolve(uint hash) => hash == H("StaticMaterialDef") ? "StaticMaterialDef" : null;
+
+        var document = MaterialDocument.Parse(stream.ToArray(), Resolve);
+        var binding = Assert.Single(document.Materials);
+        Assert.NotNull(binding.SetMacro(MaterialBinding.MacroNoBakedLighting, true));
+
+        var savedMaterial = Assert.Single(SafeBinTree.Parse(document.Serialize()).Objects).Value;
+        var savedMap = Assert.IsType<BinTreeMap>(savedMaterial.Properties[H("shaderMacros")]);
+        Assert.False(savedMaterial.Properties.ContainsKey(rawField));
+        Assert.Equal("1", Assert.IsType<BinTreeString>(Assert.Single(savedMap).Value).Value);
     }
 }

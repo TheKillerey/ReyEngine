@@ -568,13 +568,34 @@ public sealed class MaterialBinding
     public MaterialMacro? SetMacroValue(string name, string value)
     {
         if (string.IsNullOrWhiteSpace(name)) return null;
+        uint canonicalField = HashAlgorithms.Fnv1a("shaderMacros");
+        uint rawField = HashAlgorithms.Fnv1aRaw("shaderMacros");
         if (_macroMap is null)
         {
             if (MaterialObject is null) return null;
-            uint field = HashAlgorithms.Fnv1aRaw("shaderMacros");
-            _macroMap = new BinTreeMap(field, BinPropertyType.String, BinPropertyType.String,
+            _macroMap = new BinTreeMap(canonicalField, BinPropertyType.String, BinPropertyType.String,
                 Array.Empty<KeyValuePair<BinTreeProperty, BinTreeProperty>>());
-            MaterialObject.Properties[field] = _macroMap;
+            MaterialObject.Properties[canonicalField] = _macroMap;
+            _structurallyEdited = true;
+        }
+        else if (MaterialObject is not null && rawField != canonicalField
+                 && MaterialObject.Properties.TryGetValue(rawField, out var rawProperty)
+                 && ReferenceEquals(rawProperty, _macroMap))
+        {
+            // BIN field hashes are lowercase FNV-1a. M348 accidentally authored this optional camel-case
+            // field with case-sensitive FNV when a material had no macro map yet. Riot displays the raw
+            // hash and can reject the StaticMaterialDef while loading. Preserve its entries but move the
+            // map onto the canonical schema field the first time it is edited.
+            if (MaterialObject.Properties.TryGetValue(canonicalField, out var canonicalProperty)
+                && canonicalProperty is BinTreeMap canonicalMap)
+                _macroMap = canonicalMap;
+            else
+            {
+                _macroMap = new BinTreeMap(canonicalField, BinPropertyType.String, BinPropertyType.String,
+                    _macroMap.ToArray());
+                MaterialObject.Properties[canonicalField] = _macroMap;
+            }
+            MaterialObject.Properties.Remove(rawField);
             _structurallyEdited = true;
         }
         value = string.IsNullOrWhiteSpace(value) ? "0" : value.Trim();
@@ -654,15 +675,27 @@ public sealed class MaterialBinding
     public bool SetPassBool(string field, bool value)
     {
         if (PassStruct is null) return false;
-        switch (FindProp(PassStruct, field))
+        uint canonical = HashAlgorithms.Fnv1a(field);
+        uint raw = HashAlgorithms.Fnv1aRaw(field);
+        PassStruct.Properties.TryGetValue(canonical, out var property);
+        if (property is null && raw != canonical)
+            PassStruct.Properties.TryGetValue(raw, out property);
+        switch (property)
         {
             case BinTreeBool b: b.Value = value; break;
             case BinTreeBitBool bb: bb.Value = value; break;
             default:
-                uint h = HashAlgorithms.Fnv1aRaw(field);
-                PassStruct.Properties[h] = new BinTreeBool(h, value);
+                property = new BinTreeBool(canonical, value);
                 break;
         }
+        if (property.NameHash != canonical)
+            property = property switch
+            {
+                BinTreeBitBool => new BinTreeBitBool(canonical, value),
+                _ => new BinTreeBool(canonical, value),
+            };
+        PassStruct.Properties[canonical] = property;
+        if (raw != canonical) PassStruct.Properties.Remove(raw);
         _structurallyEdited = true;
         return true;
     }
@@ -680,15 +713,27 @@ public sealed class MaterialBinding
     public bool SetPassU32(string field, uint value)
     {
         if (PassStruct is null) return false;
-        switch (FindProp(PassStruct, field))
+        uint canonical = HashAlgorithms.Fnv1a(field);
+        uint raw = HashAlgorithms.Fnv1aRaw(field);
+        PassStruct.Properties.TryGetValue(canonical, out var property);
+        if (property is null && raw != canonical)
+            PassStruct.Properties.TryGetValue(raw, out property);
+        switch (property)
         {
             case BinTreeU32 u: u.Value = value; break;
             case BinTreeU8 b when value <= byte.MaxValue: b.Value = (byte)value; break;
             default:
-                uint h = HashAlgorithms.Fnv1aRaw(field);
-                PassStruct.Properties[h] = new BinTreeU32(h, value);
+                property = new BinTreeU32(canonical, value);
                 break;
         }
+        if (property.NameHash != canonical)
+            property = property switch
+            {
+                BinTreeU8 when value <= byte.MaxValue => new BinTreeU8(canonical, (byte)value),
+                _ => new BinTreeU32(canonical, value),
+            };
+        PassStruct.Properties[canonical] = property;
+        if (raw != canonical) PassStruct.Properties.Remove(raw);
         _structurallyEdited = true;
         return true;
     }

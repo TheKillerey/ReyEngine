@@ -6,6 +6,7 @@ using ReyEngine.Core.Assets;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Undo;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Meta;
 using ReyEngine.Formats.Shaders;
 
 namespace ReyEngine.Formats.Tests;
@@ -207,6 +208,49 @@ public class MaterialShaderConverterTests
         Assert.Equal(Vector4.One, VectorValue(Assert.Single(saved.Parameters)));
         Assert.True(saved.Switches["USE_VERTEX_COLOR"]);
         Assert.Equal("1", saved.Macros[MaterialBinding.MacroNoBakedLighting]);
+    }
+
+    [Fact]
+    public void Newly_authored_render_state_uses_canonical_bin_field_hashes_and_repairs_old_raw_hashes()
+    {
+        const string name = "render_state_hash_test";
+        uint rawBlend = HashAlgorithms.Fnv1aRaw("blendEnable");
+        uint rawDst = HashAlgorithms.Fnv1aRaw("dstColorBlendFactor");
+        var pass = new BinTreeStruct(0, PassClass, new BinTreeProperty[]
+        {
+            new BinTreeObjectLink(H("shader"), H(SourceShader)),
+            new BinTreeBool(rawBlend, true),
+            new BinTreeU32(rawDst, 1),
+        });
+        var technique = new BinTreeStruct(0, TechniqueClass, new BinTreeProperty[]
+        {
+            new BinTreeContainer(H("passes"), BinPropertyType.Struct, new BinTreeProperty[] { pass }),
+        });
+        using var stream = new MemoryStream();
+        new BinTree(new[]
+        {
+            new BinTreeObject(H(name), MaterialClass, new BinTreeProperty[]
+            {
+                new BinTreeString(H("name"), name),
+                new BinTreeContainer(H("techniques"), BinPropertyType.Struct,
+                    new BinTreeProperty[] { technique }),
+            }),
+        }, Array.Empty<string>()).Write(stream);
+
+        var document = MaterialDocument.Parse(stream.ToArray(), Resolve);
+        var material = Assert.Single(document.Materials);
+        Assert.True(material.SetPassBool("blendEnable", false));
+        Assert.True(material.SetPassU32("dstColorBlendFactor", 7));
+
+        var savedObject = SafeBinTree.Parse(document.Serialize()).Objects[H(name)];
+        var savedTechnique = Assert.Single(Assert.IsType<BinTreeContainer>(
+            savedObject.Properties[H("techniques")]).Elements.OfType<BinTreeStruct>());
+        var savedPass = Assert.Single(Assert.IsType<BinTreeContainer>(
+            savedTechnique.Properties[H("passes")]).Elements.OfType<BinTreeStruct>());
+        Assert.False(Assert.IsType<BinTreeBool>(savedPass.Properties[H("blendEnable")]).Value);
+        Assert.Equal(7u, Assert.IsType<BinTreeU32>(savedPass.Properties[H("dstColorBlendFactor")]).Value);
+        Assert.False(savedPass.Properties.ContainsKey(rawBlend));
+        Assert.False(savedPass.Properties.ContainsKey(rawDst));
     }
 
     [Fact]
