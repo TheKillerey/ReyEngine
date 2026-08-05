@@ -43,7 +43,8 @@ public sealed record LegacyMeshCleanupResult(
     int RemovedMeshCount,
     int RemovedBushMeshCount,
     int RetainedOriginalMeshCount,
-    int PreservedRenderRegionMeshCount);
+    int PreservedRenderRegionMeshCount,
+    int RemovedSubmeshCount = 0);
 
 public sealed record LegacyTextureCopy(string SourcePath, string TargetPath, byte[] Bytes);
 
@@ -115,7 +116,7 @@ public static class LegacyMapPorter
         int originalCount = Math.Clamp(result.DestinationMeshCount, 0, map.Meshes.Count);
         bushMaterials ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var retained = new List<MapGeoBinary.Mesh>(map.Meshes.Count);
-        int removedMeshes = 0, removedBushes = 0, retainedOriginal = 0, renderRegions = 0;
+        int removedMeshes = 0, removedBushes = 0, removedSubmeshes = 0, retainedOriginal = 0, renderRegions = 0;
         for (int i = 0; i < map.Meshes.Count; i++)
         {
             var mesh = map.Meshes[i];
@@ -130,11 +131,33 @@ public static class LegacyMapPorter
             // when bush deletion was disabled, duplicating those meshes on every pass.
             if (IsPreviousLegacyImport(mesh)) { removedMeshes++; continue; }
 
-            bool bush = mesh.Submeshes.Any(submesh => bushMaterials.Contains(submesh.Material))
-                || mesh.Submeshes.Any(submesh => LooksLikeBushMaterial(submesh.Material));
-            bool remove = bush ? options.RemoveOriginalBushes : options.RemoveOriginalMeshes;
-            if (!remove) { retained.Add(mesh); retainedOriginal++; continue; }
-            if (bush) removedBushes++; else removedMeshes++;
+            // Riot frequently batches unlike materials into one mapgeo mesh. Jade, for example, combines
+            // Order terrain and VertexDeform foliage in the same record. Classifying at mesh level retained
+            // the terrain merely because another submesh was a bush. Filter the draw ranges independently;
+            // unused indices/vertices may remain in the shared buffers but cannot render.
+            if (mesh.Submeshes.Count == 0)
+            {
+                if (options.RemoveOriginalMeshes) removedMeshes++;
+                else { retained.Add(mesh); retainedOriginal++; }
+                continue;
+            }
+            var keptSubmeshes = mesh.Submeshes.Where(submesh =>
+            {
+                bool bush = bushMaterials.Contains(submesh.Material) || LooksLikeBushMaterial(submesh.Material);
+                return !(bush ? options.RemoveOriginalBushes : options.RemoveOriginalMeshes);
+            }).ToList();
+            removedSubmeshes += mesh.Submeshes.Count - keptSubmeshes.Count;
+            if (keptSubmeshes.Count > 0)
+            {
+                mesh.Submeshes = keptSubmeshes;
+                retained.Add(mesh);
+                retainedOriginal++;
+                continue;
+            }
+
+            bool wasBushOnly = mesh.Submeshes.Count > 0 && mesh.Submeshes.All(submesh =>
+                bushMaterials.Contains(submesh.Material) || LooksLikeBushMaterial(submesh.Material));
+            if (wasBushOnly) removedBushes++; else removedMeshes++;
         }
 
         map.Meshes = retained;
@@ -145,7 +168,7 @@ public static class LegacyMapPorter
         int verifiedRegions = verified.Meshes.Count(mesh => mesh.RegionHash != 0);
         if (verifiedRegions != renderRegions)
             throw new InvalidDataException($"Render-region verification failed: retained {verifiedRegions} of {renderRegions} meshes.");
-        return new LegacyMeshCleanupResult(cleaned, removedMeshes, removedBushes, retainedOriginal, renderRegions);
+        return new LegacyMeshCleanupResult(cleaned, removedMeshes, removedBushes, retainedOriginal, renderRegions, removedSubmeshes);
     }
 
     /// <summary>Count destination bushes using the same material-aware classification used by cleanup.</summary>

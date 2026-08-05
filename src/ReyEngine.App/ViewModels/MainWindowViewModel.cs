@@ -6560,7 +6560,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Success("Legacy Port", $"{result.SourceFormat} port complete: {result.ImportedMeshCount:n0} meshes, " +
                 $"{result.Textures.Count:n0} unique textures, {created:n0} material(s) created, {updated:n0} updated; " +
                 $"removed {meshCleanup.RemovedMeshCount:n0} destination meshes + {meshCleanup.RemovedBushMeshCount:n0} bushes, " +
-                $"{removedPlacements:n0} placements, and {removedMaterials:n0} unused materials; " +
+                $"{meshCleanup.RemovedSubmeshCount:n0} material ranges, {removedPlacements:n0} placements, " +
+                $"and {removedMaterials:n0} unused materials; " +
                 $"rebuilt {replacedGenerated:n0} earlier legacy material(s), retained {meshCleanup.RetainedOriginalMeshCount:n0} " +
                 $"selected destination meshes, and protected {result.PreservedRenderRegionMeshCount:n0} render-region meshes.");
             if (TryResolveEntry(mapEntry.PathHash, out var reloaded)) await LoadMapGeoAsync(reloaded);
