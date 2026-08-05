@@ -86,9 +86,10 @@ public static class LegacyMapPorter
     public const string DecalShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest";
     public const string GrassShader = "Shaders/StaticMesh/VertexDeform";
     public const string TerrainShader = "Shaders/StaticMesh/4TextureBlend_WorldProjected";
-    /// <summary>World-space correction from the legacy map anchor (1876.810, 48.144, 7264.247)
-    /// to the modern anchor (2349.930, -18.828, 7502.003).</summary>
-    public static readonly Vector3 LegacyPositionCorrection = new(473.120f, -66.972f, 237.756f);
+    /// <summary>World-space correction measured in two passes: the initial legacy-to-modern alignment
+    /// (+473.120, -66.972, +237.756), then the final refinement from (7937.367, -22.399, 2010.147)
+    /// to (8064.653, -22.399, 2066.135), or (+127.286, 0, +55.988).</summary>
+    public static readonly Vector3 LegacyPositionCorrection = new(600.406f, -66.972f, 293.744f);
     private const int MaxVertices = 65535;
     private static readonly IReadOnlySet<string> JadeContainerBushMaterials = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {

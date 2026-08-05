@@ -59,7 +59,7 @@
             <TextBlock Classes="cardTitle" Text="IMPORTED MAP ALIGNMENT" Foreground="#73A7FF" />
             <CheckBox Content="Fix legacy map position automatically" IsChecked="{Binding FixImportedMapPosition}"
                       FontSize="11" FontWeight="SemiBold" />
-            <TextBlock Text="Moves only the imported NVR/WGEO geometry by X +473.120, Y -66.972, Z +237.756 (legacy anchor 1876.810 / 48.144 / 7264.247 to modern anchor 2349.930 / -18.828 / 7502.003). Destination render regions, retained bushes, mobs, particles and sounds are not moved."
+            <TextBlock Text="Moves only the imported NVR/WGEO geometry by the final measured correction: X +600.406, Y -66.972, Z +293.744. This includes the additional refinement from 7937.367 / -22.399 / 2010.147 to 8064.653 / -22.399 / 2066.135. Destination render regions, retained bushes, mobs, particles and sounds are not moved."
                        FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
           </StackPanel>
         </Border>

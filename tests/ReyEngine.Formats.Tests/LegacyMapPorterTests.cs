@@ -5,16 +5,17 @@ namespace ReyEngine.Formats.Tests;
 public sealed class LegacyMapPorterTests
 {
     [Fact]
-    public void LegacyPositionCorrectionMatchesMeasuredAnchorDifference()
+    public void LegacyPositionCorrectionIncludesFinalMeasuredRefinement()
     {
-        var before = new System.Numerics.Vector3(1876.810f, 48.144f, 7264.247f);
-        var after = new System.Numerics.Vector3(2349.930f, -18.828f, 7502.003f);
+        var initialCorrection = new System.Numerics.Vector3(473.120f, -66.972f, 237.756f);
+        var oldFixed = new System.Numerics.Vector3(7937.367f, -22.399f, 2010.147f);
+        var newFixed = new System.Numerics.Vector3(8064.653f, -22.399f, 2066.135f);
 
-        var corrected = before + LegacyMapPorter.LegacyPositionCorrection;
+        var expected = initialCorrection + (newFixed - oldFixed);
 
-        Assert.Equal(after.X, corrected.X, 3);
-        Assert.Equal(after.Y, corrected.Y, 3);
-        Assert.Equal(after.Z, corrected.Z, 3);
+        Assert.Equal(expected.X, LegacyMapPorter.LegacyPositionCorrection.X, 3);
+        Assert.Equal(expected.Y, LegacyMapPorter.LegacyPositionCorrection.Y, 3);
+        Assert.Equal(expected.Z, LegacyMapPorter.LegacyPositionCorrection.Z, 3);
     }
 
     [Fact]
