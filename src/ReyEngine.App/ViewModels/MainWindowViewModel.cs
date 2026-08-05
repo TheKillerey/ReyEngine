@@ -4449,7 +4449,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (entry.Type is not AssetType.SkinnedMesh) ClearViewport();
         if (entry.Type != AssetType.Bin) BinEditor.Clear();
         HasInspectorBody = entry.Type is AssetType.SkinnedMesh or AssetType.StaticMesh or AssetType.MapGeometry or AssetType.Bin;
-        InspectorTab = entry.Type == AssetType.Bin ? 2 : 0;
+        // M351g: the Raw BIN Tree tab is gone (index 2). A materials bin still lands on the Materials
+        // tab via the dedicated path below; everything else opens on Overview.
+        InspectorTab = 0;
         if (!HasInspectorBody)
         {
             MaterialEditor.Clear();

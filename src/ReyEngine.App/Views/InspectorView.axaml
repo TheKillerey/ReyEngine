@@ -164,73 +164,6 @@
                         <TextBlock Text="{Binding MaterialEditor.MeshFilterLabel}" FontSize="10"
                                    Foreground="{DynamicResource ReyAccent2Brush}" TextWrapping="Wrap" />
                       </Border>
-                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6,4">
-                        <StackPanel Spacing="2">
-                          <TextBlock Text="SHADER BINDING" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
-                          <!-- M103: which client's shader list the dropdowns offer (Live / PBE differ) -->
-                          <Grid ColumnDefinitions="Auto,*" Margin="0,2">
-                            <TextBlock Grid.Column="0" Text="Environment" FontSize="10" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
-                            <ComboBox Grid.Column="1" ItemsSource="{Binding MaterialEditor.ShaderEnvironments}"
-                                      SelectedItem="{Binding MaterialEditor.SelectedShaderEnvironment}"
-                                      FontSize="10" HorizontalAlignment="Stretch"
-                                      ToolTip.Tip="Which League install the shader list is read from" />
-                          </Grid>
-                          <TextBlock Text="{Binding MaterialEditor.CatalogStatus}" FontSize="10" TextWrapping="Wrap"
-                                     Foreground="{DynamicResource ReyAccentBrush}" />
-                          <TextBlock Text="{Binding ShaderDbStatus}" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-                          <TextBlock Text="The sampler slots below are the material's bound textures (required samplers). Switch the viewport to 'Riot Approx' to preview." FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                      </Border>
-                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6">
-                        <StackPanel Spacing="5">
-                          <TextBlock Text="BULK MATERIAL SETUP" FontSize="10" FontWeight="SemiBold"
-                                     Foreground="{DynamicResource ReyTextDimBrush}" />
-                          <TextBlock Text="Apply each shader's most-used shipped Riot parameters, switches, macros and render state to every material in the currently loaded file. This ignores the selected-mesh filter and preserves all texture paths."
-                                     FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
-                          <Button Classes="tool" Content="Apply Riot setups to all loaded materials"
-                                  Command="{Binding MaterialEditor.ApplyCommonSetupsToAllCommand}"
-                                  IsEnabled="{Binding MaterialEditor.CanApplyCommonSetupsToAll}"
-                                  HorizontalAlignment="Stretch" />
-                          <TextBlock Text="{Binding MaterialEditor.BulkCommonSetupStatus}" FontSize="9"
-                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
-                                     IsVisible="{Binding MaterialEditor.BulkCommonSetupStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        </StackPanel>
-                      </Border>
-                      <!-- M335: whole-document shader conversion. This intentionally ignores the selected-
-                           mesh filter: every material using the source shader must change together. -->
-                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6">
-                        <StackPanel Spacing="5">
-                          <TextBlock Text="BULK SHADER REPLACE" FontSize="10" FontWeight="SemiBold"
-                                     Foreground="{DynamicResource ReyTextDimBrush}" />
-                          <TextBlock Text="Replace the shader on every matching material in this map. Compatible authored values are kept; missing target samplers use a matching texture or the shader default."
-                                     FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
-                          <Grid ColumnDefinitions="72,*" RowDefinitions="Auto,Auto" RowSpacing="4">
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="From" FontSize="10"
-                                       VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
-                            <ComboBox Grid.Row="0" Grid.Column="1"
-                                      ItemsSource="{Binding MaterialEditor.UsedShaders}"
-                                      SelectedItem="{Binding MaterialEditor.BulkSourceShader, Mode=TwoWay}"
-                                      FontSize="10" HorizontalAlignment="Stretch" />
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="To" FontSize="10"
-                                       VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
-                            <AutoCompleteBox Grid.Row="1" Grid.Column="1"
-                                             Text="{Binding MaterialEditor.BulkTargetShader, Mode=TwoWay}"
-                                             ItemsSource="{Binding MaterialEditor.KnownShaders}" FilterMode="Contains"
-                                             Watermark="Shaders/StaticMesh/..." FontSize="10" />
-                          </Grid>
-                          <TextBlock Text="{Binding MaterialEditor.BulkShaderSummary}" FontSize="9"
-                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
-                          <Button Classes="tool" Content="Replace all matching materials"
-                                  Command="{Binding MaterialEditor.BulkReplaceShaderCommand}"
-                                  IsEnabled="{Binding MaterialEditor.CanBulkReplaceShader}"
-                                  HorizontalAlignment="Stretch"
-                                  ToolTip.Tip="Changes the live material document as one undoable operation. Review it in the viewport, then use Save To Override." />
-                          <TextBlock Text="{Binding MaterialEditor.BulkShaderStatus}" FontSize="9"
-                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
-                                     IsVisible="{Binding MaterialEditor.BulkShaderStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        </StackPanel>
-                      </Border>
                       <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6" IsVisible="{Binding MaterialEditor.HasUnresolved}">
                         <TextBlock Text="⚠ Some texture paths don't resolve in this WAD — see the ⚠ slots below." Foreground="#FFB454" FontSize="11" TextWrapping="Wrap" />
                       </Border>
@@ -603,64 +536,83 @@
                   </ScrollViewer>
                 </TabItem>
 
-                <!-- RAW BIN TREE TAB -->
-                <TabItem FontSize="12" IsVisible="{Binding BinEditor.HasBin}">
-                  <TabItem.Header><TextBlock Text="Raw BIN Tree" FontSize="12" /></TabItem.Header>
 
-              <!-- bin editor (M7). M351d: was the one tab with no card at all - a bare stack behind a
-                   hand-drawn 1px rule, with its title styled inline instead of as a cardTitle. -->
-              <Border Classes="card" Margin="0,8,0,0" IsVisible="{Binding BinEditor.HasBin}">
-              <StackPanel Spacing="6">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Classes="cardTitle" Text="BIN EDITOR" VerticalAlignment="Center" />
-                  <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center"
-                           IsVisible="{Binding BinEditor.IsDirty}" ToolTip.Tip="Unsaved edits" />
-                </StackPanel>
-                <TextBlock Text="{Binding BinEditor.Summary}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
-                <TextBox Watermark="Filter field names…" Text="{Binding BinEditor.Filter}" FontSize="11" Padding="4,2" />
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                  <Button Classes="tool" Content="Revert File" Command="{Binding BinEditor.RevertFileCommand}" />
-                  <Button Classes="tool" Content="Save To Override" Command="{Binding SaveBinToOverrideCommand}" />
-                  <Button Classes="tool" Content="Export BIN…" Command="{Binding ExportEditedBinCommand}" />
-                </StackPanel>
-                <TreeView ItemsSource="{Binding BinEditor.Roots}" Background="Transparent" BorderThickness="0" MaxHeight="560">
-                  <TreeView.ItemTemplate>
-                    <TreeDataTemplate ItemsSource="{Binding Children}">
-                      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsVisible}">
-                        <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextBrush}"
-                                   FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding TypeName}" Foreground="{DynamicResource ReyTextDimBrush}"
-                                   FontSize="10" VerticalAlignment="Center" IsVisible="{Binding IsBranch}" />
-                        <!-- editable primitive -->
-                        <StackPanel Orientation="Horizontal" Spacing="3" IsVisible="{Binding IsEditable}">
-                          <TextBox Text="{Binding EditedText}" MinWidth="150" FontSize="11" Padding="4,1"
-                                   FontFamily="Cascadia Mono, Consolas, monospace">
-                            <TextBox.KeyBindings>
-                              <KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" />
-                            </TextBox.KeyBindings>
-                          </TextBox>
-                          <Button Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" ToolTip.Tip="Apply edit" />
-                          <Button Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" ToolTip.Tip="Revert field" />
-                          <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
-                          <TextBlock Text="{Binding ErrorText}" Foreground="#FF6B6B" FontSize="10" VerticalAlignment="Center" IsVisible="{Binding HasError}" />
+                <!-- M351h: SHADERS TAB. The environment selector, bulk material setup and bulk
+                     shader replace act on the WHOLE document; they sat above the per-material
+                     editor and pushed the actual editing below the fold on every visit. -->
+                <TabItem FontSize="12" IsVisible="{Binding HasMaterialData}">
+                  <TabItem.Header><TextBlock Text="Shaders" FontSize="12" /></TabItem.Header>
+                  <ScrollViewer>
+                    <StackPanel Spacing="8" Margin="0,8,4,0">
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6,4">
+                        <StackPanel Spacing="2">
+                          <TextBlock Text="SHADER BINDING" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <!-- M103: which client's shader list the dropdowns offer (Live / PBE differ) -->
+                          <Grid ColumnDefinitions="Auto,*" Margin="0,2">
+                            <TextBlock Grid.Column="0" Text="Environment" FontSize="10" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding MaterialEditor.ShaderEnvironments}"
+                                      SelectedItem="{Binding MaterialEditor.SelectedShaderEnvironment}"
+                                      FontSize="10" HorizontalAlignment="Stretch"
+                                      ToolTip.Tip="Which League install the shader list is read from" />
+                          </Grid>
+                          <TextBlock Text="{Binding MaterialEditor.CatalogStatus}" FontSize="10" TextWrapping="Wrap"
+                                     Foreground="{DynamicResource ReyAccentBrush}" />
+                          <TextBlock Text="{Binding ShaderDbStatus}" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                          <TextBlock Text="The sampler slots below are the material's bound textures (required samplers). Switch the viewport to 'Riot Approx' to preview." FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
                         </StackPanel>
-                        <!-- read-only leaf value -->
-                        <TextBlock Text="{Binding OriginalText}" Foreground="{DynamicResource ReyAccentBrush}"
-                                   FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" VerticalAlignment="Center"
-                                   IsVisible="{Binding IsReadOnlyValue}" />
-                        <StackPanel.ContextMenu>
-                          <ContextMenu>
-                            <MenuItem Header="Copy Field Path" Command="{Binding CopyPathCommand}" />
-                            <MenuItem Header="Copy Field Hash" Command="{Binding CopyHashCommand}" />
-                            <MenuItem Header="Copy Value" Command="{Binding CopyValueCommand}" />
-                          </ContextMenu>
-                        </StackPanel.ContextMenu>
-                      </StackPanel>
-                    </TreeDataTemplate>
-                  </TreeView.ItemTemplate>
-                </TreeView>
-              </StackPanel>
-              </Border>
+                      </Border>
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6">
+                        <StackPanel Spacing="5">
+                          <TextBlock Text="BULK MATERIAL SETUP" FontSize="10" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <TextBlock Text="Apply each shader's most-used shipped Riot parameters, switches, macros and render state to every material in the currently loaded file. This ignores the selected-mesh filter and preserves all texture paths."
+                                     FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <Button Classes="tool" Content="Apply Riot setups to all loaded materials"
+                                  Command="{Binding MaterialEditor.ApplyCommonSetupsToAllCommand}"
+                                  IsEnabled="{Binding MaterialEditor.CanApplyCommonSetupsToAll}"
+                                  HorizontalAlignment="Stretch" />
+                          <TextBlock Text="{Binding MaterialEditor.BulkCommonSetupStatus}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
+                                     IsVisible="{Binding MaterialEditor.BulkCommonSetupStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                      </Border>
+                      <!-- M335: whole-document shader conversion. This intentionally ignores the selected-
+                           mesh filter: every material using the source shader must change together. -->
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6">
+                        <StackPanel Spacing="5">
+                          <TextBlock Text="BULK SHADER REPLACE" FontSize="10" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <TextBlock Text="Replace the shader on every matching material in this map. Compatible authored values are kept; missing target samplers use a matching texture or the shader default."
+                                     FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <Grid ColumnDefinitions="72,*" RowDefinitions="Auto,Auto" RowSpacing="4">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="From" FontSize="10"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <ComboBox Grid.Row="0" Grid.Column="1"
+                                      ItemsSource="{Binding MaterialEditor.UsedShaders}"
+                                      SelectedItem="{Binding MaterialEditor.BulkSourceShader, Mode=TwoWay}"
+                                      FontSize="10" HorizontalAlignment="Stretch" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="To" FontSize="10"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <AutoCompleteBox Grid.Row="1" Grid.Column="1"
+                                             Text="{Binding MaterialEditor.BulkTargetShader, Mode=TwoWay}"
+                                             ItemsSource="{Binding MaterialEditor.KnownShaders}" FilterMode="Contains"
+                                             Watermark="Shaders/StaticMesh/..." FontSize="10" />
+                          </Grid>
+                          <TextBlock Text="{Binding MaterialEditor.BulkShaderSummary}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                          <Button Classes="tool" Content="Replace all matching materials"
+                                  Command="{Binding MaterialEditor.BulkReplaceShaderCommand}"
+                                  IsEnabled="{Binding MaterialEditor.CanBulkReplaceShader}"
+                                  HorizontalAlignment="Stretch"
+                                  ToolTip.Tip="Changes the live material document as one undoable operation. Review it in the viewport, then use Save To Override." />
+                          <TextBlock Text="{Binding MaterialEditor.BulkShaderStatus}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
+                                     IsVisible="{Binding MaterialEditor.BulkShaderStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                      </Border>
+                    </StackPanel>
+                  </ScrollViewer>
                 </TabItem>
               </TabControl>
               </Expander>
