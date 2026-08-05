@@ -1,0 +1,89 @@
+using ReyEngine.Formats.MapGeo;
+
+namespace ReyEngine.Formats.Tests;
+
+public sealed class LegacyMapPorterTests
+{
+    [Fact]
+    public void LegacyPositionCorrectionIncludesFinalMeasuredRefinement()
+    {
+        var initialCorrection = new System.Numerics.Vector3(473.120f, -66.972f, 237.756f);
+        var oldFixed = new System.Numerics.Vector3(7937.367f, -22.399f, 2010.147f);
+        var newFixed = new System.Numerics.Vector3(8064.653f, -22.399f, 2066.135f);
+
+        var expected = initialCorrection + (newFixed - oldFixed);
+
+        Assert.Equal(expected.X, LegacyMapPorter.LegacyPositionCorrection.X, 3);
+        Assert.Equal(expected.Y, LegacyMapPorter.LegacyPositionCorrection.Y, 3);
+        Assert.Equal(expected.Z, LegacyMapPorter.LegacyPositionCorrection.Z, 3);
+    }
+
+    [Fact]
+    public void JadeContainerUsesOnlyItsDefaultEnvGameplayBushMaterial()
+    {
+        var materials = LegacyMapPorter.MapSpecificBushMaterials(
+            "data/maps/mapgeometry/map453/jade_container.mapgeo");
+
+        Assert.NotNull(materials);
+        Assert.Equal("Maps/KitPieces/Jade/Base/Materials/Default/Jade_Foliage_Grass_AA_MAT",
+            Assert.Single(materials!));
+        Assert.Null(LegacyMapPorter.MapSpecificBushMaterials(
+            "data/maps/mapgeometry/map11/base_srx.mapgeo"));
+    }
+
+    [Fact]
+    public void AppliesUserShaderChoicesToEveryDetectedRole()
+    {
+        static LegacyMaterialPlan Plan(string name, LegacyMaterialRole role) => new(name, role, "old",
+            new Dictionary<string, string>(), new Dictionary<string, System.Numerics.Vector4>(),
+            new Dictionary<string, bool>(), new Dictionary<string, bool>());
+        var source = new LegacyMapPortResult(Array.Empty<byte>(), Array.Empty<LegacyTextureCopy>(), new[]
+        {
+            Plan("normal", LegacyMaterialRole.Normal), Plan("decal", LegacyMaterialRole.Decal),
+            Plan("grass", LegacyMaterialRole.Grass), Plan("terrain", LegacyMaterialRole.FourBlendTerrain),
+        }, "room.nvr", "NVR", 4, 4, 0, 0, 4, Array.Empty<string>());
+
+        var mapped = LegacyMapPorter.ApplyShaderOptions(source,
+            new LegacyPortShaderOptions("normal_shader", "decal_shader", "grass_shader", "terrain_shader"));
+
+        Assert.Equal("normal_shader", mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Normal).Shader);
+        Assert.Equal("decal_shader", mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Decal).Shader);
+        Assert.Equal("grass_shader", mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Grass).Shader);
+        Assert.Equal("terrain_shader", mapped.Materials.Single(m => m.Role == LegacyMaterialRole.FourBlendTerrain).Shader);
+    }
+
+    [Fact]
+    public void AlphaTestRolesDoNotAuthorUnavailableNoBakePermutation()
+    {
+        Assert.False(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.Decal));
+        Assert.False(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.Normal));
+        Assert.True(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.Grass));
+        Assert.True(LegacyMapPorter.UsesNoBakedLightingByDefault(LegacyMaterialRole.FourBlendTerrain));
+    }
+
+    [Fact]
+    public void ShaderMappingAuthorsNeutralTintAndUsefulAlphaCutoffs()
+    {
+        static LegacyMaterialPlan Plan(string name, LegacyMaterialRole role) => new(name, role, "old",
+            new Dictionary<string, string>(), new Dictionary<string, System.Numerics.Vector4>(),
+            new Dictionary<string, bool>(), new Dictionary<string, bool>());
+        var source = new LegacyMapPortResult(Array.Empty<byte>(), Array.Empty<LegacyTextureCopy>(), new[]
+        {
+            Plan("normal", LegacyMaterialRole.Normal), Plan("decal", LegacyMaterialRole.Decal),
+            Plan("grass", LegacyMaterialRole.Grass), Plan("terrain", LegacyMaterialRole.FourBlendTerrain),
+        }, "room.nvr", "NVR", 4, 4, 0, 0, 4, Array.Empty<string>());
+
+        var mapped = LegacyMapPorter.ApplyShaderOptions(source, LegacyPortShaderOptions.Defaults);
+
+        foreach (var material in mapped.Materials)
+            Assert.Equal(System.Numerics.Vector4.One, material.Parameters["TintColor"]);
+        Assert.Equal(0.35f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Normal)
+            .Parameters["AlphaTestValue"].X);
+        Assert.Equal(0.005f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Decal)
+            .Parameters["AlphaTestValue"].X);
+        Assert.Equal(0.01f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.FourBlendTerrain)
+            .Parameters["WS_Multiplier"].X);
+        Assert.DoesNotContain("NO_BAKED_LIGHTING",
+            mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Normal).Macros.Keys);
+    }
+}

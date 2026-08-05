@@ -35,6 +35,65 @@ public enum TexFormat : byte
 /// </summary>
 public static class TexWriter
 {
+    /// <summary>Wrap a block-compressed legacy DDS as a Riot TEX without decoding or recompressing it.
+    /// DXT1 maps directly to BC1 and DXT5 to BC3; both containers store identical block payloads, but
+    /// DDS orders mips largest-first while TEX orders them smallest-first. Returns false for other DDS
+    /// formats or incomplete mip chains so the caller can use the decode/encode fallback.</summary>
+    public static bool TryWrapDds(byte[] dds, out byte[] tex)
+    {
+        tex = Array.Empty<byte>();
+        if (dds.Length < 128 || dds[0] != 'D' || dds[1] != 'D' || dds[2] != 'S' || dds[3] != ' '
+            || BinaryPrimitives.ReadUInt32LittleEndian(dds.AsSpan(4, 4)) != 124) return false;
+
+        uint width32 = BinaryPrimitives.ReadUInt32LittleEndian(dds.AsSpan(16, 4));
+        uint height32 = BinaryPrimitives.ReadUInt32LittleEndian(dds.AsSpan(12, 4));
+        if (width32 is 0 or > ushort.MaxValue || height32 is 0 or > ushort.MaxValue) return false;
+        int width = (int)width32, height = (int)height32;
+        uint fourCc = BinaryPrimitives.ReadUInt32LittleEndian(dds.AsSpan(84, 4));
+        const uint Dxt1 = 0x31545844; // "DXT1"
+        const uint Dxt5 = 0x35545844; // "DXT5"
+        TexFormat format;
+        int blockBytes;
+        if (fourCc == Dxt1) { format = TexFormat.Bc1; blockBytes = 8; }
+        else if (fourCc == Dxt5) { format = TexFormat.Bc3; blockBytes = 16; }
+        else return false;
+
+        int mipCount = Math.Max(1, (int)BinaryPrimitives.ReadUInt32LittleEndian(dds.AsSpan(28, 4)));
+        int fullMipCount = 1;
+        for (int w = width, h = height; w > 1 || h > 1;)
+        {
+            w = Math.Max(1, w / 2); h = Math.Max(1, h / 2); fullMipCount++;
+        }
+        if (mipCount != 1 && mipCount != fullMipCount) return false;
+
+        var levels = new List<(int Offset, int Length)>(mipCount);
+        int sourceOffset = 128, total = 0, levelWidth = width, levelHeight = height;
+        for (int level = 0; level < mipCount; level++)
+        {
+            int blocksWide = Math.Max(1, (levelWidth + 3) / 4);
+            int blocksHigh = Math.Max(1, (levelHeight + 3) / 4);
+            int length = checked(blocksWide * blocksHigh * blockBytes);
+            if (sourceOffset > dds.Length - length) return false;
+            levels.Add((sourceOffset, length));
+            sourceOffset += length; total = checked(total + length);
+            levelWidth = Math.Max(1, levelWidth / 2); levelHeight = Math.Max(1, levelHeight / 2);
+        }
+
+        tex = new byte[12 + total];
+        tex[0] = (byte)'T'; tex[1] = (byte)'E'; tex[2] = (byte)'X';
+        BinaryPrimitives.WriteUInt16LittleEndian(tex.AsSpan(4), (ushort)width);
+        BinaryPrimitives.WriteUInt16LittleEndian(tex.AsSpan(6), (ushort)height);
+        tex[8] = 1; tex[9] = (byte)format; tex[11] = (byte)(mipCount > 1 ? 1 : 0);
+        int destinationOffset = 12;
+        for (int level = levels.Count - 1; level >= 0; level--)
+        {
+            var (offset, length) = levels[level];
+            dds.AsSpan(offset, length).CopyTo(tex.AsSpan(destinationOffset, length));
+            destinationOffset += length;
+        }
+        return true;
+    }
+
     /// <summary>M171: the format a .tex is ALREADY stored in, so a rewrite can preserve it. Without this
     /// every edited texture silently becomes BC3 — and 37.9% of Map11 is BC1, which would roughly double
     /// those files. Null when the bytes are not a TEX container or carry a format we cannot write

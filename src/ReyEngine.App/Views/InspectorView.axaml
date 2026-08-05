@@ -1,0 +1,646 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:ReyEngine.App.Views"
+             xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+             xmlns:conv="clr-namespace:ReyEngine.App.Converters"
+             x:Class="ReyEngine.App.Views.InspectorView"
+             x:DataType="vm:MainWindowViewModel"
+             x:CompileBindings="True">
+  <!-- M351a: the asset inspector, lifted verbatim out of MainWindow.axaml.
+
+       It was 581 lines nested eight levels deep in a 129 KB file, which is why it had drifted into a
+       list of fully-expanded materials rather than a real inspector. Moving it first, byte for byte,
+       keeps this commit a pure refactor - the redesign that follows is then reviewable on its own. -->
+              <!-- INSPECTOR TABS (M8): Overview / Materials / Raw BIN Tree — hidden by default (M50b);
+                   expand on demand, or automatically when a .materials.bin is opened. -->
+              <Expander IsExpanded="{Binding AssetDataExpanded, Mode=TwoWay}" IsVisible="{Binding HasInspectorBody}" FontSize="11" Margin="0,4,0,0">
+                <Expander.Header>
+                  <TextBlock Text="ASSET DATA · Overview / Materials / Raw BIN" FontSize="10" FontWeight="SemiBold"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                </Expander.Header>
+              <TabControl SelectedIndex="{Binding InspectorTab}" Padding="0">
+                <TabItem FontSize="12">
+                  <TabItem.Header><TextBlock Text="Overview" FontSize="12" /></TabItem.Header>
+                  <StackPanel Spacing="8" Margin="0,8,0,0">
+              <!-- M351f: Overview in the redesign language - each card is a chevron section
+                   (the M351e vocabulary), and the stats are labelled rows instead of the old
+                   preformatted monospace blobs. The facts were discrete in the view-model right
+                   up until a StringBuilder flattened them; now they stay rows all the way. -->
+              <Border Classes="card" IsVisible="{Binding MeshInspector.HasMesh}">
+                <Expander IsExpanded="True" FontSize="11">
+                  <Expander.Header><TextBlock Classes="cardTitle" Text="MESH" /></Expander.Header>
+                  <StackPanel Spacing="4" Margin="0,4,0,0">
+              <ItemsControl ItemsSource="{Binding MeshInspector.Rows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:StatRow">
+                    <Grid ColumnDefinitions="90,*" Margin="0,1">
+                      <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
+                                 FontFamily="Cascadia Mono, Consolas, monospace" TextWrapping="Wrap" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock Text="{Binding MeshInspector.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
+              <Button Classes="tool" Content="Assign Skeleton…" HorizontalAlignment="Left"
+                      Command="{Binding AssignSkeletonCommand}" />
+              <TextBlock Text="SUBMESHES / MATERIALS" FontSize="9" FontWeight="SemiBold" Margin="0,4,0,0"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+              <ItemsControl ItemsSource="{Binding MeshInspector.SubMeshRows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:StatRow">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,1">
+                      <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
+                                 TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" />
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" Margin="8,0,0,0"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+                  </StackPanel>
+                </Expander>
+              </Border>
+              <Border Classes="card" IsVisible="{Binding MeshInspector.HasMesh}">
+                <Expander IsExpanded="True" FontSize="11">
+                  <Expander.Header><TextBlock Classes="cardTitle" Text="ANIMATION" /></Expander.Header>
+                  <StackPanel Spacing="4" Margin="0,4,0,0">
+                <TextBlock Text="{Binding Animation.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
+
+                <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Select animation…"
+                          ItemsSource="{Binding Animation.Animations}"
+                          SelectedItem="{Binding Animation.SelectedAnimation, Mode=TwoWay}"
+                          IsVisible="{Binding Animation.HasAnimations}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate>
+                    <!-- M115: grouped by skin — the loaded skin's clips glow green, others carry a badge -->
+                    <Border CornerRadius="3" Padding="4,1" Margin="-2,0"
+                            Background="{Binding IsCurrentSkin, Converter={x:Static views:M115Converters.CurrentSkinBrush}}">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="11" VerticalAlignment="Center" />
+                        <Border Grid.Column="1" Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="3"
+                                Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding SkinGroup}" FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        </Border>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Classes="tool" Content="Assign Animation…" HorizontalAlignment="Left"
+                        Command="{Binding AssignAnimationCommand}" />
+
+                <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Animation.HasClip}">
+                  <Button Classes="tool" Content="◀|" Command="{Binding Animation.StepBackCommand}" />
+                  <Button Classes="tool" Content="Play / Pause" Command="{Binding Animation.TogglePlayCommand}" />
+                  <Button Classes="tool" Content="|▶" Command="{Binding Animation.StepForwardCommand}" />
+                  <CheckBox Content="Loop" IsChecked="{Binding Animation.Loop}" VerticalAlignment="Center" FontSize="11" />
+                </StackPanel>
+                <Slider Minimum="0" Maximum="{Binding Animation.Duration}" Value="{Binding Animation.Time, Mode=TwoWay}"
+                        IsVisible="{Binding Animation.HasClip}" />
+                <TextBlock Text="{Binding Animation.TimeText}" Foreground="{DynamicResource ReyTextDimBrush}"
+                           FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" IsVisible="{Binding Animation.HasClip}" />
+                <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding Animation.HasClip}">
+                  <TextBlock Text="Speed" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" />
+                  <Slider Minimum="0.1" Maximum="2" Value="{Binding Animation.Speed, Mode=TwoWay}" Width="130" />
+                  <TextBlock Text="{Binding Animation.Speed, StringFormat='{}{0:0.0}x'}" Foreground="{DynamicResource ReyTextBrush}" FontSize="11" VerticalAlignment="Center" />
+                </StackPanel>
+                  </StackPanel>
+                </Expander>
+              </Border>
+              <Border Classes="card" IsVisible="{Binding HasChampionVfx}">
+                <Expander IsExpanded="True" FontSize="11">
+                  <Expander.Header><TextBlock Classes="cardTitle" Text="CHAMPION VFX" /></Expander.Header>
+                  <StackPanel Spacing="4" Margin="0,4,0,0">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0" Text="Select an effect to play it at the model origin." VerticalAlignment="Center"
+                           Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" TextWrapping="Wrap" />
+                <Button Grid.Column="1" Classes="tool" Content="⏹ Stop" Command="{Binding StopChampionVfxCommand}" FontSize="10" Padding="8,1" />
+              </Grid>
+                <ListBox ItemsSource="{Binding ChampionVfxSystems}" SelectedItem="{Binding SelectedChampionVfx, Mode=TwoWay}"
+                         MaxHeight="220" Background="Transparent" FontSize="11">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Display}" TextTrimming="CharacterEllipsis" />
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                  </StackPanel>
+                </Expander>
+              </Border>
+              <Border Classes="card" IsVisible="{Binding MapGeoInspector.HasMap}">
+                <Expander IsExpanded="True" FontSize="11">
+                  <Expander.Header><TextBlock Classes="cardTitle" Text="MAP GEOMETRY" /></Expander.Header>
+                  <StackPanel Spacing="4" Margin="0,4,0,0">
+              <ItemsControl ItemsSource="{Binding MapGeoInspector.Rows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:StatRow">
+                    <Grid ColumnDefinitions="90,*" Margin="0,1">
+                      <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
+                                 FontFamily="Cascadia Mono, Consolas, monospace" TextWrapping="Wrap" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+                <TextBlock Text="{Binding MapGeoInspector.Warnings}" Foreground="{DynamicResource ReyAccent2Brush}"
+                           FontSize="11" TextWrapping="Wrap" IsVisible="{Binding MapGeoInspector.HasWarnings}" />
+                  </StackPanel>
+                </Expander>
+              </Border>
+                  </StackPanel>
+                </TabItem>
+
+                <!-- MATERIALS TAB (M90: no fixed height cap — flows with the window; the whole
+                     inspector scrolls, so a hard 680px cap just left dead space on tall windows) -->
+                <TabItem FontSize="12" IsVisible="{Binding HasMaterialData}">
+                  <TabItem.Header><TextBlock Text="Materials" FontSize="12" /></TabItem.Header>
+                  <ScrollViewer>
+                    <StackPanel Spacing="8" Margin="0,8,4,0">
+                      <TextBlock Text="{Binding MaterialEditor.Summary}" Foreground="{DynamicResource ReyTextBrush}" FontSize="12" FontWeight="SemiBold" />
+                      <!-- M101: the list is scoped to the selected mesh's materials -->
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6,3"
+                              IsVisible="{Binding MaterialEditor.HasMeshFilter}">
+                        <TextBlock Text="{Binding MaterialEditor.MeshFilterLabel}" FontSize="10"
+                                   Foreground="{DynamicResource ReyAccent2Brush}" TextWrapping="Wrap" />
+                      </Border>
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6" IsVisible="{Binding MaterialEditor.HasUnresolved}">
+                        <TextBlock Text="⚠ Some texture paths don't resolve in this WAD — see the ⚠ slots below." Foreground="#FFB454" FontSize="11" TextWrapping="Wrap" />
+                      </Border>
+                      <!-- M125: the tolerant reader had to repair this bin — red banner, details + fix in the Issues window -->
+                      <Border Background="#26FF5555" CornerRadius="4" Padding="6" IsVisible="{Binding MaterialEditor.HasBinIssues}">
+                        <DockPanel>
+                          <Button DockPanel.Dock="Right" Classes="tool" Content="View Issues"
+                                  Command="{Binding MaterialEditor.ShowIssuesCommand}" VerticalAlignment="Center"
+                                  ToolTip.Tip="Every repaired problem, where it lives, and a one-click fix" />
+                          <TextBlock Text="{Binding MaterialEditor.BinIssuesLabel}" Foreground="#FF7B72" FontSize="11"
+                                     TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                      </Border>
+                      <TextBox Watermark="Search materials / textures…" Text="{Binding MaterialEditor.Search}" FontSize="11" Padding="4,2" />
+                      <StackPanel Orientation="Horizontal" Spacing="10">
+                        <CheckBox Content="Only unresolved" IsChecked="{Binding MaterialEditor.OnlyUnresolved}" FontSize="11" />
+                        <CheckBox Content="Show modified only" IsChecked="{Binding MaterialEditor.ShowModifiedOnly}" FontSize="11"
+                                  ToolTip.Tip="Only materials with unsaved edits. Applied when you toggle it — the list is not re-filtered while you type, so a material does not jump out from under you as you edit it." />
+                        <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding MaterialEditor.IsDirty}" ToolTip.Tip="Unsaved edits" />
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Button Classes="tool" Content="Apply (preview)" Command="{Binding MaterialEditor.ApplyCommand}" />
+                        <CheckBox Content="Live" IsChecked="{Binding MaterialEditor.LivePreview}" FontSize="11" VerticalAlignment="Center"
+                                  ToolTip.Tip="Push every edit to the viewport automatically (debounced)" />
+                        <Button Classes="tool" Content="Save To Override" Command="{Binding MaterialEditor.SaveCommand}" />
+                        <Button Classes="tool" Content="Revert All" Command="{Binding MaterialEditor.RevertAllCommand}" />
+                      </StackPanel>
+
+                      <!-- M351e: the selector is a ComboBox ABOVE the detail (user feedback on the
+                           M351b side list), and the detail is flat sections in the mockup order -
+                           General / Samplers / Render State / Derived / Switches / Parameters /
+                           Advanced - instead of one nested stack. Every block inside the sections is
+                           the previous markup verbatim, so no editing capability is lost; pieces
+                           moved out of the shader group keep their CanChangeShader gate. -->
+                      <StackPanel Spacing="6">
+                        <Grid ColumnDefinitions="*,Auto">
+                          <ComboBox Grid.Column="0" HorizontalAlignment="Stretch" FontSize="11"
+                                    ItemsSource="{Binding MaterialEditor.FilteredMaterials}"
+                                    SelectedItem="{Binding MaterialEditor.SelectedMaterial}">
+                            <ComboBox.ItemTemplate>
+                              <DataTemplate x:DataType="vm:MaterialBindingViewModel">
+                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                  <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="11" VerticalAlignment="Center"
+                                             IsVisible="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}" />
+                                  <TextBlock Text="●" Foreground="{DynamicResource ReyAccent2Brush}" FontSize="10"
+                                             VerticalAlignment="Center" IsVisible="{Binding IsDirty}"
+                                             ToolTip.Tip="Modified — not saved to an override yet" />
+                                  <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
+                                             TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                                  <TextBlock Text="{Binding ShaderName}" FontSize="9" VerticalAlignment="Center"
+                                             Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                              </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                          </ComboBox>
+                          <TextBlock Grid.Column="1" Text="{Binding MaterialEditor.ListSummary}" FontSize="10"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                        </Grid>
+
+                        <ContentControl Content="{Binding MaterialEditor.SelectedMaterial}">
+                        <ContentControl.ContentTemplate>
+                          <DataTemplate x:DataType="vm:MaterialBindingViewModel">
+                            <Border Classes="card">
+                              <StackPanel Spacing="6">
+                                <!-- M351k: the material ball - a CPU-lit sphere sampling the diffuse through the UV
+                                     transform. Honest about scope: it shows texture, tiling and shape, not the Riot
+                                     shader; Riot Approx in the viewport stays the truth for that. -->
+                                <Grid ColumnDefinitions="Auto,*">
+                                  <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="6" Padding="4" VerticalAlignment="Top">
+                                    <Image Source="{Binding SpherePreview}" Width="96" Height="96" />
+                                  </Border>
+                                  <StackPanel Grid.Column="1" Spacing="5" Margin="10,0,0,0">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                  <!-- M125: red name + ⚠ when this material's bin object needed repairs -->
+                                  <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="12" VerticalAlignment="Center"
+                                             IsVisible="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}" />
+                                  <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"
+                                             Classes.issue="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}">
+                                    <TextBlock.Styles>
+                                      <Style Selector="TextBlock"><Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" /></Style>
+                                      <Style Selector="TextBlock.issue"><Setter Property="Foreground" Value="#FF7B72" /></Style>
+                                    </TextBlock.Styles>
+                                  </TextBlock>
+                                  <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                  <TextBlock Text="{Binding ShaderName}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" VerticalAlignment="Center" />
+                                  <TextBlock Text="{Binding AssignedTo, StringFormat='→ {0}'}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="10" VerticalAlignment="Center" IsVisible="{Binding HasAssignment}" />
+                                </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                      <Border Background="{DynamicResource ReyAccentBrush}" CornerRadius="3" Padding="5,1">
+                                        <TextBlock Text="{Binding ProfileLabel}" Foreground="#08221E" FontSize="9" FontWeight="SemiBold" />
+                                      </Border>
+                                      <TextBlock Text="{Binding FeatureSummary}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" VerticalAlignment="Center" />
+                                      <Border Background="#4D8A5AF0" CornerRadius="3" Padding="5,1" VerticalAlignment="Center" IsVisible="{Binding UsesSpecular}">
+                                        <TextBlock Text="SPECULAR" Foreground="{DynamicResource ReyTextBrush}" FontSize="8" FontWeight="SemiBold" />
+                                      </Border>
+                                      <TextBlock Text="⚠ profile unresolved" Foreground="#FFB454" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding ProfileUnresolved}" />
+                                    </StackPanel>
+                                  </StackPanel>
+                                </Grid>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="GENERAL" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                        <StackPanel IsVisible="{Binding CanChangeShader}">
+                                  <TextBlock Text="Shader" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                                  <Grid ColumnDefinitions="*,Auto">
+                                    <AutoCompleteBox Grid.Column="0" Text="{Binding EditedShader}" FontSize="10"
+                                                     ItemsSource="{Binding Owner.KnownShaders}" FilterMode="Contains"
+                                                     Watermark="Shaders/StaticMesh/…" />
+                                    <Button Grid.Column="1" Content="Set" Command="{Binding ApplyShaderCommand}" FontSize="10" Padding="7,1" Margin="3,0,0,0"
+                                            ToolTip.Tip="Switch to this shader and auto-add the sampler slots materials of that shader use" />
+                                  </Grid>
+                                  <TextBlock Text="{Binding ShaderChangeStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}"
+                                             TextWrapping="Wrap" IsVisible="{Binding ShaderChangeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                  <TextBlock Text="{Binding ShaderDefSummary}" FontSize="9" TextWrapping="Wrap"
+                                             Foreground="{DynamicResource ReyTextDimBrush}"
+                                             IsVisible="{Binding ShaderDefSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                                    <!-- M351j: texture settings. UV was a read-only line pointing at the parameter list; now the
+                                         scale/offset are edited here and written THROUGH the parameter machinery (undo, dirty,
+                                         live preview all behave as if the parameter row was edited by hand). -->
+                                    <StackPanel Spacing="2" IsVisible="{Binding CanEditUv}">
+                                      <Grid ColumnDefinitions="Auto,*,Auto,*,Auto" ColumnSpacing="4">
+                                        <TextBlock Grid.Column="0" Text="UV scale" FontSize="9" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                                        <TextBox Grid.Column="1" Text="{Binding UvScaleText}" FontSize="10" Padding="4,1" FontFamily="Cascadia Mono, Consolas, monospace">
+                                          <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyUvCommand}" /></TextBox.KeyBindings>
+                                        </TextBox>
+                                        <TextBlock Grid.Column="2" Text="offset" FontSize="9" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                                        <TextBox Grid.Column="3" Text="{Binding UvOffsetText}" FontSize="10" Padding="4,1" FontFamily="Cascadia Mono, Consolas, monospace">
+                                          <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyUvCommand}" /></TextBox.KeyBindings>
+                                        </TextBox>
+                                        <Button Grid.Column="4" Content="Set" Command="{Binding ApplyUvCommand}" FontSize="10" Padding="7,1"
+                                                ToolTip.Tip="Writes the UV scale/offset into this material's UV parameters (created under the canonical name when missing)" />
+                                      </Grid>
+                                      <TextBlock Text="{Binding UvStatus}" FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
+                                                 IsVisible="{Binding UvStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding UvTransformText}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10"
+                                               IsVisible="{Binding !CanEditUv}" />
+                                    <TextBlock Text="{Binding UvSourceText}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="9" IsVisible="{Binding HasUvSource}" />
+                                    <TextBlock Text="{Binding RenderModeLabel, StringFormat='Blend mode: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
+                        </StackPanel>
+                      </Expander>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="SAMPLERS" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                                <ItemsControl ItemsSource="{Binding Slots}">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                      <StackPanel Spacing="2" Margin="0,4,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                          <TextBlock Text="{Binding SamplerName}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" MinWidth="110" VerticalAlignment="Center" />
+                                          <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" IsVisible="{Binding IsDiffuse}" ToolTip.Tip="Diffuse" />
+                                          <TextBlock Text="⚠" Foreground="#FFB454" FontSize="11" VerticalAlignment="Center" IsVisible="{Binding Unresolved}" ToolTip.Tip="Path not found in this WAD" />
+                                          <TextBlock Text="?" Foreground="#FFB454" FontSize="11" VerticalAlignment="Center" IsVisible="{Binding NotInShader}"
+                                                     ToolTip.Tip="The selected shader declares no sampler by this name — it will be ignored" />
+                                          <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                                        </StackPanel>
+                                        <!-- M96: star-sized so long paths shrink the textbox instead of pushing ✓/↺ off the panel -->
+                                        <Grid ColumnDefinitions="*,Auto,Auto">
+                                          <TextBox Grid.Column="0" Text="{Binding EditedPath}" FontSize="10" Padding="4,1" FontFamily="Cascadia Mono, Consolas, monospace">
+                                            <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" /></TextBox.KeyBindings>
+                                          </TextBox>
+                                          <Button Grid.Column="1" Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" Margin="3,0,0,0" ToolTip.Tip="Apply path" />
+                                          <Button Grid.Column="2" Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" Margin="3,0,0,0" ToolTip.Tip="Revert" />
+                                        </Grid>
+                                        <!-- M96: wraps instead of clipping when the inspector is narrow -->
+                                        <WrapPanel>
+                                          <Button Classes="tool" Content="Open" Command="{Binding OpenCommand}" Margin="0,0,4,2" />
+                                          <Button Classes="tool" Content="Copy" Command="{Binding CopyPathCommand}" Margin="0,0,4,2" />
+                                          <Button Classes="tool" Content="Replace Texture…" Command="{Binding ReplaceCommand}" Margin="0,0,4,2" />
+                                          <Button Classes="tool" Content="✕" Command="{Binding RemoveCommand}" IsVisible="{Binding CanRemove}" Margin="0,0,4,2" ToolTip.Tip="Remove this sampler" />
+                                        </WrapPanel>
+                                        <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="3" Padding="3" HorizontalAlignment="Left" IsVisible="{Binding HasThumbnail}">
+                                          <Image Source="{Binding Thumbnail}" Stretch="Uniform" MaxHeight="96" MaxWidth="96" />
+                                        </Border>
+                                      </StackPanel>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                        <Button Classes="tool" Content="+ Add Sampler" Command="{Binding AddSamplerCommand}"
+                                IsVisible="{Binding CanEditSamplers}" HorizontalAlignment="Left" Margin="0,4,0,0" />
+                        <StackPanel IsVisible="{Binding CanChangeShader}">
+                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasMissingSamplers}">
+                                    <TextBlock Text="SAMPLERS THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding MissingSamplers}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding Name, StringFormat='+ {0}'}"
+                                                  ToolTip.Tip="{Binding DefaultTexturePath}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderSamplerCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                        </StackPanel>
+                        </StackPanel>
+                      </Expander>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0" IsVisible="{Binding CanEditRenderState}">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="RENDER STATE" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                                    <StackPanel Spacing="2" Margin="0,4,0,0" IsVisible="{Binding CanEditRenderState}">
+                                      <CheckBox Content="Cull back faces (off = two-sided)" IsChecked="{Binding CullEnable}" FontSize="9"
+                                                ToolTip.Tip="pass.cullEnable — also what drives Two-Sided Lighting below" />
+                                      <CheckBox Content="Alpha blending (blendEnable)" IsChecked="{Binding BlendEnable}" FontSize="9"
+                                                ToolTip.Tip="pass.blendEnable — the material's own transparency flag" />
+                                      <Grid ColumnDefinitions="Auto,*" Margin="0,2,0,0">
+                                        <TextBlock Grid.Column="0" Text="Src blend" FontSize="9" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
+                                        <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
+                                                  ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding SrcColorBlendFactor}"
+                                                  ToolTip.Tip="Riot blend factor. Map22 shadow receivers use 4 (DstColor); normal alpha materials use 6 (SrcAlpha)." />
+                                      </Grid>
+                                      <Grid ColumnDefinitions="Auto,*">
+                                        <TextBlock Grid.Column="0" Text="Dst blend" FontSize="9" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
+                                        <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
+                                                  ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding DstColorBlendFactor}"
+                                                  ToolTip.Tip="Sets both the colour and alpha destination factor" />
+                                      </Grid>
+                                    </StackPanel>
+                        </StackPanel>
+                      </Expander>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="DERIVED — COMPUTED, NO .BIN FIELD" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                                      <TextBlock Grid.Row="0" Grid.Column="0" Text="Culling" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CullEnabledText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
+                                      <TextBlock Grid.Row="1" Grid.Column="0" Text="Depth Write" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DepthWriteText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
+                                                 ToolTip.Tip="Follows the blend mode: transparent and transparent-cutout materials don't write depth" />
+                                      <TextBlock Grid.Row="2" Grid.Column="0" Text="Alpha Cutout" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding AlphaCutoutText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
+                                                 ToolTip.Tip="Threshold comes from the AlphaTestValue parameter — edit it in the parameter list below" />
+                                      <TextBlock Grid.Row="3" Grid.Column="0" Text="Two-Sided Lighting" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding TwoSidedText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
+                                                 ToolTip.Tip="Active when back-face culling is off — untick 'Cull back faces' above" />
+                                    </Grid>
+                        </StackPanel>
+                      </Expander>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0" IsVisible="{Binding CanChangeShader}">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="SWITCHES &amp; MACROS" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasSwitches}">
+                                    <TextBlock Text="FEATURE SWITCHES" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding Switches}">
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
+                                            <CheckBox Grid.Column="0" Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="9" />
+                                            <Ellipse Grid.Column="1" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
+                                                     Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsDirty}" />
+                                            <Button Grid.Column="2" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
+                                                    Command="{Binding RemoveCommand}" ToolTip.Tip="Remove this switch" />
+                                          </Grid>
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                                  <StackPanel Spacing="2" IsVisible="{Binding HasShaderSwitches}">
+                                    <TextBlock Text="FEATURE SWITCHES THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding ShaderSwitches}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding StringFormat='+ {0}'}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderSwitchCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasMacros}">
+                                    <TextBlock Text="SHADER MACROS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding Macros}">
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
+                                            <CheckBox Grid.Column="0" Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="9"
+                                                      ToolTip.Tip="{Binding Hint}" />
+                                            <Ellipse Grid.Column="1" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
+                                                     Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsDirty}" />
+                                            <Button Grid.Column="2" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
+                                                    Command="{Binding RemoveCommand}"
+                                                    ToolTip.Tip="Remove the define entirely — not the same as unticking it, which writes 0. Absent means the shader's own default applies." />
+                                          </Grid>
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                                  <StackPanel Spacing="2" IsVisible="{Binding HasMissingMacros}">
+                                    <TextBlock Text="ADD SHADER MACRO" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <TextBlock Text="Macros select precompiled DX11 permutations. Unsupported combinations can crash in-game."
+                                               FontSize="8" TextWrapping="Wrap" Foreground="#FFB454" />
+                                    <ItemsControl ItemsSource="{Binding MissingMacros}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding StringFormat='+ {0}'}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddMacroCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                        </StackPanel>
+                      </Expander>
+                                <Expander Header="Parameters" IsVisible="{Binding HasParameters}" FontSize="11" Margin="0,4,0,0">
+                                  <StackPanel>
+                                  <!-- M55: add a parameter (clones an existing one's schema; edit the value after) -->
+                                  <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,4" IsVisible="{Binding CanEditParameters}">
+                                    <TextBox Grid.Column="0" Text="{Binding NewParamName}" Watermark="new param name (e.g. AlphaTestValue)"
+                                             FontSize="10" Padding="4,1">
+                                      <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding AddParameterCommand}" /></TextBox.KeyBindings>
+                                    </TextBox>
+                                    <Button Grid.Column="1" Content="+ Add" Command="{Binding AddParameterCommand}" FontSize="10" Padding="6,1" Margin="3,0,0,0"
+                                            ToolTip.Tip="Add a parameter (value type is cloned from this material's first param — edit it after)" />
+                                  </Grid>
+                                  <ItemsControl ItemsSource="{Binding Parameters}">
+                                    <ItemsControl.ItemTemplate>
+                                      <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
+                                          <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" MinWidth="110" VerticalAlignment="Center" />
+                                          <!-- M50c: live colour swatch for Tint/Color params -->
+                                          <Border Width="16" Height="16" CornerRadius="3" BorderThickness="1" VerticalAlignment="Center"
+                                                  BorderBrush="{DynamicResource ReyBorderBrush}" IsVisible="{Binding IsColorLike}"
+                                                  Background="{Binding EditedText, Converter={x:Static conv:VecColorBrushConverter.Instance}}"
+                                                  ToolTip.Tip="Colour preview (r, g, b as 0..1)" />
+                                          <TextBox Text="{Binding EditedText}" MinWidth="150" FontSize="10" Padding="4,1" IsEnabled="{Binding IsEditable}" FontFamily="Cascadia Mono, Consolas, monospace">
+                                            <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" /></TextBox.KeyBindings>
+                                          </TextBox>
+                                          <Button Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" />
+                                          <Button Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" />
+                                          <Button Content="✕" FontSize="10" Padding="5,0" IsVisible="{Binding IsRemovable}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.RemoveParameterCommand}"
+                                                  CommandParameter="{Binding}" ToolTip.Tip="Remove this parameter" />
+                                          <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                                          <TextBlock Text="{Binding ErrorText}" Foreground="#FF6B6B" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding HasError}" />
+                                        </StackPanel>
+                                      </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                  </ItemsControl>
+                                  </StackPanel>
+                                </Expander>
+                        <StackPanel IsVisible="{Binding CanChangeShader}">
+                                  <StackPanel Spacing="2" IsVisible="{Binding HasMissingParameters}">
+                                    <TextBlock Text="PARAMETERS THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding MissingParameters}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding Name, StringFormat='+ {0}'}"
+                                                  ToolTip.Tip="{Binding DefaultText, StringFormat='default {0}'}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderParameterCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                        </StackPanel>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="ADVANCED" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                          <Button Classes="tool" Content="Copy name" Command="{Binding CopyNameCommand}" />
+                          <Button Classes="tool" Content="Revert material" Command="{Binding RevertCommand}" />
+                        </StackPanel>
+                        <StackPanel IsVisible="{Binding CanChangeShader}">
+                                  <Button Classes="tool" Content="Use most-used Riot material setup"
+                                          Command="{Binding ApplyCommonShaderSetupCommand}"
+                                          IsVisible="{Binding HasShaderDef}" HorizontalAlignment="Stretch"
+                                          ToolTip.Tip="Loads real materials from the installed patch, selects the most frequent parameter/switch/macro/render-state setup for this shader, and keeps your texture paths." />
+                        </StackPanel>
+                        </StackPanel>
+                      </Expander>
+                              </StackPanel>
+                            </Border>
+                          </DataTemplate>
+                        </ContentControl.ContentTemplate>
+                        </ContentControl>
+                      </StackPanel>
+                    </StackPanel>
+                  </ScrollViewer>
+                </TabItem>
+
+
+                <!-- M351h: SHADERS TAB. The environment selector, bulk material setup and bulk
+                     shader replace act on the WHOLE document; they sat above the per-material
+                     editor and pushed the actual editing below the fold on every visit. -->
+                <TabItem FontSize="12" IsVisible="{Binding HasMaterialData}">
+                  <TabItem.Header><TextBlock Text="Shaders" FontSize="12" /></TabItem.Header>
+                  <ScrollViewer>
+                    <StackPanel Spacing="8" Margin="0,8,4,0">
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6,4">
+                        <StackPanel Spacing="2">
+                          <TextBlock Text="SHADER BINDING" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <!-- M103: which client's shader list the dropdowns offer (Live / PBE differ) -->
+                          <Grid ColumnDefinitions="Auto,*" Margin="0,2">
+                            <TextBlock Grid.Column="0" Text="Environment" FontSize="10" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding MaterialEditor.ShaderEnvironments}"
+                                      SelectedItem="{Binding MaterialEditor.SelectedShaderEnvironment}"
+                                      FontSize="10" HorizontalAlignment="Stretch"
+                                      ToolTip.Tip="Which League install the shader list is read from" />
+                          </Grid>
+                          <TextBlock Text="{Binding MaterialEditor.CatalogStatus}" FontSize="10" TextWrapping="Wrap"
+                                     Foreground="{DynamicResource ReyAccentBrush}" />
+                          <TextBlock Text="{Binding ShaderDbStatus}" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                          <TextBlock Text="The sampler slots below are the material's bound textures (required samplers). Switch the viewport to 'Riot Approx' to preview." FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </Border>
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6">
+                        <StackPanel Spacing="5">
+                          <TextBlock Text="BULK MATERIAL SETUP" FontSize="10" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <TextBlock Text="Apply each shader's most-used shipped Riot parameters, switches, macros and render state to every material in the currently loaded file. This ignores the selected-mesh filter and preserves all texture paths."
+                                     FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <Button Classes="tool" Content="Apply Riot setups to all loaded materials"
+                                  Command="{Binding MaterialEditor.ApplyCommonSetupsToAllCommand}"
+                                  IsEnabled="{Binding MaterialEditor.CanApplyCommonSetupsToAll}"
+                                  HorizontalAlignment="Stretch" />
+                          <TextBlock Text="{Binding MaterialEditor.BulkCommonSetupStatus}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
+                                     IsVisible="{Binding MaterialEditor.BulkCommonSetupStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                      </Border>
+                      <!-- M335: whole-document shader conversion. This intentionally ignores the selected-
+                           mesh filter: every material using the source shader must change together. -->
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6">
+                        <StackPanel Spacing="5">
+                          <TextBlock Text="BULK SHADER REPLACE" FontSize="10" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <TextBlock Text="Replace the shader on every matching material in this map. Compatible authored values are kept; missing target samplers use a matching texture or the shader default."
+                                     FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <Grid ColumnDefinitions="72,*" RowDefinitions="Auto,Auto" RowSpacing="4">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="From" FontSize="10"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <ComboBox Grid.Row="0" Grid.Column="1"
+                                      ItemsSource="{Binding MaterialEditor.UsedShaders}"
+                                      SelectedItem="{Binding MaterialEditor.BulkSourceShader, Mode=TwoWay}"
+                                      FontSize="10" HorizontalAlignment="Stretch" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="To" FontSize="10"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <AutoCompleteBox Grid.Row="1" Grid.Column="1"
+                                             Text="{Binding MaterialEditor.BulkTargetShader, Mode=TwoWay}"
+                                             ItemsSource="{Binding MaterialEditor.KnownShaders}" FilterMode="Contains"
+                                             Watermark="Shaders/StaticMesh/..." FontSize="10" />
+                          </Grid>
+                          <TextBlock Text="{Binding MaterialEditor.BulkShaderSummary}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                          <Button Classes="tool" Content="Replace all matching materials"
+                                  Command="{Binding MaterialEditor.BulkReplaceShaderCommand}"
+                                  IsEnabled="{Binding MaterialEditor.CanBulkReplaceShader}"
+                                  HorizontalAlignment="Stretch"
+                                  ToolTip.Tip="Changes the live material document as one undoable operation. Review it in the viewport, then use Save To Override." />
+                          <TextBlock Text="{Binding MaterialEditor.BulkShaderStatus}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
+                                     IsVisible="{Binding MaterialEditor.BulkShaderStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                      </Border>
+                    </StackPanel>
+                  </ScrollViewer>
+                </TabItem>
+              </TabControl>
+              </Expander>
+</UserControl>

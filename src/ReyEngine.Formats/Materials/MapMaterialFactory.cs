@@ -13,10 +13,110 @@ namespace ReyEngine.Formats.Materials;
 /// </summary>
 public static class MapMaterialFactory
 {
+    private static readonly uint StaticMaterialClass = HashAlgorithms.Fnv1a("StaticMaterialDef");
+
     public static bool ContainsMaterial(byte[] materialsBin, string name)
     {
         try { return SafeBinTree.Parse(materialsBin).Objects.ContainsKey(HashAlgorithms.Fnv1a(name)); }
         catch { return false; }
+    }
+
+    /// <summary>Remove material objects authored by an earlier legacy-port pass, including objects made
+    /// by older ReyEngine builds which accidentally used a non-material class hash. The namespace is
+    /// owned by the porter and is rebuilt immediately after this call.</summary>
+    public static byte[]? RemoveGeneratedMaterials(byte[] materialsBin, string prefix,
+        out int removedCount, out string? error)
+    {
+        removedCount = 0;
+        error = null;
+        try
+        {
+            var tree = SafeBinTree.Parse(materialsBin);
+            uint nameField = HashAlgorithms.Fnv1a("name");
+            var remove = tree.Objects
+                .Where(pair => pair.Value.Properties.TryGetValue(nameField, out var property)
+                    && property is BinTreeString name
+                    && name.Value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .Select(pair => pair.Key).ToList();
+            foreach (uint hash in remove) tree.Objects.Remove(hash);
+            removedCount = remove.Count;
+            if (removedCount == 0) return materialsBin;
+            using var output = new MemoryStream();
+            tree.Write(output);
+            byte[] result = output.ToArray();
+            _ = SafeBinTree.Parse(result);
+            return result;
+        }
+        catch (Exception ex) { error = ex.Message; return null; }
+    }
+
+    /// <summary>Remove only StaticMaterialDefs which are no longer reachable from the final map. Material
+    /// names used directly by mapgeo are roots because mapgeo references them by hash rather than through
+    /// the bin object graph. Every non-material bin object is also a root, so materials required by VFX,
+    /// props, or other retained systems survive. This deliberately does not mean "delete every original
+    /// material"; doing that is a common source of game crashes.</summary>
+    public static byte[]? RemoveUnusedStaticMaterials(byte[] materialsBin,
+        IEnumerable<string> usedMapGeoMaterials, out int removedCount, out string? error)
+    {
+        removedCount = 0;
+        error = null;
+        try
+        {
+            var tree = SafeBinTree.Parse(materialsBin);
+            var materialHashes = tree.Objects
+                .Where(pair => pair.Value.ClassHash == StaticMaterialClass)
+                .Select(pair => pair.Key).ToHashSet();
+            if (materialHashes.Count == 0) return materialsBin;
+
+            var reachable = new HashSet<uint>();
+            var queue = new Queue<uint>();
+            foreach (uint hash in tree.Objects.Keys.Where(hash => !materialHashes.Contains(hash))) queue.Enqueue(hash);
+            foreach (string name in usedMapGeoMaterials.Where(name => !string.IsNullOrWhiteSpace(name)))
+                queue.Enqueue(HashAlgorithms.Fnv1a(name));
+
+            while (queue.Count > 0)
+            {
+                uint hash = queue.Dequeue();
+                if (!reachable.Add(hash) || !tree.Objects.TryGetValue(hash, out var obj)) continue;
+                foreach (var property in obj.Properties.Values) EnqueueLinks(property, queue);
+            }
+
+            foreach (uint hash in materialHashes.Where(hash => !reachable.Contains(hash)).ToList())
+            {
+                tree.Objects.Remove(hash);
+                removedCount++;
+            }
+            if (removedCount == 0) return materialsBin;
+
+            using var output = new MemoryStream();
+            tree.Write(output);
+            byte[] result = output.ToArray();
+            _ = SafeBinTree.Parse(result);
+            return result;
+        }
+        catch (Exception ex) { error = ex.Message; return null; }
+    }
+
+    private static void EnqueueLinks(BinTreeProperty property, Queue<uint> queue)
+    {
+        switch (property)
+        {
+            case BinTreeObjectLink link when link.Value != 0:
+                queue.Enqueue(link.Value);
+                break;
+            case BinTreeOptional optional when optional.Value is not null:
+                EnqueueLinks(optional.Value, queue);
+                break;
+            case BinTreeStruct structure:
+                foreach (var child in structure.Properties.Values) EnqueueLinks(child, queue);
+                break;
+            case BinTreeContainer container:
+                foreach (var child in container.Elements) EnqueueLinks(child, queue);
+                break;
+            case BinTreeMap map:
+                foreach (var pair in map) { EnqueueLinks(pair.Key, queue); EnqueueLinks(pair.Value, queue); }
+                break;
+        }
     }
 
     /// <summary>Clone a proven StaticMaterialDef from any game bin into a map materials bin. Unlike
@@ -138,21 +238,30 @@ public static class MapMaterialFactory
             samplerOverrides: diffuseOverride is null ? null : new Dictionary<string, string> { ["__diffuse__"] = diffuseOverride });
 
     /// <summary>Create a material from a shader while applying authored sampler, parameter, switch and
-    /// macro defaults. Used by the legacy-map porter: the mapgeo owns the per-mesh texture overrides,
-    /// while this creates only one editable material per rendering role.</summary>
+    /// macro and render-state defaults. The legacy porter uses this to bind each content-unique texture
+    /// set through a real runtime material and to replace an earlier automatic shader choice safely.</summary>
     public static byte[]? CreateFromShader(byte[] materialsBin, string newName,
         Shaders.LeagueShaderDef shader, out string? error,
         IReadOnlyDictionary<string, string>? samplerOverrides,
         IReadOnlyDictionary<string, System.Numerics.Vector4>? parameterOverrides = null,
         IReadOnlyDictionary<string, bool>? switches = null,
-        IReadOnlyDictionary<string, bool>? macros = null)
+        IReadOnlyDictionary<string, bool>? macros = null,
+        bool replaceExisting = false,
+        bool? blendEnable = null,
+        int? sourceBlendFactor = null,
+        int? destinationBlendFactor = null,
+        bool? cullEnable = null)
     {
         error = null;
         try
         {
             var tree = SafeBinTree.Parse(materialsBin);   // tolerant - see CloneMaterial (M123d)
             uint newHash = HashAlgorithms.Fnv1a(newName);
-            if (tree.Objects.ContainsKey(newHash)) { error = $"A material named '{newName}' already exists."; return null; }
+            if (tree.Objects.ContainsKey(newHash))
+            {
+                if (!replaceExisting) { error = $"A material named '{newName}' already exists."; return null; }
+                tree.Objects.Remove(newHash);
+            }
 
             uint F(string n) => HashAlgorithms.Fnv1a(n);
             const uint SamplerClass = 0x0904b150;   // StaticMaterialShaderSamplerDef
@@ -160,10 +269,11 @@ public static class MapMaterialFactory
             const uint SwitchClass  = 0x0e2212a1;   // StaticMaterialSwitchDef
             const uint TechClass    = 0x060a4413;   // StaticMaterialTechniqueDef
             const uint PassClass    = 0x8537d0c2;   // StaticMaterialPassDef
-            const uint MaterialClass = 0xad4b8ac0;  // StaticMaterialDef (overwritten below from a real object when present)
-            uint materialClass = tree.Objects.Values
-                .Select(o => o.ClassHash)
-                .FirstOrDefault(h => tree.Objects.Values.Count(x => x.ClassHash == h) > 3, MaterialClass);
+            // Bin type hashes are lower-cased FNV-1a. Older code selected the first class occurring more
+            // than three times in the destination; bins beginning with VFX definitions consequently
+            // authored "materials" as VfxSystemDefinitionData (0x45cd899f), which the game can crash on.
+            // StaticMaterialDef is authoritative and does not vary by map.
+            uint materialClass = StaticMaterialClass;
 
             // samplers: the shader's declared textures with their default paths; the diffuse-ish one
             // takes the override (imported texture) when provided
@@ -192,7 +302,9 @@ public static class MapMaterialFactory
 
             var parameters = shader.Parameters.Select(pd =>
             {
-                var value = parameterOverrides?.GetValueOrDefault(pd.Name) ?? new System.Numerics.Vector4(pd.X, pd.Y, pd.Z, pd.W);
+                var value = parameterOverrides?.GetValueOrDefault(pd.Name)
+                            ?? shader.CommonSetup?.Parameters.GetValueOrDefault(pd.Name)
+                            ?? new System.Numerics.Vector4(pd.X, pd.Y, pd.Z, pd.W);
                 return (BinTreeProperty)new BinTreeStruct(0, ParamClass, new BinTreeProperty[]
                 {
                     new BinTreeString(F("name"), pd.Name),
@@ -200,20 +312,40 @@ public static class MapMaterialFactory
                 });
             }).ToList();
 
-            var switchValues = (switches ?? new Dictionary<string, bool>())
+            var switchValues = (switches ?? shader.CommonSetup?.Switches ?? new Dictionary<string, bool>())
                 .Select(kv => (BinTreeProperty)new BinTreeStruct(0, SwitchClass, new BinTreeProperty[]
                 {
                     new BinTreeString(F("name"), kv.Key),
                     new BinTreeBool(F("on"), kv.Value),
                 })).ToList();
-            var macroValues = (macros ?? new Dictionary<string, bool>())
-                .Select(kv => new KeyValuePair<BinTreeProperty, BinTreeProperty>(
-                    new BinTreeString(0, kv.Key), new BinTreeString(0, kv.Value ? "1" : "0"))).ToList();
+            IEnumerable<KeyValuePair<string, string>> selectedMacros = macros is not null
+                ? macros.Select(kv => new KeyValuePair<string, string>(kv.Key, kv.Value ? "1" : "0"))
+                : shader.CommonSetup?.Macros ?? new Dictionary<string, string>();
+            var macroValues = selectedMacros.Select(kv => new KeyValuePair<BinTreeProperty, BinTreeProperty>(
+                new BinTreeString(0, kv.Key), new BinTreeString(0, kv.Value))).ToList();
 
-            var pass = new BinTreeStruct(0, PassClass, new BinTreeProperty[]
+            bool? effectiveBlend = blendEnable ?? shader.CommonSetup?.BlendEnable;
+            bool? effectiveCull = cullEnable ?? shader.CommonSetup?.CullEnable;
+            int? effectiveSource = sourceBlendFactor
+                ?? (shader.CommonSetup is { SourceBlendFactor: >= 0 } commonSource
+                    ? commonSource.SourceBlendFactor : null);
+            int? effectiveDestination = destinationBlendFactor
+                ?? (shader.CommonSetup is { DestinationBlendFactor: >= 0 } commonDestination
+                    ? commonDestination.DestinationBlendFactor : null);
+
+            var passProperties = new List<BinTreeProperty>
             {
                 new BinTreeObjectLink(F("shader"), HashAlgorithms.Fnv1a(shader.Name)),
-            });
+            };
+            if (effectiveBlend is { } blend)
+                passProperties.Add(new BinTreeBool(F("blendEnable"), blend));
+            if (effectiveCull is { } cull)
+                passProperties.Add(new BinTreeBool(F("cullEnable"), cull));
+            if (effectiveSource is { } source)
+                passProperties.Add(new BinTreeU32(F("srcColorBlendFactor"), (uint)source));
+            if (effectiveDestination is { } destination)
+                passProperties.Add(new BinTreeU32(F("dstColorBlendFactor"), (uint)destination));
+            var pass = new BinTreeStruct(0, PassClass, passProperties);
             var technique = new BinTreeStruct(0, TechClass, new BinTreeProperty[]
             {
                 new BinTreeString(F("name"), "normal"),

@@ -4,6 +4,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Core.Assets;
+using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Undo;
 using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.Shaders;
@@ -44,11 +45,34 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
     partial void OnThumbnailChanged(Bitmap? value) => OnPropertyChanged(nameof(HasThumbnail));
     public void RaiseDirty() => OnPropertyChanged(nameof(IsDirty));
 
+    // ---- M351i: thumbnails are always on. The Preview toggle is gone (user feedback) - a slot shows
+    // its texture whenever it is on screen. Loading stays lazy per material: the editor calls
+    // EnsureThumbnail for the SELECTED material's slots, so the other 119 materials decode nothing.
+    private string? _thumbFor;   // the path the current Thumbnail was decoded from
+
+    public void EnsureThumbnail()
+    {
+        if (_thumbFor == EditedPath && Thumbnail is not null) return;
+        Thumbnail = _owner.LoadThumbnail?.Invoke(EditedPath);
+        _thumbFor = EditedPath;
+    }
+
+    /// <summary>After a path change: slots that are on screen (thumbnail loaded) re-decode immediately;
+    /// off-screen slots just drop the stale image and stay lazy - RevertAll over 120 materials must not
+    /// trigger 120 texture decodes.</summary>
+    private void InvalidateThumbnail()
+    {
+        bool wasVisible = Thumbnail is not null;
+        Thumbnail = null;
+        _thumbFor = null;
+        if (wasVisible) EnsureThumbnail();
+    }
+
     public void ResetFromModel()
     {
         EditedPath = Model.Path;
         _lastApplied = Model.Path;
-        Thumbnail = null;
+        InvalidateThumbnail();
         RefreshResolved();
         RaiseDirty();
     }
@@ -65,7 +89,7 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
             _owner.UndoService?.PushApplied(new TexturePathEditCommand(_owner.DocContext, Model, oldPath, EditedPath, SyncFromCommand));
         _lastApplied = EditedPath;
         RefreshResolved();
-        Thumbnail = null;
+        InvalidateThumbnail();
         _owner.NotifyChanged();
     }
 
@@ -74,7 +98,7 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
     {
         EditedPath = appliedPath;
         _lastApplied = appliedPath;
-        Thumbnail = null;
+        InvalidateThumbnail();
         RefreshResolved();
         RaiseDirty();
         _owner.NotifyChanged();
@@ -87,10 +111,6 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
         ResetFromModel();
         _owner.NotifyChanged();
     }
-
-    [RelayCommand]
-    // M96: toggle — clicking Preview again hides the thumbnail (it could only be shown before)
-    private void Preview() => Thumbnail = Thumbnail is not null ? null : _owner.LoadThumbnail?.Invoke(EditedPath);
 
     [RelayCommand] private void Open() => _owner.OpenTexture?.Invoke(EditedPath);
     [RelayCommand] private async Task CopyPath() => await _owner.Copy(EditedPath);
@@ -267,6 +287,9 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         foreach (var m in model.AllMacros) Macros.Add(new MaterialMacroViewModel(m, this));        // M150
         RefreshMissingMacros();
         LoadRenderState();   // M106
+        // M351j: seed the editable UV fields from the parse-time profile
+        UvScaleText = FmtVec2(model.Profile.UvScale);
+        UvOffsetText = FmtVec2(model.Profile.UvOffset);
     }
 
     public string Name => Model.Name;
@@ -281,6 +304,12 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
 
     [RelayCommand]
     private void ApplyShader() => Owner?.ChangeShader(this, EditedShader);
+
+    [RelayCommand]
+    private async Task ApplyCommonShaderSetup()
+    {
+        if (Owner is not null) await Owner.ApplyCommonShaderSetupAsync(this);
+    }
 
     // ---- M103: what the SELECTED shader actually declares (from the game install's shader bin) ----
 
@@ -327,7 +356,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     private static readonly string[] KnownMacros =
     {
         MaterialBinding.MacroNoBakedLighting, MaterialBinding.MacroDisableDepthFog,
-        "PREMULTIPLIED_ALPHA", "DISABLE_FOW",
+        "PREMULTIPLIED_ALPHA", "DISABLE_FOW", "DISABLE_SHADOWS", "LOW_QUALITY_MODE",
+        "USE_DYNAMIC_LIGHTING", "CLOUD_SHADOWS", "NUM_BLEND_WEIGHTS",
     };
 
     public ObservableCollection<string> MissingMacros { get; } = new();
@@ -468,6 +498,26 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         RefreshShaderDef(catalog);
         RaiseDirty();
     }
+
+    internal void SynchronizeCommonSetup(ShaderCatalog? catalog)
+    {
+        Parameters.Clear();
+        foreach (var parameter in Model.Parameters)
+            Parameters.Add(new MaterialParameterViewModel(parameter, Owner!));
+        Switches.Clear();
+        foreach (var feature in Model.AllSwitches)
+            Switches.Add(new MaterialSwitchViewModel(feature, this));
+        Macros.Clear();
+        foreach (var macro in Model.AllMacros)
+            Macros.Add(new MaterialMacroViewModel(macro, this));
+        RefreshMissingMacros();
+        LoadRenderState();
+        OnPropertyChanged(nameof(HasParameters));
+        OnPropertyChanged(nameof(HasSwitches));
+        OnPropertyChanged(nameof(HasMacros));
+        RefreshShaderDef(catalog);
+        RaiseDirty();
+    }
     public bool HasAssignment => !string.IsNullOrEmpty(Model.AssignedTo);
     public bool HasParameters => Parameters.Count > 0;
     public bool CanEditSamplers => Model.CanEditSamplers;
@@ -599,6 +649,87 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
 
     /// <summary>Warn when we couldn't map this material to a known preview profile (UV/features unresolved).</summary>
     public bool ProfileUnresolved => Model.Profile.Kind == PreviewProfileKind.Unknown;
+
+    // ---- M351k: the material ball at the top of the detail pane (rendered by the editor VM) ----
+    [ObservableProperty] private Bitmap? _spherePreview;
+
+    // ---- M351j: texture settings - the UV transform as editable fields ----
+    // UV lives in material PARAMETERS (the profile scanner reads names like UVScale/UVOffset), so these
+    // fields write THROUGH the existing parameter machinery - undo, dirty state and live preview all
+    // behave exactly as if the parameter row had been edited by hand.
+    [ObservableProperty] private string _uvScaleText = "1, 1";
+    [ObservableProperty] private string _uvOffsetText = "0, 0";
+    [ObservableProperty] private string _uvStatus = "";
+
+    /// <summary>Editing needs a real StaticMaterialDef parameter list to write into.</summary>
+    public bool CanEditUv => Model.IsStaticMaterialDef;
+
+    public System.Numerics.Vector2 CurrentUvScale() =>
+        TryParseVec2(UvScaleText, out var v) ? v : Model.Profile.UvScale;
+    public System.Numerics.Vector2 CurrentUvOffset() =>
+        TryParseVec2(UvOffsetText, out var v) ? v : Model.Profile.UvOffset;
+
+    [RelayCommand]
+    private void ApplyUv()
+    {
+        if (!TryParseVec2(UvScaleText, out var s)) { UvStatus = "Scale needs two numbers (invariant '.', e.g. 1, 1)"; return; }
+        if (!TryParseVec2(UvOffsetText, out var o)) { UvStatus = "Offset needs two numbers (invariant '.', e.g. 0, 0)"; return; }
+
+        var sp = FindOrCreateUvParam(Model.Profile.UvScaleSource, "UVScale");
+        var op = FindOrCreateUvParam(Model.Profile.UvOffsetSource, "UVOffset");
+        if (sp is null && op is null) { UvStatus = "This material has no parameter list - UV cannot be written."; return; }
+
+        if (sp is not null) WriteVec2(sp, s);
+        if (op is not null) WriteVec2(op, o);
+        UvStatus = $"Written to {sp?.Name ?? "-"} / {op?.Name ?? "-"}. The shader must read these parameters for tiling to apply in game.";
+        Owner?.NotifyChanged();
+    }
+
+    /// <summary>Prefer the parameter the profile scanner recognised as this material's UV source. Only a
+    /// material with none gets one created - under the scanner's canonical name, so the preview (which
+    /// reads the same name list) always sees the edit.</summary>
+    private MaterialParameterViewModel? FindOrCreateUvParam(string? source, string fallbackName)
+    {
+        string name = source ?? fallbackName;
+        var vm = Parameters.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (vm is not null) return vm;
+        var p = Model.AddParameter(name);
+        if (p is null) return null;   // no prototype parameter to clone a schema from
+        vm = new MaterialParameterViewModel(p, Owner!);
+        Parameters.Add(vm);
+        OnPropertyChanged(nameof(HasParameters));
+        return vm;
+    }
+
+    /// <summary>Replace the first two numeric tokens IN PLACE. The canonical text format (separators,
+    /// component count) is whatever BinValueEditor.Format produced - rewriting only the tokens means
+    /// Apply's own parser is guaranteed to round-trip, with no assumption about that format here.</summary>
+    private static void WriteVec2(MaterialParameterViewModel p, System.Numerics.Vector2 v)
+    {
+        int i = 0;
+        p.EditedText = System.Text.RegularExpressions.Regex.Replace(
+            p.EditedText, @"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", m => ++i switch
+            {
+                1 => v.X.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
+                2 => v.Y.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
+                _ => m.Value,
+            });
+        p.ApplyCommand.Execute(null);
+    }
+
+    internal static string FmtVec2(System.Numerics.Vector2 v) =>
+        string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.###}, {1:0.###}", v.X, v.Y);
+
+    private static bool TryParseVec2(string text, out System.Numerics.Vector2 v)
+    {
+        v = default;
+        var parts = text.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2) return false;
+        if (!float.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x)) return false;
+        if (!float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var y)) return false;
+        v = new System.Numerics.Vector2(x, y);
+        return true;
+    }
 
     [RelayCommand]
     private void AddSampler()
@@ -754,6 +885,37 @@ internal sealed class BulkMaterialShaderCommand : IEditorCommand
     public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
 }
 
+internal sealed class BulkCommonMaterialSetupCommand : IEditorCommand
+{
+    internal sealed record Entry(MaterialBinding Material, LeagueShaderDef Shader,
+        ShaderMaterialSetup Before, ShaderMaterialSetup CommonSetup);
+
+    private readonly IReadOnlyList<Entry> _entries;
+    private readonly Action _refresh;
+    public string Name => $"Apply Riot Setup to {_entries.Count:n0} Materials";
+    public object? Context { get; }
+
+    public BulkCommonMaterialSetupCommand(IReadOnlyList<Entry> entries, object? context, Action refresh)
+    { _entries = entries; Context = context; _refresh = refresh; }
+
+    public void Execute()
+    {
+        foreach (var entry in _entries)
+            ShaderMaterialSetups.Apply(entry.Material, entry.Shader, entry.CommonSetup);
+        _refresh();
+    }
+
+    public void Undo()
+    {
+        foreach (var entry in _entries)
+            ShaderMaterialSetups.Restore(entry.Material, entry.Before);
+        _refresh();
+    }
+
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
+
 /// <summary>
 /// Material-centric editor for a champion skin .bin or a map .materials.bin. Edits texture-slot
 /// paths + numeric params on a live BinTree (via <see cref="MaterialDocument"/>); Apply re-resolves
@@ -766,6 +928,20 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     public WadAssetEntry? BinEntry { get; private set; }
     public MaterialSourceKind Kind { get; private set; }
     public ObservableCollection<MaterialBindingViewModel> Materials { get; } = new();
+
+    /// <summary>M351b: <see cref="Materials"/> after search and filters — what the master list shows.
+    /// A separate collection rather than per-item visibility, so the list can be a real ListBox with a
+    /// selection instead of a stack of expanded cards.</summary>
+    public ObservableCollection<MaterialBindingViewModel> FilteredMaterials { get; } = new();
+
+    /// <summary>The one material the detail pane edits.</summary>
+    [ObservableProperty] private MaterialBindingViewModel? _selectedMaterial;
+
+    /// <summary>M351b: show only materials with unsaved edits.</summary>
+    [ObservableProperty] private bool _showModifiedOnly;
+
+    /// <summary>"120 material(s)", or "8 of 120" when a filter is narrowing the list.</summary>
+    [ObservableProperty] private string _listSummary = "";
 
     [ObservableProperty] private bool _hasMaterials;
     [ObservableProperty] private bool _isDirty;
@@ -799,6 +975,16 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     [ObservableProperty] private int _bulkShaderMatchCount;
     [ObservableProperty] private string _bulkShaderSummary = "Choose a source shader and replacement.";
     [ObservableProperty] private string _bulkShaderStatus = "";
+    [ObservableProperty] private bool _isApplyingCommonSetups;
+    [ObservableProperty] private string _bulkCommonSetupStatus = "";
+
+    public bool CanApplyCommonSetupsToAll => HasMaterials && HasCatalog
+        && RequestCommonShaderSetup is not null && !IsApplyingCommonSetups;
+
+    partial void OnHasMaterialsChanged(bool value) =>
+        OnPropertyChanged(nameof(CanApplyCommonSetupsToAll));
+    partial void OnIsApplyingCommonSetupsChanged(bool value) =>
+        OnPropertyChanged(nameof(CanApplyCommonSetupsToAll));
 
     public bool CanBulkReplaceShader => BulkShaderMatchCount > 0
         && !string.IsNullOrWhiteSpace(BulkTargetShader)
@@ -843,6 +1029,9 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
     /// <summary>Host hook: scan (or load the cache for) that environment and call <see cref="SetCatalog"/>.</summary>
     public Func<string, Task>? RequestCatalog { get; set; }
+    /// <summary>Loads the most frequently authored real material setup for a shader from the patch-aware
+    /// Workshop index. Kept as a host hook so the editor remains testable without opening game WADs.</summary>
+    public Func<string, Task<ShaderMaterialSetup?>>? RequestCommonShaderSetup { get; set; }
 
     partial void OnSelectedShaderEnvironmentChanged(string? value)
     {
@@ -858,6 +1047,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
             : $"{catalog.Environment}: {catalog.Shaders.Count:n0} shaders · {string.Join(", ", catalog.Categories)}";
         BuildShaderIndex();
         RefreshShaderDefs();
+        OnPropertyChanged(nameof(CanApplyCommonSetupsToAll));
     }
 
     /// <summary>Re-evaluate every material against the catalogue (after a load or an environment switch).</summary>
@@ -1003,20 +1193,149 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
             : added > 0
                 ? $"Shader set. Added {added} sampler slot(s) used by this shader — fill in their texture paths."
                 : "Shader set. This shader isn't in the catalogue, so its sampler list couldn't be checked.";
+        // A known shader should start from the setup Riot actually ships most often, not the often-zero
+        // declaration values in shaders.bin. This is asynchronous because the first use may build the
+        // patch-wide Workshop index; the user's compatible texture paths remain untouched.
+        if (def is not null && RequestCommonShaderSetup is not null)
+            _ = ApplyCommonShaderSetupAsync(vm);
+    }
+
+    public async Task ApplyCommonShaderSetupAsync(MaterialBindingViewModel vm)
+    {
+        string shaderName = vm.Model.RenderShader?.Trim() ?? "";
+        if (shaderName.Length == 0 || Catalog?.Find(shaderName) is not { } shader)
+        {
+            vm.ShaderChangeStatus = "Load the shader catalogue and select a known shader first.";
+            return;
+        }
+        if (RequestCommonShaderSetup is null)
+        {
+            vm.ShaderChangeStatus = "The Riot material setup index is unavailable.";
+            return;
+        }
+
+        vm.ShaderChangeStatus = "Finding the most-used Riot setup for this shader…";
+        ShaderMaterialSetup? setup;
+        try { setup = await RequestCommonShaderSetup(shaderName); }
+        catch (Exception ex) { vm.ShaderChangeStatus = "Could not load Riot setup: " + ex.Message; return; }
+        if (!string.Equals(vm.Model.RenderShader, shaderName, StringComparison.OrdinalIgnoreCase))
+            return; // the user selected another shader while the patch-wide index was loading
+        if (setup is null)
+        {
+            vm.ShaderChangeStatus = "No shipped material using this shader was found in the installed patch.";
+            return;
+        }
+
+        var result = ShaderMaterialSetups.Apply(vm.Model, shader, setup);
+        _doc?.Reclassify(vm.Model);
+        vm.SynchronizeCommonSetup(Catalog);
+        IsDirty = _doc?.IsDirty ?? true;
+        NotifyChanged();
+        vm.ShaderChangeStatus = setup.Summary + ". " + result.Summary
+            + " Existing texture paths were kept.";
+    }
+
+    [RelayCommand]
+    private async Task ApplyCommonSetupsToAll()
+    {
+        if (_doc is null || !HasMaterials)
+        {
+            BulkCommonSetupStatus = "No material document is loaded.";
+            return;
+        }
+        if (Catalog is null || RequestCommonShaderSetup is null)
+        {
+            BulkCommonSetupStatus = "Load the shader catalogue first.";
+            return;
+        }
+
+        IsApplyingCommonSetups = true;
+        BulkCommonSetupStatus = "Loading the most-used Riot setups…";
+        try
+        {
+            var groups = Materials
+                .Where(vm => vm.Model.IsStaticMaterialDef
+                    && !string.IsNullOrWhiteSpace(vm.Model.RenderShader))
+                .GroupBy(vm => vm.Model.RenderShader!, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var entries = new List<BulkCommonMaterialSetupCommand.Entry>();
+            int unchanged = 0, skipped = Materials.Count - groups.Sum(group => group.Count());
+            int setupGroups = 0, index = 0;
+
+            foreach (var group in groups)
+            {
+                index++;
+                BulkCommonSetupStatus = $"Loading shader setup {index:n0} of {groups.Count:n0}: {group.Key}";
+                if (Catalog.Find(group.Key) is not { } shader)
+                {
+                    skipped += group.Count();
+                    continue;
+                }
+
+                ShaderMaterialSetup? setup;
+                try { setup = await RequestCommonShaderSetup(group.Key); }
+                catch { setup = null; }
+                if (setup is null)
+                {
+                    skipped += group.Count();
+                    continue;
+                }
+                setupGroups++;
+
+                foreach (var vm in group)
+                {
+                    var before = ShaderMaterialSetups.Capture(vm.Model);
+                    if (ShaderMaterialSetups.CanonicalSignature(before)
+                        == ShaderMaterialSetups.CanonicalSignature(setup))
+                    {
+                        unchanged++;
+                        continue;
+                    }
+                    ShaderMaterialSetups.Apply(vm.Model, shader, setup);
+                    entries.Add(new BulkCommonMaterialSetupCommand.Entry(vm.Model, shader, before, setup));
+                }
+            }
+
+            void RefreshRows()
+            {
+                foreach (var vm in Materials)
+                {
+                    _doc.Reclassify(vm.Model);
+                    vm.SynchronizeCommonSetup(Catalog);
+                }
+                NotifyChanged();
+            }
+
+            if (entries.Count > 0)
+                UndoService?.PushApplied(new BulkCommonMaterialSetupCommand(entries, DocContext, RefreshRows));
+            RefreshRows();
+            BulkCommonSetupStatus = $"Applied Riot setups to {entries.Count:n0} material(s) across "
+                + $"{setupGroups:n0} shader(s); {unchanged:n0} already matched, {skipped:n0} skipped. "
+                + "All texture paths were kept. This is one Undo operation.";
+        }
+        finally
+        {
+            IsApplyingCommonSetups = false;
+        }
     }
 
     /// <summary>M50c: auto-load the diffuse thumbnail of one material — used when the user opens a
-    /// material from the selected mesh's MATERIALS card, so the texture preview shows immediately.</summary>
+    /// material from the selected mesh's MATERIALS card. M351i: the Preview toggle is gone (thumbnails
+    /// are always on), so this now selects the material — the selection hook loads every slot's image.</summary>
     public void AutoPreviewDiffuse(string materialName)
     {
         var m = Materials.FirstOrDefault(x => string.Equals(x.Name, materialName, StringComparison.OrdinalIgnoreCase));
-        var slot = m?.Slots.FirstOrDefault(s => s.IsDiffuse) ?? m?.Slots.FirstOrDefault();
-        if (slot is not null && slot.PreviewCommand.CanExecute(null)) slot.PreviewCommand.Execute(null);
+        if (m is not null && FilteredMaterials.Contains(m)) SelectedMaterial = m;
+        else m?.Slots.FirstOrDefault(s => s.IsDiffuse)?.EnsureThumbnail();
     }
 
     // Wired by MainWindowViewModel.
     public Func<string, bool>? TextureExists { get; set; }
     public Func<string, Bitmap?>? LoadThumbnail { get; set; }
+
+    /// <summary>M351k: raw RGBA decode for the material ball (the Bitmap variant can't be sampled).</summary>
+    public Func<string, TextureImage?>? LoadTextureRaw { get; set; }
     public Func<string, Task>? CopyHandler { get; set; }
     public Action<string>? OpenTexture { get; set; }
     public Func<TextureSlotViewModel, Task>? ReplaceTextureAsset { get; set; }
@@ -1058,6 +1377,10 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         RefreshShaderDefs();  // M103: match each material against the catalogue
         UpdateUnresolved();
         Summary = $"{(Kind == MaterialSourceKind.ChampionSkin ? "Champion" : "Map")} — {Materials.Count} material(s)";
+        // Explicit: Search/OnlyUnresolved were just assigned their existing values above, so their
+        // change handlers do not fire and the master list would otherwise load empty.
+        ShowModifiedOnly = false;
+        ApplyFilter();
     }
 
     public void Clear()
@@ -1065,10 +1388,12 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         if (_doc is not null) UndoService?.PurgeContext(_doc);
         _doc = null; BinEntry = null;
         Materials.Clear();
+        FilteredMaterials.Clear(); SelectedMaterial = null; ShowModifiedOnly = false; ListSummary = "";
         HasMaterials = false; IsDirty = false; Search = ""; Summary = ""; UnresolvedCount = 0;
         HasBinIssues = false; BinIssuesLabel = "";
         UsedShaders.Clear(); KnownShaders.Clear(); BulkSourceShader = null; BulkTargetShader = "";
         BulkShaderStatus = ""; UpdateBulkShaderPreview();
+        BulkCommonSetupStatus = ""; IsApplyingCommonSetups = false;
     }
 
     public byte[]? Serialize() => _doc?.Serialize();
@@ -1102,7 +1427,40 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         IsDirty = _doc?.IsDirty ?? false;
         foreach (var m in Materials) m.RaiseDirty();
         UpdateUnresolved();
+        if (SelectedMaterial is { } sm) RefreshSphere(sm);   // M351k: edits show on the ball immediately
         ScheduleLiveApply();
+    }
+
+    // ---- M351i + M351k: what happens when a material becomes the selected one ----
+    partial void OnSelectedMaterialChanged(MaterialBindingViewModel? value)
+    {
+        if (value is null) return;
+        foreach (var s in value.Slots) s.EnsureThumbnail();   // M351i: thumbnails always on
+        RefreshSphere(value);                                  // M351k: the material ball
+    }
+
+    /// <summary>M351k: render the material ball from the diffuse texture and the current UV fields.
+    /// The decode is cached by path, so re-renders after edits cost only the 112x112 shade loop.</summary>
+    private (string Path, TextureImage? Img) _sphereCache = ("", null);
+
+    public void RefreshSphere(MaterialBindingViewModel m)
+    {
+        // No decode pipeline wired = no rendering surface either. This is the headless/unit-test case:
+        // WriteableBitmap needs a live Avalonia platform, and the VM must stay testable without one.
+        if (LoadTextureRaw is null) return;
+
+        string path = m.Model.Diffuse?.Path ?? "";
+        TextureImage? img = null;
+        if (path.Length > 0)
+        {
+            if (_sphereCache.Path == path) img = _sphereCache.Img;
+            else
+            {
+                try { img = LoadTextureRaw?.Invoke(path); } catch { img = null; }
+                _sphereCache = (path, img);
+            }
+        }
+        m.SpherePreview = Imaging.MaterialBallPreview.Render(img, m.CurrentUvScale(), m.CurrentUvOffset());
     }
 
     private void UpdateUnresolved()
@@ -1130,6 +1488,9 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
     partial void OnSearchChanged(string value) => ApplyFilter();
     partial void OnOnlyUnresolvedChanged(bool value) => ApplyFilter();
+    // Deliberately NOT re-filtered from NotifyChanged: editing a material makes it dirty, and re-running
+    // the filter mid-edit would reorder the list and move the selection out from under the user.
+    partial void OnShowModifiedOnlyChanged(bool value) => ApplyFilter();
 
     // ---- M101: scope the list to the selected mesh's materials ----
     private HashSet<string>? _meshFilter;
@@ -1149,6 +1510,25 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
     private void ApplyFilter()
     {
-        foreach (var m in Materials) m.IsVisible = m.Matches(Search, OnlyUnresolved, _meshFilter);
+        foreach (var m in Materials)
+            m.IsVisible = m.Matches(Search, OnlyUnresolved, _meshFilter)
+                          && (!ShowModifiedOnly || m.IsDirty);
+
+        // M351b: the filter now also drives a real collection, because the inspector shows a master list
+        // beside one detail pane instead of rendering every material expanded. IsVisible is still set so
+        // nothing that reads it changes behaviour.
+        var keep = SelectedMaterial;
+        FilteredMaterials.Clear();
+        foreach (var m in Materials) if (m.IsVisible) FilteredMaterials.Add(m);
+
+        // Hold the selection when it survives the filter; otherwise fall to the first row, so the detail
+        // pane is never blank while the list has rows in it.
+        SelectedMaterial = keep is not null && FilteredMaterials.Contains(keep)
+            ? keep
+            : FilteredMaterials.FirstOrDefault();
+
+        ListSummary = FilteredMaterials.Count == Materials.Count
+            ? $"{Materials.Count:n0} material(s)"
+            : $"{FilteredMaterials.Count:n0} of {Materials.Count:n0}";
     }
 }

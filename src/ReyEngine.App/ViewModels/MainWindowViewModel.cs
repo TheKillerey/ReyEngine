@@ -43,6 +43,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private readonly ReyEngine.App.Services.ThumbnailService _thumbnails; // Content Browser lazy thumbnails
     private readonly Dictionary<ulong, AssetNodeViewModel> _nodesByHash = new();
     private WorkshopCatalogService? _workshopCatalog;
+    private Task<WorkshopCatalog>? _commonMaterialCatalogTask;
+    private string? _commonMaterialCatalogDirectory;
 
     private bool ContentLoaded => _archive is not null || _mounts is not null;
 
@@ -1402,6 +1404,35 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public Action<WorkshopViewModel>? ShowWorkshopWindow;
 
+    private async Task<ShaderMaterialSetup?> LoadCommonShaderSetupAsync(string shader)
+    {
+        string? final = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
+        if (final is null) return null;
+        _workshopCatalog ??= new WorkshopCatalogService(_resolver.Database, ResolveBinName);
+        if (_commonMaterialCatalogTask is null
+            || !string.Equals(_commonMaterialCatalogDirectory, final, StringComparison.OrdinalIgnoreCase))
+        {
+            _commonMaterialCatalogDirectory = final;
+            _log.Info("Material", "Loading common Riot material setups from the installed patch…");
+            _commonMaterialCatalogTask = Task.Run(
+                () => _workshopCatalog.LoadAsync(final, rebuild: false));
+        }
+
+        WorkshopCatalog catalog;
+        try { catalog = await _commonMaterialCatalogTask; }
+        catch
+        {
+            _commonMaterialCatalogTask = null;
+            throw;
+        }
+        var template = catalog.Materials.FirstOrDefault(m =>
+            m.Shader.Equals(shader, StringComparison.OrdinalIgnoreCase));
+        if (template is not null)
+            _log.Success("Material", $"{shader}: common setup uses {template.SetupUsageCount:n0} of "
+                + $"{template.ShaderUsageCount:n0} shipped material(s).");
+        return template?.CommonSetup;
+    }
+
     private async Task<string> ImportWorkshopMaterialAsync(WorkshopMaterialTemplate template, string newName)
     {
         if (_currentMapEntry is not { } mapEntry || _currentMap is null)
@@ -1568,6 +1599,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
                     var def = MaterialEditor.Catalog?.Find(m.ShaderPath);
                     if (def is null) { _log.Error("AddMesh", $"Material '{m.NewName}': shader '{m.ShaderPath}' not in the catalogue."); return; }
+                    var commonSetup = await LoadCommonShaderSetupAsync(def.Name);
+                    if (commonSetup is not null) def = def with { CommonSetup = commonSetup };
                     var newBytes = MapMaterialFactory.CreateFromShader(binBytes, m.NewName!, def, out var err, diffusePath);
                     if (newBytes is null)
                     {
@@ -1583,6 +1616,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     }
                     binBytes = newBytes;
                     _log.Success("AddMesh", $"Material '{m.NewName}' built from shader {m.ShaderPath}"
+                        + (commonSetup is not null ? " using the most-used Riot setup" : "")
                         + (diffusePath is not null ? $" with diffuse {diffusePath}" : "") + ".");
                 }
                 if (!await SaveMapBinBytesAsync(binEntry, binBytes))
@@ -3610,13 +3644,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         MaterialEditor.UndoService = UndoService;
         MaterialEditor.CopyHandler = Dialogs.CopyAsync;
+        Inspector.CopyHandler = Dialogs.CopyAsync;   // M351c: copy button beside the asset path
         MaterialEditor.TextureExists = TextureExistsByPath;
         MaterialEditor.LoadThumbnail = LoadThumbnailByPath;
+        MaterialEditor.LoadTextureRaw = LoadTextureByPath;   // M351k: the material ball samples raw RGBA
         MaterialEditor.OpenTexture = OpenTextureByPath;
         MaterialEditor.ReplaceTextureAsset = ReplaceTextureForSlot;
         MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
         MaterialEditor.SaveOverride = SaveMaterialOverride;
         MaterialEditor.RequestCatalog = LoadShaderCatalogAsync;   // M103
+        MaterialEditor.RequestCommonShaderSetup = LoadCommonShaderSetupAsync;
         InitShaderEnvironments();
 
         // M46 Particle Editor wiring
@@ -4413,7 +4450,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (entry.Type is not AssetType.SkinnedMesh) ClearViewport();
         if (entry.Type != AssetType.Bin) BinEditor.Clear();
         HasInspectorBody = entry.Type is AssetType.SkinnedMesh or AssetType.StaticMesh or AssetType.MapGeometry or AssetType.Bin;
-        InspectorTab = entry.Type == AssetType.Bin ? 2 : 0;
+        // M351g: the Raw BIN Tree tab is gone (index 2). A materials bin still lands on the Materials
+        // tab via the dedicated path below; everything else opens on Overview.
+        InspectorTab = 0;
         if (!HasInspectorBody)
         {
             MaterialEditor.Clear();
@@ -6370,27 +6409,90 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         Status = "Converting legacy map...";
         LegacyMapPortResult result;
+        LegacyDestinationContentSummary destinationSummary;
+        HashSet<string> bushMaterials;
+        byte[] originalMapBytes;
+        byte[] originalBinBytes;
         try
         {
-            byte[] mapBytes = GetAssetBytes(mapEntry);
-            result = await Task.Run(() => LegacyMapPorter.Port(folder, mapBytes, mapEntry.Path));
+            originalMapBytes = GetAssetBytes(mapEntry);
+            originalBinBytes = GetAssetBytes(binEntry);
+            var shaderNames = catalog.Shaders.GroupBy(shader => HashAlgorithms.Fnv1a(shader.Name))
+                .ToDictionary(group => group.Key, group => group.First().Name);
+            string? ResolveLegacyName(uint hash) => ResolveBinName(hash)
+                ?? shaderNames.GetValueOrDefault(hash)
+                ?? (hash == HashAlgorithms.Fnv1a("StaticMaterialDef") ? "StaticMaterialDef" : null);
+            var document = MaterialDocument.Parse(originalBinBytes, ResolveLegacyName);
+            bushMaterials = document.Materials
+                .Where(material => material.IsStaticMaterialDef
+                    && (material.Profile.IsVertexDeform
+                        || material.RenderShader?.Contains("VertexDeform", StringComparison.OrdinalIgnoreCase) == true))
+                .Select(material => material.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (LegacyMapPorter.MapSpecificBushMaterials(mapEntry.Path) is { } mapSpecificBushMaterials)
+                bushMaterials = mapSpecificBushMaterials.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var placements = MapPlaceableExtractor.Extract(originalBinBytes);
+            var particles = MapParticleExtractor.Extract(originalBinBytes, ResolveLegacyName);
+            int bushCount = LegacyMapPorter.CountBushMeshes(originalMapBytes, bushMaterials);
+            int previousImportCount = LegacyMapPorter.CountPreviousImportedMeshes(originalMapBytes);
+            int ordinaryCount = MapGeoBinary.TryReadEditable(originalMapBytes, out var editable)
+                ? Math.Max(0, editable.Meshes.Count(mesh => !mesh.HasRegionHash || mesh.RegionHash == 0)
+                    - bushCount - previousImportCount)
+                : 0;
+            destinationSummary = new LegacyDestinationContentSummary(
+                ordinaryCount, bushCount, previousImportCount, document.Materials.Count(material => material.IsStaticMaterialDef),
+                particles.Count, placements.Props.Count, placements.Sounds.Count, placements.Probes.Count);
+            result = await Task.Run(() => LegacyMapPorter.Port(folder, originalMapBytes, mapEntry.Path));
         }
         catch (Exception ex)
         { _log.Error("Legacy Port", ex.Message); Status = "Legacy map conversion failed."; return; }
+
+        var shaderChoices = catalog.Shaders
+            .Where(shader => shader.Category.Equals("StaticMesh", StringComparison.OrdinalIgnoreCase))
+            .Select(shader => shader.Name)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        LegacyMapPortShaderSelection? selection = null;
+        if (PromptOwner is not null)
+        {
+            selection = await Views.LegacyMapPortWindow.ShowAsync(PromptOwner, result, shaderChoices, destinationSummary);
+            if (selection is null) { Status = "Legacy map port cancelled."; return; }
+        }
+        var cleanup = selection?.Cleanup ?? LegacyPortCleanupOptions.FullReplacement;
+        result = LegacyMapPorter.ApplyShaderOptions(result, selection?.RoleShaders ?? LegacyPortShaderOptions.Defaults);
+        if (selection is not null)
+            result = result with
+            {
+                Materials = result.Materials.Select(material => selection.MaterialShaders.TryGetValue(material.Name, out string? shader)
+                    ? material with { Shader = shader }
+                    : material).ToList(),
+            };
+        bool correctedLegacyPosition = selection?.FixImportedMapPosition == true;
+        if (correctedLegacyPosition)
+        {
+            try { result = LegacyMapPorter.ApplyImportedPositionCorrection(result); }
+            catch (Exception ex)
+            { _log.Error("Legacy Port", $"Imported map position correction failed: {ex.Message}"); return; }
+        }
+
+        LegacyMeshCleanupResult meshCleanup;
+        try
+        {
+            meshCleanup = LegacyMapPorter.ApplyMeshCleanup(result, cleanup, bushMaterials);
+            result = result with
+            {
+                MapGeoBytes = meshCleanup.MapGeoBytes,
+                RemovedBaseMeshCount = meshCleanup.RemovedMeshCount + meshCleanup.RemovedBushMeshCount,
+                PreservedRenderRegionMeshCount = meshCleanup.PreservedRenderRegionMeshCount,
+            };
+        }
+        catch (Exception ex)
+        { _log.Error("Legacy Port", $"Destination mesh cleanup failed: {ex.Message}"); return; }
 
         var missingShaders = result.Materials.Where(m => catalog.Find(m.Shader) is null)
             .Select(m => m.Shader).Distinct().ToList();
         if (missingShaders.Count > 0)
         { _log.Error("Legacy Port", "The selected client does not ship required shader(s): " + string.Join(", ", missingShaders)); return; }
-
-        if (PromptOwner is not null && !await Views.PromptWindow.ConfirmAsync(PromptOwner, "Port Legacy Map",
-            $"Import {result.SourceFormat} into '{mapEntry.DisplayName}'?\n\n" +
-            $"{result.SourceMeshCount:n0} legacy objects become {result.ImportedMeshCount:n0} optimized mapgeo meshes.\n" +
-            $"{result.Textures.Count:n0} unique textures and {result.Materials.Count:n0} deduplicated materials will be added.\n" +
-            $"{result.RemovedBaseMeshCount:n0} ordinary destination meshes will be replaced.\n" +
-            $"{result.PreservedRenderRegionMeshCount:n0} render-region meshes will be preserved.\n\n" +
-            "This writes only to the project; Riot files are not changed.", "Port Map"))
-        { Status = "Legacy map port cancelled."; return; }
 
         // Only now mutate project state. Copying references is part of the confirmed port; Riot's WAD
         // itself remains read-only, and cancelling above leaves the project completely unchanged.
@@ -6420,14 +6522,62 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             byte[] binBytes = GetAssetBytes(binEntry);
-            int created = 0, reused = 0;
+            var placementEdits = new List<MapPlacementEdit>();
+            if (cleanup.RemoveOriginalParticles)
+                placementEdits.AddRange(MapParticleExtractor.Extract(binBytes, ResolveBinName)
+                    .Where(item => item.Id.IsValid).Select(item => new MapPlacementEdit(item.Id) { Remove = true }));
+            var originalPlacements = MapPlaceableExtractor.Extract(binBytes);
+            if (cleanup.RemoveOriginalProps)
+                placementEdits.AddRange(originalPlacements.Props.Where(item => item.Id.IsValid)
+                    .Select(item => new MapPlacementEdit(item.Id) { Remove = true }));
+            if (cleanup.RemoveOriginalSounds)
+                placementEdits.AddRange(originalPlacements.Sounds.Where(item => item.Id.IsValid)
+                    .Select(item => new MapPlacementEdit(item.Id) { Remove = true }));
+            if (cleanup.RemoveOriginalProbes)
+                placementEdits.AddRange(originalPlacements.Probes.Where(item => item.Id.IsValid)
+                    .Select(item => new MapPlacementEdit(item.Id) { Remove = true }));
+            placementEdits = placementEdits.DistinctBy(edit => edit.Id).ToList();
+            int removedPlacements = placementEdits.Count;
+            if (placementEdits.Count > 0)
+            {
+                var cleaned = MapPlaceableWriter.WriteEdits(binBytes, placementEdits, out var placementError);
+                if (cleaned is null) throw new InvalidDataException($"Destination placement cleanup failed: {placementError}");
+                if (!string.IsNullOrWhiteSpace(placementError))
+                    _log.Warn("Legacy Port", placementError);
+                binBytes = cleaned;
+            }
+
+            var resetBin = MapMaterialFactory.RemoveGeneratedMaterials(binBytes, "LegacyPort/",
+                out int replacedGenerated, out var resetError);
+            if (resetBin is null) throw new InvalidDataException($"Could not replace earlier legacy materials: {resetError}");
+            binBytes = resetBin;
+
+            int created = 0, updated = 0;
             foreach (var material in result.Materials)
             {
-                if (MapMaterialFactory.ContainsMaterial(binBytes, material.Name)) { reused++; continue; }
+                bool existed = MapMaterialFactory.ContainsMaterial(binBytes, material.Name);
                 var next = MapMaterialFactory.CreateFromShader(binBytes, material.Name, catalog.Find(material.Shader)!, out var error,
-                    material.Samplers, material.Parameters, material.Switches, material.Macros);
+                    material.Samplers, material.Parameters, material.Switches, material.Macros,
+                    replaceExisting: true, blendEnable: material.BlendEnabled,
+                    sourceBlendFactor: material.SourceBlendFactor,
+                    destinationBlendFactor: material.DestinationBlendFactor);
                 if (next is null) throw new InvalidDataException($"Material '{material.Name}': {error}");
-                binBytes = next; created++;
+                binBytes = next;
+                if (existed) updated++; else created++;
+            }
+
+            int removedMaterials = 0;
+            if (cleanup.RemoveUnusedOriginalMaterials)
+            {
+                if (!MapGeoBinary.TryReadEditable(result.MapGeoBytes, out var finalMap))
+                    throw new InvalidDataException("The final mapgeo could not be inspected for material cleanup.");
+                var usedMaterials = finalMap.Meshes.SelectMany(mesh => mesh.Submeshes)
+                    .Select(submesh => submesh.Material).Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                var pruned = MapMaterialFactory.RemoveUnusedStaticMaterials(binBytes, usedMaterials,
+                    out removedMaterials, out var materialError);
+                if (pruned is null) throw new InvalidDataException($"Destination material cleanup failed: {materialError}");
+                binBytes = pruned;
             }
 
             foreach (var texture in result.Textures)
@@ -6456,8 +6606,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (string warning in result.Warnings.Take(12)) _log.Warn("Legacy Port", warning);
             if (result.Warnings.Count > 12) _log.Warn("Legacy Port", $"{result.Warnings.Count - 12:n0} additional warning(s) omitted.");
             _log.Success("Legacy Port", $"{result.SourceFormat} port complete: {result.ImportedMeshCount:n0} meshes, " +
-                $"{result.Textures.Count:n0} unique textures, {created:n0} material(s) created, {reused:n0} reused; " +
-                $"{result.PreservedRenderRegionMeshCount:n0} render-region meshes retained.");
+                $"{result.Textures.Count:n0} unique textures, {created:n0} material(s) created, {updated:n0} updated; " +
+                $"removed {meshCleanup.RemovedMeshCount:n0} destination meshes + {meshCleanup.RemovedBushMeshCount:n0} bushes, " +
+                $"{meshCleanup.RemovedSubmeshCount:n0} material ranges, {removedPlacements:n0} placements, " +
+                $"and {removedMaterials:n0} unused materials; " +
+                $"rebuilt {replacedGenerated:n0} earlier legacy material(s), retained {meshCleanup.RetainedOriginalMeshCount:n0} " +
+                $"selected destination meshes, and protected {result.PreservedRenderRegionMeshCount:n0} render-region meshes" +
+                (correctedLegacyPosition ? $"; imported geometry moved by ({LegacyMapPorter.LegacyPositionCorrection.X:0.###}, " +
+                    $"{LegacyMapPorter.LegacyPositionCorrection.Y:0.###}, {LegacyMapPorter.LegacyPositionCorrection.Z:0.###})." : "."));
             if (TryResolveEntry(mapEntry.PathHash, out var reloaded)) await LoadMapGeoAsync(reloaded);
             Status = "Legacy map port complete.";
         }

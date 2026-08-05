@@ -6,6 +6,7 @@ using ReyEngine.Core.Assets;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Undo;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Meta;
 using ReyEngine.Formats.Shaders;
 
 namespace ReyEngine.Formats.Tests;
@@ -134,8 +135,180 @@ public class MaterialShaderConverterTests
             m => Assert.Equal("ASSETS/Map/authored_diffuse.tex", Slot(m, "Diffuse_Texture").Path));
     }
 
+    [Fact]
+    public void Common_setup_replaces_shader_settings_but_preserves_authored_textures()
+    {
+        var doc = MaterialDocument.Parse(BuildMaterials(), Resolve);
+        var material = doc.Materials.First(m => m.Name == "source_a");
+        var shader = new LeagueShaderDef(TargetShader, "StaticMesh", new(),
+            new() { new ShaderParamDef("TintColor", 0, 0, 0, 0) },
+            new() { "USE_FOG" });
+        var setup = new ShaderMaterialSetup(
+            new Dictionary<string, Vector4> { ["TintColor"] = Vector4.One },
+            new Dictionary<string, bool> { ["USE_FOG"] = true },
+            new Dictionary<string, string> { ["DISABLE_DEPTH_FOG"] = "1" },
+            BlendEnable: false, CullEnable: true, SourceBlendFactor: -1, DestinationBlendFactor: -1);
+        var texturePaths = material.Slots.Select(slot => slot.Path).ToArray();
+
+        var result = ShaderMaterialSetups.Apply(material, shader, setup);
+
+        Assert.Equal(texturePaths, material.Slots.Select(slot => slot.Path));
+        Assert.Equal(Vector4.One, VectorValue(Assert.Single(material.Parameters)));
+        Assert.DoesNotContain(material.AllSwitches, item => item.Name == "MULTIPLY_ALPHA");
+        Assert.True(material.AllSwitches.Single(item => item.Name == "USE_FOG").On);
+        Assert.DoesNotContain(material.AllMacros, item => item.Name == MaterialBinding.MacroNoBakedLighting);
+        Assert.Equal("1", material.AllMacros.Single(item => item.Name == "DISABLE_DEPTH_FOG").Value);
+        Assert.False(material.BlendEnable);
+        Assert.True(material.CullEnable);
+        Assert.Equal(-1, material.SrcBlendFactor);
+        Assert.Equal(-1, material.DstBlendFactor);
+        Assert.True(result.RemovedObsoleteValues >= 2);
+
+        var saved = MaterialDocument.Parse(doc.Serialize(), Resolve).Materials.Single(m => m.Name == "source_a");
+        Assert.Equal(Vector4.One, VectorValue(Assert.Single(saved.Parameters)));
+        Assert.Equal("ASSETS/Map/authored_diffuse.tex", Slot(saved, "DiffuseTexture").Path);
+        Assert.True(saved.Switches["USE_FOG"]);
+        Assert.Equal("1", saved.Macros["DISABLE_DEPTH_FOG"]);
+    }
+
+    [Fact]
+    public void Samplerless_static_material_can_receive_a_complete_shader_setup()
+    {
+        const string name = "empty_static_material";
+        var pass = new BinTreeStruct(0, PassClass, new BinTreeProperty[]
+        {
+            new BinTreeObjectLink(H("shader"), H(SourceShader)),
+        });
+        var technique = new BinTreeStruct(0, TechniqueClass, new BinTreeProperty[]
+        {
+            new BinTreeString(H("name"), "normal"),
+            new BinTreeContainer(H("passes"), BinPropertyType.Struct, new BinTreeProperty[] { pass }),
+        });
+        using var stream = new MemoryStream();
+        new BinTree(new[]
+        {
+            new BinTreeObject(H(name), MaterialClass, new BinTreeProperty[]
+            {
+                new BinTreeString(H("name"), name),
+                new BinTreeContainer(H("techniques"), BinPropertyType.Struct,
+                    new BinTreeProperty[] { technique }),
+            }),
+        }, Array.Empty<string>()).Write(stream);
+        var doc = MaterialDocument.Parse(stream.ToArray(), Resolve);
+        var material = Assert.Single(doc.Materials);
+
+        Assert.True(material.IsStaticMaterialDef);
+        Assert.NotNull(material.AddSampler("DiffuseTexture", "ASSETS/Map/new_diffuse.tex"));
+        Assert.NotNull(material.SetVectorParameter("TintColor", Vector4.One));
+        Assert.NotNull(material.AddSwitch("USE_VERTEX_COLOR"));
+        Assert.NotNull(material.SetMacro(MaterialBinding.MacroNoBakedLighting, true));
+
+        var saved = MaterialDocument.Parse(doc.Serialize(), Resolve).Materials.Single();
+        Assert.Equal("ASSETS/Map/new_diffuse.tex", Slot(saved, "DiffuseTexture").Path);
+        Assert.Equal(Vector4.One, VectorValue(Assert.Single(saved.Parameters)));
+        Assert.True(saved.Switches["USE_VERTEX_COLOR"]);
+        Assert.Equal("1", saved.Macros[MaterialBinding.MacroNoBakedLighting]);
+    }
+
+    [Fact]
+    public void Newly_authored_render_state_uses_canonical_bin_field_hashes_and_repairs_old_raw_hashes()
+    {
+        const string name = "render_state_hash_test";
+        uint rawBlend = HashAlgorithms.Fnv1aRaw("blendEnable");
+        uint rawDst = HashAlgorithms.Fnv1aRaw("dstColorBlendFactor");
+        var pass = new BinTreeStruct(0, PassClass, new BinTreeProperty[]
+        {
+            new BinTreeObjectLink(H("shader"), H(SourceShader)),
+            new BinTreeBool(rawBlend, true),
+            new BinTreeU32(rawDst, 1),
+        });
+        var technique = new BinTreeStruct(0, TechniqueClass, new BinTreeProperty[]
+        {
+            new BinTreeContainer(H("passes"), BinPropertyType.Struct, new BinTreeProperty[] { pass }),
+        });
+        using var stream = new MemoryStream();
+        new BinTree(new[]
+        {
+            new BinTreeObject(H(name), MaterialClass, new BinTreeProperty[]
+            {
+                new BinTreeString(H("name"), name),
+                new BinTreeContainer(H("techniques"), BinPropertyType.Struct,
+                    new BinTreeProperty[] { technique }),
+            }),
+        }, Array.Empty<string>()).Write(stream);
+
+        var document = MaterialDocument.Parse(stream.ToArray(), Resolve);
+        var material = Assert.Single(document.Materials);
+        Assert.True(material.SetPassBool("blendEnable", false));
+        Assert.True(material.SetPassU32("dstColorBlendFactor", 7));
+
+        var savedObject = SafeBinTree.Parse(document.Serialize()).Objects[H(name)];
+        var savedTechnique = Assert.Single(Assert.IsType<BinTreeContainer>(
+            savedObject.Properties[H("techniques")]).Elements.OfType<BinTreeStruct>());
+        var savedPass = Assert.Single(Assert.IsType<BinTreeContainer>(
+            savedTechnique.Properties[H("passes")]).Elements.OfType<BinTreeStruct>());
+        Assert.False(Assert.IsType<BinTreeBool>(savedPass.Properties[H("blendEnable")]).Value);
+        Assert.Equal(7u, Assert.IsType<BinTreeU32>(savedPass.Properties[H("dstColorBlendFactor")]).Value);
+        Assert.False(savedPass.Properties.ContainsKey(rawBlend));
+        Assert.False(savedPass.Properties.ContainsKey(rawDst));
+    }
+
+    [Fact]
+    public async Task Editor_can_apply_common_setups_to_every_loaded_material_as_one_undo_step()
+    {
+        var doc = MaterialDocument.Parse(BuildMaterials(), Resolve);
+        var undo = new UndoRedoService();
+        var sourceDef = new LeagueShaderDef(SourceShader, "StaticMesh", new(),
+            new() { new ShaderParamDef("TintColor", 0, 0, 0, 0) }, new());
+        var otherDef = new LeagueShaderDef(OtherShader, "StaticMesh", new(),
+            new() { new ShaderParamDef("TintColor", 0, 0, 0, 0) }, new());
+        var sourceSetup = new ShaderMaterialSetup(
+            new Dictionary<string, Vector4> { ["TintColor"] = Vector4.One }, new(), new(),
+            BlendEnable: false, CullEnable: true, SourceBlendFactor: -1, DestinationBlendFactor: -1);
+        var otherSetup = new ShaderMaterialSetup(
+            new Dictionary<string, Vector4> { ["TintColor"] = new(0.5f) }, new(), new(),
+            BlendEnable: false, CullEnable: true, SourceBlendFactor: -1, DestinationBlendFactor: -1);
+        var requests = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var editor = new MaterialEditorViewModel { UndoService = undo };
+        editor.Load(doc, new WadAssetEntry { Path = "base_srx.materials.bin" });
+        editor.SetCatalog(new ShaderCatalog { Shaders = new() { sourceDef, otherDef } });
+        editor.RequestCommonShaderSetup = shader =>
+        {
+            requests[shader] = requests.GetValueOrDefault(shader) + 1;
+            return Task.FromResult<ShaderMaterialSetup?>(shader == SourceShader ? sourceSetup : otherSetup);
+        };
+        editor.SetMeshFilter(new[] { "source_a" }); // bulk action must intentionally ignore this filter
+        var texturePaths = doc.Materials.ToDictionary(m => m.Name, m => m.Slots.Select(s => s.Path).ToArray());
+
+        await editor.ApplyCommonSetupsToAllCommand.ExecuteAsync(null);
+
+        Assert.Equal(3, doc.Materials.Count);
+        Assert.All(doc.Materials.Where(m => m.RenderShader == SourceShader),
+            m => Assert.Equal(Vector4.One, VectorValue(Assert.Single(m.Parameters))));
+        Assert.Equal(new Vector4(0.5f), VectorValue(Assert.Single(
+            doc.Materials.Single(m => m.RenderShader == OtherShader).Parameters)));
+        Assert.All(doc.Materials, m => Assert.Equal(texturePaths[m.Name], m.Slots.Select(s => s.Path)));
+        Assert.All(requests.Values, count => Assert.Equal(1, count));
+        Assert.Equal(2, requests.Count);
+        Assert.Equal("Apply Riot Setup to 3 Materials", undo.UndoName);
+        Assert.Contains("3 material(s)", editor.BulkCommonSetupStatus);
+
+        Assert.True(undo.Undo());
+        Assert.All(doc.Materials, m =>
+            Assert.Equal(new Vector4(0.2f, 0.4f, 0.6f, 0.8f), VectorValue(Assert.Single(m.Parameters))));
+        Assert.True(undo.Redo());
+        Assert.All(doc.Materials.Where(m => m.RenderShader == SourceShader),
+            m => Assert.Equal(Vector4.One, VectorValue(Assert.Single(m.Parameters))));
+    }
+
     private static TextureSlot Slot(MaterialBinding material, string name) =>
         material.Slots.Single(s => s.SamplerName.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    private static Vector4 VectorValue(MaterialParameter parameter)
+    {
+        Assert.True(parameter.TryGetVector4(out var value));
+        return value;
+    }
 
     private static byte[] BuildMaterials()
     {

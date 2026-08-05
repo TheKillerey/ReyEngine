@@ -7,17 +7,58 @@ using ReyEngine.Core.Hashing;
 
 namespace ReyEngine.Formats.MapGeo;
 
-public enum LegacyMaterialRole { Opaque, VertexLit, Cutout, Grass, FourBlendTerrain }
+public enum LegacyMaterialRole { Normal, Decal, Grass, FourBlendTerrain }
+
+public sealed record LegacyPortShaderOptions(
+    string NormalShader,
+    string DecalShader,
+    string GrassShader,
+    string TerrainShader)
+{
+    public static LegacyPortShaderOptions Defaults { get; } = new(
+        LegacyMapPorter.NormalShader,
+        LegacyMapPorter.DecalShader,
+        LegacyMapPorter.GrassShader,
+        LegacyMapPorter.TerrainShader);
+}
+
+/// <summary>Controls which content from the modern destination container is retained underneath a
+/// legacy NVR/WGEO import. Render-region meshes are structural and are always retained.</summary>
+public sealed record LegacyPortCleanupOptions(
+    bool RemoveOriginalMeshes,
+    bool RemoveOriginalBushes,
+    bool RemoveUnusedOriginalMaterials,
+    bool RemoveOriginalParticles,
+    bool RemoveOriginalProps,
+    bool RemoveOriginalSounds,
+    bool RemoveOriginalProbes)
+{
+    public static LegacyPortCleanupOptions FullReplacement { get; } = new(true, true, true, true, true, true, true);
+    public static LegacyPortCleanupOptions KeepDestinationSupport { get; } = new(true, false, true, false, false, false, false);
+    public static LegacyPortCleanupOptions KeepEverything { get; } = new(false, false, false, false, false, false, false);
+}
+
+public sealed record LegacyMeshCleanupResult(
+    byte[] MapGeoBytes,
+    int RemovedMeshCount,
+    int RemovedBushMeshCount,
+    int RetainedOriginalMeshCount,
+    int PreservedRenderRegionMeshCount,
+    int RemovedSubmeshCount = 0);
 
 public sealed record LegacyTextureCopy(string SourcePath, string TargetPath, byte[] Bytes);
 
 public sealed record LegacyMaterialPlan(
     string Name,
+    LegacyMaterialRole Role,
     string Shader,
     IReadOnlyDictionary<string, string> Samplers,
     IReadOnlyDictionary<string, Vector4> Parameters,
     IReadOnlyDictionary<string, bool> Switches,
-    IReadOnlyDictionary<string, bool> Macros);
+    IReadOnlyDictionary<string, bool> Macros,
+    bool BlendEnabled = false,
+    int? SourceBlendFactor = null,
+    int? DestinationBlendFactor = null);
 
 public sealed record LegacyMapPortResult(
     byte[] MapGeoBytes,
@@ -30,7 +71,8 @@ public sealed record LegacyMapPortResult(
     int RemovedBaseMeshCount,
     int PreservedRenderRegionMeshCount,
     int SourceMaterialCount,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    int DestinationMeshCount = 0);
 
 /// <summary>
 /// Converts Riot's pre-mapgeo NVR/WGEO environments into a modern mapgeo container. The destination
@@ -40,12 +82,191 @@ public sealed record LegacyMapPortResult(
 /// </summary>
 public static class LegacyMapPorter
 {
-    private const string OpaqueShader = "Shaders/StaticMesh/DefaultEnv_Flat";
-    private const string VertexLitShader = "Shaders/StaticMesh/Env_Diffuse_VertexColor_Multiply";
-    private const string CutoutShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest_DoubleSided";
-    private const string GrassShader = "Shaders/StaticMesh/VertexDeform";
-    private const string TerrainShader = "Shaders/StaticMesh/4TextureBlend_WorldProjected";
+    public const string NormalShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest";
+    public const string DecalShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest";
+    public const string GrassShader = "Shaders/StaticMesh/VertexDeform";
+    public const string TerrainShader = "Shaders/StaticMesh/4TextureBlend_WorldProjected";
+    /// <summary>World-space correction measured in two passes: the initial legacy-to-modern alignment
+    /// (+473.120, -66.972, +237.756), then the final refinement from (7937.367, -22.399, 2010.147)
+    /// to (8064.653, -22.399, 2066.135), or (+127.286, 0, +55.988).</summary>
+    public static readonly Vector3 LegacyPositionCorrection = new(600.406f, -66.972f, 293.744f);
     private const int MaxVertices = 65535;
+
+    /// <summary>Whether the default shader for a generated role has a cooked no-lightmap permutation.
+    /// League 16.15 does not ship NO_BAKED_LIGHTING for DefaultEnv_Flat_AlphaTest, which is used by both
+    /// normal imported surfaces and decals. Authoring the macro on either role crashes map loading.</summary>
+    public static bool UsesNoBakedLightingByDefault(LegacyMaterialRole role) =>
+        role is LegacyMaterialRole.Grass or LegacyMaterialRole.FourBlendTerrain;
+    private static readonly IReadOnlySet<string> JadeContainerBushMaterials = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        // Map453's gameplay brush is intentionally DefaultEnv_Flat, not VertexDeform. Do not broaden
+        // this to Jade_Foliage_*: leaves, flowers, mushrooms and vines are ordinary decorative geometry.
+        "Maps/KitPieces/Jade/Base/Materials/Default/Jade_Foliage_Grass_AA_MAT",
+    };
+
+    /// <summary>Some destinations do not identify gameplay bushes by shader. A non-null result replaces
+    /// shader-derived classification for that exact map; it is never applied globally.</summary>
+    public static IReadOnlySet<string>? MapSpecificBushMaterials(string? destinationMapGeoPath)
+    {
+        if (string.IsNullOrWhiteSpace(destinationMapGeoPath)) return null;
+        string path = destinationMapGeoPath.Replace('\\', '/').TrimStart('/');
+        return path.EndsWith("data/maps/mapgeometry/map453/jade_container.mapgeo", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith("maps/mapgeometry/map453/jade_container.mapgeo", StringComparison.OrdinalIgnoreCase)
+            ? JadeContainerBushMaterials
+            : null;
+    }
+
+    public static LegacyMapPortResult ApplyShaderOptions(LegacyMapPortResult result, LegacyPortShaderOptions options)
+    {
+        string ShaderFor(LegacyMaterialRole role) => role switch
+        {
+            LegacyMaterialRole.Decal => options.DecalShader,
+            LegacyMaterialRole.Grass => options.GrassShader,
+            LegacyMaterialRole.FourBlendTerrain => options.TerrainShader,
+            _ => options.NormalShader,
+        };
+        return result with
+        {
+            Materials = result.Materials.Select(material => material with
+            {
+                Shader = ShaderFor(material.Role),
+                Parameters = MaterialParameters(material.Role, material.Parameters),
+                Macros = UsesNoBakedLightingByDefault(material.Role)
+                    ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true }
+                    : new Dictionary<string, bool>(),
+            }).ToList(),
+        };
+    }
+
+    /// <summary>Neutral authored values for generated legacy materials. shaders.bin declares zero for
+    /// TintColor on DefaultEnv_Flat_AlphaTest; copying that definition literally makes DX11 multiply every
+    /// imported diffuse by black. Riot's real materials author the neutral tint explicitly, so generated
+    /// materials must do the same. Extra names are harmless because CreateFromShader only writes parameters
+    /// actually declared by the selected shader.</summary>
+    private static IReadOnlyDictionary<string, Vector4> MaterialParameters(
+        LegacyMaterialRole role, IReadOnlyDictionary<string, Vector4>? existing = null)
+    {
+        var parameters = existing is null
+            ? new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, Vector4>(existing, StringComparer.OrdinalIgnoreCase);
+        parameters["TintColor"] = Vector4.One;
+        parameters["Tint"] = Vector4.One;
+        if (role == LegacyMaterialRole.FourBlendTerrain)
+            parameters["WS_Multiplier"] = new Vector4(0.01f, 0, 0, 0);
+        else
+            parameters["AlphaTestValue"] = new Vector4(
+                role == LegacyMaterialRole.Decal ? 0.005f : 0.35f, 0, 0, 0);
+        return parameters;
+    }
+
+    /// <summary>Translate only the newly imported legacy meshes into the modern map coordinate frame.
+    /// Destination meshes occupy the prefix recorded by <see cref="LegacyMapPortResult.DestinationMeshCount"/>;
+    /// render regions, retained bushes and every bin placement are therefore untouched.</summary>
+    public static LegacyMapPortResult ApplyImportedPositionCorrection(LegacyMapPortResult result)
+    {
+        if (!MapGeoBinary.TryReadEditable(result.MapGeoBytes, out var map))
+            throw new InvalidDataException("The combined legacy mapgeo could not be reopened for position correction.");
+        int firstImported = Math.Clamp(result.DestinationMeshCount, 0, map.Meshes.Count);
+        if (firstImported == map.Meshes.Count) return result;
+        Matrix4x4 translation = Matrix4x4.CreateTranslation(LegacyPositionCorrection);
+        for (int i = firstImported; i < map.Meshes.Count; i++)
+        {
+            var mesh = map.Meshes[i];
+            mesh.Transform *= translation;
+            mesh.BoundsMin += LegacyPositionCorrection;
+            mesh.BoundsMax += LegacyPositionCorrection;
+        }
+        byte[] corrected = map.Write();
+        corrected = MapGeoWriter.WriteWithRegeneratedBucketGrids(corrected,
+            MapGeoDecoder.Decode(corrected), targetBucketSize: 1000f);
+        return result with { MapGeoBytes = corrected };
+    }
+
+    /// <summary>Apply the user's destination cleanup after the legacy geometry has been converted. The
+    /// first <see cref="LegacyMapPortResult.DestinationMeshCount"/> records are the original destination;
+    /// imported records follow them. This avoids converting hundreds of textures a second time when the
+    /// cleanup choices are changed in the review window.</summary>
+    public static LegacyMeshCleanupResult ApplyMeshCleanup(LegacyMapPortResult result,
+        LegacyPortCleanupOptions options, IReadOnlySet<string>? bushMaterials = null)
+    {
+        if (!MapGeoBinary.TryReadEditable(result.MapGeoBytes, out var map))
+            throw new InvalidDataException("The combined legacy mapgeo could not be reopened for destination cleanup.");
+
+        int originalCount = Math.Clamp(result.DestinationMeshCount, 0, map.Meshes.Count);
+        bushMaterials ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var retained = new List<MapGeoBinary.Mesh>(map.Meshes.Count);
+        int removedMeshes = 0, removedBushes = 0, removedSubmeshes = 0, retainedOriginal = 0, renderRegions = 0;
+        for (int i = 0; i < map.Meshes.Count; i++)
+        {
+            var mesh = map.Meshes[i];
+            if (i >= originalCount) { retained.Add(mesh); continue; }
+            if (mesh.HasRegionHash && mesh.RegionHash != 0)
+            {
+                retained.Add(mesh); renderRegions++; continue;
+            }
+
+            // A re-port must never layer a new import on top of an earlier one. In particular, generated
+            // Grass_* materials contain the word "grass" and used to be mistaken for destination bushes
+            // when bush deletion was disabled, duplicating those meshes on every pass.
+            if (IsPreviousLegacyImport(mesh)) { removedMeshes++; continue; }
+
+            // Riot frequently batches unlike materials into one mapgeo mesh. Jade, for example, combines
+            // Order terrain and VertexDeform foliage in the same record. Classifying at mesh level retained
+            // the terrain merely because another submesh was a bush. Filter the draw ranges independently;
+            // unused indices/vertices may remain in the shared buffers but cannot render.
+            if (mesh.Submeshes.Count == 0)
+            {
+                if (options.RemoveOriginalMeshes) removedMeshes++;
+                else { retained.Add(mesh); retainedOriginal++; }
+                continue;
+            }
+            var keptSubmeshes = mesh.Submeshes.Where(submesh =>
+            {
+                bool bush = bushMaterials.Contains(submesh.Material);
+                return !(bush ? options.RemoveOriginalBushes : options.RemoveOriginalMeshes);
+            }).ToList();
+            removedSubmeshes += mesh.Submeshes.Count - keptSubmeshes.Count;
+            if (keptSubmeshes.Count > 0)
+            {
+                mesh.Submeshes = keptSubmeshes;
+                retained.Add(mesh);
+                retainedOriginal++;
+                continue;
+            }
+
+            bool wasBushOnly = mesh.Submeshes.Count > 0
+                && mesh.Submeshes.All(submesh => bushMaterials.Contains(submesh.Material));
+            if (wasBushOnly) removedBushes++; else removedMeshes++;
+        }
+
+        map.Meshes = retained;
+        map.Compact();
+        byte[] cleaned = map.Write();
+        cleaned = MapGeoWriter.WriteWithRegeneratedBucketGrids(cleaned, MapGeoDecoder.Decode(cleaned), targetBucketSize: 1000f);
+        var verified = MapGeoDecoder.Decode(cleaned);
+        int verifiedRegions = verified.Meshes.Count(mesh => mesh.RegionHash != 0);
+        if (verifiedRegions != renderRegions)
+            throw new InvalidDataException($"Render-region verification failed: retained {verifiedRegions} of {renderRegions} meshes.");
+        return new LegacyMeshCleanupResult(cleaned, removedMeshes, removedBushes, retainedOriginal, renderRegions, removedSubmeshes);
+    }
+
+    /// <summary>Count destination bushes using the same material-aware classification used by cleanup.</summary>
+    public static int CountBushMeshes(byte[] mapGeoBytes, IReadOnlySet<string>? bushMaterials = null)
+    {
+        if (!MapGeoBinary.TryReadEditable(mapGeoBytes, out var map)) return 0;
+        bushMaterials ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return map.Meshes.Count(mesh => (!mesh.HasRegionHash || mesh.RegionHash == 0) && !IsPreviousLegacyImport(mesh)
+            && mesh.Submeshes.Any(submesh => bushMaterials.Contains(submesh.Material)));
+    }
+
+    public static int CountPreviousImportedMeshes(byte[] mapGeoBytes)
+    {
+        if (!MapGeoBinary.TryReadEditable(mapGeoBytes, out var map)) return 0;
+        return map.Meshes.Count(mesh => (!mesh.HasRegionHash || mesh.RegionHash == 0) && IsPreviousLegacyImport(mesh));
+    }
+
+    private static bool IsPreviousLegacyImport(MapGeoBinary.Mesh mesh) =>
+        mesh.Submeshes.Any(submesh => submesh.Material.StartsWith("LegacyPort/", StringComparison.OrdinalIgnoreCase));
 
     public static LegacyMapPortResult Port(string sourceRoot, byte[] destinationMapGeo,
         string? destinationMapGeoPath = null)
@@ -82,10 +303,18 @@ public static class LegacyMapPorter
             }
             byte[] bytes = File.ReadAllBytes(file);
             string ext = Path.GetExtension(file).ToLowerInvariant();
-            if (ext == ".tga")
+            if (ext == ".dds")
             {
-                // The current client does not reliably stream loose TGA resources. Convert the legacy
-                // source to a mipmapped BC3 TEX once; DDS/TEX sources stay byte-exact.
+                // Modern map materials should not keep legacy container types. DXT1/DXT5 blocks can be
+                // moved losslessly into TEX after reversing their mip order; unusual DDS formats use
+                // the RGBA/BC3 fallback. Existing TEX inputs remain byte-exact.
+                if (!TexWriter.TryWrapDds(bytes, out var converted))
+                    converted = TexWriter.Write(TextureDecoder.Decode(bytes), TexFormat.Bc3, mipmaps: true);
+                bytes = converted;
+                ext = ".tex";
+            }
+            else if (ext == ".tga")
+            {
                 bytes = TexWriter.Write(TextureDecoder.Decode(bytes), TexFormat.Bc3, mipmaps: true);
                 ext = ".tex";
             }
@@ -126,7 +355,6 @@ public static class LegacyMapPorter
                 var normals = view.TryGetAccessor(ElementName.Normal, out var nAcc) ? ReadVector3(nAcc, vertexCount) : null;
                 var uv0 = view.TryGetAccessor(ElementName.Texcoord0, out var uvAcc) ? ReadVector2(uvAcc, vertexCount) : null;
                 var uv7 = view.TryGetAccessor(ElementName.Texcoord7, out var uv7Acc) ? ReadVector2(uv7Acc, vertexCount) : null;
-                var colors = view.TryGetAccessor(ElementName.PrimaryColor, out var cAcc) ? ReadColor(cAcc, vertexCount) : null;
                 var transform = mesh.Transform;
                 var normalMatrix = Matrix4x4.Invert(transform, out var inverse)
                     ? Matrix4x4.Transpose(inverse) : transform;
@@ -154,9 +382,8 @@ public static class LegacyMapPorter
                     bool cutout = !fourBlend && HasCutoutAlpha(DecodeTexture(baseRef));
                     LegacyMaterialRole role = fourBlend ? LegacyMaterialRole.FourBlendTerrain
                         : cutout && LooksLikeGrass(materialName, baseRef) ? LegacyMaterialRole.Grass
-                        : cutout ? LegacyMaterialRole.Cutout
-                        : isNvr && colors is not null ? LegacyMaterialRole.VertexLit
-                        : LegacyMaterialRole.Opaque;
+                        : cutout && LooksLikeDecal(materialName, baseRef) ? LegacyMaterialRole.Decal
+                        : LegacyMaterialRole.Normal;
 
                     var samplers = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     TextureImage? blendMask = null;
@@ -167,7 +394,7 @@ public static class LegacyMapPorter
                         string? middle = PortTexture(raw.Color1);
                         string? top = PortTexture(raw.Color2);
                         string? extras = PortTexture(raw.Color3);
-                        if (middle is null || top is null || extras is null) { warnings.Add($"Ground material '{materialName}' was missing a layer; imported as opaque."); role = LegacyMaterialRole.VertexLit; samplers["Diffuse_Texture"] = baseTarget; }
+                        if (middle is null || top is null || extras is null) { warnings.Add($"Ground material '{materialName}' was missing a layer; imported as a normal alpha-tested surface."); role = LegacyMaterialRole.Normal; samplers["DiffuseTexture"] = baseTarget; }
                         else
                         {
                             samplers["Bottom_Texture"] = baseTarget;
@@ -176,10 +403,10 @@ public static class LegacyMapPorter
                             samplers["Extras_Texture"] = extras;
                         }
                     }
-                    else samplers[role == LegacyMaterialRole.VertexLit ? "Diffuse_Texture" : "DiffuseTexture"] = baseTarget;
+                    else samplers["DiffuseTexture"] = baseTarget;
 
                     var key = new SurfaceKey(role, string.Join("|", samplers.Select(kv => kv.Key + "=" + kv.Value)),
-                        mesh.DisableBackfaceCulling || role is LegacyMaterialRole.Cutout or LegacyMaterialRole.Grass);
+                        mesh.DisableBackfaceCulling || role == LegacyMaterialRole.Grass);
                     if (!accumulators.TryGetValue(key, out var chunks)) accumulators[key] = chunks = new();
                     if (chunks.Count == 0) chunks.Add(new MeshAccumulator(key, samplers));
 
@@ -207,7 +434,6 @@ public static class LegacyMapPorter
                             Vector4 color = role switch
                             {
                                 LegacyMaterialRole.FourBlendTerrain when blendMask is not null => Sample(blendMask, uv7![index]),
-                                LegacyMaterialRole.VertexLit => colors?[index] ?? Vector4.One,
                                 _ => Vector4.One,
                             };
                             return new LegacyVertex(p, n, uv, color, meshPivot, normals is not null);
@@ -245,11 +471,10 @@ public static class LegacyMapPorter
         var built = accumulators.Values.SelectMany(x => x).Where(x => x.IndexCount > 0).ToList();
         if (built.Count == 0) throw new InvalidDataException("The legacy environment contained no importable textured triangles.");
 
-        var preserved = target.Meshes.Where(m => m.HasRegionHash && m.RegionHash != 0).ToList();
-        int preservedCount = preserved.Count;
-        int removed = target.Meshes.Count - preserved.Count;
-        target.Meshes = preserved;
-        target.Compact();
+        // Keep the complete destination for the review stage. ApplyMeshCleanup removes only the categories
+        // selected by the user after conversion, and protects render-region meshes unconditionally.
+        int destinationMeshCount = target.Meshes.Count;
+        int preservedCount = target.Meshes.Count(m => m.HasRegionHash && m.RegionHash != 0);
 
         var materialNames = BuildMaterialNames(slug, built.Select(x => new MaterialKey(x.Key.Role, x.Key.TextureSet)));
         foreach (var acc in built)
@@ -265,10 +490,10 @@ public static class LegacyMapPorter
         if (preservedAfter != preservedCount)
             throw new InvalidDataException($"Render-region verification failed: retained {preservedAfter} of {preservedCount} meshes.");
 
-        var materialPlans = BuildMaterialPlans(materialNames, built);
+        var materialPlans = BuildMaterialPlans(materialNames, built, LegacyPortShaderOptions.Defaults);
         return new LegacyMapPortResult(ported, textureCopies.Values.ToList(), materialPlans, source,
-            isWgeo ? "WGEO" : "NVR", environment.Meshes.Count, built.Count, removed, preservedCount,
-            sourceMaterialCount, warnings.Distinct().ToList());
+            isWgeo ? "WGEO" : "NVR", environment.Meshes.Count, built.Count, 0, preservedCount,
+            sourceMaterialCount, warnings.Distinct().ToList(), destinationMeshCount);
     }
 
     private static string FindSingleSource(string root)
@@ -297,7 +522,8 @@ public static class LegacyMapPorter
         });
 
     private static IReadOnlyList<LegacyMaterialPlan> BuildMaterialPlans(
-        IReadOnlyDictionary<MaterialKey, string> names, IReadOnlyList<MeshAccumulator> meshes)
+        IReadOnlyDictionary<MaterialKey, string> names, IReadOnlyList<MeshAccumulator> meshes,
+        LegacyPortShaderOptions options)
     {
         var result = new List<LegacyMaterialPlan>();
         foreach (var (key, name) in names)
@@ -305,20 +531,28 @@ public static class LegacyMapPorter
             var sample = meshes.First(m => m.Key.Role == key.Role && m.Key.TextureSet == key.TextureSet).Samplers;
             string shader = key.Role switch
             {
-                LegacyMaterialRole.VertexLit => VertexLitShader,
-                LegacyMaterialRole.Cutout => CutoutShader,
-                LegacyMaterialRole.Grass => GrassShader,
-                LegacyMaterialRole.FourBlendTerrain => TerrainShader,
-                _ => OpaqueShader,
+                LegacyMaterialRole.Decal => options.DecalShader,
+                LegacyMaterialRole.Grass => options.GrassShader,
+                LegacyMaterialRole.FourBlendTerrain => options.TerrainShader,
+                _ => options.NormalShader,
             };
-            var parameters = key.Role == LegacyMaterialRole.FourBlendTerrain
-                ? new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase) { ["WS_Multiplier"] = new(0.01f, 0, 0, 0) }
-                : new Dictionary<string, Vector4>();
+            IReadOnlyDictionary<string, string> samplerPlan = key.Role == LegacyMaterialRole.FourBlendTerrain
+                ? new Dictionary<string, string>(sample)
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["__diffuse__"] = sample.Values.First() };
+            var parameters = MaterialParameters(key.Role);
             var switches = key.Role == LegacyMaterialRole.FourBlendTerrain
                 ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["USE_TOP"] = true, ["USE_EXTRAS"] = true }
                 : new Dictionary<string, bool>();
-            result.Add(new LegacyMaterialPlan(name, shader, new Dictionary<string, string>(sample), parameters, switches,
-                new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true }));
+            bool decal = key.Role == LegacyMaterialRole.Decal;
+            // League 16.15 has no cooked DefaultEnv_Flat_AlphaTest permutation carrying
+            // NO_BAKED_LIGHTING=1. Both ordinary imported surfaces and decals use that shader by default,
+            // so only the grass and terrain roles may author the macro.
+            IReadOnlyDictionary<string, bool> macros = UsesNoBakedLightingByDefault(key.Role)
+                ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true }
+                : new Dictionary<string, bool>();
+            result.Add(new LegacyMaterialPlan(name, key.Role, shader, samplerPlan, parameters, switches,
+                macros,
+                BlendEnabled: decal, SourceBlendFactor: decal ? 6 : null, DestinationBlendFactor: decal ? 7 : null));
         }
         return result;
     }
@@ -326,7 +560,7 @@ public static class LegacyMapPorter
     private static void AddMesh(MapGeoBinary target, MeshAccumulator source, string material)
     {
         source.FinishNormals();
-        bool hasColor = source.Key.Role is LegacyMaterialRole.VertexLit or LegacyMaterialRole.FourBlendTerrain;
+        bool hasColor = source.Key.Role == LegacyMaterialRole.FourBlendTerrain;
         bool hasGrassPivot = source.Key.Role == LegacyMaterialRole.Grass;
         var decl = new MapGeoBinary.VertexDeclaration { Usage = 0 };
         decl.Elements.Add((MapGeoBinary.ElemPosition, MapGeoBinary.FmtXYZ_Float32));
@@ -439,8 +673,19 @@ public static class LegacyMapPorter
             || value.Contains("plant", StringComparison.Ordinal)
             || value.Contains("fern", StringComparison.Ordinal)
             || value.Contains("brush", StringComparison.Ordinal)
+            || value.Contains("bush", StringComparison.Ordinal)
+            || value.Contains("shrub", StringComparison.Ordinal)
             || value.Contains("weed", StringComparison.Ordinal)
             || value.Contains("reed", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeDecal(string material, string? texture)
+    {
+        string value = (material + " " + texture).ToLowerInvariant();
+        return value.Contains("decal", StringComparison.Ordinal)
+            || value.Contains("overlay", StringComparison.Ordinal)
+            || value.Contains("roadmark", StringComparison.Ordinal)
+            || value.Contains("road_mark", StringComparison.Ordinal);
     }
 
     private static Vector4 Sample(TextureImage image, Vector2 uv)
@@ -562,11 +807,4 @@ public static class LegacyMapPorter
         return result;
     }
 
-    private static Vector4[] ReadColor(VertexElementAccessor accessor, int count)
-    {
-        var result = new Vector4[count];
-        try { var values = accessor.AsBgraU8Array(); for (int i = 0; i < count; i++) result[i] = new(values[i].r / 255f, values[i].g / 255f, values[i].b / 255f, values[i].a / 255f); }
-        catch { try { var values = accessor.AsVector4Array(); for (int i = 0; i < count; i++) result[i] = values[i]; } catch { Array.Fill(result, Vector4.One); } }
-        return result;
-    }
 }

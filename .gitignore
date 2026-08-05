@@ -16,3 +16,6 @@ obj/
 ## Keep dictionary folder docs
 !/data/hashes/README.md
 publish/
+
+## Codex scratch probes (1.5 GB of build output) - never part of the repo
+.codex_tmp/

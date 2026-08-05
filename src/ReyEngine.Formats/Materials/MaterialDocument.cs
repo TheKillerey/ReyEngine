@@ -336,6 +336,7 @@ public sealed class MaterialDocument
             materials.Add(new MaterialBinding(name, renderShader ?? shader, subs, isDefault, slots, parameters)
             {
                 ObjectPathHash = pathHash,
+                MaterialObject = isStaticMat ? o : null,
                 SamplerContainer = samplers,
                 NameFieldHash = nameFieldHash,
                 PathFieldHash = pathFieldHash,
@@ -437,24 +438,43 @@ public sealed class MaterialBinding
     public IReadOnlyList<MaterialParameter> Parameters => _params;
 
     // Set for StaticMaterialDef bindings — enables add/remove of sampler slots (M10).
-    internal BinTreeContainer? SamplerContainer { get; init; }
+    private BinTreeContainer? _samplerContainer;
+    internal BinTreeContainer? SamplerContainer { get => _samplerContainer; init => _samplerContainer = value; }
     internal uint NameFieldHash { get; init; }
     internal uint PathFieldHash { get; init; }
     // M55: the live paramValues container — enables add/remove of parameters.
-    internal BinTreeContainer? ParamContainer { get; init; }
+    private BinTreeContainer? _paramContainer;
+    internal BinTreeContainer? ParamContainer { get => _paramContainer; init => _paramContainer = value; }
 
-    /// <summary>Shader feature switches (name → on). Only populated for StaticMaterialDef bindings (M32).
-    /// This is the parse-time snapshot that feeds the preview profile — for editing use
-    /// <see cref="SwitchEntries"/>, which stays in sync with the live bin.</summary>
-    public IReadOnlyDictionary<string, bool> Switches { get; init; } = EmptySwitches;
+    /// <summary>Shader feature switches (name → on). Static materials expose the live edited values;
+    /// champion pseudo-bindings retain their parse-time snapshot.</summary>
+    private IReadOnlyDictionary<string, bool> _switchesInit = EmptySwitches;
+    public IReadOnlyDictionary<string, bool> Switches
+    {
+        get => MaterialObject is null
+            ? _switchesInit
+            : AllSwitches.ToDictionary(s => s.Name, s => s.On, StringComparer.OrdinalIgnoreCase);
+        init => _switchesInit = value;
+    }
     private static readonly IReadOnlyDictionary<string, bool> EmptySwitches = new Dictionary<string, bool>();
 
     /// <summary>M150: shaderMacros (name → "0"/"1") — the preprocessor defines, separate from
     /// <see cref="Switches"/>. Carries NO_BAKED_LIGHTING and DISABLE_DEPTH_FOG.</summary>
-    public IReadOnlyDictionary<string, string> Macros { get; init; } = EmptyMacros;
+    private IReadOnlyDictionary<string, string> _macrosInit = EmptyMacros;
+    public IReadOnlyDictionary<string, string> Macros
+    {
+        get => MaterialObject is null
+            ? _macrosInit
+            : AllMacros.ToDictionary(m => m.Name, m => m.Value, StringComparer.OrdinalIgnoreCase);
+        init => _macrosInit = value;
+    }
     private static readonly IReadOnlyDictionary<string, string> EmptyMacros = new Dictionary<string, string>();
     public IReadOnlyList<MaterialMacro> MacroEntries { get; init; } = Array.Empty<MaterialMacro>();
-    internal BinTreeMap? MacroMap { get; init; }
+    private BinTreeMap? _macroMap;
+    internal BinTreeMap? MacroMap { get => _macroMap; init => _macroMap = value; }
+    /// <summary>The owning StaticMaterialDef. Used to create an absent optional shaderMacros map only
+    /// when the user adds the first macro, keeping untouched documents byte-exact.</summary>
+    internal BinTreeObject? MaterialObject { get; init; }
 
     /// <summary>True when a macro is present AND set to a truthy value ("1"/"true"). Reads the LIVE
     /// entries, not the parse-time snapshot, so an edit is reflected immediately (the viewport
@@ -471,34 +491,47 @@ public sealed class MaterialBinding
     /// <summary>Riot's define for "exclude this surface from distance fog".</summary>
     public const string MacroDisableDepthFog = "DISABLE_DEPTH_FOG";
 
-    /// <summary>Macros live in a map, so unlike switches there is no prototype to clone — a material can
-    /// always gain one as long as it has the shaderMacros field.</summary>
-    public bool CanEditMacros => MacroMap is not null;
+    /// <summary>Macros live in a string map, so every StaticMaterialDef can gain one even when Riot
+    /// omitted the optional shaderMacros field.</summary>
+    public bool CanEditMacros => MaterialObject is not null;
 
     // ---- M103: editable feature switches ----
     /// <summary>The material's switches as live, toggleable entries.</summary>
     public IReadOnlyList<MaterialSwitch> SwitchEntries { get; init; } = Array.Empty<MaterialSwitch>();
-    internal BinTreeContainer? SwitchContainer { get; init; }
+    private BinTreeContainer? _switchContainer;
+    internal BinTreeContainer? SwitchContainer { get => _switchContainer; init => _switchContainer = value; }
 
-    /// <summary>Switches can only be added by cloning an existing entry's schema, so a material with no
-    /// switches at all has nothing to clone from.</summary>
-    public bool CanEditSwitches => SwitchContainer is not null
-                                   && SwitchContainer.Elements.OfType<BinTreeStruct>().Any();
+    /// <summary>Every real StaticMaterialDef can receive the standard switches container, including a
+    /// material whose current shader authored no switches at all.</summary>
+    public bool CanEditSwitches => MaterialObject is not null;
 
     /// <summary>Enable a shader feature switch this material doesn't carry yet.</summary>
     public MaterialSwitch? AddSwitch(string name)
     {
-        if (SwitchContainer is null) return null;
-        if (SwitchContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault() is not { } proto) return null;
+        if (MaterialObject is null) return null;
+        if (_switchContainer is null)
+        {
+            uint field = HashAlgorithms.Fnv1a("switches");
+            _switchContainer = new BinTreeContainer(field, BinPropertyType.Struct, Array.Empty<BinTreeProperty>());
+            MaterialObject.Properties[field] = _switchContainer;
+        }
 
-        var clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
+        BinTreeStruct clone;
+        if (_switchContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } proto)
+            clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
+        else
+        {
+            uint nameField = HashAlgorithms.Fnv1a("name");
+            clone = new BinTreeStruct(0, HashAlgorithms.Fnv1a("StaticMaterialSwitchDef"),
+                new BinTreeProperty[] { new BinTreeString(nameField, name) });
+        }
         uint nameHash = 0;
         foreach (var h in new[] { HashAlgorithms.Fnv1aRaw("name"), HashAlgorithms.Fnv1a("name") })
             if (clone.Properties.ContainsKey(h)) { nameHash = h; break; }
         if (nameHash == 0 || clone.Properties[nameHash] is not BinTreeString ns) return null;
         ns.Value = name;
 
-        SwitchContainer.Add(clone);
+        _switchContainer.Add(clone);
         var sw = new MaterialSwitch(name, true, clone);
         sw.SetOn(true);
         _switchEdits.Add(sw);
@@ -508,7 +541,7 @@ public sealed class MaterialBinding
 
     public bool RemoveSwitch(MaterialSwitch sw)
     {
-        if (SwitchContainer is null || !SwitchContainer.Remove(sw.Element)) return false;
+        if (_switchContainer is null || !_switchContainer.Remove(sw.Element)) return false;
         _switchEdits.Remove(sw);
         _structurallyEdited = true;
         return true;
@@ -516,7 +549,8 @@ public sealed class MaterialBinding
 
     /// <summary>Switches added after parse (SwitchEntries is the parse-time list).</summary>
     private readonly List<MaterialSwitch> _switchEdits = new();
-    public IEnumerable<MaterialSwitch> AllSwitches => SwitchEntries.Concat(_switchEdits);
+    public IEnumerable<MaterialSwitch> AllSwitches => SwitchEntries.Concat(_switchEdits)
+        .Where(s => _switchContainer?.Elements.Contains(s.Element) == true);
 
     // ---- M150: editable shaderMacros ----
     private readonly List<MaterialMacro> _macroEdits = new();
@@ -527,13 +561,47 @@ public sealed class MaterialBinding
 
     /// <summary>Set (or add) a shaderMacro, writing straight into the live bin map so Serialize persists it.
     /// Values are Riot's "0"/"1" strings.</summary>
-    public MaterialMacro? SetMacro(string name, bool on)
+    public MaterialMacro? SetMacro(string name, bool on) => SetMacroValue(name, on ? "1" : "0");
+
+    /// <summary>Set a macro to its exact authored string value. Most are 0/1, but retaining the string is
+    /// required when a real Riot material uses a numeric feature value.</summary>
+    public MaterialMacro? SetMacroValue(string name, string value)
     {
-        if (MacroMap is null || string.IsNullOrWhiteSpace(name)) return null;
-        string value = on ? "1" : "0";
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        uint canonicalField = HashAlgorithms.Fnv1a("shaderMacros");
+        uint rawField = HashAlgorithms.Fnv1aRaw("shaderMacros");
+        if (_macroMap is null)
+        {
+            if (MaterialObject is null) return null;
+            _macroMap = new BinTreeMap(canonicalField, BinPropertyType.String, BinPropertyType.String,
+                Array.Empty<KeyValuePair<BinTreeProperty, BinTreeProperty>>());
+            MaterialObject.Properties[canonicalField] = _macroMap;
+            _structurallyEdited = true;
+        }
+        else if (MaterialObject is not null && rawField != canonicalField
+                 && MaterialObject.Properties.TryGetValue(rawField, out var rawProperty)
+                 && ReferenceEquals(rawProperty, _macroMap))
+        {
+            // BIN field hashes are lowercase FNV-1a. M348 accidentally authored this optional camel-case
+            // field with case-sensitive FNV when a material had no macro map yet. Riot displays the raw
+            // hash and can reject the StaticMaterialDef while loading. Preserve its entries but move the
+            // map onto the canonical schema field the first time it is edited.
+            if (MaterialObject.Properties.TryGetValue(canonicalField, out var canonicalProperty)
+                && canonicalProperty is BinTreeMap canonicalMap)
+                _macroMap = canonicalMap;
+            else
+            {
+                _macroMap = new BinTreeMap(canonicalField, BinPropertyType.String, BinPropertyType.String,
+                    _macroMap.ToArray());
+                MaterialObject.Properties[canonicalField] = _macroMap;
+            }
+            MaterialObject.Properties.Remove(rawField);
+            _structurallyEdited = true;
+        }
+        value = string.IsNullOrWhiteSpace(value) ? "0" : value.Trim();
         _macroRemoved.Remove(name);
 
-        foreach (var e in MacroMap)
+        foreach (var e in _macroMap)
             if (e.Key is BinTreeString k && k.Value.Equals(name, StringComparison.OrdinalIgnoreCase))
             {
                 if (e.Value is BinTreeString vs) vs.Value = value;
@@ -542,30 +610,28 @@ public sealed class MaterialBinding
                 return hit;
             }
 
-        // Not present yet — clone an existing entry's schema so the new pair matches the map's key/value types.
-        var proto = MacroMap.FirstOrDefault();
-        if (proto.Key is not BinTreeString || proto.Value is not BinTreeString) return null;
-        var newKey = (BinTreeString)BinTreeCloner.Clone(proto.Key, 0);
-        var newVal = (BinTreeString)BinTreeCloner.Clone(proto.Value, 0);
-        newKey.Value = name;
-        newVal.Value = value;
-        MacroMap.Add(newKey, newVal);
+        // String-to-string is the field's fixed schema; direct construction also works for an empty map.
+        var newKey = new BinTreeString(0, name);
+        var newVal = new BinTreeString(0, value);
+        _macroMap.Add(newKey, newVal);
         var macro = new MaterialMacro(name, value);
         _macroEdits.Add(macro);
+        _structurallyEdited = true;
         return macro;
     }
 
     /// <summary>Remove a shaderMacro entirely (absent = the shader's default, which differs from "0").</summary>
     public bool RemoveMacro(string name)
     {
-        if (MacroMap is null) return false;
+        if (_macroMap is null) return false;
         BinTreeProperty? key = null;
-        foreach (var e in MacroMap)
+        foreach (var e in _macroMap)
             if (e.Key is BinTreeString k && k.Value.Equals(name, StringComparison.OrdinalIgnoreCase)) { key = e.Key; break; }
         if (key is null) return false;
-        MacroMap.Remove(key);
+        _macroMap.Remove(key);
         _macroEdits.RemoveAll(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         _macroRemoved.Add(name);
+        _structurallyEdited = true;
         return true;
     }
 
@@ -609,15 +675,27 @@ public sealed class MaterialBinding
     public bool SetPassBool(string field, bool value)
     {
         if (PassStruct is null) return false;
-        switch (FindProp(PassStruct, field))
+        uint canonical = HashAlgorithms.Fnv1a(field);
+        uint raw = HashAlgorithms.Fnv1aRaw(field);
+        PassStruct.Properties.TryGetValue(canonical, out var property);
+        if (property is null && raw != canonical)
+            PassStruct.Properties.TryGetValue(raw, out property);
+        switch (property)
         {
             case BinTreeBool b: b.Value = value; break;
             case BinTreeBitBool bb: bb.Value = value; break;
             default:
-                uint h = HashAlgorithms.Fnv1aRaw(field);
-                PassStruct.Properties[h] = new BinTreeBool(h, value);
+                property = new BinTreeBool(canonical, value);
                 break;
         }
+        if (property.NameHash != canonical)
+            property = property switch
+            {
+                BinTreeBitBool => new BinTreeBitBool(canonical, value),
+                _ => new BinTreeBool(canonical, value),
+            };
+        PassStruct.Properties[canonical] = property;
+        if (raw != canonical) PassStruct.Properties.Remove(raw);
         _structurallyEdited = true;
         return true;
     }
@@ -635,17 +713,44 @@ public sealed class MaterialBinding
     public bool SetPassU32(string field, uint value)
     {
         if (PassStruct is null) return false;
-        switch (FindProp(PassStruct, field))
+        uint canonical = HashAlgorithms.Fnv1a(field);
+        uint raw = HashAlgorithms.Fnv1aRaw(field);
+        PassStruct.Properties.TryGetValue(canonical, out var property);
+        if (property is null && raw != canonical)
+            PassStruct.Properties.TryGetValue(raw, out property);
+        switch (property)
         {
             case BinTreeU32 u: u.Value = value; break;
             case BinTreeU8 b when value <= byte.MaxValue: b.Value = (byte)value; break;
             default:
-                uint h = HashAlgorithms.Fnv1aRaw(field);
-                PassStruct.Properties[h] = new BinTreeU32(h, value);
+                property = new BinTreeU32(canonical, value);
                 break;
         }
+        if (property.NameHash != canonical)
+            property = property switch
+            {
+                BinTreeU8 when value <= byte.MaxValue => new BinTreeU8(canonical, (byte)value),
+                _ => new BinTreeU32(canonical, value),
+            };
+        PassStruct.Properties[canonical] = property;
+        if (raw != canonical) PassStruct.Properties.Remove(raw);
         _structurallyEdited = true;
         return true;
+    }
+
+    public bool RemovePassProperty(string field)
+    {
+        if (PassStruct is null) return false;
+        foreach (var hash in new[] { HashAlgorithms.Fnv1aRaw(field), HashAlgorithms.Fnv1a(field) })
+            if (PassStruct.Properties.Remove(hash))
+            {
+                if (field.Equals("cullEnable", StringComparison.OrdinalIgnoreCase)) _cullEnableInit = null;
+                else if (field.Equals("srcColorBlendFactor", StringComparison.OrdinalIgnoreCase)) _srcBlendInit = -1;
+                else if (field.Equals("dstColorBlendFactor", StringComparison.OrdinalIgnoreCase)) _dstBlendInit = -1;
+                _structurallyEdited = true;
+                return true;
+            }
+        return false;
     }
 
     private static BinTreeProperty? FindProp(BinTreeStruct st, string field)
@@ -667,7 +772,7 @@ public sealed class MaterialBinding
 
     /// <summary>First pass's cullEnable — Riot's backface-culling flag: true = single-sided (cull back),
     /// false = double-sided. Null when the field is absent (M34).</summary>
-    private readonly bool? _cullEnableInit;
+    private bool? _cullEnableInit;
     public bool? CullEnable
     {
         get
@@ -684,8 +789,8 @@ public sealed class MaterialBinding
     }
     /// <summary>Raw src/dst colour blend factors from the first pass (Riot enum; -1 when absent). Observed
     /// SR/HA values: 6 (SrcAlpha) / 7 (OneMinusSrcAlpha) for alpha blending.</summary>
-    private readonly int _srcBlendInit = -1;
-    private readonly int _dstBlendInit = -1;
+    private int _srcBlendInit = -1;
+    private int _dstBlendInit = -1;
     public int SrcBlendFactor
     {
         get { int v = GetPassU32("srcColorBlendFactor"); return v >= 0 ? v : _srcBlendInit; }
@@ -704,7 +809,7 @@ public sealed class MaterialBinding
     public MaterialProfile Profile { get; internal set; } = MaterialProfile.Default;
 
     /// <summary>True for real StaticMaterialDef bindings (they carry the switches/params that drive the profile).</summary>
-    public bool IsStaticMaterialDef => SamplerContainer is not null;
+    public bool IsStaticMaterialDef => MaterialObject is not null;
 
     public MaterialBinding(string name, string shaderName, IReadOnlyList<string> submeshes, bool isDefault,
         List<TextureSlot> slots, IReadOnlyList<MaterialParameter> parameters)
@@ -730,27 +835,46 @@ public sealed class MaterialBinding
     public TextureSlot? MatCapMask => _slots.FirstOrDefault(s => s.IsMatCapMask);
 
     public bool IsDirty => _structurallyEdited || _slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty)
-                           || SwitchEntries.Any(s => s.IsDirty);
+                           || SwitchEntries.Any(s => s.IsDirty) || AllMacros.Any(m => m.IsDirty);
     private bool _structurallyEdited;
 
-    /// <summary>True when this material exposes editable sampler slots that can be added/removed.</summary>
-    public bool CanEditSamplers => SamplerContainer is not null && SamplerContainer.Elements.Count > 0 && PathFieldHash != 0;
+    /// <summary>Every real StaticMaterialDef can receive the standard sampler container, including a
+    /// shader whose authored material currently has no texture slots.</summary>
+    public bool CanEditSamplers => MaterialObject is not null;
 
-    /// <summary>Add a sampler slot by cloning an existing one (keeps the schema) and setting its name + path.</summary>
+    /// <summary>Add a sampler slot by cloning an existing one when possible, or by authoring Riot's
+    /// standard StaticMaterialShaderSamplerDef schema for a sampler-less material.</summary>
     public TextureSlot? AddSampler(string samplerName, string path)
     {
-        if (SamplerContainer is null || PathFieldHash == 0) return null;
-        if (SamplerContainer.Elements.FirstOrDefault() is not { } proto) return null;
+        if (MaterialObject is null) return null;
+        if (_samplerContainer is null)
+        {
+            uint field = HashAlgorithms.Fnv1a("samplerValues");
+            _samplerContainer = new BinTreeUnorderedContainer(field, BinPropertyType.Struct,
+                Array.Empty<BinTreeProperty>());
+            MaterialObject.Properties[field] = _samplerContainer;
+        }
 
-        var clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
-        if (clone.Properties.TryGetValue(PathFieldHash, out var p) && p is BinTreeString pathStr)
+        uint nameHash = NameFieldHash != 0 ? NameFieldHash : HashAlgorithms.Fnv1a("TextureName");
+        uint pathHash = PathFieldHash != 0 ? PathFieldHash : HashAlgorithms.Fnv1a("texturePath");
+        BinTreeStruct clone;
+        if (_samplerContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } proto)
+            clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
+        else
+            clone = new BinTreeStruct(0, 0x0904b150, new BinTreeProperty[]
+            {
+                new BinTreeString(nameHash, samplerName),
+                new BinTreeString(pathHash, path),
+            });
+
+        if (clone.Properties.TryGetValue(pathHash, out var p) && p is BinTreeString pathStr)
             pathStr.Value = path;
         else return null;
-        if (NameFieldHash != 0 && clone.Properties.TryGetValue(NameFieldHash, out var n) && n is BinTreeString nameStr)
+        if (clone.Properties.TryGetValue(nameHash, out var n) && n is BinTreeString nameStr)
             nameStr.Value = samplerName;
 
-        SamplerContainer.Add(clone);
-        var slot = new TextureSlot(samplerName, (BinTreeString)clone.Properties[PathFieldHash], clone);
+        _samplerContainer.Add(clone);
+        var slot = new TextureSlot(samplerName, (BinTreeString)clone.Properties[pathHash], clone);
         _slots.Add(slot);
         _structurallyEdited = true;
         return slot;
@@ -786,21 +910,41 @@ public sealed class MaterialBinding
         foreach (var s in _slots) s.Revert();
         foreach (var p in Parameters) p.Revert();
         foreach (var w in SwitchEntries) w.Revert();
+        foreach (var m in AllMacros) m.Revert();
     }
 
     // ---- M55: parameter add/remove (same clone-the-schema approach as samplers) ----
 
-    /// <summary>True when parameters can be added (needs at least one existing param to clone the schema).</summary>
-    public bool CanEditParameters => ParamContainer is not null && ParamContainer.Elements.OfType<BinTreeStruct>().Any();
+    /// <summary>Every real StaticMaterialDef can receive the standard parameter container, including a
+    /// material whose current shader authored no parameters at all.</summary>
+    public bool CanEditParameters => MaterialObject is not null;
 
     /// <summary>Add a parameter by cloning an existing one (keeps the value TYPE of the prototype — edit the
     /// value afterwards). Null when this material has no parameter to clone from.</summary>
     public MaterialParameter? AddParameter(string name)
     {
-        if (ParamContainer is null) return null;
-        if (ParamContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault() is not { } proto) return null;
+        if (MaterialObject is null) return null;
+        if (_paramContainer is null)
+        {
+            uint field = HashAlgorithms.Fnv1a("paramValues");
+            _paramContainer = new BinTreeUnorderedContainer(field, BinPropertyType.Struct,
+                Array.Empty<BinTreeProperty>());
+            MaterialObject.Properties[field] = _paramContainer;
+        }
 
-        var clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
+        BinTreeStruct clone;
+        if (_paramContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } proto)
+            clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
+        else
+        {
+            uint nameField = HashAlgorithms.Fnv1a("name"), valueField = HashAlgorithms.Fnv1a("value");
+            clone = new BinTreeStruct(0, HashAlgorithms.Fnv1a("StaticMaterialShaderParamDef"),
+                new BinTreeProperty[]
+                {
+                    new BinTreeString(nameField, name),
+                    new BinTreeVector4(valueField, System.Numerics.Vector4.Zero),
+                });
+        }
         static uint HashOf(IReadOnlyDictionary<uint, BinTreeProperty> props, string n)
         {
             uint h = HashAlgorithms.Fnv1aRaw(n);
@@ -814,17 +958,29 @@ public sealed class MaterialBinding
         if (clone.Properties[nameHash] is not BinTreeString ns) return null;
         ns.Value = name;
 
-        ParamContainer.Add(clone);
+        _paramContainer.Add(clone);
         var p = new MaterialParameter(name, clone.Properties[valueHash], clone);
         _params.Add(p);
         _structurallyEdited = true;
         return p;
     }
 
+    /// <summary>Set or add a standard shader vector parameter.</summary>
+    public MaterialParameter? SetVectorParameter(string name, System.Numerics.Vector4 value)
+    {
+        var parameter = _params.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                        ?? AddParameter(name);
+        if (parameter is null) return null;
+        string text = string.Join(", ", new[] { value.X, value.Y, value.Z, value.W }
+            .Select(x => x.ToString("R", System.Globalization.CultureInfo.InvariantCulture)));
+        try { parameter.Apply(text); return parameter; }
+        catch { return null; }
+    }
+
     public bool RemoveParameter(MaterialParameter p)
     {
-        if (ParamContainer is null || p.Element is null) return false;
-        if (!ParamContainer.Remove(p.Element)) return false;
+        if (_paramContainer is null || p.Element is null) return false;
+        if (!_paramContainer.Remove(p.Element)) return false;
         _params.Remove(p);
         _structurallyEdited = true;
         return true;
