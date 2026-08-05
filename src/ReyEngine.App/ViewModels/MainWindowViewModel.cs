@@ -6390,6 +6390,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                         || material.RenderShader?.Contains("VertexDeform", StringComparison.OrdinalIgnoreCase) == true))
                 .Select(material => material.Name)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (LegacyMapPorter.MapSpecificBushMaterials(mapEntry.Path) is { } mapSpecificBushMaterials)
+                bushMaterials = mapSpecificBushMaterials.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var placements = MapPlaceableExtractor.Extract(originalBinBytes);
             var particles = MapParticleExtractor.Extract(originalBinBytes, ResolveLegacyName);
             int bushCount = LegacyMapPorter.CountBushMeshes(originalMapBytes, bushMaterials);

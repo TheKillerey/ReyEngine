@@ -76,7 +76,7 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
                   $"{result.ImportedMeshCount:n0} mapgeo meshes, {result.Textures.Count:n0} textures, " +
                   $"{result.Materials.Count:n0} materials.";
         MeshCleanupText = $"Remove original non-bush meshes ({destination.OrdinaryMeshes:n0})";
-        BushCleanupText = $"Remove original bushes / VertexDeform foliage ({destination.BushMeshes:n0})";
+        BushCleanupText = $"Remove original gameplay bushes ({destination.BushMeshes:n0})";
         MaterialCleanupText = $"Remove unused original materials ({destination.Materials:n0} total before cleanup)";
         ParticleCleanupText = $"Remove original particles ({destination.Particles:n0})";
         PropCleanupText = $"Remove original animated props / mobs ({destination.Props:n0})";
@@ -117,7 +117,7 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
             + (RemoveOriginalBushes ? 0 : _destination.BushMeshes);
         var retained = new List<string>();
         if (!RemoveOriginalBushes && _destination.BushMeshes > 0)
-            retained.Add($"{_destination.BushMeshes:n0} bush / foliage meshes");
+            retained.Add($"{_destination.BushMeshes:n0} gameplay bush meshes");
         if (!RemoveOriginalMeshes && _destination.OrdinaryMeshes > 0)
             retained.Add($"{_destination.OrdinaryMeshes:n0} other meshes");
         string meshResult = retainedMeshes == 0

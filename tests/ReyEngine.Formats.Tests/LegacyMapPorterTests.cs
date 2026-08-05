@@ -5,6 +5,19 @@ namespace ReyEngine.Formats.Tests;
 public sealed class LegacyMapPorterTests
 {
     [Fact]
+    public void JadeContainerUsesOnlyItsDefaultEnvGameplayBushMaterial()
+    {
+        var materials = LegacyMapPorter.MapSpecificBushMaterials(
+            "data/maps/mapgeometry/map453/jade_container.mapgeo");
+
+        Assert.NotNull(materials);
+        Assert.Equal("Maps/KitPieces/Jade/Base/Materials/Default/Jade_Foliage_Grass_AA_MAT",
+            Assert.Single(materials!));
+        Assert.Null(LegacyMapPorter.MapSpecificBushMaterials(
+            "data/maps/mapgeometry/map11/base_srx.mapgeo"));
+    }
+
+    [Fact]
     public void AppliesUserShaderChoicesToEveryDetectedRole()
     {
         static LegacyMaterialPlan Plan(string name, LegacyMaterialRole role) => new(name, role, "old",

@@ -87,6 +87,24 @@ public static class LegacyMapPorter
     public const string GrassShader = "Shaders/StaticMesh/VertexDeform";
     public const string TerrainShader = "Shaders/StaticMesh/4TextureBlend_WorldProjected";
     private const int MaxVertices = 65535;
+    private static readonly IReadOnlySet<string> JadeContainerBushMaterials = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        // Map453's gameplay brush is intentionally DefaultEnv_Flat, not VertexDeform. Do not broaden
+        // this to Jade_Foliage_*: leaves, flowers, mushrooms and vines are ordinary decorative geometry.
+        "Maps/KitPieces/Jade/Base/Materials/Default/Jade_Foliage_Grass_AA_MAT",
+    };
+
+    /// <summary>Some destinations do not identify gameplay bushes by shader. A non-null result replaces
+    /// shader-derived classification for that exact map; it is never applied globally.</summary>
+    public static IReadOnlySet<string>? MapSpecificBushMaterials(string? destinationMapGeoPath)
+    {
+        if (string.IsNullOrWhiteSpace(destinationMapGeoPath)) return null;
+        string path = destinationMapGeoPath.Replace('\\', '/').TrimStart('/');
+        return path.EndsWith("data/maps/mapgeometry/map453/jade_container.mapgeo", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith("maps/mapgeometry/map453/jade_container.mapgeo", StringComparison.OrdinalIgnoreCase)
+            ? JadeContainerBushMaterials
+            : null;
+    }
 
     public static LegacyMapPortResult ApplyShaderOptions(LegacyMapPortResult result, LegacyPortShaderOptions options)
     {
@@ -143,7 +161,7 @@ public static class LegacyMapPorter
             }
             var keptSubmeshes = mesh.Submeshes.Where(submesh =>
             {
-                bool bush = bushMaterials.Contains(submesh.Material) || LooksLikeBushMaterial(submesh.Material);
+                bool bush = bushMaterials.Contains(submesh.Material);
                 return !(bush ? options.RemoveOriginalBushes : options.RemoveOriginalMeshes);
             }).ToList();
             removedSubmeshes += mesh.Submeshes.Count - keptSubmeshes.Count;
@@ -155,8 +173,8 @@ public static class LegacyMapPorter
                 continue;
             }
 
-            bool wasBushOnly = mesh.Submeshes.Count > 0 && mesh.Submeshes.All(submesh =>
-                bushMaterials.Contains(submesh.Material) || LooksLikeBushMaterial(submesh.Material));
+            bool wasBushOnly = mesh.Submeshes.Count > 0
+                && mesh.Submeshes.All(submesh => bushMaterials.Contains(submesh.Material));
             if (wasBushOnly) removedBushes++; else removedMeshes++;
         }
 
@@ -177,8 +195,7 @@ public static class LegacyMapPorter
         if (!MapGeoBinary.TryReadEditable(mapGeoBytes, out var map)) return 0;
         bushMaterials ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         return map.Meshes.Count(mesh => (!mesh.HasRegionHash || mesh.RegionHash == 0) && !IsPreviousLegacyImport(mesh)
-            && mesh.Submeshes.Any(submesh => bushMaterials.Contains(submesh.Material)
-                || LooksLikeBushMaterial(submesh.Material)));
+            && mesh.Submeshes.Any(submesh => bushMaterials.Contains(submesh.Material)));
     }
 
     public static int CountPreviousImportedMeshes(byte[] mapGeoBytes)
@@ -189,12 +206,6 @@ public static class LegacyMapPorter
 
     private static bool IsPreviousLegacyImport(MapGeoBinary.Mesh mesh) =>
         mesh.Submeshes.Any(submesh => submesh.Material.StartsWith("LegacyPort/", StringComparison.OrdinalIgnoreCase));
-
-    private static bool LooksLikeBushMaterial(string material) =>
-        material.Contains("bush", StringComparison.OrdinalIgnoreCase)
-        || material.Contains("brush", StringComparison.OrdinalIgnoreCase)
-        || material.Contains("grass", StringComparison.OrdinalIgnoreCase)
-        || material.Contains("foliage", StringComparison.OrdinalIgnoreCase);
 
     public static LegacyMapPortResult Port(string sourceRoot, byte[] destinationMapGeo,
         string? destinationMapGeoPath = null)
