@@ -6428,6 +6428,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     ? material with { Shader = shader }
                     : material).ToList(),
             };
+        bool correctedLegacyPosition = selection?.FixImportedMapPosition == true;
+        if (correctedLegacyPosition)
+        {
+            try { result = LegacyMapPorter.ApplyImportedPositionCorrection(result); }
+            catch (Exception ex)
+            { _log.Error("Legacy Port", $"Imported map position correction failed: {ex.Message}"); return; }
+        }
 
         LegacyMeshCleanupResult meshCleanup;
         try
@@ -6565,7 +6572,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 $"{meshCleanup.RemovedSubmeshCount:n0} material ranges, {removedPlacements:n0} placements, " +
                 $"and {removedMaterials:n0} unused materials; " +
                 $"rebuilt {replacedGenerated:n0} earlier legacy material(s), retained {meshCleanup.RetainedOriginalMeshCount:n0} " +
-                $"selected destination meshes, and protected {result.PreservedRenderRegionMeshCount:n0} render-region meshes.");
+                $"selected destination meshes, and protected {result.PreservedRenderRegionMeshCount:n0} render-region meshes" +
+                (correctedLegacyPosition ? $"; imported geometry moved by ({LegacyMapPorter.LegacyPositionCorrection.X:0.###}, " +
+                    $"{LegacyMapPorter.LegacyPositionCorrection.Y:0.###}, {LegacyMapPorter.LegacyPositionCorrection.Z:0.###})." : "."));
             if (TryResolveEntry(mapEntry.PathHash, out var reloaded)) await LoadMapGeoAsync(reloaded);
             Status = "Legacy map port complete.";
         }

@@ -5,6 +5,19 @@ namespace ReyEngine.Formats.Tests;
 public sealed class LegacyMapPorterTests
 {
     [Fact]
+    public void LegacyPositionCorrectionMatchesMeasuredAnchorDifference()
+    {
+        var before = new System.Numerics.Vector3(1876.810f, 48.144f, 7264.247f);
+        var after = new System.Numerics.Vector3(2349.930f, -18.828f, 7502.003f);
+
+        var corrected = before + LegacyMapPorter.LegacyPositionCorrection;
+
+        Assert.Equal(after.X, corrected.X, 3);
+        Assert.Equal(after.Y, corrected.Y, 3);
+        Assert.Equal(after.Z, corrected.Z, 3);
+    }
+
+    [Fact]
     public void JadeContainerUsesOnlyItsDefaultEnvGameplayBushMaterial()
     {
         var materials = LegacyMapPorter.MapSpecificBushMaterials(

@@ -31,7 +31,8 @@ public sealed partial class LegacyPortMaterialRowViewModel : ObservableObject
 public sealed record LegacyMapPortShaderSelection(
     LegacyPortShaderOptions RoleShaders,
     IReadOnlyDictionary<string, string> MaterialShaders,
-    LegacyPortCleanupOptions Cleanup);
+    LegacyPortCleanupOptions Cleanup,
+    bool FixImportedMapPosition);
 
 public sealed record LegacyDestinationContentSummary(
     int OrdinaryMeshes,
@@ -53,6 +54,7 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     [ObservableProperty] private bool _removeOriginalProps = true;
     [ObservableProperty] private bool _removeOriginalSounds = true;
     [ObservableProperty] private bool _removeOriginalProbes = true;
+    [ObservableProperty] private bool _fixImportedMapPosition;
     [ObservableProperty] private string _cleanupOutcome = "";
     private readonly LegacyDestinationContentSummary _destination;
     public string Summary { get; }
@@ -209,7 +211,7 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
             RemoveOriginalSounds, RemoveOriginalProbes);
         Confirmed?.Invoke(new LegacyMapPortShaderSelection(options,
             Materials.ToDictionary(material => material.Name, material => material.SelectedShader!, StringComparer.OrdinalIgnoreCase),
-            cleanup));
+            cleanup, FixImportedMapPosition));
     }
 
     [RelayCommand]
