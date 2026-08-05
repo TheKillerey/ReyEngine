@@ -228,6 +228,14 @@
                           <DataTemplate x:DataType="vm:MaterialBindingViewModel">
                             <Border Classes="card">
                               <StackPanel Spacing="6">
+                                <!-- M351k: the material ball - a CPU-lit sphere sampling the diffuse through the UV
+                                     transform. Honest about scope: it shows texture, tiling and shape, not the Riot
+                                     shader; Riot Approx in the viewport stays the truth for that. -->
+                                <Grid ColumnDefinitions="Auto,*">
+                                  <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="6" Padding="4" VerticalAlignment="Top">
+                                    <Image Source="{Binding SpherePreview}" Width="96" Height="96" />
+                                  </Border>
+                                  <StackPanel Grid.Column="1" Spacing="5" Margin="10,0,0,0">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                   <!-- M125: red name + ⚠ when this material's bin object needed repairs -->
                                   <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="12" VerticalAlignment="Center"
@@ -255,6 +263,8 @@
                                       </Border>
                                       <TextBlock Text="⚠ profile unresolved" Foreground="#FFB454" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding ProfileUnresolved}" />
                                     </StackPanel>
+                                  </StackPanel>
+                                </Grid>
                       <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
                         <Expander.Header><TextBlock Classes="cardTitle" Text="GENERAL" /></Expander.Header>
                         <StackPanel Spacing="3" Margin="0,4,0,0">
@@ -273,8 +283,27 @@
                                              Foreground="{DynamicResource ReyTextDimBrush}"
                                              IsVisible="{Binding ShaderDefSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
+                                    <!-- M351j: texture settings. UV was a read-only line pointing at the parameter list; now the
+                                         scale/offset are edited here and written THROUGH the parameter machinery (undo, dirty,
+                                         live preview all behave as if the parameter row was edited by hand). -->
+                                    <StackPanel Spacing="2" IsVisible="{Binding CanEditUv}">
+                                      <Grid ColumnDefinitions="Auto,*,Auto,*,Auto" ColumnSpacing="4">
+                                        <TextBlock Grid.Column="0" Text="UV scale" FontSize="9" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                                        <TextBox Grid.Column="1" Text="{Binding UvScaleText}" FontSize="10" Padding="4,1" FontFamily="Cascadia Mono, Consolas, monospace">
+                                          <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyUvCommand}" /></TextBox.KeyBindings>
+                                        </TextBox>
+                                        <TextBlock Grid.Column="2" Text="offset" FontSize="9" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                                        <TextBox Grid.Column="3" Text="{Binding UvOffsetText}" FontSize="10" Padding="4,1" FontFamily="Cascadia Mono, Consolas, monospace">
+                                          <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyUvCommand}" /></TextBox.KeyBindings>
+                                        </TextBox>
+                                        <Button Grid.Column="4" Content="Set" Command="{Binding ApplyUvCommand}" FontSize="10" Padding="7,1"
+                                                ToolTip.Tip="Writes the UV scale/offset into this material's UV parameters (created under the canonical name when missing)" />
+                                      </Grid>
+                                      <TextBlock Text="{Binding UvStatus}" FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
+                                                 IsVisible="{Binding UvStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </StackPanel>
                                     <TextBlock Text="{Binding UvTransformText}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10"
-                                               ToolTip.Tip="Read from this material's UV parameters — edit them in the parameter list below" />
+                                               IsVisible="{Binding !CanEditUv}" />
                                     <TextBlock Text="{Binding UvSourceText}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="9" IsVisible="{Binding HasUvSource}" />
                                     <TextBlock Text="{Binding RenderModeLabel, StringFormat='Blend mode: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
                         </StackPanel>
@@ -304,8 +333,6 @@
                                         </Grid>
                                         <!-- M96: wraps instead of clipping when the inspector is narrow -->
                                         <WrapPanel>
-                                          <Button Classes="tool" Content="Preview" Command="{Binding PreviewCommand}" Margin="0,0,4,2"
-                                                  ToolTip.Tip="Show / hide the inline thumbnail" />
                                           <Button Classes="tool" Content="Open" Command="{Binding OpenCommand}" Margin="0,0,4,2" />
                                           <Button Classes="tool" Content="Copy" Command="{Binding CopyPathCommand}" Margin="0,0,4,2" />
                                           <Button Classes="tool" Content="Replace Texture…" Command="{Binding ReplaceCommand}" Margin="0,0,4,2" />

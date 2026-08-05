@@ -3647,6 +3647,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Inspector.CopyHandler = Dialogs.CopyAsync;   // M351c: copy button beside the asset path
         MaterialEditor.TextureExists = TextureExistsByPath;
         MaterialEditor.LoadThumbnail = LoadThumbnailByPath;
+        MaterialEditor.LoadTextureRaw = LoadTextureByPath;   // M351k: the material ball samples raw RGBA
         MaterialEditor.OpenTexture = OpenTextureByPath;
         MaterialEditor.ReplaceTextureAsset = ReplaceTextureForSlot;
         MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
