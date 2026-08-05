@@ -1,0 +1,74 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+             x:Class="ReyEngine.App.Views.InspectorHeaderView"
+             x:DataType="vm:MainWindowViewModel"
+             x:CompileBindings="True">
+  <!-- M351c: the asset identity header - Asset / Type / Source / Size as four cells.
+
+       It used to be a stack of four wrapping paragraphs: a name, a type badge, a status sentence
+       ("Read-only Riot material") and an override line. Two of those were prose describing facts the
+       view-model already had, and the size was not shown at all - it was a line inside the monospace
+       Details blob further down. Reading "how big is this and where did it come from" meant parsing
+       English out of two different places. -->
+  <Border Classes="card" IsVisible="{Binding Inspector.HasAsset}">
+    <Grid ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto">
+
+      <!-- ASSET -->
+      <StackPanel Grid.Row="0" Grid.Column="0" Spacing="2" Margin="0,0,14,0">
+        <TextBlock Text="Asset" FontSize="9" FontWeight="SemiBold" LetterSpacing="0.6"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <StackPanel Orientation="Horizontal" Spacing="5">
+          <TextBlock Text="{Binding Inspector.Title}" Foreground="{DynamicResource ReyTextBrightBrush}"
+                     FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                     ToolTip.Tip="{Binding Inspector.AssetPath}" VerticalAlignment="Center" />
+          <Button Classes="tool" Content="⧉" FontSize="10" Padding="4,0" VerticalAlignment="Center"
+                  Command="{Binding Inspector.CopyPathCommand}"
+                  ToolTip.Tip="Copy the full asset path" />
+        </StackPanel>
+      </StackPanel>
+
+      <!-- TYPE -->
+      <StackPanel Grid.Row="0" Grid.Column="1" Spacing="2" Margin="0,0,14,0">
+        <TextBlock Text="Type" FontSize="9" FontWeight="SemiBold" LetterSpacing="0.6"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <StackPanel Orientation="Horizontal" Spacing="5">
+          <Border Classes="badge outline" VerticalAlignment="Center">
+            <TextBlock Text="{Binding Inspector.Subtitle}" />
+          </Border>
+          <Border Classes="badge violet" IsVisible="{Binding Inspector.IsModified}" VerticalAlignment="Center">
+            <TextBlock Text="MODIFIED" />
+          </Border>
+        </StackPanel>
+      </StackPanel>
+
+      <!-- SOURCE -->
+      <StackPanel Grid.Row="0" Grid.Column="2" Spacing="2" Margin="0,0,14,0">
+        <TextBlock Text="Source" FontSize="9" FontWeight="SemiBold" LetterSpacing="0.6"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <TextBlock Text="{Binding Inspector.SourceLabel}" FontSize="11" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ReyTextBrush}" />
+      </StackPanel>
+
+      <!-- SIZE -->
+      <StackPanel Grid.Row="0" Grid.Column="3" Spacing="2">
+        <TextBlock Text="Size" FontSize="9" FontWeight="SemiBold" LetterSpacing="0.6"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <TextBlock Text="{Binding Inspector.SizeLabel}" FontSize="11" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ReyTextBrush}" />
+      </StackPanel>
+
+      <!-- Status prose still has a home, but below the cells rather than instead of them. It is kept
+           because it can carry detail the Source cell cannot ("Project material (editable)"), and
+           dropping it would quietly lose information. Both lines hide when empty. -->
+      <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Spacing="2" Margin="0,8,0,0">
+        <TextBlock Text="{Binding Inspector.AssetStatus}" FontSize="10" TextWrapping="Wrap"
+                   Foreground="{DynamicResource ReyTextDimBrush}"
+                   IsVisible="{Binding Inspector.AssetStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        <TextBlock Text="{Binding Inspector.AssetSource}" FontSize="10" TextWrapping="Wrap"
+                   Foreground="{DynamicResource ReyAccent2Brush}"
+                   IsVisible="{Binding Inspector.IsModified}" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

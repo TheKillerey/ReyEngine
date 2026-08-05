@@ -893,25 +893,9 @@
                    for the outliner/viewport selection — moved here from the left outliner -->
               <views:SceneObjectInspectorView />
 
-              <!-- M39: asset identity card — name + type badge + source/modified status -->
-              <Border Classes="card">
-                <StackPanel Spacing="6">
-                  <TextBlock Text="{Binding Inspector.Title}" Foreground="{DynamicResource ReyTextBrightBrush}"
-                             FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
-                  <StackPanel Orientation="Horizontal" Spacing="6">
-                    <Border Classes="badge outline">
-                      <TextBlock Text="{Binding Inspector.Subtitle}" />
-                    </Border>
-                    <Border Classes="badge violet" IsVisible="{Binding Inspector.IsModified}">
-                      <TextBlock Text="MODIFIED" />
-                    </Border>
-                  </StackPanel>
-                  <TextBlock Text="{Binding Inspector.AssetStatus}" FontSize="11"
-                             Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-                  <TextBlock Text="{Binding Inspector.AssetSource}" FontSize="10"
-                             Foreground="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding Inspector.IsModified}" TextWrapping="Wrap" />
-                </StackPanel>
-              </Border>
+              <!-- M351c: the asset identity card moved into InspectorView, so the whole inspector -
+                   header, tabs and all - lives in one file. -->
+              <views:InspectorHeaderView />
 
               <!-- texture preview (M90: closable — there was no way back out of it) -->
               <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8"

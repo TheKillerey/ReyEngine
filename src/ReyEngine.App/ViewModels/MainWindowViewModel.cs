@@ -3644,6 +3644,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         MaterialEditor.UndoService = UndoService;
         MaterialEditor.CopyHandler = Dialogs.CopyAsync;
+        Inspector.CopyHandler = Dialogs.CopyAsync;   // M351c: copy button beside the asset path
         MaterialEditor.TextureExists = TextureExistsByPath;
         MaterialEditor.LoadThumbnail = LoadThumbnailByPath;
         MaterialEditor.OpenTexture = OpenTextureByPath;
