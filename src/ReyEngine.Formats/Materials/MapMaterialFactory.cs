@@ -13,6 +13,44 @@ namespace ReyEngine.Formats.Materials;
 /// </summary>
 public static class MapMaterialFactory
 {
+    public static bool ContainsMaterial(byte[] materialsBin, string name)
+    {
+        try { return SafeBinTree.Parse(materialsBin).Objects.ContainsKey(HashAlgorithms.Fnv1a(name)); }
+        catch { return false; }
+    }
+
+    /// <summary>Clone a proven StaticMaterialDef from any game bin into a map materials bin. Unlike
+    /// <see cref="CloneMaterial"/>, the template does not have to already belong to the target map.</summary>
+    public static byte[]? ImportMaterial(byte[] targetMaterialsBin, byte[] sourceBin,
+        uint templateHash, string templateName, string newName, out string? error)
+    {
+        error = null;
+        try
+        {
+            var target = SafeBinTree.Parse(targetMaterialsBin);
+            var source = SafeBinTree.Parse(sourceBin);
+            if (!source.Objects.TryGetValue(templateHash, out var template))
+                template = source.Objects.Values.FirstOrDefault(o => o.PathHash == HashAlgorithms.Fnv1a(templateName));
+            if (template is null) { error = $"Template material '{templateName}' was not found in its source bin."; return null; }
+
+            uint newHash = HashAlgorithms.Fnv1a(newName);
+            if (target.Objects.ContainsKey(newHash)) { error = $"A material named '{newName}' already exists."; return null; }
+            var clone = new BinTreeObject(newHash, template.ClassHash,
+                template.Properties.Select(kv => BinTreeCloner.Clone(kv.Value, kv.Key)));
+            uint nameField = HashAlgorithms.Fnv1a("name");
+            if (clone.Properties.TryGetValue(nameField, out var name) && name is BinTreeString text)
+                text.Value = newName;
+            target.Objects[newHash] = clone;
+
+            using var output = new MemoryStream();
+            target.Write(output);
+            var bytes = output.ToArray();
+            _ = SafeBinTree.Parse(bytes);
+            return bytes;
+        }
+        catch (Exception ex) { error = ex.Message; return null; }
+    }
+
     /// <summary>Write an RGBA image as an uncompressed BGRA .dds (the game loads plain DDS fine).</summary>
     public static byte[] WriteDds(int width, int height, byte[] rgba)
     {
@@ -96,6 +134,18 @@ public static class MapMaterialFactory
     /// </summary>
     public static byte[]? CreateFromShader(byte[] materialsBin, string newName,
         Shaders.LeagueShaderDef shader, out string? error, string? diffuseOverride = null)
+        => CreateFromShader(materialsBin, newName, shader, out error,
+            samplerOverrides: diffuseOverride is null ? null : new Dictionary<string, string> { ["__diffuse__"] = diffuseOverride });
+
+    /// <summary>Create a material from a shader while applying authored sampler, parameter, switch and
+    /// macro defaults. Used by the legacy-map porter: the mapgeo owns the per-mesh texture overrides,
+    /// while this creates only one editable material per rendering role.</summary>
+    public static byte[]? CreateFromShader(byte[] materialsBin, string newName,
+        Shaders.LeagueShaderDef shader, out string? error,
+        IReadOnlyDictionary<string, string>? samplerOverrides,
+        IReadOnlyDictionary<string, System.Numerics.Vector4>? parameterOverrides = null,
+        IReadOnlyDictionary<string, bool>? switches = null,
+        IReadOnlyDictionary<string, bool>? macros = null)
     {
         error = null;
         try
@@ -107,6 +157,7 @@ public static class MapMaterialFactory
             uint F(string n) => HashAlgorithms.Fnv1a(n);
             const uint SamplerClass = 0x0904b150;   // StaticMaterialShaderSamplerDef
             const uint ParamClass   = 0xde480eef;   // StaticMaterialShaderParamDef
+            const uint SwitchClass  = 0x0e2212a1;   // StaticMaterialSwitchDef
             const uint TechClass    = 0x060a4413;   // StaticMaterialTechniqueDef
             const uint PassClass    = 0x8537d0c2;   // StaticMaterialPassDef
             const uint MaterialClass = 0xad4b8ac0;  // StaticMaterialDef (overwritten below from a real object when present)
@@ -118,9 +169,11 @@ public static class MapMaterialFactory
             // takes the override (imported texture) when provided
             var samplers = new List<BinTreeProperty>();
             bool overrideUsed = false;
+            string? diffuseOverride = null;
+            samplerOverrides?.TryGetValue("__diffuse__", out diffuseOverride);
             foreach (var t in shader.Textures)
             {
-                string path = t.DefaultTexturePath;
+                string path = samplerOverrides?.GetValueOrDefault(t.Name) ?? t.DefaultTexturePath;
                 bool diffuseIsh = t.Name.Contains("Diffuse", StringComparison.OrdinalIgnoreCase);
                 if (diffuseOverride is not null && !overrideUsed && (diffuseIsh || shader.Textures.Count == 1))
                 { path = diffuseOverride; overrideUsed = true; }
@@ -137,11 +190,25 @@ public static class MapMaterialFactory
                 ((BinTreeString)first.Properties[F("texturePath")]).Value = diffuseOverride;
             }
 
-            var parameters = shader.Parameters.Select(pd => (BinTreeProperty)new BinTreeStruct(0, ParamClass, new BinTreeProperty[]
+            var parameters = shader.Parameters.Select(pd =>
             {
-                new BinTreeString(F("name"), pd.Name),
-                new BinTreeVector4(F("value"), new System.Numerics.Vector4(pd.X, pd.Y, pd.Z, pd.W)),
-            })).ToList();
+                var value = parameterOverrides?.GetValueOrDefault(pd.Name) ?? new System.Numerics.Vector4(pd.X, pd.Y, pd.Z, pd.W);
+                return (BinTreeProperty)new BinTreeStruct(0, ParamClass, new BinTreeProperty[]
+                {
+                    new BinTreeString(F("name"), pd.Name),
+                    new BinTreeVector4(F("value"), value),
+                });
+            }).ToList();
+
+            var switchValues = (switches ?? new Dictionary<string, bool>())
+                .Select(kv => (BinTreeProperty)new BinTreeStruct(0, SwitchClass, new BinTreeProperty[]
+                {
+                    new BinTreeString(F("name"), kv.Key),
+                    new BinTreeBool(F("on"), kv.Value),
+                })).ToList();
+            var macroValues = (macros ?? new Dictionary<string, bool>())
+                .Select(kv => new KeyValuePair<BinTreeProperty, BinTreeProperty>(
+                    new BinTreeString(0, kv.Key), new BinTreeString(0, kv.Value ? "1" : "0"))).ToList();
 
             var pass = new BinTreeStruct(0, PassClass, new BinTreeProperty[]
             {
@@ -157,12 +224,13 @@ public static class MapMaterialFactory
             {
                 new BinTreeString(F("name"), newName),
                 new BinTreeU32(F("type"), 0),
-                new BinTreeMap(F("shaderMacros"), BinPropertyType.String, BinPropertyType.String,
-                    Enumerable.Empty<KeyValuePair<BinTreeProperty, BinTreeProperty>>()),
+                new BinTreeMap(F("shaderMacros"), BinPropertyType.String, BinPropertyType.String, macroValues),
                 new BinTreeUnorderedContainer(F("samplerValues"), BinPropertyType.Struct, samplers),
                 new BinTreeUnorderedContainer(F("paramValues"), BinPropertyType.Struct, parameters),
                 new BinTreeContainer(F("techniques"), BinPropertyType.Struct, new BinTreeProperty[] { technique }),
             };
+            if (switchValues.Count > 0)
+                props.Insert(5, new BinTreeUnorderedContainer(F("switches"), BinPropertyType.Struct, switchValues));
 
             tree.Objects[newHash] = new BinTreeObject(newHash, materialClass, props);
             using var outMs = new MemoryStream();

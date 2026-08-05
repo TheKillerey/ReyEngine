@@ -88,6 +88,11 @@
       <!-- M143: grouped by purpose — open-an-editor and per-asset actions up top (used constantly),
            the occasional utilities tucked into submenus. Build Package lives in Project + the toolbar. -->
       <MenuItem Header="_Tools">
+        <MenuItem Header="Workshop..." Command="{Binding OpenWorkshopCommand}"
+                  ToolTip.Tip="Browse one real game material per shader and every unique installed particle, then add a complete template directly to the open map" />
+        <MenuItem Header="Port Legacy NVR / WGEO into Open Map..." Command="{Binding PortLegacyMapCommand}"
+                  ToolTip.Tip="Replace the open mapgeo's ordinary geometry from an old room.nvr or room.wgeo, port unique textures and shared editable materials, and retain the destination render regions" />
+        <Separator />
         <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"
                   ToolTip.Tip="Open the active document's .bin in the Particle Editor (works for skin bins and map materials.bin that contain VFX systems)" />
         <MenuItem Header="Open in HUD Editor" Command="{Binding OpenInHudEditorCommand}"
@@ -570,6 +575,9 @@
               <Button Classes="tool" Content="➕ Add Mesh" Command="{Binding AddMeshToMapCommand}"
                       IsVisible="{Binding HasMapGeo}" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Import a mesh (.obj / .scb / .sco) and append it to this map. Place it with the gizmo, pick its material in the inspector, then Save to Mod." />
+              <Button Classes="tool" Content="Workshop" Command="{Binding OpenWorkshopCommand}"
+                      IsVisible="{Binding HasMapGeo}" FontSize="11" Padding="8,3" Margin="0"
+                      ToolTip.Tip="Add a complete Riot material or particle template directly to this map" />
               <Button Classes="tool" Content="⛶ Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Frame the camera on the loaded content" />
             </StackPanel>
@@ -1059,6 +1067,40 @@
                                      Foreground="{DynamicResource ReyAccentBrush}" />
                           <TextBlock Text="{Binding ShaderDbStatus}" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
                           <TextBlock Text="The sampler slots below are the material's bound textures (required samplers). Switch the viewport to 'Riot Approx' to preview." FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </Border>
+                      <!-- M335: whole-document shader conversion. This intentionally ignores the selected-
+                           mesh filter: every material using the source shader must change together. -->
+                      <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8,6">
+                        <StackPanel Spacing="5">
+                          <TextBlock Text="BULK SHADER REPLACE" FontSize="10" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <TextBlock Text="Replace the shader on every matching material in this map. Compatible authored values are kept; missing target samplers use a matching texture or the shader default."
+                                     FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <Grid ColumnDefinitions="72,*" RowDefinitions="Auto,Auto" RowSpacing="4">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="From" FontSize="10"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <ComboBox Grid.Row="0" Grid.Column="1"
+                                      ItemsSource="{Binding MaterialEditor.UsedShaders}"
+                                      SelectedItem="{Binding MaterialEditor.BulkSourceShader, Mode=TwoWay}"
+                                      FontSize="10" HorizontalAlignment="Stretch" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="To" FontSize="10"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <AutoCompleteBox Grid.Row="1" Grid.Column="1"
+                                             Text="{Binding MaterialEditor.BulkTargetShader, Mode=TwoWay}"
+                                             ItemsSource="{Binding MaterialEditor.KnownShaders}" FilterMode="Contains"
+                                             Watermark="Shaders/StaticMesh/..." FontSize="10" />
+                          </Grid>
+                          <TextBlock Text="{Binding MaterialEditor.BulkShaderSummary}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                          <Button Classes="tool" Content="Replace all matching materials"
+                                  Command="{Binding MaterialEditor.BulkReplaceShaderCommand}"
+                                  IsEnabled="{Binding MaterialEditor.CanBulkReplaceShader}"
+                                  HorizontalAlignment="Stretch"
+                                  ToolTip.Tip="Changes the live material document as one undoable operation. Review it in the viewport, then use Save To Override." />
+                          <TextBlock Text="{Binding MaterialEditor.BulkShaderStatus}" FontSize="9"
+                                     TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}"
+                                     IsVisible="{Binding MaterialEditor.BulkShaderStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
                       </Border>
                       <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6" IsVisible="{Binding MaterialEditor.HasUnresolved}">

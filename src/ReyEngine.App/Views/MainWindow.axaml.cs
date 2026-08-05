@@ -351,6 +351,7 @@ public partial class MainWindow : Window
             vm.ShowMapBinEditorWindow = () => ShowMapBinEditor(vm);       // M98
             vm.ShowMeshPreviewWindow = () => ShowMeshPreview(vm);         // M50
             vm.ShowAddMeshWindow = ShowAddMesh;                           // M123
+            vm.ShowWorkshopWindow = ShowWorkshop;
             vm.ShowLightBakeWindow = () => ShowLightBake(vm);             // M158
             vm.ShowLightingWindow = () => ShowLighting(vm);               // M169
             vm.ShowTextureRecolorWindow = () => ShowTextureRecolor(vm);   // M171
@@ -542,6 +543,15 @@ public partial class MainWindow : Window
         _addMeshWindow.Show(this);
     }
 
+    private WorkshopWindow? _workshopWindow;
+    private void ShowWorkshop(ViewModels.WorkshopViewModel vm)
+    {
+        _workshopWindow?.Close();
+        _workshopWindow = new WorkshopWindow { DataContext = vm };
+        _workshopWindow.Closed += (_, _) => _workshopWindow = null;
+        _workshopWindow.Show(this);
+    }
+
     // M50: the model preview lives in its own (non-modal) window; reuse one instance while open.
     private MeshPreviewWindow? _meshPreviewWindow;
     private void ShowMeshPreview(MainWindowViewModel vm)
@@ -633,7 +643,7 @@ public partial class MainWindow : Window
             var bakeVm = new LightBakeViewModel(vm.GatherBakeInputs, vm.MakeBakeService, vm.OnLightBakeFinished,
                 vm.GenerateLightmapLayoutAsync,
                 () => (vm.HasMapForLayout, vm.MeshesWithoutLightmapUv, vm.MapMeshCountForLayout),
-                vm.EnableExperimentalDynamicEffectLightmapsAsync);
+                vm.EnableExperimentalLightmapShadersAsync);
             _lightBakeWindow = new LightBakeWindow { DataContext = bakeVm };
             _lightBakeWindow.Closed += (_, _) => _lightBakeWindow = null;
             _lightBakeWindow.Show(this);

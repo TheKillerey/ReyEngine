@@ -159,6 +159,17 @@ public static class Dx11SceneBuilder
                 string? target = ResolveTextureTarget(slot.SamplerName, ps);
                 if (target is not null) wanted.Add((target, slot.Path!.ToLowerInvariant()));
             }
+            // Mapgeo v17+ texture overrides are per mesh and supersede the shared material binding.
+            // This is what lets legacy ports collapse thousands of source objects to a few materials
+            // without collapsing their distinct diffuse/grass/terrain textures with them.
+            foreach (var (sampler, path) in slice.TextureOverrides)
+            {
+                if (string.IsNullOrWhiteSpace(path)) continue;
+                string? target = ResolveTextureTarget(sampler, ps);
+                if (target is null) continue;
+                wanted.RemoveAll(x => x.Target.Equals(target, StringComparison.OrdinalIgnoreCase));
+                wanted.Add((target, path.ToLowerInvariant()));
+            }
             // M321: this shader's painted RGB mask is engine-owned rather than a samplerValues entry.
             // The runtime derives its asset from the active mapgeo and binds it as a one-slice Texture2DArray.
             if (b.Profile.TerrainWorldProjectedMask && !string.IsNullOrEmpty(mapGeoPath)
@@ -430,7 +441,8 @@ public static class Dx11SceneBuilder
     /// rules stay in MapVisibilityResolver, shared with the OpenGL viewport.</para>
     private static List<(string Material, int Start, int Count, string Lightmap,
         Vector2 LightmapScale, Vector2 LightmapBias,
-        string BakedPaint, Vector2 BakedPaintScale, Vector2 BakedPaintBias, int Group)> MergeSlices(MapGeoAsset map)
+        string BakedPaint, Vector2 BakedPaintScale, Vector2 BakedPaintBias,
+        string TextureOverrideKey, IReadOnlyDictionary<string, string> TextureOverrides, int Group)> MergeSlices(MapGeoAsset map)
     {
         // Sourced exactly as MainWindowViewModel.ApplyMapVisibility does, including the live per-mesh
         // edits, or the two viewports would disagree about which layer a group belongs to.
@@ -450,13 +462,18 @@ public static class Dx11SceneBuilder
                                g.LightmapScale, g.LightmapBias,
                                BakedPaint: g.BakedPaintTexture,
                                g.BakedPaintScale, g.BakedPaintBias,
+                               TextureOverrideKey: string.Join("|", g.TextureOverrides
+                                   .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+                                   .Select(x => x.Key.ToLowerInvariant() + "=" + x.Value.ToLowerInvariant())),
+                               g.TextureOverrides,
                                Group: i, Id: Identity(g)))
             .OrderBy(x => x.Start)
             .ToList();
 
         var merged = new List<(string Material, int Start, int Count, string Lightmap,
             Vector2 LightmapScale, Vector2 LightmapBias,
-            string BakedPaint, Vector2 BakedPaintScale, Vector2 BakedPaintBias, int Group)>();
+            string BakedPaint, Vector2 BakedPaintScale, Vector2 BakedPaintBias,
+            string TextureOverrideKey, IReadOnlyDictionary<string, string> TextureOverrides, int Group)>();
         (int Flags, uint Ctrl, uint Region) lastId = default;
         foreach (var s in ordered)
         {
@@ -473,11 +490,13 @@ public static class Dx11SceneBuilder
                     // Scale/bias only affect a real baked-paint binding. Ignoring the unused values keeps
                     // ordinary adjacent meshes coalesced exactly as before M319.
                     && (p.BakedPaint.Length == 0
-                        || p.BakedPaintScale == s.BakedPaintScale && p.BakedPaintBias == s.BakedPaintBias))
+                        || p.BakedPaintScale == s.BakedPaintScale && p.BakedPaintBias == s.BakedPaintBias)
+                    && p.TextureOverrideKey == s.TextureOverrideKey)
                 { merged[^1] = p with { Count = p.Count + s.Count }; continue; }
             }
             merged.Add((s.Material, s.Start, s.Count, s.Lightmap, s.LightmapScale, s.LightmapBias,
-                s.BakedPaint, s.BakedPaintScale, s.BakedPaintBias, s.Group));
+                s.BakedPaint, s.BakedPaintScale, s.BakedPaintBias,
+                s.TextureOverrideKey, s.TextureOverrides, s.Group));
             lastId = s.Id;
         }
         return merged;

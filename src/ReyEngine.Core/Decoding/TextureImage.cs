@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+
+using BCnEncoder.Decoder;
 using BCnEncoder.Shared;
 using CommunityToolkit.HighPerformance;
 using LeagueToolkit.Core.Renderer;
@@ -29,6 +32,11 @@ public static class TextureDecoder
         // than fail cleanly. LooksLikeTga validates the header, so .tex/.dds are never taken by mistake.
         if (TgaDecoder.LooksLikeTga(data) && TgaDecoder.TryDecode(data) is { } tga) return tga;
 
+        // Riot extended format 14 is BC5/ATI2: two independently compressed channels used by
+        // normal maps. LeagueToolkit currently rejects it before exposing a mip, so decode the
+        // top mip directly while preserving the TEX container's smallest-first mip ordering.
+        if (TryDecodeExtendedTex(data) is { } extended) return extended;
+
         using var ms = new MemoryStream(data, writable: false);
         Texture texture = Texture.Load(ms);
 
@@ -52,6 +60,58 @@ public static class TextureDecoder
         }
 
         return new TextureImage(w, h, rgba);
+    }
+
+    private static TextureImage? TryDecodeExtendedTex(byte[] data)
+    {
+        const int HeaderSize = 12;
+        const byte Bc5Format = 14;
+
+        if (data.Length < HeaderSize ||
+            data[0] != 'T' || data[1] != 'E' || data[2] != 'X' || data[3] != 0 ||
+            data[9] != Bc5Format)
+            return null;
+
+        int width = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(4, 2));
+        int height = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(6, 2));
+        if (width <= 0 || height <= 0)
+            throw new InvalidDataException("Extended BC5 texture has invalid dimensions.");
+
+        static int Bc5LevelSize(int width, int height) =>
+            checked(Math.Max(1, (width + 3) / 4) * Math.Max(1, (height + 3) / 4) * 16);
+
+        int topLevelSize = Bc5LevelSize(width, height);
+        int mipPayloadSize = topLevelSize;
+        if ((data[11] & 1) != 0)
+        {
+            for (int mipWidth = Math.Max(1, width / 2), mipHeight = Math.Max(1, height / 2);
+                 mipWidth != width || mipHeight != height;
+                 mipWidth = Math.Max(1, mipWidth / 2), mipHeight = Math.Max(1, mipHeight / 2))
+            {
+                mipPayloadSize = checked(mipPayloadSize + Bc5LevelSize(mipWidth, mipHeight));
+                if (mipWidth == 1 && mipHeight == 1) break;
+            }
+        }
+
+        if (data.Length < HeaderSize + mipPayloadSize)
+            throw new InvalidDataException(
+                $"Extended BC5 texture payload is truncated: expected {mipPayloadSize:N0} bytes, " +
+                $"found {Math.Max(0, data.Length - HeaderSize):N0}.");
+
+        // TEX mip chains are smallest first, therefore the full-resolution level is last.
+        int topLevelOffset = HeaderSize + mipPayloadSize - topLevelSize;
+        byte[] topLevel = data.AsSpan(topLevelOffset, topLevelSize).ToArray();
+        ColorRgba32[] pixels = new BcDecoder().DecodeRaw(topLevel, width, height, CompressionFormat.Bc5);
+        var rgba = new byte[checked(width * height * 4)];
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            rgba[i * 4] = pixels[i].r;
+            rgba[i * 4 + 1] = pixels[i].g;
+            rgba[i * 4 + 2] = pixels[i].b;
+            rgba[i * 4 + 3] = pixels[i].a;
+        }
+
+        return new TextureImage(width, height, rgba);
     }
 }
 

@@ -6,14 +6,32 @@ using ReyEngine.Formats.MapGeo;
 
 namespace ReyEngine.App.ViewModels;
 
+/// <summary>Common state for every selectable leaf in Map Content. The eye is editor-only; Disable and
+/// Delete are pending map edits that are persisted by the owning map writer.</summary>
+public abstract partial class MapOutlinerItemViewModel : ObservableObject
+{
+    [ObservableProperty] private bool _isSelected;
+    [ObservableProperty] private bool _isEditorVisible = true;
+    [ObservableProperty] private bool _isDisabled;
+    [ObservableProperty] private bool _isRemoved;
+
+    public Action<MapOutlinerItemViewModel>? StateChanged { get; set; }
+
+    partial void OnIsEditorVisibleChanged(bool value) => NotifyStateChanged();
+    partial void OnIsDisabledChanged(bool value) => NotifyStateChanged();
+    partial void OnIsRemovedChanged(bool value) => NotifyStateChanged();
+
+    protected virtual void NotifyStateChanged() => StateChanged?.Invoke(this);
+}
+
 /// <summary>One placed particle in the outliner tree (M35): wraps a <see cref="MapParticlePlacement"/> and
 /// carries a live move <see cref="Offset"/> so it can be repositioned like a mesh.</summary>
-public sealed partial class ParticlePlacementViewModel : ObservableObject
+public sealed partial class ParticlePlacementViewModel : MapOutlinerItemViewModel
 {
     public required MapParticlePlacement Placement { get; init; }
     public string Name => Placement.Name;
     public string SystemName => Placement.SystemName;
-    [ObservableProperty] private bool _isSelected;
+    public uint EffectiveSystemHash => EditedSystemHash != 0 ? EditedSystemHash : Placement.SystemHash;
 
     // ---- M204: the verbs MapPlaceableWriter has supported since M199 but nothing could reach ----------
     // Each is null/false until the user touches it, so "edited" stays distinguishable from "same as
@@ -28,16 +46,32 @@ public sealed partial class ParticlePlacementViewModel : ObservableObject
     [ObservableProperty] private uint _editedSystemHash;
     /// <summary>Marked for deletion. Removed placements stop rendering immediately so the change is visible
     /// before it is saved.</summary>
-    [ObservableProperty] private bool _isRemoved;
 
-    partial void OnEditedNameChanged(string? value) => OnPropertyChanged(nameof(HasEdits));
-    partial void OnEditedTintChanged(string? value) => OnPropertyChanged(nameof(HasEdits));
+    partial void OnEditedNameChanged(string? value) { OnPropertyChanged(nameof(HasEdits)); StateChanged?.Invoke(this); }
+    partial void OnEditedTintChanged(string? value) { OnPropertyChanged(nameof(HasEdits)); StateChanged?.Invoke(this); }
     partial void OnEditedSystemHashChanged(uint value)
     {
         OnPropertyChanged(nameof(HasEdits));
         OnPropertyChanged(nameof(IsRelinked));
+        OnPropertyChanged(nameof(EffectiveSystemHash));
+        StateChanged?.Invoke(this);
     }
-    partial void OnIsRemovedChanged(bool value) => OnPropertyChanged(nameof(HasEdits));
+    [ObservableProperty] private int? _editedVisibilityFlags;
+
+    partial void OnEditedVisibilityFlagsChanged(int? value)
+    {
+        IsDisabled = EffectiveVisibilityFlags == 0;
+        OnPropertyChanged(nameof(HasEdits));
+        StateChanged?.Invoke(this);
+    }
+
+    public int EffectiveVisibilityFlags => EditedVisibilityFlags ?? Placement.VisibilityFlags;
+
+    protected override void NotifyStateChanged()
+    {
+        OnPropertyChanged(nameof(HasEdits));
+        base.NotifyStateChanged();
+    }
 
     /// <summary>The tint as the writer wants it, or null when untouched or unparseable. InvariantCulture:
     /// this machine runs a German locale, where "0,5" would otherwise split into two components.</summary>
@@ -74,7 +108,7 @@ public sealed partial class ParticlePlacementViewModel : ObservableObject
     /// <summary>M205: pointed at a different VFX system than the bin authored.</summary>
     public bool IsRelinked => EditedSystemHash != 0 && EditedSystemHash != Placement.SystemHash;
 
-    public bool HasEdits => IsNew || IsMoved || IsRemoved || EditedSystemHash != 0
+    public bool HasEdits => IsNew || IsMoved || IsRemoved || EditedVisibilityFlags is not null || EditedSystemHash != 0
                             || (EditedName is not null && EditedName != Placement.Name)
                             || ParsedTint is not null;
 
@@ -106,7 +140,8 @@ public sealed partial class ParticlePlacementViewModel : ObservableObject
     public void ResetEdits()
     {
         Offset = Vector3.Zero; RotationDegrees = Vector3.Zero; Scale = Vector3.One;
-        EditedName = null; EditedTint = null; EditedSystemHash = 0; IsRemoved = false;
+        EditedName = null; EditedTint = null; EditedSystemHash = 0; EditedVisibilityFlags = null;
+        IsDisabled = Placement.VisibilityFlags == 0; IsRemoved = false; IsEditorVisible = true;
     }
 }
 
@@ -119,13 +154,37 @@ public sealed class ParticleSystemGroupViewModel
 }
 
 /// <summary>One placed animated prop / character in the outliner (M38).</summary>
-public sealed partial class AnimatedPropViewModel : ObservableObject
+public sealed partial class AnimatedPropViewModel : MapOutlinerItemViewModel
 {
     public required MapAnimatedProp Prop { get; init; }
-    public string Name => Prop.Display;
+    public string Name => EffectiveSkinName.Equals("Skin0", StringComparison.OrdinalIgnoreCase)
+        ? Prop.CharacterName : $"{Prop.CharacterName} / {EffectiveSkinName}";
     public string Info => Prop.CharacterRecord;
     public Vector3 Position => Prop.Position;
-    [ObservableProperty] private bool _isSelected;
+    [ObservableProperty] private string? _editedSkin;
+    [ObservableProperty] private int? _editedVisibilityFlags;
+
+    public string EffectiveSkin
+    {
+        get
+        {
+            var path = (string.IsNullOrWhiteSpace(EditedSkin) ? Prop.Skin : EditedSkin.Trim()).Replace('\\', '/').TrimStart('/');
+            if (path.StartsWith("data/", StringComparison.OrdinalIgnoreCase)) path = path[5..];
+            if (path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) path = path[..^4];
+            return path;
+        }
+    }
+    public string EffectiveSkinName => EffectiveSkin.Contains('/') ? EffectiveSkin[(EffectiveSkin.LastIndexOf('/') + 1)..] : EffectiveSkin;
+    public int EffectiveVisibilityFlags => EditedVisibilityFlags ?? Prop.VisibilityFlags;
+    public bool HasEdits => IsRemoved || EditedVisibilityFlags is not null
+        || (!string.IsNullOrWhiteSpace(EditedSkin) && !EffectiveSkin.Equals(Prop.Skin, StringComparison.OrdinalIgnoreCase));
+
+    partial void OnEditedSkinChanged(string? value)
+    { OnPropertyChanged(nameof(Name)); OnPropertyChanged(nameof(EffectiveSkin)); OnPropertyChanged(nameof(EffectiveSkinName)); OnPropertyChanged(nameof(HasEdits)); StateChanged?.Invoke(this); }
+    partial void OnEditedVisibilityFlagsChanged(int? value)
+    { IsDisabled = EffectiveVisibilityFlags == 0; OnPropertyChanged(nameof(HasEdits)); StateChanged?.Invoke(this); }
+    protected override void NotifyStateChanged()
+    { OnPropertyChanged(nameof(HasEdits)); base.NotifyStateChanged(); }
 }
 
 /// <summary>A prop group folder (all placements of the same character).</summary>
@@ -137,13 +196,19 @@ public sealed class AnimatedPropGroupViewModel
 }
 
 /// <summary>One placed cubemap reflection probe in the outliner (M38).</summary>
-public sealed partial class CubemapProbeViewModel : ObservableObject
+public sealed partial class CubemapProbeViewModel : MapOutlinerItemViewModel
 {
     public required MapCubemapProbe Probe { get; init; }
     public string Name => Probe.Name;
     public string Info => Probe.CubemapFile ?? "(no cubemap)";
     public Vector3 Position => Probe.Position;
-    [ObservableProperty] private bool _isSelected;
+    [ObservableProperty] private int? _editedVisibilityFlags;
+    public int EffectiveVisibilityFlags => EditedVisibilityFlags ?? Probe.VisibilityFlags;
+    public bool HasEdits => IsRemoved || EditedVisibilityFlags is not null;
+    partial void OnEditedVisibilityFlagsChanged(int? value)
+    { IsDisabled = EffectiveVisibilityFlags == 0; OnPropertyChanged(nameof(HasEdits)); StateChanged?.Invoke(this); }
+    protected override void NotifyStateChanged()
+    { OnPropertyChanged(nameof(HasEdits)); base.NotifyStateChanged(); }
 }
 
 /// <summary>One VFX system in a loaded champion skin's effect library (M37) — select it to play it.</summary>
@@ -155,7 +220,7 @@ public sealed class VfxSystemItemViewModel
     public string Display => $"{Name}   ·   {EmitterCount} emitter{(EmitterCount == 1 ? "" : "s")}";
 }
 
-public sealed partial class MapPieceViewModel : ObservableObject
+public sealed partial class MapPieceViewModel : MapOutlinerItemViewModel
 {
     public required string Name { get; init; }
     public required string Info { get; init; }
@@ -163,7 +228,6 @@ public sealed partial class MapPieceViewModel : ObservableObject
 
     /// <summary>Multi-select highlight state (M30): mirrors the viewport SelectionSet so the tree row
     /// shows as selected even when it isn't the TreeView's single SelectedItem.</summary>
-    [ObservableProperty] private bool _isSelected;
 }
 
 /// <summary>A visibility layer group (one distinct dragon bitmask) and the meshes it contains.</summary>
@@ -198,7 +262,7 @@ public sealed record OutlinerFolderViewModel(string Icon, string Name, System.Co
 
 /// <summary>M79: a mesh queued to be added to the map — imported geometry + chosen material + a live
 /// placement transform (gizmo-movable). Saved by appending to the mapgeo; also drawn as a preview overlay.</summary>
-public sealed partial class AddedMapMeshViewModel : ObservableObject
+public sealed partial class AddedMapMeshViewModel : MapOutlinerItemViewModel
 {
     public required string Name { get; init; }
     public required float[] Positions { get; init; }   // local xyz triplets
@@ -207,9 +271,9 @@ public sealed partial class AddedMapMeshViewModel : ObservableObject
     public required int[] Indices { get; init; }
     public required Vector3 LocalCenter { get; init; }  // local bbox center — the gizmo pivot anchor
     [ObservableProperty] private string _material = "";
-    [ObservableProperty] private bool _isSelected;
     /// <summary>M123: dragon-layer mask the mesh gets after append (255 = every configuration).</summary>
     public int VisibilityMask { get; set; } = 255;
+    public int EnabledVisibilityMask { get; set; } = 255;
 
     public Vector3 Offset;                              // world translation of the mesh's local origin
     public Vector3 RotationDegrees;
@@ -233,7 +297,7 @@ public sealed partial class AddedMapMeshViewModel : ObservableObject
 
 /// <summary>M55: one placed ambient sound (MapAudio) — name + Wwise event + world position.
 /// M75: carries a live move <see cref="Offset"/> so sounds reposition like particles do.</summary>
-public sealed class MapSoundViewModel
+public sealed partial class MapSoundViewModel : MapOutlinerItemViewModel
 {
     public required MapSoundPlacement Sound { get; init; }
     public string Name => Sound.Name;
@@ -241,6 +305,13 @@ public sealed class MapSoundViewModel
     public Vector3 Offset;                                    // M75: accumulated world-space move
     public Vector3 Position => Sound.Position + Offset;
     public bool IsMoved => Offset != Vector3.Zero;
+    [ObservableProperty] private int? _editedVisibilityFlags;
+    public int EffectiveVisibilityFlags => EditedVisibilityFlags ?? Sound.VisibilityFlags;
+    public bool HasEdits => IsMoved || IsRemoved || EditedVisibilityFlags is not null;
+    partial void OnEditedVisibilityFlagsChanged(int? value)
+    { IsDisabled = EffectiveVisibilityFlags == 0; OnPropertyChanged(nameof(HasEdits)); StateChanged?.Invoke(this); }
+    protected override void NotifyStateChanged()
+    { OnPropertyChanged(nameof(HasEdits)); base.NotifyStateChanged(); }
 }
 
 /// <summary>M55: one scene bucket grid (culling grid) of the loaded mapgeo.</summary>
@@ -257,6 +328,8 @@ public sealed class BucketGridViewModel
 
 public sealed partial class MapContentViewModel : ViewModelBase
 {
+    public Action<MapOutlinerItemViewModel>? ItemStateChanged { get; set; }
+    private void ItemChanged(MapOutlinerItemViewModel item) => ItemStateChanged?.Invoke(item);
     /// <summary>M51: one unified hierarchy (Meshes / Particles / Mobs / Probes as plain folders).</summary>
     public ObservableCollection<OutlinerFolderViewModel> OutlinerRoots { get; } = new();
 
@@ -289,7 +362,7 @@ public sealed partial class MapContentViewModel : ViewModelBase
     {
         Sounds.Clear();
         foreach (var s in sounds.OrderBy(s => s.Name, System.StringComparer.OrdinalIgnoreCase))
-            Sounds.Add(new MapSoundViewModel { Sound = s });
+            Sounds.Add(new MapSoundViewModel { Sound = s, StateChanged = ItemChanged, IsDisabled = s.VisibilityFlags == 0 });
         HasSounds = Sounds.Count > 0;
     }
 
@@ -302,6 +375,7 @@ public sealed partial class MapContentViewModel : ViewModelBase
     public ObservableCollection<AssetNodeViewModel> Maps { get; } = new();
     public ObservableCollection<MapPieceViewModel> Pieces { get; } = new();
     public ObservableCollection<MapLayerGroupViewModel> LayerGroups { get; } = new();
+    public IEnumerable<MapPieceViewModel> AllMapPieces => LayerGroups.SelectMany(g => g.Meshes);
     /// <summary>Placed particle systems grouped by VFX system (M35), shown as a "Particles" folder in the tree.</summary>
     public ObservableCollection<ParticleSystemGroupViewModel> ParticleGroups { get; } = new();
 
@@ -323,7 +397,7 @@ public sealed partial class MapContentViewModel : ViewModelBase
         foreach (var g in props.GroupBy(p => p.CharacterName).OrderBy(g => g.Key, System.StringComparer.OrdinalIgnoreCase))
         {
             var grp = new AnimatedPropGroupViewModel { CharacterName = g.Key };
-            foreach (var p in g) grp.Props.Add(new AnimatedPropViewModel { Prop = p });
+            foreach (var p in g) grp.Props.Add(new AnimatedPropViewModel { Prop = p, StateChanged = ItemChanged, IsDisabled = p.VisibilityFlags == 0 });
             PropGroups.Add(grp);
         }
         HasProps = PropGroups.Count > 0;
@@ -333,7 +407,7 @@ public sealed partial class MapContentViewModel : ViewModelBase
     public void SetProbes(IReadOnlyList<MapCubemapProbe> probes)
     {
         Probes.Clear();
-        foreach (var p in probes) Probes.Add(new CubemapProbeViewModel { Probe = p });
+        foreach (var p in probes) Probes.Add(new CubemapProbeViewModel { Probe = p, StateChanged = ItemChanged, IsDisabled = p.VisibilityFlags == 0 });
         HasProbes = Probes.Count > 0;
     }
 
@@ -344,7 +418,7 @@ public sealed partial class MapContentViewModel : ViewModelBase
         {
             var grp = new ParticleSystemGroupViewModel { SystemName = g.Key };
             foreach (var p in g.OrderBy(p => p.Name, System.StringComparer.OrdinalIgnoreCase))
-                grp.Placements.Add(new ParticlePlacementViewModel { Placement = p });
+                grp.Placements.Add(new ParticlePlacementViewModel { Placement = p, StateChanged = ItemChanged, IsDisabled = p.VisibilityFlags == 0 });
             ParticleGroups.Add(grp);
         }
         HasParticles = ParticleGroups.Count > 0;
@@ -394,7 +468,11 @@ public sealed partial class MapContentViewModel : ViewModelBase
     public void SetLayerGroups(IEnumerable<MapLayerGroupViewModel> groups)
     {
         LayerGroups.Clear();
-        foreach (var g in groups) LayerGroups.Add(g);
+        foreach (var g in groups)
+        {
+            foreach (var mesh in g.Meshes) mesh.StateChanged ??= ItemChanged;
+            LayerGroups.Add(g);
+        }
     }
 
     public void ClearMap()

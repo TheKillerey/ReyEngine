@@ -71,7 +71,8 @@ public static class MapGeoWriter
     /// replace only the original BucketedGeometry byte section. No internal LeagueToolkit constructors,
     /// mutable backing fields, or <c>EnvironmentAsset.Write</c> calls are used.
     /// </summary>
-    public static byte[] WriteWithRegeneratedBucketGrids(byte[] originalMapgeo, MapGeoAsset asset)
+    public static byte[] WriteWithRegeneratedBucketGrids(byte[] originalMapgeo, MapGeoAsset asset,
+        float targetBucketSize = MapBucketGridBuilder.TargetBucketSize)
     {
         ArgumentNullException.ThrowIfNull(originalMapgeo);
         ArgumentNullException.ThrowIfNull(asset);
@@ -84,7 +85,7 @@ public static class MapGeoWriter
         using var input = new MemoryStream(originalMapgeo, writable: false);
         using var environment = new EnvironmentAsset(input);
         MapGeoSceneGraphSection oldSection = MapGeoSceneGraphSection.Locate(originalMapgeo, environment, version);
-        IReadOnlyList<MapBucketGridData> grids = MapBucketGridBuilder.Rebuild(asset);
+        IReadOnlyList<MapBucketGridData> grids = MapBucketGridBuilder.Rebuild(asset, targetBucketSize);
         byte[] newSection = SerializeSceneGraphs(version, grids);
 
         int suffixOffset = oldSection.Offset + oldSection.Length;

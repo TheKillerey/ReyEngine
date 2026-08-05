@@ -20,21 +20,21 @@ public sealed partial class LightBakeViewModel : ObservableObject
     private readonly Action<LightBakeResult> _onBaked;
     private readonly Func<BakeSettings, Task<LightmapLayoutResult?>>? _generateLayout;
     private readonly Func<(bool MapOpen, int Missing, int Total)>? _layoutState;
-    private readonly Func<Task<string>>? _enableExperimentalDynamicEffect;
+    private readonly Func<Task<string>>? _enableExperimentalShaders;
     private CancellationTokenSource? _cts;
 
     public LightBakeViewModel(Func<BakeSettings, LightBakeInputs?> gatherInputs, Func<LightBakeService?> service,
         Action<LightBakeResult> onBaked,
         Func<BakeSettings, Task<LightmapLayoutResult?>>? generateLayout = null,
         Func<(bool MapOpen, int Missing, int Total)>? layoutState = null,
-        Func<Task<string>>? enableExperimentalDynamicEffect = null)
+        Func<Task<string>>? enableExperimentalShaders = null)
     {
         _gatherInputs = gatherInputs;
         _service = service;
         _onBaked = onBaked;
         _generateLayout = generateLayout;
         _layoutState = layoutState;
-        _enableExperimentalDynamicEffect = enableExperimentalDynamicEffect;
+        _enableExperimentalShaders = enableExperimentalShaders;
         RecomputeEstimate();
     }
 
@@ -45,27 +45,27 @@ public sealed partial class LightBakeViewModel : ObservableObject
     [ObservableProperty] private bool _canGenerateLayout;
     [ObservableProperty] private bool _isGeneratingLayout;
     [ObservableProperty] private string _layoutSummary = "";
-    [ObservableProperty] private bool _isPatchingDynamicEffect;
+    [ObservableProperty] private bool _isPatchingShaders;
 
-    /// <summary>M312: stage the opt-in ShaderCache companion and clear NO_BAKED_LIGHTING on covered
-    /// SRX_DynamicEffect materials. Kept separate from layout generation because existing Riot maps can
-    /// already have Texcoord7 + atlas references and need only the missing shader permutation.</summary>
+    /// <summary>Stage the opt-in ShaderCache companion and clear NO_BAKED_LIGHTING on covered legacy SRX
+    /// materials. Kept separate from layout generation because a map can already have Texcoord7 + atlas
+    /// references and need only the missing shader permutation.</summary>
     [RelayCommand]
-    private async Task EnableExperimentalDynamicEffectAsync()
+    private async Task EnableExperimentalShadersAsync()
     {
-        if (_enableExperimentalDynamicEffect is null || IsPatchingDynamicEffect) return;
-        IsPatchingDynamicEffect = true;
+        if (_enableExperimentalShaders is null || IsPatchingShaders) return;
+        IsPatchingShaders = true;
         Stage = "Building experimental DX11 shader patch";
         Status = "";
         try
         {
-            Status = await _enableExperimentalDynamicEffect();
-            Stage = Status.StartsWith("Experimental DynamicEffect", StringComparison.Ordinal)
+            Status = await _enableExperimentalShaders();
+            Stage = Status.StartsWith("Experimental lightmap shaders", StringComparison.Ordinal)
                 ? "Shader patch ready"
                 : "Shader patch not applied";
         }
         catch (Exception ex) { Stage = "Failed"; Status = "Shader patch failed: " + ex.Message; }
-        finally { IsPatchingDynamicEffect = false; Refresh(); }
+        finally { IsPatchingShaders = false; Refresh(); }
     }
 
     /// <summary>M147: unwrap UV2, pack atlas regions and rewrite the mapgeo, so a map Riot never
@@ -99,7 +99,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
                 Stage = IncludeDynamicEffectMeshes ? "DynamicEffect shader step required" : "No eligible atlas groups";
                 Status += IncludeDynamicEffectMeshes
                     ? " The UV layout is ready, but its DynamicEffect materials still disable baked lighting. "
-                      + "Press Enable DynamicEffect Lightmaps (Experimental) below, wait for the map to reload, then bake."
+                      + "Press Enable Experimental Shader Lightmaps below, wait for the map to reload, then bake."
                     : " The layout has no material-eligible atlas groups; see the bake eligibility message below.";
             }
         }
@@ -236,7 +236,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
             : coverage.ReferencedAtlases > 0
                 ? $"All {coverage.ReferencedAtlases} referenced atlas(es) have no eligible triangles. "
                   + "Their materials still disable baked lighting (or the meshes are intentionally filtered). "
-                  + "For SRX_DynamicEffect, press Enable DynamicEffect Lightmaps (Experimental), wait for the map reload, then retry."
+                  + "Press Enable Experimental Shader Lightmaps, wait for the map reload, then retry."
             : CanGenerateLayout
                 ? "This map has no lightmap layout. Generate one below — it unwraps UV2s, packs atlas regions and REWRITES the mapgeo, then you can bake."
                 : "No lightmap atlases in this map.";
@@ -280,7 +280,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
             Status = result.AtlasCount > 0
                 ? $"Baked {result.OutputDescription} ({Mb(result.TotalBytes)})."
                 : $"Baked 0 of {result.ReferencedAtlasCount} referenced atlas(es); {result.SkippedAtlasCount} had no material-eligible triangles. "
-                  + "For SRX_DynamicEffect, enable its experimental lightmap shader, wait for the map reload, and retry."
+                  + "Enable the experimental lightmap shaders, wait for the map reload, and retry."
                   + (result.WroteLightGrid ? " The lightgrid was written." : "");
             _onBaked(result);
         }

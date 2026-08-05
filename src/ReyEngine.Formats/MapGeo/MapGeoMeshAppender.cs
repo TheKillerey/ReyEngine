@@ -196,14 +196,16 @@ public static class MapGeoMeshAppender
 
     // ---- section walker: locate the four count fields + the tail (bucket grids onward) ----
 
-    private sealed record Sections(int Version,
+    internal sealed record Sections(int Version,
         int VertexDeclCountOffset, int VertexDeclCount,
         int VertexBufferCountOffset, int VertexBufferCount,
         int IndexBufferCountOffset, int IndexBufferCount,
         int MeshCountOffset, int MeshCount,
-        int TailOffset);
+        int TailOffset,
+        IReadOnlyList<int> MeshRecordStarts,
+        IReadOnlyList<int> MeshRecordEnds);
 
-    private static Sections WalkSections(byte[] d)
+    internal static Sections WalkSections(byte[] d)
     {
         int p = 0;
         if (d.Length < 8 || d[0] != 'O' || d[1] != 'E' || d[2] != 'G' || d[3] != 'M')
@@ -239,10 +241,18 @@ public static class MapGeoMeshAppender
         // mesh records
         int meshCountOff = p;
         int meshCount = ReadI32(d, ref p);
-        for (int i = 0; i < meshCount; i++) SkipMeshRecord(d, ref p, version);
+        var meshStarts = new List<int>(meshCount);
+        var meshEnds = new List<int>(meshCount);
+        for (int i = 0; i < meshCount; i++)
+        {
+            meshStarts.Add(p);
+            SkipMeshRecord(d, ref p, version);
+            meshEnds.Add(p);
+        }
 
         return new Sections(version, declCountOff, declCount, vbCountOff, vbCount,
-            ibCountOff, ibCount, meshCountOff, meshCount, TailOffset: p);
+            ibCountOff, ibCount, meshCountOff, meshCount, TailOffset: p,
+            meshStarts, meshEnds);
     }
 
     private static void SkipMeshRecord(byte[] d, ref int p, int version)

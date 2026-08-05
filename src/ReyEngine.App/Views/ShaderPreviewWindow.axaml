@@ -55,7 +55,7 @@
             <Button Classes="primary" Content="▶  Load shader" Command="{Binding LoadCommand}"
                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                     Margin="0,6,0,0" Padding="0,7" FontSize="12"
-                    ToolTip.Tip="Create both stages on the D3D11 device, build the input layout from the vertex shader's own signature, and allocate its constant buffers." />
+                    ToolTip.Tip="Load the selected cooked permutations and apply this shader's default textures and parameters from shaders.bin." />
             <Button Classes="tool" Content="↻  Reload from the WAD" Command="{Binding ReloadCommand}"
                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                     Padding="0,5" FontSize="11" />
@@ -371,12 +371,18 @@
 
           <TabItem Header="Textures">
             <DockPanel Margin="6">
-              <Button DockPanel.Dock="Top" Classes="tool" Content="Bind a checker to every slot"
-                      Command="{Binding BindCheckerToAllCommand}" FontSize="11" Margin="0,0,0,6"
-                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,5" />
+              <StackPanel DockPanel.Dock="Top" Spacing="5" Margin="0,0,0,6">
+                <Button Classes="primary" Content="Restore shader defaults"
+                        Command="{Binding LoadShaderDefaultsCommand}" FontSize="11"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,5"
+                        ToolTip.Tip="Resolve the shader's onByDefault switches again, then reload its default textures and parameters from shaders.bin." />
+                <Button Classes="tool" Content="Bind a checker to every slot"
+                        Command="{Binding BindCheckerToAllCommand}" FontSize="11"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,5" />
+              </StackPanel>
               <TextBlock DockPanel.Dock="Bottom" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,6,2,0"
                          Foreground="{DynamicResource ReyTextBrush}"
-                         Text="Double-click a slot to bind an image file. Slots ending in _SharedTexture are engine-supplied, not material-supplied. Anything unbound samples as opaque white." />
+                         Text="Loading a shader binds each authored defaultTexturePath. Double-click a slot to override it with an image file. Engine-supplied shared textures without a shader default still use their safe stand-in." />
               <ListBox ItemsSource="{Binding TextureSlots}" x:Name="TextureList">
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="vm:TextureSlotRow">
@@ -402,7 +408,7 @@
             <DockPanel Margin="6">
               <TextBlock DockPanel.Dock="Top" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,0,2,6"
                          Foreground="{DynamicResource ReyTextBrush}"
-                         Text="Type space-separated floats to override a constant. Empty means the preview supplies it (camera, sun, time) or leaves the shader's own default. Values are written at the byte offset the shader declares." />
+                         Text="Shader parameters are pre-filled from shaders.bin. Edit them to override the authored value; empty means the preview supplies runtime values such as camera, sun and time. Values are written at the byte offset the shader declares." />
               <ListBox ItemsSource="{Binding Constants}">
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="vm:ConstantRow">

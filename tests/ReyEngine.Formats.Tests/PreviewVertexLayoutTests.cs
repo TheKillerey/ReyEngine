@@ -90,4 +90,16 @@ public class PreviewVertexLayoutTests
             $"the zero pad at +{pad} runs past the {PreviewVertex.SizeInBytes}-byte stride");
         Assert.Equal(System.Numerics.Vector4.Zero, v.Zero);
     }
+
+    [Theory]
+    [InlineData("Plane")]
+    [InlineData("Cube")]
+    [InlineData("Sphere")]
+    public void Built_in_meshes_give_baked_shaders_identity_texcoord7(string meshName)
+    {
+        PreviewMesh mesh = PreviewGeometry.CreateBuiltIn(meshName);
+
+        Assert.All(mesh.Vertices, vertex =>
+            Assert.Equal(new System.Numerics.Vector2(vertex.Uv0.X, vertex.Uv0.Y), vertex.Uv7));
+    }
 }

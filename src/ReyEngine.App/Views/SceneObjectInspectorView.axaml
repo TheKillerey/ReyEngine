@@ -175,6 +175,33 @@
 
     <!-- MESH DETAILS — read-only mapgeo diagnostics, collapsed by default. Everything editable lives
          above (Transform card, Map Layers card, Materials); these rows have no writable .bin field. -->
+    <!-- M331: the authored visibility mask is editable for placements, not only mapgeo meshes. -->
+    <Border Classes="card" IsVisible="{Binding HasPlacementLayerSelection}">
+      <StackPanel Spacing="4">
+        <TextBlock Classes="cardTitle" Text="OBJECT VISIBILITY LAYERS" />
+        <TextBlock Text="{Binding PlacementLayerSummary}" FontSize="9"
+                   Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" />
+        <TextBlock Text="Map visibility layers (from the shipping map .bin)" FontSize="9"
+                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+        <ItemsControl ItemsSource="{Binding PlacementVisibilityLayerBits}">
+          <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <CheckBox Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="10" Margin="0,0,8,2" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock Text="Applies to selected particles, sounds, mobs/props, and probes. Disable sets the mask to zero."
+                   FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+          <Button Content="All Layers" Command="{Binding SetPlacementLayersAllCommand}" FontSize="10" Padding="8,2" />
+          <Button Content="Reset Edits" Command="{Binding ResetPlacementLayerEditsCommand}" FontSize="10" Padding="8,2" />
+          <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveMapContentEditsCommand}"
+                  FontSize="10" Padding="8,2" IsEnabled="{Binding HasParticleMoves}" />
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
     <Expander IsExpanded="False" IsVisible="{Binding MeshDetails.HasMesh}" FontSize="11">
       <Expander.Header>
         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -364,6 +391,25 @@
           <Button Classes="tool" Content="🗑 Remove" Command="{Binding RemoveAddedMeshCommand}" CommandParameter="{Binding SelectedAddedMesh}"
                   FontSize="11" Padding="8,2" />
         </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <!-- M331: mobs/props keep their placement identity and can safely swap only the nested skin path. -->
+    <Border Classes="card" IsVisible="{Binding SelectedPropNode, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <StackPanel Spacing="4">
+        <TextBlock Classes="cardTitle" Text="MOB / PROP SKIN" />
+        <TextBlock Text="{Binding SelectedPropNode.Prop.CharacterRecord}" FontSize="9"
+                   Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+        <TextBlock Text="Available skins for this character" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+        <ComboBox ItemsSource="{Binding PropSkinChoices}" SelectedItem="{Binding SelectedPropNode.EditedSkin}"
+                  FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="260"
+                  ToolTip.Tip="Only skin bins shipped for this exact character are listed" />
+        <TextBox Text="{Binding SelectedPropNode.EditedSkin}" Watermark="{Binding SelectedPropNode.Prop.Skin}"
+                 FontSize="10" Padding="3,1"
+                 ToolTip.Tip="Full skin path without data/ and .bin. Leave empty to keep the authored skin." />
+        <TextBlock Text="{Binding SelectedPropNode.EffectiveSkin}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" />
+        <Button Classes="primary" Content="Save Map Content Edits" Command="{Binding SaveMapContentEditsCommand}"
+                FontSize="10" Padding="8,2" HorizontalAlignment="Left" />
       </StackPanel>
     </Border>
 

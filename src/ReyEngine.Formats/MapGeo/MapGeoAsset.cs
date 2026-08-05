@@ -177,6 +177,9 @@ public sealed record MapGeoGroup(
     string Name = "", int VisibilityFlags = 255, uint ControllerHash = 0, int MeshIndex = -1,
     string LightmapTexture = "")
 {
+    /// <summary>All v17+ per-mesh shader texture overrides, joined from the asset sampler table.</summary>
+    public IReadOnlyDictionary<string, string> TextureOverrides { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     /// <summary>M319: the per-mesh BAKED_DIFFUSE_TEXTURE override. Mapgeo v17+ stores the sampler name
     /// once on the asset and stores only (sampler index, texture path) on each mesh.</summary>
     public string BakedPaintTexture { get; init; } = "";
@@ -219,6 +222,9 @@ public sealed class MapGeoMesh
     public Vector2 BakedLightBias { get; init; } = Vector2.Zero;
     /// <summary>M319: mesh-owned BAKED_DIFFUSE_TEXTURE path used by DefaultEnv_Flat_BakedTerrain.</summary>
     public string? BakedPaintTexture { get; init; }
+    /// <summary>All v17+ per-mesh shader texture overrides, joined from the asset sampler table.</summary>
+    public IReadOnlyDictionary<string, string> TextureOverrides { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     public Vector2 BakedPaintScale { get; init; } = Vector2.One;
     public Vector2 BakedPaintBias { get; init; } = Vector2.Zero;
 

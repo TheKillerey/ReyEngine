@@ -39,7 +39,7 @@ public sealed class MapGeoBinary
 
     // ---- element enums (values match LeagueToolkit's ElementName / ElementFormat) ----
     public const uint ElemPosition = 0, ElemNormal = 2, ElemPrimaryColor = 4,
-                      ElemTexcoord0 = 7, ElemTexcoord7 = 14;
+                      ElemTexcoord0 = 7, ElemTexcoord5 = 12, ElemTexcoord7 = 14;
     /// <summary>The lightmap UV channel. Riot stores baked-lightmap atlas UVs here.</summary>
     public const uint LightmapUvElement = ElemTexcoord7;
 
