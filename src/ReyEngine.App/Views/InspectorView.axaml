@@ -224,49 +224,42 @@
                         <Button Classes="tool" Content="Revert All" Command="{Binding MaterialEditor.RevertAllCommand}" />
                       </StackPanel>
 
-                      <!-- M351b: master-detail. The list used to render EVERY material fully expanded,
-                           so reaching one material meant scrolling past all 120. Now the list is a real
-                           selection and exactly one material is edited at a time. -->
-                      <Grid ColumnDefinitions="240,8,*" MinHeight="360">
-                        <!-- MASTER: the filtered material list -->
-                        <Border Grid.Column="0" Classes="card" Padding="0">
-                          <DockPanel>
-                            <Border DockPanel.Dock="Top" Padding="8,6"
-                                    BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1">
-                              <TextBlock Text="{Binding MaterialEditor.ListSummary}" FontSize="10"
-                                         Foreground="{DynamicResource ReyTextDimBrush}" />
-                            </Border>
-                            <ListBox ItemsSource="{Binding MaterialEditor.FilteredMaterials}"
-                                     SelectedItem="{Binding MaterialEditor.SelectedMaterial}"
-                                     Background="Transparent" BorderThickness="0" Padding="2">
-                              <ListBox.ItemTemplate>
-                                <DataTemplate x:DataType="vm:MaterialBindingViewModel">
-                                  <StackPanel Spacing="1" Margin="2">
-                                    <StackPanel Orientation="Horizontal" Spacing="4">
-                                      <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="11" VerticalAlignment="Center"
-                                                 IsVisible="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}" />
-                                      <TextBlock Text="●" Foreground="{DynamicResource ReyAccent2Brush}" FontSize="10"
-                                                 VerticalAlignment="Center" IsVisible="{Binding IsDirty}"
-                                                 ToolTip.Tip="Modified — not saved to an override yet" />
-                                      <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
-                                                 TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
-                                    </StackPanel>
-                                    <TextBlock Text="{Binding ShaderName}" FontSize="9"
-                                               Foreground="{DynamicResource ReyTextDimBrush}"
-                                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding ShaderName}" />
-                                  </StackPanel>
-                                </DataTemplate>
-                              </ListBox.ItemTemplate>
-                            </ListBox>
-                          </DockPanel>
-                        </Border>
+                      <!-- M351e: the selector is a ComboBox ABOVE the detail (user feedback on the
+                           M351b side list), and the detail is flat sections in the mockup order -
+                           General / Samplers / Render State / Derived / Switches / Parameters /
+                           Advanced - instead of one nested stack. Every block inside the sections is
+                           the previous markup verbatim, so no editing capability is lost; pieces
+                           moved out of the shader group keep their CanChangeShader gate. -->
+                      <StackPanel Spacing="6">
+                        <Grid ColumnDefinitions="*,Auto">
+                          <ComboBox Grid.Column="0" HorizontalAlignment="Stretch" FontSize="11"
+                                    ItemsSource="{Binding MaterialEditor.FilteredMaterials}"
+                                    SelectedItem="{Binding MaterialEditor.SelectedMaterial}">
+                            <ComboBox.ItemTemplate>
+                              <DataTemplate x:DataType="vm:MaterialBindingViewModel">
+                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                  <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="11" VerticalAlignment="Center"
+                                             IsVisible="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}" />
+                                  <TextBlock Text="●" Foreground="{DynamicResource ReyAccent2Brush}" FontSize="10"
+                                             VerticalAlignment="Center" IsVisible="{Binding IsDirty}"
+                                             ToolTip.Tip="Modified — not saved to an override yet" />
+                                  <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
+                                             TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                                  <TextBlock Text="{Binding ShaderName}" FontSize="9" VerticalAlignment="Center"
+                                             Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                              </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                          </ComboBox>
+                          <TextBlock Grid.Column="1" Text="{Binding MaterialEditor.ListSummary}" FontSize="10"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                        </Grid>
 
-                        <!-- DETAIL: the one selected material -->
-                        <ContentControl Grid.Column="2" Content="{Binding MaterialEditor.SelectedMaterial}">
+                        <ContentControl Content="{Binding MaterialEditor.SelectedMaterial}">
                         <ContentControl.ContentTemplate>
                           <DataTemplate x:DataType="vm:MaterialBindingViewModel">
-                            <Border Classes="card" Margin="0,0,0,6">
-                              <StackPanel Spacing="5">
+                            <Border Classes="card">
+                              <StackPanel Spacing="6">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                   <!-- M125: red name + ⚠ when this material's bin object needed repairs -->
                                   <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="12" VerticalAlignment="Center"
@@ -284,10 +277,6 @@
                                   <TextBlock Text="{Binding ShaderName}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" VerticalAlignment="Center" />
                                   <TextBlock Text="{Binding AssignedTo, StringFormat='→ {0}'}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="10" VerticalAlignment="Center" IsVisible="{Binding HasAssignment}" />
                                 </StackPanel>
-
-                                <!-- M32: preview profile (features + UV transform) -->
-                                <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="3" Padding="6,4">
-                                  <StackPanel Spacing="2">
                                     <StackPanel Orientation="Horizontal" Spacing="6">
                                       <Border Background="{DynamicResource ReyAccentBrush}" CornerRadius="3" Padding="5,1">
                                         <TextBlock Text="{Binding ProfileLabel}" Foreground="#08221E" FontSize="9" FontWeight="SemiBold" />
@@ -298,64 +287,10 @@
                                       </Border>
                                       <TextBlock Text="⚠ profile unresolved" Foreground="#FFB454" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding ProfileUnresolved}" />
                                     </StackPanel>
-                                    <TextBlock Text="{Binding UvTransformText}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10"
-                                               ToolTip.Tip="Read from this material's UV parameters — edit them in the parameter list below" />
-                                    <TextBlock Text="{Binding UvSourceText}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="9" IsVisible="{Binding HasUvSource}" />
-                                    <TextBlock Text="{Binding RenderModeLabel, StringFormat='Blend mode: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
-
-                                    <!-- M106: the pass's REAL fields — these write straight into the .bin. -->
-                                    <StackPanel Spacing="2" Margin="0,4,0,0" IsVisible="{Binding CanEditRenderState}">
-                                      <TextBlock Text="RENDER STATE" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
-                                      <CheckBox Content="Cull back faces (off = two-sided)" IsChecked="{Binding CullEnable}" FontSize="9"
-                                                ToolTip.Tip="pass.cullEnable — also what drives Two-Sided Lighting below" />
-                                      <CheckBox Content="Alpha blending (blendEnable)" IsChecked="{Binding BlendEnable}" FontSize="9"
-                                                ToolTip.Tip="pass.blendEnable — the material's own transparency flag" />
-                                      <Grid ColumnDefinitions="Auto,*" Margin="0,2,0,0">
-                                        <TextBlock Grid.Column="0" Text="Src blend" FontSize="9" VerticalAlignment="Center"
-                                                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
-                                        <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
-                                                  ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding SrcColorBlendFactor}"
-                                                  ToolTip.Tip="Riot blend factor. Map22 shadow receivers use 4 (DstColor); normal alpha materials use 6 (SrcAlpha)." />
-                                      </Grid>
-                                      <Grid ColumnDefinitions="Auto,*">
-                                        <TextBlock Grid.Column="0" Text="Dst blend" FontSize="9" VerticalAlignment="Center"
-                                                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
-                                        <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
-                                                  ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding DstColorBlendFactor}"
-                                                  ToolTip.Tip="Sets both the colour and alpha destination factor" />
-                                      </Grid>
-                                    </StackPanel>
-
-                                    <!-- Derived read-outs: nothing in the .bin stores these, so they can't be
-                                         edited directly — they follow the fields above plus the shader name and
-                                         the AlphaTestValue / UV parameters. -->
-                                    <TextBlock Text="DERIVED (no .bin field — change the inputs named below)" FontSize="8" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,5,0,0" />
-                                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
-                                      <TextBlock Grid.Row="0" Grid.Column="0" Text="Culling" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
-                                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CullEnabledText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
-                                      <TextBlock Grid.Row="1" Grid.Column="0" Text="Depth Write" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
-                                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DepthWriteText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
-                                                 ToolTip.Tip="Follows the blend mode: transparent and transparent-cutout materials don't write depth" />
-                                      <TextBlock Grid.Row="2" Grid.Column="0" Text="Alpha Cutout" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
-                                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding AlphaCutoutText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
-                                                 ToolTip.Tip="Threshold comes from the AlphaTestValue parameter — edit it in the parameter list below" />
-                                      <TextBlock Grid.Row="3" Grid.Column="0" Text="Two-Sided Lighting" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
-                                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding TwoSidedText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
-                                                 ToolTip.Tip="Active when back-face culling is off — untick 'Cull back faces' above" />
-                                    </Grid>
-                                  </StackPanel>
-                                </Border>
-
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                  <Button Classes="tool" Content="Copy name" Command="{Binding CopyNameCommand}" />
-                                  <Button Classes="tool" Content="Revert material" Command="{Binding RevertCommand}" />
-                                  <Button Classes="tool" Content="+ Add Sampler" Command="{Binding AddSamplerCommand}" IsVisible="{Binding CanEditSamplers}" />
-                                </StackPanel>
-
-                                <!-- M52: shader selector — swap the pass shader; missing sampler slots the
-                                     target shader uses (learned from this document's materials) are auto-added -->
-                                <StackPanel Spacing="2" Margin="0,4,0,0" IsVisible="{Binding CanChangeShader}">
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="GENERAL" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                        <StackPanel IsVisible="{Binding CanChangeShader}">
                                   <TextBlock Text="Shader" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
                                   <Grid ColumnDefinitions="*,Auto">
                                     <AutoCompleteBox Grid.Column="0" Text="{Binding EditedShader}" FontSize="10"
@@ -364,132 +299,21 @@
                                     <Button Grid.Column="1" Content="Set" Command="{Binding ApplyShaderCommand}" FontSize="10" Padding="7,1" Margin="3,0,0,0"
                                             ToolTip.Tip="Switch to this shader and auto-add the sampler slots materials of that shader use" />
                                   </Grid>
-                                  <Button Classes="tool" Content="Use most-used Riot material setup"
-                                          Command="{Binding ApplyCommonShaderSetupCommand}"
-                                          IsVisible="{Binding HasShaderDef}" HorizontalAlignment="Stretch"
-                                          ToolTip.Tip="Loads real materials from the installed patch, selects the most frequent parameter/switch/macro/render-state setup for this shader, and keeps your texture paths." />
                                   <TextBlock Text="{Binding ShaderChangeStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}"
                                              TextWrapping="Wrap" IsVisible="{Binding ShaderChangeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-                                  <!-- M103: what the SELECTED shader declares. These are the samplers /
-                                       parameters the shader supports that this material doesn't bind yet —
-                                       one click adds them with the shader's own default values. -->
                                   <TextBlock Text="{Binding ShaderDefSummary}" FontSize="9" TextWrapping="Wrap"
                                              Foreground="{DynamicResource ReyTextDimBrush}"
                                              IsVisible="{Binding ShaderDefSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasMissingSamplers}">
-                                    <TextBlock Text="SAMPLERS THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource ReyTextDimBrush}" />
-                                    <ItemsControl ItemsSource="{Binding MissingSamplers}">
-                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                                      <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
-                                                  Content="{Binding Name, StringFormat='+ {0}'}"
-                                                  ToolTip.Tip="{Binding DefaultTexturePath}"
-                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderSamplerCommand}"
-                                                  CommandParameter="{Binding}" />
-                                        </DataTemplate>
-                                      </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                  </StackPanel>
-
-                                  <StackPanel Spacing="2" IsVisible="{Binding HasMissingParameters}">
-                                    <TextBlock Text="PARAMETERS THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource ReyTextDimBrush}" />
-                                    <ItemsControl ItemsSource="{Binding MissingParameters}">
-                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                                      <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
-                                                  Content="{Binding Name, StringFormat='+ {0}'}"
-                                                  ToolTip.Tip="{Binding DefaultText, StringFormat='default {0}'}"
-                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderParameterCommand}"
-                                                  CommandParameter="{Binding}" />
-                                        </DataTemplate>
-                                      </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                  </StackPanel>
-
-                                  <!-- M103: the material's own feature switches, editable. An entry with no
-                                       explicit 'on' field counts as enabled, so unticking one writes the
-                                       field rather than removing the entry. -->
-                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasSwitches}">
-                                    <TextBlock Text="FEATURE SWITCHES" FontSize="8" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource ReyTextDimBrush}" />
-                                    <ItemsControl ItemsSource="{Binding Switches}">
-                                      <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                          <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
-                                            <CheckBox Grid.Column="0" Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="9" />
-                                            <Ellipse Grid.Column="1" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
-                                                     Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsDirty}" />
-                                            <Button Grid.Column="2" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
-                                                    Command="{Binding RemoveCommand}" ToolTip.Tip="Remove this switch" />
-                                          </Grid>
-                                        </DataTemplate>
-                                      </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                  </StackPanel>
-
-                                  <StackPanel Spacing="2" IsVisible="{Binding HasShaderSwitches}">
-                                    <TextBlock Text="FEATURE SWITCHES THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource ReyTextDimBrush}" />
-                                    <ItemsControl ItemsSource="{Binding ShaderSwitches}">
-                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                                      <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
-                                                  Content="{Binding StringFormat='+ {0}'}"
-                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderSwitchCommand}"
-                                                  CommandParameter="{Binding}" />
-                                        </DataTemplate>
-                                      </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                  </StackPanel>
-
-                                  <!-- M150: shaderMacros — the defines that decide how a surface reacts to the
-                                       SCENE (lightmap / fog), separate from the feature switches above. -->
-                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasMacros}">
-                                    <TextBlock Text="SHADER MACROS" FontSize="8" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource ReyTextDimBrush}" />
-                                    <ItemsControl ItemsSource="{Binding Macros}">
-                                      <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                          <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
-                                            <CheckBox Grid.Column="0" Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="9"
-                                                      ToolTip.Tip="{Binding Hint}" />
-                                            <Ellipse Grid.Column="1" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
-                                                     Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsDirty}" />
-                                            <Button Grid.Column="2" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
-                                                    Command="{Binding RemoveCommand}"
-                                                    ToolTip.Tip="Remove the define entirely — not the same as unticking it, which writes 0. Absent means the shader's own default applies." />
-                                          </Grid>
-                                        </DataTemplate>
-                                      </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                  </StackPanel>
-
-                                  <StackPanel Spacing="2" IsVisible="{Binding HasMissingMacros}">
-                                    <TextBlock Text="ADD SHADER MACRO" FontSize="8" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource ReyTextDimBrush}" />
-                                    <TextBlock Text="Macros select precompiled DX11 permutations. Unsupported combinations can crash in-game."
-                                               FontSize="8" TextWrapping="Wrap" Foreground="#FFB454" />
-                                    <ItemsControl ItemsSource="{Binding MissingMacros}">
-                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                                      <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
-                                                  Content="{Binding StringFormat='+ {0}'}"
-                                                  Command="{Binding $parent[ItemsControl].DataContext.AddMacroCommand}"
-                                                  CommandParameter="{Binding}" />
-                                        </DataTemplate>
-                                      </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                  </StackPanel>
-                                </StackPanel>
-
+                        </StackPanel>
+                                    <TextBlock Text="{Binding UvTransformText}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10"
+                                               ToolTip.Tip="Read from this material's UV parameters — edit them in the parameter list below" />
+                                    <TextBlock Text="{Binding UvSourceText}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="9" IsVisible="{Binding HasUvSource}" />
+                                    <TextBlock Text="{Binding RenderModeLabel, StringFormat='Blend mode: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
+                        </StackPanel>
+                      </Expander>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="SAMPLERS" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
                                 <ItemsControl ItemsSource="{Binding Slots}">
                                   <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -526,7 +350,144 @@
                                     </DataTemplate>
                                   </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-
+                        <Button Classes="tool" Content="+ Add Sampler" Command="{Binding AddSamplerCommand}"
+                                IsVisible="{Binding CanEditSamplers}" HorizontalAlignment="Left" Margin="0,4,0,0" />
+                        <StackPanel IsVisible="{Binding CanChangeShader}">
+                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasMissingSamplers}">
+                                    <TextBlock Text="SAMPLERS THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding MissingSamplers}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding Name, StringFormat='+ {0}'}"
+                                                  ToolTip.Tip="{Binding DefaultTexturePath}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderSamplerCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                        </StackPanel>
+                        </StackPanel>
+                      </Expander>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0" IsVisible="{Binding CanEditRenderState}">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="RENDER STATE" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                                    <StackPanel Spacing="2" Margin="0,4,0,0" IsVisible="{Binding CanEditRenderState}">
+                                      <CheckBox Content="Cull back faces (off = two-sided)" IsChecked="{Binding CullEnable}" FontSize="9"
+                                                ToolTip.Tip="pass.cullEnable — also what drives Two-Sided Lighting below" />
+                                      <CheckBox Content="Alpha blending (blendEnable)" IsChecked="{Binding BlendEnable}" FontSize="9"
+                                                ToolTip.Tip="pass.blendEnable — the material's own transparency flag" />
+                                      <Grid ColumnDefinitions="Auto,*" Margin="0,2,0,0">
+                                        <TextBlock Grid.Column="0" Text="Src blend" FontSize="9" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
+                                        <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
+                                                  ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding SrcColorBlendFactor}"
+                                                  ToolTip.Tip="Riot blend factor. Map22 shadow receivers use 4 (DstColor); normal alpha materials use 6 (SrcAlpha)." />
+                                      </Grid>
+                                      <Grid ColumnDefinitions="Auto,*">
+                                        <TextBlock Grid.Column="0" Text="Dst blend" FontSize="9" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
+                                        <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
+                                                  ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding DstColorBlendFactor}"
+                                                  ToolTip.Tip="Sets both the colour and alpha destination factor" />
+                                      </Grid>
+                                    </StackPanel>
+                        </StackPanel>
+                      </Expander>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="DERIVED — COMPUTED, NO .BIN FIELD" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                                      <TextBlock Grid.Row="0" Grid.Column="0" Text="Culling" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CullEnabledText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9" />
+                                      <TextBlock Grid.Row="1" Grid.Column="0" Text="Depth Write" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DepthWriteText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
+                                                 ToolTip.Tip="Follows the blend mode: transparent and transparent-cutout materials don't write depth" />
+                                      <TextBlock Grid.Row="2" Grid.Column="0" Text="Alpha Cutout" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding AlphaCutoutText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
+                                                 ToolTip.Tip="Threshold comes from the AlphaTestValue parameter — edit it in the parameter list below" />
+                                      <TextBlock Grid.Row="3" Grid.Column="0" Text="Two-Sided Lighting" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="9" Margin="0,0,10,0" />
+                                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding TwoSidedText}" Foreground="{DynamicResource ReyTextBrush}" FontSize="9"
+                                                 ToolTip.Tip="Active when back-face culling is off — untick 'Cull back faces' above" />
+                                    </Grid>
+                        </StackPanel>
+                      </Expander>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0" IsVisible="{Binding CanChangeShader}">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="SWITCHES &amp; MACROS" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasSwitches}">
+                                    <TextBlock Text="FEATURE SWITCHES" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding Switches}">
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
+                                            <CheckBox Grid.Column="0" Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="9" />
+                                            <Ellipse Grid.Column="1" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
+                                                     Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsDirty}" />
+                                            <Button Grid.Column="2" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
+                                                    Command="{Binding RemoveCommand}" ToolTip.Tip="Remove this switch" />
+                                          </Grid>
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                                  <StackPanel Spacing="2" IsVisible="{Binding HasShaderSwitches}">
+                                    <TextBlock Text="FEATURE SWITCHES THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding ShaderSwitches}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding StringFormat='+ {0}'}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderSwitchCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                                  <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasMacros}">
+                                    <TextBlock Text="SHADER MACROS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding Macros}">
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
+                                            <CheckBox Grid.Column="0" Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="9"
+                                                      ToolTip.Tip="{Binding Hint}" />
+                                            <Ellipse Grid.Column="1" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
+                                                     Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsDirty}" />
+                                            <Button Grid.Column="2" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
+                                                    Command="{Binding RemoveCommand}"
+                                                    ToolTip.Tip="Remove the define entirely — not the same as unticking it, which writes 0. Absent means the shader's own default applies." />
+                                          </Grid>
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                                  <StackPanel Spacing="2" IsVisible="{Binding HasMissingMacros}">
+                                    <TextBlock Text="ADD SHADER MACRO" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <TextBlock Text="Macros select precompiled DX11 permutations. Unsupported combinations can crash in-game."
+                                               FontSize="8" TextWrapping="Wrap" Foreground="#FFB454" />
+                                    <ItemsControl ItemsSource="{Binding MissingMacros}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding StringFormat='+ {0}'}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddMacroCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                        </StackPanel>
+                      </Expander>
                                 <Expander Header="Parameters" IsVisible="{Binding HasParameters}" FontSize="11" Margin="0,4,0,0">
                                   <StackPanel>
                                   <!-- M55: add a parameter (clones an existing one's schema; edit the value after) -->
@@ -564,12 +525,45 @@
                                   </ItemsControl>
                                   </StackPanel>
                                 </Expander>
+                        <StackPanel IsVisible="{Binding CanChangeShader}">
+                                  <StackPanel Spacing="2" IsVisible="{Binding HasMissingParameters}">
+                                    <TextBlock Text="PARAMETERS THIS SHADER SUPPORTS" FontSize="8" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <ItemsControl ItemsSource="{Binding MissingParameters}">
+                                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                                  Content="{Binding Name, StringFormat='+ {0}'}"
+                                                  ToolTip.Tip="{Binding DefaultText, StringFormat='default {0}'}"
+                                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderParameterCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                        </StackPanel>
+                      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
+                        <Expander.Header><TextBlock Classes="cardTitle" Text="ADVANCED" /></Expander.Header>
+                        <StackPanel Spacing="3" Margin="0,4,0,0">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                          <Button Classes="tool" Content="Copy name" Command="{Binding CopyNameCommand}" />
+                          <Button Classes="tool" Content="Revert material" Command="{Binding RevertCommand}" />
+                        </StackPanel>
+                        <StackPanel IsVisible="{Binding CanChangeShader}">
+                                  <Button Classes="tool" Content="Use most-used Riot material setup"
+                                          Command="{Binding ApplyCommonShaderSetupCommand}"
+                                          IsVisible="{Binding HasShaderDef}" HorizontalAlignment="Stretch"
+                                          ToolTip.Tip="Loads real materials from the installed patch, selects the most frequent parameter/switch/macro/render-state setup for this shader, and keeps your texture paths." />
+                        </StackPanel>
+                        </StackPanel>
+                      </Expander>
                               </StackPanel>
                             </Border>
                           </DataTemplate>
                         </ContentControl.ContentTemplate>
                         </ContentControl>
-                      </Grid>
+                      </StackPanel>
                     </StackPanel>
                   </ScrollViewer>
                 </TabItem>
