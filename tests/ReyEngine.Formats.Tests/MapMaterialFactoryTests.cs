@@ -72,6 +72,51 @@ public sealed class MapMaterialFactoryTests
     }
 
     [Fact]
+    public void ShaderAuthoredMaterialAlwaysUsesStaticMaterialClass()
+    {
+        var objects = Enumerable.Range(0, 5)
+            .Select(i => new BinTreeObject((uint)(0x100 + i), H("VfxSystemDefinitionData"), Array.Empty<BinTreeProperty>()))
+            .ToArray();
+        var shader = new LeagueShaderDef("Shaders/StaticMesh/Test", "StaticMesh", new(), new(), new());
+
+        var result = MapMaterialFactory.CreateFromShader(Write(objects), "LegacyPort/Test/Material",
+            shader, out var error, samplerOverrides: null);
+
+        Assert.Null(error);
+        Assert.NotNull(result);
+        Assert.Equal(H("StaticMaterialDef"),
+            SafeBinTree.Parse(result!).Objects[H("LegacyPort/Test/Material")].ClassHash);
+    }
+
+    [Fact]
+    public void ReimportRemovesStaleLegacyMaterialsEvenWhenOldBuildUsedWrongClass()
+    {
+        var bin = Write(
+            new BinTreeObject(H("LegacyPort/Test/Current"), H("StaticMaterialDef"), new BinTreeProperty[]
+            {
+                new BinTreeString(H("name"), "LegacyPort/Test/Current"),
+            }),
+            new BinTreeObject(H("LegacyPort/Test/Stale"), H("VfxSystemDefinitionData"), new BinTreeProperty[]
+            {
+                new BinTreeString(H("name"), "LegacyPort/Test/Stale"),
+            }),
+            new BinTreeObject(H("Maps/Test/Keep"), H("StaticMaterialDef"), new BinTreeProperty[]
+            {
+                new BinTreeString(H("name"), "Maps/Test/Keep"),
+            }));
+
+        var cleaned = MapMaterialFactory.RemoveGeneratedMaterials(bin, "LegacyPort/",
+            out int removed, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(cleaned);
+        Assert.Equal(2, removed);
+        var tree = SafeBinTree.Parse(cleaned!);
+        Assert.Single(tree.Objects);
+        Assert.True(tree.Objects.ContainsKey(H("Maps/Test/Keep")));
+    }
+
+    [Fact]
     public void CreatesLegacyRoleMaterialWithAuthoredBindingsAndFeatures()
     {
         var target = Write(new BinTreeObject(0x100u, H("MapSunProperties"), Array.Empty<BinTreeProperty>()));

@@ -21,6 +21,35 @@ public static class MapMaterialFactory
         catch { return false; }
     }
 
+    /// <summary>Remove material objects authored by an earlier legacy-port pass, including objects made
+    /// by older ReyEngine builds which accidentally used a non-material class hash. The namespace is
+    /// owned by the porter and is rebuilt immediately after this call.</summary>
+    public static byte[]? RemoveGeneratedMaterials(byte[] materialsBin, string prefix,
+        out int removedCount, out string? error)
+    {
+        removedCount = 0;
+        error = null;
+        try
+        {
+            var tree = SafeBinTree.Parse(materialsBin);
+            uint nameField = HashAlgorithms.Fnv1a("name");
+            var remove = tree.Objects
+                .Where(pair => pair.Value.Properties.TryGetValue(nameField, out var property)
+                    && property is BinTreeString name
+                    && name.Value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .Select(pair => pair.Key).ToList();
+            foreach (uint hash in remove) tree.Objects.Remove(hash);
+            removedCount = remove.Count;
+            if (removedCount == 0) return materialsBin;
+            using var output = new MemoryStream();
+            tree.Write(output);
+            byte[] result = output.ToArray();
+            _ = SafeBinTree.Parse(result);
+            return result;
+        }
+        catch (Exception ex) { error = ex.Message; return null; }
+    }
+
     /// <summary>Remove only StaticMaterialDefs which are no longer reachable from the final map. Material
     /// names used directly by mapgeo are roots because mapgeo references them by hash rather than through
     /// the bin object graph. Every non-material bin object is also a root, so materials required by VFX,
@@ -239,10 +268,11 @@ public static class MapMaterialFactory
             const uint SwitchClass  = 0x0e2212a1;   // StaticMaterialSwitchDef
             const uint TechClass    = 0x060a4413;   // StaticMaterialTechniqueDef
             const uint PassClass    = 0x8537d0c2;   // StaticMaterialPassDef
-            const uint MaterialClass = 0xad4b8ac0;  // StaticMaterialDef (overwritten below from a real object when present)
-            uint materialClass = tree.Objects.Values
-                .Select(o => o.ClassHash)
-                .FirstOrDefault(h => tree.Objects.Values.Count(x => x.ClassHash == h) > 3, MaterialClass);
+            // Bin type hashes are lower-cased FNV-1a. Older code selected the first class occurring more
+            // than three times in the destination; bins beginning with VFX definitions consequently
+            // authored "materials" as VfxSystemDefinitionData (0x45cd899f), which the game can crash on.
+            // StaticMaterialDef is authoritative and does not vary by map.
+            uint materialClass = StaticMaterialClass;
 
             // samplers: the shader's declared textures with their default paths; the diffuse-ish one
             // takes the override (imported texture) when provided

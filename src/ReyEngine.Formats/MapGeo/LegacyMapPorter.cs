@@ -125,6 +125,11 @@ public static class LegacyMapPorter
                 retained.Add(mesh); renderRegions++; continue;
             }
 
+            // A re-port must never layer a new import on top of an earlier one. In particular, generated
+            // Grass_* materials contain the word "grass" and used to be mistaken for destination bushes
+            // when bush deletion was disabled, duplicating those meshes on every pass.
+            if (IsPreviousLegacyImport(mesh)) { removedMeshes++; continue; }
+
             bool bush = mesh.Submeshes.Any(submesh => bushMaterials.Contains(submesh.Material))
                 || mesh.Submeshes.Any(submesh => LooksLikeBushMaterial(submesh.Material));
             bool remove = bush ? options.RemoveOriginalBushes : options.RemoveOriginalMeshes;
@@ -148,10 +153,19 @@ public static class LegacyMapPorter
     {
         if (!MapGeoBinary.TryReadEditable(mapGeoBytes, out var map)) return 0;
         bushMaterials ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        return map.Meshes.Count(mesh => (!mesh.HasRegionHash || mesh.RegionHash == 0)
+        return map.Meshes.Count(mesh => (!mesh.HasRegionHash || mesh.RegionHash == 0) && !IsPreviousLegacyImport(mesh)
             && mesh.Submeshes.Any(submesh => bushMaterials.Contains(submesh.Material)
                 || LooksLikeBushMaterial(submesh.Material)));
     }
+
+    public static int CountPreviousImportedMeshes(byte[] mapGeoBytes)
+    {
+        if (!MapGeoBinary.TryReadEditable(mapGeoBytes, out var map)) return 0;
+        return map.Meshes.Count(mesh => (!mesh.HasRegionHash || mesh.RegionHash == 0) && IsPreviousLegacyImport(mesh));
+    }
+
+    private static bool IsPreviousLegacyImport(MapGeoBinary.Mesh mesh) =>
+        mesh.Submeshes.Any(submesh => submesh.Material.StartsWith("LegacyPort/", StringComparison.OrdinalIgnoreCase));
 
     private static bool LooksLikeBushMaterial(string material) =>
         material.Contains("bush", StringComparison.OrdinalIgnoreCase)

@@ -36,6 +36,7 @@ public sealed record LegacyMapPortShaderSelection(
 public sealed record LegacyDestinationContentSummary(
     int OrdinaryMeshes,
     int BushMeshes,
+    int PreviousImportMeshes,
     int Materials,
     int Particles,
     int Props,
@@ -52,6 +53,8 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     [ObservableProperty] private bool _removeOriginalProps = true;
     [ObservableProperty] private bool _removeOriginalSounds = true;
     [ObservableProperty] private bool _removeOriginalProbes = true;
+    [ObservableProperty] private string _cleanupOutcome = "";
+    private readonly LegacyDestinationContentSummary _destination;
     public string Summary { get; }
     public string MeshCleanupText { get; }
     public string BushCleanupText { get; }
@@ -68,12 +71,13 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     public LegacyMapPortWindowViewModel(LegacyMapPortResult result, IReadOnlyList<string> shaderChoices,
         LegacyDestinationContentSummary destination)
     {
+        _destination = destination;
         Summary = $"{result.SourceFormat}: {result.SourceMeshCount:n0} source objects -> " +
                   $"{result.ImportedMeshCount:n0} mapgeo meshes, {result.Textures.Count:n0} textures, " +
                   $"{result.Materials.Count:n0} materials.";
         MeshCleanupText = $"Remove original non-bush meshes ({destination.OrdinaryMeshes:n0})";
         BushCleanupText = $"Remove original bushes / VertexDeform foliage ({destination.BushMeshes:n0})";
-        MaterialCleanupText = $"Remove original materials that are no longer referenced ({destination.Materials:n0} total)";
+        MaterialCleanupText = $"Remove unused original materials ({destination.Materials:n0} total before cleanup)";
         ParticleCleanupText = $"Remove original particles ({destination.Particles:n0})";
         PropCleanupText = $"Remove original animated props / mobs ({destination.Props:n0})";
         SoundCleanupText = $"Remove original map sounds ({destination.Sounds:n0})";
@@ -96,6 +100,37 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
                 SelectedShader = material.Shader,
             });
         foreach (var row in ShaderRows) row.SelectionChanged = ApplyRoleShader;
+        UpdateCleanupOutcome();
+    }
+
+    partial void OnRemoveOriginalMeshesChanged(bool value) => UpdateCleanupOutcome();
+    partial void OnRemoveOriginalBushesChanged(bool value) => UpdateCleanupOutcome();
+    partial void OnRemoveUnusedOriginalMaterialsChanged(bool value) => UpdateCleanupOutcome();
+    partial void OnRemoveOriginalParticlesChanged(bool value) => UpdateCleanupOutcome();
+    partial void OnRemoveOriginalPropsChanged(bool value) => UpdateCleanupOutcome();
+    partial void OnRemoveOriginalSoundsChanged(bool value) => UpdateCleanupOutcome();
+    partial void OnRemoveOriginalProbesChanged(bool value) => UpdateCleanupOutcome();
+
+    private void UpdateCleanupOutcome()
+    {
+        int retainedMeshes = (RemoveOriginalMeshes ? 0 : _destination.OrdinaryMeshes)
+            + (RemoveOriginalBushes ? 0 : _destination.BushMeshes);
+        var retained = new List<string>();
+        if (!RemoveOriginalBushes && _destination.BushMeshes > 0)
+            retained.Add($"{_destination.BushMeshes:n0} bush / foliage meshes");
+        if (!RemoveOriginalMeshes && _destination.OrdinaryMeshes > 0)
+            retained.Add($"{_destination.OrdinaryMeshes:n0} other meshes");
+        string meshResult = retainedMeshes == 0
+            ? "No ordinary destination mapgeo meshes will remain."
+            : $"This selection keeps {string.Join(" and ", retained)} from the destination.";
+        if (_destination.PreviousImportMeshes > 0)
+            meshResult += $" {_destination.PreviousImportMeshes:n0} meshes from the earlier legacy import will always be replaced.";
+        string materialResult = !RemoveUnusedOriginalMaterials
+            ? " All original material definitions will remain."
+            : retainedMeshes > 0 || !RemoveOriginalParticles || !RemoveOriginalProps || !RemoveOriginalSounds || !RemoveOriginalProbes
+                ? " Materials required by any retained meshes or bin content must remain too."
+                : " Unreferenced original materials will be removed after the imported materials are rebuilt.";
+        CleanupOutcome = meshResult + materialResult;
     }
 
     [RelayCommand]

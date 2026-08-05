@@ -6393,11 +6393,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var placements = MapPlaceableExtractor.Extract(originalBinBytes);
             var particles = MapParticleExtractor.Extract(originalBinBytes, ResolveLegacyName);
             int bushCount = LegacyMapPorter.CountBushMeshes(originalMapBytes, bushMaterials);
+            int previousImportCount = LegacyMapPorter.CountPreviousImportedMeshes(originalMapBytes);
             int ordinaryCount = MapGeoBinary.TryReadEditable(originalMapBytes, out var editable)
-                ? Math.Max(0, editable.Meshes.Count(mesh => !mesh.HasRegionHash || mesh.RegionHash == 0) - bushCount)
+                ? Math.Max(0, editable.Meshes.Count(mesh => !mesh.HasRegionHash || mesh.RegionHash == 0)
+                    - bushCount - previousImportCount)
                 : 0;
             destinationSummary = new LegacyDestinationContentSummary(
-                ordinaryCount, bushCount, document.Materials.Count(material => material.IsStaticMaterialDef),
+                ordinaryCount, bushCount, previousImportCount, document.Materials.Count(material => material.IsStaticMaterialDef),
                 particles.Count, placements.Props.Count, placements.Sounds.Count, placements.Probes.Count);
             result = await Task.Run(() => LegacyMapPorter.Port(folder, originalMapBytes, mapEntry.Path));
         }
@@ -6497,6 +6499,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 binBytes = cleaned;
             }
 
+            var resetBin = MapMaterialFactory.RemoveGeneratedMaterials(binBytes, "LegacyPort/",
+                out int replacedGenerated, out var resetError);
+            if (resetBin is null) throw new InvalidDataException($"Could not replace earlier legacy materials: {resetError}");
+            binBytes = resetBin;
+
             int created = 0, updated = 0;
             foreach (var material in result.Materials)
             {
@@ -6554,7 +6561,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 $"{result.Textures.Count:n0} unique textures, {created:n0} material(s) created, {updated:n0} updated; " +
                 $"removed {meshCleanup.RemovedMeshCount:n0} destination meshes + {meshCleanup.RemovedBushMeshCount:n0} bushes, " +
                 $"{removedPlacements:n0} placements, and {removedMaterials:n0} unused materials; " +
-                $"{result.PreservedRenderRegionMeshCount:n0} render-region meshes retained.");
+                $"rebuilt {replacedGenerated:n0} earlier legacy material(s), retained {meshCleanup.RetainedOriginalMeshCount:n0} " +
+                $"selected destination meshes, and protected {result.PreservedRenderRegionMeshCount:n0} render-region meshes.");
             if (TryResolveEntry(mapEntry.PathHash, out var reloaded)) await LoadMapGeoAsync(reloaded);
             Status = "Legacy map port complete.";
         }

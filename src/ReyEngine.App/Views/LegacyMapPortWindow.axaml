@@ -46,6 +46,10 @@
               <CheckBox Grid.Row="2" Grid.Column="1" Content="{Binding SoundCleanupText}" IsChecked="{Binding RemoveOriginalSounds}" FontSize="10" />
               <CheckBox Grid.Row="3" Grid.Column="0" Content="{Binding ProbeCleanupText}" IsChecked="{Binding RemoveOriginalProbes}" FontSize="10" />
             </Grid>
+            <Border Background="#261F12" BorderBrush="#80601D" BorderThickness="1" CornerRadius="4" Padding="8,6">
+              <TextBlock Text="{Binding CleanupOutcome}" FontSize="10" FontWeight="SemiBold" TextWrapping="Wrap"
+                         Foreground="#F2C45E" />
+            </Border>
             <TextBlock Text="Material cleanup is dependency-aware: it removes only StaticMaterialDefs no longer referenced by the final mapgeo or any retained bin object."
                        FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
           </StackPanel>
