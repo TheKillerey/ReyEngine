@@ -825,6 +825,20 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     public MaterialSourceKind Kind { get; private set; }
     public ObservableCollection<MaterialBindingViewModel> Materials { get; } = new();
 
+    /// <summary>M351b: <see cref="Materials"/> after search and filters — what the master list shows.
+    /// A separate collection rather than per-item visibility, so the list can be a real ListBox with a
+    /// selection instead of a stack of expanded cards.</summary>
+    public ObservableCollection<MaterialBindingViewModel> FilteredMaterials { get; } = new();
+
+    /// <summary>The one material the detail pane edits.</summary>
+    [ObservableProperty] private MaterialBindingViewModel? _selectedMaterial;
+
+    /// <summary>M351b: show only materials with unsaved edits.</summary>
+    [ObservableProperty] private bool _showModifiedOnly;
+
+    /// <summary>"120 material(s)", or "8 of 120" when a filter is narrowing the list.</summary>
+    [ObservableProperty] private string _listSummary = "";
+
     [ObservableProperty] private bool _hasMaterials;
     [ObservableProperty] private bool _isDirty;
     [ObservableProperty] private string _search = "";
@@ -1255,6 +1269,10 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         RefreshShaderDefs();  // M103: match each material against the catalogue
         UpdateUnresolved();
         Summary = $"{(Kind == MaterialSourceKind.ChampionSkin ? "Champion" : "Map")} — {Materials.Count} material(s)";
+        // Explicit: Search/OnlyUnresolved were just assigned their existing values above, so their
+        // change handlers do not fire and the master list would otherwise load empty.
+        ShowModifiedOnly = false;
+        ApplyFilter();
     }
 
     public void Clear()
@@ -1262,6 +1280,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         if (_doc is not null) UndoService?.PurgeContext(_doc);
         _doc = null; BinEntry = null;
         Materials.Clear();
+        FilteredMaterials.Clear(); SelectedMaterial = null; ShowModifiedOnly = false; ListSummary = "";
         HasMaterials = false; IsDirty = false; Search = ""; Summary = ""; UnresolvedCount = 0;
         HasBinIssues = false; BinIssuesLabel = "";
         UsedShaders.Clear(); KnownShaders.Clear(); BulkSourceShader = null; BulkTargetShader = "";
@@ -1328,6 +1347,9 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
     partial void OnSearchChanged(string value) => ApplyFilter();
     partial void OnOnlyUnresolvedChanged(bool value) => ApplyFilter();
+    // Deliberately NOT re-filtered from NotifyChanged: editing a material makes it dirty, and re-running
+    // the filter mid-edit would reorder the list and move the selection out from under the user.
+    partial void OnShowModifiedOnlyChanged(bool value) => ApplyFilter();
 
     // ---- M101: scope the list to the selected mesh's materials ----
     private HashSet<string>? _meshFilter;
@@ -1347,6 +1369,25 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
     private void ApplyFilter()
     {
-        foreach (var m in Materials) m.IsVisible = m.Matches(Search, OnlyUnresolved, _meshFilter);
+        foreach (var m in Materials)
+            m.IsVisible = m.Matches(Search, OnlyUnresolved, _meshFilter)
+                          && (!ShowModifiedOnly || m.IsDirty);
+
+        // M351b: the filter now also drives a real collection, because the inspector shows a master list
+        // beside one detail pane instead of rendering every material expanded. IsVisible is still set so
+        // nothing that reads it changes behaviour.
+        var keep = SelectedMaterial;
+        FilteredMaterials.Clear();
+        foreach (var m in Materials) if (m.IsVisible) FilteredMaterials.Add(m);
+
+        // Hold the selection when it survives the filter; otherwise fall to the first row, so the detail
+        // pane is never blank while the list has rows in it.
+        SelectedMaterial = keep is not null && FilteredMaterials.Contains(keep)
+            ? keep
+            : FilteredMaterials.FirstOrDefault();
+
+        ListSummary = FilteredMaterials.Count == Materials.Count
+            ? $"{Materials.Count:n0} material(s)"
+            : $"{FilteredMaterials.Count:n0} of {Materials.Count:n0}";
     }
 }

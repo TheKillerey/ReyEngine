@@ -4,7 +4,8 @@
              xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
              xmlns:conv="clr-namespace:ReyEngine.App.Converters"
              x:Class="ReyEngine.App.Views.InspectorView"
-             x:DataType="vm:MainWindowViewModel">
+             x:DataType="vm:MainWindowViewModel"
+             x:CompileBindings="True">
   <!-- M351a: the asset inspector, lifted verbatim out of MainWindow.axaml.
 
        It was 581 lines nested eight levels deep in a 129 KB file, which is why it had drifted into a
@@ -211,6 +212,8 @@
                       <TextBox Watermark="Search materials / textures…" Text="{Binding MaterialEditor.Search}" FontSize="11" Padding="4,2" />
                       <StackPanel Orientation="Horizontal" Spacing="10">
                         <CheckBox Content="Only unresolved" IsChecked="{Binding MaterialEditor.OnlyUnresolved}" FontSize="11" />
+                        <CheckBox Content="Show modified only" IsChecked="{Binding MaterialEditor.ShowModifiedOnly}" FontSize="11"
+                                  ToolTip.Tip="Only materials with unsaved edits. Applied when you toggle it — the list is not re-filtered while you type, so a material does not jump out from under you as you edit it." />
                         <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding MaterialEditor.IsDirty}" ToolTip.Tip="Unsaved edits" />
                       </StackPanel>
                       <StackPanel Orientation="Horizontal" Spacing="4">
@@ -221,10 +224,49 @@
                         <Button Classes="tool" Content="Revert All" Command="{Binding MaterialEditor.RevertAllCommand}" />
                       </StackPanel>
 
-                      <ItemsControl ItemsSource="{Binding MaterialEditor.Materials}">
-                        <ItemsControl.ItemTemplate>
-                          <DataTemplate>
-                            <Border IsVisible="{Binding IsVisible}" Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+                      <!-- M351b: master-detail. The list used to render EVERY material fully expanded,
+                           so reaching one material meant scrolling past all 120. Now the list is a real
+                           selection and exactly one material is edited at a time. -->
+                      <Grid ColumnDefinitions="240,8,*" MinHeight="360">
+                        <!-- MASTER: the filtered material list -->
+                        <Border Grid.Column="0" Background="{DynamicResource ReyBgBrush}" CornerRadius="4"
+                                BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
+                          <DockPanel>
+                            <Border DockPanel.Dock="Top" Padding="8,6"
+                                    BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1">
+                              <TextBlock Text="{Binding MaterialEditor.ListSummary}" FontSize="10"
+                                         Foreground="{DynamicResource ReyTextDimBrush}" />
+                            </Border>
+                            <ListBox ItemsSource="{Binding MaterialEditor.FilteredMaterials}"
+                                     SelectedItem="{Binding MaterialEditor.SelectedMaterial}"
+                                     Background="Transparent" BorderThickness="0" Padding="2">
+                              <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:MaterialBindingViewModel">
+                                  <StackPanel Spacing="1" Margin="2">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                      <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="11" VerticalAlignment="Center"
+                                                 IsVisible="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}" />
+                                      <TextBlock Text="●" Foreground="{DynamicResource ReyAccent2Brush}" FontSize="10"
+                                                 VerticalAlignment="Center" IsVisible="{Binding IsDirty}"
+                                                 ToolTip.Tip="Modified — not saved to an override yet" />
+                                      <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
+                                                 TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding ShaderName}" FontSize="9"
+                                               Foreground="{DynamicResource ReyTextDimBrush}"
+                                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding ShaderName}" />
+                                  </StackPanel>
+                                </DataTemplate>
+                              </ListBox.ItemTemplate>
+                            </ListBox>
+                          </DockPanel>
+                        </Border>
+
+                        <!-- DETAIL: the one selected material -->
+                        <ContentControl Grid.Column="2" Content="{Binding MaterialEditor.SelectedMaterial}">
+                        <ContentControl.ContentTemplate>
+                          <DataTemplate x:DataType="vm:MaterialBindingViewModel">
+                            <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
                               <StackPanel Spacing="5">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                   <!-- M125: red name + ⚠ when this material's bin object needed repairs -->
@@ -526,8 +568,9 @@
                               </StackPanel>
                             </Border>
                           </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                      </ItemsControl>
+                        </ContentControl.ContentTemplate>
+                        </ContentControl>
+                      </Grid>
                     </StackPanel>
                   </ScrollViewer>
                 </TabItem>
