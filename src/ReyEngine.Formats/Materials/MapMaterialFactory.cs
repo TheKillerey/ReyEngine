@@ -13,10 +13,81 @@ namespace ReyEngine.Formats.Materials;
 /// </summary>
 public static class MapMaterialFactory
 {
+    private static readonly uint StaticMaterialClass = HashAlgorithms.Fnv1a("StaticMaterialDef");
+
     public static bool ContainsMaterial(byte[] materialsBin, string name)
     {
         try { return SafeBinTree.Parse(materialsBin).Objects.ContainsKey(HashAlgorithms.Fnv1a(name)); }
         catch { return false; }
+    }
+
+    /// <summary>Remove only StaticMaterialDefs which are no longer reachable from the final map. Material
+    /// names used directly by mapgeo are roots because mapgeo references them by hash rather than through
+    /// the bin object graph. Every non-material bin object is also a root, so materials required by VFX,
+    /// props, or other retained systems survive. This deliberately does not mean "delete every original
+    /// material"; doing that is a common source of game crashes.</summary>
+    public static byte[]? RemoveUnusedStaticMaterials(byte[] materialsBin,
+        IEnumerable<string> usedMapGeoMaterials, out int removedCount, out string? error)
+    {
+        removedCount = 0;
+        error = null;
+        try
+        {
+            var tree = SafeBinTree.Parse(materialsBin);
+            var materialHashes = tree.Objects
+                .Where(pair => pair.Value.ClassHash == StaticMaterialClass)
+                .Select(pair => pair.Key).ToHashSet();
+            if (materialHashes.Count == 0) return materialsBin;
+
+            var reachable = new HashSet<uint>();
+            var queue = new Queue<uint>();
+            foreach (uint hash in tree.Objects.Keys.Where(hash => !materialHashes.Contains(hash))) queue.Enqueue(hash);
+            foreach (string name in usedMapGeoMaterials.Where(name => !string.IsNullOrWhiteSpace(name)))
+                queue.Enqueue(HashAlgorithms.Fnv1a(name));
+
+            while (queue.Count > 0)
+            {
+                uint hash = queue.Dequeue();
+                if (!reachable.Add(hash) || !tree.Objects.TryGetValue(hash, out var obj)) continue;
+                foreach (var property in obj.Properties.Values) EnqueueLinks(property, queue);
+            }
+
+            foreach (uint hash in materialHashes.Where(hash => !reachable.Contains(hash)).ToList())
+            {
+                tree.Objects.Remove(hash);
+                removedCount++;
+            }
+            if (removedCount == 0) return materialsBin;
+
+            using var output = new MemoryStream();
+            tree.Write(output);
+            byte[] result = output.ToArray();
+            _ = SafeBinTree.Parse(result);
+            return result;
+        }
+        catch (Exception ex) { error = ex.Message; return null; }
+    }
+
+    private static void EnqueueLinks(BinTreeProperty property, Queue<uint> queue)
+    {
+        switch (property)
+        {
+            case BinTreeObjectLink link when link.Value != 0:
+                queue.Enqueue(link.Value);
+                break;
+            case BinTreeOptional optional when optional.Value is not null:
+                EnqueueLinks(optional.Value, queue);
+                break;
+            case BinTreeStruct structure:
+                foreach (var child in structure.Properties.Values) EnqueueLinks(child, queue);
+                break;
+            case BinTreeContainer container:
+                foreach (var child in container.Elements) EnqueueLinks(child, queue);
+                break;
+            case BinTreeMap map:
+                foreach (var pair in map) { EnqueueLinks(pair.Key, queue); EnqueueLinks(pair.Value, queue); }
+                break;
+        }
     }
 
     /// <summary>Clone a proven StaticMaterialDef from any game bin into a map materials bin. Unlike

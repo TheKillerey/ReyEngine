@@ -9,10 +9,10 @@ public partial class LegacyMapPortWindow : Window
     public LegacyMapPortWindow() => InitializeComponent();
 
     public static Task<LegacyMapPortShaderSelection?> ShowAsync(Window owner, LegacyMapPortResult result,
-        IReadOnlyList<string> shaderChoices)
+        IReadOnlyList<string> shaderChoices, LegacyDestinationContentSummary destination)
     {
         var completion = new TaskCompletionSource<LegacyMapPortShaderSelection?>();
-        var viewModel = new LegacyMapPortWindowViewModel(result, shaderChoices);
+        var viewModel = new LegacyMapPortWindowViewModel(result, shaderChoices, destination);
         var window = new LegacyMapPortWindow { DataContext = viewModel };
         viewModel.Confirmed = selection => { completion.TrySetResult(selection); window.Close(); };
         viewModel.Cancelled = () => { completion.TrySetResult(null); window.Close(); };

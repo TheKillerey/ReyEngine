@@ -22,6 +22,29 @@ public sealed record LegacyPortShaderOptions(
         LegacyMapPorter.TerrainShader);
 }
 
+/// <summary>Controls which content from the modern destination container is retained underneath a
+/// legacy NVR/WGEO import. Render-region meshes are structural and are always retained.</summary>
+public sealed record LegacyPortCleanupOptions(
+    bool RemoveOriginalMeshes,
+    bool RemoveOriginalBushes,
+    bool RemoveUnusedOriginalMaterials,
+    bool RemoveOriginalParticles,
+    bool RemoveOriginalProps,
+    bool RemoveOriginalSounds,
+    bool RemoveOriginalProbes)
+{
+    public static LegacyPortCleanupOptions FullReplacement { get; } = new(true, true, true, true, true, true, true);
+    public static LegacyPortCleanupOptions KeepDestinationSupport { get; } = new(true, false, true, false, false, false, false);
+    public static LegacyPortCleanupOptions KeepEverything { get; } = new(false, false, false, false, false, false, false);
+}
+
+public sealed record LegacyMeshCleanupResult(
+    byte[] MapGeoBytes,
+    int RemovedMeshCount,
+    int RemovedBushMeshCount,
+    int RetainedOriginalMeshCount,
+    int PreservedRenderRegionMeshCount);
+
 public sealed record LegacyTextureCopy(string SourcePath, string TargetPath, byte[] Bytes);
 
 public sealed record LegacyMaterialPlan(
@@ -47,7 +70,8 @@ public sealed record LegacyMapPortResult(
     int RemovedBaseMeshCount,
     int PreservedRenderRegionMeshCount,
     int SourceMaterialCount,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    int DestinationMeshCount = 0);
 
 /// <summary>
 /// Converts Riot's pre-mapgeo NVR/WGEO environments into a modern mapgeo container. The destination
@@ -77,6 +101,63 @@ public static class LegacyMapPorter
             Materials = result.Materials.Select(material => material with { Shader = ShaderFor(material.Role) }).ToList(),
         };
     }
+
+    /// <summary>Apply the user's destination cleanup after the legacy geometry has been converted. The
+    /// first <see cref="LegacyMapPortResult.DestinationMeshCount"/> records are the original destination;
+    /// imported records follow them. This avoids converting hundreds of textures a second time when the
+    /// cleanup choices are changed in the review window.</summary>
+    public static LegacyMeshCleanupResult ApplyMeshCleanup(LegacyMapPortResult result,
+        LegacyPortCleanupOptions options, IReadOnlySet<string>? bushMaterials = null)
+    {
+        if (!MapGeoBinary.TryReadEditable(result.MapGeoBytes, out var map))
+            throw new InvalidDataException("The combined legacy mapgeo could not be reopened for destination cleanup.");
+
+        int originalCount = Math.Clamp(result.DestinationMeshCount, 0, map.Meshes.Count);
+        bushMaterials ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var retained = new List<MapGeoBinary.Mesh>(map.Meshes.Count);
+        int removedMeshes = 0, removedBushes = 0, retainedOriginal = 0, renderRegions = 0;
+        for (int i = 0; i < map.Meshes.Count; i++)
+        {
+            var mesh = map.Meshes[i];
+            if (i >= originalCount) { retained.Add(mesh); continue; }
+            if (mesh.HasRegionHash && mesh.RegionHash != 0)
+            {
+                retained.Add(mesh); renderRegions++; continue;
+            }
+
+            bool bush = mesh.Submeshes.Any(submesh => bushMaterials.Contains(submesh.Material))
+                || mesh.Submeshes.Any(submesh => LooksLikeBushMaterial(submesh.Material));
+            bool remove = bush ? options.RemoveOriginalBushes : options.RemoveOriginalMeshes;
+            if (!remove) { retained.Add(mesh); retainedOriginal++; continue; }
+            if (bush) removedBushes++; else removedMeshes++;
+        }
+
+        map.Meshes = retained;
+        map.Compact();
+        byte[] cleaned = map.Write();
+        cleaned = MapGeoWriter.WriteWithRegeneratedBucketGrids(cleaned, MapGeoDecoder.Decode(cleaned), targetBucketSize: 1000f);
+        var verified = MapGeoDecoder.Decode(cleaned);
+        int verifiedRegions = verified.Meshes.Count(mesh => mesh.RegionHash != 0);
+        if (verifiedRegions != renderRegions)
+            throw new InvalidDataException($"Render-region verification failed: retained {verifiedRegions} of {renderRegions} meshes.");
+        return new LegacyMeshCleanupResult(cleaned, removedMeshes, removedBushes, retainedOriginal, renderRegions);
+    }
+
+    /// <summary>Count destination bushes using the same material-aware classification used by cleanup.</summary>
+    public static int CountBushMeshes(byte[] mapGeoBytes, IReadOnlySet<string>? bushMaterials = null)
+    {
+        if (!MapGeoBinary.TryReadEditable(mapGeoBytes, out var map)) return 0;
+        bushMaterials ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return map.Meshes.Count(mesh => (!mesh.HasRegionHash || mesh.RegionHash == 0)
+            && mesh.Submeshes.Any(submesh => bushMaterials.Contains(submesh.Material)
+                || LooksLikeBushMaterial(submesh.Material)));
+    }
+
+    private static bool LooksLikeBushMaterial(string material) =>
+        material.Contains("bush", StringComparison.OrdinalIgnoreCase)
+        || material.Contains("brush", StringComparison.OrdinalIgnoreCase)
+        || material.Contains("grass", StringComparison.OrdinalIgnoreCase)
+        || material.Contains("foliage", StringComparison.OrdinalIgnoreCase);
 
     public static LegacyMapPortResult Port(string sourceRoot, byte[] destinationMapGeo,
         string? destinationMapGeoPath = null)
@@ -281,11 +362,10 @@ public static class LegacyMapPorter
         var built = accumulators.Values.SelectMany(x => x).Where(x => x.IndexCount > 0).ToList();
         if (built.Count == 0) throw new InvalidDataException("The legacy environment contained no importable textured triangles.");
 
-        var preserved = target.Meshes.Where(m => m.HasRegionHash && m.RegionHash != 0).ToList();
-        int preservedCount = preserved.Count;
-        int removed = target.Meshes.Count - preserved.Count;
-        target.Meshes = preserved;
-        target.Compact();
+        // Keep the complete destination for the review stage. ApplyMeshCleanup removes only the categories
+        // selected by the user after conversion, and protects render-region meshes unconditionally.
+        int destinationMeshCount = target.Meshes.Count;
+        int preservedCount = target.Meshes.Count(m => m.HasRegionHash && m.RegionHash != 0);
 
         var materialNames = BuildMaterialNames(slug, built.Select(x => new MaterialKey(x.Key.Role, x.Key.TextureSet)));
         foreach (var acc in built)
@@ -303,8 +383,8 @@ public static class LegacyMapPorter
 
         var materialPlans = BuildMaterialPlans(materialNames, built, LegacyPortShaderOptions.Defaults);
         return new LegacyMapPortResult(ported, textureCopies.Values.ToList(), materialPlans, source,
-            isWgeo ? "WGEO" : "NVR", environment.Meshes.Count, built.Count, removed, preservedCount,
-            sourceMaterialCount, warnings.Distinct().ToList());
+            isWgeo ? "WGEO" : "NVR", environment.Meshes.Count, built.Count, 0, preservedCount,
+            sourceMaterialCount, warnings.Distinct().ToList(), destinationMeshCount);
     }
 
     private static string FindSingleSource(string root)

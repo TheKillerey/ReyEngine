@@ -44,6 +44,34 @@ public sealed class MapMaterialFactoryTests
     }
 
     [Fact]
+    public void UnusedMaterialCleanupKeepsMapGeoAndBinGraphDependencies()
+    {
+        const string mapGeoMaterial = "Maps/Test/Materials/Ground";
+        const string linkedMaterial = "Maps/Test/Materials/Particle";
+        const string orphanMaterial = "Maps/Test/Materials/OldBush";
+        var bin = Write(
+            new BinTreeObject(H(mapGeoMaterial), H("StaticMaterialDef"), Array.Empty<BinTreeProperty>()),
+            new BinTreeObject(H(linkedMaterial), H("StaticMaterialDef"), Array.Empty<BinTreeProperty>()),
+            new BinTreeObject(H(orphanMaterial), H("StaticMaterialDef"), Array.Empty<BinTreeProperty>()),
+            new BinTreeObject(H("Maps/Test/Vfx"), H("VfxSystemDefinitionData"), new BinTreeProperty[]
+            {
+                new BinTreeObjectLink(H("material"), H(linkedMaterial)),
+            }));
+
+        var cleaned = MapMaterialFactory.RemoveUnusedStaticMaterials(bin, new[] { mapGeoMaterial },
+            out int removed, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(cleaned);
+        Assert.Equal(1, removed);
+        var tree = SafeBinTree.Parse(cleaned!);
+        Assert.True(tree.Objects.ContainsKey(H(mapGeoMaterial)));
+        Assert.True(tree.Objects.ContainsKey(H(linkedMaterial)));
+        Assert.False(tree.Objects.ContainsKey(H(orphanMaterial)));
+        Assert.True(tree.Objects.ContainsKey(H("Maps/Test/Vfx")));
+    }
+
+    [Fact]
     public void CreatesLegacyRoleMaterialWithAuthoredBindingsAndFeatures()
     {
         var target = Write(new BinTreeObject(0x100u, H("MapSunProperties"), Array.Empty<BinTreeProperty>()));

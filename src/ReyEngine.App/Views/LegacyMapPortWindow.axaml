@@ -4,7 +4,7 @@
         xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         x:Class="ReyEngine.App.Views.LegacyMapPortWindow"
         x:DataType="vm:LegacyMapPortWindowViewModel"
-        Title="ReyEngine - Port Legacy Map" Width="820" Height="660" MinWidth="680" MinHeight="520"
+        Title="ReyEngine - Port Legacy Map" Width="860" Height="760" MinWidth="680" MinHeight="520"
         WindowStartupLocation="CenterOwner" ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
@@ -25,6 +25,31 @@
       <StackPanel Margin="18" Spacing="12">
         <TextBlock Text="Legacy material mapping" FontSize="18" FontWeight="SemiBold" />
         <TextBlock Text="{Binding Summary}" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
+        <Border Classes="card" BorderBrush="#EAB640" BorderThickness="1">
+          <StackPanel Spacing="7">
+            <DockPanel>
+              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+                <Button Content="Full replacement" Command="{Binding FullReplacementCommand}" FontSize="9" Padding="9,4" />
+                <Button Content="Keep support content" Command="{Binding KeepDestinationSupportCommand}" FontSize="9" Padding="9,4" />
+                <Button Content="Keep everything" Command="{Binding KeepEverythingCommand}" FontSize="9" Padding="9,4" />
+              </StackPanel>
+              <TextBlock Classes="cardTitle" Text="DESTINATION CLEANUP" Foreground="#EAB640" />
+            </DockPanel>
+            <TextBlock Text="Choose what ReyEngine removes from the modern map used as the destination container. Render-region meshes are always protected. Full replacement is the safest starting point when retained map-specific objects crash the game; disable bush deletion when the old map has no bushes of its own."
+                       FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="3">
+              <CheckBox Grid.Row="0" Grid.Column="0" Content="{Binding MeshCleanupText}" IsChecked="{Binding RemoveOriginalMeshes}" FontSize="10" />
+              <CheckBox Grid.Row="0" Grid.Column="1" Content="{Binding BushCleanupText}" IsChecked="{Binding RemoveOriginalBushes}" FontSize="10" />
+              <CheckBox Grid.Row="1" Grid.Column="0" Content="{Binding MaterialCleanupText}" IsChecked="{Binding RemoveUnusedOriginalMaterials}" FontSize="10" />
+              <CheckBox Grid.Row="1" Grid.Column="1" Content="{Binding ParticleCleanupText}" IsChecked="{Binding RemoveOriginalParticles}" FontSize="10" />
+              <CheckBox Grid.Row="2" Grid.Column="0" Content="{Binding PropCleanupText}" IsChecked="{Binding RemoveOriginalProps}" FontSize="10" />
+              <CheckBox Grid.Row="2" Grid.Column="1" Content="{Binding SoundCleanupText}" IsChecked="{Binding RemoveOriginalSounds}" FontSize="10" />
+              <CheckBox Grid.Row="3" Grid.Column="0" Content="{Binding ProbeCleanupText}" IsChecked="{Binding RemoveOriginalProbes}" FontSize="10" />
+            </Grid>
+            <TextBlock Text="Material cleanup is dependency-aware: it removes only StaticMaterialDefs no longer referenced by the final mapgeo or any retained bin object."
+                       FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+          </StackPanel>
+        </Border>
         <Border Classes="card">
           <StackPanel Spacing="6">
             <TextBlock Classes="cardTitle" Text="SHADER ASSIGNMENT" />
