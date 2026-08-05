@@ -194,4 +194,43 @@ public sealed class MapMaterialFactoryTests
         Assert.Equal(H(replacement.Name), Assert.IsType<BinTreeObjectLink>(pass.Properties[H("shader")]).Value);
         Assert.False(Assert.IsType<BinTreeBool>(pass.Properties[H("blendEnable")]).Value);
     }
+
+    [Fact]
+    public void ShaderCreationUsesTheCommonRiotSetupInsteadOfUnsafeDeclarationDefaults()
+    {
+        const string name = "Maps/Test/Materials/CommonSetup";
+        var target = Write(new BinTreeObject(0x100u, H("MapSunProperties"), Array.Empty<BinTreeProperty>()));
+        var setup = new ShaderMaterialSetup(
+            new Dictionary<string, Vector4> { ["TintColor"] = Vector4.One },
+            new Dictionary<string, bool> { ["USE_VERTEX_COLOR"] = true },
+            new Dictionary<string, string> { ["NO_BAKED_LIGHTING"] = "1" },
+            BlendEnable: true, CullEnable: false, SourceBlendFactor: 6, DestinationBlendFactor: 7);
+        var shader = new LeagueShaderDef("Shaders/StaticMesh/CommonSetup", "StaticMesh",
+            new() { new ShaderTextureDef("DiffuseTexture", "ASSETS/Defaults/white.tex") },
+            new() { new ShaderParamDef("TintColor", 0, 0, 0, 0) },
+            new() { "USE_VERTEX_COLOR" }, setup);
+
+        var result = MapMaterialFactory.CreateFromShader(target, name, shader, out var error,
+            samplerOverrides: null);
+
+        Assert.Null(error);
+        var material = SafeBinTree.Parse(result!).Objects[H(name)];
+        var parameters = Assert.IsType<BinTreeUnorderedContainer>(material.Properties[H("paramValues")]);
+        var parameter = Assert.Single(parameters.Elements.OfType<BinTreeStruct>());
+        Assert.Equal(Vector4.One, Assert.IsType<BinTreeVector4>(parameter.Properties[H("value")]).Value);
+        var feature = Assert.Single(Assert.IsType<BinTreeUnorderedContainer>(
+            material.Properties[H("switches")]).Elements.OfType<BinTreeStruct>());
+        Assert.True(Assert.IsType<BinTreeBool>(feature.Properties[H("on")]).Value);
+        var macro = Assert.Single(Assert.IsType<BinTreeMap>(material.Properties[H("shaderMacros")]));
+        Assert.Equal("NO_BAKED_LIGHTING", Assert.IsType<BinTreeString>(macro.Key).Value);
+
+        var technique = Assert.Single(Assert.IsType<BinTreeContainer>(
+            material.Properties[H("techniques")]).Elements.OfType<BinTreeStruct>());
+        var pass = Assert.Single(Assert.IsType<BinTreeContainer>(
+            technique.Properties[H("passes")]).Elements.OfType<BinTreeStruct>());
+        Assert.True(Assert.IsType<BinTreeBool>(pass.Properties[H("blendEnable")]).Value);
+        Assert.False(Assert.IsType<BinTreeBool>(pass.Properties[H("cullEnable")]).Value);
+        Assert.Equal(6u, Assert.IsType<BinTreeU32>(pass.Properties[H("srcColorBlendFactor")]).Value);
+        Assert.Equal(7u, Assert.IsType<BinTreeU32>(pass.Properties[H("dstColorBlendFactor")]).Value);
+    }
 }

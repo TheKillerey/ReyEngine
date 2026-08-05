@@ -249,7 +249,8 @@ public static class MapMaterialFactory
         bool replaceExisting = false,
         bool? blendEnable = null,
         int? sourceBlendFactor = null,
-        int? destinationBlendFactor = null)
+        int? destinationBlendFactor = null,
+        bool? cullEnable = null)
     {
         error = null;
         try
@@ -301,7 +302,9 @@ public static class MapMaterialFactory
 
             var parameters = shader.Parameters.Select(pd =>
             {
-                var value = parameterOverrides?.GetValueOrDefault(pd.Name) ?? new System.Numerics.Vector4(pd.X, pd.Y, pd.Z, pd.W);
+                var value = parameterOverrides?.GetValueOrDefault(pd.Name)
+                            ?? shader.CommonSetup?.Parameters.GetValueOrDefault(pd.Name)
+                            ?? new System.Numerics.Vector4(pd.X, pd.Y, pd.Z, pd.W);
                 return (BinTreeProperty)new BinTreeStruct(0, ParamClass, new BinTreeProperty[]
                 {
                     new BinTreeString(F("name"), pd.Name),
@@ -309,25 +312,38 @@ public static class MapMaterialFactory
                 });
             }).ToList();
 
-            var switchValues = (switches ?? new Dictionary<string, bool>())
+            var switchValues = (switches ?? shader.CommonSetup?.Switches ?? new Dictionary<string, bool>())
                 .Select(kv => (BinTreeProperty)new BinTreeStruct(0, SwitchClass, new BinTreeProperty[]
                 {
                     new BinTreeString(F("name"), kv.Key),
                     new BinTreeBool(F("on"), kv.Value),
                 })).ToList();
-            var macroValues = (macros ?? new Dictionary<string, bool>())
-                .Select(kv => new KeyValuePair<BinTreeProperty, BinTreeProperty>(
-                    new BinTreeString(0, kv.Key), new BinTreeString(0, kv.Value ? "1" : "0"))).ToList();
+            IEnumerable<KeyValuePair<string, string>> selectedMacros = macros is not null
+                ? macros.Select(kv => new KeyValuePair<string, string>(kv.Key, kv.Value ? "1" : "0"))
+                : shader.CommonSetup?.Macros ?? new Dictionary<string, string>();
+            var macroValues = selectedMacros.Select(kv => new KeyValuePair<BinTreeProperty, BinTreeProperty>(
+                new BinTreeString(0, kv.Key), new BinTreeString(0, kv.Value))).ToList();
+
+            bool? effectiveBlend = blendEnable ?? shader.CommonSetup?.BlendEnable;
+            bool? effectiveCull = cullEnable ?? shader.CommonSetup?.CullEnable;
+            int? effectiveSource = sourceBlendFactor
+                ?? (shader.CommonSetup is { SourceBlendFactor: >= 0 } commonSource
+                    ? commonSource.SourceBlendFactor : null);
+            int? effectiveDestination = destinationBlendFactor
+                ?? (shader.CommonSetup is { DestinationBlendFactor: >= 0 } commonDestination
+                    ? commonDestination.DestinationBlendFactor : null);
 
             var passProperties = new List<BinTreeProperty>
             {
                 new BinTreeObjectLink(F("shader"), HashAlgorithms.Fnv1a(shader.Name)),
             };
-            if (blendEnable is { } blend)
+            if (effectiveBlend is { } blend)
                 passProperties.Add(new BinTreeBool(F("blendEnable"), blend));
-            if (sourceBlendFactor is { } source)
+            if (effectiveCull is { } cull)
+                passProperties.Add(new BinTreeBool(F("cullEnable"), cull));
+            if (effectiveSource is { } source)
                 passProperties.Add(new BinTreeU32(F("srcColorBlendFactor"), (uint)source));
-            if (destinationBlendFactor is { } destination)
+            if (effectiveDestination is { } destination)
                 passProperties.Add(new BinTreeU32(F("dstColorBlendFactor"), (uint)destination));
             var pass = new BinTreeStruct(0, PassClass, passProperties);
             var technique = new BinTreeStruct(0, TechClass, new BinTreeProperty[]

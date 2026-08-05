@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
@@ -21,6 +22,27 @@ public sealed record ShaderParamDef(string Name, float X, float Y, float Z, floa
         string.Join(", ", new[] { X, Y, Z, W }.Select(v => v.ToString("0.###", CultureInfo.InvariantCulture)));
 }
 
+/// <summary>The material state Riot authors most often for one shader. This is separate from the raw
+/// shaders.bin defaults: those describe the parameter ABI and frequently contain zero multipliers,
+/// while real StaticMaterialDefs supply the values the shader is intended to use.</summary>
+public sealed record ShaderMaterialSetup(
+    Dictionary<string, Vector4> Parameters,
+    Dictionary<string, bool> Switches,
+    Dictionary<string, string> Macros,
+    bool BlendEnable,
+    bool? CullEnable,
+    int SourceBlendFactor,
+    int DestinationBlendFactor)
+{
+    public int SourceMaterialCount { get; init; }
+    public int MatchingSetupCount { get; init; }
+    public string ExampleMaterial { get; init; } = "";
+
+    public string Summary => MatchingSetupCount > 0
+        ? $"Most used Riot setup ({MatchingSetupCount:n0} of {SourceMaterialCount:n0} material(s))"
+        : "Riot material setup";
+}
+
 /// <summary>
 /// M103: one <c>CustomShaderDef</c> from the client's shader bin — the authoritative answer to
 /// "which samplers, parameters and feature switches does this shader support?". Materials that bind
@@ -31,11 +53,13 @@ public sealed record LeagueShaderDef(
     string Category,
     List<ShaderTextureDef> Textures,
     List<ShaderParamDef> Parameters,
-    List<string> StaticSwitches)
+    List<string> StaticSwitches,
+    ShaderMaterialSetup? CommonSetup = null)
 {
     /// <summary>Name without the <c>Shaders/Category/</c> prefix (what the dropdown shows).</summary>
     public string ShortName { get { int i = Name.LastIndexOf('/'); return i < 0 ? Name : Name[(i + 1)..]; } }
-    public string Summary => $"{Textures.Count} sampler(s) · {Parameters.Count} param(s) · {StaticSwitches.Count} switch(es)";
+    public string Summary => $"{Textures.Count} sampler(s) · {Parameters.Count} param(s) · {StaticSwitches.Count} switch(es)"
+        + (CommonSetup is null ? "" : $" · {CommonSetup.Summary}");
 }
 
 /// <summary>Every shader one game install ships, as scanned from its <c>data/shaders/shaders.bin</c>.</summary>

@@ -43,6 +43,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private readonly ReyEngine.App.Services.ThumbnailService _thumbnails; // Content Browser lazy thumbnails
     private readonly Dictionary<ulong, AssetNodeViewModel> _nodesByHash = new();
     private WorkshopCatalogService? _workshopCatalog;
+    private Task<WorkshopCatalog>? _commonMaterialCatalogTask;
+    private string? _commonMaterialCatalogDirectory;
 
     private bool ContentLoaded => _archive is not null || _mounts is not null;
 
@@ -1402,6 +1404,35 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public Action<WorkshopViewModel>? ShowWorkshopWindow;
 
+    private async Task<ShaderMaterialSetup?> LoadCommonShaderSetupAsync(string shader)
+    {
+        string? final = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
+        if (final is null) return null;
+        _workshopCatalog ??= new WorkshopCatalogService(_resolver.Database, ResolveBinName);
+        if (_commonMaterialCatalogTask is null
+            || !string.Equals(_commonMaterialCatalogDirectory, final, StringComparison.OrdinalIgnoreCase))
+        {
+            _commonMaterialCatalogDirectory = final;
+            _log.Info("Material", "Loading common Riot material setups from the installed patch…");
+            _commonMaterialCatalogTask = Task.Run(
+                () => _workshopCatalog.LoadAsync(final, rebuild: false));
+        }
+
+        WorkshopCatalog catalog;
+        try { catalog = await _commonMaterialCatalogTask; }
+        catch
+        {
+            _commonMaterialCatalogTask = null;
+            throw;
+        }
+        var template = catalog.Materials.FirstOrDefault(m =>
+            m.Shader.Equals(shader, StringComparison.OrdinalIgnoreCase));
+        if (template is not null)
+            _log.Success("Material", $"{shader}: common setup uses {template.SetupUsageCount:n0} of "
+                + $"{template.ShaderUsageCount:n0} shipped material(s).");
+        return template?.CommonSetup;
+    }
+
     private async Task<string> ImportWorkshopMaterialAsync(WorkshopMaterialTemplate template, string newName)
     {
         if (_currentMapEntry is not { } mapEntry || _currentMap is null)
@@ -1568,6 +1599,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
                     var def = MaterialEditor.Catalog?.Find(m.ShaderPath);
                     if (def is null) { _log.Error("AddMesh", $"Material '{m.NewName}': shader '{m.ShaderPath}' not in the catalogue."); return; }
+                    var commonSetup = await LoadCommonShaderSetupAsync(def.Name);
+                    if (commonSetup is not null) def = def with { CommonSetup = commonSetup };
                     var newBytes = MapMaterialFactory.CreateFromShader(binBytes, m.NewName!, def, out var err, diffusePath);
                     if (newBytes is null)
                     {
@@ -1583,6 +1616,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     }
                     binBytes = newBytes;
                     _log.Success("AddMesh", $"Material '{m.NewName}' built from shader {m.ShaderPath}"
+                        + (commonSetup is not null ? " using the most-used Riot setup" : "")
                         + (diffusePath is not null ? $" with diffuse {diffusePath}" : "") + ".");
                 }
                 if (!await SaveMapBinBytesAsync(binEntry, binBytes))
@@ -3617,6 +3651,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
         MaterialEditor.SaveOverride = SaveMaterialOverride;
         MaterialEditor.RequestCatalog = LoadShaderCatalogAsync;   // M103
+        MaterialEditor.RequestCommonShaderSetup = LoadCommonShaderSetupAsync;
         InitShaderEnvironments();
 
         // M46 Particle Editor wiring

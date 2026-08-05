@@ -7,13 +7,15 @@ using ReyEngine.Core.Assets;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Shaders;
 using ReyEngine.Formats.Vfx;
 
 namespace ReyEngine.App.Services;
 
 public sealed record WorkshopMaterialTemplate(
     string Shader, string MaterialName, uint MaterialHash, ulong SourceBinHash, string SourceBinPath, string SourceWad,
-    string Profile, string Features, int Samplers, int Parameters, IReadOnlyList<string> TexturePaths);
+    string Profile, string Features, int Samplers, int Parameters, IReadOnlyList<string> TexturePaths,
+    ShaderMaterialSetup CommonSetup, int ShaderUsageCount, int SetupUsageCount);
 
 public sealed record WorkshopParticleTemplate(
     uint SystemHash, string Name, string ParticlePath, ulong SourceBinHash, string SourceBinPath,
@@ -32,6 +34,10 @@ public sealed record WorkshopCatalogProgress(int CompletedWads, int TotalWads, i
 /// compact de-duplicated templates. A WAD timestamp/size fingerprint invalidates it after a Riot patch.</summary>
 public sealed class WorkshopCatalogService
 {
+    private sealed record MaterialCandidate(WorkshopMaterialTemplate Item, int Count, int Score);
+    private static readonly JsonSerializerOptions CacheJson = new() { IncludeFields = true };
+    private static readonly JsonSerializerOptions CacheJsonCompact = new()
+        { IncludeFields = true, WriteIndented = false };
     private static readonly uint StaticMaterialClass = HashAlgorithms.Fnv1a("StaticMaterialDef");
     private readonly IHashResolver _resolver;
     private readonly Func<uint, string?> _resolveBinName;
@@ -43,7 +49,7 @@ public sealed class WorkshopCatalogService
 
     public static string CachePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ReyEngine", "Cache", "workshop-catalog-v3.json");
+        "ReyEngine", "Cache", "workshop-catalog-v5.json");
 
     public async Task<WorkshopCatalog> LoadAsync(string finalDirectory, bool rebuild,
         IProgress<WorkshopCatalogProgress>? progress = null, CancellationToken cancellationToken = default)
@@ -54,7 +60,11 @@ public sealed class WorkshopCatalogService
         string fingerprint = Fingerprint(finalDirectory, _wads);
 
         WorkshopCatalog? cached = !rebuild ? ReadCache(fingerprint) : null;
-        var materials = new ConcurrentDictionary<string, (WorkshopMaterialTemplate Item, int Score)>(StringComparer.OrdinalIgnoreCase);
+        // shader -> canonical authored setup -> representative + frequency. The old Workshop selected the
+        // richest single material, which made that outlier look like the shader's default. Counting real
+        // setups makes the winning template representative instead.
+        var materials = new ConcurrentDictionary<string, ConcurrentDictionary<string, MaterialCandidate>>(
+            StringComparer.OrdinalIgnoreCase);
         var particles = new ConcurrentDictionary<string, (WorkshopParticleTemplate Item, int Score)>(StringComparer.OrdinalIgnoreCase);
         int completed = 0;
 
@@ -96,12 +106,19 @@ public sealed class WorkshopCatalogService
                                         .OrderByDescending(s => ReferenceEquals(s, binding.Diffuse))
                                         .Select(s => Normalize(s.Path))
                                         .Where(p => p.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                                    var setup = ShaderMaterialSetups.Capture(binding);
                                     var item = new WorkshopMaterialTemplate(binding.ShaderName, binding.Name, binding.ObjectPathHash,
                                         entry.PathHash, entry.Path, wadPath, binding.Profile.ProfileLabel,
-                                        binding.Profile.FeatureSummary, binding.Slots.Count, binding.Parameters.Count, textures);
+                                        binding.Profile.FeatureSummary, binding.Slots.Count, binding.Parameters.Count, textures,
+                                        setup, 1, 1);
                                     int score = (textures.Length > 0 ? 1000 : 0) + binding.Slots.Count * 25
                                         + binding.Parameters.Count * 5 + binding.Switches.Count;
-                                    materials.AddOrUpdate(binding.ShaderName, (item, score), (_, old) => score > old.Score ? (item, score) : old);
+                                    string signature = ShaderMaterialSetups.CanonicalSignature(setup);
+                                    var bySetup = materials.GetOrAdd(binding.ShaderName,
+                                        _ => new ConcurrentDictionary<string, MaterialCandidate>(StringComparer.Ordinal));
+                                    bySetup.AddOrUpdate(signature, new MaterialCandidate(item, 1, score), (_, old) =>
+                                        new MaterialCandidate(score > old.Score ? item : old.Item, old.Count + 1,
+                                            Math.Max(score, old.Score)));
                                 }
                             }
                             catch { /* a skin/map bin without StaticMaterialDefs */ }
@@ -139,8 +156,27 @@ public sealed class WorkshopCatalogService
         });
 
         if (cached is not null) return cached;
+        var materialTemplates = materials.Select(pair =>
+        {
+            int total = pair.Value.Values.Sum(candidate => candidate.Count);
+            var winner = pair.Value.Values.OrderByDescending(candidate => candidate.Count)
+                .ThenByDescending(candidate => candidate.Score)
+                .ThenBy(candidate => candidate.Item.MaterialName, StringComparer.OrdinalIgnoreCase).First();
+            var setup = winner.Item.CommonSetup with
+            {
+                SourceMaterialCount = total,
+                MatchingSetupCount = winner.Count,
+                ExampleMaterial = winner.Item.MaterialName,
+            };
+            return winner.Item with
+            {
+                CommonSetup = setup,
+                ShaderUsageCount = total,
+                SetupUsageCount = winner.Count,
+            };
+        }).OrderBy(x => x.Shader, StringComparer.OrdinalIgnoreCase).ToArray();
         var catalog = new WorkshopCatalog(fingerprint, DateTime.UtcNow,
-            materials.Values.Select(x => x.Item).OrderBy(x => x.Shader, StringComparer.OrdinalIgnoreCase).ToArray(),
+            materialTemplates,
             particles.Values.Select(x => x.Item).OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToArray());
         WriteCache(catalog);
         return catalog;
@@ -188,7 +224,7 @@ public sealed class WorkshopCatalogService
         try
         {
             if (!File.Exists(CachePath)) return null;
-            var result = JsonSerializer.Deserialize<WorkshopCatalog>(File.ReadAllText(CachePath));
+            var result = JsonSerializer.Deserialize<WorkshopCatalog>(File.ReadAllText(CachePath), CacheJson);
             return result?.Fingerprint == fingerprint ? result : null;
         }
         catch { return null; }
@@ -199,7 +235,7 @@ public sealed class WorkshopCatalogService
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(CachePath)!);
-            File.WriteAllText(CachePath, JsonSerializer.Serialize(catalog, new JsonSerializerOptions { WriteIndented = false }));
+            File.WriteAllText(CachePath, JsonSerializer.Serialize(catalog, CacheJsonCompact));
         }
         catch { /* cache failure does not make the Workshop unusable */ }
     }

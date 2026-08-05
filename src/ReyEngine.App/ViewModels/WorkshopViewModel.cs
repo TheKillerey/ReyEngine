@@ -12,8 +12,9 @@ public sealed partial class WorkshopMaterialViewModel : ObservableObject
     [ObservableProperty] private Bitmap? _thumbnail;
     public string Name => Template.Shader.Split('/').LastOrDefault() ?? Template.Shader;
     public string Category => Template.Shader.Contains('/') ? Template.Shader[..Template.Shader.LastIndexOf('/')] : "Shader";
-    public string Detail => $"{Template.Profile}  |  {Template.Samplers} textures  |  {Template.Parameters} params";
-    public string Source => $"Test material: {Template.MaterialName}\n{Template.SourceBinPath}";
+    public string Detail => $"{Template.Profile}  |  {Template.Samplers} textures  |  {Template.Parameters} params"
+        + $"  |  common setup {Template.SetupUsageCount}/{Template.ShaderUsageCount}";
+    public string Source => $"Most-used setup example: {Template.MaterialName}\n{Template.SourceBinPath}";
 }
 
 public sealed partial class WorkshopParticleViewModel : ObservableObject

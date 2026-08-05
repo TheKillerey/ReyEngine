@@ -134,8 +134,89 @@ public class MaterialShaderConverterTests
             m => Assert.Equal("ASSETS/Map/authored_diffuse.tex", Slot(m, "Diffuse_Texture").Path));
     }
 
+    [Fact]
+    public void Common_setup_replaces_shader_settings_but_preserves_authored_textures()
+    {
+        var doc = MaterialDocument.Parse(BuildMaterials(), Resolve);
+        var material = doc.Materials.First(m => m.Name == "source_a");
+        var shader = new LeagueShaderDef(TargetShader, "StaticMesh", new(),
+            new() { new ShaderParamDef("TintColor", 0, 0, 0, 0) },
+            new() { "USE_FOG" });
+        var setup = new ShaderMaterialSetup(
+            new Dictionary<string, Vector4> { ["TintColor"] = Vector4.One },
+            new Dictionary<string, bool> { ["USE_FOG"] = true },
+            new Dictionary<string, string> { ["DISABLE_DEPTH_FOG"] = "1" },
+            BlendEnable: false, CullEnable: true, SourceBlendFactor: -1, DestinationBlendFactor: -1);
+        var texturePaths = material.Slots.Select(slot => slot.Path).ToArray();
+
+        var result = ShaderMaterialSetups.Apply(material, shader, setup);
+
+        Assert.Equal(texturePaths, material.Slots.Select(slot => slot.Path));
+        Assert.Equal(Vector4.One, VectorValue(Assert.Single(material.Parameters)));
+        Assert.DoesNotContain(material.AllSwitches, item => item.Name == "MULTIPLY_ALPHA");
+        Assert.True(material.AllSwitches.Single(item => item.Name == "USE_FOG").On);
+        Assert.DoesNotContain(material.AllMacros, item => item.Name == MaterialBinding.MacroNoBakedLighting);
+        Assert.Equal("1", material.AllMacros.Single(item => item.Name == "DISABLE_DEPTH_FOG").Value);
+        Assert.False(material.BlendEnable);
+        Assert.True(material.CullEnable);
+        Assert.Equal(-1, material.SrcBlendFactor);
+        Assert.Equal(-1, material.DstBlendFactor);
+        Assert.True(result.RemovedObsoleteValues >= 2);
+
+        var saved = MaterialDocument.Parse(doc.Serialize(), Resolve).Materials.Single(m => m.Name == "source_a");
+        Assert.Equal(Vector4.One, VectorValue(Assert.Single(saved.Parameters)));
+        Assert.Equal("ASSETS/Map/authored_diffuse.tex", Slot(saved, "DiffuseTexture").Path);
+        Assert.True(saved.Switches["USE_FOG"]);
+        Assert.Equal("1", saved.Macros["DISABLE_DEPTH_FOG"]);
+    }
+
+    [Fact]
+    public void Samplerless_static_material_can_receive_a_complete_shader_setup()
+    {
+        const string name = "empty_static_material";
+        var pass = new BinTreeStruct(0, PassClass, new BinTreeProperty[]
+        {
+            new BinTreeObjectLink(H("shader"), H(SourceShader)),
+        });
+        var technique = new BinTreeStruct(0, TechniqueClass, new BinTreeProperty[]
+        {
+            new BinTreeString(H("name"), "normal"),
+            new BinTreeContainer(H("passes"), BinPropertyType.Struct, new BinTreeProperty[] { pass }),
+        });
+        using var stream = new MemoryStream();
+        new BinTree(new[]
+        {
+            new BinTreeObject(H(name), MaterialClass, new BinTreeProperty[]
+            {
+                new BinTreeString(H("name"), name),
+                new BinTreeContainer(H("techniques"), BinPropertyType.Struct,
+                    new BinTreeProperty[] { technique }),
+            }),
+        }, Array.Empty<string>()).Write(stream);
+        var doc = MaterialDocument.Parse(stream.ToArray(), Resolve);
+        var material = Assert.Single(doc.Materials);
+
+        Assert.True(material.IsStaticMaterialDef);
+        Assert.NotNull(material.AddSampler("DiffuseTexture", "ASSETS/Map/new_diffuse.tex"));
+        Assert.NotNull(material.SetVectorParameter("TintColor", Vector4.One));
+        Assert.NotNull(material.AddSwitch("USE_VERTEX_COLOR"));
+        Assert.NotNull(material.SetMacro(MaterialBinding.MacroNoBakedLighting, true));
+
+        var saved = MaterialDocument.Parse(doc.Serialize(), Resolve).Materials.Single();
+        Assert.Equal("ASSETS/Map/new_diffuse.tex", Slot(saved, "DiffuseTexture").Path);
+        Assert.Equal(Vector4.One, VectorValue(Assert.Single(saved.Parameters)));
+        Assert.True(saved.Switches["USE_VERTEX_COLOR"]);
+        Assert.Equal("1", saved.Macros[MaterialBinding.MacroNoBakedLighting]);
+    }
+
     private static TextureSlot Slot(MaterialBinding material, string name) =>
         material.Slots.Single(s => s.SamplerName.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    private static Vector4 VectorValue(MaterialParameter parameter)
+    {
+        Assert.True(parameter.TryGetVector4(out var value));
+        return value;
+    }
 
     private static byte[] BuildMaterials()
     {

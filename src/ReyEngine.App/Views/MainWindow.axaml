@@ -1231,6 +1231,10 @@
                                     <Button Grid.Column="1" Content="Set" Command="{Binding ApplyShaderCommand}" FontSize="10" Padding="7,1" Margin="3,0,0,0"
                                             ToolTip.Tip="Switch to this shader and auto-add the sampler slots materials of that shader use" />
                                   </Grid>
+                                  <Button Classes="tool" Content="Use most-used Riot material setup"
+                                          Command="{Binding ApplyCommonShaderSetupCommand}"
+                                          IsVisible="{Binding HasShaderDef}" HorizontalAlignment="Stretch"
+                                          ToolTip.Tip="Loads real materials from the installed patch, selects the most frequent parameter/switch/macro/render-state setup for this shader, and keeps your texture paths." />
                                   <TextBlock Text="{Binding ShaderChangeStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}"
                                              TextWrapping="Wrap" IsVisible="{Binding ShaderChangeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 

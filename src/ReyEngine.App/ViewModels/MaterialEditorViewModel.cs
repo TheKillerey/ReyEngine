@@ -282,6 +282,12 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     [RelayCommand]
     private void ApplyShader() => Owner?.ChangeShader(this, EditedShader);
 
+    [RelayCommand]
+    private async Task ApplyCommonShaderSetup()
+    {
+        if (Owner is not null) await Owner.ApplyCommonShaderSetupAsync(this);
+    }
+
     // ---- M103: what the SELECTED shader actually declares (from the game install's shader bin) ----
 
     /// <summary>The catalogue entry for this material's current shader; null when the shader isn't in
@@ -466,6 +472,26 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
             if (!Slots.Any(vm => ReferenceEquals(vm.Model, slot)))
                 Slots.Add(new TextureSlotViewModel(slot, Owner!) { Binding = this });
         RaiseShaderChanged();
+        RefreshShaderDef(catalog);
+        RaiseDirty();
+    }
+
+    internal void SynchronizeCommonSetup(ShaderCatalog? catalog)
+    {
+        Parameters.Clear();
+        foreach (var parameter in Model.Parameters)
+            Parameters.Add(new MaterialParameterViewModel(parameter, Owner!));
+        Switches.Clear();
+        foreach (var feature in Model.AllSwitches)
+            Switches.Add(new MaterialSwitchViewModel(feature, this));
+        Macros.Clear();
+        foreach (var macro in Model.AllMacros)
+            Macros.Add(new MaterialMacroViewModel(macro, this));
+        RefreshMissingMacros();
+        LoadRenderState();
+        OnPropertyChanged(nameof(HasParameters));
+        OnPropertyChanged(nameof(HasSwitches));
+        OnPropertyChanged(nameof(HasMacros));
         RefreshShaderDef(catalog);
         RaiseDirty();
     }
@@ -844,6 +870,9 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
     /// <summary>Host hook: scan (or load the cache for) that environment and call <see cref="SetCatalog"/>.</summary>
     public Func<string, Task>? RequestCatalog { get; set; }
+    /// <summary>Loads the most frequently authored real material setup for a shader from the patch-aware
+    /// Workshop index. Kept as a host hook so the editor remains testable without opening game WADs.</summary>
+    public Func<string, Task<ShaderMaterialSetup?>>? RequestCommonShaderSetup { get; set; }
 
     partial void OnSelectedShaderEnvironmentChanged(string? value)
     {
@@ -1004,6 +1033,46 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
             : added > 0
                 ? $"Shader set. Added {added} sampler slot(s) used by this shader — fill in their texture paths."
                 : "Shader set. This shader isn't in the catalogue, so its sampler list couldn't be checked.";
+        // A known shader should start from the setup Riot actually ships most often, not the often-zero
+        // declaration values in shaders.bin. This is asynchronous because the first use may build the
+        // patch-wide Workshop index; the user's compatible texture paths remain untouched.
+        if (def is not null && RequestCommonShaderSetup is not null)
+            _ = ApplyCommonShaderSetupAsync(vm);
+    }
+
+    public async Task ApplyCommonShaderSetupAsync(MaterialBindingViewModel vm)
+    {
+        string shaderName = vm.Model.RenderShader?.Trim() ?? "";
+        if (shaderName.Length == 0 || Catalog?.Find(shaderName) is not { } shader)
+        {
+            vm.ShaderChangeStatus = "Load the shader catalogue and select a known shader first.";
+            return;
+        }
+        if (RequestCommonShaderSetup is null)
+        {
+            vm.ShaderChangeStatus = "The Riot material setup index is unavailable.";
+            return;
+        }
+
+        vm.ShaderChangeStatus = "Finding the most-used Riot setup for this shader…";
+        ShaderMaterialSetup? setup;
+        try { setup = await RequestCommonShaderSetup(shaderName); }
+        catch (Exception ex) { vm.ShaderChangeStatus = "Could not load Riot setup: " + ex.Message; return; }
+        if (!string.Equals(vm.Model.RenderShader, shaderName, StringComparison.OrdinalIgnoreCase))
+            return; // the user selected another shader while the patch-wide index was loading
+        if (setup is null)
+        {
+            vm.ShaderChangeStatus = "No shipped material using this shader was found in the installed patch.";
+            return;
+        }
+
+        var result = ShaderMaterialSetups.Apply(vm.Model, shader, setup);
+        _doc?.Reclassify(vm.Model);
+        vm.SynchronizeCommonSetup(Catalog);
+        IsDirty = _doc?.IsDirty ?? true;
+        NotifyChanged();
+        vm.ShaderChangeStatus = setup.Summary + ". " + result.Summary
+            + " Existing texture paths were kept.";
     }
 
     /// <summary>M50c: auto-load the diffuse thumbnail of one material — used when the user opens a
