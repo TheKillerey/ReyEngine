@@ -229,8 +229,7 @@
                            selection and exactly one material is edited at a time. -->
                       <Grid ColumnDefinitions="240,8,*" MinHeight="360">
                         <!-- MASTER: the filtered material list -->
-                        <Border Grid.Column="0" Background="{DynamicResource ReyBgBrush}" CornerRadius="4"
-                                BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
+                        <Border Grid.Column="0" Classes="card" Padding="0">
                           <DockPanel>
                             <Border DockPanel.Dock="Top" Padding="8,6"
                                     BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1">
@@ -266,7 +265,7 @@
                         <ContentControl Grid.Column="2" Content="{Binding MaterialEditor.SelectedMaterial}">
                         <ContentControl.ContentTemplate>
                           <DataTemplate x:DataType="vm:MaterialBindingViewModel">
-                            <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+                            <Border Classes="card" Margin="0,0,0,6">
                               <StackPanel Spacing="5">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                   <!-- M125: red name + ⚠ when this material's bin object needed repairs -->
@@ -579,11 +578,12 @@
                 <TabItem FontSize="12" IsVisible="{Binding BinEditor.HasBin}">
                   <TabItem.Header><TextBlock Text="Raw BIN Tree" FontSize="12" /></TabItem.Header>
 
-              <!-- bin editor (M7) -->
-              <StackPanel Spacing="6" Margin="0,8,0,0" IsVisible="{Binding BinEditor.HasBin}">
-                <Border Height="1" Background="{DynamicResource ReyBorderBrush}" />
+              <!-- bin editor (M7). M351d: was the one tab with no card at all - a bare stack behind a
+                   hand-drawn 1px rule, with its title styled inline instead of as a cardTitle. -->
+              <Border Classes="card" Margin="0,8,0,0" IsVisible="{Binding BinEditor.HasBin}">
+              <StackPanel Spacing="6">
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="BIN EDITOR" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" />
+                  <TextBlock Classes="cardTitle" Text="BIN EDITOR" VerticalAlignment="Center" />
                   <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center"
                            IsVisible="{Binding BinEditor.IsDirty}" ToolTip.Tip="Unsaved edits" />
                 </StackPanel>
@@ -631,6 +631,7 @@
                   </TreeView.ItemTemplate>
                 </TreeView>
               </StackPanel>
+              </Border>
                 </TabItem>
               </TabControl>
               </Expander>
