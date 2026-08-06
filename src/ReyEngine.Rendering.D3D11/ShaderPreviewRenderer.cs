@@ -2141,6 +2141,11 @@ float4 psmain(VOut i) : SV_Target
     private ComPtr<ID3D11Buffer> _gizmoVb;
     private int _gizmoVbCapacity;
     private readonly int[] _gizmoAxisVerts = new int[3];
+
+    // M361: the paint brush ring, drawn through the same overlay pipeline as the gizmo.
+    private ComPtr<ID3D11Buffer> _brushRingVb;
+    private int _brushRingVbCapacity;
+    private int _brushRingVerts;
     private int _gizmoTotalVerts;
 
     /// <summary>
@@ -2190,6 +2195,63 @@ float4 psmain(VOut i) : SV_Target
             System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
         _ctx.Unmap(_gizmoVb, 0);
         _gizmoTotalVerts = floats / 3;
+    }
+
+    /// <summary>M361: the brush ring as a world-space line list, built by
+    /// <c>ViewportMeshRenderer.BuildBrushRing</c> so both viewports draw the identical ring. Null clears it.</summary>
+    public void SetBrushRingLines(float[]? verts)
+    {
+        _brushRingVerts = 0;
+        if (verts is null || verts.Length < 6 || !EnsureOverlay()) return;
+
+        int bytes = verts.Length * sizeof(float);
+        if (_brushRingVbCapacity < bytes || _brushRingVb.Handle is null)
+        {
+            _brushRingVb.Dispose();
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)bytes, Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> vb = default;
+            if (_device.CreateBuffer(in desc, null, ref vb) < 0) { Log("brush ring vertex buffer failed"); return; }
+            _brushRingVb = vb; _brushRingVbCapacity = bytes;
+        }
+
+        var map = new MappedSubresource();
+        if (_ctx.Map(_brushRingVb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        fixed (float* p = verts)
+            System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
+        _ctx.Unmap(_brushRingVb, 0);
+        _brushRingVerts = verts.Length / 3;
+    }
+
+    private int DrawBrushRing(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_brushRingVerts == 0 || _brushRingVb.Handle is null || !EnsureOverlay()) return 0;
+
+        var mvp = Matrix4x4.Multiply(view, proj);
+        _ctx.IASetInputLayout(_overlayLayout);
+        _ctx.VSSetShader(_overlayVs, null, 0);
+        _ctx.PSSetShader(_overlayPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
+
+        uint stride = 3 * sizeof(float), offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _brushRingVb, in stride, in offset);
+        _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+
+        // Depth test OFF, like the gizmo. The ring hugs the surface it is about to paint, so with depth
+        // testing on it z-fights the very geometry it is meant to sit on - GL lifts it along the normal
+        // for the same reason and still draws it last.
+        _ctx.OMSetDepthStencilState(_overlayDepthNoTest, 0);
+
+        SetOverlayCb(mvp, new Vector4(1f, 0.85f, 0.25f, 1f));
+        _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.Draw((uint)_brushRingVerts, 0);
+
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+        return 1;
     }
 
     private int DrawGizmo(Matrix4x4 view, Matrix4x4 proj)
@@ -3830,7 +3892,8 @@ float4 psmain(VOut i) : SV_Target
             HighlightDraws = DrawHighlight(view, proj);
             IconDraws = DrawIcons(view, proj);
             int gridDraws = DrawBucketGrid(view, proj);   // M293
-            int gizmoDraws = DrawGizmo(view, proj);      // M296, last so it is over everything
+            int gizmoDraws = DrawGizmo(view, proj);
+ DrawBrushRing(view, proj);   // M361: after the gizmo, same overlay pipeline      // M296, last so it is over everything
             DrawCalls += HighlightDraws + IconDraws + gridDraws + gizmoDraws;
 
             _ctx.CopyResource(_stage, _rt);
@@ -3998,6 +4061,7 @@ float4 psmain(VOut i) : SV_Target
         ClearMaterials();
         ClearTextures();
         _rasterCull.Dispose();
+        _brushRingVb.Dispose();
         _white.Dispose();
         _whiteArray.Dispose();
         _whiteCube.Dispose();

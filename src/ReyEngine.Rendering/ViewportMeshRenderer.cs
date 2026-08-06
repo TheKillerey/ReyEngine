@@ -1866,7 +1866,20 @@ void main(){
     public void SetBrushRing(Vector3? center, Vector3 normal, float radius, float hardness)
     {
         if (!_ready) return;
-        if (center is not { } c || radius <= 0f) { _brushRingVerts = 0; return; }
+        var verts = BuildBrushRing(center, normal, radius, hardness);
+        if (verts is null) { _brushRingVerts = 0; return; }
+        UploadLines(_brushRingVao, _brushRingVbo, verts, out _brushRingVerts);
+    }
+
+    /// <summary>M361: the ring as a world-space line list (pairs of xyz endpoints), independent of GL.
+    ///
+    /// <para>Public and static for the same reason <c>BuildGizmoAxis</c> is (M296): the D3D11 viewport has
+    /// to draw the SAME ring, and a second implementation would drift - a brush that reads one size in one
+    /// viewport and another size in the other is worse than no brush ring at all. Returns null when there
+    /// is nothing to draw.</para></summary>
+    public static float[]? BuildBrushRing(Vector3? center, Vector3 normal, float radius, float hardness)
+    {
+        if (center is not { } c || radius <= 0f) return null;
 
         // An orthonormal basis in the surface plane. The seed axis is whichever cardinal is least
         // parallel to the normal, so the cross product never collapses on a floor or a wall.
@@ -1898,7 +1911,7 @@ void main(){
                 verts[k++] = p1.X; verts[k++] = p1.Y; verts[k++] = p1.Z;
             }
         }
-        UploadLines(_brushRingVao, _brushRingVbo, verts, out _brushRingVerts);
+        return verts;
     }
 
     /// <summary>M55: bucket-grid overlay — world-space line list (pairs of xyz endpoints); null/empty clears.</summary>

@@ -370,7 +370,17 @@ public partial class MainWindow : Window
                     _dx11PaintedKeys.Add(path.ToLowerInvariant());
                 QueueDx11Frame();
             };
-            vm.ShowBrushRing = Viewport.SetBrushRing;                      // M172e: brush footprint
+            // M172e: brush footprint. M361: fed to BOTH viewports from ONE tessellation
+            // (ViewportMeshRenderer.BuildBrushRing), so the ring cannot read one size in one viewport and
+            // a different size in the other - which a second implementation would eventually do.
+            vm.ShowBrushRing = (center, normal, radius, hardness) =>
+            {
+                Viewport.SetBrushRing(center, normal, radius, hardness);
+                if (_dx11?.IsReady != true) return;
+                _dx11.Renderer.SetBrushRingLines(
+                    ReyEngine.Rendering.ViewportMeshRenderer.BuildBrushRing(center, normal, radius, hardness));
+                QueueDx11Frame();
+            };
             var glMipRebuild = Viewport.RequestMipRebuild;
             vm.RebuildTextureMips = () =>
             {
