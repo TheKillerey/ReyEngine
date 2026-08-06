@@ -101,8 +101,12 @@ public static class Dx11SceneBuilder
         MapGeoAsset map,
         IReadOnlyList<MaterialBinding> materials,
         Func<ulong, byte[]?> readAsset,
-        string? mapGeoPath = null,
-        string? grassTintPath = null)
+        // M365d: NO DEFAULTS. These were optional, and the one live caller silently omitted grassTintPath,
+        // which disabled the entire grass-tint block for every map while still compiling and still looking
+        // correct in review. Required parameters make the next omission a build error instead of a feature
+        // that quietly does nothing. Pass null explicitly when a caller genuinely has no path.
+        string? mapGeoPath,
+        string? grassTintPath)
     {
         var t0 = DateTime.UtcNow;
 

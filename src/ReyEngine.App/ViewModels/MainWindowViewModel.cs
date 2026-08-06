@@ -2488,59 +2488,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// the GL viewport does.</summary>
     public Formats.Shaders.ShaderCacheReader? Dx11ShaderCache => _dx11ShaderCache;
 
-    /// <summary>M249: build the currently open map into <paramref name="renderer"/>. Returns a report, or a
-    /// reason string when there is nothing to build - never null, because "the viewport is empty and I do
-    /// not know why" is the state this whole phase exists to avoid.</summary>
-    public string BuildDx11Scene(ReyEngine.Rendering.D3D11.ShaderPreviewRenderer renderer)
-    {
-        if (_currentMap is not { } map) return "No map open - the D3D11 surface has no scene to draw yet.";
-        if (_currentMapEntry is not { } mapEntry) return "The open map has no WAD entry.";
-
-        string? dir = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
-        if (dir is null || !Directory.Exists(dir)) return "Game directory is not set, so the shader cache cannot be opened.";
-
-        if (_dx11ShaderCache is null || !string.Equals(_dx11ShaderCacheDir, dir, StringComparison.OrdinalIgnoreCase))
-        {
-            _dx11ShaderCache = Formats.Shaders.ShaderCacheReader.Open(dir, _resolver.Database, out var cacheErr);
-            _dx11ShaderCacheDir = dir;
-            if (_dx11ShaderCache is null) return "ShaderCache.dx11.wad.client: " + (cacheErr ?? "not readable");
-        }
-
-        // The map's own materials.bin - the same sibling lookup the material editor uses, so the viewport
-        // and the editor cannot disagree about which bin describes this map.
-        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
-            return "No materials.bin alongside this mapgeo.";
-
-        Formats.Materials.MaterialDocument doc;
-        try { doc = Formats.Materials.MaterialDocument.Parse(GetAssetBytes(binEntry), ResolveBinName); }
-        catch (Exception ex) { return $"{binEntry.DisplayName}: {ex.Message}"; }
-
-        var result = Services.Dx11SceneBuilder.Commit(
-            renderer,
-            Services.Dx11SceneBuilder.Prepare(_dx11ShaderCache, ShaderPerms(), map, doc.Materials,
-                TryReadAssetBytes, mapEntry.Path,
-                // M355: the same lookup the GL path uses (M78), so both viewports tint from one asset.
-                FindGrassTintTexturePath()),
-            AppInfo.DisplayVersion);
-
-        _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
-                          + $"{result.Slices} slice(s), {result.Textures} texture binding(s)");
-        // M365c: say what happened to the grass tint instead of leaving it to be inferred from the picture.
-        // This has now had two distinct causes that looked identical on screen - a texture never queued for
-        // loading, and a blend term left on a white stand-in - so the next report should start from a
-        // number. NoSlot specifically means the resolved permutation declared no tint sampler at all, which
-        // is a permutation-selection problem rather than a texture problem.
-        if (result.GrassTintBound > 0 || result.GrassTintNoSlot > 0)
-            _log.Info("DX11", $"grass tint: {result.GrassTintBound} slice(s) bound"
-                              + (result.GrassTintNoSlot > 0
-                                  ? $", {result.GrassTintNoSlot} whose permutation declares no tint sampler"
-                                  : ""));
-        // M278: never log a failure COUNT on its own. This exact line read "0 material(s), 21 unresolved"
-        // for an afternoon while the shader cache had simply been renamed underneath us, and it named
-        // nothing that could be looked up.
-        foreach (var why in result.Reasons) _log.Warn("DX11", "unresolved - " + why);
-        return result.Report;
-    }
+    // M365d: the SYNCHRONOUS BuildDx11Scene overload used to live here and has been deleted.
+    //
+    // It had no callers - MainWindow.axaml.cs:109 awaits BuildDx11SceneAsync, and that is the only
+    // call site in the repo - but it was the twin that passed grassTintPath to the scene builder
+    // while the live async one did not. So the grass tint read as correctly wired in every review,
+    // and four separate fixes (M355, M365, M365b, M365c) were written against code that never ran.
+    // Deleted rather than kept in sync: two builders that must agree WILL diverge, and this one
+    // proved it silently.
 
     /// <summary>M250: the async form. The CPU half - mesh build, permutation resolution, and every texture
     /// decode - runs on a worker; only the D3D commit comes back to the UI thread. Map12/bloom spent 5.5 s
@@ -2569,6 +2524,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var cache = _dx11ShaderCache;
         var perms = ShaderPerms();
+        // M365d: THE grass-tint bug. This overload is the only one the app calls, and it omitted this
+        // argument, so grassTintPath was null and the entire tint block in Dx11SceneBuilder - guarded by
+        // `if (!string.IsNullOrEmpty(grassTintPath))` - was skipped on every map. Both declared samplers
+        // then took the opaque-white stand-in, and lerp(white, white, GRASS_INTERP) is white for any interp,
+        // so the multiply was the identity: arithmetically indistinguishable from "no tint", always.
+        // M355, M365, M365b and M365c all edited code inside that dead gate.
+        //
+        // Resolved OUTSIDE Task.Run, like ShaderPerms() above: FindGrassTintTexturePath reads _mounts and
+        // _currentMapEntry, which are UI-thread state.
+        string? grassTintPath = FindGrassTintTexturePath();
 
         Services.Dx11SceneBuilder.PreparedScene? prepared = null;
         string? error = null;
@@ -2578,7 +2543,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName);
                 prepared = Services.Dx11SceneBuilder.Prepare(cache, perms, map, doc.Materials,
-                    TryReadAssetBytes, mapEntry.Path);
+                    TryReadAssetBytes, mapEntry.Path, grassTintPath);
             }
             catch (Exception ex) { error = ex.Message; }
         });
@@ -2588,6 +2553,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var result = Services.Dx11SceneBuilder.Commit(renderer, prepared, AppInfo.DisplayVersion);
         _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
                           + $"{result.Slices} slice(s), {result.Textures} texture binding(s)");
+        // M365c/M365d: say what happened to the grass tint instead of leaving it to be inferred from the
+        // picture. This was added to the dead sync twin, so it never printed - and the silence read as
+        // "nothing to report" rather than "this code does not run". NoSlot specifically means the resolved
+        // permutation declared no tint sampler, which is a permutation-selection problem rather than a
+        // texture one; the two look identical on screen and have completely different fixes.
+        if (result.GrassTintBound > 0 || result.GrassTintNoSlot > 0)
+            _log.Info("DX11", $"grass tint: {result.GrassTintBound} slice(s) bound"
+                              + (result.GrassTintNoSlot > 0
+                                  ? $", {result.GrassTintNoSlot} whose permutation declares no tint sampler"
+                                  : ""));
         // M278: never log a failure COUNT on its own. This exact line read "0 material(s), 21 unresolved"
         // for an afternoon while the shader cache had simply been renamed underneath us, and it named
         // nothing that could be looked up.
