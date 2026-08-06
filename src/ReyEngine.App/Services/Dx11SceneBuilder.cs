@@ -407,22 +407,15 @@ public static class Dx11SceneBuilder
             // And the alpha CUTOUT needs nothing at all - it is a discard compiled into Riot's own pixel
             // shader ("lt r1.x, r0.w, cb0[2].x" then "discard_nz"), driven by the AlphaTestValue this
             // builder already puts in mat.Params, so it was never a blend-state question.
-            // M356: M354 is REVERTED here. Honouring the authored cullEnable is correct in principle, but
-            // switching it on made the map's terrain disappear - which is the signature of culling the
-            // FRONT faces, not the back ones.
+            // M358: the authored cullEnable, the same value GL has honoured per submesh since M34.
+            // DX11 drew every map surface two-sided because its cull mode was a single global rasterizer
+            // state, so interior faces showed through and back faces lit that the game never rasterises.
             //
-            // Why it only broke now: the map path had never culled at all (its host pins the global
-            // CullBackFaces off), so the winding convention in the cull rasterizer state was dead code
-            // that nothing had ever exercised. That state sets FrontCounterClockwise = MirrorX, and the
-            // map host sets MirrorX = true. GL renders the same geometry correctly with plain
-            // CullFace(Back) under its CCW-front default, and the DX11 view mirrors X - which flips
-            // winding - so the flag is very likely inverted for this path. "Very likely" is not good
-            // enough to ship on a user's map twice, so this stays off until the winding is MEASURED:
-            // render one known single-sided surface both ways and see which keeps it.
-            //
-            // mat.CullBackFaces defaults to false, so this restores the previous, working two-sided draw.
-            // The renderer half of M354 (the second rasterizer state and the per-draw selection) is kept -
-            // it is inert while nothing sets the flag, and it is what the fix will switch on.
+            // This is M354 restored, and it is only safe now because the reason M354 failed has been
+            // fixed rather than worked around. M354 deleted the terrain because the cull state's winding
+            // was inverted (M357) - dead code until M354 first executed it. That inversion was then
+            // MEASURED against the Cull Back Faces toggle, not guessed at, and corrected.
+            mat.CullBackFaces = s.Profile.CullEnabled;
 
             bool depthWrite = s.Profile.DepthWrite;
             mat.WritesDepth = depthWrite;
