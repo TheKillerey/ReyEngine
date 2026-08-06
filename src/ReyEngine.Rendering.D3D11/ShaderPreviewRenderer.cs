@@ -198,6 +198,11 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// (particles, props, champion skins) exactly as it was; only the map builder sets it.</summary>
     public bool CullBackFaces { get; set; }
 
+    /// <summary>M363: this material's emitter authored softParticleParams, so it needs the scene depth
+    /// snapshot bound rather than the white stand-in. Set by the emitter pipeline; false leaves the
+    /// pre-M363 behaviour, which is a fade neutralised to fully visible rather than anything broken.</summary>
+    public bool NeedsSceneDepth { get; set; }
+
     public bool Additive { get; set; }
 
     /// <summary>M282: non-null makes this a heat-haze draw - the renderer replaces the material's own
@@ -409,6 +414,9 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     /// solves it the identical way (VfxParticleRenderer.cs:192-217).</summary>
     private ComPtr<ID3D11Texture2D> _sceneCopy;
     private ComPtr<ID3D11ShaderResourceView> _sceneCopySrv;
+    // M363: the soft-particle depth snapshot. Same copy-then-sample shape as the scene colour above.
+    private ComPtr<ID3D11Texture2D> _depthCopy;
+    private ComPtr<ID3D11ShaderResourceView> _depthCopySrv;
     private int _width, _height;
 
     private ComPtr<ID3D11SamplerState> _linearWrap, _linearClampU, _linearClampV, _linearClamp, _comparison;
@@ -2882,6 +2890,8 @@ float4 psmain(VOut i) : SV_Target
         _rtv = default; _rt = default; _stage = default; _dsv = default; _depth = default;
         _sceneCopySrv.Dispose(); _sceneCopy.Dispose();
         _sceneCopySrv = default; _sceneCopy = default;
+        _depthCopySrv.Dispose(); _depthCopy.Dispose();
+        _depthCopySrv = default; _depthCopy = default;
         _width = w; _height = h;
 
         // BGRA so the readback drops straight into an Avalonia Bgra8888 bitmap with no swizzle
@@ -2919,18 +2929,89 @@ float4 psmain(VOut i) : SV_Target
         }
         else Log("distortion: the scene-copy texture could not be created; heat haze will be skipped");
 
+        // M363: R32_TYPELESS, not D32_FLOAT. Identical precision and identical depth behaviour, but a fully
+        // typed depth format can never carry a shader-resource view, and soft particles have to SAMPLE this.
+        // The DSV below names D32_FLOAT explicitly, which is what the typeless format defers.
         var dd = new Texture2DDesc
         {
             Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1,
-            Format = Format.FormatD32Float, SampleDesc = new SampleDesc(1, 0),
+            Format = Format.FormatR32Typeless, SampleDesc = new SampleDesc(1, 0),
             Usage = Usage.Default, BindFlags = (uint)BindFlag.DepthStencil,
         };
         ComPtr<ID3D11Texture2D> depth = default;
         _device.CreateTexture2D(in dd, null, ref depth);
         _depth = depth;
+        var dsvDesc = new DepthStencilViewDesc
+        {
+            Format = Format.FormatD32Float,
+            ViewDimension = DsvDimension.Texture2D,
+        };
         ComPtr<ID3D11DepthStencilView> dsv = default;
-        _device.CreateDepthStencilView(_depth, null, ref dsv);
+        _device.CreateDepthStencilView(_depth, in dsvDesc, ref dsv);
         _dsv = dsv;
+
+        // M363: a COPY, for the same reason M282's colour capture is a copy - a resource cannot be bound as
+        // a depth-stencil view and read as a shader resource in the same draw, and the particles that want
+        // to read this are being drawn INTO that very depth buffer. The GL path resolves it the same way,
+        // with a depth blit into its own texture.
+        var dc = dd;
+        dc.BindFlags = (uint)BindFlag.ShaderResource;
+        ComPtr<ID3D11Texture2D> dcopy = default;
+        if (_device.CreateTexture2D(in dc, null, ref dcopy) >= 0)
+        {
+            _depthCopy = dcopy;
+            var dsrv = new ShaderResourceViewDesc
+            {
+                Format = Format.FormatR32Float,
+                ViewDimension = D3DSrvDimension.D3D11SrvDimensionTexture2D,
+                Anonymous = new ShaderResourceViewDescUnion
+                {
+                    Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1 },
+                },
+            };
+            ComPtr<ID3D11ShaderResourceView> dsv2 = default;
+            if (_device.CreateShaderResourceView(_depthCopy, in dsrv, ref dsv2) >= 0) _depthCopySrv = dsv2;
+            else Log("soft particles: CreateShaderResourceView for the depth copy failed");
+        }
+        else Log("soft particles: the depth-copy texture could not be created; the fade will stay neutral");
+    }
+
+    /// <summary>M363: snapshot the depth buffer so particles can sample the scene behind them. Called from
+    /// the draw loop the first time a soft-particle material is reached, which is after the opaque geometry
+    /// has written depth and before any particle has - exactly the window the effect needs.</summary>
+    private void CaptureDepthCopy()
+    {
+        if (_depthCopy.Handle is null || _depth.Handle is null) return;
+        _ctx.OMSetRenderTargets(0, (ID3D11RenderTargetView**)null, (ID3D11DepthStencilView*)null);
+        _ctx.CopyResource(_depthCopy, _depth);
+        _ctx.OMSetRenderTargets(1, ref _rtv, _dsv);
+    }
+
+    /// <summary>M363: window depth to view distance, for <c>cDepthConversionParams</c>. The shader spends it
+    /// as <c>1/(z*DC.y + DC.x)</c>.
+    ///
+    /// <para><b>This is deliberately NOT the constant the GL path uses,</b> and the difference is not a bug in
+    /// either. System.Numerics emits a Direct3D-convention projection (near maps to 0, not -1). D3D's viewport
+    /// transform passes that through unchanged, so window depth fills [0,1] and the textbook pair is correct
+    /// here. GL then applies its OWN transform d = (z+1)/2 on top of an already-D3D-convention matrix, so its
+    /// window depth only occupies [0.5,1] and it must double the slope to compensate - see the note in
+    /// VfxParticleRenderer, where an offscreen probe caught that exact factor of two. Copying GL's pair into
+    /// D3D would reintroduce that 1.9x error mirrored, and it would be invisible to inspection because the
+    /// result still looks like a plausible soft particle.</para></summary>
+    private static float[] DepthConversionFrom(Matrix4x4 proj)
+    {
+        // CreatePerspectiveFieldOfView writes M33 = f/(n-f) and M43 = n*f/(n-f), so both planes come back
+        // out: n = M43/M33 and f = M43/(M33+1). Recovered from the matrix rather than passed in, so a
+        // caller-supplied projection is handled as correctly as a derived one.
+        float m33 = proj.M33, m43 = proj.M43;
+        // Neutral fallback. Both terms feed reciprocals, so neither may be zero or the quad turns NaN and
+        // vanishes - the same trap the placeholder value guarded against.
+        var neutral = new[] { 1f, 1f, 0f, 0f };
+        if (MathF.Abs(m33) < 1e-9f || MathF.Abs(m33 + 1f) < 1e-9f) return neutral;
+        float near = m43 / m33, far = m43 / (m33 + 1f);
+        if (!(near > 1e-6f) || !(far > near) || float.IsNaN(near) || float.IsNaN(far)) return neutral;
+        float invN = 1f / near, invF = 1f / far;
+        return new[] { invN, invF - invN, 0f, 0f };
     }
 
     private (bool wire, bool cull, bool depth, bool blend, bool mirror)? _stateKey;
@@ -3296,9 +3377,11 @@ float4 psmain(VOut i) : SV_Target
                     "CSOFTPARTICLECONTROL" => mat is { Additive: true }
                         ? new[] { 0f, 1f, 1f, 0f }      // additive: fade the RGB, leave alpha
                         : new[] { 1f, 0f, 0f, 1f },     // alpha:    leave RGB, fade the alpha
-                    // Feeds two reciprocals. Both terms must stay finite or d is NaN and the quad vanishes,
-                    // so neither component may be zero.
-                    "CDEPTHCONVERSIONPARAMS" => new[] { 1f, 1f, 0f, 0f },
+                    // M363: derived from the live projection now, rather than the neutral placeholder that
+                    // stood here while nothing sampled depth. Feeds two reciprocals, so DepthConversionFrom
+                    // falls back to that same placeholder rather than ever returning a zero component - a
+                    // zero makes d NaN and the quad vanishes.
+                    "CDEPTHCONVERSIONPARAMS" => DepthConversionFrom(proj),
 
                     // M232: MULT_PASS's second flipbook atlas descriptor, same shape as TEXTURE_INFO
                     // and derived the same way (M231).
@@ -3773,6 +3856,7 @@ float4 psmain(VOut i) : SV_Target
             int lastPipeline = int.MinValue;
             PipelineSwitches = 0;
             bool sceneCaptured = false;
+            bool depthCaptured = false;
             DistortionDraws = 0;
             MeshDraws = 0;
 
@@ -3791,6 +3875,12 @@ float4 psmain(VOut i) : SV_Target
             // this same loop bind rasterizer state of their own, so any "what did I last bind" flag here
             // would go stale behind them and silently cull the wrong draws. RSSetState is a pointer swap.
             _ctx.RSSetState(s.CullBackFaces || mat.CullBackFaces ? _rasterCull : _raster);
+
+            // M363: snapshot the depth on the FIRST soft-particle material, lazily and once per frame, for
+            // the same reason the colour copy is lazy - most frames contain no soft particle at all, and a
+            // full-target copy is not free. Here in the draw loop rather than before it, so the snapshot
+            // holds the opaque geometry that has already drawn and none of the particles that have not.
+            if (mat.NeedsSceneDepth && !depthCaptured) { CaptureDepthCopy(); depthCaptured = true; }
 
             // M282: heat haze takes a pipeline of its own. Handled before any of the ordinary material
             // state below, because none of it applies - different shaders, different layout, different
@@ -4015,6 +4105,17 @@ float4 psmain(VOut i) : SV_Target
         if (refl is null) return;
         foreach (var t in refl.Textures)
         {
+            // M363: the scene depth is resolved HERE rather than stored in mat.Textures, because materials
+            // hold the SRV itself and this one is recreated on every resize - a stored copy would dangle the
+            // first time the viewport changed size. Reading the field per draw is always current.
+            if (mat.NeedsSceneDepth && _depthCopySrv.Handle is not null
+                && t.Name.Contains("DepthTexture", StringComparison.OrdinalIgnoreCase))
+            {
+                var d = _depthCopySrv;
+                if (pixel) _ctx.PSSetShaderResources(t.BindPoint, 1, ref d);
+                else _ctx.VSSetShaderResources(t.BindPoint, 1, ref d);
+                continue;
+            }
             var srv = mat.Textures.TryGetValue(t.Name, out var bound) ? bound : StandIn(t);
             if (pixel) _ctx.PSSetShaderResources(t.BindPoint, 1, ref srv);
             else _ctx.VSSetShaderResources(t.BindPoint, 1, ref srv);
@@ -4082,6 +4183,7 @@ float4 psmain(VOut i) : SV_Target
         _overlayCb.Dispose(); _overlayDepth.Dispose(); _overlayDepthNoTest.Dispose(); _overlayBlend.Dispose();
         _distortVs.Dispose(); _distortPs.Dispose(); _distortLayout.Dispose(); _distortCb.Dispose();
         _sceneCopySrv.Dispose(); _sceneCopy.Dispose();
+        _depthCopySrv.Dispose(); _depthCopy.Dispose();
         _gridVs.Dispose(); _gridPs.Dispose(); _gridLayout.Dispose(); _gridVb.Dispose();
         _gizmoVb.Dispose();
         DisposeSky();

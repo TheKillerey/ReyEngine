@@ -204,6 +204,23 @@ public static class VfxD3D11EmitterPipeline
         if (e.DepthPushPull != 0f)
             mat.Params["PARTICLE_DEPTH_PUSH_PULL"] = new[] { e.DepthPushPull, 0f, 0f, 0f };
 
+        // M363 (v0.4.0 item 7a): soft particles. The third instance of the same shape - VfxShaderFlags has
+        // always turned SOFT_PARTICLES on from this very field, so the permutation was already being
+        // selected; what was missing was the emitter's authored widths and a real depth texture to measure
+        // against. The renderer's fallback deliberately neutralises the fade to "fully visible", so until
+        // now these emitters rendered as ordinary hard-edged sprites rather than incorrectly.
+        //
+        // IsDegenerate is honoured for the reason VfxSoftParticle spells out: if the packing is wrong the
+        // symptom is the sprite disappearing, and skipping the stage can only restore the previous
+        // appearance, never make anything worse. NeedsSceneDepth is what tells the renderer to snapshot and
+        // bind the depth buffer, so it must not be set for a configuration we then decline to drive.
+        if (e.SoftParticle is { } soft && !soft.IsDegenerate)
+        {
+            var p = soft.PackParams();
+            mat.Params["cSoftParticleParams"] = new[] { p.X, p.Y, p.Z, p.W };
+            mat.NeedsSceneDepth = true;
+        }
+
         return mat;
     }
 
