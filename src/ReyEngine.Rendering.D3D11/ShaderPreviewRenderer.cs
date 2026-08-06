@@ -2885,7 +2885,19 @@ float4 psmain(VOut i) : SV_Target
             // M223: a mirrored view reverses triangle winding, so the front face has to swap with it or
             // backface culling removes exactly the faces it should keep. ViewportMeshRenderer does the same
             // thing off the model determinant.
-            FrontCounterClockwise = s.MirrorX,
+            //
+            // M357: INVERTED from M223, measured. M223 got the swap direction right but the base convention
+            // wrong: it assumed the unmirrored front face is clockwise (D3D's default), so mirrored had to
+            // become counter-clockwise. League's geometry is authored CCW-front - GL renders it correctly
+            // with a plain CullFace(Back) under its CCW-front default - so mirroring makes the front CW,
+            // which is the opposite.
+            //
+            // It went unnoticed for so long because nothing exercised it: the map host pins CullBackFaces
+            // off, and with CullMode.None the winding is irrelevant. Turning culling on (M354) executed
+            // this line for the first time and deleted the terrain. Measured directly afterwards: with the
+            // Cull Back Faces toggle on a mirrored map, this flag TRUE removes the surfaces that should
+            // remain, so the correct value under a mirror is false.
+            FrontCounterClockwise = !s.MirrorX,
             DepthClipEnable = 1,
         };
         ComPtr<ID3D11RasterizerState> rs = default;
