@@ -276,7 +276,17 @@ public static class Dx11SceneBuilder
                 if (!string.IsNullOrEmpty(grassTintPath)
                     && ps.Textures.FirstOrDefault(t => t.Name.Equals("GRASS_TINT_MAP_SharedTexture",
                         StringComparison.OrdinalIgnoreCase)) is { } grassSlot)
-                    wanted.Add((grassSlot.Name, grassTintPath.ToLowerInvariant()));
+                {
+                    string grassKey = grassTintPath.ToLowerInvariant();
+                    wanted.Add((grassSlot.Name, grassKey));
+                    // AND into `distinct`, explicitly. M355 shipped this block below the
+                    //     foreach (var (_, key) in wanted) distinct.Add(key);
+                    // line that gathers what actually gets LOADED, so the binding named a texture the
+                    // loader was never told to fetch: the slot resolved to nothing, took the opaque-white
+                    // stand-in, and the map rendered with no tint at all while every count in the log still
+                    // looked healthy. Adding to `wanted` alone is not enough this far down the method.
+                    distinct.Add(grassKey);
+                }
 
                 // GRASS_TINT_MAP_ALTERNATE_SharedTexture and GRASS_INTERP are deliberately left alone.
                 // The alternate map's asset is unknown - nothing in the map data names a second tint - and
