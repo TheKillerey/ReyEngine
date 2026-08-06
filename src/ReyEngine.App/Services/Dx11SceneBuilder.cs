@@ -260,17 +260,21 @@ public static class Dx11SceneBuilder
             // works because of a coincidence is worth making explicit: the terrain transform wins.
             if (b.Profile.UsesGrassTint && !b.Profile.TerrainWorldProjectedMask)
             {
-                // TERRAIN_XFORM is worldXZ * .xy + .zw (verified in M322 for the terrain-blend mask), and
-                // for grass tint it has to map world XZ onto the map's bounds. Without this the renderer's
-                // neutral identity leaves it sampling raw world coordinates, thousands of units outside
-                // 0..1, so every grass surface takes one clamped corner texel.
-                float spanX = MathF.Max(1f, map.BoundsMax.X - map.BoundsMin.X);
-                float spanZ = MathF.Max(1f, map.BoundsMax.Z - map.BoundsMin.Z);
+                // M365b: the SAME canvas the terrain-blend mask uses, not a second one invented here.
+                //
+                // Both features feed the identical TERRAIN_XFORM constant in shaders from one family, so
+                // they address one world canvas; M322 already derived that canvas and verified it against
+                // the terrain blend. M355 instead built its own from map.BoundsMin/Max, which is wrong in
+                // three separate ways: the mapgeo bounds include sky domes and out-of-bounds decor rather
+                // than the playable canvas, the X and Z spans were applied INDEPENDENTLY (so a
+                // non-square bounding box stretched the tint), and it skipped the edge snapping that
+                // recovers clean authored extents like -600..15400. Stretched and offset is exactly how
+                // this was reported.
                 parameters.RemoveAll(x => x.Item1.Equals("TERRAIN_XFORM", StringComparison.OrdinalIgnoreCase));
                 parameters.Add(("TERRAIN_XFORM", new[]
                 {
-                    1f / spanX, 1f / spanZ,
-                    -map.BoundsMin.X / spanX, -map.BoundsMin.Z / spanZ,
+                    terrainWorldTransform.X, terrainWorldTransform.Y,
+                    terrainWorldTransform.Z, terrainWorldTransform.W,
                 }));
 
                 if (!string.IsNullOrEmpty(grassTintPath)

@@ -7294,12 +7294,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var gtPath = FindGrassTintTexturePath();
             CurrentGrassTint = gtPath is not null ? Load(gtPath) : null;
-            CurrentGrassTintRect = new System.Numerics.Vector4(
-                map.BoundsMin.X, map.BoundsMin.Z,
-                1f / MathF.Max(1f, map.BoundsMax.X - map.BoundsMin.X),
-                1f / MathF.Max(1f, map.BoundsMax.Z - map.BoundsMin.Z));
+            // M365b: the terrain-blend canvas, not a second one derived from the whole scene.
+            //
+            // This used to be (BoundsMin.X, BoundsMin.Z, 1/spanX, 1/spanZ), which was wrong three ways:
+            // mapgeo bounds include sky domes and out-of-bounds decor rather than the playable canvas, the
+            // X and Z spans were applied independently so a non-square bounding box STRETCHED the tint, and
+            // it missed the edge snapping that recovers clean authored extents. TerrainBlendWorldTransformFor
+            // was already measured and verified for the terrain mask (M322) and is square by construction;
+            // D3D11 feeds the very same numbers into TERRAIN_XFORM, so the two viewports now place the tint
+            // identically instead of merely being wrong in the same direction.
+            //
+            // Repacked, not reinterpreted: the transform is uv = world.xz * scale + bias, and this shader
+            // wants uv = (world.xz - origin) * scale, so origin = -bias / scale.
+            float gtScale = terrainWorldTransform.X != 0f ? terrainWorldTransform.X : 1f / 16000f;
+            float gtOrigin = -terrainWorldTransform.Z / gtScale;
+            CurrentGrassTintRect = new System.Numerics.Vector4(gtOrigin, gtOrigin, gtScale, gtScale);
             _log.Info("GrassTint", gtPath is not null
-                ? $"{gtGroups} grass-tint group(s) — {gtPath}"
+                ? $"{gtGroups} grass-tint group(s) — {gtPath} — canvas origin {gtOrigin:0.#}, "
+                  + $"extent {(gtScale > 0f ? 1f / gtScale : 0f):0.#}"
                 : $"{gtGroups} grass-tint group(s), but no grasstint texture found in the mounts.");
         }
         else CurrentGrassTint = null;
