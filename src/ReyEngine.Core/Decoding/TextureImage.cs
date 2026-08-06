@@ -26,8 +26,28 @@ public sealed class TextureImage
 /// old NVR levels reference Targa files, which LeagueToolkit cannot read).</summary>
 public static class TextureDecoder
 {
+    /// <summary>M353: the fixed 8-byte header every encrypted esports banner starts with.</summary>
+    private static readonly byte[] EncryptedBannerMagic = { 0xc9, 0xe3, 0x44, 0x26, 0x64, 0xbb, 0x01, 0x61 };
+
+    /// <summary>M353: Riot ships sponsored esports banner art ENCRYPTED, and no amount of decoding will
+    /// open it. Measured over every shipping map WAD: the only textures that fail to decode are 192 files
+    /// under <c>assets/esports/sponsoredbanners/secret/</c>, and all 192 share one 16-byte header and one
+    /// byte length (1 MiB + 16) despite being different banners — a fixed-size encrypted container, not
+    /// image data. Saying so beats "unknown texture file format", which reads like an editor defect.</summary>
+    public static bool IsEncryptedAsset(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < EncryptedBannerMagic.Length) return false;
+        for (int i = 0; i < EncryptedBannerMagic.Length; i++)
+            if (data[i] != EncryptedBannerMagic[i]) return false;
+        return true;
+    }
+
     public static TextureImage Decode(byte[] data)
     {
+        if (IsEncryptedAsset(data))
+            throw new NotSupportedException(
+                "This texture is encrypted by Riot (sponsored esports banner art) and cannot be decoded.");
+
         // M144: checked first — TGA has no leading magic, so LeagueToolkit would misparse it rather
         // than fail cleanly. LooksLikeTga validates the header, so .tex/.dds are never taken by mistake.
         if (TgaDecoder.LooksLikeTga(data) && TgaDecoder.TryDecode(data) is { } tga) return tga;

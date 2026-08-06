@@ -15,6 +15,7 @@ editor renders and what the game renders.
 | # | Item | Outcome |
 |---|------|---------|
 | 1 | ~~Map brightness root cause~~ | **Not a brightness problem.** Disassembling the map pixel shaders out of `ShaderCache.dx11` shows every one ending in plain linear `mad` into `o0` — no sRGB encode, no `pow`-shaped math. **League is gamma-space end to end and the "find where Riot applies gamma" theory is closed with evidence; do not add sRGB SRVs/RTVs.** The real defect was black map *ground*: `4TextureBlend_UVBased_baseMat` carries no RDEF default on any used constant, and nothing supplied `R_/G_/B_mask_multiplier` (declared `1` in shaders.bin), so they uploaded as `0` and collapsed the four-way terrain blend. The fallback already existed in `Dx11SceneBuilder` since M257; the Shader Preview's material path never got it. Fixed as parity in **M352** (`30e524a`). Riot declares `Tint = 0`, which also retroactively settles M284/M286. |
+| 6 | ~~zstd-subchunked textures~~ | **Already fixed by M135, verified by measurement.** Extracted and decoded every texture in all 18 shipping map WADs: **108,731 textures, 84,858 of them subchunked, 0 extract failures.** The `WadFile.Subchunks` NRE in the backlog note predates M135's TOC-less fallback. The only decode failures anywhere are 192 encrypted esports banners — see Known non-defects — and **M353** now names them honestly instead of reporting "unknown texture file format". |
 | 2 | ~~DX11: live geometry edits~~ | **Already implemented, discovered while scoping.** `MainWindow.axaml.cs` watches `MeshVerticesRevision` and calls `UpdateDx11EditedMeshVertices`, a targeted vertex-range upload rather than a rebuild. All ten `MeshVerticesRevision++` sites are transform edits — translate, rotate, scale, gizmo drag, numeric apply, normal flip, tab restore — so moving/rotating/scaling meshes already updates DX11 live. See item 2b for the part that is genuinely missing. |
 
 ## Core (defines the release)
@@ -25,7 +26,6 @@ editor renders and what the game renders.
 | 3 | DX11: skybox + clear colour | S | Parity survey item. |
 | 4 | DX11: per-material back-face culling | S | Parity survey item. |
 | 5 | DX11: grass tint | S | Parity survey item. |
-| 6 | zstd-subchunked textures | S–M | Map12/Bloom `.tex` fail to load (`WadFile.Subchunks` NRE); whole texture families invisible today. |
 | 7 | DX11: soft particles + beam/trail emitters | M | Remaining particle-pipeline parity. |
 
 ## Stretch (ship if ready, hold if not)
@@ -50,6 +50,11 @@ editor renders and what the game renders.
   the away-facing half is genuinely zero and correct. It disappears with Map sun off only because
   that path substitutes scale 1.0. Real map geometry never shows it. Adding ambient to make the ball
   look nicer would misrepresent the game — the M284 mistake.
+
+- **192 esports banner textures will never decode.** Everything under
+  `assets/esports/sponsoredbanners/secret/` is shipped encrypted by Riot: all 192 files share one
+  16-byte header and one byte length (1 MiB + 16) despite being different banners. M353 reports them
+  as encrypted; there is nothing to fix and no decoder to write.
 
 ## Release criteria
 
