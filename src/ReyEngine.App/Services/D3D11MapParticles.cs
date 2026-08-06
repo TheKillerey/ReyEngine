@@ -110,6 +110,24 @@ public sealed class D3D11MapParticles
     }
     private readonly List<MeshSlice> _meshSlices = new();
 
+    /// <summary>M364: a beam or trail emitter. One per PLACEMENT for the same reason <see cref="MeshSlice"/>
+    /// is: the ribbon is world-space geometry extruded from THIS placement's particle history and basis
+    /// vectors, so two placements of one system cannot share a vertex buffer the way two billboard
+    /// placements can share a quad slice.</summary>
+    private sealed class RibbonSlice
+    {
+        public required PreviewMaterial Material { get; init; }
+        public required VfxParticleSimulator Owner { get; init; }
+        public required VfxParticleSimulator.EmitterState State { get; init; }
+        public required int RibbonId { get; init; }
+        public required bool IsBeam { get; init; }
+    }
+    private readonly List<RibbonSlice> _ribbonSlices = new();
+
+    /// <summary>Scratch for ribbon assembly, reused across slices and frames. Passed by ref because the
+    /// builders grow it to fit - a long trail can need far more than the initial guess.</summary>
+    private float[] _ribbonVerts = Array.Empty<float>();
+
     public D3D11MapParticles(ShaderPreviewRenderer renderer, ShaderCacheReader cache,
         int maxQuads = DefaultMaxQuads)
     {
@@ -184,6 +202,9 @@ public sealed class D3D11MapParticles
         foreach (int id in _meshSlices.Select(s => s.GeometryId).Distinct())
             _renderer.ReleaseMeshGeometry(id);
         _meshSlices.Clear();
+        foreach (int id in _ribbonSlices.Select(s => s.RibbonId).Distinct())
+            _renderer.ReleaseRibbon(id);
+        _ribbonSlices.Clear();
         _liveBySlice.Clear();
         _byEmitter.Clear();
         _noPipeline.Clear();
@@ -223,7 +244,13 @@ public sealed class D3D11MapParticles
             foreach (var es in sim.Emitters)
             {
                 var def = es.Def;
-                if (def.Beam is not null || def.Trail is not null) { SkippedBeamTrailEmitters++; continue; }
+                // M364: beams and trails are ribbon strips, not billboards. They used to be skipped here
+                // with exactly that reason recorded; they now build a ribbon slice of their own.
+                if (def.Beam is not null || def.Trail is not null)
+                {
+                    if (!BuildRibbonSlice(item, sim, es, def, tocs, sb)) SkippedBeamTrailEmitters++;
+                    continue;
+                }
 
                 // M283: mesh-primitive emitters draw their own .skn through the renderer's mesh pipeline.
                 // The decoded mesh has been on the playback item all along - it is what GL draws - and this
@@ -282,9 +309,13 @@ public sealed class D3D11MapParticles
         if (SkippedMeshEmitters > 0)
             head.AppendLine($"   {N(SkippedMeshEmitters)} mesh-primitive emitter instance(s) skipped - this path "
                             + "draws billboards only, and a solid white card would be worse than nothing");
+        // M364: these now DRAW as ribbons, so the count only survives for the ones that still could not be
+        // built - almost always a missing texture. The old reason ("ribbon geometry, not billboards") was
+        // the whole feature and is no longer true of the general case.
+        if (_ribbonSlices.Count > 0)
+            head.AppendLine($"   {N(_ribbonSlices.Count)} beam/trail emitter instance(s) drawn as ribbons");
         if (SkippedBeamTrailEmitters > 0)
-            head.AppendLine($"   {N(SkippedBeamTrailEmitters)} beam/trail emitter instance(s) skipped - ribbon "
-                            + "geometry, not billboards");
+            head.AppendLine($"   {N(SkippedBeamTrailEmitters)} beam/trail emitter instance(s) not drawn - see below");
         if (UnresolvedSprites > 0)
             head.AppendLine($"   {N(UnresolvedSprites)} emitter sprite(s) unresolved - drawn with the shared "
                             + "soft dot, the same substitute the OpenGL viewport makes");
@@ -357,15 +388,22 @@ public sealed class D3D11MapParticles
         // M283: mesh emitters count too. Returning on _slices alone would freeze a system whose only
         // drawable emitters are meshes - it has no quad slices at all, so the old test read as "nothing
         // to do" and its meshes never advanced or drew.
-        if (_playback is not { } pb || (_slices.Count == 0 && _meshSlices.Count == 0)) return;
+        // M364: ribbon slices count too, for the same reason M283 added mesh slices here - a system whose
+        // only drawable emitter is a beam has no quad slices at all, and testing _slices alone would read
+        // as "nothing to do" and freeze it.
+        if (_playback is not { } pb
+            || (_slices.Count == 0 && _meshSlices.Count == 0 && _ribbonSlices.Count == 0)) return;
 
         UpdateActive(pb, mirrorInclusiveViewProj, cameraPosition, cameraDistance);
 
         foreach (var (_, sim) in _active) sim.Update(dt);
-        // SetBeamTarget is deliberately not called: TargetDummyPosition is unbound in MainWindow.axaml, so
-        // the GL map path passes null too, and beam emitters are not drawn by this path at all.
-
+        // SetBeamTarget is still deliberately not called: TargetDummyPosition is unbound in
+        // MainWindow.axaml, so the GL map path passes null too. M364 note - that no longer means beams do
+        // not draw. The simulator resolves endpoints without a target, using the emitter's authored target
+        // offset, which is Riot's own pattern for untargeted beams (the _Long_FakeDir family); only an
+        // emitter authoring neither gets the editor's fallback length.
         TickMeshSlices();
+        TickRibbonSlices(cameraPosition);
 
         var (right, up, normal) = VfxBillboardBasis.FromView(mirrorInclusiveView);
         if (_slices.Count == 0) return;   // meshes are updated above; there is nothing to pack
@@ -511,6 +549,83 @@ public sealed class D3D11MapParticles
 
     /// <summary>How many mesh emitters actually drew last frame.</summary>
     public int MeshEmittersDrawn { get; private set; }
+
+    /// <summary>M364: register a beam or trail emitter as a ribbon slice.
+    ///
+    /// <para>The material is still built through the ordinary emitter pipeline - the texture resolution,
+    /// blend decision and alpha-test value all come from there - and only the DRAW is diverted to the ribbon
+    /// pipeline. That keeps one owner for "what does this emitter look like" and confines the ribbon
+    /// specialisation to geometry.</para>
+    ///
+    /// <para>Like the mesh path, an untextured ribbon draws NOTHING rather than taking the white stand-in: a
+    /// beam is a long thin quad, and a solid white one across the map is worse than an absent effect.</para></summary>
+    private bool BuildRibbonSlice(VfxPlaybackItem item, VfxParticleSimulator sim,
+        VfxParticleSimulator.EmitterState es, VfxEmitterDefinition def,
+        VfxD3D11EmitterPipeline.Tocs tocs, StringBuilder sb)
+    {
+        if (ResolveSprite("TEXTURE", item, def) is not { } sprite || sprite.Key == VfxPlaybackSim.SoftDotKey)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: {(def.Beam is not null ? "beam" : "trail")} with no texture - not drawn");
+            return false;
+        }
+
+        var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, def,
+            sampler => ResolveSprite(sampler, item, def), sb);
+        if (mat is null)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: no pipeline (ribbon)");
+            return false;
+        }
+
+        int ribbonId = _renderer.CreateRibbon();
+        if (ribbonId < 0)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: the ribbon pipeline is unavailable");
+            return false;
+        }
+
+        mat.RibbonId = ribbonId;
+        mat.UsesDynamicMesh = false;      // its geometry is its own, not the shared quad buffer
+        mat.Visible = false;              // until a Tick finds it active and gives it a strip
+        _renderer.AddMaterial(mat);
+        _mine.Add(mat);
+        _ribbonSlices.Add(new RibbonSlice
+        {
+            Material = mat, Owner = sim, State = es, RibbonId = ribbonId, IsBeam = def.Beam is not null,
+        });
+        return true;
+    }
+
+    /// <summary>M364: re-extrude every live ribbon. Unlike the billboard slices this cannot be skipped when
+    /// the camera has not moved - a trail's shape follows its particles, and a camera-facing trail twists
+    /// with the view as well.</summary>
+    private void TickRibbonSlices(Vector3 cameraPosition)
+    {
+        RibbonEmittersDrawn = 0;
+        foreach (var rs in _ribbonSlices)
+        {
+            var mat = rs.Material;
+            if (!_activeSet.Contains(rs.Owner)) { mat.Visible = false; continue; }
+
+            // Assembled by the GL renderer's own builders. Not a shared style choice - the per-particle
+            // history a trail walks is internal to that assembly, so this is the only way to get the same
+            // geometry rather than a second implementation of it.
+            int k = rs.IsBeam
+                ? ReyEngine.Rendering.Vfx.VfxParticleRenderer.BuildBeamRibbon(ref _ribbonVerts, rs.State, cameraPosition)
+                : ReyEngine.Rendering.Vfx.VfxParticleRenderer.BuildTrailRibbon(ref _ribbonVerts, rs.State, cameraPosition);
+
+            // k == 0 is the ordinary early state, not a failure: a trail whose particles have not moved far
+            // enough has no history to extrude yet, and a beam whose endpoints did not resolve has nowhere
+            // to go. Either way the slice is simply invisible this frame.
+            if (k == 0) { mat.Visible = false; continue; }
+
+            mat.Visible = _renderer.UpdateRibbon(rs.RibbonId, _ribbonVerts, k);
+            if (mat.Visible) RibbonEmittersDrawn++;
+        }
+    }
+
+    /// <summary>How many beam/trail emitters actually drew last frame.</summary>
+    public int RibbonEmittersDrawn { get; private set; }
 
     /// <summary>The camera gate, and the reason it is not just a cost saving: a placement ENTERING the set is
     /// Reset, so it restarts at t=0 exactly as the GL viewport restarts it. Without that, a system that
@@ -684,11 +799,18 @@ public sealed class D3D11MapParticles
         // The scope limit belongs where a user can see it, not only in a build report nothing displays.
         // "The map has particles that this viewport never draws" is a stated behaviour if it is on screen
         // and a bug report if it is not.
+        // M364: "billboards only on this path" was the honest summary when meshes and ribbons were both
+        // skipped wholesale. Both draw now, so what is left is per-emitter failure - almost always a
+        // missing texture - and calling that a path limitation would send someone looking in the wrong
+        // place. The build report carries the specific reason per emitter.
+        if (_ribbonSlices.Count > 0)
+            sb.Append(Environment.NewLine
+                      + $"ribbons: {N(RibbonEmittersDrawn)}/{N(_ribbonSlices.Count)} beam/trail emitter(s) drawing");
         int notDrawn = SkippedMeshEmitters + SkippedBeamTrailEmitters;
         if (notDrawn > 0)
             sb.Append(Environment.NewLine
                       + $"not drawn: {N(SkippedMeshEmitters)} mesh-primitive and {N(SkippedBeamTrailEmitters)} "
-                      + "beam/trail emitter instance(s) - billboards only on this path");
+                      + "beam/trail emitter instance(s) - see the build report for why");
 
         if (ParticlesDropped > 0)
             sb.Append(Environment.NewLine + OverBudgetLine(ParticlesDropped, _maxQuads, SlicesTruncated));

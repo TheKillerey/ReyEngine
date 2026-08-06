@@ -220,6 +220,12 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// <see cref="ShaderPreviewRenderer.CreateMeshGeometry"/>.</summary>
     public int? MeshGeometryId { get; set; }
 
+    /// <summary>M364: non-null makes this a BEAM or TRAIL emitter - it draws a world-space ribbon strip
+    /// through the ribbon pipeline instead of a billboard. The value is a handle from
+    /// <see cref="ShaderPreviewRenderer.CreateRibbon"/>, and the strip itself is re-uploaded every frame
+    /// because it is extruded from particle history that moves.</summary>
+    public int? RibbonId { get; set; }
+
     /// <summary>The emitter's live particles, in the simulator's packed layout
     /// (<see cref="ShaderPreviewRenderer.MeshInstanceStride"/> floats each). Handed over by reference and
     /// re-read every frame rather than copied.</summary>
@@ -3857,6 +3863,7 @@ float4 psmain(VOut i) : SV_Target
             PipelineSwitches = 0;
             bool sceneCaptured = false;
             bool depthCaptured = false;
+            RibbonDraws = 0;
             DistortionDraws = 0;
             MeshDraws = 0;
 
@@ -3890,6 +3897,16 @@ float4 psmain(VOut i) : SV_Target
                 if (!sceneCaptured) { CaptureSceneCopy(); sceneCaptured = true; }
                 if (DrawDistortion(mat, strength, Matrix4x4.Multiply(view, proj), width, height, ref boundSource))
                 { DistortionDraws++; DrawCalls++; }
+                continue;
+            }
+
+            // M364: beam/trail ribbons, for the same reason as the two branches around it - the strip is
+            // world-space geometry in its own buffer with its own shader, so none of the billboard state
+            // below applies. Drawn here rather than in a separate pass so it keeps its authored position in
+            // the emitter's pass order, which is what decides how it layers against the other emitters.
+            if (mat.RibbonId is not null)
+            {
+                if (DrawRibbon(mat, Matrix4x4.Multiply(view, proj))) DrawCalls++;
                 continue;
             }
 
@@ -4187,6 +4204,7 @@ float4 psmain(VOut i) : SV_Target
         _gridVs.Dispose(); _gridPs.Dispose(); _gridLayout.Dispose(); _gridVb.Dispose();
         _gizmoVb.Dispose();
         DisposeSky();
+        DisposeRibbon();
         _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();
         _meshCullCw.Dispose(); _meshCullCcw.Dispose();
         ReleaseMeshGeometry();

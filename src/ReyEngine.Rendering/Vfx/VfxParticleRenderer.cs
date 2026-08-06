@@ -1029,8 +1029,10 @@ public sealed class VfxParticleRenderer
     private int _trailVboCapacity;
     private bool _trailProgramFailed;
 
-    /// <summary>pos3 + uv2 + rgba4 per ribbon vertex.</summary>
-    private const int TrailStride = 9;
+    /// <summary>pos3 + uv2 + rgba4 per ribbon vertex. M364: public alongside <see cref="BuildRibbon"/> -
+    /// a caller sizing a buffer for it has to know the stride, and a second copy of "9" is exactly the kind
+    /// of constant that goes stale on one side only.</summary>
+    public const int TrailStride = 9;
 
     private unsafe void EnsureTrailProgram()
     {
@@ -1084,41 +1086,12 @@ public sealed class VfxParticleRenderer
         // M183: the trail path never applied stencil state, so a mode-2/3 emitter earlier in pass order
         // silently masked it. Same fix as the new beam path.
         ApplyStencil(es.Def);
-        var trail = es.Def.Trail!;
-        float tiling = trail.EffectiveTiling;
 
-        int quadCount = 0;
-        foreach (var p in es.Particles) if (p.HistoryCount >= 2) quadCount += p.HistoryCount - 1;
-        if (quadCount == 0) return;
-
-        int needed = quadCount * 6 * TrailStride;
-        if (_trailVerts.Length < needed) _trailVerts = new float[Math.Max(needed, 4096)];
-        var buf = _trailVerts;
-        int k = 0;
-
-        for (int pi = 0; pi < es.Particles.Count; pi++)
-        {
-            var p = es.Particles[pi];
-            if (p.HistoryCount < 2 || p.History is not { } hist) continue;
-
-            // Colour and width come from the same per-particle values the billboard path uses, so a trail
-            // emitter's colour-over-life curve drives the ribbon exactly as it would drive a sprite.
-            int o = pi * Stride;
-            float r = 1f, g = 1f, b = 1f, a = 1f, halfWidth = 8f;
-            if (o + 8 < es.Instances.Length && pi < es.InstanceCount)
-            {
-                halfWidth = MathF.Abs(es.Instances[o + 3]) * 0.5f;
-                r = es.Instances[o + 5]; g = es.Instances[o + 6]; b = es.Instances[o + 7]; a = es.Instances[o + 8];
-            }
-            if (halfWidth < 1e-3f) halfWidth = 1e-3f;
-
-            // M183: shared with the beam path so the two ribbons cannot drift. `null` uTotal means
-            // "derive U from accumulated arc length", which is the trail's behaviour.
-            var colour = new Vector4(r, g, b, a);
-            k = BuildRibbon(buf, k, hist.AsSpan(0, p.HistoryCount), halfWidth, colour, colour,
-                tiling, null, es.Def.IsArbitraryTrail, es.PlacementUp, es.PlacementForward, camPos);
-        }
+        // M364: the assembly moved to BuildTrailRibbon so the D3D11 host draws the identical geometry.
+        // Same work, same buffer, one owner.
+        int k = BuildTrailRibbon(ref _trailVerts, es, camPos);
         if (k == 0) return;
+        var buf = _trailVerts;
 
         _gl.UseProgram(_trailProgram);
         _gl.BindVertexArray(_trailVao);
@@ -1152,7 +1125,11 @@ public sealed class VfxParticleRenderer
     /// exactly that many repeats across the whole run (the beam, whose repeat count comes from
     /// VfxBeamDefinition.UvRepeats). <paramref name="c0"/>/<paramref name="c1"/> lerp along the run; pass
     /// the same colour twice for a uniform ribbon.</summary>
-    private static int BuildRibbon(float[] buf, int k, ReadOnlySpan<Vector3> points, float halfWidth,
+    /// <remarks>M364: public so the D3D11 host can build the SAME ribbon geometry instead of growing a
+    /// second extruder that would drift from this one - the M361 precedent (BuildBrushRing), extracted
+    /// rather than duplicated. Pure maths on a caller-owned buffer, so it holds no GL state and needs
+    /// none; the writes are 9 floats per vertex, matching <see cref="TrailStride"/>.</remarks>
+    public static int BuildRibbon(float[] buf, int k, ReadOnlySpan<Vector3> points, float halfWidth,
         Vector4 c0, Vector4 c1, float tiling, float? uTotal,
         bool arbitrary, Vector3 up, Vector3 forward, Vector3 camPos)
     {
@@ -1222,6 +1199,78 @@ public sealed class VfxParticleRenderer
         return k;
     }
 
+    /// <summary>M364: assemble a whole TRAIL emitter's ribbons into <paramref name="buf"/>, growing it if
+    /// needed; returns the write cursor (floats, not vertices).
+    ///
+    /// <para>Extracted so the D3D11 host can draw the same trails. It has to live HERE rather than be
+    /// reimplemented there for a hard reason, not a stylistic one: the per-particle history this walks
+    /// (<c>EmitterState.Particles</c>) is <c>internal</c> to this assembly, so no amount of care in the App
+    /// layer could reproduce it. That the two renderers now share the assembly step as well as the extruder
+    /// is the point - a trail that differs between them can no longer be a divergence, only a bug in one
+    /// place.</para></summary>
+    public static int BuildTrailRibbon(ref float[] buf, VfxParticleSimulator.EmitterState es, Vector3 camPos)
+    {
+        if (es.Def.Trail is not { } trail) return 0;
+
+        int quadCount = 0;
+        foreach (var p in es.Particles) if (p.HistoryCount >= 2) quadCount += p.HistoryCount - 1;
+        if (quadCount == 0) return 0;
+
+        int needed = quadCount * 6 * TrailStride;
+        if (buf.Length < needed) buf = new float[Math.Max(needed, 4096)];
+
+        float tiling = trail.EffectiveTiling;
+        int k = 0;
+        for (int pi = 0; pi < es.Particles.Count; pi++)
+        {
+            var p = es.Particles[pi];
+            if (p.HistoryCount < 2 || p.History is not { } hist) continue;
+
+            // Colour and width come from the same per-particle values the billboard path uses, so a trail
+            // emitter's colour-over-life curve drives the ribbon exactly as it would drive a sprite.
+            int o = pi * Stride;
+            float r = 1f, g = 1f, b = 1f, a = 1f, halfWidth = 8f;
+            if (o + 8 < es.Instances.Length && pi < es.InstanceCount)
+            {
+                halfWidth = MathF.Abs(es.Instances[o + 3]) * 0.5f;
+                r = es.Instances[o + 5]; g = es.Instances[o + 6]; b = es.Instances[o + 7]; a = es.Instances[o + 8];
+            }
+            if (halfWidth < 1e-3f) halfWidth = 1e-3f;
+
+            var colour = new Vector4(r, g, b, a);
+            k = BuildRibbon(buf, k, hist.AsSpan(0, p.HistoryCount), halfWidth, colour, colour,
+                tiling, null, es.Def.IsArbitraryTrail, es.PlacementUp, es.PlacementForward, camPos);
+        }
+        return k;
+    }
+
+    /// <summary>M364: assemble a BEAM emitter's single ribbon. Companion to <see cref="BuildTrailRibbon"/>,
+    /// extracted for the same reason and used by the same two callers.
+    ///
+    /// <para>One ribbon per emitter, not per particle - see <see cref="RenderBeamEmitter"/> for why N
+    /// coincident ribbons would read as an N-times brightness multiplier under an additive blend.</para></summary>
+    public static int BuildBeamRibbon(ref float[] buf, VfxParticleSimulator.EmitterState es, Vector3 camPos)
+    {
+        if (es.Def.Beam is not { } beam || !es.HasBeamEndpoints || es.InstanceCount == 0) return 0;
+        // Guarded rather than assumed: this is now reachable from another assembly, where "InstanceCount > 0
+        // implies a full instance" is a contract no compiler is checking.
+        if (es.Instances.Length < 9) return 0;
+
+        float halfWidth = MathF.Abs(es.Instances[3]) * 0.5f;
+        if (halfWidth < 1e-3f) halfWidth = 1e-3f;
+        var colour = new Vector4(es.Instances[5], es.Instances[6], es.Instances[7], es.Instances[8]);
+
+        float length = Vector3.Distance(es.BeamSource, es.BeamTarget);
+        Span<Vector3> ends = stackalloc Vector3[2];
+        ends[0] = es.BeamSource;
+        ends[1] = es.BeamTarget;
+
+        int needed = 6 * TrailStride;
+        if (buf.Length < needed) buf = new float[Math.Max(needed, 4096)];
+        return BuildRibbon(buf, 0, ends, halfWidth, colour, colour,
+            1f, beam.UvRepeats(length), arbitrary: false, es.PlacementUp, es.PlacementForward, camPos);
+    }
+
     /// <summary>M183 (2.5): draw an emitter's beam - a ribbon from its source to the bound target.
     ///
     /// ONE RIBBON PER EMITTER, not per particle. INFERRED, and the reason matters: the source and target
@@ -1238,22 +1287,11 @@ public sealed class VfxParticleRenderer
     {
         EnsureTrailProgram();
         // Its own texture guard: the loop's shared `es.Texture == 0` check sits downstream of this branch.
-        if (_trailProgramFailed || es.Texture == 0 || !es.HasBeamEndpoints || es.InstanceCount == 0) return;
-        var beam = es.Def.Beam!;
+        if (_trailProgramFailed || es.Texture == 0) return;
 
-        float halfWidth = MathF.Abs(es.Instances[3]) * 0.5f;
-        if (halfWidth < 1e-3f) halfWidth = 1e-3f;
-        var colour = new Vector4(es.Instances[5], es.Instances[6], es.Instances[7], es.Instances[8]);
-
-        float length = Vector3.Distance(es.BeamSource, es.BeamTarget);
-        Span<Vector3> ends = stackalloc Vector3[2];
-        ends[0] = es.BeamSource;
-        ends[1] = es.BeamTarget;
-
-        int needed = 6 * TrailStride;
-        if (_trailVerts.Length < needed) _trailVerts = new float[Math.Max(needed, 4096)];
-        int k = BuildRibbon(_trailVerts, 0, ends, halfWidth, colour, colour,
-            1f, beam.UvRepeats(length), arbitrary: false, es.PlacementUp, es.PlacementForward, camPos);
+        // M364: assembled by BuildBeamRibbon, shared with the D3D11 host. It repeats the endpoint and
+        // instance guards that used to sit in the condition above, so they are enforced once.
+        int k = BuildBeamRibbon(ref _trailVerts, es, camPos);
         if (k == 0) return;
 
         ApplyStencil(es.Def);
