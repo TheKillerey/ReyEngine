@@ -9,6 +9,9 @@ editor renders and what the game renders.
 > item against the current build before scheduling it** — two of the first two were stale, and one of
 > them (the "map is too dark, find Riot's gamma step") had already cost two reverted attempts
 > (M284, M285/M286) at a problem that did not exist.
+>
+> **And verify a render change ON A REAL MAP, not just "it builds and starts".** M354 passed both and
+> still deleted the terrain, because it enabled a code path that had never run before.
 
 ## Done
 
@@ -25,7 +28,7 @@ editor renders and what the game renders.
 | 2b | DX11 live edits: paint and topology | S–M | The remaining half of item 2, and **unverified** — scope it before building. Painting (`MapPaintSession`) changes vertex colours / baked-paint textures, not positions, so `UpdateMeshVertices` cannot carry it. Add Mesh and delete change topology and need a full rebuild (`MapGeneration++`) rather than a range upload. Test first: with both viewports open, move a mesh (expected: works), then paint, then Add Mesh. |
 | 3a | DX11: match GL's clear colour | S | Verified real: the DX11 host sets no clear colour at all, so it falls back to the renderer's default dark grey `(0.08, 0.09, 0.11)` while GL clears to the map's own sky colour. Closes most of the visible gap on its own. |
 | 3b | DX11: port the skybox | **M**, not S | Verified real, and **the survey mis-sized it.** GL has a whole `SkyboxRenderer` (M122) with its own mesh, shader and pipeline; DX11 has no sky at all. This is a fourth pipeline alongside overlay/distortion/mesh, not a settings tweak. Split out of item 3 so the roadmap stops promising a quick job. |
-| ~~4~~ | ~~DX11: per-material back-face culling~~ | done | **M354** (`c012b0e`). DX11 drew every map surface two-sided: cull mode lived in one global rasterizer state keyed on the master toggle, which the map host pins off, so authored `cullEnable` never reached the rasterizer. Now two rasterizer states selected per draw, from `MaterialProfile.CullEnabled` — the same value GL has used since M34. |
+| 4 | DX11: per-material back-face culling | **reopened** | M354 shipped it and **M356 reverted it** (`3bf5c1b`): switching culling on made the map terrain vanish - the signature of culling FRONT faces. The map path had never culled, so the cull state's `FrontCounterClockwise = MirrorX` was never-executed code. **Blocked on a measurement**, not on more code: render one known single-sided surface with the flag both ways and see which keeps it. The renderer half (second rasterizer state + per-draw selection) is already in place and inert. |
 | 5 | DX11: grass tint | S | Verified real: **zero** references to grass tint in any DX11 file. `CurrentGrassTint` / `CurrentGrassTintRect` exist (M78) and only GL consumes them. |
 | 7 | DX11: soft particles + beam/trail emitters | M | Remaining particle-pipeline parity. |
 
