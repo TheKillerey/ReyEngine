@@ -366,6 +366,11 @@ public static class Dx11SceneBuilder
             // And the alpha CUTOUT needs nothing at all - it is a discard compiled into Riot's own pixel
             // shader ("lt r1.x, r0.w, cb0[2].x" then "discard_nz"), driven by the AlphaTestValue this
             // builder already puts in mat.Params, so it was never a blend-state question.
+            // M354: the authored cullEnable, the same value GL has honoured per submesh since M34.
+            // DX11 drew every map surface two-sided because its cull mode was a single global rasterizer
+            // state, so interior faces showed through and back faces lit that the game never rasterises.
+            mat.CullBackFaces = s.Profile.CullEnabled;
+
             bool depthWrite = s.Profile.DepthWrite;
             mat.WritesDepth = depthWrite;
             mat.SortableByPipeline = depthWrite;

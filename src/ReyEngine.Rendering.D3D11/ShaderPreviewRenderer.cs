@@ -193,6 +193,11 @@ public sealed unsafe class PreviewMaterial : IDisposable
 
     /// <summary>M232: draw this material with additive blending rather than straight alpha. Set from the
     /// emitter's blendMode; see VfxShaderFlags for how that integer is read and what is still a guess.</summary>
+    /// <summary>M354: the material's authored cullEnable - true means Riot marked this surface
+    /// single-sided and the game culls its back faces. Default false keeps every existing caller
+    /// (particles, props, champion skins) exactly as it was; only the map builder sets it.</summary>
+    public bool CullBackFaces { get; set; }
+
     public bool Additive { get; set; }
 
     /// <summary>M282: non-null makes this a heat-haze draw - the renderer replaces the material's own
@@ -418,6 +423,7 @@ public sealed unsafe class ShaderPreviewRenderer : IDisposable
     private readonly List<PreviewMaterial> _materials = new();
     public IReadOnlyList<PreviewMaterial> Materials => _materials;
 
+    private ComPtr<ID3D11RasterizerState> _rasterCull;   // M354: per-material back-face culling
     private ComPtr<ID3D11ShaderResourceView> _white;
     private ComPtr<ID3D11ShaderResourceView> _whiteArray;
     private ComPtr<ID3D11ShaderResourceView> _whiteCube;
@@ -2886,6 +2892,18 @@ float4 psmain(VOut i) : SV_Target
         _device.CreateRasterizerState(in rd, ref rs);
         _raster = rs;
 
+        // M354: the same state with culling FORCED ON, for materials whose bin says cullEnable=true.
+        // Riot authors most map surfaces single-sided; drawing them two-sided lets interior faces show
+        // through and lights back faces that the game never rasterises. GL has picked per submesh since
+        // M34 (cull = cullBackfaces && !DoubleSided) - this is the D3D11 half of that, and the reason a
+        // SECOND state exists rather than a flag on the first is that D3D11 cull mode lives in immutable
+        // rasterizer state, so per-draw selection means per-draw objects.
+        _rasterCull.Dispose();
+        rd.CullMode = CullMode.Back;
+        ComPtr<ID3D11RasterizerState> rsCull = default;
+        _device.CreateRasterizerState(in rd, ref rsCull);
+        _rasterCull = rsCull;
+
         var bd = new BlendDesc();
         bd.RenderTarget[0] = new RenderTargetBlendDesc
         {
@@ -3643,6 +3661,14 @@ float4 psmain(VOut i) : SV_Target
             // M245: frustum cull. Slices with no bounds are always drawn.
             if (mat.Bounds is { } bb && !FrustumContains(planes, bb.Min, bb.Max)) { CulledSlices++; continue; }
 
+            // M354: per-material back-face culling, matching GL's M34 rule. The global toggle still wins:
+            // turning CullBackFaces off forces everything two-sided, which is what that toggle is for.
+            //
+            // Set unconditionally rather than tracked. The distortion and mesh-particle branches inside
+            // this same loop bind rasterizer state of their own, so any "what did I last bind" flag here
+            // would go stale behind them and silently cull the wrong draws. RSSetState is a pointer swap.
+            _ctx.RSSetState(s.CullBackFaces || mat.CullBackFaces ? _rasterCull : _raster);
+
             // M282: heat haze takes a pipeline of its own. Handled before any of the ordinary material
             // state below, because none of it applies - different shaders, different layout, different
             // cbuffer, and a blend mode that overrides what the emitter authored.
@@ -3917,6 +3943,7 @@ float4 psmain(VOut i) : SV_Target
     {
         ClearMaterials();
         ClearTextures();
+        _rasterCull.Dispose();
         _white.Dispose();
         _whiteArray.Dispose();
         _whiteCube.Dispose();
