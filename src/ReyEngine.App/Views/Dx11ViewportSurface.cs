@@ -301,6 +301,16 @@ public sealed class Dx11ViewportSurface : IDisposable
             MirrorX = true,
             TransposeMatrices = true,
 
+            // M359: the same background the GL viewport clears to. This host set no clear colour at all,
+            // so it fell back to the renderer's own default (0.08, 0.09, 0.11) - a lighter, greyer field
+            // than GL's (0.039, 0.051, 0.075). Toggling between the two renderers to compare a map made
+            // the whole image look shifted before a single pixel of geometry was drawn.
+            //
+            // A literal, matching GL's literal, because GL's clear is NOT the map's sky colour - it is a
+            // hardcoded editor background (ViewportControl.cs, OnOpenGlRender). Deriving one here from
+            // MapSunProperties would make the two viewports disagree, which is the opposite of the point.
+            ClearColor = new System.Numerics.Vector4(0.039f, 0.051f, 0.075f, 1f),
+
             // M261. The sun and the lightmap scale are ungated, matching the GL path, which applies them
             // unconditionally. Fog is gated on the toggle, also matching it.
             TimeSeconds = t,
