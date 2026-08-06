@@ -311,7 +311,7 @@ public sealed unsafe class PreviewMaterial : IDisposable
 /// slots and byte offsets, texture and sampler registers, and the vertex input signature. Nothing is
 /// hardcoded per shader, because nothing is known per shader.</para>
 /// </summary>
-public sealed unsafe class ShaderPreviewRenderer : IDisposable
+public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
 {
     private static readonly float[] NeutralIblCubemapScales = Repeat(new[] { 1f, 1f, 1f, 1f }, 32);
 
@@ -3722,6 +3722,13 @@ float4 psmain(VOut i) : SV_Target
             _ctx.ClearRenderTargetView(_rtv, clear);
             _ctx.ClearDepthStencilView(_dsv, (uint)ClearFlag.Depth, 1f, 0);
 
+            // M362: the sky, FIRST and before any geometry - exactly where the GL viewport draws it. It
+            // writes no depth and tests none, so the scene simply paints over it; drawing it here rather
+            // than last also means it never has to be sorted against transparent geometry. No-op until a
+            // host sets a sky source. It sets its own raster/blend/depth states, which the three lines
+            // below then reset for the scene pass.
+            DrawSky(view, proj);
+
             _ctx.RSSetState(_raster);
             var factor = stackalloc float[4] { 0, 0, 0, 0 };
             _ctx.OMSetBlendState(_blend, factor, 0xFFFFFFFF);
@@ -4077,6 +4084,7 @@ float4 psmain(VOut i) : SV_Target
         _sceneCopySrv.Dispose(); _sceneCopy.Dispose();
         _gridVs.Dispose(); _gridPs.Dispose(); _gridLayout.Dispose(); _gridVb.Dispose();
         _gizmoVb.Dispose();
+        DisposeSky();
         _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();
         _meshCullCw.Dispose(); _meshCullCcw.Dispose();
         ReleaseMeshGeometry();

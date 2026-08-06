@@ -41,6 +41,7 @@ public partial class MainWindow : Window
     /// multi-megabyte and is rebuilt only when the grid actually changes, so re-uploading it every frame
     /// would dominate the frame for a buffer whose contents are identical.</summary>
     private float[]? _lastDx11BucketGrid;
+    private Services.SkyboxSpec? _lastDx11Skybox;
     private bool _dx11FrameQueued;
 
     /// <summary>M360: keys painted since the last mip rebuild, so the finish rebuilds only what the
@@ -231,6 +232,16 @@ public partial class MainWindow : Window
             _dx11.Renderer.SetBucketGrid(vm.BucketGridLines);
         }
 
+        // M362: the sky, from the same SkyboxSpec property the GL viewport binds to - so the two renderers
+        // cannot show different skies. Reference-guarded like the bucket grid above and for the same
+        // reason: a cubemap is six full-resolution faces, and re-uploading it every frame would cost more
+        // than everything else in this method. Publishing null clears it.
+        if (!ReferenceEquals(_lastDx11Skybox, vm.CurrentSkybox))
+        {
+            _lastDx11Skybox = vm.CurrentSkybox;
+            ApplyDx11Skybox(vm.CurrentSkybox);
+        }
+
         // Pushed per frame rather than on load: the cache is opened lazily the first time a scene is built,
         // which can be after this surface has already drawn its first frames.
         _dx11.ShaderCache = vm.Dx11ShaderCache;
@@ -267,6 +278,24 @@ public partial class MainWindow : Window
             // No scene is a legitimate state, not a failure - say which, rather than showing an empty
             // viewport and letting it read as a broken renderer.
             : "D3D11 no scene: " + WhyNoScene(_dx11.SceneReport);
+    }
+
+    /// <summary>M362: hand a <see cref="Services.SkyboxSpec"/> to the D3D11 renderer. Deliberately the same
+    /// source-selection order as the GL path in <c>ViewportControl</c> - exactly one of the three is ever
+    /// set, and a spec that somehow carries none clears the sky rather than leaving the previous one up.</summary>
+    private void ApplyDx11Skybox(Services.SkyboxSpec? spec)
+    {
+        if (_dx11 is null) return;
+        var r = _dx11.Renderer;
+        if (spec is null) { r.ClearSky(); return; }
+        // Faces are +X -X +Y -Y +Z -Z: the order the GL path binds them in (TextureCubeMapPositiveX + f)
+        // and the order D3D11 numbers its cube slices, so no remapping is needed or wanted.
+        if (spec.Cubemap is { } cm) r.SetSkyCubemap(cm.Faces, cm.FaceSize);
+        else if (spec.Equirect is { } eq) r.SetSkyEquirect(eq.Rgba, eq.Width, eq.Height);
+        else if (spec.MeshPositions is { } mp && spec.MeshIndices is { } mi)
+            r.SetSkyMesh(mp, spec.MeshUvs ?? Array.Empty<float>(), mi,
+                spec.MeshTexture?.Rgba, spec.MeshTexture?.Width ?? 0, spec.MeshTexture?.Height ?? 0);
+        else r.ClearSky();
     }
 
     // ---- M81: About + updates ----
