@@ -23,9 +23,10 @@ editor renders and what the game renders.
 | # | Item | Size | Notes |
 |---|------|------|-------|
 | 2b | DX11 live edits: paint and topology | S–M | The remaining half of item 2, and **unverified** — scope it before building. Painting (`MapPaintSession`) changes vertex colours / baked-paint textures, not positions, so `UpdateMeshVertices` cannot carry it. Add Mesh and delete change topology and need a full rebuild (`MapGeneration++`) rather than a range upload. Test first: with both viewports open, move a mesh (expected: works), then paint, then Add Mesh. |
-| 3 | DX11: skybox + clear colour | S | Parity survey item. |
-| 4 | DX11: per-material back-face culling | S | Parity survey item. |
-| 5 | DX11: grass tint | S | Parity survey item. |
+| 3a | DX11: match GL's clear colour | S | Verified real: the DX11 host sets no clear colour at all, so it falls back to the renderer's default dark grey `(0.08, 0.09, 0.11)` while GL clears to the map's own sky colour. Closes most of the visible gap on its own. |
+| 3b | DX11: port the skybox | **M**, not S | Verified real, and **the survey mis-sized it.** GL has a whole `SkyboxRenderer` (M122) with its own mesh, shader and pipeline; DX11 has no sky at all. This is a fourth pipeline alongside overlay/distortion/mesh, not a settings tweak. Split out of item 3 so the roadmap stops promising a quick job. |
+| ~~4~~ | ~~DX11: per-material back-face culling~~ | done | **M354** (`c012b0e`). DX11 drew every map surface two-sided: cull mode lived in one global rasterizer state keyed on the master toggle, which the map host pins off, so authored `cullEnable` never reached the rasterizer. Now two rasterizer states selected per draw, from `MaterialProfile.CullEnabled` — the same value GL has used since M34. |
+| 5 | DX11: grass tint | S | Verified real: **zero** references to grass tint in any DX11 file. `CurrentGrassTint` / `CurrentGrassTintRect` exist (M78) and only GL consumes them. |
 | 7 | DX11: soft particles + beam/trail emitters | M | Remaining particle-pipeline parity. |
 
 ## Stretch (ship if ready, hold if not)
