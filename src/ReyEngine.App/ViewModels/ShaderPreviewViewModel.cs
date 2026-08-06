@@ -1431,6 +1431,24 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             foreach (var prm in b.Parameters)
                 if (prm.TryGetVector4(out var v))
                     mat.Params[prm.Name] = new[] { v.X, v.Y, v.Z, v.W };
+
+            // M352: the SHADER's declared default for anything the material leaves out - the same
+            // fallback Dx11SceneBuilder has had since M257, which this path never received.
+            //
+            // Riot's compiled shaders carry no RDEF defaults (measured: every used constant of the map
+            // families reports none), so a parameter no one supplies is uploaded as ZERO, and zero on a
+            // multiplier renders the surface black. That is the black-map-ground defect exactly:
+            // 4TextureBlend_UVBased_baseMat declares R_/G_/B_mask_multiplier = 1 and the materials do
+            // not repeat them, so the four-way terrain blend collapsed while props - whose shaders
+            // multiply by differently named constants - stayed correctly lit.
+            //
+            // Values come from shaders.bin, never invented. That is what separates this from M284/M286,
+            // which guessed at Tint: Riot declares Tint = 0, so the guess of 1 was wrong and the right
+            // value was in the game data the whole time. Authored parameters always win.
+            if (_perms is not null && _perms.TryGetParameterDefaults(shader, out var paramDefaults))
+                foreach (var (dn, dv) in paramDefaults)
+                    if (!mat.Params.ContainsKey(dn)) mat.Params[dn] = dv;
+
             ApplySkinMeshParams(mat);
 
             _renderer.AddMaterial(mat);
