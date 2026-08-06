@@ -93,7 +93,8 @@ public static class Dx11SceneBuilder
         MapGeoAsset map,
         IReadOnlyList<MaterialBinding> materials,
         Func<ulong, byte[]?> readAsset,
-        string? mapGeoPath = null)
+        string? mapGeoPath = null,
+        string? grassTintPath = null)
     {
         var t0 = DateTime.UtcNow;
 
@@ -245,6 +246,46 @@ public static class Dx11SceneBuilder
                     terrainWorldTransform.Z, terrainWorldTransform.W,
                 }));
             }
+
+            // M355: grass tint. Measured from Riot's own shader by diffing the two permutations of
+            // staticmesh/vertexdeform that differ only in USE_GRASS_TINT_MAP: turning it on adds exactly
+            // GRASS_TINT_MAP_SharedTexture, GRASS_TINT_MAP_ALTERNATE_SharedTexture, TERRAIN_XFORM and
+            // GRASS_INTERP. Nothing else changes, so all four are attributable rather than guessed.
+            //
+            // Not a port of the GL path: that one is ReyEngine's own approximation with a single texture
+            // and its own world-rect uniform. DX11 runs Riot's compiled shader and must feed what the
+            // shader asks for, which is a different set.
+            // The terrain-mask branch above writes the same constant. In practice the two never coincide
+            // (the mask is a 4TextureBlend shader, grass tint is VertexDeform), but ordering that only
+            // works because of a coincidence is worth making explicit: the terrain transform wins.
+            if (b.Profile.UsesGrassTint && !b.Profile.TerrainWorldProjectedMask)
+            {
+                // TERRAIN_XFORM is worldXZ * .xy + .zw (verified in M322 for the terrain-blend mask), and
+                // for grass tint it has to map world XZ onto the map's bounds. Without this the renderer's
+                // neutral identity leaves it sampling raw world coordinates, thousands of units outside
+                // 0..1, so every grass surface takes one clamped corner texel.
+                float spanX = MathF.Max(1f, map.BoundsMax.X - map.BoundsMin.X);
+                float spanZ = MathF.Max(1f, map.BoundsMax.Z - map.BoundsMin.Z);
+                parameters.RemoveAll(x => x.Item1.Equals("TERRAIN_XFORM", StringComparison.OrdinalIgnoreCase));
+                parameters.Add(("TERRAIN_XFORM", new[]
+                {
+                    1f / spanX, 1f / spanZ,
+                    -map.BoundsMin.X / spanX, -map.BoundsMin.Z / spanZ,
+                }));
+
+                if (!string.IsNullOrEmpty(grassTintPath)
+                    && ps.Textures.FirstOrDefault(t => t.Name.Equals("GRASS_TINT_MAP_SharedTexture",
+                        StringComparison.OrdinalIgnoreCase)) is { } grassSlot)
+                    wanted.Add((grassSlot.Name, grassTintPath.ToLowerInvariant()));
+
+                // GRASS_TINT_MAP_ALTERNATE_SharedTexture and GRASS_INTERP are deliberately left alone.
+                // The alternate map's asset is unknown - nothing in the map data names a second tint - and
+                // GRASS_INTERP is the blend between the two. Unbound textures take the opaque-white
+                // stand-in and unset constants upload as 0, so interp 0 selects the primary map, which is
+                // the honest neutral. Binding the primary to BOTH slots would fake a blend we have not
+                // measured.
+            }
+
 
             scene.Slices.Add(new PreparedSlice(b.Name, slice.Start, slice.Count, vs, ps,
                 new ShaderDescription(full, DxbcStage.Vertex, vp.Key, vp.BlobIndex, b.Macros, vs),

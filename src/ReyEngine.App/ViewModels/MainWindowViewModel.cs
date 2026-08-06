@@ -2518,7 +2518,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var result = Services.Dx11SceneBuilder.Commit(
             renderer,
             Services.Dx11SceneBuilder.Prepare(_dx11ShaderCache, ShaderPerms(), map, doc.Materials,
-                TryReadAssetBytes, mapEntry.Path),
+                TryReadAssetBytes, mapEntry.Path,
+                // M355: the same lookup the GL path uses (M78), so both viewports tint from one asset.
+                FindGrassTintTexturePath()),
             AppInfo.DisplayVersion);
 
         _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
