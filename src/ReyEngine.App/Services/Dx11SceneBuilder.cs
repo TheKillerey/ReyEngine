@@ -43,7 +43,7 @@ public static class Dx11SceneBuilder
     /// caller that logs <paramref name="Failed"/> without one of these is reporting a number nobody can
     /// act on - which is what "0 material(s), 21 unresolved" was.</summary>
     public sealed record Result(int Materials, int Failed, int Textures, int Slices, string Report,
-        IReadOnlyList<string> Reasons);
+        IReadOnlyList<string> Reasons, int GrassTintBound = 0, int GrassTintNoSlot = 0);
 
     /// <summary>One slice, resolved and ready to become a pipeline. Everything here is CPU-side.
     /// <para>M279: <paramref name="Profile"/> is the material's OWN render state, derived from its
@@ -71,6 +71,14 @@ public static class Dx11SceneBuilder
         public int Failed { get; set; }
         public int RawGroups { get; set; }
         public double PrepareMs { get; set; }
+
+        /// <summary>M365c: grass-tint slices that actually got a texture bound, and slices whose resolved
+        /// permutation declared no tint slot to bind to. Reported rather than inferred, because "the tint
+        /// is missing" has had two completely different causes already - a texture that was never queued
+        /// for loading (M365) and a blend term left on a white stand-in (M365c) - and a third possible one,
+        /// the switch never reaching permutation selection, looks identical on screen.</summary>
+        public int GrassTintBound { get; set; }
+        public int GrassTintNoSlot { get; set; }
 
         /// <summary>M278: why the failures failed, first example per distinct kind, in the order they were
         /// first hit. The report used to say "21 unresolved" and nothing else, so a shader cache whose
@@ -277,27 +285,51 @@ public static class Dx11SceneBuilder
                     terrainWorldTransform.Z, terrainWorldTransform.W,
                 }));
 
-                if (!string.IsNullOrEmpty(grassTintPath)
-                    && ps.Textures.FirstOrDefault(t => t.Name.Equals("GRASS_TINT_MAP_SharedTexture",
-                        StringComparison.OrdinalIgnoreCase)) is { } grassSlot)
+                if (!string.IsNullOrEmpty(grassTintPath))
                 {
                     string grassKey = grassTintPath.ToLowerInvariant();
-                    wanted.Add((grassSlot.Name, grassKey));
+                    // M365c: BOTH tint slots, not just the primary.
+                    //
+                    // Measured across all 896 cooked vertexdeform pixel permutations: 192 declare
+                    // GRASS_TINT_MAP_SharedTexture, and every one of those also declares
+                    // GRASS_TINT_MAP_ALTERNATE_SharedTexture and marks GRASS_INTERP as USED. M355 bound
+                    // only the primary and argued interp would default to 0 and select it - but that
+                    // reasoning assumed a blend DIRECTION that was never measured. Leaving the alternate
+                    // unbound gives it the renderer's opaque-WHITE stand-in, so if the blend runs the other
+                    // way (or interp is not 0) the tint washes to white, which on screen is
+                    // indistinguishable from no tint at all. That is exactly how this was reported.
+                    //
+                    // Binding the same texture to both slots is not a faked blend: the map data names only
+                    // ONE tint asset (the dragon variants are alternatives for different soul states, not
+                    // simultaneous layers), so making the two ends identical renders the interpolation a
+                    // no-op for ANY value and ANY direction. It removes the unmeasured term instead of
+                    // guessing it.
+                    bool bound = false;
+                    foreach (var slotName in new[]
+                             {
+                                 "GRASS_TINT_MAP_SharedTexture",
+                                 "GRASS_TINT_MAP_ALTERNATE_SharedTexture",
+                             })
+                    {
+                        if (ps.Textures.FirstOrDefault(t =>
+                                t.Name.Equals(slotName, StringComparison.OrdinalIgnoreCase)) is not { } slot)
+                            continue;
+                        wanted.Add((slot.Name, grassKey));
+                        bound = true;
+                    }
+
                     // AND into `distinct`, explicitly. M355 shipped this block below the
                     //     foreach (var (_, key) in wanted) distinct.Add(key);
                     // line that gathers what actually gets LOADED, so the binding named a texture the
-                    // loader was never told to fetch: the slot resolved to nothing, took the opaque-white
-                    // stand-in, and the map rendered with no tint at all while every count in the log still
-                    // looked healthy. Adding to `wanted` alone is not enough this far down the method.
-                    distinct.Add(grassKey);
+                    // loader was never told to fetch: the slot resolved to nothing, took the stand-in, and
+                    // the map rendered untinted while every count in the log still looked healthy.
+                    if (bound) { distinct.Add(grassKey); scene.GrassTintBound++; }
+                    // The permutation this material resolved to has no tint slot at all, so nothing here
+                    // can bind. Counted rather than silently skipped: it is the difference between "the
+                    // texture failed to load" and "the switch never reached permutation selection", and
+                    // those have completely different fixes.
+                    else scene.GrassTintNoSlot++;
                 }
-
-                // GRASS_TINT_MAP_ALTERNATE_SharedTexture and GRASS_INTERP are deliberately left alone.
-                // The alternate map's asset is unknown - nothing in the map data names a second tint - and
-                // GRASS_INTERP is the blend between the two. Unbound textures take the opaque-white
-                // stand-in and unset constants upload as 0, so interp 0 selects the primary map, which is
-                // the honest neutral. Binding the primary to BOTH slots would fake a blend we have not
-                // measured.
             }
 
 
@@ -478,7 +510,8 @@ public static class Dx11SceneBuilder
                       + $"{renderer.CachedPipelineCount} resident");
         sb.AppendLine($"timing: {scene.PrepareMs:F0} ms off-thread + {commitMs:F0} ms on the UI thread");
         return new Result(ok, failed, textures, scene.Slices.Count, sb.ToString(),
-            reasons.Select(kv => $"{kv.Key}: {Trim(kv.Value)}").ToList());
+            reasons.Select(kv => $"{kv.Key}: {Trim(kv.Value)}").ToList(),
+            scene.GrassTintBound, scene.GrassTintNoSlot);
     }
 
     // ---------------------------------------------------------------- helpers

@@ -2525,6 +2525,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
                           + $"{result.Slices} slice(s), {result.Textures} texture binding(s)");
+        // M365c: say what happened to the grass tint instead of leaving it to be inferred from the picture.
+        // This has now had two distinct causes that looked identical on screen - a texture never queued for
+        // loading, and a blend term left on a white stand-in - so the next report should start from a
+        // number. NoSlot specifically means the resolved permutation declared no tint sampler at all, which
+        // is a permutation-selection problem rather than a texture problem.
+        if (result.GrassTintBound > 0 || result.GrassTintNoSlot > 0)
+            _log.Info("DX11", $"grass tint: {result.GrassTintBound} slice(s) bound"
+                              + (result.GrassTintNoSlot > 0
+                                  ? $", {result.GrassTintNoSlot} whose permutation declares no tint sampler"
+                                  : ""));
         // M278: never log a failure COUNT on its own. This exact line read "0 material(s), 21 unresolved"
         // for an afternoon while the shader cache had simply been renamed underneath us, and it named
         // nothing that could be looked up.
