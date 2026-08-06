@@ -1667,6 +1667,48 @@ float4 psmain_tex(VTexOut i) : SV_Target
 
     public bool IsCached(string key) => _texPool.TryGetValue(key, out var v) && v.Handle is not null;
 
+    /// <summary>M360: overwrite a pooled texture's pixels in place, for live brush strokes.
+    ///
+    /// <para>In place, deliberately. Materials hold the SRV itself (<c>m.Textures[name] = srv</c>), not the
+    /// pool key, so creating a replacement SRV and swapping the pool entry would leave every already-bound
+    /// material pointing at the old one - the paint would land in the pool and never appear. Writing
+    /// through the existing resource keeps every binding valid and updates all users at once.</para>
+    ///
+    /// <para>Whole-texture rather than the dirty rect: one upload of a 2048 map texture is ~16 MB and the
+    /// stroke handler is already throttled. A sub-region write is the obvious optimisation, but only worth
+    /// making once it has been measured as too slow.</para>
+    ///
+    /// <para>Returns false rather than throwing on anything unexpected - a texture that was created
+    /// Immutable (M294 does that for unmipped ones) cannot be written, and a brush stroke that does not
+    /// show in the D3D11 view is a far better outcome than one that takes the editor down.</para></summary>
+    public bool UpdatePooledTexture(string key, byte[] rgba, int width, int height)
+    {
+        if (width <= 0 || height <= 0 || rgba.Length < width * height * 4) return false;
+        if (!_texPool.TryGetValue(key, out var srv) || srv.Handle is null) return false;
+
+        ID3D11Resource* res = null;
+        try
+        {
+            srv.GetResource(ref res);
+            if (res is null) return false;
+            // (Box*)null, not bare null: the Span overload is otherwise ambiguous. Null box = whole resource.
+            fixed (byte* p = rgba)
+                _ctx.UpdateSubresource(res, 0, (Box*)null, p, (uint)(width * 4), 0);
+            return true;
+        }
+        catch { return false; }
+        finally { if (res is not null) res->Release(); }
+    }
+
+    /// <summary>M360: regenerate mips after a stroke finishes. Only textures created with a mip chain
+    /// (M294: <c>MipLevels = 0</c> plus <c>GenerateMips</c>) have anything to rebuild; the call is harmless
+    /// on the others, and skipping it leaves a painted surface sharp up close and stale at distance.</summary>
+    public void RegeneratePooledMips(string key)
+    {
+        if (!_texPool.TryGetValue(key, out var srv) || srv.Handle is null) return;
+        try { _ctx.GenerateMips(srv); } catch { }
+    }
+
     /// <summary>M275: the authored sun direction as a unit vector, for upload to SUN_LIGHT_DIRECTION.
     /// A zero vector is passed through rather than normalised - Vector3.Normalize would hand back NaN and
     /// NaN in a dp3 poisons the whole pixel, where zero just means "no sun", which is a survivable answer to

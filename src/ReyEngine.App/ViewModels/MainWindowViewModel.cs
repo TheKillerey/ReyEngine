@@ -2843,6 +2843,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Set by the view: pushes a painted rectangle to the GPU without a reload.</summary>
     public Action<TextureImage, Avalonia.PixelRect>? PushTextureRegion { get; set; }
+
+    /// <summary>M360: the same stroke, for hosts that identify a texture by its ASSET PATH rather than by
+    /// the TextureImage instance. GL keeps an image-to-GL-id map so the path is redundant there; the D3D11
+    /// renderer's texture pool is keyed by path, so without it a painted stroke has nothing to look up.
+    /// Kept as a second hook rather than widening the first, so the GL path is untouched.</summary>
+    public Action<string, TextureImage>? PushPaintedTextureByPath { get; set; }
     /// <summary>Set by the view: shows the brush footprint on the surface (null centre hides it).</summary>
     public Action<System.Numerics.Vector3?, System.Numerics.Vector3, float, float>? ShowBrushRing { get; set; }
     /// <summary>Set by the view: force a mip rebuild once a stroke has finished.</summary>
@@ -3031,6 +3037,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             session.MarkPainted(painted.Image, painted.AssetPath);
             PushTextureRegion?.Invoke(painted.Image, new Avalonia.PixelRect(
                 painted.Rect.MinX, painted.Rect.MinY, painted.Rect.Width, painted.Rect.Height));
+            // M360: same stroke to the D3D11 viewport. Whole-texture re-upload, not the dirty rect: the
+            // pool stores one SRV per path and re-creating it is the only update entry point the renderer
+            // has today. If that proves too slow mid-stroke, the fix is a sub-region path via
+            // UpdateSubresource - but that is an optimisation to make when measured, not up front.
+            PushPaintedTextureByPath?.Invoke(painted.AssetPath, painted.Image);
         }
     }
 

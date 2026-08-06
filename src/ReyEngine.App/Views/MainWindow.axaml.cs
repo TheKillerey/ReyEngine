@@ -42,6 +42,10 @@ public partial class MainWindow : Window
     /// would dominate the frame for a buffer whose contents are identical.</summary>
     private float[]? _lastDx11BucketGrid;
     private bool _dx11FrameQueued;
+
+    /// <summary>M360: keys painted since the last mip rebuild, so the finish rebuilds only what the
+    /// stroke touched instead of the whole texture pool.</summary>
+    private readonly HashSet<string> _dx11PaintedKeys = new(StringComparer.Ordinal);
     private bool _closed;
 
     public MainWindow()
@@ -356,8 +360,28 @@ public partial class MainWindow : Window
             vm.ShowLightingWindow = () => ShowLighting(vm);               // M169
             vm.ShowTextureRecolorWindow = () => ShowTextureRecolor(vm);   // M171
             vm.PushTextureRegion = Viewport.QueueTextureUpdate;            // M172c: live brush strokes
+            // M360: the same stroke to the D3D11 viewport, which the paint path never reached. Gated on the
+            // surface being up: with DX11 off there is no device and nothing to update, and the pool lookup
+            // would miss anyway. Painted keys are lower-cased to match how the scene builder pools them.
+            vm.PushPaintedTextureByPath = (path, img) =>
+            {
+                if (_dx11?.IsReady != true || !vm.UseDx11Viewport) return;
+                if (_dx11.Renderer.UpdatePooledTexture(path.ToLowerInvariant(), img.Rgba, img.Width, img.Height))
+                    _dx11PaintedKeys.Add(path.ToLowerInvariant());
+                QueueDx11Frame();
+            };
             vm.ShowBrushRing = Viewport.SetBrushRing;                      // M172e: brush footprint
-            vm.RebuildTextureMips = Viewport.RequestMipRebuild;
+            var glMipRebuild = Viewport.RequestMipRebuild;
+            vm.RebuildTextureMips = () =>
+            {
+                glMipRebuild();
+                // M360: mips are throttled mid-stroke in both renderers, so the finished result has to be
+                // rebuilt for the textures this stroke actually touched - not the whole pool.
+                if (_dx11?.IsReady == true)
+                    foreach (var k in _dx11PaintedKeys) _dx11.Renderer.RegeneratePooledMips(k);
+                _dx11PaintedKeys.Clear();
+                QueueDx11Frame();
+            };
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop
