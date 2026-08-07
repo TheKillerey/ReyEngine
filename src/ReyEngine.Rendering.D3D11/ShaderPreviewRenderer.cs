@@ -441,6 +441,8 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11ShaderResourceView> _white;
     private ComPtr<ID3D11ShaderResourceView> _whiteArray;
     private ComPtr<ID3D11ShaderResourceView> _whiteCube;
+    /// <summary>M366: R32_FLOAT stand-in for shadow maps, which are sampled with sample_c.</summary>
+    private ComPtr<ID3D11ShaderResourceView> _whiteDepth;
     private ComPtr<ID3D11ShaderResourceView> _whiteCubeArray;
     private ComPtr<ID3D11ShaderResourceView> _identityRamp;
 
@@ -568,6 +570,20 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         _whiteArray = MakeTexture(px, 1, 1, resourceDimension: 5) ?? default;
         _whiteCube = MakeTexture(px, 1, 1, resourceDimension: 9) ?? default;
         _whiteCubeArray = MakeTexture(px, 1, 1, resourceDimension: 10) ?? default;
+
+        // M366: a DEPTH stand-in, for shadow maps specifically. Latent undefined behaviour, measured not
+        // assumed: CheckFormatSupport on R8G8B8A8_UNORM reports SHADER_SAMPLE = true but
+        // SHADER_SAMPLE_COMPARISON = FALSE, and every NO_BAKED_LIGHTING blob reads
+        // SHADOW_MAP_DEPTH_PCF_SharedTexture with sample_c. Handing it _white is therefore a comparison
+        // sample against a format that does not support one - it happens to return 1 ("unshadowed") on the
+        // GPU this was measured on, but a driver returning 0 collapses the light term to SHADOW_COLOR,
+        // which is a 2.86x darkening of exactly the surfaces this renderer draws most.
+        //
+        // It is NOT safe to assume ComparisonFunc.Always rescues it: with Always set, a BLACK texel
+        // measured 0.0 rather than 1.0, so the comparison function is genuinely ignored on that format and
+        // the M254 note nearby is wrong about why this works. R32_FLOAT does support comparison sampling,
+        // so with it the sampler means what it says.
+        _whiteDepth = MakeTexture(BitConverter.GetBytes(1f), 1, 1, format: Format.FormatR32Float) ?? default;
 
         // M221: the colour-remap ramp stand-in must be TRANSPARENT, and the shader says so itself.
         //
@@ -1823,7 +1839,10 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// which samples BLACK rather than falling through to the white stand-in. BuildMaterial already checks
     /// its shader HRESULTs; this was the one place that did not.</summary>
     private ComPtr<ID3D11ShaderResourceView>? MakeTexture(
-        byte[] rgba, int w, int h, uint resourceDimension = 4)
+        byte[] rgba, int w, int h, uint resourceDimension = 4,
+        // M366: overridable so a DEPTH stand-in can be R32_FLOAT. Everything else stays RGBA8; the
+        // 4-bytes-per-texel assumptions below (length check, SysMemPitch) hold for both formats.
+        Format format = Format.FormatR8G8B8A8Unorm)
     {
         if (w <= 0 || h <= 0 || rgba.Length < w * h * 4)
         {
@@ -1854,7 +1873,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
             Width = (uint)w, Height = (uint)h,
             MipLevels = mipped ? 0u : 1u,          // 0 = full chain down to 1x1
             ArraySize = arraySize,
-            Format = Format.FormatR8G8B8A8Unorm, SampleDesc = new SampleDesc(1, 0),
+            Format = format, SampleDesc = new SampleDesc(1, 0),
             Usage = mipped || cube ? Usage.Default : Usage.Immutable,
             BindFlags = (uint)(mipped ? BindFlag.ShaderResource | BindFlag.RenderTarget
                                       : BindFlag.ShaderResource),
@@ -3557,34 +3576,37 @@ float4 psmain(VOut i) : SV_Target
                     // via Params; this fallback is for a single-mesh preview, already centred on the origin.
                     "MESH_CENTER" => new[] { 0f, 0f, 0f, 0f },
 
-                    // M212: these two ADD, and the result multiplies a diffuse the shader has ALREADY
-                    // doubled and clamped. Measured on staticmesh/defaultenv_flat blob#53 by binding a flat
-                    // texture and sweeping - with headroom below clipping, because the first attempt
-                    // measured a saturated image where every setting looked identical and concluded
-                    // nothing:
+                    // These two ADD, and the sum multiplies the diffuse. The sum is the only observable
+                    // quantity here (DISABLE_SHADOWS forces the shadow term), which is why the split below
+                    // is a labelled stand-in: four splits summing to 1.0 measured identically, a sum of 2.0
+                    // doubled, a sum of 0 went black.
                     //
-                    //     output = saturate(2 x texture) x (SHADOW_COLOR + SHADOW_COLOR_COMPLEMENT) x TintColor
+                    // CORRECTION (M366): M212's headline formula, "output = saturate(2 x texture) x ...",
+                    // was WRONG, and the overbright-albedo story built on top of it was wrong with it.
+                    // Disassembling staticmesh/defaultenv_flat blob 53 gives
+                    //     lt r1.xyz, r1.xyzx, l(0.5)
+                    // - the branch tests the SAMPLED TEXEL, so the operator is Overlay(base = texture,
+                    // blend = TintColor), not a doubling of anything. M212's sweep bound TintColor = 1.0,
+                    // where Overlay's lower branch degenerates to 2D and the upper collapses to exactly
+                    // 1.0; that is the "1.00x from 64 to 126, then clamped hard at 127" it recorded, and it
+                    // is a harness artefact rather than a property of the shader. At the value Riot
+                    // actually ships - TintColor 0.5019608 on 282 of 301 DefaultEnv_Flat materials in
+                    // milkshake_srs, 0.5 on the other 19 - Overlay evaluates to 1.004x. SRX_DynamicEffect's
+                    // hard-light variant at tint 0.5 is exactly 1.000x.
                     //
-                    // Evidence. Four different splits summing to 1.0 all gave exactly 2.00x on a 0.125
-                    // texture, a sum of 2.0 gave 4.00x, a sum of 0 gave 0 - so it is the SUM, linearly, and
-                    // the split is not observable here (DISABLE_SHADOWS forces the shadow term). Sweeping
-                    // the texture instead held 1.00x from input 64 to 126 and then clamped hard at 127 for
-                    // 130, 140, 160 and 200 - a saturate() that reaches 1.0 at texture 0.5, i.e. the
-                    // diffuse is doubled and clamped BEFORE the light term is applied. Only three
-                    // constants are USED in that permutation, so the x2 is a literal in the shader.
+                    // So there is NO overbright convention in these shaders to preserve or cancel, and the
+                    // sum of 1.0 is not justified by one. It is justified only by being neutral for a term
+                    // that multiplies. What the game really uses is NOT RECOVERABLE from shipped data:
+                    // scanning all 2,883 bins in Map11.wad.client for shadowColor / ScaleSunShadowIntensity
+                    // / colorblindShadowColor returns ZERO hits (engine-side, not map data), and across all
+                    // 829 shipped PS TOCs SHADOW_COLOR never co-occurs with a baked, sun, env or HDR term,
+                    // so no shipped shader reveals its magnitude either.
                     //
-                    // That x2 is intentional - it is the overbright-albedo convention, of a piece with the
-                    // lightMapColorScale=2 map data records - so League's environment diffuse is authored
-                    // at roughly half scale. The preview must NOT cancel it: picking a sum of 0.5 to undo
-                    // the doubling would make a synthetic mid-grey test texture look tidy while
-                    // misrepresenting what the game actually draws.
-                    //
-                    // The real defect in M210 was a sum of 2.0, which double-brightened on top of the
-                    // shader's intended doubling and clipped everything bright to white. A sum of 1.0 is
-                    // the neutral value for a term that multiplies - and is what a colour plus its
-                    // complement ought to add up to. The SPLIT is a stand-in and is labelled as one: only
-                    // the sum is observable in this permutation, so nothing measured constrains it. Both
-                    // are editable in the Constants tab.
+                    // Do not "fix" map brightness by raising this. It is one PerFramePixelCB pair shared by
+                    // every material on the map (336 of 336 on milkshake_srs consume it identically), so it
+                    // can only ever rescale the WHOLE image - it cannot make one shader darker than
+                    // another, and a sum of 2.0 specifically is the M210 defect that clipped everything
+                    // bright to white. Both are editable in the Constants tab.
                     "SHADOW_COLOR" => new[] { 0.35f, 0.35f, 0.35f, 1f },
                     "SHADOW_COLOR_COMPLEMENT" => new[] { 0.65f, 0.65f, 0.65f, 1f },
 
@@ -4165,6 +4187,12 @@ float4 psmain(VOut i) : SV_Target
     private ComPtr<ID3D11ShaderResourceView> StandIn(DxbcResource resource)
     {
         if (resource.Name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase)) return _identityRamp;
+        // M366: shadow maps are read with sample_c, which is undefined against the RGBA8 white stand-in.
+        // See the _whiteDepth creation for the measurement.
+        if (_whiteDepth.Handle is not null
+            && (resource.Name.Contains("SHADOW_MAP", StringComparison.OrdinalIgnoreCase)
+                || resource.Name.Contains("DEPTH_PCF", StringComparison.OrdinalIgnoreCase)))
+            return _whiteDepth;
         return resource.Dimension switch
         {
             5 => _whiteArray,
@@ -4190,6 +4218,7 @@ float4 psmain(VOut i) : SV_Target
         _white.Dispose();
         _whiteArray.Dispose();
         _whiteCube.Dispose();
+        _whiteDepth.Dispose();
         _whiteCubeArray.Dispose();
         _identityRamp.Dispose();
         // M242: the cache owns shader objects that no material releases, so it must be drained here or
