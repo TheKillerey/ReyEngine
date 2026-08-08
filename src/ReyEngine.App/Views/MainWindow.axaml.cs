@@ -386,6 +386,11 @@ public partial class MainWindow : Window
             vm.ShowAddMeshWindow = ShowAddMesh;                           // M123
             vm.ShowWorkshopWindow = ShowWorkshop;
             vm.ShowLightBakeWindow = () => ShowLightBake(vm);             // M158
+            vm.ShowTextureImportWindow = async ivm =>                     // M392
+            {
+                var w = new TextureImportWindow { DataContext = ivm };
+                return await w.ShowDialog<TextureImportResult>(this);
+            };
             // M386: the view owns the D3D11 surface, so the grass-tint swap is routed through here.
             // Guarded on HasScene: with no committed scene there are no materials to rebind, and the
             // next Prepare will pick the tint up from the view-model anyway.

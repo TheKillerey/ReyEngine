@@ -10523,7 +10523,58 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (await ResolveWriteTargetAsync("Import", target) is not { } into) return;
         var files = await Dialogs.OpenFilesAsync("Import files into the project", DialogService.All);
-        if (files.Count > 0) ImportExternalFilesTo(files, into);
+        if (files.Count == 0) return;
+
+        // M392: images get the conversion dialog; everything else is copied as before. Splitting rather
+        // than converting the whole selection means a mixed drop (a .tex, a .bin and three PNGs) still
+        // does the right thing with each part.
+        var images = files.Where(TextureImportViewModel.IsConvertibleImage).ToList();
+        var rest = files.Where(f => !TextureImportViewModel.IsConvertibleImage(f)).ToList();
+
+        if (images.Count > 0 && ShowTextureImportWindow is { } show)
+        {
+            var vm = new TextureImportViewModel(images);
+            switch (await show(vm))
+            {
+                case Views.TextureImportResult.Cancel:
+                    return;                                   // cancels the WHOLE import, images and rest
+                case Views.TextureImportResult.Convert:
+                    WriteConvertedTextures(vm, into);
+                    break;
+                case Views.TextureImportResult.CopyAsIs:
+                    rest.AddRange(images);
+                    break;
+            }
+        }
+        else rest.AddRange(images);                            // no dialog host: behave exactly as before
+
+        if (rest.Count > 0) ImportExternalFilesTo(rest, into);
+    }
+
+    /// <summary>M392: set by the view; shows the import dialog and reports how it closed.</summary>
+    public Func<TextureImportViewModel, Task<Views.TextureImportResult>>? ShowTextureImportWindow;
+
+    private void WriteConvertedTextures(TextureImportViewModel vm, string into)
+    {
+        int done = 0;
+        long bytes = 0;
+        foreach (var (name, data) in vm.Encode())
+        {
+            try
+            {
+                File.WriteAllBytes(Path.Combine(into, name), data);
+                done++; bytes += data.LongLength;
+            }
+            catch (Exception ex) { _log.Warn("Files", $"{name}: {ex.Message}"); }
+        }
+        int skipped = vm.Items.Count - done;
+        if (done > 0)
+        {
+            _log.Success("Files", $"Converted {done} image(s) to .tex ({bytes / 1024.0 / 1024.0:0.##} MB) "
+                                  + $"in {into}" + (skipped > 0 ? $" - {skipped} skipped" : ""));
+            RefreshBrowser();
+        }
+        else _log.Warn("Files", "Nothing was converted - see the rows in the import dialog for why.");
     }
 
     /// <summary>Copy the selected assets out to a folder on disk. Works for read-only Riot references

@@ -1,0 +1,70 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.TextureImportWindow"
+        x:DataType="vm:TextureImportViewModel"
+        Title="Import images as .tex"
+        Width="720" Height="480"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource ReyPanelBrush}">
+
+  <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="16">
+
+    <TextBlock Grid.Row="0" Text="{Binding Title}" FontSize="16" FontWeight="SemiBold"
+               Foreground="{DynamicResource ReyTextBrush}" Margin="0,0,0,10" />
+
+    <!-- one row per picked file; unreadable files stay listed with their reason rather than vanishing -->
+    <Border Grid.Row="1" Background="{DynamicResource ReyCardBrush}" CornerRadius="6" Padding="8">
+      <ScrollViewer>
+        <ItemsControl ItemsSource="{Binding Items}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:TextureImportViewModel+Item">
+              <Grid ColumnDefinitions="*,Auto" Margin="0,3">
+                <StackPanel Grid.Column="0">
+                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                             Foreground="{DynamicResource ReyTextBrush}" />
+                  <TextBlock Text="{Binding Detail}" FontFamily="Consolas" FontSize="11" Opacity="0.75"
+                             TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                </StackPanel>
+                <TextBlock Grid.Column="1" Text="!" FontWeight="Bold" VerticalAlignment="Center"
+                           Foreground="#E06C6C" IsVisible="{Binding !CanConvert}"
+                           ToolTip.Tip="This file could not be decoded and will be skipped." />
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="18" Margin="0,12,0,0">
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Text="Compression" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ReyTextBrush}" />
+        <!-- BC1 and BC3 are the whole real choice set: together they are 99.95% of the 613,542 .tex
+             files Riot ships. See TexEncodeOptions for the survey. -->
+        <ComboBox SelectedIndex="{Binding Format, Mode=TwoWay}" Width="230">
+          <ComboBoxItem>Auto (BC3 if the image has alpha)</ComboBoxItem>
+          <ComboBoxItem>BC1 - no alpha, half the size</ComboBoxItem>
+          <ComboBoxItem>BC3 - graded alpha</ComboBoxItem>
+        </ComboBox>
+      </StackPanel>
+
+      <CheckBox IsChecked="{Binding Mipmaps, Mode=TwoWay}"
+                Foreground="{DynamicResource ReyTextBrush}"
+                ToolTip.Tip="Write the full mip chain down to 1x1. 94% of Riot's BC3 and 87% of its BC1 textures ship mipped, so leave this on unless you know the texture is sampled at one size.">
+        <TextBlock Text="Mipmaps" />
+      </CheckBox>
+    </StackPanel>
+
+    <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,14,0,0">
+      <TextBlock Grid.Column="0" Text="{Binding TotalSummary}" VerticalAlignment="Center"
+                 FontFamily="Consolas" FontSize="11" Opacity="0.85"
+                 Foreground="{DynamicResource ReyTextBrush}" />
+      <Button Grid.Column="1" Content="Cancel" Click="OnCancel" Margin="0,0,8,0" />
+      <Button Grid.Column="2" Content="Copy as-is" Click="OnCopyAsIs" Margin="0,0,8,0"
+              ToolTip.Tip="Import the original files unchanged, without converting them to .tex." />
+      <Button Grid.Column="3" Content="Convert to .tex" Click="OnConvert" Classes="accent"
+              IsEnabled="{Binding HasConvertible}" />
+    </Grid>
+  </Grid>
+</Window>
