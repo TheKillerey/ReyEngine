@@ -359,6 +359,12 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11SamplerState> _iconSampler;
     private readonly ComPtr<ID3D11ShaderResourceView>[] _glyphSrv = new ComPtr<ID3D11ShaderResourceView>[5];
     private ComPtr<ID3D11Buffer> _vb, _ib;
+
+    /// <summary>M381: per-triangle EDGE indices, so the selection highlight can be drawn as GL draws it -
+    /// a wireframe outline rather than a translucent fill. Triangle t occupies [t*6, t*6+6), so a submesh
+    /// index range [Start, Start+Count) maps to wire range [Start*2, Count*2) - the same arithmetic
+    /// ViewportMeshRenderer uses against its _wireEbo, deliberately, so the two cannot drift.</summary>
+    private ComPtr<ID3D11Buffer> _wireIb;
     // M264: a SECOND pair, for geometry that is rewritten every frame. Until now SetMesh and
     // SetDynamicMesh both replaced _vb/_ib, so a scene could hold static geometry or particles but never
     // both - which is why the map viewport could not show particles at all.
@@ -1039,7 +1045,9 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     public int HighlightRangeCount => _highlight.Count;
 
     /// <summary>Colour of the highlight overlay. Alpha is the blend weight over the shaded pixel.</summary>
-    public Vector4 HighlightColor = new(1.0f, 0.55f, 0.15f, 0.45f);
+    /// <summary>M381: GL's outline colour (the Kalista accent ViewportMeshRenderer draws with), opaque.
+    /// Was a translucent orange fill; the two viewports now mark selection identically.</summary>
+    public Vector4 HighlightColor = new(0.21f, 0.89f, 0.76f, 1f);
 
     /// <summary>
     /// <para>Whether the highlight is occluded by geometry in front of it. Defaults OFF, against the
@@ -1461,7 +1469,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// <summary>Draw the highlighted ranges over the finished frame. Returns the number of draws made.</summary>
     private int DrawHighlight(Matrix4x4 view, Matrix4x4 proj)
     {
-        if (_highlight.Count == 0 || _vb.Handle is null || _ib.Handle is null) return 0;
+        if (_highlight.Count == 0 || _vb.Handle is null || _wireIb.Handle is null) return 0;
         if (!EnsureOverlay()) return 0;
 
         // view already carries the X mirror when MirrorX is on (applied at the top of the draw), so the
@@ -1471,7 +1479,9 @@ float4 psmain_tex(VTexOut i) : SV_Target
 
         uint stride = PreviewVertex.SizeInBytes, offset = 0;
         _ctx.IASetVertexBuffers(0, 1, ref _vb, in stride, in offset);
-        _ctx.IASetIndexBuffer(_ib, Format.FormatR32Uint, 0);
+        // M381: the EDGE buffer, drawn as lines - GL's outline, not a translucent fill over the faces.
+        _ctx.IASetIndexBuffer(_wireIb, Format.FormatR32Uint, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyLinelist);
         _ctx.IASetInputLayout(_overlayLayout);
         _ctx.VSSetShader(_overlayVs, null, 0);
         _ctx.PSSetShader(_overlayPs, null, 0);
@@ -1485,9 +1495,12 @@ float4 psmain_tex(VTexOut i) : SV_Target
         foreach (var (start, count) in _highlight)
         {
             if (start + count > _indexCount) continue;   // a stale range from a previous map
-            _ctx.DrawIndexed((uint)count, (uint)start, 0);
+            // Triangle range -> edge range: same mapping ViewportMeshRenderer applies to its _wireEbo.
+            _ctx.DrawIndexed((uint)(count * 2), (uint)(start * 2), 0);
             draws++;
         }
+        // Restore triangles for whatever draws next - the overlay stages that follow assume it.
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
         return draws;
     }
 
@@ -1611,8 +1624,8 @@ float4 psmain_tex(VTexOut i) : SV_Target
         // M264: deliberately does NOT touch the dynamic pair - loading a map must not silently drop
         // the particles drawn on top of it.
         Mesh = mesh;
-        _vb.Dispose(); _ib.Dispose();
-        _vb = default; _ib = default;
+        _vb.Dispose(); _ib.Dispose(); _wireIb.Dispose();
+        _vb = default; _ib = default; _wireIb = default;
 
         var vdesc = new BufferDesc
         {
@@ -1640,6 +1653,35 @@ float4 psmain_tex(VTexOut i) : SV_Target
             _ib = b;
         }
         _indexCount = mesh.Indices.Length;
+
+        // M381: the edge buffer behind the wireframe selection outline. Two indices per triangle edge,
+        // laid out so wire offset == triangle offset * 2 (see _wireIb).
+        int triCount = mesh.Indices.Length / 3;
+        if (triCount > 0)
+        {
+            var wire = new uint[triCount * 6];
+            for (int t = 0; t < triCount; t++)
+            {
+                uint a = mesh.Indices[t * 3], b2 = mesh.Indices[t * 3 + 1], c = mesh.Indices[t * 3 + 2];
+                int o = t * 6;
+                wire[o] = a; wire[o + 1] = b2;
+                wire[o + 2] = b2; wire[o + 3] = c;
+                wire[o + 4] = c; wire[o + 5] = a;
+            }
+            var wdesc = new BufferDesc
+            {
+                ByteWidth = (uint)(wire.Length * 4),
+                Usage = Usage.Immutable, BindFlags = (uint)BindFlag.IndexBuffer,
+            };
+            fixed (uint* p = wire)
+            {
+                var sub = new SubresourceData { PSysMem = p };
+                ComPtr<ID3D11Buffer> b = default;
+                _device.CreateBuffer(in wdesc, in sub, ref b);
+                _wireIb = b;
+            }
+        }
+
         Log($"mesh '{mesh.Name}': {mesh.Vertices.Length:n0} verts, {mesh.TriangleCount:n0} tris");
     }
 
