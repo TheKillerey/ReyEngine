@@ -70,7 +70,9 @@ public sealed partial class TextureImportViewModel : ObservableObject
             string? err = null;
             try
             {
-                img = TextureDecoder.Decode(readBytes(p));
+                // M393: ImageFileDecoder, not TextureDecoder - the latter has no PNG/JPEG/BMP decoder,
+                // which is exactly what this dialog is for.
+                img = Services.ImageFileDecoder.Decode(readBytes(p));
                 err = TexEncodeOptions.Validate(img);
                 if (err is not null) img = null;
             }

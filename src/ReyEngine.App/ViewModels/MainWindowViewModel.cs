@@ -8047,9 +8047,35 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var file = await Dialogs.OpenFileAsync($"Replace {entry.DisplayName}", DialogService.All);
         if (file is null) return;
+
+        // M393: replacing a .tex with a PNG has to CONVERT. Storing the PNG bytes under a .tex path
+        // would produce an override the game cannot read, and nothing downstream would notice - the
+        // override system is byte-agnostic on purpose.
+        string source = file;
+        string? temp = null;
+        if (TextureImportViewModel.IsConvertibleImage(file)
+            && entry.Path.EndsWith(".tex", StringComparison.OrdinalIgnoreCase)
+            && ShowTextureImportWindow is { } showImport)
+        {
+            var ivm = new TextureImportViewModel(new[] { file });
+            var choice = await showImport(ivm);
+            if (choice == Views.TextureImportResult.Cancel) return;
+            if (choice == Views.TextureImportResult.Convert)
+            {
+                var encoded = ivm.Encode();
+                if (encoded.Count == 0)
+                { _log.Warn("Project", $"{Path.GetFileName(file)} could not be decoded - nothing replaced."); return; }
+                temp = Path.Combine(Path.GetTempPath(), $"reyengine_{Guid.NewGuid():N}.tex");
+                File.WriteAllBytes(temp, encoded[0].Bytes);
+                source = temp;
+            }
+            // CopyAsIs falls through with the original file, which is a deliberate escape hatch: a user
+            // replacing a .tex with an already-encoded blob that merely has the wrong extension.
+        }
+
         try
         {
-            var stored = ProjectWorkspace.StoreOverride(Project, entry.PathHash, file);
+            var stored = ProjectWorkspace.StoreOverride(Project, entry.PathHash, source);
             _overrides.Set(new ProjectAssetOverride
             {
                 PathHash = entry.PathHash,
@@ -8061,9 +8087,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project.IsDirty = true;
             UpdateTitle();
             OnSelectedNodeChanged(SelectedNode); // refresh preview/status from override
-            _log.Success("Project", $"Replaced {entry.DisplayName} with {Path.GetFileName(file)}.");
+            _log.Success("Project", $"Replaced {entry.DisplayName} with {Path.GetFileName(file)}"
+                                    + (temp is not null ? " (converted to .tex)." : "."));
         }
         catch (Exception ex) { _log.Error("Project", ex.Message); }
+        finally
+        {
+            // The override was copied into the project by StoreOverride, so the scratch file has served
+            // its purpose either way - including when StoreOverride threw.
+            if (temp is not null) { try { File.Delete(temp); } catch { } }
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanRevertSelected))]
