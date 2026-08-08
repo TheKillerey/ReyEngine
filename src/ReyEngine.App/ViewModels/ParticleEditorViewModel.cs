@@ -319,17 +319,15 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
         var texPath = emitter.Properties.FirstOrDefault(p => p.Name == "texture")?.CurrentText;
         if (!string.IsNullOrWhiteSpace(texPath))
             try { Thumbnail = owner.LoadThumbnail?.Invoke(texPath); } catch { Thumbnail = null; }
-        BuildSchema(emitter.ClassHash, emitter.PresentHashes, owner);
+        Schema = MetaSchemaPanelViewModel.Build(
+            emitter.ClassHash, emitter.PresentHashes, owner.DeclaredProperties, owner.ClassName,
+            emitter.TryAddDefaultProperty, owner.IsEditable);
     }
 
-    /// <summary>M368: the fields this object does NOT carry, and what the game uses instead. Shared with
-    /// the material editor - see <see cref="MetaSchemaPanelViewModel"/> for why it lives there rather than
-    /// being written twice.</summary>
+    /// <summary>M368: the fields this object does NOT carry, and what the game uses instead. M370 makes
+    /// each row writable. Shared with the material editor - see <see cref="MetaSchemaPanelViewModel"/> for
+    /// why it lives there rather than being written twice.</summary>
     public MetaSchemaPanelViewModel Schema { get; private set; } = MetaSchemaPanelViewModel.None;
-
-    private void BuildSchema(uint classHash, IReadOnlyCollection<uint> present, ParticleEditorViewModel owner)
-        => Schema = MetaSchemaPanelViewModel.Build(
-            classHash, present, owner.DeclaredProperties, owner.ClassName);
 
     /// <summary>M188 (3.5): the system-level card. Its fields - particleName, particlePath, flags, transform,
     /// visibilityRadius, the default sounds - had no editor surface at all before this.</summary>
@@ -344,7 +342,9 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
                 system.Properties.Where(p => p.Module == m)
                     .Select(p => new ParticlePropertyRowViewModel(p, owner)).ToList()))
             .ToList();
-        BuildSchema(system.ClassHash, system.PresentHashes, owner);
+        Schema = MetaSchemaPanelViewModel.Build(
+            system.ClassHash, system.PresentHashes, owner.DeclaredProperties, owner.ClassName,
+            system.TryAddDefaultProperty, owner.IsEditable);
     }
 }
 

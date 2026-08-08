@@ -294,7 +294,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         // top-level fields an editor never had a control for - dynamicMaterial, SharedTextureSets,
         // childTechniques, type - and what the game assumes when they are absent.
         Schema = MetaSchemaPanelViewModel.Build(
-            model.ClassHash, model.PresentHashes, owner.DeclaredProperties, owner.ClassName);
+            model.ClassHash, model.PresentHashes, owner.DeclaredProperties, owner.ClassName,
+            model.TryAddDefaultProperty, model.CanAddSchemaField);
     }
 
     /// <summary>M368: fields StaticMaterialDef declares that this material omits, with their defaults.

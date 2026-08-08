@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -72,7 +73,7 @@ public sealed class ParticleDocument
             // it refused to open a bin whose systems were ALL emitterless (70 of 2,674 in the sample).
             systems.Add(new ParticleSystemEntry(o.PathHash, name, path, emitters,
                 ParticleSystemEntry.ReadProperties(o, resolveName),
-                o.ClassHash, o.Properties.Keys.ToList()));
+                o.ClassHash, o.Properties.Keys.ToList()) { SystemObject = o });
         }
         return systems.Count > 0 ? new ParticleDocument(tree, systems, issues) : null;
     }
@@ -89,9 +90,37 @@ public sealed record ParticleSystemEntry(uint PathHash, string Name, string Part
     // the whole point of having a schema rather than only names.
     uint ClassHash = 0, IReadOnlyCollection<uint>? PresentPropertyHashes = null)
 {
-    public bool IsDirty => Emitters.Any(e => e.IsDirty) || Properties.Any(p => p.IsDirty);
+    public bool IsDirty => _propertyAdded || Emitters.Any(e => e.IsDirty) || Properties.Any(p => p.IsDirty);
 
     public IReadOnlyCollection<uint> PresentHashes => PresentPropertyHashes ?? Array.Empty<uint>();
+
+    /// <summary>M370: the live object, so a schema field can be written onto the system itself. Not a
+    /// positional parameter because BinTreeObject is a LeagueToolkit type and this record is public.</summary>
+    internal BinTreeObject? SystemObject { get; init; }
+
+    private readonly StrongBox<bool> _added = new(false);
+    private bool _propertyAdded => _added.Value;
+
+    /// <summary>M370: as <see cref="ParticleEmitterEntry.TryAddDefaultProperty"/>, for the system's own
+    /// fields.</summary>
+    public bool TryAddDefaultProperty(uint nameHash, string fieldType, string? defaultJson, out string? reason)
+    {
+        if (SystemObject is not { } o)
+        {
+            reason = "This system has no editable bin object.";
+            return false;
+        }
+        if (o.Properties.ContainsKey(nameHash))
+        {
+            reason = "This system already carries that field.";
+            return false;
+        }
+        if (!MetaDefaultProperty.TryCreate(nameHash, fieldType, defaultJson, out var prop, out reason))
+            return false;
+        o.Properties[nameHash] = prop!;
+        _added.Value = true;   // a record's own fields are init-only, so the flag lives in a box
+        return true;
+    }
 
     /// <summary>Distinct module names carried by this system's own properties, in panel order.</summary>
     public IReadOnlyList<string> Modules =>
@@ -166,8 +195,32 @@ public sealed class ParticleEmitterEntry
     /// <summary>M368: the property hashes this emitter actually carries. Everything the class declares that
     /// is NOT in here is running on the game's authored default.</summary>
     public IReadOnlyCollection<uint> PresentHashes => EmitterStruct.Properties.Keys.ToList();
+
+    private bool _propertyAdded;
+
+    /// <summary>M370: write a field the emitter omits, at the value the schema says the game already uses.
+    ///
+    /// <para>Adding the DEFAULT specifically is what makes this safe to offer: the bin gains a property but
+    /// the effect is unchanged, so the risky step (materialising the field) and the visible step (then
+    /// editing it) are separated. If the add is wrong, nothing looks different until the user changes the
+    /// value, and Revert still restores the original.</para>
+    ///
+    /// <para>Refuses rather than guesses - see <see cref="MetaDefaultProperty"/>.</para></summary>
+    public bool TryAddDefaultProperty(uint nameHash, string fieldType, string? defaultJson, out string? reason)
+    {
+        if (EmitterStruct.Properties.ContainsKey(nameHash))
+        {
+            reason = "This emitter already carries that field.";
+            return false;
+        }
+        if (!MetaDefaultProperty.TryCreate(nameHash, fieldType, defaultJson, out var prop, out reason))
+            return false;
+        EmitterStruct.Properties[nameHash] = prop!;
+        _propertyAdded = true;
+        return true;
+    }
     private bool _disabledEdited;
-    public bool IsDirty => _disabledEdited || Properties.Any(p => p.IsDirty);
+    public bool IsDirty => _disabledEdited || _propertyAdded || Properties.Any(p => p.IsDirty);
 
     private static readonly uint DisabledHash = HashAlgorithms.Fnv1a("disabled");
 

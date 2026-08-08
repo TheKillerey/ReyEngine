@@ -149,12 +149,21 @@
                               <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:MetaSchemaRowViewModel">
                                   <DockPanel Margin="6,2">
+                                    <!-- M370: write the field at the schema's own default. -->
+                                    <Button DockPanel.Dock="Right" Classes="tool" Content="+" FontSize="9"
+                                            Padding="4,0" Margin="3,0,0,0" MinWidth="0"
+                                            Command="{Binding AddCommand}" IsEnabled="{Binding CanAdd}"
+                                            IsVisible="{Binding !Added}" ToolTip.Tip="{Binding AddTip}" />
+                                    <TextBlock DockPanel.Dock="Right" Text="added" FontSize="8" Opacity="0.6"
+                                               Margin="3,0,0,0" VerticalAlignment="Center"
+                                               IsVisible="{Binding Added}" />
                                     <TextBlock DockPanel.Dock="Right" Text="{Binding DefaultText}" FontSize="9"
-                                               Opacity="0.55" MaxWidth="90" TextTrimming="CharacterEllipsis"
+                                               Opacity="0.55" MaxWidth="80" TextTrimming="CharacterEllipsis"
                                                ToolTip.Tip="{Binding DefaultText}" />
                                     <TextBlock DockPanel.Dock="Left" Text="{Binding TypeName}" FontSize="8"
                                                Opacity="0.4" Margin="0,0,5,0" VerticalAlignment="Center" />
-                                    <TextBlock Text="{Binding Name}" FontSize="10" Opacity="0.7" />
+                                    <TextBlock Text="{Binding Name}" FontSize="10" Opacity="0.7"
+                                               ToolTip.Tip="{Binding Error}" />
                                   </DockPanel>
                                 </DataTemplate>
                               </ItemsControl.ItemTemplate>

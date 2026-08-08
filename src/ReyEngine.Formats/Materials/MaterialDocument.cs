@@ -486,6 +486,41 @@ public sealed class MaterialBinding
     public IReadOnlyCollection<uint> PresentHashes =>
         MaterialObject is { } o ? o.Properties.Keys.ToList() : Array.Empty<uint>();
 
+    private bool _schemaPropertyAdded;
+
+    /// <summary>M370: true once a schema field has been materialised onto this material, so the editor
+    /// knows there is something to save.</summary>
+    public bool HasAddedSchemaProperty => _schemaPropertyAdded;
+
+    /// <summary>M370: whether a schema field can be written here at all. Same structural precondition as
+    /// <see cref="CanEditSwitches"/> - the inline and skin-default bindings have no StaticMaterialDef object
+    /// behind them - but named for this feature so the intent is readable at the call site.</summary>
+    public bool CanAddSchemaField => MaterialObject is not null;
+
+    /// <summary>M370: write a field this material omits, at the value the schema says the game already
+    /// uses. Adding the DEFAULT is what makes it safe to offer - the bin gains a property but nothing
+    /// renders differently, so materialising the field and then changing it stay separate steps.
+    /// Refuses rather than guesses; see <see cref="ReyEngine.Formats.Meta.MetaDefaultProperty"/>.</summary>
+    public bool TryAddDefaultProperty(uint nameHash, string fieldType, string? defaultJson, out string? reason)
+    {
+        if (MaterialObject is not { } obj)
+        {
+            reason = "This binding has no StaticMaterialDef object to write to.";
+            return false;
+        }
+        if (obj.Properties.ContainsKey(nameHash))
+        {
+            reason = "This material already carries that field.";
+            return false;
+        }
+        if (!ReyEngine.Formats.Meta.MetaDefaultProperty.TryCreate(nameHash, fieldType, defaultJson,
+                out var prop, out reason))
+            return false;
+        obj.Properties[nameHash] = prop!;
+        _schemaPropertyAdded = true;
+        return true;
+    }
+
     /// <summary>True when a macro is present AND set to a truthy value ("1"/"true"). Reads the LIVE
     /// entries, not the parse-time snapshot, so an edit is reflected immediately (the viewport
     /// re-derives the profile after every material change).</summary>
@@ -844,7 +879,8 @@ public sealed class MaterialBinding
     public TextureSlot? MatCap => _slots.FirstOrDefault(s => s.IsMatCap);
     public TextureSlot? MatCapMask => _slots.FirstOrDefault(s => s.IsMatCapMask);
 
-    public bool IsDirty => _structurallyEdited || _slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty)
+    public bool IsDirty => _structurallyEdited || _schemaPropertyAdded
+                           || _slots.Any(s => s.IsDirty) || Parameters.Any(p => p.IsDirty)
                            || SwitchEntries.Any(s => s.IsDirty) || AllMacros.Any(m => m.IsDirty);
     private bool _structurallyEdited;
 
