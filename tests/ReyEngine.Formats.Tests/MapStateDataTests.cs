@@ -195,6 +195,46 @@ public class MapStateDataTests
         Assert.Equal("custom/default.tex", st.ResolveGrassTint(st.Skins[0], _ => false).ActivePath);
     }
 
+    // ---- mask vs index (M387) ----
+
+    /// <summary>
+    /// The regression this exists for. ReyEngine's UI holds a MASK (VisibilityLayer.Bit is 1 &lt;&lt; i);
+    /// Riot's BitIndex is an INDEX. M385 compared them directly, which shifted every state by one and
+    /// showed the Infernal tint on Base. The failure is silent — mask 1 IS a valid index — so this pins
+    /// the mapping at both ends rather than just checking one case.
+    /// </summary>
+    [Theory]
+    [InlineData(0, "ASSETS/Maps/Info/Map11/GrassTint_SRX.tex")]           // nothing active -> default
+    [InlineData(1 << 0, "ASSETS/Maps/Info/Map11/GrassTint_SRX.tex")]      // "Base" layer -> still default
+    [InlineData(1 << 1, "ASSETS/Maps/Info/Map11/GrassTint_SRX_Infernal.tex")]  // Fire, BitIndex 1
+    [InlineData(1 << 3, "ASSETS/Maps/Info/Map11/GrassTint_SRX_Ocean.tex")]     // Ocean, BitIndex 3
+    public void MaskResolutionMapsToTheRightState(int mask, string expected)
+    {
+        var st = MapStateData.Parse(RealisticBin());
+        Assert.Equal(expected, st.ResolveGrassTintForMask(st.Skins[0], mask).ActivePath);
+    }
+
+    /// <summary>Base must NOT be an alternate. Mask 1 is bit 0, and no flag definition owns bit 0.</summary>
+    [Fact]
+    public void TheBaseLayerIsNeverAnAlternate()
+    {
+        var st = MapStateData.Parse(RealisticBin());
+        Assert.False(st.ResolveGrassTintForMask(st.Skins[0], 1 << 0).FromAlternate);
+    }
+
+    /// <summary>Passing a mask to the INDEX overload is the bug, and it silently resolves the wrong
+    /// state rather than nothing. Pinned so the two overloads stay visibly different.</summary>
+    [Fact]
+    public void MaskPassedToTheIndexOverloadResolvesTheWrongStateOnPurpose()
+    {
+        var st = MapStateData.Parse(RealisticBin());
+        int infernalMask = 1 << 1;   // 2
+        Assert.EndsWith("Infernal.tex", st.ResolveGrassTintForMask(st.Skins[0], infernalMask).ActivePath);
+        // the same number read as an INDEX is BitIndex 2 = earth = Mountain
+        Assert.Equal(2, infernalMask);
+        Assert.Equal("Mountain", st.FlagByBit(infernalMask)!.PublicName);
+    }
+
     // ---- skin selection (M385) ----
 
     private static BinTreeObject SkinLinked(uint pathHash, string skinName, string container, string? tint)

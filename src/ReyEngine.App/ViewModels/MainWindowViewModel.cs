@@ -7710,8 +7710,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public Formats.MapGeo.GrassTintChoice GrassTintChoice()
     {
         var state = MapState();
-        int activeBit = CurrentPrimaryVisibilityBit;
-        return state.ResolveGrassTint(_mapSkin, bit => bit == activeBit);
+        // M387: CurrentPrimaryVisibilityBit is a MASK (VisibilityLayer.Bit is built as 1 << i and used as
+        // one: `controllerBits & l.Bit`). Riot's MapVisibilityFlagDefinition.BitIndex is an INDEX. M385
+        // compared the two directly, which shifted every state by one position: "Base" (mask 1) matched
+        // BitIndex 1 = Fire and showed the Infernal tint, "Infernal" (mask 2) matched BitIndex 2 = earth
+        // and showed Mountain, and so on. Convert explicitly.
+        return state.ResolveGrassTintForMask(_mapSkin, CurrentPrimaryVisibilityBit);
     }
 
     /// <summary>

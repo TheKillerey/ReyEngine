@@ -205,7 +205,9 @@ public sealed record MapStateData(
     /// own states works with no code change.</para>
     /// </summary>
     /// <param name="skin">The active MapSkin.</param>
-    /// <param name="isBitActive">Is this visibility bit currently on?</param>
+    /// <param name="isBitActive">Is the flag at this BIT INDEX currently on? Note INDEX, not mask — if
+    /// you hold a mask use <see cref="ResolveGrassTintForMask"/> rather than converting at the call site,
+    /// which is what M385 got wrong and shifted every state by one.</param>
     public GrassTintChoice ResolveGrassTint(MapSkinAssets? skin, Func<int, bool> isBitActive)
     {
         if (skin is null) return new GrassTintChoice(null, null, 0, -1, false);
@@ -221,6 +223,17 @@ public sealed record MapStateData(
 
         return new GrassTintChoice(skin.GrassTintTexture, skin.GrassTintTexture, 0, -1, false);
     }
+
+    /// <summary>
+    /// M387: the same resolution from a visibility MASK — the form ReyEngine's UI actually holds, since
+    /// VisibilityLayer.Bit is built as <c>1 &lt;&lt; i</c> and tested with <c>mask &amp; bit</c>.
+    ///
+    /// <para>Exists so callers never hand a mask to the index-taking overload. That mistake is silent:
+    /// mask 1 equals index 1, mask 2 equals index 2, so it resolves a real (wrong) state for every
+    /// selection instead of failing, and shows a plausible tint for a different dragon.</para>
+    /// </summary>
+    public GrassTintChoice ResolveGrassTintForMask(MapSkinAssets? skin, int activeMask)
+        => ResolveGrassTint(skin, i => i >= 0 && i < 32 && (activeMask & (1 << i)) != 0);
 }
 
 /// <summary>What <see cref="MapStateData.ResolveGrassTint"/> decided, with enough context for the map
