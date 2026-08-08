@@ -55,6 +55,10 @@ public static class MetaDefaultProperty
         "Vec2" => nameof(BinTreeVector2),
         "Vec3" => nameof(BinTreeVector3),
         "Vec4" => nameof(BinTreeVector4),
+        // M407: Color is deliberately NOT here even though it is now creatable. This method feeds the
+        // VALIDATOR, and M372 measured that wire-type checking the Color/container/struct families
+        // produces false alarms on correct bins. Being able to CREATE a Color and choosing not to POLICE
+        // one are separate decisions; conflating them would start flagging shipped data.
         _ => null,
     };
 
@@ -62,7 +66,11 @@ public static class MetaDefaultProperty
     public static bool IsSupported(string fieldType) => fieldType switch
     {
         "Bool" or "Flag" or "U8" or "I8" or "U16" or "I16" or "U32" or "I32" or "U64" or "I64"
-            or "F32" or "String" or "Hash" or "Vec2" or "Vec3" or "Vec4" => true,
+            or "F32" or "String" or "Hash" or "Vec2" or "Vec3" or "Vec4"
+            // M407: Color is four floats like Vec4 and every bit as constructible. It was declined only
+            // because it was never listed - 310 declared properties across the meta database are Color,
+            // making it the single largest refused type, and the editor now draws a swatch for them.
+            or "Color" => true,
         _ => false,
     };
 
@@ -131,6 +139,13 @@ public static class MetaDefaultProperty
                 {
                     var f = AsFloats(v, 4);
                     property = new BinTreeVector4(nameHash, new Vector4(f[0], f[1], f[2], f[3]));
+                    break;
+                }
+                case "Color":
+                {
+                    // Same four floats as Vec4, different wire type. Riot writes colours 0..1.
+                    var f = AsFloats(v, 4);
+                    property = new BinTreeColor(nameHash, new LeagueToolkit.Core.Primitives.Color(f[0], f[1], f[2], f[3]));
                     break;
                 }
                 default:

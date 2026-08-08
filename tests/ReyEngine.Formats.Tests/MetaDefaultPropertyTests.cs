@@ -88,7 +88,9 @@ public class MetaDefaultPropertyTests
     [InlineData("Map", "{}")]
     [InlineData("Option", "0.0")]
     [InlineData("Mtx44", "[[1.0,0.0,0.0,0.0]]")]
-    [InlineData("Color", "[1.0,1.0,1.0,1.0]")]
+    // M407: "Color" was here. It is now CREATABLE - four floats, exactly like Vec4, refused only because
+    // it had never been listed. See ColorIsCreatable below. It remains excluded from the VALIDATOR's
+    // wire-type check (MetaDefaultProperty.ExpectedWireType), which is a separate decision.
     public void RefusesTypesThatAreNotSelfContained(string type, string json)
     {
         Assert.False(MetaDefaultProperty.IsSupported(type));
@@ -96,6 +98,26 @@ public class MetaDefaultPropertyTests
         Assert.Null(p);
         Assert.NotNull(reason);
     }
+
+    /// <summary>M407: Color is four floats and every bit as constructible as Vec4. 310 declared
+    /// properties across the meta database are Color, which made it the largest refused type.</summary>
+    [Fact]
+    public void ColorIsCreatable()
+    {
+        Assert.True(MetaDefaultProperty.IsSupported("Color"));
+        Assert.True(MetaDefaultProperty.TryCreate(1, "Color", "[1.0,0.5,0.25,1.0]", out var p, out var reason));
+        Assert.Null(reason);
+        var c = Assert.IsType<LeagueToolkit.Core.Meta.Properties.BinTreeColor>(p);
+        Assert.Equal(1.0f, c.Value.R, 3);
+        Assert.Equal(0.5f, c.Value.G, 3);
+        Assert.Equal(0.25f, c.Value.B, 3);
+    }
+
+    /// <summary>Creatable but NOT wire-type policed: M372 measured that checking the Color/container/
+    /// struct families flags correct bins. Pinned so the two decisions stay separate.</summary>
+    [Fact]
+    public void ColorIsStillNotWireTypeChecked()
+        => Assert.Null(MetaDefaultProperty.ExpectedWireType("Color"));
 
     /// <summary>No default means no measured value, so nothing is written. Inventing a zero here would be
     /// asserting a game behaviour nobody checked.</summary>
