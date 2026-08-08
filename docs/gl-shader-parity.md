@@ -60,6 +60,24 @@ NOTE: all three Winter Rift GlowSign materials author `USE_FLICKER=False`, so on
 does nothing. Honour the switch — do not make GL flicker unconditionally, or GL becomes wrong in the
 other direction.
 
+**VertexDeform wave** — `staticmesh/vertexdeform.vs.dx11`, any of the 24 blobs of 40 that mention
+`WaveAmplitude` (blob 19 was read):
+
+```
+seed  = sin(MESH_CENTER.x + MESH_CENTER.y + MESH_CENTER.z)   // per-bush phase, so foliage is out of step
+wave  = sin(seed + WaveFrequency * TIME.x)
+sway  = wave * WaveAmplitude.xy + WaveOffset.xy              // WaveAmplitude @80, WaveOffset @88
+```
+
+Applied to world position, gated by **`COLOR0.z`** — the vertex colour's blue channel, used as
+`COLOR0.z - 1`, which is what keeps roots planted while tips move. GL must therefore supply vertex
+colours to the mesh program, and `MESH_CENTER` per submesh, neither of which it does today.
+
+**NOT portable:** the same shader then loops 10 entries of a `GrassDisortVS` cbuffer (cb3) with
+`DistControlFactor` / `MinDistance` / `SpreadStrength` — that is units parting the grass as they walk
+through it. There are no units in the editor and no such buffer in GL. Leave it out and say so; do not
+approximate it.
+
 **Emissive** — `env_glowsign.ps.dx11` blob 69, tail:
 
 ```
@@ -76,9 +94,7 @@ o0.w   += Alpha_Offset
    (`scratchpad/readback-a`) rather than by eye. This is the calibration baseline for everything after.
 2. **Emissive glow**, formula above. Biggest visual win per line, and it is additive so it cannot
    regress an unlit surface.
-3. **VertexDeform wave** — disassemble `staticmesh/vertexdeform.vs.dx11` first; the authored params
-   (`WaveFrequency`, `WaveAmplitude`, `WaveOffset`, `DistControlFactor`, `MinDistance`) are already parsed
-   and reaching D3D11, so only the formula is missing.
+3. **VertexDeform wave** — formula RECOVERED (below); implementation not started.
 4. **GlowSign flicker**, formula above, gated on `USE_FLICKER`.
 5. **DynamicEffect** — lowest priority. Measured: its emission needs `EMISSION_ROTATE_ON` and
    `EMISSION_SINGLE_DIRECTION_ON` BOTH set, and all 33 Winter Rift materials author both false, so there
