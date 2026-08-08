@@ -1523,6 +1523,11 @@ void main(){
     /// world rect and changes when the MAP changes, while this changes when the STATE does. Folding them
     /// into one call would re-upload the base on every dragon switch.</para>
     /// </summary>
+    /// <summary>M399: the blend FACTOR only. Cheap - a float, no GPU work - so it is safe to push every
+    /// frame, which a crossfade needs. Kept separate from the upload below because re-uploading a
+    /// megabyte of texture 60 times a second to animate one float stalls the UI thread.</summary>
+    public void SetGrassTintInterp(float interp) => _grassInterp = interp;
+
     public unsafe void SetGrassTintTransition(byte[]? altRgba, int width, int height, float interp)
     {
         if (!_ready) return;

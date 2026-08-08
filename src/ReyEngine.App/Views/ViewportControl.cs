@@ -901,12 +901,16 @@ public sealed class ViewportControl : OpenGlControlBase
         _meshRenderer.SetLightFalloffSoftness((float)LightFalloffSoftness);   // M160
         _meshRenderer.SetLightmapScale((float)LightmapScale);   // M45: MapSunProperties.lightMapColorScale
         _meshRenderer.SetLightmapsEnabled(LightmapsEnabled);    // M69: baked-lightmap on/off toggle
+        // M399: the crossfade factor, every frame and outside the dirty gate. It is one uniform, and it
+        // is the only part of the transition that changes per frame - the two textures do not.
+        _meshRenderer.SetGrassTintInterp(GrassInterp);
         if (_grassTintDirty)   // M78: (re)upload the map's grass-tint texture on the GL thread
         {
             var gti = GrassTintTexture;
             _meshRenderer.SetGrassTintTexture(gti?.Rgba, gti?.Width ?? 0, gti?.Height ?? 0, GrassTintRect);
             // M397: and the transition's incoming tint. Null clears it, which turns the blend off - the
-            // resting state whenever nothing is fading.
+            // resting state whenever nothing is fading. UPLOAD only; the factor is pushed below, every
+            // frame, because it changes every frame and this block does not run every frame.
             var gta = GrassTintAltTexture;
             _meshRenderer.SetGrassTintTransition(gta?.Rgba, gta?.Width ?? 0, gta?.Height ?? 0, GrassInterp);
             _grassTintDirty = false;
@@ -1636,8 +1640,13 @@ public sealed class ViewportControl : OpenGlControlBase
         { RequestNextFrameRendering(); } // M44/M45/M50b/M54/M69/M70: water + lightmap scale + outline + prop idles + lightmap toggle + dynamic lights
         else if (change.Property == DynamicLightsProperty)   // M70: new Light.dat table -> re-upload + re-mark on the GL thread
         { _dynamicLightsDirty = true; _lightMarkersDirty = true; RequestNextFrameRendering(); }
-        else if (change.Property == GrassTintTextureProperty || change.Property == GrassTintRectProperty)   // M78
+        else if (change.Property == GrassTintTextureProperty || change.Property == GrassTintRectProperty
+                 || change.Property == GrassTintAltTextureProperty)   // M78, M399: alt included or it never uploads
         { _grassTintDirty = true; RequestNextFrameRendering(); }
+        // M399: the factor alone needs a redraw, NOT a re-upload. Without this arm it would fall through
+        // to the dirty branch and re-upload both tints 60 times a second, which is what froze the UI.
+        else if (change.Property == GrassInterpProperty)
+        { RequestNextFrameRendering(); }
         else if (change.Property == DynamicLightPositionScaleProperty || change.Property == DynamicLightScaleXProperty
                  || change.Property == DynamicLightScaleZProperty || change.Property == DynamicLightOffsetXProperty
                  || change.Property == DynamicLightOffsetZProperty || change.Property == ShowLightMarkersProperty)
