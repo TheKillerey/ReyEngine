@@ -272,8 +272,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool IsSoundVisible(MapSoundPlacement sound, int? visibilityOverride = null) =>
         MapVisibility.VisibleForMask(visibilityOverride ?? sound.VisibilityFlags, _mapVisibility.Primary, CurrentPrimaryVisibilityBit);
 
+    // M383: ONE gate per placeable category, read by BOTH the marker builders (what is DRAWN) and
+    // SelectAnyFromViewport (what is PICKABLE). They used to be written out separately and had drifted:
+    // picking omitted ShowPropIcons and ShowSoundIcons entirely, so turning those icons off stopped the
+    // markers being drawn while leaving them clickable - an invisible marker would take the click and
+    // select a prop or sound instead of the mesh behind it. Anything pickable must be visible; keeping
+    // the predicate in one place is what stops that pair going out of sync again.
+    private bool CanPickParticles => ShowParticles && MapContent.HasParticles;
+    private bool CanPickProps => ShowPlaceables && ShowPropIcons && MapContent.HasProps;
+    private bool CanPickProbes => ShowPlaceables && MapContent.HasProbes;
+    private bool CanPickSounds => ShowPlaceables && ShowSoundIcons && MapContent.HasSounds;
+    /// <summary>Lights are the odd one out: PointLightViewModel is a plain ObservableObject with no
+    /// per-item eye/disable/delete state, so ShowLightMarkers - the flag that decides whether the glow
+    /// icon is drawn at all - is the only filter available, and picking now honours it.</summary>
+    private bool CanPickLights => ShowDynamicLights && ShowLightMarkers;
+
     private void UpdateParticleMarkers() =>
-        ParticleMarkers = (ShowParticles && MapContent.HasParticles)
+        ParticleMarkers = CanPickParticles
             ? MapContent.AllParticles.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved
                 && IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags)).Select(v => v.CurrentPosition).ToList() : null;
 
@@ -792,11 +807,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private void UpdatePlaceableMarkers()
     {
-        PropMarkers = (ShowPlaceables && ShowPropIcons && MapContent.HasProps) ? MapContent.AllProps
+        PropMarkers = CanPickProps ? MapContent.AllProps
             .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved).Select(p => p.Position).ToList() : null;
-        ProbeMarkers = (ShowPlaceables && MapContent.HasProbes) ? MapContent.Probes
+        ProbeMarkers = CanPickProbes ? MapContent.Probes
             .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved).Select(p => p.Position).ToList() : null;
-        SoundMarkers = (ShowPlaceables && ShowSoundIcons && MapContent.HasSounds)
+        SoundMarkers = CanPickSounds
             ? MapContent.Sounds.Where(s => s.IsEditorVisible && !s.IsDisabled && !s.IsRemoved
                 && IsSoundVisible(s.Sound, s.EffectiveVisibilityFlags)).Select(s => s.Position).ToList() : null;   // M55
     }
@@ -5647,21 +5662,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             float d = (toC - rayDir * t).Length();                          // perpendicular distance
             if (d <= radius) { bestT = t; bestNode = node; }
         }
-        if (ShowParticles && MapContent.HasParticles && !additive)
+        // M383: these gates are the SAME properties the marker builders use, so nothing invisible can
+        // take a click. See CanPickProps/CanPickSounds for what had drifted.
+        if (CanPickParticles && !additive)
             foreach (var p in MapContent.AllParticles.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved
                 && IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags))) Test(p, p.CurrentPosition);
-        if (ShowPlaceables && MapContent.HasProps && !additive)
+        if (CanPickProps && !additive)
             foreach (var p in MapContent.AllProps.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) Test(p, p.Position);
-        if (ShowPlaceables && MapContent.HasProbes && !additive)
+        if (CanPickProbes && !additive)
             foreach (var p in MapContent.Probes.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) Test(p, p.Position);
-        if (ShowPlaceables && MapContent.HasSounds && !additive)
+        if (CanPickSounds && !additive)
             foreach (var s in MapContent.Sounds.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved
                 && IsSoundVisible(v.Sound, v.EffectiveVisibilityFlags))) Test(s, s.Position);   // M55/M60
         // M153: point lights pick like any other placement, so you can click one in the viewport.
-        if (ShowDynamicLights && !additive)
+        if (CanPickLights && !additive)
             foreach (var l in MapContent.Lights) Test(l, l.Position);
 
         // nearest placeable beats a farther mesh face (icons draw on top, so this matches what you see)
+        if (PickDiagnostics)
+            _log.Info("Pick", $"  gates: particles={CanPickParticles} props={CanPickProps} "
+                              + $"probes={CanPickProbes} sounds={CanPickSounds} lights={CanPickLights}");
         if (PickDiagnostics)
             _log.Info("Pick", $"  placeables: radius={radius:0.#} best={(bestNode?.GetType().Name ?? "none")} "
                               + $"bestT={(bestT >= float.MaxValue ? "-" : bestT.ToString("0.#"))} "
