@@ -7728,38 +7728,98 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <para>Cheap when nothing changed: the path is compared first and the texture is only reloaded when
     /// it actually differs, so this is safe to call from the visibility hook.</para>
     /// </summary>
+    /// <summary>M396: the running environment crossfade. Renderer-agnostic; both viewports read
+    /// <see cref="GrassInterp"/> and the same pair of paths.</summary>
+    private readonly Formats.MapGeo.MapStateTransition _grassTransition = new();
+    private readonly System.Diagnostics.Stopwatch _grassClock = System.Diagnostics.Stopwatch.StartNew();
+    private double _grassLastTick;
+
+    /// <summary>GRASS_INTERP for this frame: 0 = the state being left, 1 = the state being entered.</summary>
+    public float GrassInterp => _grassTransition.Interp;
+
     private void RefreshGrassTint()
     {
         if (_currentMap is null) return;
-        string? path = FindGrassTintTexturePath();
-        if (string.Equals(path, _grassTintPathInUse, StringComparison.OrdinalIgnoreCase)) return;
 
-        _grassTintPathInUse = path;
-        var tex = path is not null ? LoadTextureByPath(path) : null;
-        CurrentGrassTint = tex;   // OpenGL rebinds from this
+        var choice = GrassTintChoice();
+        string? path = choice.ActivePath is not null ? FindGrassTintTexturePath() : null;
 
-        // M386: D3D11 binds the tint into each material at scene-prepare time, so publishing the image is
-        // not enough - the committed materials keep the old SRV until something replaces it. Swap it in
-        // place rather than re-preparing the scene.
-        int rebound = tex is not null && path is not null
-            ? Dx11RebindGrassTint?.Invoke(path, tex) ?? 0
-            : 0;
+        // Riot authors TransitionTime on the state being ENTERED. Base is not a named state - its flag
+        // definition carries no BitIndex, PublicName or TransitionTime - so returning to base is INSTANT.
+        // That is what the data says, and it matches the game, which never leaves a dragon state
+        // mid-match; the return trip only exists in an editor.
+        float? duration = choice.FromAlternate ? MapState().TransitionTimeForBit(choice.BitIndex) : null;
 
-        var c = GrassTintChoice();
+        if (!_grassTransition.Begin(path, duration)) return;
+        _grassLastTick = _grassClock.Elapsed.TotalSeconds;
+        ApplyGrassTransition();
+
         _log.Info("GrassTint", path is null
             ? "no grass tint resolved for this state."
-            : $"{c.SourceLabel}: {path}"
-              + (c.FromAlternate ? $" (visibility bit {c.BitIndex})" : "")
-              + (rebound > 0 ? $" — {rebound} D3D11 slot(s) rebound" : ""));
+            : $"{choice.SourceLabel}: {path}"
+              + (choice.FromAlternate ? $" (visibility bit {choice.BitIndex})" : "")
+              + (_grassTransition.IsRunning
+                  ? $" - crossfading over {_grassTransition.Duration:0.##}s"
+                  : " - instant (no TransitionTime authored)"));
         OnPropertyChanged(nameof(GrassTintStatus));
     }
 
-    private string? _grassTintPathInUse;
+    /// <summary>Push the transition's CURRENT pair to both renderers. Called when a fade starts and
+    /// again when it lands, not per frame - only the interp factor changes in between.</summary>
+    private void ApplyGrassTransition()
+    {
+        var from = _grassTransition.FromPath;
+        var to = _grassTransition.ToPath;
 
-    /// <summary>M386: set by the view (which owns the D3D11 surface) — swaps the grass tint on the live
-    /// scene and returns how many slot bindings changed. Null when D3D11 is not up, which is the normal
-    /// case under OpenGL and not an error.</summary>
-    public Func<string, TextureImage, int>? Dx11RebindGrassTint;
+        // OpenGL still samples ONE tint (its second sampler is not built yet), so give it the end it is
+        // nearest. That degrades to the right texture at both ends of a fade rather than being wrong.
+        var nearest = _grassTransition.NearestPath;
+        CurrentGrassTint = nearest is not null ? LoadTextureByPath(nearest) : null;
+
+        var fromTex = from is not null ? LoadTextureByPath(from) : null;
+        var toTex = to is not null ? LoadTextureByPath(to) : null;
+        // Either end missing means there is nothing to blend between; fall back to whichever exists so a
+        // half-resolved state still shows a tint instead of none.
+        fromTex ??= toTex;
+        toTex ??= fromTex;
+        if (from is null || to is null || fromTex is null || toTex is null) return;
+
+        Dx11RebindGrassTintPair?.Invoke(from, fromTex, to, toTex);
+    }
+
+    /// <summary>M396: advance the crossfade. Called from the per-frame path of whichever viewport is
+    /// presenting; returns true while it is still moving, so the host knows to keep asking for frames.</summary>
+    public bool TickGrassTransition()
+    {
+        double now = _grassClock.Elapsed.TotalSeconds;
+        float dt = (float)(now - _grassLastTick);
+        _grassLastTick = now;
+
+        if (!_grassTransition.IsRunning) return false;
+
+        _grassTransition.Advance(dt);
+        OnPropertyChanged(nameof(GrassInterp));
+
+        if (!_grassTransition.IsRunning)
+        {
+            // Landed: collapse so the next fade starts from a clean pair, and rebind both slots to the
+            // settled texture. Without this the alternate slot would keep the old incoming texture and
+            // the next transition would blend from the wrong end.
+            _grassTransition.Settle();
+            ApplyGrassTransition();
+            OnPropertyChanged(nameof(GrassInterp));
+            OnPropertyChanged(nameof(GrassTintStatus));
+            _log.Info("GrassTint", $"transition settled on {_grassTransition.SettledPath}.");
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>M396: set by the view (which owns the D3D11 surface) — binds the two grass-tint slots to
+    /// the transition's from/to textures. Null when D3D11 is not up, which is the normal case under
+    /// OpenGL and not an error. Supersedes M386's single-texture callback, because a crossfade needs the
+    /// two slots holding DIFFERENT textures.</summary>
+    public Func<string, TextureImage, string, TextureImage, int>? Dx11RebindGrassTintPair;
 
     /// <summary>M385: item 7 — the grass tint state, for the existing map/visibility inspector rather
     /// than a standalone debug window.</summary>

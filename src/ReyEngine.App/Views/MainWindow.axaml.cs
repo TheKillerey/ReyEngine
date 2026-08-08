@@ -188,6 +188,10 @@ public partial class MainWindow : Window
         _dx11.LightmapScale = vm.CurrentLightmapScale;
         _dx11.AnimateTime = vm.AnimationsPlaying;
         _dx11.Wireframe = vm.ShowWireframe;
+        // M396: advance the environment crossfade and hand the factor to the shaders. Ticked here rather
+        // than on a timer because this IS the frame - a transition can only advance as fast as it draws.
+        if (vm.TickGrassTransition()) Viewport.RequestFrame();
+        _dx11.GrassInterp = vm.GrassInterp;
         // M269: pushed every frame rather than on a selection-changed event - the selection, the map and
         // the scene rebuild all move independently, and one of the three going stale is exactly how a
         // highlight ends up pointing at geometry that is no longer there.
@@ -394,10 +398,11 @@ public partial class MainWindow : Window
             // M386: the view owns the D3D11 surface, so the grass-tint swap is routed through here.
             // Guarded on HasScene: with no committed scene there are no materials to rebind, and the
             // next Prepare will pick the tint up from the view-model anyway.
-            vm.Dx11RebindGrassTint = (path, tex) =>
+            vm.Dx11RebindGrassTintPair = (fromPath, fromTex, toPath, toTex) =>
                 _dx11 is { HasScene: true } d
-                    ? ReyEngine.App.Services.Dx11SceneBuilder.RebindGrassTint(
-                        d.Renderer, path, tex.Rgba, tex.Width, tex.Height)
+                    ? ReyEngine.App.Services.Dx11SceneBuilder.RebindGrassTintPair(d.Renderer,
+                        fromPath, fromTex.Rgba, fromTex.Width, fromTex.Height,
+                        toPath, toTex.Rgba, toTex.Width, toTex.Height)
                     : 0;
             vm.ShowLightingWindow = () => ShowLighting(vm);               // M169
             vm.ShowTextureRecolorWindow = () => ShowTextureRecolor(vm);   // M171

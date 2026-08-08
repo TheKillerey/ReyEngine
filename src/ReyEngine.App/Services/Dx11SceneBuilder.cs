@@ -622,24 +622,6 @@ public static class Dx11SceneBuilder
     };
 
     /// <summary>
-    /// M386: swap the grass tint on an ALREADY COMMITTED scene, without re-preparing it.
-    ///
-    /// <para>The tint is part of the map STATE, not the map build: switching dragon selects a different
-    /// mAlternateAssets entry. Re-preparing to change one texture costs a full rebuild of every material
-    /// (456 of them on base_srx), which is why the D3D11 viewport used to keep the tint it happened to be
-    /// built with while OpenGL followed the state.</para>
-    ///
-    /// <para>Returns how many slot bindings were replaced, so the caller can log a number rather than
-    /// assert success. Zero means no committed material has a tint slot — which is the same thing
-    /// GrassTintNoSlot reports at build time, not a failure to rebind.</para>
-    /// </summary>
-    public static int RebindGrassTint(ShaderPreviewRenderer renderer, string poolKey,
-        byte[] rgba, int width, int height)
-        // The SRV swap itself lives in the renderer, which owns PreviewMaterial.Textures; the SLOT NAMES
-        // stay here with the rest of the binding contract.
-        => renderer.RebindSharedTexture(GrassTintSlots, poolKey, rgba, width, height);
-
-    /// <summary>
     /// M395: bind the two grass-tint slots to DIFFERENT textures, which is what a state transition needs.
     ///
     /// <para>GrassTintSlots[0] is GRASS_TINT_MAP - the state being LEFT - and [1] is

@@ -89,6 +89,10 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// difference that is a UI setting rather than a rendering one.</summary>
     public bool FogEnabled { get; set; }
 
+    /// <summary>M396: GRASS_INTERP for this frame, pushed from the view-model's running transition.
+    /// 0 when nothing is fading, which is the correct resting value.</summary>
+    public float GrassInterp { get; set; }
+
     /// <summary>Mirrors the GL viewport's <c>LightmapScale</c> (<c>CurrentLightmapScale</c>).</summary>
     public double LightmapScale { get; set; } = 1.0;
 
@@ -318,6 +322,11 @@ public sealed class Dx11ViewportSurface : IDisposable
             MapSunColor = MapSun?.SunColor,
             MapSunDirection = MapSun?.SunDirection,
             MapLightMapScale = (float)LightmapScale,
+
+            // M396: the environment crossfade. Riot's shaders do
+            // lerp(GRASS_TINT_MAP, GRASS_TINT_MAP_ALTERNATE, GRASS_INTERP) themselves, so passing this
+            // through is the whole of the transition here.
+            GrassInterp = GrassInterp,
 
             // RAW fogStartAndEnd, not TryGetFogRange's normalised (near, far). Riot ships these negative
             // and reversed and the shader consumes them unmodified - the GL path normalises only because

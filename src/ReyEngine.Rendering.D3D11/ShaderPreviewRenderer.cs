@@ -1292,22 +1292,6 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         return rebound;
     }
 
-    public int RebindSharedTexture(IReadOnlyList<string> targets, string poolKey,
-        byte[] rgba, int width, int height)
-    {
-        int rebound = 0;
-        foreach (var mat in Materials)
-            foreach (var t in targets)
-            {
-                if (!mat.Textures.ContainsKey(t)) continue;
-                // Pooled first: cycling dragon states revisits the same handful of textures, so an
-                // already-uploaded tint costs no GPU allocation to switch back to.
-                if (!TryBindCached(mat, t, poolKey)) SetTexture(mat, t, poolKey, rgba, width, height);
-                rebound++;
-            }
-        return rebound;
-    }
-
     public void SetHighlightRanges(IReadOnlyList<(int Start, int Count)>? ranges)
     {
         if (ReferenceEquals(_highlightSource, ranges)) return;
