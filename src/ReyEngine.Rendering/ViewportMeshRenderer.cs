@@ -27,6 +27,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mNvrFourBlend;                                    // M89: NVR ground four-blend flag
     private int _mCompositeGround;                                 // M142: Map10 baked height-blend ground (2nd-UV composite)
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
+    private int _mNoBakedLighting;                                 // M375: surface opts out of ALL lighting
     private int _mAlphaMode;                                       // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
     private int _mTint;                                            // M34: TintColor for untextured effects / authored decals
     private int _mTintTextured;
@@ -307,6 +308,7 @@ uniform int uNvrFourBlend;     // M89: 1 = CREATE_GROUND_MOSAIC_FOUR_BLEND (blen
 uniform int uCompositeGround;  // M142: 1 = Map10 baked height-blend ground atlas, sampled by the 2nd UV
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
 uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
+uniform int uNoBakedLighting;  // M375: 1 when the material carries NO_BAKED_LIGHTING
 uniform int uAlphaMode;        // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
 uniform float uAlphaCutoff;    // M34: alpha-test threshold for cutout mode (from AlphaTestValue; default 0.35)
 uniform vec2 uClampUv;         // M34: per-axis UV clamp (1 = clamp to [0,1] for decals; 0 = tile)
@@ -576,7 +578,21 @@ void main() {
     // BakedLight UV (alpha decals, effects, props) is systematically darker than the encoded baked ground
     // it sits on - the M64/M65 encode only covered the lightmap path, leaving decals too dark.
     // M142: the composite ground atlas is already fully baked (lighting + AO) — use it as-is.
-    vec3 col = (uCompositeGround == 1) ? base : base * bakedLightColour(uSkyLight + uSunColor * d);
+    // M375: a NO_BAKED_LIGHTING surface gets NO lighting term at all - not this fallback either.
+    //
+    // Measured, not assumed: in Riot's own shaders the NO_BAKED_LIGHTING permutations mark
+    // SUN_LIGHT_COLOR as [unused] (env_glowsign ps blob 69, srx_dynamiceffect blob 209), while the 100
+    // baked permutations of the same shader DO use it. So the sun term belongs to the baked path, and
+    // applying it here was inventing light Riot never applies. A framebuffer readback measured D3D11
+    // drawing these surfaces at 1.000x their diffuse texel while this term put GL at up to 1.37x - which
+    // is why D3D11 was repeatedly reported as too dark when it was in fact the accurate one.
+    //
+    // Scoped to NO_BAKED_LIGHTING deliberately. Champions, props and anything else without a lightmap
+    // still get the fallback, because their real shaders DO carry a diffuse term - removing it there
+    // would flatten the model preview.
+    vec3 col = (uCompositeGround == 1 || uNoBakedLighting == 1)
+        ? base
+        : base * bakedLightColour(uSkyLight + uSunColor * d);
 
     // Baked lightmap: when the mesh carries a real BakedLight atlas, that IS the lighting for this
     // surface, so it replaces the fake directional term (finalColor = diffuse * lightmap * scale). The
@@ -775,6 +791,7 @@ void main() { FragColor = uColor; }";
         _mCompositeGround = gl.GetUniformLocation(_meshProgram, "uCompositeGround");
         _mLightmap = gl.GetUniformLocation(_meshProgram, "uLightmap");
         _mHasLightmap = gl.GetUniformLocation(_meshProgram, "uHasLightmap");
+        _mNoBakedLighting = gl.GetUniformLocation(_meshProgram, "uNoBakedLighting");
         _mAlphaMode = gl.GetUniformLocation(_meshProgram, "uAlphaMode");
         _mTint = gl.GetUniformLocation(_meshProgram, "uTint");
         _mTintTextured = gl.GetUniformLocation(_meshProgram, "uTintTextured");
@@ -2170,6 +2187,10 @@ void main(){
                     // M150: NO_BAKED_LIGHTING makes the surface ignore the baked lightmap entirely.
                     _gl.Uniform1(_mHasLightmap,
                         (_lightmapsEnabled && s.Lightmap != 0 && _hasLightmapUv && !s.NoBakedLighting) ? 1 : 0);
+                    // M375: pushed SEPARATELY from uHasLightmap. That flag folds three different reasons
+                    // into one zero - no atlas, no UV, or opted out - and the shader needs the last one
+                    // apart: only NO_BAKED_LIGHTING means no lighting term at all.
+                    _gl.Uniform1(_mNoBakedLighting, s.NoBakedLighting ? 1 : 0);
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
                     haveBindings = true;
 
@@ -2258,6 +2279,7 @@ void main(){
             _gl.Uniform1(_mEmissive, 3); _gl.Uniform1(_mMatCap, 4); _gl.Uniform1(_mMatCapMask, 5); _gl.Uniform1(_mLightmap, 6);
             _gl.Uniform1(_mHasMask, 0); _gl.Uniform1(_mHasGradient, 0); _gl.Uniform1(_mHasEmissive, 0);
             _gl.Uniform1(_mHasMatCap, 0); _gl.Uniform1(_mHasMatCapMask, 0); _gl.Uniform1(_mHasLightmap, 0);
+            _gl.Uniform1(_mNoBakedLighting, 0);   // M375: props are lit; never leak a stale opt-out
             _gl.Uniform1(_mHasGrassTint, 0);   // M78: props never grass-tint
             _gl.Uniform1(_mUsesRim, 0); _gl.Uniform1(_mUsesSpec, 0);
             _gl.Uniform1(_mUsesBakedPaint, 0);
