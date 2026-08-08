@@ -1815,14 +1815,35 @@ void main(){
         else // move / scale: an arm from the pivot
         {
             var tip = pivot + axis * arm;
-            Seg(pivot, tip);
             if (mode == 2) // scale: a small box at the tip
             {
+                Seg(pivot, tip);
                 float s = arm * 0.06f;
                 Vector3 C(int sx, int sy, int sz) => tip + axis * (sz * s) + u * (sx * s) + w * (sy * s);
                 var c = new[] { C(-1, -1, -1), C(1, -1, -1), C(1, 1, -1), C(-1, 1, -1), C(-1, -1, 1), C(1, -1, 1), C(1, 1, 1), C(-1, 1, 1) };
                 int[,] e = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
                 for (int i = 0; i < 12; i++) Seg(c[e[i, 0]], c[e[i, 1]]);
+            }
+            else // M380: move — a cone arrowhead at the tip, the way every other editor draws translate.
+            {
+                // The shaft stops at the cone base rather than running to the tip, so the line is not
+                // drawn through the inside of the (wireframe, therefore see-through) head.
+                float headLen = arm * 0.16f, headR = arm * 0.05f;
+                var baseC = tip - axis * headLen;
+                Seg(pivot, baseC);
+
+                // Rim + slant per step. The rim closes because step N lands back on the step-0 point,
+                // which is also where that point gets its slant drawn - so all N points get exactly one.
+                const int N = 12;
+                var prev = baseC + u * headR;
+                for (int i = 1; i <= N; i++)
+                {
+                    float t = i / (float)N * MathF.Tau;
+                    var p = baseC + (u * MathF.Cos(t) + w * MathF.Sin(t)) * headR;
+                    Seg(prev, p);
+                    Seg(p, tip);
+                    prev = p;
+                }
             }
         }
         return v.ToArray();
