@@ -290,7 +290,16 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         // M351j: seed the editable UV fields from the parse-time profile
         UvScaleText = FmtVec2(model.Profile.UvScale);
         UvOffsetText = FmtVec2(model.Profile.UvOffset);
+        // M368: the same schema panel the particle editor shows. On a StaticMaterialDef this surfaces the
+        // top-level fields an editor never had a control for - dynamicMaterial, SharedTextureSets,
+        // childTechniques, type - and what the game assumes when they are absent.
+        Schema = MetaSchemaPanelViewModel.Build(
+            model.ClassHash, model.PresentHashes, owner.DeclaredProperties, owner.ClassName);
     }
+
+    /// <summary>M368: fields StaticMaterialDef declares that this material omits, with their defaults.
+    /// Empty (and hidden) when the meta database was never synced.</summary>
+    public MetaSchemaPanelViewModel Schema { get; } = MetaSchemaPanelViewModel.None;
 
     public string Name => Model.Name;
     public string ShaderName => Model.RenderShader ?? Model.ShaderName;
@@ -1333,6 +1342,13 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     // Wired by MainWindowViewModel.
     public Func<string, bool>? TextureExists { get; set; }
     public Func<string, Bitmap?>? LoadThumbnail { get; set; }
+
+    /// <summary>M368: class hash -> every property the class DECLARES, from the LeagueToolkit meta
+    /// database. Null when it was never synced, in which case the schema panel does not appear at all.</summary>
+    public Func<uint, IReadOnlyList<ReyEngine.Core.Meta.MetaProperty>>? DeclaredProperties { get; set; }
+
+    /// <summary>M368: class hash -> its resolved name.</summary>
+    public Func<uint, string?>? ClassName { get; set; }
 
     /// <summary>M351k: raw RGBA decode for the material ball (the Bitmap variant can't be sampled).</summary>
     public Func<string, TextureImage?>? LoadTextureRaw { get; set; }

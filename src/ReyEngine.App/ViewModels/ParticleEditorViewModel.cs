@@ -322,49 +322,14 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
         BuildSchema(emitter.ClassHash, emitter.PresentHashes, owner);
     }
 
-    /// <summary>M368: the fields this object does NOT carry, and what the game uses instead.
-    ///
-    /// <para>Until now the editor could only show what a file happened to contain, which made an unset
-    /// field indistinguishable from a field that does not exist. With the meta-class schema the difference
-    /// is visible: VfxEmitterDefinitionData declares 135 properties and 107 of them have an authored
-    /// default, so "absent" almost never means zero - it means the value listed here. That was the exact
-    /// ambiguity the VFX census kept running into.</para>
-    ///
-    /// <para>Read-only on purpose. Showing what a field defaults to is safe; ADDING a property to a live
-    /// bin is a write path with its own failure modes and belongs in its own change.</para></summary>
+    /// <summary>M368: the fields this object does NOT carry, and what the game uses instead. Shared with
+    /// the material editor - see <see cref="MetaSchemaPanelViewModel"/> for why it lives there rather than
+    /// being written twice.</summary>
+    public MetaSchemaPanelViewModel Schema { get; private set; } = MetaSchemaPanelViewModel.None;
+
     private void BuildSchema(uint classHash, IReadOnlyCollection<uint> present, ParticleEditorViewModel owner)
-    {
-        if (classHash == 0 || owner.DeclaredProperties is null) return;
-        IReadOnlyList<ReyEngine.Core.Meta.MetaProperty> declared;
-        try { declared = owner.DeclaredProperties(classHash); }
-        catch { return; }
-        if (declared.Count == 0) return;
-
-        ClassDisplayName = owner.ClassName?.Invoke(classHash) ?? $"0x{classHash:x8}";
-        var seen = present as HashSet<uint> ?? new HashSet<uint>(present);
-        var absent = declared.Where(d => !seen.Contains(d.Hash))
-            .Select(d => new ParticleSchemaRowViewModel(d))
-            .ToList();
-
-        DeclaredCount = declared.Count;
-        PresentCount = declared.Count - absent.Count;
-        UnsetRows = absent;
-        HasSchema = true;
-    }
-
-    /// <summary>M368: the resolved class name, so a card headed "0x45cd899f" now reads
-    /// "VfxSystemDefinitionData".</summary>
-    public string? ClassDisplayName { get; private set; }
-    public bool HasSchema { get; private set; }
-    public int DeclaredCount { get; private set; }
-    public int PresentCount { get; private set; }
-    public IReadOnlyList<ParticleSchemaRowViewModel> UnsetRows { get; private set; }
-        = Array.Empty<ParticleSchemaRowViewModel>();
-
-    /// <summary>"42 of 135 fields authored — 93 on defaults".</summary>
-    public string SchemaSummary => HasSchema
-        ? $"{PresentCount} of {DeclaredCount} fields authored — {UnsetRows.Count} on defaults"
-        : "";
+        => Schema = MetaSchemaPanelViewModel.Build(
+            classHash, present, owner.DeclaredProperties, owner.ClassName);
 
     /// <summary>M188 (3.5): the system-level card. Its fields - particleName, particlePath, flags, transform,
     /// visibilityRadius, the default sounds - had no editor surface at all before this.</summary>
@@ -383,25 +348,6 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
     }
 }
 
-/// <summary>M368: one property the class declares but this object does not carry. Read-only: it reports
-/// what the game falls back to, it does not add the field.</summary>
-public sealed class ParticleSchemaRowViewModel
-{
-    public ParticleSchemaRowViewModel(ReyEngine.Core.Meta.MetaProperty p)
-    {
-        Name = p.HasName ? p.Name : $"0x{p.Hash:x8}";
-        TypeName = p.KeyType.Length > 0 ? $"{p.FieldType}<{p.KeyType}>" : p.FieldType;
-        // Raw JSON straight from the dump. Deliberately not reformatted into the editor's own value syntax:
-        // that would be a second, lossy type system over every bin type, and this is a reference display.
-        DefaultText = p.Default ?? "(no default)";
-        HasDefault = p.Default is not null;
-    }
-
-    public string Name { get; }
-    public string TypeName { get; }
-    public string DefaultText { get; }
-    public bool HasDefault { get; }
-}
 
 /// <summary>M190 (3.6): one editable curve key - its time and its 1..4 value components.</summary>
 public sealed partial class ParticleCurveKeyViewModel : ObservableObject

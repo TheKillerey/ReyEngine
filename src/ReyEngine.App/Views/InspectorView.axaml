@@ -538,6 +538,38 @@
                                     </ItemsControl>
                                   </StackPanel>
                         </StackPanel>
+                      <!-- M368: what StaticMaterialDef declares that this material omits, and the value the
+                           game falls back to. Same shared panel the Particle Editor shows. Collapsed by
+                           default, and hidden entirely when the meta-class database was never synced. -->
+                      <Expander IsExpanded="False" FontSize="11" Margin="0,2,0,0"
+                                IsVisible="{Binding Schema.HasSchema}">
+                        <Expander.Header>
+                          <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="UNSET FIELDS" />
+                            <TextBlock Text="{Binding Schema.Summary}" FontSize="9" Opacity="0.6" />
+                          </StackPanel>
+                        </Expander.Header>
+                        <StackPanel Spacing="2" Margin="0,4,0,0">
+                          <TextBlock Text="{Binding Schema.ClassDisplayName}" FontSize="9" Opacity="0.5"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="Declared by the class but absent here — the game uses the default shown."
+                                     FontSize="9" Opacity="0.45" TextWrapping="Wrap" Margin="0,0,0,3" />
+                          <ItemsControl ItemsSource="{Binding Schema.UnsetRows}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="vm:MetaSchemaRowViewModel">
+                                <DockPanel Margin="0,1">
+                                  <TextBlock DockPanel.Dock="Right" Text="{Binding DefaultText}" FontSize="9"
+                                             Opacity="0.55" MaxWidth="120" TextTrimming="CharacterEllipsis"
+                                             ToolTip.Tip="{Binding DefaultText}" />
+                                  <TextBlock DockPanel.Dock="Left" Text="{Binding TypeName}" FontSize="8"
+                                             Opacity="0.4" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                  <TextBlock Text="{Binding Name}" FontSize="10" Opacity="0.75" />
+                                </DockPanel>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+                      </Expander>
                       <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
                         <Expander.Header><TextBlock Classes="cardTitle" Text="ADVANCED" /></Expander.Header>
                         <StackPanel Spacing="3" Margin="0,4,0,0">

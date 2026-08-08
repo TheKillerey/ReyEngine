@@ -476,6 +476,16 @@ public sealed class MaterialBinding
     /// when the user adds the first macro, keeping untouched documents byte-exact.</summary>
     internal BinTreeObject? MaterialObject { get; init; }
 
+    /// <summary>M368: this material's own class hash (StaticMaterialDef in practice), for looking the
+    /// declared schema up in the meta-class database. 0 for the inline/skin-default bindings, which have no
+    /// StaticMaterialDef object behind them.</summary>
+    public uint ClassHash => MaterialObject?.ClassHash ?? 0;
+
+    /// <summary>M368: the property hashes this material actually carries. Anything the class declares that
+    /// is NOT in here is running on the game's authored default.</summary>
+    public IReadOnlyCollection<uint> PresentHashes =>
+        MaterialObject is { } o ? o.Properties.Keys.ToList() : Array.Empty<uint>();
+
     /// <summary>True when a macro is present AND set to a truthy value ("1"/"true"). Reads the LIVE
     /// entries, not the parse-time snapshot, so an edit is reflected immediately (the viewport
     /// re-derives the profile after every material change).</summary>

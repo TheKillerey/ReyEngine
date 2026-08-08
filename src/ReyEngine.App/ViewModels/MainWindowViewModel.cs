@@ -3657,6 +3657,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Inspector.CopyHandler = Dialogs.CopyAsync;   // M351c: copy button beside the asset path
         MaterialEditor.TextureExists = TextureExistsByPath;
         MaterialEditor.LoadThumbnail = LoadThumbnailByPath;
+        // M368: the same schema source the particle editor uses, so both panels agree by construction.
+        MaterialEditor.DeclaredProperties = h => Meta.PropertiesOf(h);
+        MaterialEditor.ClassName = h => Meta.TryGetName(h, out var n) ? n : null;
         MaterialEditor.LoadTextureRaw = LoadTextureByPath;   // M351k: the material ball samples raw RGBA
         MaterialEditor.OpenTexture = OpenTextureByPath;
         MaterialEditor.ReplaceTextureAsset = ReplaceTextureForSlot;
