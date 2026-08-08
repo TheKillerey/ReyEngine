@@ -593,11 +593,17 @@ public sealed class ViewportControl : OpenGlControlBase
         return Vector2.Distance(p, a + ab * t);
     }
 
+    /// <summary>Frame the camera on the scene AND redraw - what the Frame button does. The name reads
+    /// like "request a frame of animation"; it is not. Use <see cref="RequestRedraw"/> for that.</summary>
     public void RequestFrame()
     {
         _needFrame = true;
         RequestNextFrameRendering();
     }
+
+    /// <summary>M401: redraw only, leaving the camera exactly where the user put it. Anything animating
+    /// per frame wants this - RequestFrame would re-FRAME the camera on every one of them.</summary>
+    public void RequestRedraw() => RequestNextFrameRendering();
 
     // ---- GL lifecycle ----
 

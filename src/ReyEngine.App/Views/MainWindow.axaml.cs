@@ -151,7 +151,7 @@ public partial class MainWindow : Window
         else
         {
             if (!_grassFrameHooked) { _grassFrameHooked = true; Viewport.FrameRendered += OnGrassFrame; }
-            Viewport.RequestFrame();
+            Viewport.RequestRedraw();
         }
     }
 
@@ -161,7 +161,7 @@ public partial class MainWindow : Window
     private void OnGrassFrame()
     {
         if (_closed || DataContext is not MainWindowViewModel vm) return;
-        if (vm.TickGrassTransition()) Viewport.RequestFrame();
+        if (vm.TickGrassTransition()) Viewport.RequestRedraw();
     }
 
     private static void SavePng(string path, byte[] bgra, int w, int h)
