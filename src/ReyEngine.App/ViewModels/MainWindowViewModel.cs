@@ -5551,6 +5551,47 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     /// <summary>M55: click-select ANY scene object — meshes (triangles) or placeable icon markers
     /// (particles/props/probes, ray-vs-sphere at the marker's world size); nearest hit wins.</summary>
+    /// <summary>M382: per-click picking trace, toggled by the PICK button on the viewport toolbar.
+    ///
+    /// Selection is a CPU raycast against matrices cached by whichever renderer drew last, and a wrong
+    /// pick has three quite different causes that look identical on screen: the ray is offset (click
+    /// pixel vs cached bounds disagree), the ray is right but the hit maps to the wrong group, or a
+    /// placeable marker beat the mesh and swallowed the click. This logs enough to tell them apart in
+    /// one click each. Seeded from REYENGINE_PICK_DIAG so it can be enabled before the window exists.</summary>
+    [ObservableProperty]
+    private bool _pickDiagnostics = Environment.GetEnvironmentVariable("REYENGINE_PICK_DIAG") == "1";
+
+    /// <summary>The view half of the trace: the click pixel and the bounds the matrices were cached
+    /// with. These live in the control, so the view calls this before handing the ray over — if they
+    /// disagree, every ray is offset and nothing downstream can be right.</summary>
+    public void LogPickClick(double clickX, double clickY, double boundsW, double boundsH)
+    {
+        if (!PickDiagnostics) return;
+        _log.Info("Pick", $"click ({clickX:0.#},{clickY:0.#}) px in bounds {boundsW:0.#}x{boundsH:0.#} "
+                          + $"renderer={(UseDx11Viewport ? "D3D11" : "GL")}");
+    }
+
+    private void LogPickRay(System.Numerics.Vector3 o, System.Numerics.Vector3 d, Rendering.MeshRayHit? hit)
+    {
+        _log.Info("Pick", $"  ray o=({o.X:0.#},{o.Y:0.#},{o.Z:0.#}) d=({d.X:0.###},{d.Y:0.###},{d.Z:0.###})");
+        if (_currentMap is not { } map) { _log.Info("Pick", "  no map open"); return; }
+        if (hit is not { } h)
+        {
+            _log.Info("Pick", $"  NO HIT over {map.Groups.Count} groups "
+                              + $"(visible={CurrentModelSubmeshVisible?.Count(v => v).ToString() ?? "all"})");
+            return;
+        }
+        int meshIndex = h.Submesh >= 0 && h.Submesh < map.Groups.Count ? map.Groups[h.Submesh].MeshIndex : -1;
+        var mesh = map.Meshes.FirstOrDefault(x => x.Index == meshIndex);
+        // Group count for the mesh: several groups sharing one MeshIndex is why clicking one visible
+        // piece can correctly outline others - that is not a picking error, and this line shows it.
+        int groupsOnMesh = map.Groups.Count(g => g.MeshIndex == meshIndex);
+        _log.Info("Pick", $"  hit group={h.Submesh} tri={h.Triangle} dist={h.Distance:0.#} "
+                          + $"at ({h.Position.X:0.#},{h.Position.Y:0.#},{h.Position.Z:0.#}) -> "
+                          + $"mesh={meshIndex} '{(mesh?.Name is { Length: > 0 } n ? n : "?")}' "
+                          + $"({groupsOnMesh} group(s) share this mesh)");
+    }
+
     public void SelectAnyFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir, bool additive = false,
         Func<System.Numerics.Vector3, System.Numerics.Vector2?>? projectToScreen = null,
         System.Numerics.Vector2? clickScreenPx = null)
@@ -5587,9 +5628,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         rayDir = System.Numerics.Vector3.Normalize(rayDir);   // same t units for mesh + marker tests
         // mesh hit distance (float.MaxValue when none)
         float meshT = float.MaxValue;
+        Rendering.MeshRayHit? diagHit = null;   // M382: kept whole for the diagnostic, not just its distance
         if (_currentMap is { } map0 && map0.Groups.Count > 0
             && RayIndex?.ClosestHit(rayOrigin, rayDir, CurrentModelSubmeshVisible) is { } meshHit)
-            meshT = meshHit.Distance;
+        { meshT = meshHit.Distance; diagHit = meshHit; }
+
+        if (PickDiagnostics) LogPickRay(rayOrigin, rayDir, diagHit);
 
         // placeable markers: same size formula the viewport uses for the icons (Mesh.Radius-scaled)
         float radius = CurrentMesh is { } cm ? Math.Clamp(cm.Radius * 0.004f, 4f, 90f) * 1.6f : 40f;
@@ -5618,6 +5662,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var l in MapContent.Lights) Test(l, l.Position);
 
         // nearest placeable beats a farther mesh face (icons draw on top, so this matches what you see)
+        if (PickDiagnostics)
+            _log.Info("Pick", $"  placeables: radius={radius:0.#} best={(bestNode?.GetType().Name ?? "none")} "
+                              + $"bestT={(bestT >= float.MaxValue ? "-" : bestT.ToString("0.#"))} "
+                              + $"meshT={(meshT >= float.MaxValue ? "-" : meshT.ToString("0.#"))} -> "
+                              + (bestNode is not null && bestT < meshT ? "PLACEABLE WINS (no mesh selected)" : "mesh"));
         if (bestNode is not null && bestT < meshT)
         {
             SelectedOutlinerItem = bestNode;   // routes by type + highlights the hierarchy

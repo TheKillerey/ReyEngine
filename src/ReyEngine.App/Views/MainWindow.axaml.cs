@@ -948,6 +948,11 @@ public partial class MainWindow : Window
             && Viewport.TryGetPickRay(e.GetPosition(ViewportInput), out var origin, out var dir))
         {
             bool additive = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+            // M382: the click pixel next to the bounds the pick matrices were cached with. The click is
+            // relative to ViewportInput and the matrices come from Viewport.Bounds - two different
+            // controls, so if those ever disagree every ray is offset by the difference.
+            var diagPos = e.GetPosition(ViewportInput);
+            vm.LogPickClick(diagPos.X, diagPos.Y, Viewport.Bounds.Width, Viewport.Bounds.Height);
             // M76: UE-style screen-space icon picking — pass a projector + the click pixel so placeable
             // icons are clickable at any zoom (18px tolerance), not just via a ray-vs-world-sphere hit.
             var clickPos = e.GetPosition(ViewportInput);
