@@ -7648,6 +7648,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             TerrainUseAlphaOverlay: p.TerrainUseAlphaOverlay,
             TerrainOverlayRange: p.TerrainOverlayRange,
             UsesGrassTint: p.UsesGrassTint,    // M78
+            EmissiveColor: p.EmissiveColor,       // M376: additive glow, gated on the intensity below
+            EmissiveIntensity: p.EmissiveIntensity,
             NoBakedLighting: p.NoBakedLighting,   // M150: shaderMacros NO_BAKED_LIGHTING
             DisableDepthFog: p.DisableDepthFog,   //           DISABLE_DEPTH_FOG
             SrcBlendFactor: p.SrcBlendFactor,

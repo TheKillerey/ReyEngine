@@ -80,6 +80,11 @@ public sealed record MaterialProfile(
     // the lightmap layout and the bake (a broader test than UsesGrassTint, which additionally requires
     // USE_GRASS_TINT_MAP and so misses plain foliage).
     bool IsVertexDeform = false,
+    // M376: ENV_GlowSign / emissive shaders add `Emissive_Texture * Emissive_Color * Emissive_Intensity`
+    // on top of the lit diffuse. Intensity 0 means the material authored none, which is also the gate -
+    // a terrain-blend material puts COLOR_MAP_2 in the same sampler slot and must never glow.
+    Vector4? EmissiveColor = null,
+    float EmissiveIntensity = 0f,
     // M150: shaderMacros that decide how the surface reacts to the SCENE rather than how it shades.
     bool NoBakedLighting = false,   // NO_BAKED_LIGHTING  — ignore the baked lightmap
     bool DisableDepthFog = false,   // DISABLE_DEPTH_FOG  — exclude from distance fog
@@ -206,6 +211,16 @@ public static class MaterialProfiles
         }
 
         // ---- Feature flags from switches / samplers / params ----
+        // M376: the emissive glow params, read verbatim. Absent => intensity 0 => no glow, which is also
+        // what the shader does with an unwritten constant. Intensity is the GATE as well as the strength:
+        // a terrain-blend material puts COLOR_MAP_2 in the same sampler slot and must never glow.
+        Vector4? emissiveColor = b.Parameters
+            .FirstOrDefault(p => string.Equals(p.Name, "Emissive_Color", OIC)) is { } ec
+            && ec.TryGetVector4(out var ecv) ? ecv : null;
+        float emissiveIntensity = b.Parameters
+            .FirstOrDefault(p => string.Equals(p.Name, "Emissive_Intensity", OIC)) is { } ei
+            && ei.TryGetVector4(out var eiv) ? eiv.X : 0f;
+
         bool matcap = b.MatCap is not null;
         bool emissive = b.Emissive is not null
             || b.Switches.Any(kv => kv.Value && (kv.Key.Contains("EMISS", OIC) || kv.Key.Contains("GLOW", OIC) || kv.Key.Contains("ILLUM", OIC)));
@@ -271,6 +286,7 @@ public static class MaterialProfiles
             terrain.UseAlphaOverlay, terrain.OverlayRange,
             grassTint,
             vertexDeform,                                      // M163
+            emissiveColor, emissiveIntensity,                  // M376
             b.MacroOn(MaterialBinding.MacroNoBakedLighting),   // M150
             b.MacroOn(MaterialBinding.MacroDisableDepthFog),
             b.SrcBlendFactor,

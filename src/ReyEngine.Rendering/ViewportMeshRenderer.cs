@@ -28,6 +28,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mCompositeGround;                                 // M142: Map10 baked height-blend ground (2nd-UV composite)
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
     private int _mNoBakedLighting;                                 // M375: surface opts out of ALL lighting
+    private int _mEmissiveColor, _mEmissiveIntensity;              // M376: additive emissive glow
     private int _mAlphaMode;                                       // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
     private int _mTint;                                            // M34: TintColor for untextured effects / authored decals
     private int _mTintTextured;
@@ -149,6 +150,8 @@ public sealed class ViewportMeshRenderer : IDisposable
         public int DstBlendFactor;
         public float AlphaCutoff;       // M34: alpha-test threshold for cutout (default 0.35)
         public bool UsesGrassTint;      // M78: multiply the map's world-space grass tint into the diffuse
+        public Vector4 EmissiveColor;  // M376
+        public float EmissiveIntensity; // M376: 0 = this surface does not glow
         public bool DoubleSided;        // M34: two-sided material (cullEnable=false) — never culled
         public bool Mirrored;           // M34: source mesh has a negative-determinant (mirrored) transform
         public Vector2 ClampUv;         // M34: per-axis UV clamp (1 = clamp/decal, 0 = tile); default 0,0
@@ -225,7 +228,9 @@ public sealed class ViewportMeshRenderer : IDisposable
         // DISABLE_DEPTH_FOG excludes it from distance fog (skyboxes, FX, water use these).
         bool NoBakedLighting = false, bool DisableDepthFog = false,
         bool UsesBakedPaint = false,
-        int SrcBlendFactor = -1, int DstBlendFactor = -1)
+        int SrcBlendFactor = -1, int DstBlendFactor = -1,
+        // M376: emissive glow (ENV_GlowSign and friends). Intensity 0 = no glow, and is the gate too.
+        Vector4? EmissiveColor = null, float EmissiveIntensity = 0f)
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
@@ -309,6 +314,8 @@ uniform int uCompositeGround;  // M142: 1 = Map10 baked height-blend ground atla
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
 uniform int uHasLightmap;      // 1 when the mesh has a BakedLight atlas + Texcoord7 UV
 uniform int uNoBakedLighting;  // M375: 1 when the material carries NO_BAKED_LIGHTING
+uniform vec3 uEmissiveColor;   // M376: Emissive_Color
+uniform float uEmissiveIntensity; // M376: Emissive_Intensity; 0 disables the glow entirely
 uniform int uAlphaMode;        // M34: 0 opaque, 1 cutout, 2 transparent, 3 transparent cutout
 uniform float uAlphaCutoff;    // M34: alpha-test threshold for cutout mode (from AlphaTestValue; default 0.35)
 uniform vec2 uClampUv;         // M34: per-axis UV clamp (1 = clamp to [0,1] for decals; 0 = tile)
@@ -604,6 +611,18 @@ void main() {
     // re-encode here; without the atlas the earlier assignment keeps the raw composite/detail colour.
     if (uCompositeGround == 1 && uHasLightmap == 1) col = base * texture(uLightmap, vLmUv).rgb * 2.0;
 
+    // M376: the emissive glow, ported from env_glowsign ps blob 69 rather than approximated:
+    //     em      = Emissive_Texture.rgb * Emissive_Color.rgb
+    //     colour += em * Emissive_Intensity
+    // ADDITIVE and applied after the lighting, because in Riot's shader it is added to the lit result -
+    // an emissive surface is lit AND glows, it is not replaced by its glow.
+    //
+    // Gated on intensity > 0 rather than on uHasEmissive, and that is the whole safety of it: slot 3 is
+    // shared with the terrain blend's COLOR_MAP_2, so keying off the texture alone would make blended
+    // ground glow. Only a material that authored Emissive_Intensity can light up here.
+    if (uEmissiveIntensity > 0.0 && uHasEmissive == 1)
+        col += texture(uEmissive, uv).rgb * uEmissiveColor * uEmissiveIntensity;
+
     // M89: NVR ground bakes its shading/AO into vertex colour (a dark mask the raw diffuse lacks). Add it
     // as a baked light term so terrain reads its painted variation instead of a flat repeated texture. NVR
     // authors these dark on purpose - the map is meant to be lit mostly by Light.dat, so scale is tunable.
@@ -792,6 +811,8 @@ void main() { FragColor = uColor; }";
         _mLightmap = gl.GetUniformLocation(_meshProgram, "uLightmap");
         _mHasLightmap = gl.GetUniformLocation(_meshProgram, "uHasLightmap");
         _mNoBakedLighting = gl.GetUniformLocation(_meshProgram, "uNoBakedLighting");
+        _mEmissiveColor = gl.GetUniformLocation(_meshProgram, "uEmissiveColor");
+        _mEmissiveIntensity = gl.GetUniformLocation(_meshProgram, "uEmissiveIntensity");
         _mAlphaMode = gl.GetUniformLocation(_meshProgram, "uAlphaMode");
         _mTint = gl.GetUniformLocation(_meshProgram, "uTint");
         _mTintTextured = gl.GetUniformLocation(_meshProgram, "uTintTextured");
@@ -1584,6 +1605,8 @@ void main(){
         _submeshes[index].DstBlendFactor = mat.DstBlendFactor;
         _submeshes[index].AlphaCutoff = mat.AlphaCutoff;
         _submeshes[index].UsesGrassTint = mat.UsesGrassTint;   // M78
+        _submeshes[index].EmissiveColor = mat.EmissiveColor ?? Vector4.One;   // M376
+        _submeshes[index].EmissiveIntensity = mat.EmissiveIntensity;
         _submeshes[index].DoubleSided = mat.DoubleSided;
         _submeshes[index].Tint = mat.Tint ?? Vector4.One;
         _submeshes[index].TintTextured = mat.TintTextured;
@@ -1631,6 +1654,7 @@ void main(){
             _submeshes[i].DstBlendFactor = -1;
             _submeshes[i].AlphaCutoff = 0.35f;
             _submeshes[i].UsesGrassTint = false;   // M78
+            _submeshes[i].EmissiveIntensity = 0f;   // M376: props do not glow unless a material says so
             _submeshes[i].DoubleSided = false;
             _submeshes[i].Tint = Vector4.One;
             _submeshes[i].TintTextured = false;
@@ -2191,6 +2215,8 @@ void main(){
                     // into one zero - no atlas, no UV, or opted out - and the shader needs the last one
                     // apart: only NO_BAKED_LIGHTING means no lighting term at all.
                     _gl.Uniform1(_mNoBakedLighting, s.NoBakedLighting ? 1 : 0);
+                    _gl.Uniform3(_mEmissiveColor, s.EmissiveColor.X, s.EmissiveColor.Y, s.EmissiveColor.Z);   // M376
+                    _gl.Uniform1(_mEmissiveIntensity, s.EmissiveIntensity);
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
                     haveBindings = true;
 
@@ -2280,6 +2306,7 @@ void main(){
             _gl.Uniform1(_mHasMask, 0); _gl.Uniform1(_mHasGradient, 0); _gl.Uniform1(_mHasEmissive, 0);
             _gl.Uniform1(_mHasMatCap, 0); _gl.Uniform1(_mHasMatCapMask, 0); _gl.Uniform1(_mHasLightmap, 0);
             _gl.Uniform1(_mNoBakedLighting, 0);   // M375: props are lit; never leak a stale opt-out
+            _gl.Uniform1(_mEmissiveIntensity, 0f);   // M376: and never leak a stale glow
             _gl.Uniform1(_mHasGrassTint, 0);   // M78: props never grass-tint
             _gl.Uniform1(_mUsesRim, 0); _gl.Uniform1(_mUsesSpec, 0);
             _gl.Uniform1(_mUsesBakedPaint, 0);
