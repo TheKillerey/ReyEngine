@@ -214,11 +214,15 @@ public static class MaterialProfiles
         // M376: the emissive glow params, read verbatim. Absent => intensity 0 => no glow, which is also
         // what the shader does with an unwritten constant. Intensity is the GATE as well as the strength:
         // a terrain-blend material puts COLOR_MAP_2 in the same sampler slot and must never glow.
+        // M378: match on Norm(), like every other parameter lookup in this file. The M376 version compared
+        // the RAW name against "Emissive_Color", so it matched only that exact spelling and missed the
+        // underscore-less "EmissiveColor" that materials also author. Norm() strips underscores, so this
+        // is strictly more permissive: it cannot stop an already-working match, only start a failing one.
         Vector4? emissiveColor = b.Parameters
-            .FirstOrDefault(p => string.Equals(p.Name, "Emissive_Color", OIC)) is { } ec
+            .FirstOrDefault(p => Norm(p.Name) == "emissivecolor") is { } ec
             && ec.TryGetVector4(out var ecv) ? ecv : null;
         float emissiveIntensity = b.Parameters
-            .FirstOrDefault(p => string.Equals(p.Name, "Emissive_Intensity", OIC)) is { } ei
+            .FirstOrDefault(p => Norm(p.Name) == "emissiveintensity") is { } ei
             && ei.TryGetVector4(out var eiv) ? eiv.X : 0f;
 
         bool matcap = b.MatCap is not null;
