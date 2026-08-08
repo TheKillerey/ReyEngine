@@ -34,12 +34,24 @@ public static class BinValidator
         ".dds", ".tex", ".skn", ".skl", ".anm", ".bnk", ".wpk", ".scb", ".sco", ".mapgeo", ".bin",
     };
 
+    /// <summary>M372: what the meta-class schema says about one property of one class, at the build the
+    /// caller resolved for. All three delegates are optional - with no schema the validator behaves exactly
+    /// as it did before, which matters because the schema is a separate opt-in download.</summary>
+    /// <param name="classKnown">Is this class in the schema at all? Everything below is skipped when not:
+    /// an unknown class means no expectations, not a bin full of problems.</param>
+    /// <param name="declaredType">The field type declared for (class, property) at the target build, or
+    /// null when the property is not declared there.</param>
+    /// <param name="declaredEver">Was it declared at ANY build? Separates "removed in your patch" from
+    /// "never existed", which need opposite advice.</param>
     public static BinValidationReport Validate(
         string binName, byte[] binBytes,
         IReadOnlyList<byte[]> dependencyBins,
         Func<string, bool> assetExists,
         Func<uint, string?>? resolve = null,
-        Func<uint, bool>? linkExempt = null)
+        Func<uint, bool>? linkExempt = null,
+        Func<uint, bool>? classKnown = null,
+        Func<uint, uint, string?>? declaredType = null,
+        Func<uint, uint, bool>? declaredEver = null)
     {
         string R(uint h) => resolve?.Invoke(h) ?? $"0x{h:x8}";
         var issues = new List<BinIssue>();
@@ -106,10 +118,55 @@ public static class BinValidator
             }
         }
 
+        // M372: schema checks, on the object's OWN properties only.
+        //
+        // Top level only, on purpose. Nested structs each have their own class and would need the same
+        // lookup per level; doing that without also handling embedded/optional/container element classes
+        // would produce confident nonsense on the nested cases. Top-level properties are where a stale mod
+        // actually breaks, and they are checkable with no guessing.
+        void CheckSchema(uint objHash, BinTreeObject obj)
+        {
+            if (declaredType is null || classKnown?.Invoke(obj.ClassHash) != true) return;
+            string owner = R(objHash);
+
+            foreach (var (propHash, prop) in obj.Properties)
+            {
+                string? declared = declaredType(obj.ClassHash, propHash);
+                if (declared is null)
+                {
+                    // The game reads a bin against the class it knows, so a field the class does not
+                    // declare is simply ignored - it is not a crash. Reported because it is almost always
+                    // either a stale field from an older patch or a hash that belongs to another class.
+                    bool everExisted = declaredEver?.Invoke(obj.ClassHash, propHash) == true;
+                    issues.Add(new BinIssue(
+                        everExisted ? "field-removed-in-patch" : "field-not-in-class",
+                        owner,
+                        everExisted
+                            ? $"{R(propHash)} is not part of {R(obj.ClassHash)} in this patch (it existed in "
+                              + "an earlier build) — the game will ignore it"
+                            : $"{R(propHash)} is not declared by {R(obj.ClassHash)} — the game will ignore it",
+                        objHash, obj.ClassHash));
+                    continue;
+                }
+
+                // Only where the mapping is unambiguous; see MetaDefaultProperty.ExpectedWireType for why
+                // the container/struct families are deliberately not checked.
+                string? expected = MetaDefaultProperty.ExpectedWireType(declared);
+                if (expected is null) continue;
+                string actual = prop.GetType().Name;
+                if (!string.Equals(expected, actual, StringComparison.Ordinal))
+                    issues.Add(new BinIssue("field-type-mismatch", owner,
+                        $"{R(propHash)} is stored as {actual} but {R(obj.ClassHash)} declares {declared} "
+                        + $"({expected}) — the game will read it at the wrong width",
+                        objHash, obj.ClassHash));
+            }
+        }
+
         foreach (var (hash, obj) in tree.Objects)
         {
             string owner = R(hash);
             foreach (var v in obj.Properties.Values) Walk(v, owner, hash, obj.ClassHash);
+            CheckSchema(hash, obj);
         }
 
         var refPaths = new HashSet<string>(checkedAssets, StringComparer.OrdinalIgnoreCase);

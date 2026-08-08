@@ -8292,7 +8292,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     var report = Formats.Meta.BinValidator.Validate(display, bytes, deps,
                         p => TryResolveEntry(HashAlgorithms.WadPath(p), out _),
                         ResolveBinName,
-                        h => ResolveBinName(h)?.StartsWith("Shaders/", StringComparison.OrdinalIgnoreCase) == true);
+                        h => ResolveBinName(h)?.StartsWith("Shaders/", StringComparison.OrdinalIgnoreCase) == true,
+                        // M372: schema checks. All three fall back to "no schema" when the meta database
+                        // was never synced, and the validator then reports exactly what it did before.
+                        classKnown: h => Meta.TryGetClass(h, out _),
+                        declaredType: (cls, prop) =>
+                            Meta.TryGetProperty(cls, prop, out var mp) ? mp.FieldType : null,
+                        declaredEver: Meta.DeclaredAtAnyBuild);
 
                     var alts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var i in report.Issues)

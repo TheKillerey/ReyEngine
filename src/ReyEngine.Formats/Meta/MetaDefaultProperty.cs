@@ -28,6 +28,36 @@ namespace ReyEngine.Formats.Meta;
 /// </summary>
 public static class MetaDefaultProperty
 {
+    /// <summary>
+    /// <para>M372: the CLR property type a declared field type must arrive as, for the cases where that is
+    /// UNAMBIGUOUS. Null means "do not check" - deliberately, and for most of the type system.</para>
+    ///
+    /// <para>Only the self-contained types are listed. The container/struct/map/option families are
+    /// omitted because their CLR hierarchy has real subtyping (BinTreeEmbedded derives from BinTreeStruct,
+    /// BinTreeUnorderedContainer from BinTreeContainer), so an exact-name comparison would flag correct
+    /// bins. A validator that cries wolf is worse than one that stays quiet, so it stays quiet there.</para>
+    /// </summary>
+    public static string? ExpectedWireType(string fieldType) => fieldType switch
+    {
+        "Bool" => nameof(BinTreeBool),
+        "Flag" => nameof(BinTreeBitBool),
+        "U8" => nameof(BinTreeU8),
+        "I8" => nameof(BinTreeI8),
+        "U16" => nameof(BinTreeU16),
+        "I16" => nameof(BinTreeI16),
+        "U32" => nameof(BinTreeU32),
+        "I32" => nameof(BinTreeI32),
+        "U64" => nameof(BinTreeU64),
+        "I64" => nameof(BinTreeI64),
+        "F32" => nameof(BinTreeF32),
+        "String" => nameof(BinTreeString),
+        "Hash" => nameof(BinTreeHash),
+        "Vec2" => nameof(BinTreeVector2),
+        "Vec3" => nameof(BinTreeVector3),
+        "Vec4" => nameof(BinTreeVector4),
+        _ => null,
+    };
+
     /// <summary>Field types this can build. Everything else is declined - see the class remarks.</summary>
     public static bool IsSupported(string fieldType) => fieldType switch
     {

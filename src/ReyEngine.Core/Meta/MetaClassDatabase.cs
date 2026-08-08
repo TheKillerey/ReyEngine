@@ -68,6 +68,11 @@ public sealed class MetaClassDatabase
     private readonly Dictionary<uint, string> _externalTypeNames = new();
     private readonly Dictionary<uint, string> _allNames = new();
 
+    /// <summary>M372: every property hash a class has EVER declared, across all builds - not just the one
+    /// resolved for. This is what separates "this field was removed in your patch" from "this field never
+    /// existed", and those two need completely different advice.</summary>
+    private readonly Dictionary<uint, HashSet<uint>> _everDeclared = new();
+
     /// <summary>The newest build number the dump covers. 0 when nothing is loaded.</summary>
     public int Latest { get; private set; }
 
@@ -85,6 +90,25 @@ public sealed class MetaClassDatabase
     public IEnumerable<MetaClass> Classes => _classes.Values;
 
     public bool TryGetClass(uint classHash, out MetaClass cls) => _classes.TryGetValue(classHash, out cls!);
+
+    /// <summary>M372: did this class EVER declare this property, at any build? Walks bases like
+    /// <see cref="TryGetProperty"/> does. Used to tell "your patch removed this field" (true here, absent
+    /// at the resolved build) from "this field never existed" (false), which need opposite advice.</summary>
+    public bool DeclaredAtAnyBuild(uint classHash, uint propertyHash)
+    {
+        var seen = new HashSet<uint>();
+        var queue = new Queue<uint>();
+        queue.Enqueue(classHash);
+        while (queue.Count > 0)
+        {
+            uint h = queue.Dequeue();
+            if (!seen.Add(h)) continue;
+            if (_everDeclared.TryGetValue(h, out var ever) && ever.Contains(propertyHash)) return true;
+            if (_classes.TryGetValue(h, out var cls))
+                foreach (var b in cls.Bases) queue.Enqueue(b);
+        }
+        return false;
+    }
 
     /// <summary>Resolve any class OR property hash to a name. Complements the CommunityDragon bin-name
     /// lists rather than replacing them - the two disagree on coverage in both directions.</summary>
@@ -211,6 +235,12 @@ public sealed class MetaClassDatabase
                     if (!TryParseHexHash(pj.Name, out uint propHash)) continue;
                     string pName = pj.Value.TryGetProperty("name", out var pn) ? pn.GetString() ?? "" : "";
                     if (pName.Length > 0) _allNames.TryAdd(propHash, pName);
+
+                    // Recorded BEFORE the build filter below, deliberately: a property that exists only in
+                    // older revisions still counts as "this class used to have it".
+                    if (!_everDeclared.TryGetValue(classHash, out var ever))
+                        _everDeclared[classHash] = ever = new HashSet<uint>();
+                    ever.Add(propHash);
 
                     if (!pj.Value.TryGetProperty("revisions", out var pRevs)
                         || pRevs.ValueKind != JsonValueKind.Array) continue;
