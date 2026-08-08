@@ -195,6 +195,65 @@ public class MapStateDataTests
         Assert.Equal("custom/default.tex", st.ResolveGrassTint(st.Skins[0], _ => false).ActivePath);
     }
 
+    // ---- skin selection (M385) ----
+
+    private static BinTreeObject SkinLinked(uint pathHash, string skinName, string container, string? tint)
+    {
+        var props = new List<BinTreeProperty>
+        {
+            new BinTreeString(H("name"), skinName),
+            new BinTreeString(H("mMapContainerLink"), container),
+        };
+        if (tint is not null) props.Add(new BinTreeString(H("mGrassTintTexture"), tint));
+        return new BinTreeObject(pathHash, H("MapSkin"), props);
+    }
+
+    /// <summary>Base_SRX really is claimed by Default, SR_Seasonal_Map, LunarRevel and AprilFools2019, so
+    /// the container link narrows candidates rather than identifying one. "Default" wins.</summary>
+    [Fact]
+    public void SkinSelectionPrefersDefaultAmongCandidatesSharingAContainer()
+    {
+        var st = MapStateData.Parse(Write(
+            SkinLinked(1, "LunarRevel", "Maps/MapGeometry/Map11/Base_SRX", "lunar.tex"),
+            SkinLinked(2, "Default", "Maps/MapGeometry/Map11/Base_SRX", "base.tex"),
+            SkinLinked(3, "SocialSR", "Maps/MapGeometry/Map11/SocialSR", "social.tex")));
+
+        Assert.Equal("Default", st.SkinForMapGeo("data/maps/mapgeometry/map11/base_srx.mapgeo")!.SkinName);
+    }
+
+    /// <summary>Matching is on the STEM and case-insensitive: the link says "Base_SRX", the file is
+    /// "base_srx.mapgeo", and on Windows the path may arrive with backslashes.</summary>
+    [Theory]
+    [InlineData("data/maps/mapgeometry/map11/base_srx.mapgeo")]
+    [InlineData(@"data\maps\mapgeometry\map11\BASE_SRX.mapgeo")]
+    [InlineData("base_srx")]
+    public void SkinSelectionMatchesOnStemCaseInsensitively(string path)
+    {
+        var st = MapStateData.Parse(Write(
+            SkinLinked(2, "Default", "Maps/MapGeometry/Map11/Base_SRX", "base.tex")));
+        Assert.Equal("base.tex", st.SkinForMapGeo(path)!.GrassTintTexture);
+    }
+
+    /// <summary>A "Default" that authors no tint must not beat a sibling that does — picking it would
+    /// blank a map that actually has one.</summary>
+    [Fact]
+    public void ASkinThatAuthorsATintBeatsAnEmptyDefault()
+    {
+        var st = MapStateData.Parse(Write(
+            SkinLinked(1, "Default", "Maps/MapGeometry/Map11/Base_SRX", null),
+            SkinLinked(2, "SR_Seasonal_Map", "Maps/MapGeometry/Map11/Base_SRX", "seasonal.tex")));
+        Assert.Equal("seasonal.tex", st.SkinForMapGeo("base_srx")!.GrassTintTexture);
+    }
+
+    [Fact]
+    public void AnUnknownMapGeoSelectsNoSkin()
+    {
+        var st = MapStateData.Parse(Write(
+            SkinLinked(2, "Default", "Maps/MapGeometry/Map11/Base_SRX", "base.tex")));
+        Assert.Null(st.SkinForMapGeo("data/maps/mapgeometry/map12/bloom.mapgeo"));
+        Assert.Null(st.SkinForMapGeo(null));
+    }
+
     // ---- robustness: this runs against modded bins ----
 
     [Fact]

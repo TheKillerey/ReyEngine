@@ -30,7 +30,13 @@ public sealed record MapSkinAssets(
     string Name,
     /// <summary>mGrassTintTexture — the skin's default grass tint.</summary>
     string? GrassTintTexture,
-    IReadOnlyList<MapAlternateAsset> AlternateAssets);
+    IReadOnlyList<MapAlternateAsset> AlternateAssets,
+    /// <summary>mMapContainerLink, e.g. "Maps/MapGeometry/Map11/Base_SRX" — which mapgeo this skin
+    /// dresses. NOT unique: Default, SR_Seasonal_Map, LunarRevel and AprilFools2019 all point at
+    /// Base_SRX, so it narrows the candidates rather than identifying one.</summary>
+    string? MapContainerLink = null,
+    /// <summary>The MapSkin's own <c>name</c> property ("Default", "SocialSR", …).</summary>
+    string? SkinName = null);
 
 /// <summary>
 /// M384: the map-state half of a Map*.bin — grass tint (default + per-state alternates) and the
@@ -63,6 +69,8 @@ public sealed record MapStateData(
     private static readonly uint FPublicName = H("PublicName");
     private static readonly uint FBitIndex = H("BitIndex");
     private static readonly uint FTransition = H("TransitionTime");
+    private static readonly uint FContainerLink = H("mMapContainerLink");
+    private static readonly uint FSkinName = H("name");
 
     /// <summary>Parse a Map*.bin. Never throws on unexpected shapes — a field that is missing or the wrong
     /// type is simply absent from the result, because this runs against modded bins too.</summary>
@@ -105,7 +113,8 @@ public sealed record MapStateData(
                     Get(st.Properties, FAltFlag) is BinTreeHash h ? h.Value : 0u));
             }
 
-        return new MapSkinAssets(resolveName?.Invoke(hash) ?? $"0x{hash:x8}", tint, alts);
+        return new MapSkinAssets(resolveName?.Invoke(hash) ?? $"0x{hash:x8}", tint, alts,
+            Str(obj.Properties, FContainerLink), Str(obj.Properties, FSkinName));
     }
 
     private static IEnumerable<MapVisibilityFlagDefinition> ParseFlags(BinTreeObject obj)
@@ -135,6 +144,48 @@ public sealed record MapStateData(
         => Get(props, key) is BinTreeString s && s.Value.Length > 0 ? s.Value : null;
 
     // ---- resolution -------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The MapSkin that dresses a given mapgeo, chosen by the stem of its mMapContainerLink — for
+    /// "…/map11/base_srx.mapgeo" that is "base_srx", matched against "Maps/MapGeometry/Map11/Base_SRX".
+    ///
+    /// <para>Several skins can claim the same container (Base_SRX is claimed by Default,
+    /// SR_Seasonal_Map, LunarRevel and AprilFools2019), so this prefers the one literally named
+    /// "Default" and otherwise takes the first candidate that actually authors a grass tint. Skins that
+    /// author nothing are never preferred, because picking one would blank a map that has a tint.</para>
+    /// </summary>
+    /// <param name="mapGeoPath">Any path or name whose file stem identifies the mapgeo.</param>
+    public MapSkinAssets? SkinForMapGeo(string? mapGeoPath)
+    {
+        if (string.IsNullOrWhiteSpace(mapGeoPath)) return null;
+        string stem = Stem(mapGeoPath);
+        if (stem.Length == 0) return null;
+
+        var candidates = Skins
+            .Where(s => s.MapContainerLink is { } l
+                     && string.Equals(Stem(l), stem, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (candidates.Count == 0) return null;
+
+        return candidates.FirstOrDefault(s =>
+                   string.Equals(s.SkinName, "Default", StringComparison.OrdinalIgnoreCase)
+                   && s.GrassTintTexture is not null)
+            ?? candidates.FirstOrDefault(s => s.GrassTintTexture is not null)
+            ?? candidates.FirstOrDefault(s =>
+                   string.Equals(s.SkinName, "Default", StringComparison.OrdinalIgnoreCase))
+            ?? candidates[0];
+    }
+
+    /// <summary>Last path segment without its extension. Handles both separators; Riot's links use '/'
+    /// while the mapgeo path on disk may use '\'.</summary>
+    private static string Stem(string path)
+    {
+        string p = path.Replace('\\', '/').TrimEnd('/');
+        int slash = p.LastIndexOf('/');
+        if (slash >= 0) p = p[(slash + 1)..];
+        int dot = p.LastIndexOf('.');
+        return dot > 0 ? p[..dot] : p;
+    }
 
     public MapVisibilityFlagDefinition? FlagByBit(int bitIndex)
         => FlagDefinitions.FirstOrDefault(f => f.BitIndex == bitIndex);

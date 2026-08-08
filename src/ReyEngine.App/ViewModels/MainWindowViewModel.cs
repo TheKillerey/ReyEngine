@@ -4926,6 +4926,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 vis[i] = false;
         }
         CurrentModelSubmeshVisible = vis;
+        // M385: the grass tint is part of the map STATE, not the map build - Riot swaps it for the
+        // mAlternateAssets entry whose visibility flag is active, so it has to follow this.
+        RefreshGrassTint();
         UpdateParticleMarkers();
         UpdatePlaceableMarkers();
         RefreshMeshDetails();  // keep the inspector's mesh details + "why visible/hidden" in sync
@@ -7661,9 +7664,127 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>M78: locate the map's grass-tint texture (mGrassTintTexture — usually
     /// ASSETS/Maps/Info/&lt;map&gt;/GrassTint_*.tex). Mount glob, preferring the current map's folder and
     /// the base (shortest-named, no dragon suffix) texture — mirrors the MapgeoAddon fallback chain.</summary>
+    // M385: the map's own state data, parsed once per opened map. Nulled by InvalidateMapState so a
+    // reopen (or a project override appearing) re-reads it rather than serving a stale skin.
+    private Formats.MapGeo.MapStateData? _mapState;
+    private string? _mapStateFor;
+    private Formats.MapGeo.MapSkinAssets? _mapSkin;
+
+    private void InvalidateMapState() { _mapState = null; _mapStateFor = null; _mapSkin = null; }
+
+    /// <summary>
+    /// Riot's Map*.bin for the open mapgeo: "…/mapgeometry/map11/base_srx.mapgeo" -> the folder name
+    /// "map11" -> "data/maps/shipping/map11/map11.bin". Read through ReadAssetByPath, so the normal mount
+    /// priority applies and a project's own Map11.bin wins over Riot's.
+    /// </summary>
+    private Formats.MapGeo.MapStateData MapState()
+    {
+        string? mapPath = _currentMapEntry?.Path;
+        if (mapPath is null) return Formats.MapGeo.MapStateData.Empty;
+        if (_mapState is not null && _mapStateFor == mapPath) return _mapState;
+
+        _mapStateFor = mapPath;
+        _mapState = Formats.MapGeo.MapStateData.Empty;
+        _mapSkin = null;
+
+        string dir = Path.GetFileName(Path.GetDirectoryName(mapPath.Replace('\\', '/')) ?? "") ?? "";
+        if (dir.Length == 0) return _mapState;
+
+        try
+        {
+            var bytes = ReadAssetByPath($"data/maps/shipping/{dir.ToLowerInvariant()}/{dir.ToLowerInvariant()}.bin");
+            if (bytes is null) return _mapState;
+            _mapState = Formats.MapGeo.MapStateData.Parse(bytes, ResolveBinName);
+            _mapSkin = _mapState.SkinForMapGeo(mapPath);
+            _log.Info("MapGeo", $"map state: {_mapState.Skins.Count} skin(s), "
+                              + $"{_mapState.FlagDefinitions.Count} visibility flag(s); skin for this mapgeo = "
+                              + $"{_mapSkin?.SkinName ?? "(none matched)"}");
+        }
+        catch (Exception ex) { _log.Warn("MapGeo", $"map state could not be read ({ex.Message})."); }
+
+        return _mapState;
+    }
+
+    /// <summary>M385: which grass tint the CURRENT visibility state selects, with the reasoning kept so
+    /// the map/visibility inspector can show it without a debug window.</summary>
+    public Formats.MapGeo.GrassTintChoice GrassTintChoice()
+    {
+        var state = MapState();
+        int activeBit = CurrentPrimaryVisibilityBit;
+        return state.ResolveGrassTint(_mapSkin, bit => bit == activeBit);
+    }
+
+    /// <summary>
+    /// M385: re-resolve the grass tint for the CURRENT visibility state and republish it.
+    ///
+    /// <para>Called whenever visibility changes, because the tint is part of the map state: Riot swaps
+    /// mGrassTintTexture for the mAlternateAssets entry whose flag is active. Before this it was resolved
+    /// once at map-build time and never again, so switching dragon kept the base tint.</para>
+    ///
+    /// <para>Cheap when nothing changed: the path is compared first and the texture is only reloaded when
+    /// it actually differs, so this is safe to call from the visibility hook.</para>
+    /// </summary>
+    private void RefreshGrassTint()
+    {
+        if (_currentMap is null) return;
+        string? path = FindGrassTintTexturePath();
+        if (string.Equals(path, _grassTintPathInUse, StringComparison.OrdinalIgnoreCase)) return;
+
+        _grassTintPathInUse = path;
+        CurrentGrassTint = path is not null ? LoadTextureByPath(path) : null;
+
+        var c = GrassTintChoice();
+        _log.Info("GrassTint", path is null
+            ? "no grass tint resolved for this state."
+            : $"{c.SourceLabel}: {path}"
+              + (c.FromAlternate ? $" (visibility bit {c.BitIndex})" : ""));
+        OnPropertyChanged(nameof(GrassTintStatus));
+    }
+
+    private string? _grassTintPathInUse;
+
+    /// <summary>M385: item 7 — the grass tint state, for the existing map/visibility inspector rather
+    /// than a standalone debug window.</summary>
+    public string GrassTintStatus
+    {
+        get
+        {
+            var c = GrassTintChoice();
+            if (c.DefaultPath is null && c.ActivePath is null) return "";
+            var flag = c.FromAlternate ? MapState().FlagByBit(c.BitIndex) : null;
+            return $"Default: {c.DefaultPath ?? "(none)"}\n"
+                 + $"Active: {c.ActivePath ?? "(none)"}\n"
+                 + $"Source: {c.SourceLabel}"
+                 + (flag is not null
+                     ? $"\nVisibility Flag: {flag.PublicName ?? $"bit {c.BitIndex}"}"
+                       + (flag.TransitionTime is { } t ? $" (transition {t:0.##}s)" : " (no transition authored)")
+                     : "");
+        }
+    }
+
+    /// <summary>An "ASSETS/..." string from a bin, as a mounted virtual path — or null if nothing is
+    /// mounted at it. WAD virtual paths are lowercase, which is the only transform needed.</summary>
+    private string? ResolveAssetString(string? assetPath)
+    {
+        if (string.IsNullOrWhiteSpace(assetPath)) return null;
+        string vp = assetPath.Replace('\\', '/').ToLowerInvariant();
+        try { return ReadAssetByPath(vp) is not null ? vp : null; } catch { return null; }
+    }
+
     private string? FindGrassTintTexturePath()
     {
         if (_mounts is null) return null;
+
+        // M385: the authored answer first - mGrassTintTexture, or the mAlternateAssets entry whose
+        // visibility flag is active. What follows is the pre-M385 filename scan, kept ONLY as a fallback
+        // for maps with no Map*.bin (legacy NVR ports, hand-built projects); it guesses by name and was
+        // never Riot's configuration.
+        var choice = GrassTintChoice();
+        if (ResolveAssetString(choice.ActivePath) is { } authored) return authored;
+        // Authored but not mounted: say so, because silently scanning would hide a missing asset.
+        if (choice.ActivePath is { } missing)
+            _log.Warn("GrassTint", $"'{missing}' is authored but not mounted - falling back to a name scan.");
+
         var candidates = _mounts.Assets
             .Where(a => a.IsResolved && a.VirtualPath.Contains("grasstint", StringComparison.OrdinalIgnoreCase))
             .Select(a => a.VirtualPath)
