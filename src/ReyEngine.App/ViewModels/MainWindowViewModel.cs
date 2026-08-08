@@ -3745,6 +3745,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M98: Map Bin Editor window
         MapBinEditor.Resolve = ResolveBinName;
         MapBinEditor.LoadThumbnail = LoadThumbnailByPath;   // M406: texture previews on texture rows
+        // M408: the same meta-schema hooks the material and particle editors already receive, so the bin
+        // editor can list a class's declared-but-absent fields and add one.
+        MapBinEditor.DeclaredProperties = MaterialEditor.DeclaredProperties;
+        MapBinEditor.ClassName = MaterialEditor.ClassName;
         MapBinEditor.Info = m => _log.Info("MapBin", m);
         MapBinEditor.Warn = m => _log.Warn("MapBin", m);
         MapBinEditor.PickOldOriginal = () => Dialogs.OpenFileAsync(

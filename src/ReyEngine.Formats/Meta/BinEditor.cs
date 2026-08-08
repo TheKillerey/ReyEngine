@@ -40,6 +40,7 @@ public sealed class BinEditorDocument
                 IsBranch = true,
                 Kind = BinValueKind.ReadOnly,
                 PathLabel = className,
+                Object = obj,   // M408: kept so the schema panel can ADD a field to this object
             };
             foreach (var (nh, prop) in obj.Properties)
                 node.Children.Add(Build(Name(nh, resolve), nh, prop, resolve, className));
@@ -132,6 +133,36 @@ public sealed class EditableBinField
     public string OriginalText { get; init; } = "";
     public List<EditableBinField> Children { get; } = new();
     internal BinTreeProperty? Property { get; init; }
+
+    /// <summary>M408: the underlying object, on ROOTS only. Internal for the same reason Property is -
+    /// the App must not depend on LeagueToolkit types - so the schema surface below is exposed instead.</summary>
+    internal BinTreeObject? Object { get; init; }
+
+    /// <summary>Class hash of the object this root represents, or 0 for a non-root field.</summary>
+    public uint ClassHash => Object?.ClassHash ?? 0u;
+
+    /// <summary>Property hashes the object ALREADY carries - what the schema panel diffs against to work
+    /// out which declared fields are missing.</summary>
+    public IReadOnlyCollection<uint> PresentHashes =>
+        Object is null ? Array.Empty<uint>() : Object.Properties.Keys.ToList();
+
+    /// <summary>
+    /// M408: add one declared-but-absent field to this object, mirroring
+    /// ParticleEmitterEntry.TryAddDefaultProperty.
+    ///
+    /// <para>Returns false with a reason rather than throwing: every refusal here - unsupported type, no
+    /// authored default, field already present - is expected rather than exceptional.</para>
+    /// </summary>
+    public bool TryAddDefaultProperty(uint nameHash, string fieldType, string? defaultJson, out string? reason)
+    {
+        reason = null;
+        if (Object is null) { reason = "not an object"; return false; }
+        if (Object.Properties.ContainsKey(nameHash)) { reason = "already present"; return false; }
+        if (!MetaDefaultProperty.TryCreate(nameHash, fieldType, defaultJson, out var prop, out reason))
+            return false;
+        Object.Properties[nameHash] = prop!;
+        return true;
+    }
 
     public bool IsEditable => !IsBranch && Kind != BinValueKind.ReadOnly && Property is not null;
 

@@ -73,6 +73,47 @@ public class BinValidatorSchemaTests
         Assert.Equal("0xdeadbeef", shader.CurrentText(_ => null));
     }
 
+    /// <summary>M408: the bin editor could only overwrite existing values. A root now exposes its class,
+    /// its present fields and a way to ADD one, which is what the schema panel drives.</summary>
+    [Fact]
+    public void ARootCanAddADeclaredFieldItDoesNotHave()
+    {
+        var doc = ReyEngine.Formats.Meta.BinEditorDocument.Parse(
+            Bin(new BinTreeString(H("name"), "Test")), _ => null);
+        var root = doc.Roots.Single();
+
+        Assert.Equal(MatClass, root.ClassHash);
+        Assert.Contains(H("name"), root.PresentHashes);
+        Assert.DoesNotContain(H("type"), root.PresentHashes);
+
+        Assert.True(root.TryAddDefaultProperty(H("type"), "U32", "7", out var reason));
+        Assert.Null(reason);
+        Assert.Contains(H("type"), root.PresentHashes);
+    }
+
+    /// <summary>Adding a field that is already there must be refused with a reason, not duplicated.</summary>
+    [Fact]
+    public void AddingAFieldThatAlreadyExistsIsRefused()
+    {
+        var doc = ReyEngine.Formats.Meta.BinEditorDocument.Parse(
+            Bin(new BinTreeString(H("name"), "Test")), _ => null);
+        Assert.False(doc.Roots.Single().TryAddDefaultProperty(H("name"), "String", "\"x\"", out var reason));
+        Assert.Equal("already present", reason);
+    }
+
+    /// <summary>The added field must SURVIVE a save - otherwise the button appears to work and the edit
+    /// is silently lost.</summary>
+    [Fact]
+    public void AnAddedFieldSurvivesSerialisation()
+    {
+        var doc = ReyEngine.Formats.Meta.BinEditorDocument.Parse(
+            Bin(new BinTreeString(H("name"), "Test")), _ => null);
+        Assert.True(doc.Roots.Single().TryAddDefaultProperty(H("type"), "U32", "7", out _));
+
+        var reloaded = ReyEngine.Formats.Meta.BinEditorDocument.Parse(doc.Serialize(), _ => null);
+        Assert.Contains(H("type"), reloaded.Roots.Single().PresentHashes);
+    }
+
     /// <summary>M405: the object's own `name`, used as a label when its path hash never resolves.</summary>
     [Fact]
     public void OwnNameIsExposedWhenTheObjectCarriesOne()

@@ -135,6 +135,11 @@ public sealed class MapBinObjectViewModel
     public required string Name { get; init; }
     public required string ClassName { get; init; }
     public required EditableBinField Root { get; init; }
+
+    /// <summary>M408: declared-but-absent fields for this object, and the means to add one. Built lazily
+    /// because a bin can hold thousands of objects and the panel is only meaningful for the selected
+    /// one - building every panel up front would query the meta database once per object on open.</summary>
+    public MetaSchemaPanelViewModel? Schema { get; set; }
 }
 
 public sealed partial class MapBinClassGroupViewModel : ObservableObject
@@ -171,6 +176,11 @@ public sealed partial class MapBinEditorViewModel : ObservableObject
     /// <summary>M406: virtual asset path -> decoded thumbnail, supplied by the host (which owns the
     /// mounts). Null when no project is open, in which case texture rows simply show no preview.</summary>
     public Func<string, Avalonia.Media.Imaging.Bitmap?>? LoadThumbnail;
+
+    /// <summary>M408: meta-schema hooks, same shape the material and particle editors use. Null when the
+    /// meta database has not been synced, in which case the panel simply reports nothing to add.</summary>
+    public Func<uint, IReadOnlyList<ReyEngine.Core.Meta.MetaProperty>>? DeclaredProperties;
+    public Func<uint, string?>? ClassName;
     public Func<WadAssetEntry, byte[], Task<bool>>? SaveBytes;
     public Func<Task<string?>>? PickOldOriginal;
     public Func<WadAssetEntry, byte[]?>? ReadRiotOriginal;
@@ -239,7 +249,24 @@ public sealed partial class MapBinEditorViewModel : ObservableObject
         if (value is null) return;
         foreach (var c in value.Root.Children)
             Rows.Add(new MapBinRowViewModel(c, this));
+
+        // M408: build the add-a-field panel for THIS object, on selection. Same call shape the particle
+        // editor uses. Adding a field mutates the live BinTree, so it must mark the document dirty -
+        // otherwise the change would be invisible to Save and silently lost.
+        value.Schema ??= MetaSchemaPanelViewModel.Build(
+            value.Root.ClassHash, value.Root.PresentHashes, DeclaredProperties, ClassName,
+            (uint nameHash, string fieldType, string? defaultJson, out string? reason) =>
+            {
+                if (!value.Root.TryAddDefaultProperty(nameHash, fieldType, defaultJson, out reason)) return false;
+                NotifyDirty();
+                return true;
+            },
+            canEdit: true);
+        SelectedSchema = value.Schema;
     }
+
+    /// <summary>M408: the selected object's schema panel, for the view to bind to.</summary>
+    [ObservableProperty] private MetaSchemaPanelViewModel? _selectedSchema;
 
     internal void NotifyDirty() => IsDirty = true;
 

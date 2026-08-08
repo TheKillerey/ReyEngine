@@ -77,6 +77,42 @@
               <TextBlock Text="{Binding SelectedObject.Name}" FontSize="11"
                          Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
             </StackPanel>
+            <!-- M408: declared-but-absent fields for the selected object, the same panel the material and
+                 particle editors already show. This editor could previously only overwrite existing
+                 values; "+" writes a field at the class's own default. -->
+            <Expander Header="UNSET FIELDS" IsExpanded="False" Margin="0,6,0,0"
+                      IsVisible="{Binding SelectedSchema.HasSchema}">
+              <StackPanel Spacing="2" Margin="0,4,0,0">
+                <TextBlock Text="{Binding SelectedSchema.Summary}" FontSize="9" Opacity="0.6" />
+                <TextBlock Text="{Binding SelectedSchema.ClassDisplayName}" FontSize="9" Opacity="0.5"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="Declared by the class but absent here - the game uses the default shown."
+                           FontSize="9" Opacity="0.45" TextWrapping="Wrap" Margin="0,0,0,3" />
+                <ItemsControl ItemsSource="{Binding SelectedSchema.UnsetRows}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:MetaSchemaRowViewModel">
+                      <DockPanel Margin="0,1">
+                        <Button DockPanel.Dock="Right" Classes="tool" Content="+" FontSize="9"
+                                Padding="5,0" Margin="4,0,0,0" MinWidth="0"
+                                Command="{Binding AddCommand}" IsEnabled="{Binding CanAdd}"
+                                IsVisible="{Binding !Added}" ToolTip.Tip="{Binding AddTip}" />
+                        <TextBlock DockPanel.Dock="Right" Text="added" FontSize="8" Opacity="0.6"
+                                   Margin="4,0,0,0" VerticalAlignment="Center"
+                                   IsVisible="{Binding Added}" />
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding DefaultText}" FontSize="9"
+                                   Opacity="0.55" MaxWidth="110" TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding DefaultText}" />
+                        <TextBlock DockPanel.Dock="Left" Text="{Binding TypeName}" FontSize="8"
+                                   Opacity="0.4" Margin="0,0,6,0" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding Name}" FontSize="10" Opacity="0.75"
+                                   TextTrimming="CharacterEllipsis" />
+                      </DockPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Expander>
+
           </Border>
           <TreeView ItemsSource="{Binding Rows}" Margin="4,0,4,4">
             <TreeView.DataTemplates>
