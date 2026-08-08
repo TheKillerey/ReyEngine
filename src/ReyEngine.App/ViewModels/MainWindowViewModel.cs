@@ -14,6 +14,7 @@ using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Painting;
 using ReyEngine.Core.Diagnostics;
 using ReyEngine.Core.Hashing;
+using ReyEngine.Core.Meta;
 using ReyEngine.Core.Projects;
 using ReyEngine.Core.Selection;
 using ReyEngine.Core.Undo;
@@ -35,6 +36,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 {
     private readonly Logger _log = new();
     private readonly HashSyncService _sync = new();
+
+    // M367: the LeagueToolkit meta-class schema. Lazy and thread-safe: it is a ~3.6 MB parse that most
+    // sessions never need, and when it IS needed the first call arrives from a background bin parse.
+    // Optional by design - nothing here fails when it was never synced, it just resolves fewer names.
+    private readonly MetaClassSyncService _metaSync = new();
+    private Lazy<MetaClassDatabase> _meta = null!;
+    private MetaClassDatabase Meta => _meta.Value;
     private readonly WadPathResolver _resolver;
     private WadArchive? _archive;
     private AssetMountService? _mounts;          // project mode: the virtual file system
@@ -3610,6 +3618,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MainWindowViewModel()
     {
         _log.AddSink(Console);
+        // M367: deferred, not eager - LoadLocal reads and parses ~3.6 MB, and a session that never opens a
+        // bin should not pay for it at startup. Lazy is thread-safe, which matters because the first
+        // ResolveBinName usually arrives from a background parse.
+        _meta = new Lazy<MetaClassDatabase>(() => _metaSync.LoadLocal(m => _log.Info("Meta", m)));
         _cullBackfaces = Settings.CullBackfacesDefault;   // M40: honor saved viewport default
         Project.GameDirectory = ReyProject.GuessGameDirectory();
         _log.Info("ReyEngine", "Editor started.");
@@ -4366,6 +4378,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>M367: download the LeagueToolkit meta-class database. Companion to Sync Hashes, and
+    /// deliberately a SEPARATE command - the hash lists are ~100 MB and this is ~3.6 MB, so bundling them
+    /// would make a cheap refresh cost the expensive one.</summary>
+    [RelayCommand]
+    private async Task SyncMetaClasses()
+    {
+        try
+        {
+            Status = "Syncing meta classes…";
+            var db = await _metaSync.SyncAsync(m => _log.Info("Meta", m));
+            _meta = new Lazy<MetaClassDatabase>(() => db);
+            Status = db.IsEmpty
+                ? "Meta classes synced, but the database parsed empty"
+                : $"Meta classes synced — {db.ClassCount:n0} classes, build {db.ResolvedBuild}";
+            if (db.IsEmpty) _log.Warn("Meta", "The download parsed to zero classes - format may have changed.");
+            else _log.Success("Meta", $"{db.ClassCount:n0} class(es) available for name and schema lookup.");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Meta", $"Sync failed: {ex.Message}");
+        }
+    }
+
     [RelayCommand]
     private void ReloadLocalHashes()
     {
@@ -4549,7 +4584,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // ---- Material editor: load + apply + save ---------------------------
 
-    private string? ResolveBinName(uint h) => _resolver.Database.TryGetBinName(h, out var n) ? n : null;
+    /// <summary>Hash to bin field/class name. M367 adds the LeagueToolkit meta database as a SECOND
+    /// source, consulted only when CommunityDragon has no answer - the two have genuinely different
+    /// coverage, and CDragon stays first so this can never change a name the app already resolved.
+    /// This one line feeds every bin consumer (materials, particles, HUD, workshop), so widening it here
+    /// widens all of them at once.</summary>
+    private string? ResolveBinName(uint h)
+    {
+        if (_resolver.Database.TryGetBinName(h, out var n)) return n;
+        return Meta.TryGetName(h, out var m) ? m : null;
+    }
 
     private WadAssetEntry? ResolveMaterialBin(WadAssetEntry entry)
     {

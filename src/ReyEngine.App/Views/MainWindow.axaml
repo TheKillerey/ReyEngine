@@ -140,6 +140,8 @@
         </MenuItem>
         <MenuItem Header="Hashes &amp; Names">
           <MenuItem Header="Sync Hashes (CommunityDragon)" Command="{Binding SyncHashesCommand}" />
+          <MenuItem Header="Sync Meta Classes (LeagueToolkit)" Command="{Binding SyncMetaClassesCommand}"
+                    ToolTip.Tip="Riot's own .bin class and property schema, dumped per patch — adds names, types and authored defaults" />
           <MenuItem Header="Reload Local Hashes" Command="{Binding ReloadLocalHashesCommand}" />
           <MenuItem Header="Hash Lookup" Command="{Binding HashLookupCommand}" />
           <Separator />

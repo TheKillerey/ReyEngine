@@ -13,11 +13,20 @@ public static class ReyPaths
     public static string CommunityDragonDir => Path.Combine(HashesDir, "communitydragon", "lol");
     public static string MergedCache => Path.Combine(HashesDir, "merged_hashes.cache");
 
+    /// <summary>M367: the LeagueToolkit meta-class database. Downloaded and cached exactly like the
+    /// CommunityDragon hashes above and gitignored for the same two reasons: it is third-party data this
+    /// repo should not redistribute (lol-meta-classes ships no licence), and it is re-dumped every patch,
+    /// so a committed copy would be stale the week after it landed.</summary>
+    public static string MetaDir => Path.Combine(DataRoot, "meta");
+    public static string MetaDbFile => Path.Combine(MetaDir, "meta.db.json");
+
     public static void EnsureHashDirs()
     {
         Directory.CreateDirectory(HashesDir);
         Directory.CreateDirectory(CommunityDragonDir);
     }
+
+    public static void EnsureMetaDir() => Directory.CreateDirectory(MetaDir);
 
     private static string ResolveDataRoot()
     {
