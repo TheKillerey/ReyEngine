@@ -309,11 +309,7 @@ public static class Dx11SceneBuilder
                     // no-op for ANY value and ANY direction. It removes the unmeasured term instead of
                     // guessing it.
                     bool bound = false;
-                    foreach (var slotName in new[]
-                             {
-                                 "GRASS_TINT_MAP_SharedTexture",
-                                 "GRASS_TINT_MAP_ALTERNATE_SharedTexture",
-                             })
+                    foreach (var slotName in GrassTintSlots)
                     {
                         if (ps.Textures.FirstOrDefault(t =>
                                 t.Name.Equals(slotName, StringComparison.OrdinalIgnoreCase)) is not { } slot)
@@ -614,6 +610,34 @@ public static class Dx11SceneBuilder
         return ps.Textures.FirstOrDefault(t =>
             t.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase))?.Name;
     }
+
+    /// <summary>M386: the reflected slots a map's grass tint binds to. Shared by Prepare and
+    /// <see cref="RebindGrassTint"/> so the set that gets BOUND and the set that gets REBOUND cannot
+    /// drift — a slot missing from one list would leave a stale tint on screen with nothing to show it.
+    /// Both ends are bound to the same texture on purpose; see the note in Prepare.</summary>
+    public static readonly string[] GrassTintSlots =
+    {
+        "GRASS_TINT_MAP_SharedTexture",
+        "GRASS_TINT_MAP_ALTERNATE_SharedTexture",
+    };
+
+    /// <summary>
+    /// M386: swap the grass tint on an ALREADY COMMITTED scene, without re-preparing it.
+    ///
+    /// <para>The tint is part of the map STATE, not the map build: switching dragon selects a different
+    /// mAlternateAssets entry. Re-preparing to change one texture costs a full rebuild of every material
+    /// (456 of them on base_srx), which is why the D3D11 viewport used to keep the tint it happened to be
+    /// built with while OpenGL followed the state.</para>
+    ///
+    /// <para>Returns how many slot bindings were replaced, so the caller can log a number rather than
+    /// assert success. Zero means no committed material has a tint slot — which is the same thing
+    /// GrassTintNoSlot reports at build time, not a failure to rebind.</para>
+    /// </summary>
+    public static int RebindGrassTint(ShaderPreviewRenderer renderer, string poolKey,
+        byte[] rgba, int width, int height)
+        // The SRV swap itself lives in the renderer, which owns PreviewMaterial.Textures; the SLOT NAMES
+        // stay here with the rest of the binding contract.
+        => renderer.RebindSharedTexture(GrassTintSlots, poolKey, rgba, width, height);
 
     /// <summary>M319: reflected texture target used by DefaultEnv_Flat_BakedTerrain. Public because the
     /// binding contract is GPU-free and regression-tested without creating a D3D device.</summary>

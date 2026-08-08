@@ -7731,17 +7731,31 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (string.Equals(path, _grassTintPathInUse, StringComparison.OrdinalIgnoreCase)) return;
 
         _grassTintPathInUse = path;
-        CurrentGrassTint = path is not null ? LoadTextureByPath(path) : null;
+        var tex = path is not null ? LoadTextureByPath(path) : null;
+        CurrentGrassTint = tex;   // OpenGL rebinds from this
+
+        // M386: D3D11 binds the tint into each material at scene-prepare time, so publishing the image is
+        // not enough - the committed materials keep the old SRV until something replaces it. Swap it in
+        // place rather than re-preparing the scene.
+        int rebound = tex is not null && path is not null
+            ? Dx11RebindGrassTint?.Invoke(path, tex) ?? 0
+            : 0;
 
         var c = GrassTintChoice();
         _log.Info("GrassTint", path is null
             ? "no grass tint resolved for this state."
             : $"{c.SourceLabel}: {path}"
-              + (c.FromAlternate ? $" (visibility bit {c.BitIndex})" : ""));
+              + (c.FromAlternate ? $" (visibility bit {c.BitIndex})" : "")
+              + (rebound > 0 ? $" — {rebound} D3D11 slot(s) rebound" : ""));
         OnPropertyChanged(nameof(GrassTintStatus));
     }
 
     private string? _grassTintPathInUse;
+
+    /// <summary>M386: set by the view (which owns the D3D11 surface) — swaps the grass tint on the live
+    /// scene and returns how many slot bindings changed. Null when D3D11 is not up, which is the normal
+    /// case under OpenGL and not an error.</summary>
+    public Func<string, TextureImage, int>? Dx11RebindGrassTint;
 
     /// <summary>M385: item 7 — the grass tint state, for the existing map/visibility inspector rather
     /// than a standalone debug window.</summary>

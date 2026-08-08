@@ -386,6 +386,14 @@ public partial class MainWindow : Window
             vm.ShowAddMeshWindow = ShowAddMesh;                           // M123
             vm.ShowWorkshopWindow = ShowWorkshop;
             vm.ShowLightBakeWindow = () => ShowLightBake(vm);             // M158
+            // M386: the view owns the D3D11 surface, so the grass-tint swap is routed through here.
+            // Guarded on HasScene: with no committed scene there are no materials to rebind, and the
+            // next Prepare will pick the tint up from the view-model anyway.
+            vm.Dx11RebindGrassTint = (path, tex) =>
+                _dx11 is { HasScene: true } d
+                    ? ReyEngine.App.Services.Dx11SceneBuilder.RebindGrassTint(
+                        d.Renderer, path, tex.Rgba, tex.Width, tex.Height)
+                    : 0;
             vm.ShowLightingWindow = () => ShowLighting(vm);               // M169
             vm.ShowTextureRecolorWindow = () => ShowTextureRecolor(vm);   // M171
             vm.PushTextureRegion = Viewport.QueueTextureUpdate;            // M172c: live brush strokes

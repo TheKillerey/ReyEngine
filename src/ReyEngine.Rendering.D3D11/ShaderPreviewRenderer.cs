@@ -1243,6 +1243,33 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         Upload(_overlayCb, bytes, 80);
     }
 
+    /// <summary>
+    /// M386: replace a shared texture on every committed material that binds it, in place.
+    ///
+    /// <para>For state-driven textures — the map's grass tint is the case this exists for — where the
+    /// scene is otherwise unchanged. Re-preparing the scene to swap one SRV rebuilds every material,
+    /// which is why the D3D11 viewport used to keep whichever tint it was built with.</para>
+    ///
+    /// <para>Only materials that ALREADY bind one of <paramref name="targets"/> are touched; this never
+    /// introduces a binding that the permutation did not reflect. Returns the number of slot bindings
+    /// replaced — zero means no committed material has such a slot, not a failure.</para>
+    /// </summary>
+    public int RebindSharedTexture(IReadOnlyList<string> targets, string poolKey,
+        byte[] rgba, int width, int height)
+    {
+        int rebound = 0;
+        foreach (var mat in Materials)
+            foreach (var t in targets)
+            {
+                if (!mat.Textures.ContainsKey(t)) continue;
+                // Pooled first: cycling dragon states revisits the same handful of textures, so an
+                // already-uploaded tint costs no GPU allocation to switch back to.
+                if (!TryBindCached(mat, t, poolKey)) SetTexture(mat, t, poolKey, rgba, width, height);
+                rebound++;
+            }
+        return rebound;
+    }
+
     public void SetHighlightRanges(IReadOnlyList<(int Start, int Count)>? ranges)
     {
         if (ReferenceEquals(_highlightSource, ranges)) return;
