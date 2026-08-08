@@ -367,6 +367,8 @@
                 ShowLightMarkers="{Binding ShowLightMarkers}"
                 GrassTintTexture="{Binding CurrentGrassTint}"
                 GrassTintRect="{Binding CurrentGrassTintRect}"
+                GrassTintAltTexture="{Binding CurrentGrassTintAlt}"
+                GrassInterp="{Binding GrassInterp}"
                 ParticleMarkers="{Binding ParticleMarkers}"
                 SelectedParticlePosition="{Binding SelectedParticleMarker}"
                 PropMarkers="{Binding PropMarkers}"

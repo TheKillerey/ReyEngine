@@ -62,6 +62,11 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, TextureImage?>(nameof(GrassTintTexture));   // M78
     public static readonly StyledProperty<Vector4> GrassTintRectProperty =
         AvaloniaProperty.Register<ViewportControl, Vector4>(nameof(GrassTintRect), new Vector4(0, 0, 1, 1));
+    // M397: the environment transition's incoming tint and its blend factor.
+    public static readonly StyledProperty<TextureImage?> GrassTintAltTextureProperty =
+        AvaloniaProperty.Register<ViewportControl, TextureImage?>(nameof(GrassTintAltTexture));
+    public static readonly StyledProperty<float> GrassInterpProperty =
+        AvaloniaProperty.Register<ViewportControl, float>(nameof(GrassInterp));
     public static readonly StyledProperty<IReadOnlyList<Vector3>?> ParticleMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ParticleMarkers));
     public static readonly StyledProperty<Vector3?> SelectedParticlePositionProperty =
@@ -286,6 +291,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool ShowLightMarkers { get => GetValue(ShowLightMarkersProperty); set => SetValue(ShowLightMarkersProperty, value); }
     public TextureImage? GrassTintTexture { get => GetValue(GrassTintTextureProperty); set => SetValue(GrassTintTextureProperty, value); }
     public Vector4 GrassTintRect { get => GetValue(GrassTintRectProperty); set => SetValue(GrassTintRectProperty, value); }
+    public TextureImage? GrassTintAltTexture { get => GetValue(GrassTintAltTextureProperty); set => SetValue(GrassTintAltTextureProperty, value); }
+    public float GrassInterp { get => GetValue(GrassInterpProperty); set => SetValue(GrassInterpProperty, value); }
     /// <summary>World positions of placed-particle markers to draw (M35); null/empty hides them.</summary>
     public IReadOnlyList<Vector3>? ParticleMarkers { get => GetValue(ParticleMarkersProperty); set => SetValue(ParticleMarkersProperty, value); }
     public Vector3? SelectedParticlePosition { get => GetValue(SelectedParticlePositionProperty); set => SetValue(SelectedParticlePositionProperty, value); }
@@ -898,6 +905,10 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             var gti = GrassTintTexture;
             _meshRenderer.SetGrassTintTexture(gti?.Rgba, gti?.Width ?? 0, gti?.Height ?? 0, GrassTintRect);
+            // M397: and the transition's incoming tint. Null clears it, which turns the blend off - the
+            // resting state whenever nothing is fading.
+            var gta = GrassTintAltTexture;
+            _meshRenderer.SetGrassTintTransition(gta?.Rgba, gta?.Width ?? 0, gta?.Height ?? 0, GrassInterp);
             _grassTintDirty = false;
         }
         if (_dynamicLightsDirty)   // M70: (re)upload the Light.dat point-light table on the GL thread

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -131,6 +132,30 @@ public partial class MainWindow : Window
     }
 
 
+    private DispatcherTimer? _grassTimer;
+
+    /// <summary>M397: pump frames while an environment crossfade runs. ~60 Hz; the transition itself is
+    /// wall-clock driven inside the view-model, so a dropped tick costs smoothness, never correctness.</summary>
+    private void StartGrassTransitionTimer()
+    {
+        if (_closed || DataContext is not MainWindowViewModel vm) return;
+        _grassTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        if (_grassTimerHooked is false)
+        {
+            _grassTimerHooked = true;
+            _grassTimer.Tick += (_, _) =>
+            {
+                if (_closed || DataContext is not MainWindowViewModel v || !v.TickGrassTransition())
+                { _grassTimer!.Stop(); return; }
+                Viewport.RequestFrame();
+            };
+        }
+        _grassTimer.Start();
+        Viewport.RequestFrame();
+    }
+
+    private bool _grassTimerHooked;
+
     private static void SavePng(string path, byte[] bgra, int w, int h)
     {
         var bmp = new Avalonia.Media.Imaging.WriteableBitmap(
@@ -188,9 +213,6 @@ public partial class MainWindow : Window
         _dx11.LightmapScale = vm.CurrentLightmapScale;
         _dx11.AnimateTime = vm.AnimationsPlaying;
         _dx11.Wireframe = vm.ShowWireframe;
-        // M396: advance the environment crossfade and hand the factor to the shaders. Ticked here rather
-        // than on a timer because this IS the frame - a transition can only advance as fast as it draws.
-        if (vm.TickGrassTransition()) Viewport.RequestFrame();
         _dx11.GrassInterp = vm.GrassInterp;
         // M269: pushed every frame rather than on a selection-changed event - the selection, the map and
         // the scene rebuild all move independently, and one of the three going stale is exactly how a
@@ -398,6 +420,9 @@ public partial class MainWindow : Window
             // M386: the view owns the D3D11 surface, so the grass-tint swap is routed through here.
             // Guarded on HasScene: with no committed scene there are no materials to rebind, and the
             // next Prepare will pick the tint up from the view-model anyway.
+            // M397: one timer drives the crossfade for BOTH viewports. It starts when a fade begins and
+            // stops the moment it lands, so a settled editor is not pumping frames for nothing.
+            vm.GrassTransitionStarted = StartGrassTransitionTimer;
             vm.Dx11RebindGrassTintPair = (fromPath, fromTex, toPath, toTex) =>
                 _dx11 is { HasScene: true } d
                     ? ReyEngine.App.Services.Dx11SceneBuilder.RebindGrassTintPair(d.Renderer,

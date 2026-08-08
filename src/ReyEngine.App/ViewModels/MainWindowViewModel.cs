@@ -7737,6 +7737,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>GRASS_INTERP for this frame: 0 = the state being left, 1 = the state being entered.</summary>
     public float GrassInterp => _grassTransition.Interp;
 
+/// <summary>M397: the environment transition's INCOMING grass tint, for OpenGL's alternate sampler.
+    /// Null whenever nothing is fading, which switches the shader's blend off.</summary>
+    [ObservableProperty] private TextureImage? _currentGrassTintAlt;
+
+
     private void RefreshGrassTint()
     {
         if (_currentMap is null) return;
@@ -7753,6 +7758,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!_grassTransition.Begin(path, duration)) return;
         _grassLastTick = _grassClock.Elapsed.TotalSeconds;
         ApplyGrassTransition();
+        // M397: ask the host to start pumping frames. Driven by the host rather than the D3D11 render
+        // callback, because OpenGL has its own loop and a fade must run in whichever viewport is up.
+        if (_grassTransition.IsRunning) GrassTransitionStarted?.Invoke();
 
         _log.Info("GrassTint", path is null
             ? "no grass tint resolved for this state."
@@ -7771,10 +7779,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var from = _grassTransition.FromPath;
         var to = _grassTransition.ToPath;
 
-        // OpenGL still samples ONE tint (its second sampler is not built yet), so give it the end it is
-        // nearest. That degrades to the right texture at both ends of a fade rather than being wrong.
-        var nearest = _grassTransition.NearestPath;
-        CurrentGrassTint = nearest is not null ? LoadTextureByPath(nearest) : null;
+        // M397: OpenGL now blends the same pair Riot does, so it gets BOTH ends - base on the primary
+        // sampler, incoming on the alternate - and the shared GrassInterp. No approximation left here.
+        CurrentGrassTint = from is not null ? LoadTextureByPath(from) : null;
+        CurrentGrassTintAlt = _grassTransition.IsRunning && to is not null ? LoadTextureByPath(to) : null;
 
         var fromTex = from is not null ? LoadTextureByPath(from) : null;
         var toTex = to is not null ? LoadTextureByPath(to) : null;
@@ -7786,6 +7794,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         Dx11RebindGrassTintPair?.Invoke(from, fromTex, to, toTex);
     }
+
+    /// <summary>M397: raised when a fade begins, so the host can start ticking. Renderer-neutral on
+    /// purpose - OpenGL and D3D11 have different frame loops and both must be able to run a transition.</summary>
+    public Action? GrassTransitionStarted;
 
     /// <summary>M396: advance the crossfade. Called from the per-frame path of whichever viewport is
     /// presenting; returns true while it is still moving, so the host knows to keep asking for frames.</summary>

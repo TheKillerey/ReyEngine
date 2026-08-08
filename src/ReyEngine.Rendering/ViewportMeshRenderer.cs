@@ -49,8 +49,13 @@ public sealed class ViewportMeshRenderer : IDisposable
     private bool _lightmapsEnabled = true;                        // M69: toggle baked lightmaps off (fall back to sun/sky term)
     // M78: the map's grass-tint texture (world-space planar, VertexDeform materials multiply it in)
     private uint _grassTintTex;
+    // M397: the state being ENTERED during an environment transition, matching Riot's
+    // GRASS_TINT_MAP_ALTERNATE. Zero when nothing is fading, in which case the shader is told to use
+    // the base tint alone rather than blending against an empty sampler.
+    private uint _grassTintAltTex;
+    private float _grassInterp;
     private Vector4 _grassTintRect = new(0f, 0f, 1f, 1f);
-    private int _mGrassTint, _mHasGrassTint, _mGrassTintRect;
+    private int _mGrassTint, _mHasGrassTint, _mGrassTintRect, _mGrassTintAlt, _mHasGrassTintAlt, _mGrassInterp;
     // M70: legacy Riot point lights (Light.dat) uploaded as an RGBA32F table sampled per fragment.
     private uint _lightsTex;
     private int _lightCount;
@@ -340,6 +345,12 @@ uniform int uIsTerrainBlend;
 uniform sampler2D uGrassTint;
 uniform int uHasGrassTint;
 uniform vec4 uGrassTintRect;
+// M397: environment transition. Riot blends the state being left against the state being entered with
+// GRASS_INTERP (PerFramePixelCB offset 260); this is the same lerp, so GL matches exactly here rather
+// than approximating.
+uniform sampler2D uGrassTintAlt;
+uniform int uHasGrassTintAlt;
+uniform float uGrassInterp;
 // M70: legacy Riot dynamic point lights (Light.dat). Table is an RGBA32F texture: texel (i,0) = position.xyz
 // + radius (w), texel (i,1) = colour.rgb. highp is required - positions reach ~14000 world units and would
 // quantize badly at lower precision.
@@ -417,7 +428,15 @@ void main() {
         // the GL path needs it: D3D11 runs Riot's own blob, which already contains the flip.
         vec2 gtUv = clamp((vWorld.xz - uGrassTintRect.xy) * uGrassTintRect.zw, 0.0, 1.0);
         gtUv.y = 1.0 - gtUv.y;
-        tex.rgb *= texture(uGrassTint, gtUv).rgb;
+        vec3 gt = texture(uGrassTint, gtUv).rgb;
+        // M397: same blend Riot's blob 19 performs -
+        //     add r2.xyz, -r1.xyzx, r2.xyzx      // alt - base
+        //     mad r1.xyz, cb1[16].yyyy, r2, r1   // base + interp*(alt-base)
+        // Gated on the alternate actually being bound: with no transition running there is no second
+        // texture, and blending against an unbound sampler reads as black and would darken the grass.
+        if (uHasGrassTintAlt == 1)
+            gt = mix(gt, texture(uGrassTintAlt, gtUv).rgb, clamp(uGrassInterp, 0.0, 1.0));
+        tex.rgb *= gt;
     }
     vec3 base = tex.rgb;
     float alpha = tex.a;
@@ -853,6 +872,9 @@ void main() { FragColor = uColor; }";
         _mGrassTint = gl.GetUniformLocation(_meshProgram, "uGrassTint");         // M78
         _mHasGrassTint = gl.GetUniformLocation(_meshProgram, "uHasGrassTint");
         _mGrassTintRect = gl.GetUniformLocation(_meshProgram, "uGrassTintRect");
+        _mGrassTintAlt = gl.GetUniformLocation(_meshProgram, "uGrassTintAlt");   // M397
+        _mHasGrassTintAlt = gl.GetUniformLocation(_meshProgram, "uHasGrassTintAlt");
+        _mGrassInterp = gl.GetUniformLocation(_meshProgram, "uGrassInterp");
         _mLightsTex = gl.GetUniformLocation(_meshProgram, "uLightsTex");         // M70
         _mNumLights = gl.GetUniformLocation(_meshProgram, "uNumLights");
         _mLightIntensity = gl.GetUniformLocation(_meshProgram, "uLightIntensity");
@@ -1490,6 +1512,39 @@ void main(){
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _grassTintRect = rect;
+    }
+
+    /// <summary>
+    /// M397: the environment transition's INCOMING grass tint (Riot's GRASS_TINT_MAP_ALTERNATE) and the
+    /// blend factor (GRASS_INTERP). Passing null clears the alternate, which turns the blend off - the
+    /// correct resting state when nothing is fading.
+    ///
+    /// <para>Deliberately separate from <see cref="SetGrassTintTexture"/>: the base tint carries the
+    /// world rect and changes when the MAP changes, while this changes when the STATE does. Folding them
+    /// into one call would re-upload the base on every dragon switch.</para>
+    /// </summary>
+    public unsafe void SetGrassTintTransition(byte[]? altRgba, int width, int height, float interp)
+    {
+        if (!_ready) return;
+        _grassInterp = interp;
+
+        if (altRgba is null || width <= 0 || height <= 0)
+        {
+            if (_grassTintAltTex != 0) { _gl.DeleteTexture(_grassTintAltTex); _grassTintAltTex = 0; }
+            return;
+        }
+        if (_grassTintAltTex == 0) _grassTintAltTex = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, _grassTintAltTex);
+        fixed (byte* p = altRgba)
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)width, (uint)height, 0,
+                PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        // ClampToEdge, matching the base tint: the tint is a one-shot canvas over the map, and wrapping
+        // would tile a second copy across anything outside the authored extent.
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
     }
 
     /// <summary>M70: upload a Riot Light.dat point-light table as an RGBA32F texture (width = light count,
@@ -2143,6 +2198,18 @@ void main(){
                     _gl.BindTexture(TextureTarget.Texture2D, _grassTintTex);
                     _gl.ActiveTexture(TextureUnit.Texture0);
                 }
+                // M397: the transition's incoming tint on unit 9 (the first free one). uHasGrassTintAlt
+                // gates the blend, so with nothing fading the shader never samples an unbound unit -
+                // which would read black and darken the grass instead of leaving it alone.
+                _gl.Uniform1(_mGrassTintAlt, 9);
+                _gl.Uniform1(_mHasGrassTintAlt, _grassTintAltTex != 0 ? 1 : 0);
+                _gl.Uniform1(_mGrassInterp, _grassInterp);
+                if (_grassTintAltTex != 0)
+                {
+                    _gl.ActiveTexture(TextureUnit.Texture9);
+                    _gl.BindTexture(TextureTarget.Texture2D, _grassTintAltTex);
+                    _gl.ActiveTexture(TextureUnit.Texture0);
+                }
                 // M70: dynamic point lights — table on unit 7, count gated by the toggle (0 = shader skips them).
                 _gl.Uniform1(_mLightsTex, 7);
                 int activeLights = (_dynamicLightsEnabled && _lightsTex != 0) ? _lightCount : 0;
@@ -2623,6 +2690,7 @@ void main(){
         _gl.DeleteTexture(_whiteTex);
         if (_lightsTex != 0) { _gl.DeleteTexture(_lightsTex); _lightsTex = 0; }   // M70
         if (_grassTintTex != 0) { _gl.DeleteTexture(_grassTintTex); _grassTintTex = 0; }   // M78
+        if (_grassTintAltTex != 0) { _gl.DeleteTexture(_grassTintAltTex); _grassTintAltTex = 0; }   // M397
         _gl.DeleteVertexArray(_bucketMeshVao); _gl.DeleteBuffer(_bucketMeshVbo);   // M77b
         _gl.DeleteProgram(_bucketMeshProgram);
         _gl.DeleteBuffer(_boundsVbo);
