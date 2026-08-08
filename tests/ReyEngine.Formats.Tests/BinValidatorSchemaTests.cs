@@ -48,6 +48,50 @@ public class BinValidatorSchemaTests
 
     // ---- the check that matters most: silence without a schema ----
 
+    /// <summary>M405: an object link must render its TARGET, not its hash. Format already received the
+    /// resolver and ignored it, so a material's `shader` row showed a bare hash - or nothing, where the
+    /// row template hides read-only values.</summary>
+    [Fact]
+    public void AnObjectLinkFormatsAsItsResolvedTarget()
+    {
+        var doc = ReyEngine.Formats.Meta.BinEditorDocument.Parse(
+            Bin(new BinTreeObjectLink(H("shader"), MatClass)),
+            h => h == MatClass ? "Shaders/StaticMesh/DefaultEnv_Flat" : null);
+        var shader = doc.Roots.Single().Children.Single(c => c.NameHash == H("shader"));
+        Assert.Equal("Shaders/StaticMesh/DefaultEnv_Flat",
+            shader.CurrentText(h => h == MatClass ? "Shaders/StaticMesh/DefaultEnv_Flat" : null));
+    }
+
+    /// <summary>Unresolvable stays HEX rather than blank or an error: shader links resolve globally, not
+    /// through the bin's dependency list, so a miss is normal.</summary>
+    [Fact]
+    public void AnUnresolvableLinkFallsBackToHex()
+    {
+        var doc = ReyEngine.Formats.Meta.BinEditorDocument.Parse(
+            Bin(new BinTreeObjectLink(H("shader"), 0xdeadbeef)), _ => null);
+        var shader = doc.Roots.Single().Children.Single(c => c.NameHash == H("shader"));
+        Assert.Equal("0xdeadbeef", shader.CurrentText(_ => null));
+    }
+
+    /// <summary>M405: the object's own `name`, used as a label when its path hash never resolves.</summary>
+    [Fact]
+    public void OwnNameIsExposedWhenTheObjectCarriesOne()
+    {
+        var doc = ReyEngine.Formats.Meta.BinEditorDocument.Parse(
+            Bin(new BinTreeString(H("name"), "LegacyPort/map11/Normal_df41cbeda41c")), _ => null);
+        Assert.Equal("LegacyPort/map11/Normal_df41cbeda41c", doc.Roots.Single().OwnName);
+    }
+
+    /// <summary>Not universal - VfxSystemDefinitionData carries no top-level name - so callers keep a
+    /// fallback and this must return null rather than inventing one.</summary>
+    [Fact]
+    public void OwnNameIsNullWhenTheObjectHasNoNameProperty()
+    {
+        var doc = ReyEngine.Formats.Meta.BinEditorDocument.Parse(
+            Bin(new BinTreeU32(H("type"), 3)), _ => null);
+        Assert.Null(doc.Roots.Single().OwnName);
+    }
+
     [Fact]
     public void WithNoSchemaNothingIsReported()
     {

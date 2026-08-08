@@ -27,6 +27,11 @@ public sealed partial class MapBinRowViewModel : ObservableObject
     public bool IsBranch => _f.IsBranch;
     public bool IsBool => _f.IsEditable && _f.Kind == BinValueKind.Bool;
     public bool IsEditableText => _f.IsEditable && _f.Kind != BinValueKind.Bool;
+
+    /// <summary>M405: leaves that have a VALUE but no editor - object links, matrices, anything
+    /// BinValueKind.ReadOnly. The row template only ever bound a TextBox gated on IsEditableText, so
+    /// these rendered blank; a link showed its type and nothing else.</summary>
+    public bool IsReadOnlyValue => !IsBranch && !IsBool && !IsEditableText;
     public bool IsColor => _f.Kind is BinValueKind.Vector3 or BinValueKind.Vector4
                            && Name.Contains("color", StringComparison.OrdinalIgnoreCase);
 
@@ -139,7 +144,10 @@ public sealed partial class MapBinEditorViewModel : ObservableObject
         foreach (var root in _doc.Roots)
             _allObjects.Add(new MapBinObjectViewModel
             {
-                Name = Resolve?.Invoke(root.NameHash) ?? $"0x{root.NameHash:x8}",
+                // M405: resolved hash -> the object's OWN name -> hex. A custom or ported bin's path
+                // hash was never published by Riot, so it cannot resolve; its `name` property is then the
+                // only readable label, and hex is what the user was seeing instead.
+                Name = Resolve?.Invoke(root.NameHash) ?? root.OwnName ?? $"0x{root.NameHash:x8}",
                 ClassName = root.Name,
                 Root = root,
             });

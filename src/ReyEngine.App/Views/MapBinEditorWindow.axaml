@@ -97,6 +97,13 @@
                     <TextBox Text="{Binding Text, Mode=TwoWay}" IsVisible="{Binding IsEditableText}"
                              MinWidth="180" MaxWidth="420" FontSize="10" Padding="4,1"
                              FontFamily="Cascadia Mono, Consolas, monospace" VerticalAlignment="Center" />
+                    <!-- M405: leaves with a value but no editor - object links, matrices. Without this the
+                         value column was empty for them, so a material's shader row showed only its type. -->
+                    <TextBlock Text="{Binding Text}" IsVisible="{Binding IsReadOnlyValue}"
+                               MaxWidth="420" FontSize="10" TextTrimming="CharacterEllipsis"
+                               FontFamily="Cascadia Mono, Consolas, monospace" VerticalAlignment="Center"
+                               Opacity="0.8" Foreground="{DynamicResource ReyTextBrush}"
+                               ToolTip.Tip="{Binding Text}" />
                     <Border Width="26" Height="14" CornerRadius="3" BorderThickness="1"
                             BorderBrush="{DynamicResource ReyBorderBrush}" Background="{Binding Swatch}"
                             IsVisible="{Binding IsColor}" VerticalAlignment="Center"

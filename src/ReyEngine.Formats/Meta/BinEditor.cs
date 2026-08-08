@@ -135,6 +135,18 @@ public sealed class EditableBinField
 
     public bool IsEditable => !IsBranch && Kind != BinValueKind.ReadOnly && Property is not null;
 
+    /// <summary>
+    /// M405: the object's own <c>name</c> string, when it has one. Lives here because
+    /// <see cref="Property"/> is internal, so only this assembly can type-check the child.
+    ///
+    /// <para>NOT universal - measured on shipped bins, StaticMaterialDef/MapSkin/Character carry one
+    /// while VfxSystemDefinitionData (272 objects) and MapPlaceableContainer carry none - so callers must
+    /// keep a fallback. 0x8d39bde6 is FNV1a("name").</para>
+    /// </summary>
+    public string? OwnName =>
+        Children.FirstOrDefault(c => c.NameHash == 0x8d39bde6u)?.Property is BinTreeString s
+        && !string.IsNullOrWhiteSpace(s.Value) ? s.Value : null;
+
     /// <summary>M98e: the property's CURRENT value — <see cref="OriginalText"/> is a parse-time snapshot
     /// and goes stale the moment an edit is applied; row UIs must display this instead.</summary>
     public string CurrentText(Func<uint, string?> resolve) =>
@@ -186,7 +198,12 @@ public static class BinValueEditor
         BinTreeVector2 v => $"{v.Value.X.ToString("R", Inv)}, {v.Value.Y.ToString("R", Inv)}",
         BinTreeVector3 v => $"{v.Value.X.ToString("R", Inv)}, {v.Value.Y.ToString("R", Inv)}, {v.Value.Z.ToString("R", Inv)}",
         BinTreeVector4 v => $"{v.Value.X.ToString("R", Inv)}, {v.Value.Y.ToString("R", Inv)}, {v.Value.Z.ToString("R", Inv)}, {v.Value.W.ToString("R", Inv)}",
-        BinTreeObjectLink l => $"0x{l.Value:x8}",
+        // M405: resolve the target. Format already takes the resolver and was ignoring it here, so every
+        // link - most visibly a material's `shader` - rendered as a bare hash or, where the row template
+        // hides read-only values, as nothing at all. Unresolvable stays hex: shader links resolve
+        // GLOBALLY rather than through the bin's dependency list (see BinValidator.linkExempt), so a
+        // miss is normal and must not read as an error.
+        BinTreeObjectLink l => l.Value == 0 ? "(none)" : resolve(l.Value) ?? $"0x{l.Value:x8}",
         // M151: these were falling through to the bare type name, so their values were invisible.
         BinTreeColor c => $"{c.Value.R.ToString("R", Inv)}, {c.Value.G.ToString("R", Inv)}, {c.Value.B.ToString("R", Inv)}, {c.Value.A.ToString("R", Inv)}",
         BinTreeMatrix44 m => FormatMatrix(m.Value),
