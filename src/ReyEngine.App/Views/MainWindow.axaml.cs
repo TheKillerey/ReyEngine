@@ -132,33 +132,37 @@ public partial class MainWindow : Window
     }
 
 
-    private DispatcherTimer? _grassTimer;
-
-    /// <summary>M397: pump frames while an environment crossfade runs. ~60 Hz; the transition itself is
-    /// wall-clock driven inside the view-model, so a dropped tick costs smoothness, never correctness.</summary>
+    /// <summary>
+    /// M400: start the environment crossfade running. NOT a timer.
+    ///
+    /// <para>M397 used a 16 ms DispatcherTimer that called RequestFrame. Each render of this map costs
+    /// more than 16 ms, so requests were queued faster than they drained and the UI thread never got
+    /// back to input - the viewport locked for exactly the length of the fade, and the fly camera's
+    /// wall-clock dt then arrived as one huge value and threw the camera across the map.</para>
+    ///
+    /// <para>Frame-driven instead: each rendered frame advances the fade and asks for the next one, so
+    /// it self-throttles to whatever the renderer can actually sustain. A slow machine gets a chunkier
+    /// fade, never a frozen editor.</para>
+    /// </summary>
     private void StartGrassTransitionTimer()
     {
         if (_closed || DataContext is not MainWindowViewModel vm) return;
-        _grassTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
-        if (_grassTimerHooked is false)
+        if (vm.UseDx11Viewport) QueueDx11Frame();      // RenderDx11Frame ticks it
+        else
         {
-            _grassTimerHooked = true;
-            _grassTimer.Tick += (_, _) =>
-            {
-                if (_closed || DataContext is not MainWindowViewModel v || !v.TickGrassTransition())
-                { _grassTimer!.Stop(); return; }
-                // Only poke the viewport that is actually PRESENTING. Under D3D11 the GL control is
-                // hidden and QueueDx11Frame is already pumping; asking the hidden control to render
-                // would run OnOpenGlRender, whose CachePickMatrices call would then cache a matrix
-                // built from a hidden control's zero bounds and break picking.
-                if (!v.UseDx11Viewport) Viewport.RequestFrame();
-            };
+            if (!_grassFrameHooked) { _grassFrameHooked = true; Viewport.FrameRendered += OnGrassFrame; }
+            Viewport.RequestFrame();
         }
-        _grassTimer.Start();
-        if (vm.UseDx11Viewport) QueueDx11Frame(); else Viewport.RequestFrame();
     }
 
-    private bool _grassTimerHooked;
+    private bool _grassFrameHooked;
+
+    /// <summary>Advance the fade once per rendered GL frame, and ask for another only while it runs.</summary>
+    private void OnGrassFrame()
+    {
+        if (_closed || DataContext is not MainWindowViewModel vm) return;
+        if (vm.TickGrassTransition()) Viewport.RequestFrame();
+    }
 
     private static void SavePng(string path, byte[] bgra, int w, int h)
     {
@@ -217,6 +221,8 @@ public partial class MainWindow : Window
         _dx11.LightmapScale = vm.CurrentLightmapScale;
         _dx11.AnimateTime = vm.AnimationsPlaying;
         _dx11.Wireframe = vm.ShowWireframe;
+        // M400: same frame-driven tick on the D3D11 side - QueueDx11Frame is already the frame loop.
+        vm.TickGrassTransition();
         _dx11.GrassInterp = vm.GrassInterp;
         // M269: pushed every frame rather than on a selection-changed event - the selection, the map and
         // the scene rebuild all move independently, and one of the three going stale is exactly how a

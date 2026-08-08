@@ -1174,7 +1174,14 @@ public sealed class ViewportControl : OpenGlControlBase
             }
         }
 
+        // M400: one notification per ACTUALLY RENDERED frame. Anything that must advance in step with
+        // drawing hooks this instead of a timer: a fixed-rate timer that outpaces the frame time queues
+        // renders faster than they drain, and the UI thread stops servicing input.
+        FrameRendered?.Invoke();
     }
+
+    /// <summary>M400: raised at the end of every rendered GL frame, on the UI thread.</summary>
+    public event Action? FrameRendered;
 
     private void EnsureFbo(uint w, uint h)
     {
