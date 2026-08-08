@@ -147,11 +147,15 @@ public partial class MainWindow : Window
             {
                 if (_closed || DataContext is not MainWindowViewModel v || !v.TickGrassTransition())
                 { _grassTimer!.Stop(); return; }
-                Viewport.RequestFrame();
+                // Only poke the viewport that is actually PRESENTING. Under D3D11 the GL control is
+                // hidden and QueueDx11Frame is already pumping; asking the hidden control to render
+                // would run OnOpenGlRender, whose CachePickMatrices call would then cache a matrix
+                // built from a hidden control's zero bounds and break picking.
+                if (!v.UseDx11Viewport) Viewport.RequestFrame();
             };
         }
         _grassTimer.Start();
-        Viewport.RequestFrame();
+        if (vm.UseDx11Viewport) QueueDx11Frame(); else Viewport.RequestFrame();
     }
 
     private bool _grassTimerHooked;
