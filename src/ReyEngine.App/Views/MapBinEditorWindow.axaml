@@ -104,6 +104,14 @@
                                FontFamily="Cascadia Mono, Consolas, monospace" VerticalAlignment="Center"
                                Opacity="0.8" Foreground="{DynamicResource ReyTextBrush}"
                                ToolTip.Tip="{Binding Text}" />
+                    <!-- M406: texture preview. Source binding is what triggers the lazy decode, so rows
+                         that are never realised cost nothing. -->
+                    <Border Width="32" Height="32" CornerRadius="3" BorderThickness="1"
+                            BorderBrush="{DynamicResource ReyBorderBrush}"
+                            IsVisible="{Binding IsTexturePath}" VerticalAlignment="Center"
+                            ToolTip.Tip="{Binding Text}">
+                      <Image Source="{Binding Thumbnail}" Stretch="Uniform" />
+                    </Border>
                     <Border Width="26" Height="14" CornerRadius="3" BorderThickness="1"
                             BorderBrush="{DynamicResource ReyBorderBrush}" Background="{Binding Swatch}"
                             IsVisible="{Binding IsColor}" VerticalAlignment="Center"

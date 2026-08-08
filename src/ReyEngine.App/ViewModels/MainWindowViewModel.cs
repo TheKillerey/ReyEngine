@@ -3744,6 +3744,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         // M98: Map Bin Editor window
         MapBinEditor.Resolve = ResolveBinName;
+        MapBinEditor.LoadThumbnail = LoadThumbnailByPath;   // M406: texture previews on texture rows
         MapBinEditor.Info = m => _log.Info("MapBin", m);
         MapBinEditor.Warn = m => _log.Warn("MapBin", m);
         MapBinEditor.PickOldOriginal = () => Dialogs.OpenFileAsync(

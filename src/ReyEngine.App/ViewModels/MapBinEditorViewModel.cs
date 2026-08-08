@@ -32,14 +32,51 @@ public sealed partial class MapBinRowViewModel : ObservableObject
     /// BinValueKind.ReadOnly. The row template only ever bound a TextBox gated on IsEditableText, so
     /// these rendered blank; a link showed its type and nothing else.</summary>
     public bool IsReadOnlyValue => !IsBranch && !IsBool && !IsEditableText;
-    public bool IsColor => _f.Kind is BinValueKind.Vector3 or BinValueKind.Vector4
-                           && Name.Contains("color", StringComparison.OrdinalIgnoreCase);
+    /// <summary>M406: widened. The name-contains-"color" test missed BinTreeColor itself, so the one
+    /// type that IS unambiguously a colour never got a swatch while a Vector4 called TintColor did.</summary>
+    public bool IsColor => TypeName.Equals("Color", StringComparison.OrdinalIgnoreCase)
+                           || (_f.Kind is BinValueKind.Vector3 or BinValueKind.Vector4
+                               && Name.Contains("color", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>M406: a string that names a texture. Extension-based rather than context-based - the row
+    /// has no sampler context, and a bin string ending in .tex/.dds/.tga/.png is a texture in every case
+    /// measured. A path that does not resolve simply shows no thumbnail.</summary>
+    public bool IsTexturePath => _f.Kind == BinValueKind.String
+        && (Text.EndsWith(".tex", StringComparison.OrdinalIgnoreCase)
+            || Text.EndsWith(".dds", StringComparison.OrdinalIgnoreCase)
+            || Text.EndsWith(".tga", StringComparison.OrdinalIgnoreCase)
+            || Text.EndsWith(".png", StringComparison.OrdinalIgnoreCase));
 
     [ObservableProperty] private string _text = "";
     [ObservableProperty] private bool _boolValue;
     [ObservableProperty] private bool _isDirty;
     [ObservableProperty] private bool _hasError;
     [ObservableProperty] private IBrush? _swatch;
+
+    private Avalonia.Media.Imaging.Bitmap? _thumbnail;
+    private bool _thumbnailRequested;
+
+    /// <summary>
+    /// M406: decoded preview for a texture row, decoded on FIRST GET rather than at construction.
+    ///
+    /// <para>Lazy because the tree builds every row of every object up front and a single object can
+    /// carry dozens of texture paths - decoding eagerly would decode hundreds of textures nobody has
+    /// looked at just to open a bin. Binding to this property is what triggers the load, so a row that
+    /// is never realised never costs anything.</para>
+    ///
+    /// <para>Null when the path does not resolve or no project is mounted; the view then shows nothing,
+    /// which is the correct outcome rather than an error.</para>
+    /// </summary>
+    public Avalonia.Media.Imaging.Bitmap? Thumbnail
+    {
+        get
+        {
+            if (_thumbnailRequested || !IsTexturePath) return _thumbnail;
+            _thumbnailRequested = true;
+            try { _thumbnail = _owner.LoadThumbnail?.Invoke(Text); } catch { _thumbnail = null; }
+            return _thumbnail;
+        }
+    }
 
     public MapBinRowViewModel(EditableBinField f, MapBinEditorViewModel owner)
     {
@@ -130,6 +167,10 @@ public sealed partial class MapBinEditorViewModel : ObservableObject
 
     // wired once by MainWindowViewModel
     public Func<uint, string?>? Resolve;
+
+    /// <summary>M406: virtual asset path -> decoded thumbnail, supplied by the host (which owns the
+    /// mounts). Null when no project is open, in which case texture rows simply show no preview.</summary>
+    public Func<string, Avalonia.Media.Imaging.Bitmap?>? LoadThumbnail;
     public Func<WadAssetEntry, byte[], Task<bool>>? SaveBytes;
     public Func<Task<string?>>? PickOldOriginal;
     public Func<WadAssetEntry, byte[]?>? ReadRiotOriginal;
