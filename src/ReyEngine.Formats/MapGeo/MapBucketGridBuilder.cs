@@ -53,11 +53,35 @@ public static class MapBucketGridBuilder
     private const float MinimumBucketSize = 0.01f;
     private const float IntersectionEpsilon = 0.0001f;
 
-    public static IReadOnlyList<MapBucketGridData> Rebuild(MapGeoAsset asset, float targetBucketSize = TargetBucketSize)
+    /// <summary>
+    /// M410: the height range is now a PARAMETER, not a constant.
+    ///
+    /// <para>Worth being precise about what it does, because the name invites a wrong mental model: the
+    /// bucket grid has NO height. It is a 2D X/Z culling grid - MapBucketGridData carries
+    /// MinX/MinZ/MaxX/MaxZ and BucketsPerSide and nothing about Y, and the shipped header has no height
+    /// field either. This range is a triangle REJECT FILTER applied before the grid is built: a triangle
+    /// whose entire Y span falls outside it is dropped from the bake. Widening it bakes more geometry
+    /// into the grid; it does not make the grid taller, because there is no such thing.</para>
+    ///
+    /// <para>Triangles that STRADDLE a boundary are kept whole - there is no clipping - so the effective
+    /// volume is slightly larger than the range in both directions.</para>
+    /// </summary>
+    /// <param name="heightMin">Absolute world Y, not relative to the map's bounds.</param>
+    public static IReadOnlyList<MapBucketGridData> Rebuild(MapGeoAsset asset,
+        float targetBucketSize = TargetBucketSize,
+        float heightMin = HeightRangeMin, float heightMax = HeightRangeMax)
     {
         ArgumentNullException.ThrowIfNull(asset);
         if (!float.IsFinite(targetBucketSize) || targetBucketSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(targetBucketSize));
+        if (!float.IsFinite(heightMin) || !float.IsFinite(heightMax))
+            throw new ArgumentOutOfRangeException(nameof(heightMin), "height range must be finite");
+        // Inverted rather than clamped: an inverted range silently bakes NOTHING, and a grid that is
+        // empty because two numbers were typed the wrong way round is indistinguishable on screen from
+        // one that failed to build.
+        if (heightMin > heightMax)
+            throw new ArgumentOutOfRangeException(nameof(heightMin),
+                $"height range is inverted: min {heightMin} is above max {heightMax}");
 
         var trianglesByGrid = new Dictionary<MapBucketGridKey, List<Triangle>>();
         foreach (var group in asset.Groups)
@@ -89,7 +113,7 @@ public static class MapBucketGridBuilder
                 Vector3 pc = PositionAt(asset, c);
                 float minY = MathF.Min(pa.Y, MathF.Min(pb.Y, pc.Y));
                 float maxY = MathF.Max(pa.Y, MathF.Max(pb.Y, pc.Y));
-                if (maxY < HeightRangeMin || minY > HeightRangeMax)
+                if (maxY < heightMin || minY > heightMax)
                     continue;
 
                 triangles.Add(new Triangle(a, b, c, unchecked((byte)mesh.VisibilityFlags)));
