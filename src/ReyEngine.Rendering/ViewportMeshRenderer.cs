@@ -409,7 +409,14 @@ void main() {
     if (uHasTex == 1 && uTintTextured == 1) { tex.rgb *= uTint.rgb * 2.0; tex.a *= uTint.a; }
     // M78: grass tint - world-space planar multiply (VertexDeform + USE_GRASS_TINT_MAP materials only).
     if (uHasGrassTint == 1) {
+        // M388: V is FLIPPED, exactly as Riot's shader does it. staticmesh/vertexdeform.ps.dx11 blob 19:
+        //     mad r1.xy, v3.xyxx, cb1[2].xyxx, cb1[2].zwzz   // uv = planarXZ * TERRAIN_XFORM.xy + .zw
+        //     add r1.z, -r1.y, l(1.000000)                   // 1 - v
+        //     sample r1.xyz, r1.xzxx, t0                     // samples (u, 1-v)
+        // Without this the tint is mirrored along Z against the terrain it is supposed to colour. Only
+        // the GL path needs it: D3D11 runs Riot's own blob, which already contains the flip.
         vec2 gtUv = clamp((vWorld.xz - uGrassTintRect.xy) * uGrassTintRect.zw, 0.0, 1.0);
+        gtUv.y = 1.0 - gtUv.y;
         tex.rgb *= texture(uGrassTint, gtUv).rgb;
     }
     vec3 base = tex.rgb;
