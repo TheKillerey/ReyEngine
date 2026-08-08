@@ -1124,6 +1124,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void StopChampionVfx() => SelectedChampionVfx = null;
 
     /// <summary>Rebuild the live playback request (M36): all visible placements, or just the selected one.</summary>
+    /// <summary>
+    /// M403: should a Transitional placement be playing right now?
+    ///
+    /// <para>Non-transitional placements always pass - this only ever REMOVES transition bursts.</para>
+    ///
+    /// <para>A transitional placement plays while a crossfade into ITS state is running: its
+    /// mVisibilityFlags MASK must contain the bit of the state being entered. Riot's placements carry
+    /// masks 2/4/8/16/32/64, i.e. 1 &lt;&lt; BitIndex for Fire..Chemtech, which lines up with the flag table
+    /// in Map*.bin.</para>
+    ///
+    /// <para>INFERRED, not measured: no consumer in the shipped data confirms that Transitional means
+    /// "play during a transition". The name, the 1,159 one-shot bursts it marks, and the fact that the
+    /// SRS_*_Transition_* systems carry it are the whole basis. If it turns out to mean something else,
+    /// this gate is the single place to change.</para>
+    /// </summary>
+    private bool IsTransitionalParticleActive(Formats.MapGeo.MapParticlePlacement placement, int effectiveFlags)
+    {
+        if (placement.Transitional != true) return true;          // not a burst - unaffected
+        if (!_grassTransition.IsRunning) return false;            // nothing is transitioning
+
+        int bit = GrassTintChoice().BitIndex;
+        if (bit < 0) return false;                                // returning to base fires nothing
+        int mask = placement.HasVisibilityFlags ? effectiveFlags : 0;
+        return (mask & (1 << bit)) != 0;
+    }
+
     private void RebuildParticlePlayback()
     {
         if (PlayAllParticles)
@@ -1133,6 +1159,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 if (!v.IsEditorVisible || v.IsDisabled || v.IsRemoved) continue;
                 if (!IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags)) continue;
+                // M403: Transitional placements are one-shot bursts fired BY a state change - the
+                // SRS_*_Transition_DragonPit set and friends. Playing them with everything else would
+                // leave an explosion looping over the dragon pit forever, so they are gated to an
+                // actually-running transition into the state they belong to.
+                if (!IsTransitionalParticleActive(v.Placement, v.EffectiveVisibilityFlags)) continue;
                 if (!_vfxSystems.TryGetValue(v.EffectiveSystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
                 items.Add(new VfxPlaybackItem(s, v.CurrentTransform, ResolveSystemTextures(s), ResolveSystemMeshes(s),
                     ResolveSystemMultTextures(s), ResolveSystemDistortionTextures(s), ResolveSystemColorTextures(s),
@@ -7761,6 +7792,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M397: ask the host to start pumping frames. Driven by the host rather than the D3D11 render
         // callback, because OpenGL has its own loop and a fade must run in whichever viewport is up.
         if (_grassTransition.IsRunning) GrassTransitionStarted?.Invoke();
+        // M403: the transition bursts are gated on a RUNNING transition, so the playback set has to be
+        // rebuilt at both edges - here to start them, and on settle to stop them.
+        RebuildParticlePlayback();
 
         _log.Info("GrassTint", path is null
             ? "no grass tint resolved for this state."
@@ -7821,6 +7855,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ApplyGrassTransition();
             OnPropertyChanged(nameof(GrassInterp));
             OnPropertyChanged(nameof(GrassTintStatus));
+            RebuildParticlePlayback();   // M403: drop the transition bursts now the fade has landed
             _log.Info("GrassTint", $"transition settled on {_grassTransition.SettledPath}.");
             return false;
         }
