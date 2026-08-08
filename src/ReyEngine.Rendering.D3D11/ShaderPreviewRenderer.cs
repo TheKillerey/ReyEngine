@@ -59,6 +59,21 @@ public sealed class PreviewSettings
     public Vector4? MapFogColor;
     public Vector2? MapFogStartEnd;
 
+    /// <summary>
+    /// M395: GRASS_INTERP - the environment-transition crossfade factor, 0 = GRASS_TINT_MAP (the state
+    /// being left) and 1 = GRASS_TINT_MAP_ALTERNATE (the state being entered).
+    ///
+    /// <para>Riot's own shaders do the blend; staticmesh/vertexdeform.ps.dx11 blob 19 ends with
+    /// <c>mad r1, cb1[16].yyyy, (alt - base), base</c>, and cb1[16].y is PerFramePixelCB offset 260 =
+    /// GRASS_INTERP. So supplying this constant IS the transition on the D3D11 side - there is nothing
+    /// to reimplement.</para>
+    ///
+    /// <para>Defaults to 0, which is the correct resting value: with both slots bound to the same
+    /// texture (the no-transition case) any factor is a no-op, and with two different ones 0 means
+    /// "still showing the current state".</para>
+    /// </summary>
+    public float GrassInterp;
+
     /// <summary>M246: collapse pipeline state changes by drawing depth-writing geometry grouped by
     /// pipeline. Order-sensitive draws (additive, or anything that does not write depth) are never
     /// reordered. On by default; a toggle exists because if an ordering artefact ever does appear, being
@@ -1254,6 +1269,29 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     /// introduces a binding that the permutation did not reflect. Returns the number of slot bindings
     /// replaced — zero means no committed material has such a slot, not a failure.</para>
     /// </summary>
+    /// <summary>
+    /// M395: bind ONE target to ONE texture, across every committed material that already binds it.
+    ///
+    /// <para>The list-taking overload below applies a single texture to N targets, which is right for a
+    /// settled state and useless for a transition: the crossfade needs GRASS_TINT_MAP and
+    /// GRASS_TINT_MAP_ALTERNATE holding DIFFERENT textures at once. The texture pool is keyed
+    /// Ordinal, so two paths are already two entries - nothing else had to change.</para>
+    ///
+    /// <para>As with the list overload, a target the permutation did not reflect is never introduced,
+    /// only replaced.</para>
+    /// </summary>
+    public int RebindSharedTexture(string target, string poolKey, byte[] rgba, int width, int height)
+    {
+        int rebound = 0;
+        foreach (var mat in Materials)
+        {
+            if (!mat.Textures.ContainsKey(target)) continue;
+            if (!TryBindCached(mat, target, poolKey)) SetTexture(mat, target, poolKey, rgba, width, height);
+            rebound++;
+        }
+        return rebound;
+    }
+
     public int RebindSharedTexture(IReadOnlyList<string> targets, string poolKey,
         byte[] rgba, int width, int height)
     {
@@ -3606,6 +3644,13 @@ float4 psmain(VOut i) : SV_Target
                     "ENV_FOG_COLOR" or "ENV_FOG_ALT_COLOR" => s.MapFogColor is { } fc
                         ? new[] { fc.X, fc.Y, fc.Z, fc.W }
                         : new[] { 0f, 0f, 0f, 1f },
+
+                    // M395: the environment-transition crossfade. Riot's shader already does
+                    //     lerp(GRASS_TINT_MAP, GRASS_TINT_MAP_ALTERNATE, GRASS_INTERP)
+                    // so this constant IS the transition here. UPPERCASE on purpose - the switch subject
+                    // is v.Name.ToUpperInvariant(), which is why the mixed-case arms further down
+                    // ("GrassDistortSpheres", "GrassVelocities", "VelocityStrength") are unreachable.
+                    "GRASS_INTERP" => new[] { s.GrassInterp, 0f, 0f, 0f },
 
                     // Below this world height the engine treats everything as permanently visible. Nothing
                     // in the preview should ever be force-fogged, so push it above any real geometry.

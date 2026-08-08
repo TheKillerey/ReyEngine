@@ -639,6 +639,23 @@ public static class Dx11SceneBuilder
         // stay here with the rest of the binding contract.
         => renderer.RebindSharedTexture(GrassTintSlots, poolKey, rgba, width, height);
 
+    /// <summary>
+    /// M395: bind the two grass-tint slots to DIFFERENT textures, which is what a state transition needs.
+    ///
+    /// <para>GrassTintSlots[0] is GRASS_TINT_MAP - the state being LEFT - and [1] is
+    /// GRASS_TINT_MAP_ALTERNATE, the state being ENTERED. Riot's shader blends them with GRASS_INTERP,
+    /// so this plus the constant is the whole transition on the D3D11 side. Order is positional and the
+    /// array is the single source of it; do not reorder GrassTintSlots.</para>
+    ///
+    /// <para>Returns the total slot bindings replaced across both slots, for the same reason the single
+    /// version does: so the caller can log a number rather than assert success.</para>
+    /// </summary>
+    public static int RebindGrassTintPair(ShaderPreviewRenderer renderer,
+        string fromKey, byte[] fromRgba, int fromW, int fromH,
+        string toKey, byte[] toRgba, int toW, int toH)
+        => renderer.RebindSharedTexture(GrassTintSlots[0], fromKey, fromRgba, fromW, fromH)
+         + renderer.RebindSharedTexture(GrassTintSlots[1], toKey, toRgba, toW, toH);
+
     /// <summary>M319: reflected texture target used by DefaultEnv_Flat_BakedTerrain. Public because the
     /// binding contract is GPU-free and regression-tested without creating a D3D device.</summary>
     public static string? BakedPaintTextureTarget(DxbcShader ps) => ps.Textures.FirstOrDefault(t =>
