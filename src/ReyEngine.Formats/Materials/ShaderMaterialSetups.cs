@@ -85,12 +85,30 @@ public static class ShaderMaterialSetups
         ApplyFeaturesAndRenderState(material, snapshot);
     }
 
+    /// <summary>
+    /// M404: names that state a FACT ABOUT THE GEOMETRY rather than a look, and so must survive a
+    /// "make this look like Riot's" preset.
+    ///
+    /// <para>The apply below removes anything the preset does not mention. Riot's presets are derived
+    /// from SHIPPED kitpiece materials, whose geometry HAS baked lightmaps - so none of them carries
+    /// NO_BAKED_LIGHTING, and applying one deleted that flag from every ported material. LegacyMapPorter
+    /// sets it deliberately: ported NVR/WGEO geometry has no lightmap UVs at all. Stripping it tells the
+    /// renderer to sample a lightmap that does not exist.</para>
+    ///
+    /// <para>The rule is one-directional and therefore safe on Riot materials too: a preset may still ADD
+    /// one of these, it just may not REMOVE one the material already declares. A material that states its
+    /// geometry has no baked light is reporting something the preset cannot know.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> GeometryFacts =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "NO_BAKED_LIGHTING" };
+
     private static (int Switches, int Macros, int Removed) ApplyFeaturesAndRenderState(
         MaterialBinding material, ShaderMaterialSetup setup)
     {
         int removed = 0, switches = 0, macros = 0;
         foreach (var old in material.AllSwitches.ToList())
-            if (!setup.Switches.ContainsKey(old.Name) && material.RemoveSwitch(old)) removed++;
+            if (!GeometryFacts.Contains(old.Name)
+                && !setup.Switches.ContainsKey(old.Name) && material.RemoveSwitch(old)) removed++;
         foreach (var (name, on) in setup.Switches)
         {
             var entry = material.AllSwitches.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
@@ -101,7 +119,8 @@ public static class ShaderMaterialSetups
         }
 
         foreach (var old in material.AllMacros.ToList())
-            if (!setup.Macros.ContainsKey(old.Name) && material.RemoveMacro(old.Name)) removed++;
+            if (!GeometryFacts.Contains(old.Name)
+                && !setup.Macros.ContainsKey(old.Name) && material.RemoveMacro(old.Name)) removed++;
         foreach (var (name, value) in setup.Macros)
             if (material.SetMacroValue(name, value) is not null) macros++;
 

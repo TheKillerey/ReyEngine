@@ -135,6 +135,29 @@ public class MaterialShaderConverterTests
             m => Assert.Equal("ASSETS/Map/authored_diffuse.tex", Slot(m, "Diffuse_Texture").Path));
     }
 
+    /// <summary>M404: a preset may ADD a geometry fact but must never REMOVE one the material already
+    /// declares. Pinned separately from the inverted assertion above so the rule is stated once as a
+    /// rule, not only as a side effect of another test.</summary>
+    [Fact]
+    public void Common_setup_may_not_strip_a_geometry_fact_the_material_declares()
+    {
+        var doc = MaterialDocument.Parse(BuildMaterials(), Resolve);
+        var material = doc.Materials.First(m => m.Name == "source_a");
+        var shader = new LeagueShaderDef(TargetShader, "StaticMesh", new(),
+            new List<ShaderParamDef>(), new() { "USE_FOG" });
+        // a preset that mentions NEITHER of the material's existing macros
+        var setup = new ShaderMaterialSetup(
+            new Dictionary<string, Vector4>(),
+            new Dictionary<string, bool> { ["USE_FOG"] = true },
+            new Dictionary<string, string>(),
+            BlendEnable: false, CullEnable: true, SourceBlendFactor: -1, DestinationBlendFactor: -1);
+
+        ShaderMaterialSetups.Apply(material, shader, setup);
+
+        Assert.Contains(material.AllMacros, m => m.Name == MaterialBinding.MacroNoBakedLighting);
+        Assert.Contains(MaterialBinding.MacroNoBakedLighting, ShaderMaterialSetups.GeometryFacts);
+    }
+
     [Fact]
     public void Common_setup_replaces_shader_settings_but_preserves_authored_textures()
     {
@@ -156,13 +179,21 @@ public class MaterialShaderConverterTests
         Assert.Equal(Vector4.One, VectorValue(Assert.Single(material.Parameters)));
         Assert.DoesNotContain(material.AllSwitches, item => item.Name == "MULTIPLY_ALPHA");
         Assert.True(material.AllSwitches.Single(item => item.Name == "USE_FOG").On);
-        Assert.DoesNotContain(material.AllMacros, item => item.Name == MaterialBinding.MacroNoBakedLighting);
+        // M404: DELIBERATELY INVERTED. This used to assert the preset REMOVES NO_BAKED_LIGHTING, which
+        // pinned behaviour that turned out to be the bug: Riot's presets are mined from shipped kitpiece
+        // materials whose geometry HAS lightmaps, so none of them mentions the macro - and applying one
+        // stripped it from every material LegacyMapPorter had marked as lightmap-less. The flag states a
+        // fact about the GEOMETRY, which a look-preset cannot know. See ShaderMaterialSetups.GeometryFacts.
+        Assert.Contains(material.AllMacros, item => item.Name == MaterialBinding.MacroNoBakedLighting);
         Assert.Equal("1", material.AllMacros.Single(item => item.Name == "DISABLE_DEPTH_FOG").Value);
         Assert.False(material.BlendEnable);
         Assert.True(material.CullEnable);
         Assert.Equal(-1, material.SrcBlendFactor);
         Assert.Equal(-1, material.DstBlendFactor);
-        Assert.True(result.RemovedObsoleteValues >= 2);
+        // M404: was >= 2, calibrated to the old behaviour. One FEWER value is removed now, and correctly
+        // so - NO_BAKED_LIGHTING is a protected geometry fact. The point of the assertion (obsolete values
+        // still get cleared) is unchanged.
+        Assert.True(result.RemovedObsoleteValues >= 1);
 
         var saved = MaterialDocument.Parse(doc.Serialize(), Resolve).Materials.Single(m => m.Name == "source_a");
         Assert.Equal(Vector4.One, VectorValue(Assert.Single(saved.Parameters)));
