@@ -30,6 +30,14 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     public Func<VfxSystemDefinition, IReadOnlyList<CubemapImage?>>? ResolveReflectionCubemaps;   // M181 (2.12)
     public Func<VfxSystemDefinition, IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>?>? ResolveMeshes; // M47
     public Func<string, Avalonia.Media.Imaging.Bitmap?>? LoadThumbnail;   // particle sprite preview on cards
+
+    /// <summary>M368: class hash -> every property the class DECLARES, from the LeagueToolkit meta database.
+    /// Null when it was never synced, in which case the schema panel simply does not appear - the editor has
+    /// always worked without it and must keep doing so.</summary>
+    public Func<uint, IReadOnlyList<ReyEngine.Core.Meta.MetaProperty>>? DeclaredProperties;
+
+    /// <summary>M368: class hash -> its resolved name, for the card header.</summary>
+    public Func<uint, string?>? ClassName;
     /// <summary>M187 (3.1): the host's .bin name dictionary, so emitter rows show field names rather than
     /// raw hashes. Measured, this takes named coverage from 85.5% to 99.8% of emitter field occurrences.</summary>
     public Func<uint, string?>? ResolveBinName;
@@ -311,7 +319,52 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
         var texPath = emitter.Properties.FirstOrDefault(p => p.Name == "texture")?.CurrentText;
         if (!string.IsNullOrWhiteSpace(texPath))
             try { Thumbnail = owner.LoadThumbnail?.Invoke(texPath); } catch { Thumbnail = null; }
+        BuildSchema(emitter.ClassHash, emitter.PresentHashes, owner);
     }
+
+    /// <summary>M368: the fields this object does NOT carry, and what the game uses instead.
+    ///
+    /// <para>Until now the editor could only show what a file happened to contain, which made an unset
+    /// field indistinguishable from a field that does not exist. With the meta-class schema the difference
+    /// is visible: VfxEmitterDefinitionData declares 135 properties and 107 of them have an authored
+    /// default, so "absent" almost never means zero - it means the value listed here. That was the exact
+    /// ambiguity the VFX census kept running into.</para>
+    ///
+    /// <para>Read-only on purpose. Showing what a field defaults to is safe; ADDING a property to a live
+    /// bin is a write path with its own failure modes and belongs in its own change.</para></summary>
+    private void BuildSchema(uint classHash, IReadOnlyCollection<uint> present, ParticleEditorViewModel owner)
+    {
+        if (classHash == 0 || owner.DeclaredProperties is null) return;
+        IReadOnlyList<ReyEngine.Core.Meta.MetaProperty> declared;
+        try { declared = owner.DeclaredProperties(classHash); }
+        catch { return; }
+        if (declared.Count == 0) return;
+
+        ClassDisplayName = owner.ClassName?.Invoke(classHash) ?? $"0x{classHash:x8}";
+        var seen = present as HashSet<uint> ?? new HashSet<uint>(present);
+        var absent = declared.Where(d => !seen.Contains(d.Hash))
+            .Select(d => new ParticleSchemaRowViewModel(d))
+            .ToList();
+
+        DeclaredCount = declared.Count;
+        PresentCount = declared.Count - absent.Count;
+        UnsetRows = absent;
+        HasSchema = true;
+    }
+
+    /// <summary>M368: the resolved class name, so a card headed "0x45cd899f" now reads
+    /// "VfxSystemDefinitionData".</summary>
+    public string? ClassDisplayName { get; private set; }
+    public bool HasSchema { get; private set; }
+    public int DeclaredCount { get; private set; }
+    public int PresentCount { get; private set; }
+    public IReadOnlyList<ParticleSchemaRowViewModel> UnsetRows { get; private set; }
+        = Array.Empty<ParticleSchemaRowViewModel>();
+
+    /// <summary>"42 of 135 fields authored — 93 on defaults".</summary>
+    public string SchemaSummary => HasSchema
+        ? $"{PresentCount} of {DeclaredCount} fields authored — {UnsetRows.Count} on defaults"
+        : "";
 
     /// <summary>M188 (3.5): the system-level card. Its fields - particleName, particlePath, flags, transform,
     /// visibilityRadius, the default sounds - had no editor surface at all before this.</summary>
@@ -326,7 +379,28 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
                 system.Properties.Where(p => p.Module == m)
                     .Select(p => new ParticlePropertyRowViewModel(p, owner)).ToList()))
             .ToList();
+        BuildSchema(system.ClassHash, system.PresentHashes, owner);
     }
+}
+
+/// <summary>M368: one property the class declares but this object does not carry. Read-only: it reports
+/// what the game falls back to, it does not add the field.</summary>
+public sealed class ParticleSchemaRowViewModel
+{
+    public ParticleSchemaRowViewModel(ReyEngine.Core.Meta.MetaProperty p)
+    {
+        Name = p.HasName ? p.Name : $"0x{p.Hash:x8}";
+        TypeName = p.KeyType.Length > 0 ? $"{p.FieldType}<{p.KeyType}>" : p.FieldType;
+        // Raw JSON straight from the dump. Deliberately not reformatted into the editor's own value syntax:
+        // that would be a second, lossy type system over every bin type, and this is a reference display.
+        DefaultText = p.Default ?? "(no default)";
+        HasDefault = p.Default is not null;
+    }
+
+    public string Name { get; }
+    public string TypeName { get; }
+    public string DefaultText { get; }
+    public bool HasDefault { get; }
 }
 
 /// <summary>M190 (3.6): one editable curve key - its time and its 1..4 value components.</summary>

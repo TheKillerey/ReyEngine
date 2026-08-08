@@ -101,6 +101,7 @@
                         <Image Source="{Binding Thumbnail}" Stretch="Uniform" Margin="3" />
                       </Border>
                       <ScrollViewer VerticalScrollBarVisibility="Auto">
+                       <StackPanel>
                         <ItemsControl ItemsSource="{Binding Modules}">
                           <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:ParticleModuleGroupViewModel">
@@ -130,6 +131,37 @@
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>
                         </ItemsControl>
+
+                        <!-- M368: what this object does NOT set. Collapsed by default and hidden entirely
+                             when the meta-class database was never synced, so the card is unchanged for
+                             anyone who has not opted in. Read-only: it reports the game's fallback value,
+                             it does not add the field. -->
+                        <Expander FontSize="10" IsExpanded="False" Padding="0" Margin="0"
+                                  IsVisible="{Binding HasSchema}"
+                                  ToolTip.Tip="Declared by the class but absent from this object — the game uses the default shown">
+                          <Expander.Header>
+                            <TextBlock Text="{Binding SchemaSummary}" FontSize="10" Opacity="0.75" />
+                          </Expander.Header>
+                          <StackPanel>
+                            <TextBlock Text="{Binding ClassDisplayName}" FontSize="9" Opacity="0.5"
+                                       Margin="6,2,6,4" TextTrimming="CharacterEllipsis" />
+                            <ItemsControl ItemsSource="{Binding UnsetRows}">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ParticleSchemaRowViewModel">
+                                  <DockPanel Margin="6,2">
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding DefaultText}" FontSize="9"
+                                               Opacity="0.55" MaxWidth="90" TextTrimming="CharacterEllipsis"
+                                               ToolTip.Tip="{Binding DefaultText}" />
+                                    <TextBlock DockPanel.Dock="Left" Text="{Binding TypeName}" FontSize="8"
+                                               Opacity="0.4" Margin="0,0,5,0" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Name}" FontSize="10" Opacity="0.7" />
+                                  </DockPanel>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </StackPanel>
+                        </Expander>
+                       </StackPanel>
                       </ScrollViewer>
                     </DockPanel>
                   </Border>

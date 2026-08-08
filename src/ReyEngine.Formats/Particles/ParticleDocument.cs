@@ -71,7 +71,8 @@ public sealed class ParticleDocument
             // editor look like it had failed to parse an effect the user could see referenced by name, and
             // it refused to open a bin whose systems were ALL emitterless (70 of 2,674 in the sample).
             systems.Add(new ParticleSystemEntry(o.PathHash, name, path, emitters,
-                ParticleSystemEntry.ReadProperties(o, resolveName)));
+                ParticleSystemEntry.ReadProperties(o, resolveName),
+                o.ClassHash, o.Properties.Keys.ToList()));
         }
         return systems.Count > 0 ? new ParticleDocument(tree, systems, issues) : null;
     }
@@ -82,9 +83,15 @@ public sealed class ParticleDocument
 
 /// <summary>One VfxSystemDefinitionData object (keyed by its path hash, matching the resolver output).</summary>
 public sealed record ParticleSystemEntry(uint PathHash, string Name, string ParticlePath,
-    IReadOnlyList<ParticleEmitterEntry> Emitters, IReadOnlyList<ParticleProperty> Properties)
+    IReadOnlyList<ParticleEmitterEntry> Emitters, IReadOnlyList<ParticleProperty> Properties,
+    // M368: the object's own class hash and the set of property hashes it actually carries. Together with
+    // the meta-class database these answer "what does this class DECLARE that this object omits", which is
+    // the whole point of having a schema rather than only names.
+    uint ClassHash = 0, IReadOnlyCollection<uint>? PresentPropertyHashes = null)
 {
     public bool IsDirty => Emitters.Any(e => e.IsDirty) || Properties.Any(p => p.IsDirty);
+
+    public IReadOnlyCollection<uint> PresentHashes => PresentPropertyHashes ?? Array.Empty<uint>();
 
     /// <summary>Distinct module names carried by this system's own properties, in panel order.</summary>
     public IReadOnlyList<string> Modules =>
@@ -151,6 +158,14 @@ public sealed class ParticleEmitterEntry
     public IReadOnlyList<ParticleProperty> Properties { get; private init; } = Array.Empty<ParticleProperty>();
     internal BinTreeStruct EmitterStruct { get; init; } = null!;
     private BinTreeStruct _struct => EmitterStruct;
+
+    /// <summary>M368: this emitter's own class hash (VfxEmitterDefinitionData in practice), for looking the
+    /// declared schema up in the meta-class database.</summary>
+    public uint ClassHash => EmitterStruct.ClassHash;
+
+    /// <summary>M368: the property hashes this emitter actually carries. Everything the class declares that
+    /// is NOT in here is running on the game's authored default.</summary>
+    public IReadOnlyCollection<uint> PresentHashes => EmitterStruct.Properties.Keys.ToList();
     private bool _disabledEdited;
     public bool IsDirty => _disabledEdited || Properties.Any(p => p.IsDirty);
 

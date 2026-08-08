@@ -3708,6 +3708,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.Error = m => _log.Error("Particle", m);
         ParticleEditor.MarkDocumentDirty = () => { }; // window has its own dirty state via Document.IsDirty
         ParticleEditor.LoadThumbnail = LoadThumbnailByPath;
+        // M368: the meta-class schema. Both are no-ops when it was never synced (empty database), so the
+        // editor keeps working exactly as before and simply shows no schema panel.
+        ParticleEditor.DeclaredProperties = h => Meta.PropertiesOf(h);
+        ParticleEditor.ClassName = h => Meta.TryGetName(h, out var n) ? n : null;
         ParticleEditor.SaveOverrideAsync = SaveParticleOverride;
         ParticleEditor.OpenIssues = OpenParticleBinIssues;   // M125
         MaterialEditor.OpenIssues = OpenMaterialBinIssues;   // M125
