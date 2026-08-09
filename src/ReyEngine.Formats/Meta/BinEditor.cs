@@ -52,6 +52,7 @@ public sealed class BinEditorDocument
     public byte[] Serialize()
     {
         SafeBinTree.ThrowIfLossy(_tree, "this bin");   // M413 - see MaterialDocument.Serialize
+        BinEmptyProperty.Strip(_tree);                 // M414
         using var ms = new MemoryStream();
         _tree.Write(ms);
         return ms.ToArray();

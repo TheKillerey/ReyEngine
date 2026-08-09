@@ -52,6 +52,7 @@ public sealed class MaterialDocument
         // the bytes it could not read still exist in the source file, and saving replaces them with
         // nothing. Duplicate fields/objects are exempt: clearing those IS the advertised repair.
         Meta.SafeBinTree.ThrowIfLossy(_tree, "this materials bin");
+        Meta.BinEmptyProperty.Strip(_tree);   // M414 - Riot never ships an empty container; one crashed Map453
         using var ms = new MemoryStream();
         _tree.Write(ms);
         return ms.ToArray();

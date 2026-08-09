@@ -34,6 +34,7 @@ public sealed class ParticleDocument
     public byte[] Serialize()
     {
         Meta.SafeBinTree.ThrowIfLossy(_tree, "this particle bin");   // M413 - see MaterialDocument.Serialize
+        Meta.BinEmptyProperty.Strip(_tree);                          // M414
         using var ms = new MemoryStream();
         _tree.Write(ms);
         return ms.ToArray();

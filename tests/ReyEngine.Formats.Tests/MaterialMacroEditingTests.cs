@@ -21,10 +21,19 @@ public sealed class MaterialMacroEditingTests
         {
             new BinTreeContainer(H("passes"), BinPropertyType.Struct, new BinTreeProperty[] { pass }),
         });
+        // M414: samplerValues carries a real sampler rather than being an empty container. Riot ships zero
+        // empty containers (0 of 33,645 materials) and Serialize now strips them, so an empty one here
+        // would make the byte-identity assertion below fail for a reason that has nothing to do with
+        // macros - and one such container is what crashed the Map453 mod at load.
+        var sampler = new BinTreeStruct(0, H("StaticMaterialShaderSamplerDef"), new BinTreeProperty[]
+        {
+            new BinTreeString(H("TextureName"), "DiffuseTexture"),
+            new BinTreeString(H("texturePath"), "ASSETS/Test/diffuse.tex"),
+        });
         var material = new BinTreeObject(H("Maps/Test/Alpha"), H("StaticMaterialDef"), new BinTreeProperty[]
         {
             new BinTreeString(H("name"), "Maps/Test/Alpha"),
-            new BinTreeUnorderedContainer(H("samplerValues"), BinPropertyType.Struct, Array.Empty<BinTreeProperty>()),
+            new BinTreeUnorderedContainer(H("samplerValues"), BinPropertyType.Struct, new BinTreeProperty[] { sampler }),
             new BinTreeContainer(H("techniques"), BinPropertyType.Struct, new BinTreeProperty[] { technique }),
         });
         var tree = new BinTree(new[] { material }, Array.Empty<string>());

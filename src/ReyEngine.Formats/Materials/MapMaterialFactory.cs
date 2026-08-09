@@ -352,17 +352,23 @@ public static class MapMaterialFactory
                 new BinTreeContainer(F("passes"), BinPropertyType.Struct, new BinTreeProperty[] { pass }),
             });
 
+            // M414: an EMPTY container is a shape Riot never ships (0 of 33,645 shipped materials) and one
+            // of them crashed Map453 at load. 'switches' was already guarded; the other three were not,
+            // which is where the 117 empty shaderMacros maps in an earlier mod came from.
             var props = new List<BinTreeProperty>
             {
                 new BinTreeString(F("name"), newName),
                 new BinTreeU32(F("type"), 0),
-                new BinTreeMap(F("shaderMacros"), BinPropertyType.String, BinPropertyType.String, macroValues),
-                new BinTreeUnorderedContainer(F("samplerValues"), BinPropertyType.Struct, samplers),
-                new BinTreeUnorderedContainer(F("paramValues"), BinPropertyType.Struct, parameters),
                 new BinTreeContainer(F("techniques"), BinPropertyType.Struct, new BinTreeProperty[] { technique }),
             };
+            if (macroValues.Count > 0)
+                props.Insert(2, new BinTreeMap(F("shaderMacros"), BinPropertyType.String, BinPropertyType.String, macroValues));
+            if (samplers.Count > 0)
+                props.Insert(props.Count - 1, new BinTreeUnorderedContainer(F("samplerValues"), BinPropertyType.Struct, samplers));
+            if (parameters.Count > 0)
+                props.Insert(props.Count - 1, new BinTreeUnorderedContainer(F("paramValues"), BinPropertyType.Struct, parameters));
             if (switchValues.Count > 0)
-                props.Insert(5, new BinTreeUnorderedContainer(F("switches"), BinPropertyType.Struct, switchValues));
+                props.Insert(props.Count - 1, new BinTreeUnorderedContainer(F("switches"), BinPropertyType.Struct, switchValues));
 
             tree.Objects[newHash] = new BinTreeObject(newHash, materialClass, props);
             using var outMs = new MemoryStream();
