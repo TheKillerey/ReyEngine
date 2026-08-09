@@ -583,6 +583,100 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>M77: regenerate every bucket grid from the map's CURRENT world-space triangles (uses the
     /// M58 builder — same rules the game data follows). Preview updates immediately; saving the map writes
     /// the regenerated grids into the mapgeo (the save path re-runs the builder over the final geometry).</summary>
+    // ============================================================ M412: bucket-grid bake box
+    // The grid has NO height (it is a 2D X/Z culling grid); the "height" here is the triangle REJECT
+    // FILTER the bake applies (M410). The preview volume is the DERIVED X/Z extent extruded through that
+    // slab, computed by the bake's own derivation so it cannot disagree with a real rebuild.
+
+    [ObservableProperty] private bool _showBakeBox;
+    [ObservableProperty] private string _bakeHeightMinText = "-120";
+    [ObservableProperty] private string _bakeHeightMaxText = "5000";
+    [ObservableProperty] private string _bakeBucketSizeText = "500";
+    /// <summary>What the panel shows: grids, cells, cell size - the cell count is the redraw driver
+    /// because the BOX can be byte-identical while the grid inside it changes completely (M411).</summary>
+    [ObservableProperty] private string _bakeBoxInfo = "";
+    /// <summary>The preview volume for both viewports, or null when nothing survives the filter.</summary>
+    [ObservableProperty] private (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max)? _bakeBox;
+
+    /// <summary>German locale: the user types "4,5" as naturally as "4.5", and file convention is
+    /// InvariantCulture - accept both rather than making one of them silently wrong.</summary>
+    private static bool ParseBakeFloat(string text, out float value) =>
+        float.TryParse((text ?? "").Trim().Replace(',', '.'),
+            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
+
+    // M412: the save path re-bakes independently of the Rebuild command, so it must use the SAME
+    // settings or the saved file silently diverges from the preview the user approved.
+    private float SaveBakeSize() => BakeSettings()?.Size ?? Formats.MapGeo.MapBucketGridBuilder.TargetBucketSize;
+    private float SaveBakeMin() => BakeSettings()?.Min ?? Formats.MapGeo.MapBucketGridBuilder.HeightRangeMin;
+    private float SaveBakeMax() => BakeSettings()?.Max ?? Formats.MapGeo.MapBucketGridBuilder.HeightRangeMax;
+
+    private (float Size, float Min, float Max)? BakeSettings()
+    {
+        if (!ParseBakeFloat(BakeBucketSizeText, out float size)
+            || !ParseBakeFloat(BakeHeightMinText, out float min)
+            || !ParseBakeFloat(BakeHeightMaxText, out float max)) return null;
+        return (size, min, max);
+    }
+
+    partial void OnShowBakeBoxChanged(bool value)
+    {
+        if (!value) { BakeBox = null; BakeBoxInfo = ""; return; }
+        _ = RefreshBakeBoxPreviewAsync();
+    }
+    partial void OnBakeHeightMinTextChanged(string value) { if (ShowBakeBox) _ = RefreshBakeBoxPreviewAsync(); }
+    partial void OnBakeHeightMaxTextChanged(string value) { if (ShowBakeBox) _ = RefreshBakeBoxPreviewAsync(); }
+    partial void OnBakeBucketSizeTextChanged(string value) { if (ShowBakeBox) _ = RefreshBakeBoxPreviewAsync(); }
+
+    private int _bakeBoxGeneration;
+
+    /// <summary>Debounced dry-run of the bake. A full Rebuild costs seconds on Summoner's Rift, so typing
+    /// "5000" must not run it four times: 300 ms of quiet first, and a generation counter discards any
+    /// result that finished after the settings moved on.</summary>
+    private async Task RefreshBakeBoxPreviewAsync()
+    {
+        int gen = ++_bakeBoxGeneration;
+        await Task.Delay(300);
+        if (gen != _bakeBoxGeneration) return;
+        if (_currentMap is not { } map) { BakeBoxInfo = "Load a map first."; BakeBox = null; return; }
+        if (BakeSettings() is not { } cfg)
+        { BakeBoxInfo = "Enter numbers (height min/max, bucket size)."; BakeBox = null; return; }
+
+        try
+        {
+            var (grids, box) = await Task.Run(() =>
+            {
+                var g = Formats.MapGeo.MapBucketGridBuilder.Rebuild(map, cfg.Size, cfg.Min, cfg.Max);
+                (System.Numerics.Vector3, System.Numerics.Vector3)? b = null;
+                if (g.Count > 0)
+                {
+                    float minX = float.MaxValue, minZ = float.MaxValue, maxX = float.MinValue, maxZ = float.MinValue;
+                    foreach (var e in g)
+                    { minX = MathF.Min(minX, e.MinX); minZ = MathF.Min(minZ, e.MinZ);
+                      maxX = MathF.Max(maxX, e.MaxX); maxZ = MathF.Max(maxZ, e.MaxZ); }
+                    b = (new System.Numerics.Vector3(minX, cfg.Min, minZ),
+                         new System.Numerics.Vector3(maxX, cfg.Max, maxZ));
+                }
+                return (g, b);
+            });
+            if (gen != _bakeBoxGeneration) return;   // stale - the settings moved on while we baked
+
+            BakeBox = box;
+            BakeBoxInfo = grids.Count == 0
+                ? "Nothing survives the height filter - no geometry would be baked."
+                : $"{grids.Count} grid(s), {grids[0].BucketsPerSide}x{grids[0].BucketsPerSide} cells, "
+                  + $"cell {grids[0].BucketSizeX:0}x{grids[0].BucketSizeZ:0} - "
+                  + $"{grids.Sum(g2 => g2.Vertices.Count):n0} vert(s)";
+        }
+        catch (Exception ex)
+        {
+            if (gen != _bakeBoxGeneration) return;
+            // Inverted range and the per-cell u16 ceilings arrive here. Shown, not thrown: mid-typing
+            // states are transient and a message beats a crash.
+            BakeBox = null;
+            BakeBoxInfo = ex.Message;
+        }
+    }
+
     [RelayCommand]
     private async Task RebuildBucketGrids()
     {
@@ -590,7 +684,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Status = "Rebuilding bucket grids…";
         try
         {
-            var grids = await Task.Run(() => MapBucketGridBuilder.Rebuild(map));
+            // M412: the panel's settings, falling back to the shipped defaults when unparsable.
+            var cfg = BakeSettings() ?? (MapBucketGridBuilder.TargetBucketSize,
+                MapBucketGridBuilder.HeightRangeMin, MapBucketGridBuilder.HeightRangeMax);
+            var grids = await Task.Run(() => MapBucketGridBuilder.Rebuild(map, cfg.Size, cfg.Min, cfg.Max));
             var infos = grids.Select(g =>
             {
                 var mp = new float[g.Vertices.Count * 3];
@@ -6273,7 +6370,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (layered is not null) { appended = layered; reMap = await Task.Run(() => MapGeoDecoder.Decode(appended)); }
                     else _log.Warn("MapGeo", $"Added-mesh layers not applied: {lErr}");
                 }
-                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(appended, reMap);
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(appended, reMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax());
             }
 
             // 2b) M105: bucket grids bake per-face visibility masks from the mesh flags, so layer-only
@@ -6281,7 +6378,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (hasLayers && !hasMoves && added.Count == 0)
             {
                 var reMap2 = await Task.Run(() => MapGeoDecoder.Decode(bytes));
-                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2);
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2, SaveBakeSize(), SaveBakeMin(), SaveBakeMax());
             }
 
             // 3) Blender-style pending deletion: remove only the selected mesh records. Their buffers stay
@@ -6292,7 +6389,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var stripped = MapGeoMeshRemover.Remove(bytes, removedIndices, out var removeError);
                 if (stripped is null) { _log.Error("MapGeo", $"Could not remove selected meshes: {removeError}"); return; }
                 var remainingMap = await Task.Run(() => MapGeoDecoder.Decode(stripped));
-                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap);
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax());
             }
 
             var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");

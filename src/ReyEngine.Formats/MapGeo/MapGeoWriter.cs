@@ -72,7 +72,13 @@ public static class MapGeoWriter
     /// mutable backing fields, or <c>EnvironmentAsset.Write</c> calls are used.
     /// </summary>
     public static byte[] WriteWithRegeneratedBucketGrids(byte[] originalMapgeo, MapGeoAsset asset,
-        float targetBucketSize = MapBucketGridBuilder.TargetBucketSize)
+        float targetBucketSize = MapBucketGridBuilder.TargetBucketSize,
+        // M412: the same bake settings the preview and the Rebuild command use. Defaults keep every
+        // existing caller byte-identical; the app passes its panel values so the SAVED file matches what
+        // the user previewed - a save that silently re-baked with defaults would be a divergence nothing
+        // on screen reveals.
+        float heightMin = MapBucketGridBuilder.HeightRangeMin,
+        float heightMax = MapBucketGridBuilder.HeightRangeMax)
     {
         ArgumentNullException.ThrowIfNull(originalMapgeo);
         ArgumentNullException.ThrowIfNull(asset);
@@ -85,7 +91,7 @@ public static class MapGeoWriter
         using var input = new MemoryStream(originalMapgeo, writable: false);
         using var environment = new EnvironmentAsset(input);
         MapGeoSceneGraphSection oldSection = MapGeoSceneGraphSection.Locate(originalMapgeo, environment, version);
-        IReadOnlyList<MapBucketGridData> grids = MapBucketGridBuilder.Rebuild(asset, targetBucketSize);
+        IReadOnlyList<MapBucketGridData> grids = MapBucketGridBuilder.Rebuild(asset, targetBucketSize, heightMin, heightMax);
         byte[] newSection = SerializeSceneGraphs(version, grids);
 
         int suffixOffset = oldSection.Offset + oldSection.Length;

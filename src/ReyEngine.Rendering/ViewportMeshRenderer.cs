@@ -97,10 +97,11 @@ public sealed class ViewportMeshRenderer : IDisposable
     private uint _highlightVao, _highlightVbo;
     private uint _brushRingVao, _brushRingVbo;   // M172e: paint brush footprint
     private uint _groupBoundsVao, _groupBoundsVbo;
+    private uint _bakeBoxVao, _bakeBoxVbo;   // M412: bucket-grid bake volume preview
     private uint _gizmoVao, _gizmoVbo;
     private uint _particleVao, _particleVbo, _particleSelVao, _particleSelVbo;   // M35: placed-particle markers
     private uint _propVao, _propVbo, _probeVao, _probeVbo;                       // M38: prop / cubemap-probe markers
-    private int _boundsVerts, _boneVerts, _highlightVerts, _groupBoundsVerts, _brushRingVerts;
+    private int _boundsVerts, _boneVerts, _highlightVerts, _groupBoundsVerts, _brushRingVerts, _bakeBoxVerts;
     private int _particleVerts, _particleSelVerts, _propVerts, _probeVerts;
 
     // M41: placed animated-prop meshes — unique geometry registered once, instanced per placement.
@@ -900,6 +901,8 @@ void main() { FragColor = uColor; }";
         _highlightVbo = gl.GenBuffer();
         _groupBoundsVao = gl.GenVertexArray();
         _groupBoundsVbo = gl.GenBuffer();
+        _bakeBoxVao = gl.GenVertexArray();
+        _bakeBoxVbo = gl.GenBuffer();
         _gizmoVao = gl.GenVertexArray();
         _gizmoVbo = gl.GenBuffer();
         _dummyVao = gl.GenVertexArray();
@@ -1844,6 +1847,17 @@ void main(){
         UploadLines(_groupBoundsVao, _groupBoundsVbo, BuildBoxLines(a, b), out _groupBoundsVerts);
     }
 
+    /// <summary>M412: the bucket-grid bake volume - the DERIVED X/Z extent extruded through the authored
+    /// height-filter slab. A preview, not a selection: it gets its own channel and colour precisely so it
+    /// cannot be mistaken for the amber selection boxes, and its own VBO so publishing it never touches
+    /// the multi-megabyte bucket-grid array.</summary>
+    public void SetBakeBox(Vector3? min, Vector3? max)
+    {
+        if (!_ready) return;
+        if (min is not { } a || max is not { } b) { _bakeBoxVerts = 0; return; }
+        UploadLines(_bakeBoxVao, _bakeBoxVbo, BuildBoxLines(a, b), out _bakeBoxVerts);
+    }
+
     /// <summary>Set (or clear, with pivot=null) the transform gizmo (M42). <paramref name="mode"/> selects
     /// move (0, axis arrows) / rotate (1, rings) / scale (2, axis arms with box tips); the axis vectors let
     /// the gizmo follow world or local space.</summary>
@@ -2097,6 +2111,7 @@ void main(){
         _highlightVerts = 0;
         _brushRingVerts = 0;
         _groupBoundsVerts = 0;
+        _bakeBoxVerts = 0;
         _particleVerts = 0;
         _particleSelVerts = 0;
         _propVerts = 0;
@@ -2470,11 +2485,17 @@ void main(){
 
         // Selection highlight: a bright box around each selected mesh + a dimmer box around the whole
         // group, always on top so they read clearly even inside dense geometry.
-        if (_highlightVerts > 0 || _groupBoundsVerts > 0)
+        if (_highlightVerts > 0 || _groupBoundsVerts > 0 || _bakeBoxVerts > 0)
         {
             _gl.UseProgram(_lineProgram);
             _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
             _gl.Disable(EnableCap.DepthTest);
+            if (_bakeBoxVerts > 0)
+            {
+                _gl.Uniform4(_lColor, 0.80f, 0.40f, 0.95f, 1f); // M412: bake volume - violet, nothing else uses it
+                _gl.BindVertexArray(_bakeBoxVao);
+                _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_bakeBoxVerts);
+            }
             if (_groupBoundsVerts > 0)
             {
                 _gl.Uniform4(_lColor, 0.5f, 0.65f, 0.95f, 1f); // group bounds — cool blue
@@ -2648,7 +2669,9 @@ void main(){
         vertexCount = verts.Length / 3;
     }
 
-    private static float[] BuildBoxLines(Vector3 a, Vector3 b)
+    /// <summary>M412: public for the same reason BuildGizmoAxis is (M296) - the D3D11 viewport draws the
+    /// SAME box from the same builder, so the two cannot drift.</summary>
+    public static float[] BuildBoxLines(Vector3 a, Vector3 b)
     {
         Vector3[] c =
         {

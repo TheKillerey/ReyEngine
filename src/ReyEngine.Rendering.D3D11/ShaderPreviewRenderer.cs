@@ -2270,6 +2270,9 @@ float4 psmain(VOut i) : SV_Target
     private ComPtr<ID3D11Buffer> _brushRingVb;
     private int _brushRingVbCapacity;
     private int _brushRingVerts;
+    private ComPtr<ID3D11Buffer> _bakeBoxVb;   // M412: bake-volume preview lines
+    private int _bakeBoxVbCapacity;
+    private int _bakeBoxVerts;
     private int _gizmoTotalVerts;
 
     /// <summary>
@@ -2348,6 +2351,62 @@ float4 psmain(VOut i) : SV_Target
             System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
         _ctx.Unmap(_brushRingVb, 0);
         _brushRingVerts = verts.Length / 3;
+    }
+
+    /// <summary>M412: the bucket-grid bake volume, built by ViewportMeshRenderer.BuildBoxLines so both
+    /// viewports draw the identical box. Its own small VB - it must never ride on the multi-megabyte
+    /// bucket-grid channel, where publishing it would re-upload the whole grid. Null clears it.</summary>
+    public void SetBakeBoxLines(float[]? verts)
+    {
+        _bakeBoxVerts = 0;
+        if (verts is null || verts.Length < 6 || !EnsureOverlay()) return;
+
+        int bytes = verts.Length * sizeof(float);
+        if (_bakeBoxVbCapacity < bytes || _bakeBoxVb.Handle is null)
+        {
+            _bakeBoxVb.Dispose();
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)bytes, Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> vb = default;
+            if (_device.CreateBuffer(in desc, null, ref vb) < 0) { Log("bake box vertex buffer failed"); return; }
+            _bakeBoxVb = vb; _bakeBoxVbCapacity = bytes;
+        }
+
+        var map = new MappedSubresource();
+        if (_ctx.Map(_bakeBoxVb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        fixed (float* p = verts)
+            System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
+        _ctx.Unmap(_bakeBoxVb, 0);
+        _bakeBoxVerts = verts.Length / 3;
+    }
+
+    private int DrawBakeBox(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_bakeBoxVerts == 0 || _bakeBoxVb.Handle is null || !EnsureOverlay()) return 0;
+
+        var mvp = Matrix4x4.Multiply(view, proj);
+        _ctx.IASetInputLayout(_overlayLayout);
+        _ctx.VSSetShader(_overlayVs, null, 0);
+        _ctx.PSSetShader(_overlayPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
+
+        uint stride = 3 * sizeof(float), offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _bakeBoxVb, in stride, in offset);
+        _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        // Always on top, like the GL side draws it - a preview volume hidden inside terrain is useless.
+        _ctx.OMSetDepthStencilState(_overlayDepthNoTest, 0);
+
+        // Violet, matching GL's (0.80, 0.40, 0.95) exactly - the two viewports must show the same box.
+        SetOverlayCb(mvp, new Vector4(0.80f, 0.40f, 0.95f, 1f));
+        _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.Draw((uint)_bakeBoxVerts, 0);
+
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
+        return 1;
     }
 
     private int DrawBrushRing(Matrix4x4 view, Matrix4x4 proj)
@@ -4128,6 +4187,7 @@ float4 psmain(VOut i) : SV_Target
             int gridDraws = DrawBucketGrid(view, proj);   // M293
             int gizmoDraws = DrawGizmo(view, proj);
  DrawBrushRing(view, proj);   // M361: after the gizmo, same overlay pipeline      // M296, last so it is over everything
+            DrawBakeBox(view, proj);     // M412: same overlay pipeline
             DrawCalls += HighlightDraws + IconDraws + gridDraws + gizmoDraws;
 
             _ctx.CopyResource(_stage, _rt);
@@ -4330,6 +4390,7 @@ float4 psmain(VOut i) : SV_Target
         _depthCopySrv.Dispose(); _depthCopy.Dispose();
         _gridVs.Dispose(); _gridPs.Dispose(); _gridLayout.Dispose(); _gridVb.Dispose();
         _gizmoVb.Dispose();
+        _bakeBoxVb.Dispose();
         DisposeSky();
         DisposeRibbon();
         _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();

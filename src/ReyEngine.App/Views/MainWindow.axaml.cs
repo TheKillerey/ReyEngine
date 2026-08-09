@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     /// multi-megabyte and is rebuilt only when the grid actually changes, so re-uploading it every frame
     /// would dominate the frame for a buffer whose contents are identical.</summary>
     private float[]? _lastDx11BucketGrid;
+    private (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max)? _lastDx11BakeBox;   // M412
     private Services.SkyboxSpec? _lastDx11Skybox;
     private bool _dx11FrameQueued;
 
@@ -266,6 +267,15 @@ public partial class MainWindow : Window
         {
             _lastDx11BucketGrid = vm.BucketGridLines;
             _dx11.Renderer.SetBucketGrid(vm.BucketGridLines);
+        }
+        // M412: the bake-volume preview - 72 floats, value-compared, from the SAME BuildBoxLines the GL
+        // side draws, so the two viewports show the identical box.
+        if (_lastDx11BakeBox != vm.BakeBox)
+        {
+            _lastDx11BakeBox = vm.BakeBox;
+            _dx11.Renderer.SetBakeBoxLines(vm.BakeBox is { } bb
+                ? ReyEngine.Rendering.ViewportMeshRenderer.BuildBoxLines(bb.Min, bb.Max)
+                : null);
         }
 
         // M362: the sky, from the same SkyboxSpec property the GL viewport binds to - so the two renderers

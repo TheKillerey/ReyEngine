@@ -375,6 +375,7 @@
                 ProbeMarkers="{Binding ProbeMarkers}"
                 SoundMarkers="{Binding SoundMarkers}"
                 BucketGridLines="{Binding BucketGridLines}"
+                BakeBox="{Binding BakeBox}"
                 PropMeshes="{Binding CurrentPropMeshes}"
                 ParticlePlayback="{Binding CurrentParticlePlayback}"
                 PlayPropAnimations="{Binding PlayPropAnimations}"
@@ -576,6 +577,36 @@
               <Button Classes="tool" Content="⟳ Rebuild Grids" Command="{Binding RebuildBucketGridsCommand}"
                       IsVisible="{Binding HasBucketGrids}" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Regenerate every bucket grid from the map's CURRENT geometry (after moving/scaling meshes). Preview updates immediately; saving the map writes the new grids into the mapgeo." />
+              <!-- M412: bake settings + the preview volume. A Flyout so the three numbers live next to
+                   the button that uses them; Flyout takes ONE child (the StackPanel). -->
+              <Button Classes="tool" Content="▦" FontSize="11" Padding="8,3" Margin="0"
+                      IsVisible="{Binding HasBucketGrids}"
+                      ToolTip.Tip="Bucket-grid bake settings: the height filter and target bucket size, with a live preview of the volume the next rebuild covers.">
+                <Button.Flyout>
+                  <Flyout Placement="Bottom">
+                    <StackPanel Width="280" Spacing="6">
+                      <CheckBox IsChecked="{Binding ShowBakeBox}" Content="Show bake volume in viewport"
+                                FontSize="11" />
+                      <TextBlock Text="Height filter (world Y). The grid itself is flat - this decides which triangles get baked, not how tall anything is."
+                                 FontSize="9" Opacity="0.6" TextWrapping="Wrap" />
+                      <Grid ColumnDefinitions="Auto,*,Auto,*" >
+                        <TextBlock Grid.Column="0" Text="Min" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <TextBox Grid.Column="1" Text="{Binding BakeHeightMinText, Mode=TwoWay}" FontSize="10" Padding="4,1" />
+                        <TextBlock Grid.Column="2" Text="Max" FontSize="10" VerticalAlignment="Center" Margin="8,0,4,0" />
+                        <TextBox Grid.Column="3" Text="{Binding BakeHeightMaxText, Mode=TwoWay}" FontSize="10" Padding="4,1" />
+                      </Grid>
+                      <Grid ColumnDefinitions="Auto,*">
+                        <TextBlock Grid.Column="0" Text="Bucket size" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <TextBox Grid.Column="1" Text="{Binding BakeBucketSizeText, Mode=TwoWay}" FontSize="10" Padding="4,1" />
+                      </Grid>
+                      <TextBlock Text="{Binding BakeBoxInfo}" FontSize="9" Opacity="0.75" TextWrapping="Wrap"
+                                 FontFamily="Consolas" />
+                      <Button Classes="tool" Content="⟳ Rebuild with these settings"
+                              Command="{Binding RebuildBucketGridsCommand}" HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
               <Button Classes="tool" Content="➕ Add Mesh" Command="{Binding AddMeshToMapCommand}"
                       IsVisible="{Binding HasMapGeo}" FontSize="11" Padding="8,3" Margin="0"
                       ToolTip.Tip="Import a mesh (.obj / .scb / .sco) and append it to this map. Place it with the gizmo, pick its material in the inspector, then Save to Mod." />

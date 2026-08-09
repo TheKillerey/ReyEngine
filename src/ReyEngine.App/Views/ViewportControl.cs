@@ -77,6 +77,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ProbeMarkers));
     public static readonly StyledProperty<IReadOnlyList<Vector3>?> SoundMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(SoundMarkers));      // M55
+    // M412: the bucket-grid bake volume preview. A tiny value type, so it is compared by VALUE in the
+    // render loop - unlike the multi-megabyte grid array above it, which is reference-guarded.
+    public static readonly StyledProperty<(Vector3 Min, Vector3 Max)?> BakeBoxProperty =
+        AvaloniaProperty.Register<ViewportControl, (Vector3 Min, Vector3 Max)?>(nameof(BakeBox));
     public static readonly StyledProperty<float[]?> BucketGridLinesProperty =
         AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(BucketGridLines));                  // M55
     public static readonly StyledProperty<PropRenderSet?> PropMeshesProperty =
@@ -301,6 +305,7 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>World positions of cubemap-probe markers (M38); green.</summary>
     public IReadOnlyList<Vector3>? ProbeMarkers { get => GetValue(ProbeMarkersProperty); set => SetValue(ProbeMarkersProperty, value); }
     public IReadOnlyList<Vector3>? SoundMarkers { get => GetValue(SoundMarkersProperty); set => SetValue(SoundMarkersProperty, value); }
+    public (Vector3 Min, Vector3 Max)? BakeBox { get => GetValue(BakeBoxProperty); set => SetValue(BakeBoxProperty, value); }
     public float[]? BucketGridLines { get => GetValue(BucketGridLinesProperty); set => SetValue(BucketGridLinesProperty, value); }
     /// <summary>Decoded placed prop meshes to render at their transforms (M41); null clears them.</summary>
     public PropRenderSet? PropMeshes { get => GetValue(PropMeshesProperty); set => SetValue(PropMeshesProperty, value); }
@@ -348,6 +353,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private bool _dynamicLightsDirty;   // M70: re-upload the Light.dat table on the GL thread when it changes
     private bool _lightMarkersDirty;    // M71: recompute the transformed light-position icons
     private float[]? _lastBucketGridLines;   // M77: skip redundant multi-MB line uploads
+    private (Vector3 Min, Vector3 Max)? _lastBakeBox;   // M412
     private bool _grassTintDirty;            // M78: upload the grass-tint texture on the GL thread
     private bool _particlesDirty;
     private bool _propMeshesDirty;   // M41
@@ -805,6 +811,12 @@ public sealed class ViewportControl : OpenGlControlBase
             {
                 _meshRenderer.SetBucketGridMesh(BucketGridLines);
                 _lastBucketGridLines = BucketGridLines;
+            }
+            // M412: 72 floats, value-compared - never rides on the grid array above.
+            if (_lastBakeBox != BakeBox)
+            {
+                _meshRenderer.SetBakeBox(BakeBox?.Min, BakeBox?.Max);
+                _lastBakeBox = BakeBox;
             }
             _particlesDirty = false;
         }
@@ -1642,7 +1654,8 @@ public sealed class ViewportControl : OpenGlControlBase
         { _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticleMarkersProperty || change.Property == SelectedParticlePositionProperty
                  || change.Property == PropMarkersProperty || change.Property == ProbeMarkersProperty
-                 || change.Property == SoundMarkersProperty || change.Property == BucketGridLinesProperty)
+                 || change.Property == SoundMarkersProperty || change.Property == BucketGridLinesProperty
+                 || change.Property == BakeBoxProperty)
         { _particlesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticlePlaybackProperty)
         { _particlePlaybackDirty = true; RequestNextFrameRendering(); }
