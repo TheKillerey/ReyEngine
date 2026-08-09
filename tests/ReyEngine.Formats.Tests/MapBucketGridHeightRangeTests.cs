@@ -114,6 +114,73 @@ public class MapBucketGridHeightRangeTests
         Assert.Equal(tight.BucketsPerSide, wide.BucketsPerSide);
     }
 
+    // ---- the preview box (M411) ----
+
+    /// <summary>The preview's X/Z must be the BAKE's own snapped extent, not a separate calculation -
+    /// a preview that disagrees with what gets baked is worse than no preview.</summary>
+    [Fact]
+    public void BakeBoundsXzMatchesTheGridTheBakeProduces()
+    {
+        var asset = AssetAt(0f);
+        var grid = MapBucketGridBuilder.Rebuild(asset).Single();
+        var box = MapBucketGridBuilder.ComputeBakeBounds(asset)!.Value;
+
+        Assert.Equal(grid.MinX, box.Min.X);
+        Assert.Equal(grid.MinZ, box.Min.Z);
+        Assert.Equal(grid.MaxX, box.Max.X);
+        Assert.Equal(grid.MaxZ, box.Max.Z);
+    }
+
+    /// <summary>Y is the FILTER range, authored - it is the one part of the box the user sets.</summary>
+    [Fact]
+    public void BakeBoundsYIsTheAuthoredHeightRange()
+    {
+        var box = MapBucketGridBuilder.ComputeBakeBounds(AssetAt(0f), heightMin: -300f, heightMax: 900f)!.Value;
+        Assert.Equal(-300f, box.Min.Y);
+        Assert.Equal(900f, box.Max.Y);
+    }
+
+    /// <summary>Nothing survives the filter -> no box. That is the useful answer, not an empty one at
+    /// the origin, which would draw a degenerate rectangle in the middle of the map.</summary>
+    [Fact]
+    public void BakeBoundsIsNullWhenNothingSurvivesTheFilter()
+        => Assert.Null(MapBucketGridBuilder.ComputeBakeBounds(AssetAt(10_000f), heightMax: 5000f));
+
+    /// <summary>
+    /// targetBucketSize changes the CELL COUNT; it changes the extent only when the span does not divide
+    /// evenly, because maxX is snapped to minX + bucketSize * side.
+    ///
+    /// <para>Written the other way round first, asserting the extent always moves - it does not. A
+    /// 1000-unit span snaps to 1000 at both 100 (side 10) and 5000 (side clamped to 4, cell 250), so the
+    /// box is identical while the grid inside it is completely different. Worth pinning: a preview that
+    /// only redraws when the BOX changes would look frozen while the user changes the thing that
+    /// matters.</para>
+    /// </summary>
+    [Fact]
+    public void TargetBucketSizeChangesTheCellCountEvenWhenTheExtentIsUnchanged()
+    {
+        var asset = AssetAt(0f);
+        var small = MapBucketGridBuilder.Rebuild(asset, targetBucketSize: 100f).Single();
+        var large = MapBucketGridBuilder.Rebuild(asset, targetBucketSize: 5000f).Single();
+
+        Assert.NotEqual(small.BucketsPerSide, large.BucketsPerSide);
+        Assert.Equal(4, large.BucketsPerSide);   // clamped to MinimumBucketsPerSide
+
+        var boxS = MapBucketGridBuilder.ComputeBakeBounds(asset, targetBucketSize: 100f)!.Value;
+        var boxL = MapBucketGridBuilder.ComputeBakeBounds(asset, targetBucketSize: 5000f)!.Value;
+        Assert.Equal(boxS.Max.X, boxL.Max.X);    // evenly divisible here, so the extent does NOT move
+    }
+
+    /// <summary>And when the span does NOT divide evenly, the extent really is snapped outward.</summary>
+    [Fact]
+    public void AnUnevenSpanIsSnappedOutward()
+    {
+        var asset = AssetAt(0f);
+        var box = MapBucketGridBuilder.ComputeBakeBounds(asset, targetBucketSize: 300f)!.Value;
+        var grid = MapBucketGridBuilder.Rebuild(asset, targetBucketSize: 300f).Single();
+        Assert.Equal(grid.MinX + grid.BucketSizeX * grid.BucketsPerSide, box.Max.X, 3);
+    }
+
     // ---- validation ----
 
     /// <summary>An inverted range bakes NOTHING, and an empty grid is indistinguishable on screen from a

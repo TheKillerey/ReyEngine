@@ -129,6 +129,34 @@ public static class MapBucketGridBuilder
             .ToArray();
     }
 
+    /// <summary>
+    /// M411: the volume the next bake would actually cover, for the viewport preview.
+    ///
+    /// <para>X/Z are DERIVED - the union of every grid's snapped extent, exactly as BuildGrid computes
+    /// it, so the preview cannot drift from the bake. Y is the height FILTER range, which is authored.
+    /// Drawn together they answer the real question ("what gets baked?") without implying the X/Z is
+    /// editable, because it is not: the grid's rectangle comes from the geometry that survives.</para>
+    ///
+    /// <para>Null when nothing survives the filter - which is itself the useful answer, and is why an
+    /// inverted range throws in Rebuild rather than silently producing this.</para>
+    /// </summary>
+    public static (Vector3 Min, Vector3 Max)? ComputeBakeBounds(MapGeoAsset asset,
+        float targetBucketSize = TargetBucketSize,
+        float heightMin = HeightRangeMin, float heightMax = HeightRangeMax)
+    {
+        var grids = Rebuild(asset, targetBucketSize, heightMin, heightMax);
+        if (grids.Count == 0) return null;
+
+        float minX = float.MaxValue, minZ = float.MaxValue;
+        float maxX = float.MinValue, maxZ = float.MinValue;
+        foreach (var g in grids)
+        {
+            minX = MathF.Min(minX, g.MinX); minZ = MathF.Min(minZ, g.MinZ);
+            maxX = MathF.Max(maxX, g.MaxX); maxZ = MathF.Max(maxZ, g.MaxZ);
+        }
+        return (new Vector3(minX, heightMin, minZ), new Vector3(maxX, heightMax, maxZ));
+    }
+
     private static MapBucketGridData BuildGrid(MapGeoAsset asset, MapBucketGridKey key, List<Triangle> triangles, float targetBucketSize)
     {
         float minX = float.MaxValue, minZ = float.MaxValue;
