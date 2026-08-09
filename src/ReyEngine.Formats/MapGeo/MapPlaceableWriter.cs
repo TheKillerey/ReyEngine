@@ -83,6 +83,10 @@ public static class MapPlaceableWriter
         {
             original = SafeBinTree.Parse(materialsBin);
             tree = SafeBinTree.Parse(materialsBin);   // a second, independent parse to diff against
+            // M413: placements are exactly what a lossy parse loses - they live in the map/big containers
+            // whose tails get abandoned first. Rewriting the file from a partial read would delete every
+            // placement that failed to parse, permanently and without a word.
+            SafeBinTree.ThrowIfLossy(tree, "placement edits");
         }
         catch (Exception ex) { error = $"could not parse the .bin: {ex.Message}"; return null; }
 

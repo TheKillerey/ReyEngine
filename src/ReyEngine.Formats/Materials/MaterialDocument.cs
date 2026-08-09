@@ -48,6 +48,10 @@ public sealed class MaterialDocument
 
     public byte[] Serialize()
     {
+        // M413: a tolerant parse that had to abandon part of an object must never be written back -
+        // the bytes it could not read still exist in the source file, and saving replaces them with
+        // nothing. Duplicate fields/objects are exempt: clearing those IS the advertised repair.
+        Meta.SafeBinTree.ThrowIfLossy(_tree, "this materials bin");
         using var ms = new MemoryStream();
         _tree.Write(ms);
         return ms.ToArray();
