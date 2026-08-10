@@ -1677,6 +1677,48 @@ wrong — it is binary. Verified across all 1,189 files:
 - the body holds plain IEEE-754 little-endian floats — `0.25`, `120.0`, `360.0`, `90.0` and `0.005` all
   appear as clean constants.
 
+**Body structure, partially decoded (M421 correlation pass).** The body is a VARIABLE-LENGTH
+serialization with default elision, not a fixed record array — 1-emitter bodies range 17..570 bytes
+across 118 distinct lengths, so length is not a function of emitter count. Three things are now
+established:
+
+1. **The body ENDS with a dense u16 string-reference table**, one entry per string-valued field, in
+   field order. The final u16 of a body is a valid string offset in 1,175 of 1,175 files, and every
+   emitter name is referenced somewhere in the body in **0 of 1,175** exceptions. Scanning backwards
+   from the end while each u16 remains a valid string offset recovers the table.
+
+2. **The u16 at body+0 is a flags/presence mask.** It strongly determines the table shape: value
+   `0x1028` occurs in 189 of 370 single-emitter files and 181 of those have a 5-entry table.
+
+3. **For mask `0x1028` with a 5-entry table the field order is fully decoded**, 100% across all 181
+   files:
+
+   | position | field | agreement |
+   |---|---|---|
+   | 0 | emitter name | 181/181 |
+   | 1 | Wwise sound event | 181/181 |
+   | 2 | texture | 181/181 |
+   | 3 | keyword (quality/primitive) | 181/181 |
+   | 4 | texture | 181/181 |
+
+   Two texture slots, matching the legacy shader's two samplers. It reproduces by hand on the smallest
+   sound particle: `[empty, Play_sfx_…, Black.DDS, Simple, Black.DDS]`.
+
+**Killed in this pass**, so they are not retried: the body is **not** linear in emitter count; the u16
+at body+2 is **not** the emitter count (matches a name-derived count in only 31% of files, and the
+mismatches run in both directions).
+
+**Not yet resolved.** Which of the two texture slots is the diffuse and which is the colour ramp —
+`color-` prefixed names spread across positions 1, 2, 3, 4 and 5 with no majority, so the distinction is
+carried by the mask bits rather than by slot position. And the mask itself is decoded for exactly one
+value out of many. Until a mask value is decoded, position does not imply field, because elision shifts
+everything.
+
+**What this would buy when finished.** The table is per-emitter string assignment straight from the
+data — it would replace every heuristic the converter currently uses for texture, ramp and mesh binding
+(the name-match/positional rules, and the 460 unbound meshes). The float parameters the effects actually
+need — rate, lifetime, velocity, scale — live in the region BEFORE the table and are still untouched.
+
 **What is still NOT decoded**, with the hypotheses that were tested and killed so they are not retried:
 
 | hypothesis | result |
