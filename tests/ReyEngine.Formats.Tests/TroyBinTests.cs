@@ -439,6 +439,52 @@ public class TroyBinTests
         Assert.All(container.Elements, e => Assert.Equal(BinPropertyType.Struct, e.Type));
     }
 
+    /// <summary>
+    /// Every asset path written into the system must also appear in <c>Assets</c>. This is the
+    /// invariant both the import and the M420 Workshop preview stand on: the import stages exactly the
+    /// Assets list, and the preview resolves a converted system by aliasing those target paths back to
+    /// their originals. A path referenced but not staged is a texture that is missing in game AND
+    /// missing in the preview - the same white-quad failure, from the other direction.
+    /// </summary>
+    [Fact]
+    public void EveryPathTheSystemReferencesIsAlsoStaged()
+    {
+        byte[] raw = Build(new[]
+        {
+            "crystal", "shield",
+            "DATA/Particles/quartz32.DDS",
+            "DATA/Particles/color-crystal32.DDS",
+            "DATA/Particles/CrystalShield2.scb",
+            "DATA/Particles/HA_AP_healingIcon.skn",
+            "DATA/Particles/HA_AP_healingIcon.skl",
+        });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+        var staged = result.Assets.Select(a => a.TargetPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var tree = new BinTree(new MemoryStream(result.BinBytes, writable: false));
+        foreach (string referenced in AssetStrings(tree.Objects.Values.Single().Properties.Values))
+            Assert.Contains(referenced, staged);
+    }
+
+    /// <summary>Every string anywhere in the object that looks like an asset path.</summary>
+    private static IEnumerable<string> AssetStrings(IEnumerable<BinTreeProperty> props)
+    {
+        foreach (var p in props)
+        {
+            switch (p)
+            {
+                case BinTreeString s when s.Value.Contains('/') && Path.HasExtension(s.Value):
+                    yield return s.Value; break;
+                case BinTreeContainer c:
+                    foreach (var v in AssetStrings(c.Elements)) yield return v; break;
+                case BinTreeStruct st:
+                    foreach (var v in AssetStrings(st.Properties.Values)) yield return v; break;
+            }
+        }
+    }
+
     private static BinTreeProperty? FindEmitterProperty(byte[] bin, string field)
     {
         var tree = new BinTree(new MemoryStream(bin, writable: false));

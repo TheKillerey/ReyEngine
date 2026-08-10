@@ -1553,6 +1553,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             AddMaterial = ImportWorkshopMaterialAsync,
             AddParticle = ImportWorkshopParticleAsync,
+            BuildParticlePreview = BuildWorkshopParticlePreview,   // M420
         };
         ShowWorkshopWindow?.Invoke(vm);
         _ = vm.InitializeAsync();
@@ -1616,6 +1617,67 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         await LoadMapGeoAsync(mapEntry);
         _log.Success("Workshop", $"Added material '{newName}' from {template.Shader} with {staged.Written} asset(s).");
         return $"Added '{newName}' to the current map. {staged.Written} texture asset(s) copied.";
+    }
+
+    /// <summary>
+    /// M420: build a playable preview of a Workshop template, so "what am I actually adding" is
+    /// answered before adding it rather than after.
+    ///
+    /// <para>A legacy template is converted on the spot, which means the preview shows the CONVERTED
+    /// effect - the same emitters, textures, ramps and mesh bindings the import will write - and not the
+    /// original. That is the honest thing to preview: the conversion is lossy in known ways, and seeing
+    /// the conversion is what tells you whether it is worth adding.</para>
+    /// </summary>
+    private VfxPlayback? BuildWorkshopParticlePreview(WorkshopParticleTemplate template)
+    {
+        if (_workshopCatalog is null) return null;
+        VfxSystemDefinition? def = null;
+        Dictionary<string, string>? aliases = null;
+
+        try
+        {
+            if (template.IsLegacy)
+            {
+                byte[]? troyBytes = _workshopCatalog.ReadAsset(template.SourceBinPath);
+                if (troyBytes is null) return null;
+                if (!Formats.Particles.TroyBinFile.TryParse(troyBytes, out var troy, out _)) return null;
+                var converted = Formats.Particles.TroyBinConverter.Convert(
+                    troy!, template.Name, template.ParticlePath);
+                aliases = converted.Assets.ToDictionary(
+                    a => a.TargetPath, a => a.SourcePath, StringComparer.OrdinalIgnoreCase);
+                def = VfxSystemResolver.ExtractAll(converted.BinBytes).Values.FirstOrDefault();
+            }
+            else
+            {
+                foreach (byte[] bin in _workshopCatalog.ReadBinClosure(template.SourceBinHash, template.SourceWad))
+                {
+                    if (!VfxSystemResolver.ExtractAll(bin).TryGetValue(template.SystemHash, out var found)) continue;
+                    def = found;
+                    break;
+                }
+            }
+        }
+        catch { return null; }
+        if (def is null) return null;
+
+        // the per-emitter resolvers all read through ReadAssetByPath, so pointing that at the catalog
+        // for the duration is enough to make every one of them work on a whole-install template
+        var previous = _workshopPreviewAliases;
+        _workshopPreviewAliases = aliases ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            // a converted legacy system reuses names across templates, so a stale cache entry would show
+            // the previously previewed effect's sprites
+            _vfxTextureCache.Remove(def.PathHash);
+            _vfxMeshCache.Remove(def.PathHash);
+            return new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero,
+                ResolveSystemTextures(def), ResolveSystemMeshes(def), ResolveSystemMultTextures(def),
+                ResolveSystemDistortionTextures(def), ResolveSystemColorTextures(def),
+                ResolveSystemErosionTextures(def), ResolveSystemPaletteTextures(def),
+                emitterReflectionCubemaps: ResolveSystemReflectionCubemaps(def)) });
+        }
+        catch { return null; }
+        finally { _workshopPreviewAliases = previous; }
     }
 
     private async Task<string> ImportWorkshopParticleAsync(WorkshopParticleTemplate template, string newName)
@@ -4342,11 +4404,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // ---- Material editor: asset access helpers --------------------------
 
+    /// <summary>
+    /// M420: while a Workshop preview is being built, assets are read from the whole-install catalog
+    /// rather than the project VFS, which mounts only the current map and shared WADs. A converted
+    /// legacy effect additionally points at staged paths that do not exist anywhere yet
+    /// (<c>ASSETS/Legacy/...</c>), so those are aliased back to the original <c>DATA/...</c> chunk.
+    ///
+    /// <para>Hooking it here rather than writing a parallel resolver is deliberate: every existing
+    /// per-emitter resolver - sprites, mult, distortion, colour ramps, erosion, palette, cubemaps and
+    /// meshes - goes through this method, so all of them work for a template unchanged.</para>
+    /// </summary>
+    private IReadOnlyDictionary<string, string>? _workshopPreviewAliases;
+
     private byte[]? ReadAssetByPath(string path)
     {
-        if (!ContentLoaded || string.IsNullOrEmpty(path)) return null;
-        var hash = HashAlgorithms.WadPath(path);
-        return TryResolveEntry(hash, out _) ? ReadAsset(hash) : null;
+        if (string.IsNullOrEmpty(path)) return null;
+        if (ContentLoaded)
+        {
+            var hash = HashAlgorithms.WadPath(path);
+            if (TryResolveEntry(hash, out _) && ReadAsset(hash) is { } bytes) return bytes;
+        }
+        if (_workshopPreviewAliases is null || _workshopCatalog is null) return null;
+        string source = _workshopPreviewAliases.TryGetValue(path, out var alias) ? alias : path;
+        try { return _workshopCatalog.ReadAsset(source); } catch { return null; }
     }
 
     private bool TextureExistsByPath(string path)

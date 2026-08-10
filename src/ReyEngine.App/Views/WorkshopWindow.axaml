@@ -166,7 +166,25 @@
                   BorderBrush="{DynamicResource ReyBorderAccentBrush}" BorderThickness="1"
                   Background="{DynamicResource ReyPanelAltBrush}">
             <Grid>
-              <Image Source="{Binding SelectedParticle.Thumbnail}" Stretch="UniformToFill" />
+              <!-- M420: the static thumbnail stays as the fallback for systems that cannot be played -->
+              <Image Source="{Binding SelectedParticle.Thumbnail}" Stretch="UniformToFill"
+                     IsVisible="{Binding !HasLivePreview}" />
+              <views:ViewportControl x:Name="PreviewViewport" IsVisible="{Binding HasLivePreview}"
+                                     ParticlePlayback="{Binding Playback}"
+                                     ParticleSpeed="{Binding PreviewSpeed}"
+                                     ParticlePaused="{Binding PreviewPaused}" />
+              <Border x:Name="PreviewInput" Background="Transparent"
+                      IsVisible="{Binding HasLivePreview}" />
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="10,8"
+                          HorizontalAlignment="Right" VerticalAlignment="Top">
+                <Button Content="Restart" Command="{Binding RestartPreviewCommand}" Padding="10,3" FontSize="10"
+                        IsVisible="{Binding HasLivePreview}" />
+                <Button Content="Pause" Command="{Binding TogglePreviewPauseCommand}" Padding="10,3" FontSize="10"
+                        IsVisible="{Binding HasLivePreview}" />
+              </StackPanel>
+              <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
+                         Margin="8,8" HorizontalAlignment="Left" VerticalAlignment="Top"
+                         IsHitTestVisible="False" IsVisible="{Binding HasLivePreview}" />
               <Border VerticalAlignment="Bottom" Padding="18,24,18,14">
                 <Border.Background>
                   <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
@@ -185,6 +203,10 @@
           <Border Grid.Row="1" Classes="card" Margin="0,16,0,0">
             <StackPanel Spacing="6">
               <TextBlock Text="{Binding SelectedParticle.Detail}" FontSize="11" />
+              <!-- M420: says when the preview is the CONVERTED legacy effect, or absent entirely -->
+              <TextBlock Text="{Binding PreviewStatus}" FontSize="10" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyAccentBrush}"
+                         IsVisible="{Binding PreviewStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
               <TextBlock Text="Linked systems and every explicit texture, mesh or audio asset path are copied into the current map's package."
                          FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
             </StackPanel>

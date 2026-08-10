@@ -65,6 +65,28 @@ public sealed partial class WorkshopViewModel : ObservableObject
     public Func<WorkshopMaterialTemplate, string, Task<string>>? AddMaterial;
     public Func<WorkshopParticleTemplate, string, Task<string>>? AddParticle;
 
+    /// <summary>M420: host-supplied builder for the animated preview. The host owns asset resolution,
+    /// so the window itself never touches WADs.</summary>
+    public Func<WorkshopParticleTemplate, VfxPlayback?>? BuildParticlePreview;
+
+    /// <summary>Non-null while a template is playable; the hero panel falls back to the thumbnail when
+    /// it is null.</summary>
+    [ObservableProperty] private VfxPlayback? _playback;
+    [ObservableProperty] private string _previewStatus = "";
+    [ObservableProperty] private bool _previewPaused;
+    [ObservableProperty] private float _previewSpeed = 1f;
+
+    public bool HasLivePreview => Playback is not null;
+    partial void OnPlaybackChanged(VfxPlayback? value) => OnPropertyChanged(nameof(HasLivePreview));
+
+    [RelayCommand] private void TogglePreviewPause() => PreviewPaused = !PreviewPaused;
+
+    [RelayCommand]
+    private void RestartPreview()
+    {
+        if (SelectedParticle is { } item) _ = LoadLivePreviewAsync(item, _previewGeneration);
+    }
+
     public bool IsMaterialsTab => SelectedTab == 0;
     public bool IsParticlesTab => SelectedTab == 1;
     public bool CanAddMaterial => !Running && SelectedMaterial is not null && !string.IsNullOrWhiteSpace(NewMaterialName);
@@ -147,6 +169,14 @@ public sealed partial class WorkshopViewModel : ObservableObject
             NewParticleName = UniqueName("Workshop_" + value.Name);
             _ = LoadParticlePreviewAsync(value, ++_previewGeneration);
         }
+        else
+        {
+            // M420: nothing selected means nothing to play - leaving the last system running would keep
+            // the renderer busy and show an effect the user is no longer looking at
+            _previewGeneration++;
+            Playback = null;
+            PreviewStatus = "";
+        }
         RaiseCanAdd();
     }
 
@@ -164,10 +194,37 @@ public sealed partial class WorkshopViewModel : ObservableObject
 
     private async Task LoadParticlePreviewAsync(WorkshopParticleViewModel item, int generation)
     {
+        // M420: the animated preview first - it is what the user is waiting to see. The thumbnail is
+        // still built because the list rows use it, and because it is the fallback when a system cannot
+        // be played (no textures resolved, or an effect the renderer has no pipeline for).
+        await LoadLivePreviewAsync(item, generation);
         if (item.Thumbnail is not null) return;
         var image = await DecodeAsync(item.Template.PreviewTexturePath);
         if (generation != _previewGeneration && SelectedParticle != item) return;
         item.Thumbnail = WorkshopThumbnailRenderer.Render(image, item.Path, particle: true);
+    }
+
+    /// <summary>M420: build and start the animated preview for the selected template. Built off the UI
+    /// thread - a legacy template is converted and a modern one has its bin closure read and parsed,
+    /// neither of which belongs on the render thread.</summary>
+    private async Task LoadLivePreviewAsync(WorkshopParticleViewModel item, int generation)
+    {
+        if (BuildParticlePreview is null) { PreviewStatus = ""; return; }
+        Playback = null;
+        PreviewStatus = "Building preview…";
+        var built = await Task.Run(() =>
+        {
+            try { return BuildParticlePreview(item.Template); }
+            catch { return null; }
+        });
+        if (generation != _previewGeneration && SelectedParticle != item) return;
+
+        Playback = built;
+        PreviewStatus = built is null
+            ? "No live preview for this system — showing its texture instead."
+            : item.Template.IsLegacy
+                ? "Live preview of the CONVERTED effect — timing and physics are engine defaults."
+                : "";
     }
 
     private async Task<TextureImage?> DecodeAsync(string? path)
