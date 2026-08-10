@@ -97,10 +97,106 @@ public class TroyBinTests
         byte[] raw = Build(new[] { "flame", second, second.Replace("0 ", "1 ") });
 
         Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
-        var key = Assert.IsType<(float Time, Vector4 Color)>(troy!.ColorKeys[0], exactMatch: false);
+        var key = Assert.Single(troy!.ColorCurves)[0];
         Assert.Equal(0f, key.Time);
         Assert.Equal(expectedR, key.Color.X, 4);
         Assert.Equal(expectedG, key.Color.Y, 4);
+    }
+
+    /// <summary>
+    /// A file carries SEVERAL colour curves, not one. Measured: of the 660 files with colour keys only
+    /// 223 form a single monotonic curve — 136 have two runs, 77 three, 99 four. Reading them as one
+    /// list produced a non-monotonic time series (0…1, 0…1, 0…1) handed to every emitter, which is why
+    /// converted effects rendered white instead of their authored colour. A run ends where time stops
+    /// increasing.
+    /// </summary>
+    [Fact]
+    public void ColourKeysSplitIntoOneCurvePerRun()
+    {
+        byte[] raw = Build(new[]
+        {
+            "flame", "smoke",
+            "0 1 0 0 1", "0.5 1 0.5 0 1", "1 1 1 0 0",   // curve 1
+            "0 0 0 1 1", "1 0 0 0.5 0",                   // curve 2 - time resets
+        });
+
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+        Assert.Equal(2, troy!.ColorCurves.Count);
+        Assert.Equal(3, troy.ColorCurves[0].Count);
+        Assert.Equal(2, troy.ColorCurves[1].Count);
+        Assert.Equal(5, troy.ColorKeyCount);
+        // every curve is monotonic in time, which is the property that was broken
+        foreach (var curve in troy.ColorCurves)
+            for (int i = 1; i < curve.Count; i++)
+                Assert.True(curve[i].Time > curve[i - 1].Time);
+    }
+
+    /// <summary>Several curves are handed out one per emitter, in order — the mangled single curve used
+    /// to go to all of them.</summary>
+    [Fact]
+    public void EachEmitterGetsItsOwnCurveWhenThereAreSeveral()
+    {
+        byte[] raw = Build(new[]
+        {
+            "flame", "smoke",
+            "0 1 0 0 1", "1 1 0 0 0",     // red   -> flame
+            "0 0 0 1 1", "1 0 0 1 0",     // blue  -> smoke
+        });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+        var emitters = VfxSystemResolver.ExtractAll(result.BinBytes).Values.Single().Emitters;
+
+        var flame = Values(result.BinBytes, 0);
+        var smoke = Values(result.BinBytes, 1);
+        Assert.Equal(1f, flame[0].X, 3);   // red
+        Assert.Equal(0f, flame[0].Z, 3);
+        Assert.Equal(0f, smoke[0].X, 3);   // blue
+        Assert.Equal(1f, smoke[0].Z, 3);
+        Assert.Equal(2, emitters.Count);
+    }
+
+    /// <summary>One curve and several emitters is the file's only colour information (223 of 660 files),
+    /// so it goes to all of them - a purple torch should come out purple on every emitter.</summary>
+    [Fact]
+    public void ASingleCurveAppliesToEveryEmitter()
+    {
+        byte[] raw = Build(new[] { "a1", "b2", "c3", "0 0.5 0 1 1", "1 0.5 0 1 0" });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+        for (int i = 0; i < 3; i++)
+        {
+            var v = Values(result.BinBytes, i);
+            Assert.Equal(0.5f, v[0].X, 3);
+            Assert.Equal(1f, v[0].Z, 3);
+        }
+    }
+
+    /// <summary>An emitter with no colour data gets NO birthColor. A hand-written white one is an
+    /// invented value, and on an additive emitter it is what blows the effect out to white.</summary>
+    [Fact]
+    public void AnEmitterWithNoColourDataGetsNoInventedWhite()
+    {
+        byte[] raw = Build(new[] { "plain", "DATA/Particles/plain.dds" });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+        Assert.Null(FindEmitterProperty(result.BinBytes, "birthColor"));
+        Assert.Null(FindEmitterProperty(result.BinBytes, "Color"));
+    }
+
+    /// <summary>The Vector4 values of emitter <paramref name="index"/>'s colour curve.</summary>
+    private static IReadOnlyList<Vector4> Values(byte[] bin, int index)
+    {
+        var tree = new BinTree(new MemoryStream(bin, writable: false));
+        var container = (BinTreeContainer)tree.Objects.Values.Single()
+            .Properties[HashAlgorithms.Fnv1a("complexEmitterDefinitionData")];
+        var emitter = (BinTreeStruct)container.Elements[index];
+        var color = (BinTreeEmbedded)emitter.Properties[HashAlgorithms.Fnv1a("Color")];
+        var dynamics = (BinTreeStruct)color.Properties[HashAlgorithms.Fnv1a("dynamics")];
+        var values = (BinTreeContainer)dynamics.Properties[HashAlgorithms.Fnv1a("values")];
+        return values.Elements.Cast<BinTreeVector4>().Select(v => v.Value).ToArray();
     }
 
     [Fact]

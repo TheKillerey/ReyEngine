@@ -98,8 +98,9 @@ public static class TroyBinConverter
         notes = BindMeshes(notes, troy.MeshPaths.ToList(), out var unboundMeshes);
 
         var emitters = new List<BinTreeProperty>(names.Count);
-        foreach (var note in notes)
-            emitters.Add(BuildEmitter(note, troy.ColorKeys, ramp, troy.SkeletonPath));
+        for (int i = 0; i < notes.Count; i++)
+            emitters.Add(BuildEmitter(notes[i], CurveFor(troy.ColorCurves, i, notes.Count),
+                ramp, troy.SkeletonPath));
 
         uint systemHash = H(particlePath);
         var system = new BinTreeObject(systemHash, SystemClass, new BinTreeProperty[]
@@ -121,7 +122,7 @@ public static class TroyBinConverter
             .Select(ToMapping).ToArray();
 
         return new TroyConversionResult(ms.ToArray(), systemHash, systemName, particlePath,
-            notes, assets, troy.ColorKeys.Count, troy.UndecodedBodyBytes, unboundMeshes);
+            notes, assets, troy.ColorKeyCount, troy.UndecodedBodyBytes, unboundMeshes);
     }
 
     /// <summary>
@@ -244,6 +245,22 @@ public static class TroyBinConverter
         });
     }
 
+    /// <summary>
+    /// Which colour curve belongs to emitter <paramref name="index"/>.
+    ///
+    /// <para>One curve and several emitters means it is the file's only colour information, so every
+    /// emitter gets it - 223 of the 660 files with colour keys are that shape, and a purple torch should
+    /// come out purple. Several curves are handed out in order, the same positional judgement the
+    /// texture mapping makes, and an emitter past the end of the list gets none rather than a repeat.</para>
+    /// </summary>
+    private static IReadOnlyList<(float Time, Vector4 Color)> CurveFor(
+        IReadOnlyList<IReadOnlyList<(float, Vector4)>> curves, int index, int emitterCount)
+    {
+        if (curves.Count == 0) return Array.Empty<(float, Vector4)>();
+        if (curves.Count == 1) return curves[0];
+        return index < curves.Count ? curves[index] : Array.Empty<(float, Vector4)>();
+    }
+
     private static BinTreeProperty BuildEmitter(TroyEmitterNote note,
         IReadOnlyList<(float Time, Vector4 Color)> colorKeys, string? colorRamp, string? skeletonPath)
     {
@@ -284,12 +301,13 @@ public static class TroyBinConverter
                         colorKeys.Select(k => (BinTreeProperty)new BinTreeVector4(0, k.Color)).ToArray()),
                 }),
             }));
-        else
+        else if (colorKeys.Count == 1)
             props.Add(new BinTreeEmbedded(H("birthColor"), H("ValueColor"), new BinTreeProperty[]
             {
-                new BinTreeVector4(H("constantValue"),
-                    colorKeys.Count == 1 ? colorKeys[0].Color : Vector4.One),
+                new BinTreeVector4(H("constantValue"), colorKeys[0].Color),
             }));
+        // no colour data at all: write nothing. A hand-written white birthColor is an invented value,
+        // and on an additive emitter it is the one that blows the effect out to white.
 
         return new BinTreeStruct(0, EmitterClass, props);
     }

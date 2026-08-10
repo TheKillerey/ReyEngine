@@ -135,8 +135,23 @@ public sealed class TroyBinFile
     /// <c>0.437 255 255 151 255</c> - so a run whose colour components exceed 1 is divided by 255. The
     /// time component is never rescaled.
     /// </summary>
-    public IReadOnlyList<(float Time, Vector4 Color)> ColorKeys { get; private set; }
-        = Array.Empty<(float, Vector4)>();
+    /// <summary>
+    /// Colour-over-life curves, one per run of 5-token tuples.
+    ///
+    /// <para><b>A file carries several curves, not one.</b> Measured: of the 660 files with colour keys,
+    /// only 223 form a single monotonic curve - 136 have two runs, 77 three, 99 four, and so on. Reading
+    /// them as one list produced a non-monotonic time series (0…1, 0…1, 0…1) and handed the same mangled
+    /// curve to every emitter, which is why converted effects came out white instead of their authored
+    /// colour. A run ends where time stops increasing.</para>
+    ///
+    /// <para>Both authored scales occur, and the choice is made per run: a run whose colour components
+    /// exceed 1 is divided by 255. The time component is never rescaled.</para>
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<(float Time, Vector4 Color)>> ColorCurves { get; private set; }
+        = Array.Empty<IReadOnlyList<(float, Vector4)>>();
+
+    /// <summary>Total keys across every curve - what the provenance line reports.</summary>
+    public int ColorKeyCount => ColorCurves.Sum(c => c.Count);
 
     public static bool TryParse(byte[] data, out TroyBinFile? file, out string? error)
     {
@@ -177,7 +192,7 @@ public sealed class TroyBinFile
 
         var result = new TroyBinFile(version, strings, Math.Max(0, blockStart - 3));
         result.AssetPaths = ExtractAssets(strings);
-        result.ColorKeys = ExtractColorKeys(strings);
+        result.ColorCurves = ExtractColorCurves(strings);
         file = result;
         return true;
     }
@@ -225,21 +240,32 @@ public sealed class TroyBinFile
         return list;
     }
 
-    private static IReadOnlyList<(float, Vector4)> ExtractColorKeys(IEnumerable<TroyString> strings)
+    private static IReadOnlyList<IReadOnlyList<(float, Vector4)>> ExtractColorCurves(
+        IEnumerable<TroyString> strings)
     {
-        var keys = new List<(float, Vector4)>();
+        var curves = new List<List<(float, Vector4)>>();
+        List<(float, Vector4)>? current = null;
         foreach (var s in strings.Where(s => s.Kind == TroyStringKind.NumericTuple))
         {
             if (!IsNumericTuple(s.Value, out var p) || p.Length != 5) continue;
-            keys.Add((p[0], new Vector4(p[1], p[2], p[3], p[4])));
+            var key = (p[0], new Vector4(p[1], p[2], p[3], p[4]));
+            // time not increasing means a new curve started
+            if (current is null || key.Item1 <= current[^1].Item1)
+            {
+                current = new List<(float, Vector4)>();
+                curves.Add(current);
+            }
+            current.Add(key);
         }
-        if (keys.Count == 0) return keys;
 
-        // one authored scale per file, so the decision is made over the whole run rather than per key
-        bool scale255 = keys.Any(k => k.Item2.X > 1f || k.Item2.Y > 1f || k.Item2.Z > 1f || k.Item2.W > 1f);
-        if (scale255)
-            for (int i = 0; i < keys.Count; i++)
-                keys[i] = (keys[i].Item1, keys[i].Item2 / 255f);
-        return keys;
+        foreach (var curve in curves)
+        {
+            bool scale255 = curve.Any(k => k.Item2.X > 1f || k.Item2.Y > 1f
+                                           || k.Item2.Z > 1f || k.Item2.W > 1f);
+            if (!scale255) continue;
+            for (int i = 0; i < curve.Count; i++)
+                curve[i] = (curve[i].Item1, curve[i].Item2 / 255f);
+        }
+        return curves.Select(c => (IReadOnlyList<(float, Vector4)>)c).ToArray();
     }
 }
