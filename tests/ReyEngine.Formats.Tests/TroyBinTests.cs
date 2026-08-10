@@ -194,16 +194,90 @@ public class TroyBinTests
         var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
 
         var dds = result.Assets.Single(a => a.SourcePath.EndsWith(".dds"));
-        Assert.Equal("DATA/Particles/spark_core.tex", dds.TargetPath);
+        Assert.Equal("ASSETS/Legacy/Particles/spark_core.tex", dds.TargetPath);
         Assert.True(dds.NeedsTexTranscode);
 
-        // meshes are carried across untouched - the .tex container is for textures only
+        // meshes move root with everything else but keep their format - the .tex container is for
+        // textures only
         var scb = result.Assets.Single(a => a.SourcePath.EndsWith(".scb"));
-        Assert.Equal(scb.SourcePath, scb.TargetPath);
+        Assert.Equal("ASSETS/Legacy/Particles/mesh.scb", scb.TargetPath);
         Assert.False(scb.NeedsTexTranscode);
 
         var texture = Assert.IsType<BinTreeString>(FindEmitterProperty(result.BinBytes, "texture"));
-        Assert.Equal("DATA/Particles/spark_core.tex", texture.Value);
+        Assert.Equal("ASSETS/Legacy/Particles/spark_core.tex", texture.Value);
+    }
+
+    /// <summary>
+    /// The first in-game test rendered a white quad. Cause: the converted system kept the authored
+    /// <c>DATA/</c> root, and every one of the 2,381,099 texture references in shipped particle systems
+    /// sits under <c>ASSETS/</c> - so the loader never resolved it and fell back to a default texture.
+    /// The <c>Legacy/</c> segment is not decoration: a plain DATA -> ASSETS swap collides with 444
+    /// shipped assets, and staging over those would replace them for the whole game.
+    /// </summary>
+    [Theory]
+    [InlineData("DATA/Particles/FlashRed.dds", "ASSETS/Legacy/Particles/FlashRed.tex")]
+    [InlineData("DATA/Shared/Particles/Black.DDS", "ASSETS/Legacy/Shared/Particles/Black.tex")]
+    [InlineData("DATA/Particles/CrystalShield2.scb", "ASSETS/Legacy/Particles/CrystalShield2.scb")]
+    public void AssetsAreRootedUnderAssetsLegacy(string legacy, string expected)
+        => Assert.Equal(expected, TroyBinConverter.ToTargetPath(legacy));
+
+    /// <summary>
+    /// The legacy pixel shader multiplies two samplers - <c>TEXTURE * PARTICLE_COLOR_TEXTURE</c> - and
+    /// Riot names the ramp with a <c>color-</c> prefix (695 of 4,822 references). Feeding a ramp to the
+    /// modern <c>texture</c> field is the other half of the white-quad bug.
+    /// </summary>
+    [Fact]
+    public void AColourRampGoesToParticleColorTextureNotTheDiffuse()
+    {
+        byte[] raw = Build(new[]
+        {
+            "crystal",
+            "DATA/Particles/quartz32.DDS",
+            "DATA/Particles/color-crystal32.DDS",
+        });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+        Assert.Equal(new[] { "DATA/Particles/quartz32.DDS" }, troy!.TexturePaths);
+        Assert.Equal(new[] { "DATA/Particles/color-crystal32.DDS" }, troy.ColorRampPaths);
+
+        var result = TroyBinConverter.Convert(troy, "X", "Particles/X");
+        Assert.Equal("ASSETS/Legacy/Particles/quartz32.tex",
+            Assert.IsType<BinTreeString>(FindEmitterProperty(result.BinBytes, "texture")).Value);
+        Assert.Equal("ASSETS/Legacy/Particles/color-crystal32.tex",
+            Assert.IsType<BinTreeString>(FindEmitterProperty(result.BinBytes, "particleColorTexture")).Value);
+
+        // the ramp is still staged, or the reference would dangle
+        Assert.Contains(result.Assets, a => a.SourcePath.Contains("color-crystal32"));
+    }
+
+    /// <summary>Which emitter a ramp belonged to lives in the undecoded body, so a file with several
+    /// ramps gets none rather than an invented assignment.</summary>
+    [Fact]
+    public void SeveralRampsMeansNoRampIsAssigned()
+    {
+        byte[] raw = Build(new[]
+        {
+            "a1", "DATA/Particles/main.dds",
+            "DATA/Particles/color-one.dds", "DATA/Particles/color-two.dds",
+        });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+        Assert.Null(FindEmitterProperty(result.BinBytes, "particleColorTexture"));
+        // both are still staged so nothing is lost
+        Assert.Equal(2, result.Assets.Count(a => a.SourcePath.Contains("color-")));
+    }
+
+    /// <summary>Written explicitly rather than left to the game's default for an absent field. M117
+    /// established 1/3/4/5 as the additive family, and legacy sprites are additive glows on black.</summary>
+    [Fact]
+    public void BlendModeIsWrittenExplicitlyAsAdditive()
+    {
+        byte[] raw = Build(new[] { "glow", "DATA/Particles/glow.dds" });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+        Assert.Equal(1, Assert.IsType<BinTreeU8>(FindEmitterProperty(result.BinBytes, "blendMode")).Value);
+        Assert.Equal(1, VfxSystemResolver.ExtractAll(result.BinBytes).Values.Single().Emitters[0].BlendMode);
     }
 
     [Fact]

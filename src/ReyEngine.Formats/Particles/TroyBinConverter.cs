@@ -81,9 +81,14 @@ public static class TroyBinConverter
         var names = troy.EmitterNames.Count > 0 ? troy.EmitterNames.ToList() : new List<string> { "emitter" };
         var (notes, assetsUsed) = MapTextures(names, textures);
 
+        // The ramp is the second half of the legacy shader's multiply. Which emitter each ramp belonged
+        // to is not recoverable (that lives in the undecoded body), so a file's single ramp goes to every
+        // emitter and a file with several is left alone rather than guessed at.
+        string? ramp = troy.ColorRampPaths.Count() == 1 ? troy.ColorRampPaths.Single() : null;
+
         var emitters = new List<BinTreeProperty>(names.Count);
         foreach (var note in notes)
-            emitters.Add(BuildEmitter(note, troy.ColorKeys));
+            emitters.Add(BuildEmitter(note, troy.ColorKeys, ramp));
 
         uint systemHash = H(particlePath);
         var system = new BinTreeObject(systemHash, SystemClass, new BinTreeProperty[]
@@ -98,7 +103,7 @@ public static class TroyBinConverter
 
         // meshes come across as staged assets even though nothing binds them yet: dropping them would
         // lose the only record that the original effect used them
-        var assets = assetsUsed.Concat(troy.MeshPaths)
+        var assets = assetsUsed.Concat(troy.ColorRampPaths).Concat(troy.MeshPaths)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(ToMapping).ToArray();
 
@@ -154,13 +159,19 @@ public static class TroyBinConverter
         return (notes.Select(n => n!).ToArray(), used);
     }
 
-    private static BinTreeProperty BuildEmitter(TroyEmitterNote note, IReadOnlyList<(float Time, Vector4 Color)> colorKeys)
+    private static BinTreeProperty BuildEmitter(TroyEmitterNote note,
+        IReadOnlyList<(float Time, Vector4 Color)> colorKeys, string? colorRamp)
     {
         var props = new List<BinTreeProperty>
         {
             new BinTreeString(H("emitterName"), note.EmitterName),
             ValueFloat("rate", DefaultRate),
             ValueFloat("particleLifetime", DefaultLifetime),
+            // STATED ASSUMPTION, not a recovered value: legacy sprites are additive glows on black, and
+            // M117 established 1/3/4/5 as the additive family. The original per-emitter blend lives in
+            // the undecoded body. Written explicitly so the result does not depend on whatever the game
+            // defaults an absent blendMode to.
+            new BinTreeU8(H("blendMode"), 1),
             new BinTreeEmbedded(H("birthScale0"), H("ValueVector3"), new BinTreeProperty[]
             {
                 new BinTreeVector3(H("constantValue"), new Vector3(DefaultScale, DefaultScale, 0f)),
@@ -171,6 +182,8 @@ public static class TroyBinConverter
 
         if (!string.IsNullOrWhiteSpace(note.TexturePath))
             props.Add(new BinTreeString(H("texture"), ToTargetPath(note.TexturePath!)));
+        if (!string.IsNullOrWhiteSpace(colorRamp))
+            props.Add(new BinTreeString(H("particleColorTexture"), ToTargetPath(colorRamp!)));
 
         if (colorKeys.Count >= 2)
             props.Add(new BinTreeEmbedded(H("Color"), H("ValueColor"), new BinTreeProperty[]
@@ -199,23 +212,38 @@ public static class TroyBinConverter
             new BinTreeF32(H("constantValue"), value),
         });
 
-    /// <summary>Legacy effects reference <c>DATA/Particles/x.dds</c>; shipped modern systems reference
-    /// <c>.tex</c> 2,381,029 times against 70 <c>.dds</c>, so the converted system points at a .tex and
-    /// the caller transcodes. The directory is kept as authored - WAD paths hash lowercased, so the
-    /// staged file resolves without inventing an ASSETS layout.</summary>
+    /// <summary>
+    /// Where a legacy asset has to live for the modern engine to find it.
+    ///
+    /// <para><b>The root must change, and this is measured.</b> Every one of the 2,381,099 texture
+    /// references in shipped particle systems - all 2,381,029 <c>.tex</c> and all 70 <c>.dds</c> - sits
+    /// under <c>ASSETS/</c>. Not one uses <c>DATA/</c>. The first cut of this converter kept the authored
+    /// <c>DATA/</c> path; the effect rendered as a white quad in game because the loader never resolved
+    /// the texture and fell back to its default.</para>
+    ///
+    /// <para><b>And it must be namespaced.</b> Swapping <c>DATA/</c> for <c>ASSETS/</c> directly collides
+    /// with 444 shipped assets - <c>ASSETS/Shared/Particles/Black.tex</c> among them - and staging over
+    /// those would replace those textures for every effect in the game, not just the ported one.
+    /// <c>ASSETS/Legacy/</c> collides with 0 of the 2,388 legacy assets.</para>
+    /// </summary>
     public static string ToTargetPath(string legacyPath)
     {
-        string path = legacyPath.Replace('\\', '/').Trim();
-        return path.EndsWith(".dds", StringComparison.OrdinalIgnoreCase)
-               || path.EndsWith(".tga", StringComparison.OrdinalIgnoreCase)
-            ? path[..^4] + ".tex"
-            : path;
+        string path = legacyPath.Replace('\\', '/').Trim().TrimStart('/');
+        if (path.StartsWith("DATA/", StringComparison.OrdinalIgnoreCase)) path = path["DATA/".Length..];
+        if (path.EndsWith(".dds", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".tga", StringComparison.OrdinalIgnoreCase))
+            path = path[..^4] + ".tex";
+        return "ASSETS/Legacy/" + path;
     }
 
+    /// <summary>Transcoding is keyed on the EXTENSION changing, not on the path changing. Every path
+    /// changes now that assets are re-rooted under ASSETS/Legacy/, so comparing paths would send meshes
+    /// through the DDS transcoder.</summary>
     private static TroyAssetMapping ToMapping(string source)
     {
         string target = ToTargetPath(source);
-        return new TroyAssetMapping(source, target,
-            !target.Equals(source, StringComparison.OrdinalIgnoreCase));
+        bool transcode = target.EndsWith(".tex", StringComparison.OrdinalIgnoreCase)
+                         && !source.EndsWith(".tex", StringComparison.OrdinalIgnoreCase);
+        return new TroyAssetMapping(source, target, transcode);
     }
 }

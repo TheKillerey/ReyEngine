@@ -83,9 +83,32 @@ public sealed class TroyBinFile
     /// Riot's own <c>doesnotexist.*</c> placeholders dropped.</summary>
     public IReadOnlyList<string> AssetPaths { get; private set; } = Array.Empty<string>();
 
-    public IEnumerable<string> TexturePaths =>
-        AssetPaths.Where(p => p.EndsWith(".dds", StringComparison.OrdinalIgnoreCase)
-                              || p.EndsWith(".tga", StringComparison.OrdinalIgnoreCase));
+    /// <summary>
+    /// Diffuse textures - everything image-shaped that is NOT a colour ramp.
+    ///
+    /// <para>The split is not cosmetic. The legacy pixel shader
+    /// (<c>DATA/Shaders/HLSL/ParticleSystem/QUAD_PS.ps_2_0</c>) samples two textures and multiplies
+    /// them: <c>out_color0 = input.color0 * tex2D(TEXTURE, uv0) * tex2D(PARTICLE_COLOR_TEXTURE, uv1)</c>.
+    /// TEXTURE is the sprite, PARTICLE_COLOR_TEXTURE is a colour ramp. Handing a ramp to the modern
+    /// <c>texture</c> field renders a near-white quad, which is exactly what the first in-game test
+    /// showed.</para>
+    /// </summary>
+    public IEnumerable<string> TexturePaths => AssetPaths.Where(p => IsImage(p) && !IsColorRamp(p));
+
+    /// <summary>The ramp half of that multiply. Riot's naming convention is a <c>color-</c> prefix:
+    /// 695 of 4,822 texture references across 411 files.</summary>
+    public IEnumerable<string> ColorRampPaths => AssetPaths.Where(p => IsImage(p) && IsColorRamp(p));
+
+    private static bool IsImage(string p) =>
+        p.EndsWith(".dds", StringComparison.OrdinalIgnoreCase)
+        || p.EndsWith(".tga", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsColorRamp(string p)
+    {
+        string file = Path.GetFileName(p);
+        return file.StartsWith("color-", StringComparison.OrdinalIgnoreCase)
+               || file.StartsWith("color_", StringComparison.OrdinalIgnoreCase);
+    }
 
     public IEnumerable<string> MeshPaths =>
         AssetPaths.Where(p => p.EndsWith(".scb", StringComparison.OrdinalIgnoreCase)
