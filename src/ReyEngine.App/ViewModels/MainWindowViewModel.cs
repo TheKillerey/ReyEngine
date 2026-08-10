@@ -8737,6 +8737,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
 
             var list = new List<(string Rel, Formats.Meta.BinValidationReport Report, Dictionary<string, string> Alts)>();
+            // M418: the geometry rules ask a question no single file can answer — "does the materials bin
+            // define this material, and on which shader" — so every material bin read below is kept and
+            // the .mapgeo pass runs once, afterwards, against all of them.
+            var materialTrees = new List<LeagueToolkit.Core.Meta.BinTree>();
+            uint materialClass = HashAlgorithms.Fnv1a("StaticMaterialDef");
             foreach (var folder in Project.ProjectFolders)
             {
                 string root = Path.Combine(Project.RootPath!, folder);
@@ -8793,6 +8798,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                         declaredType: (cls, prop) =>
                             Meta.TryGetProperty(cls, prop, out var mp) ? mp.FieldType : null,
                         declaredEver: Meta.DeclaredAtAnyBuild);
+
+                    // M418: shape rules on top of the link/asset checks. Every one of these parses
+                    // cleanly, round-trips byte-identically and diffs clean against Riot's file — and
+                    // still crashes the game at map load or renders nothing. Additive, so both sets of
+                    // findings land in the same report.
+                    try
+                    {
+                        var tree = Formats.Meta.SafeBinTree.Parse(bytes);
+                        var shape = Formats.Meta.ModShapeValidator.ValidateBin(tree, bytes, ResolveBinName);
+                        if (shape.Count > 0)
+                            report = report with { Issues = report.Issues.Concat(shape).ToList() };
+                        if (tree.Objects.Values.Any(o => o.ClassHash == materialClass))
+                            materialTrees.Add(tree);
+                    }
+                    catch { /* unreadable: BinValidator already said so, above */ }
 
                     var alts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var i in report.Issues)
@@ -8878,6 +8898,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (findings.Count > 0) usage[rel] = findings;
             }
 
+            // ---- M418: geometry against the materials that are supposed to define its surfaces ----
+            // Appended AFTER the usage analysis on purpose: a custom map's .mapgeo has no Riot original
+            // and nothing links to it by path, so that analysis would call it unused and offer to delete
+            // it. Only files with findings are added, so a clean mapgeo stays out of the report.
+            if (materialTrees.Count > 0)
+            {
+                var shaderOf = Formats.Meta.ModShapeValidator.MaterialShaderLookup(materialTrees, ResolveBinName);
+                foreach (var folder in Project.ProjectFolders)
+                {
+                    string root = Path.Combine(Project.RootPath!, folder);
+                    if (!Directory.Exists(root)) continue;
+                    foreach (var file in Directory.EnumerateFiles(root, "*.mapgeo", SearchOption.AllDirectories))
+                    {
+                        string rel = Path.GetRelativePath(root, file).Replace('\\', '/');
+                        byte[] bytes;
+                        try { bytes = File.ReadAllBytes(file); } catch { continue; }
+                        var issues = Formats.Meta.ModShapeValidator.ValidateMapGeo(rel, bytes, shaderOf);
+                        if (issues.Count == 0) continue;
+                        list.Add((rel, new Formats.Meta.BinValidationReport(rel, 0, 0, 0, issues),
+                            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)));
+                    }
+                }
+            }
+
             return (list, usage);
         });
         var (reports, usage) = results;
@@ -8910,7 +8954,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             BinName = $"Validate Project Bins — {bad} bin(s) with issues, {usage.Count} unused",
             Description = "Broken references the game would fail to load, checked against the injected view "
-                + "(project overrides + Riot originals). Go To jumps to the object holding the reference; "
+                + "(project overrides + Riot originals), plus shape checks for the defects that parse "
+                + "cleanly and still break in-game — pointer instead of embedded container elements, empty "
+                + "containers, half a blend equation, long-form null structs, geometry whose material the "
+                + "bin never defines. Go To jumps to the object holding the reference; "
                 + "where an existing replacement was found, Fix repoints every reference and saves the bin. "
                 + "Bins marked unused are never requested by the current game — Delete .bin removes them. "
                 + "Re-run Validate afterwards to confirm.",
