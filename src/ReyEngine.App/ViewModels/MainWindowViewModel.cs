@@ -1693,6 +1693,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _log.Info("Workshop", e.Source == Formats.Particles.TroyTextureSource.None
                     ? $"   emitter '{e.EmitterName}' has no texture — assign one in the Particle Editor."
                     : $"   emitter '{e.EmitterName}' took '{Path.GetFileName(e.TexturePath)}' by position, not by name — check it.");
+            foreach (var e in legacy.Emitters.Where(e => e.MeshPath is not null))
+                _log.Info("Workshop", $"   emitter '{e.EmitterName}' renders mesh '{Path.GetFileName(e.MeshPath)}'.");
+            foreach (var mesh in legacy.UnboundMeshes)
+                _log.Warn("Workshop", $"   mesh '{Path.GetFileName(mesh)}' could not be matched to an emitter — "
+                    + "it is staged, so set the emitter's primitive to it in the Particle Editor.");
             return $"Added '{newName}' at the viewport focus, converted from a legacy .troybin. {legacy.Provenance}";
         }
         return $"Added '{newName}' at the viewport focus. {graph.ImportedObjects} linked object(s) and {staged.Written} asset(s) imported.";

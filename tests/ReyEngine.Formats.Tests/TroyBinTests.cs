@@ -280,6 +280,102 @@ public class TroyBinTests
         Assert.Equal(1, VfxSystemResolver.ExtractAll(result.BinBytes).Values.Single().Emitters[0].BlendMode);
     }
 
+    // ---- mesh particles ------------------------------------------------------------------------
+
+    /// <summary>A mesh emitter must carry VfxPrimitiveMesh, not the billboard quad - the first in-game
+    /// test showed mesh effects rendering as flat sprites. Shape copied from a shipped system:
+    /// primitive = Struct VfxPrimitiveMesh { mMesh = EMBEDDED VfxMeshDefinitionData { mSimpleMeshName } }.</summary>
+    [Fact]
+    public void ASingleEmitterOwnsTheFilesMeshAndRendersItAsGeometry()
+    {
+        byte[] raw = Build(new[] { "shield", "DATA/Particles/CrystalShield2.scb", "DATA/Particles/quartz32.dds" });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+        Assert.Equal("DATA/Particles/CrystalShield2.scb", Assert.Single(result.Emitters).MeshPath);
+        Assert.Empty(result.UnboundMeshes);
+
+        var prim = Assert.IsType<BinTreeStruct>(FindEmitterProperty(result.BinBytes, "primitive"));
+        Assert.Equal(HashAlgorithms.Fnv1a("VfxPrimitiveMesh"), prim.ClassHash);
+        var mesh = Assert.IsType<BinTreeEmbedded>(prim.Properties[HashAlgorithms.Fnv1a("mMesh")]);
+        Assert.Equal("ASSETS/Legacy/Particles/CrystalShield2.scb",
+            Assert.IsType<BinTreeString>(mesh.Properties[HashAlgorithms.Fnv1a("mSimpleMeshName")]).Value);
+
+        // and the modern resolver agrees it is a mesh particle
+        var emitter = VfxSystemResolver.ExtractAll(result.BinBytes).Values.Single().Emitters.Single();
+        Assert.Equal("ASSETS/Legacy/Particles/CrystalShield2.scb", emitter.MeshPath);
+    }
+
+    [Fact]
+    public void AMeshWhoseFilenameCarriesTheEmitterNameBindsToThatEmitter()
+    {
+        byte[] raw = Build(new[]
+        {
+            "GroundBurst", "BeamMesh", "Embers",
+            "DATA/Particles/Global_SS_Smite_AoEStun_BeamMesh.scb",
+        });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+        Assert.Equal("DATA/Particles/Global_SS_Smite_AoEStun_BeamMesh.scb",
+            result.Emitters.Single(e => e.EmitterName == "BeamMesh").MeshPath);
+        Assert.All(result.Emitters.Where(e => e.EmitterName != "BeamMesh"), e => Assert.Null(e.MeshPath));
+    }
+
+    /// <summary>The common corpus shape is one mesh and several emitters (42 files have 4 emitters and
+    /// 1 mesh). Which one owned it lives in the undecoded body, and binding the wrong emitter costs two
+    /// errors, so an unmatchable mesh is reported instead of assigned.</summary>
+    [Fact]
+    public void AnUnmatchableMeshIsReportedRatherThanBoundToAGuess()
+    {
+        byte[] raw = Build(new[] { "aa1", "bb2", "cc3", "DATA/Particles/Something_Else.scb" });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+        Assert.All(result.Emitters, e => Assert.Null(e.MeshPath));
+        Assert.Equal("DATA/Particles/Something_Else.scb", Assert.Single(result.UnboundMeshes));
+        Assert.Contains("could not be matched", result.Provenance);
+        // still staged, so the user can bind it by hand
+        Assert.Contains(result.Assets, a => a.SourcePath.EndsWith("Something_Else.scb"));
+    }
+
+    /// <summary>A skinned mesh names mMeshName + mMeshSkeletonName instead of mSimpleMeshName, and the
+    /// .skl has to be staged or the primitive dangles. 58 corpus files are skinned.</summary>
+    [Fact]
+    public void ASkinnedMeshCarriesItsSkeleton()
+    {
+        byte[] raw = Build(new[]
+        {
+            "healthIcon",
+            "DATA/Particles/HA_AP_healingIcon.skn",
+            "DATA/Particles/HA_AP_healingIcon.skl",
+        });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+        var prim = Assert.IsType<BinTreeStruct>(FindEmitterProperty(result.BinBytes, "primitive"));
+        var mesh = Assert.IsType<BinTreeEmbedded>(prim.Properties[HashAlgorithms.Fnv1a("mMesh")]);
+
+        Assert.Equal("ASSETS/Legacy/Particles/HA_AP_healingIcon.skn",
+            Assert.IsType<BinTreeString>(mesh.Properties[HashAlgorithms.Fnv1a("mMeshName")]).Value);
+        Assert.Equal("ASSETS/Legacy/Particles/HA_AP_healingIcon.skl",
+            Assert.IsType<BinTreeString>(mesh.Properties[HashAlgorithms.Fnv1a("mMeshSkeletonName")]).Value);
+        Assert.Contains(result.Assets, a => a.SourcePath.EndsWith(".skl"));
+    }
+
+    /// <summary>mesh/trail/beam sit in the same positional role as Simple. Left in the name bucket they
+    /// became phantom emitters - "mesh" appears in 7 files and all 7 reference a mesh asset.</summary>
+    [Theory]
+    [InlineData("mesh")]
+    [InlineData("trail")]
+    [InlineData("beam")]
+    public void PrimitiveTypeKeywordsAreNotEmitterNames(string keyword)
+    {
+        byte[] raw = Build(new[] { "healthIcon", keyword, "Simple", "DATA/Particles/x.dds" });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+        Assert.Equal(new[] { "healthIcon" }, troy!.EmitterNames);
+    }
+
     [Fact]
     public void AColourCurveBecomesAnAnimatedColorDynamic()
     {

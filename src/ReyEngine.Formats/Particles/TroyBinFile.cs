@@ -59,7 +59,12 @@ public sealed class TroyBinFile
     /// emitter, which is worse than carrying one extra.</summary>
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase)
     {
+        // quality tiers and sampler state
         "Simple", "High", "Low", "Basic", "Medium", "clamp",
+        // primitive types, in the same positional role as Simple. Measured: "mesh" appears in 7 files
+        // and ALL 7 reference a mesh asset (no false positives); "trail" 25, "beam" 4. Left in the name
+        // bucket they became phantom emitters.
+        "mesh", "trail", "beam",
     };
 
     private TroyBinFile(int version, IReadOnlyList<TroyString> strings, int undecoded)
@@ -110,9 +115,16 @@ public sealed class TroyBinFile
                || file.StartsWith("color_", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Simple (.scb/.sco) and skinned (.skn) meshes both count; 374 of 1,175 files reference
+    /// one, 680 references in total, 58 of them skinned.</summary>
     public IEnumerable<string> MeshPaths =>
         AssetPaths.Where(p => p.EndsWith(".scb", StringComparison.OrdinalIgnoreCase)
+                              || p.EndsWith(".sco", StringComparison.OrdinalIgnoreCase)
                               || p.EndsWith(".skn", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The .skl beside a skinned .skn. The modern mesh primitive wants both.</summary>
+    public string? SkeletonPath =>
+        AssetPaths.FirstOrDefault(p => p.EndsWith(".skl", StringComparison.OrdinalIgnoreCase));
 
     private IReadOnlyList<string> Of(TroyStringKind kind) =>
         Strings.Where(s => s.Kind == kind).Select(s => s.Value).ToArray();

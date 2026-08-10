@@ -1697,6 +1697,30 @@ Riot's own `doesnotexist.*` placeholders and `teamrecolor, a.dds, b.dds` compoun
 Textures are re-pointed to `.tex` and transcoded on import, because shipped modern systems reference
 `.tex` **2,381,029** times against **70** `.dds`.
 
+**Mesh particles (M419b).** The first in-game test rendered mesh effects as flat sprites: the converter
+wrote `VfxPrimitiveArbitraryQuad` for every emitter. 374 of 1,175 files reference a mesh (680 references,
+58 of them skinned `.skn`). The modern shape, copied from a shipped system: `primitive` is a Struct of
+class `VfxPrimitiveMesh` holding `mMesh` as an **Embedded** `VfxMeshDefinitionData`, naming
+`mSimpleMeshName` (`.scb`/`.sco`) or `mMeshName` + `mMeshSkeletonName` for skinned meshes.
+
+Binding is deliberately conservative, because the common shape is ONE mesh and SEVERAL emitters (42
+files have 4 emitters and 1 mesh, 32 have 3 and 1) and which emitter owned it lives in the undecoded
+body. Binding the wrong one costs two errors — a billboard wrongly becomes a mesh and the real mesh
+emitter stays flat. Two rules fire, both measured: emitter name appearing in the mesh filename (197
+agreements), and single-emitter files (38 unambiguous). Result over the corpus: **220 mesh emitters
+bound, 460 meshes staged but reported unbound** rather than guessed.
+
+A third rule was tested and rejected: "the mesh sits between its emitter's name and the next emitter's
+name in the string block". Checked against the 196 references that name-matching already resolves, it
+holds for 28 and fails for 168. Strings are written in first-reference order but emitter names are not
+reliably interleaved with their own data — `temp_itemblackout` lists all three emitter names before any
+texture.
+
+`mesh`, `trail` and `beam` also turned out to be primitive-type keywords in the same positional role as
+`Simple`, not emitter names — `mesh` appears in 7 files and **all 7** reference a mesh asset, with no
+false positives. Left in the name bucket they produced phantom emitters. They are keywords now, but the
+signal is too sparse to drive binding: 373 files carry a mesh with no keyword at all.
+
 **The emitter/texture mapping is the one judgement call**, and it is measured rather than assumed:
 positional assignment alone is indefensible because only 476 of 1,168 files (40%) have as many textures
 as emitter names. A texture whose filename contains the emitter name wins first (847 of 4,797 emitters),

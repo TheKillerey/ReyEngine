@@ -17,7 +17,12 @@ public enum TroyTextureSource
     None,
 }
 
-public sealed record TroyEmitterNote(string EmitterName, string? TexturePath, TroyTextureSource Source);
+/// <summary><paramref name="MeshPath"/> non-null makes this emitter a mesh particle instead of a
+/// billboard quad. It is only set where there is positive evidence - see
+/// <see cref="TroyBinConverter"/> - because binding the wrong emitter is two errors, not one: the
+/// billboard becomes a mesh AND the real mesh emitter stays flat.</summary>
+public sealed record TroyEmitterNote(string EmitterName, string? TexturePath, TroyTextureSource Source,
+    string? MeshPath = null);
 
 /// <summary>A legacy asset and where the converted system expects to find it.</summary>
 public sealed record TroyAssetMapping(string SourcePath, string TargetPath, bool NeedsTexTranscode);
@@ -25,14 +30,18 @@ public sealed record TroyAssetMapping(string SourcePath, string TargetPath, bool
 public sealed record TroyConversionResult(
     byte[] BinBytes, uint SystemHash, string SystemName, string ParticlePath,
     IReadOnlyList<TroyEmitterNote> Emitters, IReadOnlyList<TroyAssetMapping> Assets,
-    int ColorKeys, int UndecodedBodyBytes)
+    int ColorKeys, int UndecodedBodyBytes, IReadOnlyList<string> UnboundMeshes)
 {
     /// <summary>One line the UI can show verbatim. Says what did NOT come across, because that is the
     /// part a user would otherwise discover by wondering why the effect looks wrong.</summary>
     public string Provenance =>
         $"{Emitters.Count} emitter(s), {Assets.Count} asset(s), "
+        + $"{Emitters.Count(e => e.MeshPath is not null)} mesh emitter(s), "
         + $"{(ColorKeys > 0 ? $"{ColorKeys} colour key(s)" : "no colour curve")}. "
-        + $"Timing and physics ({UndecodedBodyBytes:n0} undecoded bytes) are engine defaults, not the original values.";
+        + $"Timing and physics ({UndecodedBodyBytes:n0} undecoded bytes) are engine defaults, not the original values."
+        + (UnboundMeshes.Count > 0
+            ? $" {UnboundMeshes.Count} mesh(es) could not be matched to an emitter and are staged but unbound."
+            : "");
 }
 
 /// <summary>
@@ -86,9 +95,11 @@ public static class TroyBinConverter
         // emitter and a file with several is left alone rather than guessed at.
         string? ramp = troy.ColorRampPaths.Count() == 1 ? troy.ColorRampPaths.Single() : null;
 
+        notes = BindMeshes(notes, troy.MeshPaths.ToList(), out var unboundMeshes);
+
         var emitters = new List<BinTreeProperty>(names.Count);
         foreach (var note in notes)
-            emitters.Add(BuildEmitter(note, troy.ColorKeys, ramp));
+            emitters.Add(BuildEmitter(note, troy.ColorKeys, ramp, troy.SkeletonPath));
 
         uint systemHash = H(particlePath);
         var system = new BinTreeObject(systemHash, SystemClass, new BinTreeProperty[]
@@ -103,12 +114,62 @@ public static class TroyBinConverter
 
         // meshes come across as staged assets even though nothing binds them yet: dropping them would
         // lose the only record that the original effect used them
+        // the .skl belongs with a skinned .skn or the mesh primitive dangles
         var assets = assetsUsed.Concat(troy.ColorRampPaths).Concat(troy.MeshPaths)
+            .Concat(troy.SkeletonPath is { } skl ? new[] { skl } : Array.Empty<string>())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(ToMapping).ToArray();
 
         return new TroyConversionResult(ms.ToArray(), systemHash, systemName, particlePath,
-            notes, assets, troy.ColorKeys.Count, troy.UndecodedBodyBytes);
+            notes, assets, troy.ColorKeys.Count, troy.UndecodedBodyBytes, unboundMeshes);
+    }
+
+    /// <summary>
+    /// Decide which emitters are mesh particles rather than billboards.
+    ///
+    /// <para>Only where there is positive evidence, because most files cannot be resolved: of the 374
+    /// files referencing a mesh, the common shape is ONE mesh and several emitters (42 files have 4
+    /// emitters and 1 mesh, 32 have 3 and 1, and so on), and which emitter owned it lives in the
+    /// undecoded body. Binding the wrong one costs two errors - a billboard wrongly becomes a mesh and
+    /// the real mesh emitter stays flat - so an unresolvable mesh is reported instead of assigned.</para>
+    ///
+    /// <para>Two rules fire, both measured: the emitter name appearing in the mesh filename (197
+    /// agreements across the corpus), and a file with a single emitter (38 are unambiguously one
+    /// emitter and one mesh).</para>
+    /// </summary>
+    private static IReadOnlyList<TroyEmitterNote> BindMeshes(
+        IReadOnlyList<TroyEmitterNote> notes, List<string> meshes, out IReadOnlyList<string> unbound)
+    {
+        unbound = Array.Empty<string>();
+        if (meshes.Count == 0) return notes;
+
+        var result = notes.ToArray();
+        var claimed = new bool[meshes.Count];
+
+        for (int i = 0; i < result.Length; i++)
+        {
+            string name = result[i].EmitterName;
+            if (name.Length < 3) continue;
+            for (int m = 0; m < meshes.Count; m++)
+            {
+                if (claimed[m]) continue;
+                if (!Path.GetFileNameWithoutExtension(meshes[m]).Contains(name, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                result[i] = result[i] with { MeshPath = meshes[m] };
+                claimed[m] = true;
+                break;
+            }
+        }
+
+        // a single emitter owns the file's mesh by elimination, not by guess
+        if (result.Length == 1 && result[0].MeshPath is null)
+        {
+            result[0] = result[0] with { MeshPath = meshes[0] };
+            claimed[0] = true;
+        }
+
+        unbound = meshes.Where((_, m) => !claimed[m]).ToArray();
+        return result;
     }
 
     /// <summary>Name-match first, leftovers in order. Returns the notes plus every texture actually
@@ -159,8 +220,32 @@ public static class TroyBinConverter
         return (notes.Select(n => n!).ToArray(), used);
     }
 
+    /// <summary>
+    /// The mesh primitive, copied from a shipped system rather than inferred:
+    /// <c>primitive</c> is a Struct of class <c>VfxPrimitiveMesh</c> holding <c>mMesh</c> as an
+    /// EMBEDDED <c>VfxMeshDefinitionData</c>. A simple mesh names <c>mSimpleMeshName</c> (.scb/.sco); a
+    /// skinned one names <c>mMeshName</c> (.skn) plus <c>mMeshSkeletonName</c> (.skl).
+    /// </summary>
+    private static BinTreeProperty MeshPrimitive(string meshPath, string? skeletonPath)
+    {
+        bool skinned = meshPath.EndsWith(".skn", StringComparison.OrdinalIgnoreCase);
+        var mesh = new List<BinTreeProperty>();
+        if (skinned)
+        {
+            mesh.Add(new BinTreeString(H("mMeshName"), ToTargetPath(meshPath)));
+            if (!string.IsNullOrWhiteSpace(skeletonPath))
+                mesh.Add(new BinTreeString(H("mMeshSkeletonName"), ToTargetPath(skeletonPath!)));
+        }
+        else mesh.Add(new BinTreeString(H("mSimpleMeshName"), ToTargetPath(meshPath)));
+
+        return new BinTreeStruct(H("primitive"), H("VfxPrimitiveMesh"), new BinTreeProperty[]
+        {
+            new BinTreeEmbedded(H("mMesh"), H("VfxMeshDefinitionData"), mesh),
+        });
+    }
+
     private static BinTreeProperty BuildEmitter(TroyEmitterNote note,
-        IReadOnlyList<(float Time, Vector4 Color)> colorKeys, string? colorRamp)
+        IReadOnlyList<(float Time, Vector4 Color)> colorKeys, string? colorRamp, string? skeletonPath)
     {
         var props = new List<BinTreeProperty>
         {
@@ -176,8 +261,11 @@ public static class TroyBinConverter
             {
                 new BinTreeVector3(H("constantValue"), new Vector3(DefaultScale, DefaultScale, 0f)),
             }),
-            // the billboard quad every legacy sprite emitter used
-            new BinTreeStruct(H("primitive"), H("VfxPrimitiveArbitraryQuad"), Array.Empty<BinTreeProperty>()),
+            // a mesh emitter renders its geometry; everything else is the billboard quad the legacy
+            // sprite emitters used
+            note.MeshPath is { } mesh
+                ? MeshPrimitive(mesh, skeletonPath)
+                : new BinTreeStruct(H("primitive"), H("VfxPrimitiveArbitraryQuad"), Array.Empty<BinTreeProperty>()),
         };
 
         if (!string.IsNullOrWhiteSpace(note.TexturePath))
