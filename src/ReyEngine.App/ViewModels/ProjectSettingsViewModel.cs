@@ -24,6 +24,9 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     [ObservableProperty] private string _gameDirectoryMessage = "";
     [ObservableProperty] private string _outputDirectory = "";
     [ObservableProperty] private bool _packKnownTypesOnly = true;   // M132
+    [ObservableProperty] private string _riotPatchVersion = "";
+    [ObservableProperty] private bool _autoUpdateOnRiotPatch = true;
+    [ObservableProperty] private bool _autoBuildAfterPatchUpdate = true;
 
     public bool Saved { get; private set; }
     public event Action? CloseRequested;
@@ -41,6 +44,11 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         _gameDirectory = p.GameDirectory ?? "";
         _outputDirectory = p.OutputDirectory ?? "";
         _packKnownTypesOnly = p.PackKnownTypesOnly;
+        // Both sides added to this constructor: main validates the game directory, M308 seeds the patch
+        // fields. Neither supersedes the other.
+        _riotPatchVersion = p.RiotPatchVersion ?? "";
+        _autoUpdateOnRiotPatch = p.AutoUpdateOnRiotPatch;
+        _autoBuildAfterPatchUpdate = p.AutoBuildAfterPatchUpdate;
         ValidateGameDirectory();
     }
 
@@ -70,6 +78,9 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         else if (string.IsNullOrWhiteSpace(GameDirectory)) p.GameDirectory = null;
         if (!string.IsNullOrWhiteSpace(OutputDirectory)) p.OutputDirectory = OutputDirectory.Trim();
         p.PackKnownTypesOnly = PackKnownTypesOnly;
+        p.RiotPatchVersion = RiotPatchVersionDetector.TryNormalize(RiotPatchVersion, out var patch) ? patch : null;
+        p.AutoUpdateOnRiotPatch = AutoUpdateOnRiotPatch;
+        p.AutoBuildAfterPatchUpdate = AutoBuildAfterPatchUpdate;
     }
 
     [RelayCommand]
