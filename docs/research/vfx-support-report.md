@@ -1651,19 +1651,57 @@ question now has an answer. Nothing here was taken on faith: every row was re-co
 | `MapParticle.quality` | 3 | **DONE (M195)** — raw integer, no bitmask reading applied |
 | `MapParticle.TextureOverride` | 16 | **DONE (M201)** — see below |
 | the `flex*` value family | ~4,100 | **RETIRED (M179)** — measured to be a no-op at reference size; also needs runtime IDs that live in game code |
-| `.troybin` legacy particles | 1,189 files | **RETIRED (M201)** — orphaned; see below |
+| `.troybin` legacy particles | 1,189 files | **DONE (M419)** — format decoded far enough to port; see below |
 | `MapClouds` | 1 | not implemented — one object in the entire install |
 | `MapSkinColorizationPostEffect` | 3 | not implemented |
 | the Viktor-only 8-class modifier tree | 16 systems | not implemented |
 
-**The `.troybin` question is answered: nothing references them.** The report left open "whether any live
-champion still references them". Measured across all 45,931 PROP bins in 239 WADs: **0 references by
-string and 0 by WAD hash link** to any of the 1,189 `.troybin` chunks. The first pass only checked strings,
-which would have been an overclaim — a bin can reference an asset by hash — so the hash route was checked
-separately against the full set of `.troybin` chunk hashes. Both are zero. The caveat that remains: this
-covers `.bin` files only, so a reference from game code or a non-bin format would not show up. On the
-evidence available the files are orphaned, and implementing a legacy format nothing points at is not worth
-doing.
+**The `.troybin` question, revisited (M419).** M201 measured that nothing references these files —
+across all 45,931 PROP bins in 239 WADs, **0 references by string and 0 by WAD hash** — and concluded
+that "implementing a legacy format nothing points at is not worth doing". That measurement still stands
+and has not been re-litigated. What changed is the *reason* to implement it: not runtime compatibility,
+but 1,189 otherwise-dead effects as a Workshop content library. M419 ports them.
+
+**The format, corrected.** This report previously called `.troybin` a "pre-PROP" text format. That was
+wrong — it is binary. Verified across all 1,189 files:
+
+- byte 0 is a version and is `2` in every file;
+- bytes 1–2 are a u16 giving the size of a NUL-terminated **string block** at the end of the file.
+  Slicing on it lands exactly on the first string in every file, and the block ends in NUL in all 1,189;
+- strings are referenced by **u16 offset** into that block. In the smallest non-trivial file the offsets
+  0, 6, 13 and 58 found in the body land precisely on its four strings, and the final u16 of the body is
+  a valid string offset in **1,175 of 1,175** files that have one;
+- the string block carries emitter names, every texture/mesh path, Wwise events, quality keywords, and
+  colour-over-life curves written as text (`0.000000 1.000000 1.000000 1.000000 1.000000` = `t r g b a`,
+  authored at either 0–1 or 0–255 scale);
+- the body holds plain IEEE-754 little-endian floats — `0.25`, `120.0`, `360.0`, `90.0` and `0.005` all
+  appear as clean constants.
+
+**What is still NOT decoded**, with the hypotheses that were tested and killed so they are not retried:
+
+| hypothesis | result |
+|---|---|
+| the recurring 4-byte groups are known bin field-name hashes | **dead** — 0 of the 400 most frequent resolve against 523,284 known hashes |
+| the group that varies between two otherwise identical sound particles is the FNV-1/FNV-1a Wwise event hash | **dead** — 0 matches across the 395 files carrying an event string |
+| the body is an id-keyed record array | **dead** — 36,841 distinct candidate ids, 21,946 needed to cover 90% of the mass; that is float noise, not a field table |
+
+So *which* float is `rate` versus `particleLifetime` remains unknown, and **every numeric parameter in a
+converted system is an engine default, not the original value**. `TroyBinFile.UndecodedBodyBytes`
+reports how much was left behind (899,138 bytes across the corpus, median 459 per file) and
+`TroyConversionResult.Provenance` states it in words wherever a converted effect surfaces.
+
+**What the port delivers.** All 1,189 files parse, convert, and read back through `VfxSystemResolver`
+with matching emitter counts: 4,797 emitters and 5,481 assets recovered, 660 files carrying a colour
+curve. 2,391 of the 2,525 referenced assets (94.7%) still ship exactly as written; the remainder are
+Riot's own `doesnotexist.*` placeholders and `teamrecolor, a.dds, b.dds` compound strings, both handled.
+Textures are re-pointed to `.tex` and transcoded on import, because shipped modern systems reference
+`.tex` **2,381,029** times against **70** `.dds`.
+
+**The emitter/texture mapping is the one judgement call**, and it is measured rather than assumed:
+positional assignment alone is indefensible because only 476 of 1,168 files (40%) have as many textures
+as emitter names. A texture whose filename contains the emitter name wins first (847 of 4,797 emitters),
+leftovers are assigned in order (3,227), and 723 emitters end up with no texture. Every emitter records
+which rule fired, and the import log names each one that was not a name match.
 
 **`TextureOverride` (M201)** was the one genuine gap left, and it is now read. Layout verified directly
 rather than assumed: a struct of class `0x115b5460` carrying `TextureToOverride` (`Hash`, 16 of 16) and

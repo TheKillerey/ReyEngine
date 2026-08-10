@@ -6,6 +6,7 @@ using System.Text.Json;
 using ReyEngine.Core.Assets;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
+using ReyEngine.Formats.Particles;
 using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.Shaders;
 using ReyEngine.Formats.Vfx;
@@ -17,9 +18,13 @@ public sealed record WorkshopMaterialTemplate(
     string Profile, string Features, int Samplers, int Parameters, IReadOnlyList<string> TexturePaths,
     ShaderMaterialSetup CommonSetup, int ShaderUsageCount, int SetupUsageCount);
 
+/// <summary><paramref name="IsLegacy"/> marks an effect recovered from a <c>.troybin</c> (M419). Those
+/// have no source .bin - <paramref name="SourceBinPath"/> is the .troybin itself, and the import path
+/// converts it on demand rather than copying an object graph.</summary>
 public sealed record WorkshopParticleTemplate(
     uint SystemHash, string Name, string ParticlePath, ulong SourceBinHash, string SourceBinPath,
-    string SourceWad, int Emitters, int VisualEmitters, string? PreviewTexturePath);
+    string SourceWad, int Emitters, int VisualEmitters, string? PreviewTexturePath,
+    bool IsLegacy = false);
 
 public sealed record WorkshopCatalog(string Fingerprint, DateTime BuiltUtc,
     IReadOnlyList<WorkshopMaterialTemplate> Materials, IReadOnlyList<WorkshopParticleTemplate> Particles);
@@ -49,7 +54,7 @@ public sealed class WorkshopCatalogService
 
     public static string CachePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ReyEngine", "Cache", "workshop-catalog-v5.json");
+        "ReyEngine", "Cache", "workshop-catalog-v6.json");
 
     public async Task<WorkshopCatalog> LoadAsync(string finalDirectory, bool rebuild,
         IProgress<WorkshopCatalogProgress>? progress = null, CancellationToken cancellationToken = default)
@@ -84,6 +89,30 @@ public sealed class WorkshopCatalogService
 
                 if (cached is null)
                 {
+                    // M419: legacy .troybin effects. 1,189 of them ship in DATA.wad.client and nothing in
+                    // the live game references them (measured in M201), so they are invisible to the
+                    // bin-graph harvest below - they are their own format, not PROP objects.
+                    foreach (var entry in wad.Entries.Where(e => e.IsResolved
+                                 && e.Path.EndsWith(".troybin", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        try
+                        {
+                            if (!TroyBinFile.TryParse(wad.Extract(entry), out var troy, out _)) continue;
+                            string name = Path.GetFileNameWithoutExtension(entry.Path);
+                            string? preview = troy!.TexturePaths.FirstOrDefault();
+                            int emitters = Math.Max(1, troy.EmitterNames.Count);
+                            var item = new WorkshopParticleTemplate(
+                                HashAlgorithms.Fnv1a(entry.Path), name, entry.Path,
+                                entry.PathHash, entry.Path, wadPath,
+                                emitters, troy.TexturePaths.Any() ? emitters : 0,
+                                preview is null ? null : Normalize(preview), IsLegacy: true);
+                            particles.AddOrUpdate("troy:" + entry.Path, (item, int.MaxValue),
+                                (_, old) => old);
+                        }
+                        catch { /* one unreadable legacy file must not hide the rest */ }
+                    }
+
                     foreach (var entry in wad.Entries.Where(e => e.IsResolved
                                  && e.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)))
                     {

@@ -1628,12 +1628,31 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             throw new InvalidOperationException("Save the project before adding Workshop content.");
 
         byte[] target = GetAssetBytes(binEntry);
-        var closure = _workshopCatalog?.ReadBinClosure(template.SourceBinHash, template.SourceWad)
-            ?? Array.Empty<byte[]>();
-        if (closure.Count == 0)
-            throw new InvalidOperationException("The template source bins are no longer available. Rebuild the Workshop catalog.");
 
-        var graph = BinObjectGraphImporter.Import(target, closure, new[] { template.SystemHash }, out var graphError)
+        // M419: a legacy .troybin has no source bin to copy a graph out of - it is converted into one
+        // here, and the same importer then runs unchanged.
+        Formats.Particles.TroyConversionResult? legacy = null;
+        IReadOnlyList<byte[]> closure;
+        uint systemHash = template.SystemHash;
+        if (template.IsLegacy)
+        {
+            byte[]? troyBytes = _workshopCatalog?.ReadAsset(template.SourceBinPath)
+                ?? throw new InvalidOperationException("The legacy .troybin is no longer available. Rebuild the Workshop catalog.");
+            if (!Formats.Particles.TroyBinFile.TryParse(troyBytes, out var troy, out var troyError))
+                throw new InvalidOperationException($"That .troybin could not be read: {troyError}");
+            legacy = Formats.Particles.TroyBinConverter.Convert(troy!, newName, $"Particles/{newName}");
+            closure = new[] { legacy.BinBytes };
+            systemHash = legacy.SystemHash;
+        }
+        else
+        {
+            closure = _workshopCatalog?.ReadBinClosure(template.SourceBinHash, template.SourceWad)
+                ?? Array.Empty<byte[]>();
+            if (closure.Count == 0)
+                throw new InvalidOperationException("The template source bins are no longer available. Rebuild the Workshop catalog.");
+        }
+
+        var graph = BinObjectGraphImporter.Import(target, closure, new[] { systemHash }, out var graphError)
             ?? throw new InvalidOperationException(graphError ?? "The particle object graph could not be imported.");
         var tree = SafeBinTree.Parse(graph.Bytes);
         var id = MapPlaceableWriter.NewParticleId(tree, HashAlgorithms.Fnv1a(newName));
@@ -1647,12 +1666,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             CreateParticle = true,
             Name = newName,
             Transform = transform,
-            SystemLink = template.SystemHash,
+            SystemLink = systemHash,
         };
         byte[] placed = MapPlaceableWriter.WriteEdits(graph.Bytes, new[] { edit }, out var placeError)
             ?? throw new InvalidOperationException(placeError ?? "The particle placement could not be created.");
 
-        var staged = StageWorkshopAssets(graph.AssetPaths, mapEntry);
+        var staged = legacy is not null
+            ? StageLegacyTroyAssets(legacy.Assets, mapEntry)
+            : StageWorkshopAssets(graph.AssetPaths, mapEntry);
         if (staged.Missing.Count > 0)
             throw new InvalidOperationException("Required particle asset(s) were not found in the installed patch: "
                 + string.Join(", ", staged.Missing.Take(4)) + (staged.Missing.Count > 4 ? "..." : ""));
@@ -1664,6 +1685,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var added = MapContent.AllParticles.FirstOrDefault(x => x.Placement.Id == id);
         if (added is not null) SelectedParticleNode = added;
         _log.Success("Workshop", $"Added particle '{newName}': {graph.ImportedObjects} object(s), {staged.Written} asset(s).");
+        if (legacy is not null)
+        {
+            // say what did NOT come across, at the moment the user can still act on it
+            _log.Warn("Workshop", $"'{newName}' was converted from a legacy .troybin. {legacy.Provenance}");
+            foreach (var e in legacy.Emitters.Where(e => e.Source != Formats.Particles.TroyTextureSource.NameMatch))
+                _log.Info("Workshop", e.Source == Formats.Particles.TroyTextureSource.None
+                    ? $"   emitter '{e.EmitterName}' has no texture — assign one in the Particle Editor."
+                    : $"   emitter '{e.EmitterName}' took '{Path.GetFileName(e.TexturePath)}' by position, not by name — check it.");
+            return $"Added '{newName}' at the viewport focus, converted from a legacy .troybin. {legacy.Provenance}";
+        }
         return $"Added '{newName}' at the viewport focus. {graph.ImportedObjects} linked object(s) and {staged.Written} asset(s) imported.";
     }
 
@@ -1685,7 +1716,52 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // Preflight the complete dependency set before touching the project. A failed import should not
         // leave half of a particle's textures behind as unexplained dead files.
         if (missing.Count > 0) return (0, missing);
+        return WriteStagedAssets(sources, destinationMap, missing);
+    }
 
+    /// <summary>
+    /// M419: stage a converted legacy .troybin effect's assets. Same destination rules as
+    /// <see cref="StageWorkshopAssets"/>, but the bytes are transcoded on the way: legacy effects
+    /// reference <c>DATA/Particles/x.dds</c> while shipped modern systems reference <c>.tex</c>
+    /// 2,381,029 times against 70 <c>.dds</c>, so the converted system points at a .tex and the DDS is
+    /// wrapped (or re-encoded when it cannot be wrapped) here.
+    /// </summary>
+    private (int Written, IReadOnlyList<string> Missing) StageLegacyTroyAssets(
+        IReadOnlyList<Formats.Particles.TroyAssetMapping> assets, WadAssetEntry destinationMap)
+    {
+        if (_workshopCatalog is null) return (0, assets.Select(a => a.SourcePath).ToArray());
+        var missing = new List<string>();
+        var sources = new List<(string Path, byte[] Bytes)>();
+        foreach (var asset in assets)
+        {
+            string source = asset.SourcePath.Trim().Replace('\\', '/').TrimStart('/');
+            string target = asset.TargetPath.Trim().Replace('\\', '/').TrimStart('/');
+            if (target.Length == 0 || target.Split('/').Any(part => part == "..")) { missing.Add(source); continue; }
+            byte[]? bytes = _workshopCatalog.ReadAsset(source);
+            if (bytes is null) { missing.Add(source); continue; }
+
+            if (asset.NeedsTexTranscode)
+            {
+                try
+                {
+                    // the legacy-map porter's route (M141): wrap the DDS when its format is already one
+                    // the .tex container can carry, and only pay for a full re-encode when it is not
+                    if (!TexWriter.TryWrapDds(bytes, out var wrapped))
+                        wrapped = TexWriter.Write(TextureDecoder.Decode(bytes), TexFormat.Bc3, mipmaps: true);
+                    bytes = wrapped;
+                }
+                catch { missing.Add(source); continue; }
+            }
+            sources.Add((target, bytes));
+        }
+        if (missing.Count > 0) return (0, missing);
+        return WriteStagedAssets(sources, destinationMap, missing);
+    }
+
+    /// <summary>The write half of asset staging, shared by the modern and legacy paths.</summary>
+    private (int Written, IReadOnlyList<string> Missing) WriteStagedAssets(
+        IReadOnlyList<(string Path, byte[] Bytes)> sources, WadAssetEntry destinationMap, List<string> missing)
+    {
         int written = 0;
         foreach (var (path, bytes) in sources)
         {

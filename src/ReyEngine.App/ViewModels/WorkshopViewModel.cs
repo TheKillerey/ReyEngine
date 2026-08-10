@@ -25,6 +25,16 @@ public sealed partial class WorkshopParticleViewModel : ObservableObject
     public string Path => string.IsNullOrWhiteSpace(Template.ParticlePath) ? $"0x{Template.SystemHash:x8}" : Template.ParticlePath;
     public string Detail => $"{Template.Emitters} emitter(s)  |  {Template.VisualEmitters} visual";
     public bool IsVisual => Template.VisualEmitters > 0;
+
+    /// <summary>M419. Legacy effects are worth flagging in the list rather than only on import: their
+    /// names, textures and colour curves are faithful but every timing and physics value is a modern
+    /// default, because that part of the .troybin format is not decoded.</summary>
+    public bool IsLegacy => Template.IsLegacy;
+
+    public string LegacyTip =>
+        "Recovered from a legacy .troybin. Emitter names, textures and colour curves come from the "
+        + "original file; rate, lifetime, velocity and scale are engine defaults — tune them in the "
+        + "Particle Editor after adding.";
 }
 
 /// <summary>Searchable, de-duplicated library of one proven game material per shader and every unique VFX
