@@ -486,14 +486,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (Sound.DecodeToWav(targetId, newData) is null)
                 _log.Warn("Audio", "Imported wem didn't decode with vgmstream — saving anyway (it may still be valid in-game).");
 
-            var dest = ProjectWorkspace.StoreOverrideBytes(Project, bankEntry.PathHash, rb.Bytes, Path.GetExtension(rb.Path));
-            _overrides.Set(new ProjectAssetOverride
+            // M417: project file first - see the mapgeo and placement saves.
+            if (!TryWriteToProjectFile(bankEntry, rb.Bytes, out var dest))
             {
-                PathHash = bankEntry.PathHash,
-                ResolvedPath = bankEntry.IsResolved ? bankEntry.Path : null,
-                OverrideFile = dest,
-                AddedUtc = DateTime.UtcNow.ToString("o"),
-            });
+                dest = ProjectWorkspace.StoreOverrideBytes(Project, bankEntry.PathHash, rb.Bytes, Path.GetExtension(rb.Path));
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = bankEntry.PathHash,
+                    ResolvedPath = bankEntry.IsResolved ? bankEntry.Path : null,
+                    OverrideFile = dest,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
             SetNodeStatus(bankEntry.PathHash, AssetStatus.Modified);
             Project.IsDirty = true;
             UpdateTitle();
@@ -6392,21 +6397,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax());
             }
 
-            var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
-            _overrides.Set(new ProjectAssetOverride
+            // M417: same rule as the bin editor and placements - the project FILE wins when the project
+            // ships this mapgeo, or the build discards the edit and the mod exports unchanged.
+            string savedTo;
+            if (TryWriteToProjectFile(entry, bytes, out var geoProjectFile)) savedTo = geoProjectFile;
+            else
             {
-                PathHash = entry.PathHash,
-                ResolvedPath = entry.IsResolved ? entry.Path : null,
-                OverrideFile = dest,
-                AddedUtc = DateTime.UtcNow.ToString("o"),
-            });
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = entry.PathHash,
+                    ResolvedPath = entry.IsResolved ? entry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
             SetNodeStatus(entry.PathHash, AssetStatus.Modified);
             Project.IsDirty = true;
             UpdateTitle();
             UndoService.MarkSaved();
             int moves = map.Meshes.Count(x => x.IsMoved);
             int layers = map.Meshes.Count(x => x.HasLayerEdit);
-            _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {layers} layer edit(s) + {added.Count} added + {removedIndices.Count} deleted mesh(es) to override ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the resulting native geometry.");
+            _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {layers} layer edit(s) + {added.Count} added + {removedIndices.Count} deleted mesh(es) to {savedTo} ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the resulting native geometry.");
         }
         catch (Exception ex) { _log.Error("MapGeo", ex.Message); }
     }
@@ -6516,6 +6529,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (err is not null) _log.Warn("Particles", err);
         try
         {
+            // M417: write the PROJECT FILE when the project ships this bin, exactly as SaveBinToOverride
+            // has done since M98c. Placement edits went straight to the override store instead - and the
+            // build refuses to let an override clobber a path a project folder provides (M126/M131), so
+            // every deleted or moved particle was saved, reported as saved, and then dropped at package
+            // time. TryWriteToProjectFile also dissolves the stale shadow, including a record-less orphan.
+            if (TryWriteToProjectFile(binEntry, bytes, out var projectFile))
+            {
+                SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+                Project.IsDirty = true;
+                UpdateTitle();
+                HasParticleMoves = false;
+                _log.Success("Map Content",
+                    $"Saved {placementEdits.Count} placement edit(s) to {projectFile}. Build Package will include it.");
+                return;
+            }
+
             var dest = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
             _overrides.Set(new ProjectAssetOverride
             {
@@ -6524,6 +6553,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 OverrideFile = dest,
                 AddedUtc = DateTime.UtcNow.ToString("o"),
             });
+            _overrides.SaveTo(Project);   // M417: otherwise the record lives only in memory until some
+                                          // unrelated command happens to persist it, and the build sees
+                                          // an overrides list that does not mention this file
             SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
             Project.IsDirty = true;
             UpdateTitle();
