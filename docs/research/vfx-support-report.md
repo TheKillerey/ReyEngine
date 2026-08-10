@@ -1677,47 +1677,58 @@ wrong — it is binary. Verified across all 1,189 files:
 - the body holds plain IEEE-754 little-endian floats — `0.25`, `120.0`, `360.0`, `90.0` and `0.005` all
   appear as clean constants.
 
-**Body structure, partially decoded (M421 correlation pass).** The body is a VARIABLE-LENGTH
-serialization with default elision, not a fixed record array — 1-emitter bodies range 17..570 bytes
-across 118 distinct lengths, so length is not a function of emitter count. Three things are now
-established:
+**Body structure — DECODED (M422).** A nine-agent correlation pass cracked the container. The body is:
 
-1. **The body ENDS with a dense u16 string-reference table**, one entry per string-valued field, in
-   field order. The final u16 of a body is a valid string offset in 1,175 of 1,175 files, and every
-   emitter name is referenced somewhere in the body in **0 of 1,175** exceptions. Scanning backwards
-   from the end while each u16 remains a valid string offset recovers the table.
+```
+u16 mask
+for each SET bit, LSB -> MSB:
+    u16 count C
+    C x u32 key          (strictly ascending)
+    C x value            (width fixed per bit)
+```
 
-2. **The u16 at body+0 is a flags/presence mask.** It strongly determines the table shape: value
-   `0x1028` occurs in 189 of 370 single-emitter files and 181 of those have a 5-entry table.
+Widths: bit0=4B raw int, bit1=f32, bit2=u8, bit3=i16, bit4=u8, bit5=one BIT per entry, bit6=3xu8,
+bit7=3xf32, bit8=2xu8, bit9=2xf32, bit10=4xu8, bit11=4xf32, bit12=u16 string offset.
 
-3. **For mask `0x1028` with a 5-entry table the field order is fully decoded**, 100% across all 181
-   files:
+**Evidence.** The forward parse consumes the body to the exact final byte in **1,189 of 1,189** files —
+zero slack, zero overrun — over 164 masks and body lengths 2..7,605, reproduced clean-room by three
+independent implementations. Each width is uniquely determined: exhaustive search over widths 0..48 plus
+bit-packing, scored only on files that set the bit, gives exactly one winner per bit (100% vs best rival
+8.9%). All 71 pairwise width swaps and every offsetting perturbation score ≤774/1,189, so exact
+consumption is real evidence, not a degenerate fit. Section order is LSB→MSB (1,189 vs 206 reversed).
+Entries ascend by key in 8,888/8,888 sections. The string-block boundary is over-determined: the parse
+derives it without reading the header and agrees 1,189/1,189, all 46,891 string offsets land on a string
+start, and there are 0 orphan strings.
 
-   | position | field | agreement |
-   |---|---|---|
-   | 0 | emitter name | 181/181 |
-   | 1 | Wwise sound event | 181/181 |
-   | 2 | texture | 181/181 |
-   | 3 | keyword (quality/primitive) | 181/181 |
-   | 4 | texture | 181/181 |
+**The key model — `key = sdbm-65599(lowercase(emitterName + fieldName))`**, field names starting `*`.
+Null controls make this a derivation rather than a fit: shuffled emitter names → 0.89%, random
+same-length names → **exactly zero**, every alternative multiplier → exactly zero. Because the emitter
+name is *in* the key, each field belongs to one emitter by construction — 0 of 13,921 bound string
+references are ambiguous.
 
-   Two texture slots, matching the legacy shader's two samplers. It reproduces by hand on the smallest
-   sound particle: `[empty, Play_sfx_…, Black.DDS, Simple, Black.DDS]`.
+**Why every earlier mask correlation failed:** typing is VALUE-ADAPTIVE. The same field lands in a
+different section depending on its value (`*p-life`: 2,687 as u8, 637 as f32, 13 as i16), so two files
+with identical schemas legitimately carry different masks. That single fact explains the dead
+mask→field-order (31.6%), mask→table-length and popcount→emitter-count results — all correctly killed.
 
-**Killed in this pass**, so they are not retried: the body is **not** linear in emitter count; the u16
-at body+2 is **not** the emitter count (matches a name-derived count in only 31% of files, and the
-mismatches run in both directions).
+**Scaling is per FIELD, not per section**, and this was contested until measured. Continuous fields store
+tenths in u8 and escape to f32 when a value will not fit 0..25.5 in 0.1 steps — `*p-life` u8 [0..215]
+(0..21.5s) with an f32 witness to 1e7; `*e-rate` u8 [1..250] (0.1..25/s) with f32 to 3,400. Counts and
+enums never escape and are raw: `*p-numframes` [2..36], `*p-type` [2..11]. `*p-framerate` settles it the
+other way — its f32 witness [26..60] does not overlap the tenths reading [0.2..24], so it is raw. A
+blanket /10 would have made every count ten times too small.
 
-**Not yet resolved.** Which of the two texture slots is the diffuse and which is the colour ramp —
-`color-` prefixed names spread across positions 1, 2, 3, 4 and 5 with no majority, so the distinction is
-carried by the mask bits rather than by slot position. And the mask itself is decoded for exactly one
-value out of many. Until a mask value is decoded, position does not imply field, because elision shifts
-everything.
+**Corrections to claims made along the way**, so they are not repeated: the "integers are tenths"
+rule is NOT general; `0x0A0A0A0A` is not on `*p-xrgba` (that field is 100% string-valued); bit5 is a
+1-bit VALUE, not a boolean type; the 0x1028 field order is 181 of 184 (98.4%), not 100% of 181; bit0's
+width rests on only 17 files and its semantics are unknown.
 
-**What this would buy when finished.** The table is per-emitter string assignment straight from the
-data — it would replace every heuristic the converter currently uses for texture, ramp and mesh binding
-(the name-match/positional rules, and the 460 unbound meshes). The float parameters the effects actually
-need — rate, lifetime, velocity, scale — live in the region BEFORE the table and are still untouched.
+**Shipped result.** 1,172 of 1,189 bodies decode (the other 17 have no emitters at all). Every binding
+the converter used to guess is now read by key: 4,216 key-bound emitters, 4,171 with a real emission
+rate, 4,157 with a real particle lifetime, 795 mesh emitters (was 220) and **0 unbound meshes** (was
+460). 836 emitters are flipbook sheets, which is why converted effects previously rendered as
+undifferentiated blobs. Byte-exact REWRITING remains unsafe — value-adaptive type selection is unpinned,
+so a re-serialised file may choose a different section than Riot did.
 
 **What is still NOT decoded**, with the hypotheses that were tested and killed so they are not retried:
 

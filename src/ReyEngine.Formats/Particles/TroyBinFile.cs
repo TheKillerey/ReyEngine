@@ -193,8 +193,63 @@ public sealed class TroyBinFile
         var result = new TroyBinFile(version, strings, Math.Max(0, blockStart - 3));
         result.AssetPaths = ExtractAssets(strings);
         result.ColorCurves = ExtractColorCurves(strings);
+        result.DecodeBody(data, blockStart);
         file = result;
         return true;
+    }
+
+    /// <summary>
+    /// M422: the decoded body. Non-null means every field below was read by key rather than inferred,
+    /// and <see cref="Emitters"/> is authoritative.
+    /// </summary>
+    public TroySections? Sections { get; private set; }
+
+    /// <summary>
+    /// Emitters read from the body by key. EMPTY when the body could not be decoded, in which case
+    /// callers must fall back to the string-classification heuristics above.
+    ///
+    /// <para>This is the authoritative emitter list, and it disagrees with the heuristic in both
+    /// directions - <c>firetorch_purple</c> has 4 emitters where string classification counted 11.</para>
+    /// </summary>
+    public IReadOnlyList<TroyEmitter> Emitters { get; private set; } = Array.Empty<TroyEmitter>();
+
+    public bool HasDecodedBody => Sections is not null && Emitters.Count > 0;
+
+    private void DecodeBody(byte[] data, int blockStart)
+    {
+        var body = data.AsSpan(3, Math.Max(0, blockStart - 3));
+        if (!TroySections.TryParse(body, out var sections, out _) || sections is null) return;
+        Sections = sections;
+
+        var offsets = Strings.ToDictionary(s => s.Offset, s => s.Value);
+        string? Str(string emitter, string field) =>
+            sections.TryGetStringOffset(TroyHash.FieldKey(emitter, field), out int o)
+            && offsets.TryGetValue(o, out var v) ? v : null;
+        float? Num(string emitter, string field) =>
+            sections.TryGetScalar(TroyHash.FieldKey(emitter, field), TroyFields.IsTenths(field), out float v)
+                ? v : null;
+
+        var emitters = new List<TroyEmitter>();
+        for (int i = 1; i <= 64; i++)
+        {
+            if (!sections.TryGetStringOffset(TroyHash.EmitterNameKey(i), out int nameOffset)) break;
+            if (!offsets.TryGetValue(nameOffset, out var name)) break;
+            emitters.Add(new TroyEmitter(
+                name,
+                Str(name, TroyFields.Texture),
+                Str(name, TroyFields.ColorTexture),
+                Str(name, TroyFields.TextureMult),
+                Str(name, TroyFields.Mesh) ?? Str(name, TroyFields.Skin),
+                Num(name, TroyFields.EmitterRate),
+                Num(name, TroyFields.ParticleLife),
+                Num(name, TroyFields.EmitterLife),
+                Num(name, TroyFields.Scale),
+                (int?)Num(name, TroyFields.NumFrames),
+                Num(name, TroyFields.FrameRate),
+                (int?)Num(name, TroyFields.StartFrame),
+                (int?)Num(name, TroyFields.ParticleType)));
+        }
+        Emitters = emitters;
     }
 
     private static TroyStringKind Classify(string value)

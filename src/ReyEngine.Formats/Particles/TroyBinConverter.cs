@@ -15,6 +15,8 @@ public enum TroyTextureSource
     Positional,
     /// <summary>The file has no texture left for this emitter.</summary>
     None,
+    /// <summary>M422: read from the decoded body by key - exact, not inferred. No heuristic involved.</summary>
+    KeyBound,
 }
 
 /// <summary><paramref name="MeshPath"/> non-null makes this emitter a mesh particle instead of a
@@ -38,7 +40,9 @@ public sealed record TroyConversionResult(
         $"{Emitters.Count} emitter(s), {Assets.Count} asset(s), "
         + $"{Emitters.Count(e => e.MeshPath is not null)} mesh emitter(s), "
         + $"{(ColorKeys > 0 ? $"{ColorKeys} colour key(s)" : "no colour curve")}. "
-        + $"Timing and physics ({UndecodedBodyBytes:n0} undecoded bytes) are engine defaults, not the original values."
+        + (Emitters.Any(e => e.Source == TroyTextureSource.KeyBound)
+            ? "Rates, lifetimes, scales and every asset binding were read from the file itself."
+            : $"Timing and physics ({UndecodedBodyBytes:n0} undecoded bytes) are engine defaults, not the original values.")
         + (UnboundMeshes.Count > 0
             ? $" {UnboundMeshes.Count} mesh(es) could not be matched to an emitter and are staged but unbound."
             : "");
@@ -86,6 +90,9 @@ public static class TroyBinConverter
         if (string.IsNullOrWhiteSpace(systemName)) throw new ArgumentException("A system name is required.", nameof(systemName));
         particlePath = string.IsNullOrWhiteSpace(particlePath) ? systemName : particlePath;
 
+        // M422: when the body decoded, every binding below is read by key and nothing is guessed.
+        if (troy.HasDecodedBody) return ConvertDecoded(troy, systemName, particlePath);
+
         var textures = troy.TexturePaths.ToList();
         var names = troy.EmitterNames.Count > 0 ? troy.EmitterNames.ToList() : new List<string> { "emitter" };
         var (notes, assetsUsed) = MapTextures(names, textures);
@@ -123,6 +130,98 @@ public static class TroyBinConverter
 
         return new TroyConversionResult(ms.ToArray(), systemHash, systemName, particlePath,
             notes, assets, troy.ColorKeyCount, troy.UndecodedBodyBytes, unboundMeshes);
+    }
+
+    /// <summary>
+    /// M422: conversion from the DECODED body. Nothing here is a heuristic - each emitter's texture,
+    /// colour ramp, mesh, rate, lifetime and scale is read from a key built out of that emitter's own
+    /// name, so the assignment is exact. This path retires the name-matching and positional rules,
+    /// which remain only as the fallback for a body that will not decode.
+    /// </summary>
+    private static TroyConversionResult ConvertDecoded(TroyBinFile troy, string systemName, string particlePath)
+    {
+        var notes = new List<TroyEmitterNote>();
+        var used = new List<string>();
+        var emitters = new List<BinTreeProperty>();
+
+        for (int i = 0; i < troy.Emitters.Count; i++)
+        {
+            var e = troy.Emitters[i];
+            notes.Add(new TroyEmitterNote(e.Name, e.TexturePath, TroyTextureSource.KeyBound, e.MeshPath));
+            foreach (string? p in new[] { e.TexturePath, e.ColorTexturePath, e.TextureMultPath, e.MeshPath })
+                if (!string.IsNullOrWhiteSpace(p)) used.Add(p!);
+
+            var props = new List<BinTreeProperty>
+            {
+                new BinTreeString(H("emitterName"), e.Name),
+                new BinTreeU8(H("blendMode"), 1),
+                ValueFloat("rate", e.Rate ?? DefaultRate),
+                ValueFloat("particleLifetime", e.ParticleLifetime ?? DefaultLifetime),
+            };
+
+            // -1 means "runs forever"; a positive value is a real emitter runtime
+            if (e.EmitterLifetime is { } life && life > 0f)
+                props.Add(ValueFloat("lifetime", life));
+
+            float scale = e.Scale is { } s && s > 0f ? s * DefaultScale : DefaultScale;
+            props.Add(new BinTreeEmbedded(H("birthScale0"), H("ValueVector3"), new BinTreeProperty[]
+            {
+                new BinTreeVector3(H("constantValue"), new Vector3(scale, scale, 0f)),
+            }));
+
+            props.Add(e.MeshPath is { } mesh
+                ? MeshPrimitive(mesh, troy.SkeletonPath)
+                : new BinTreeStruct(H("primitive"), H("VfxPrimitiveArbitraryQuad"), Array.Empty<BinTreeProperty>()));
+
+            if (!string.IsNullOrWhiteSpace(e.TexturePath))
+                props.Add(new BinTreeString(H("texture"), ToTargetPath(e.TexturePath!)));
+            if (!string.IsNullOrWhiteSpace(e.ColorTexturePath))
+                props.Add(new BinTreeString(H("particleColorTexture"), ToTargetPath(e.ColorTexturePath!)));
+
+            // a flipbook sheet drawn as one sprite is what made converted effects look like blobs
+            if (e.IsFlipbook)
+            {
+                props.Add(new BinTreeU16(H("numFrames"), (ushort)e.FrameCount!.Value));
+                if (e.FrameRate is { } fps && fps > 0f) props.Add(ValueFloat("frameRate", fps));
+            }
+
+            var curve = CurveFor(troy.ColorCurves, i, troy.Emitters.Count);
+            if (curve.Count >= 2)
+                props.Add(new BinTreeEmbedded(H("Color"), H("ValueColor"), new BinTreeProperty[]
+                {
+                    new BinTreeStruct(H("dynamics"), H("VfxAnimatedColorVariableData"), new BinTreeProperty[]
+                    {
+                        new BinTreeContainer(H("times"), BinPropertyType.F32,
+                            curve.Select(k => (BinTreeProperty)new BinTreeF32(0, k.Time)).ToArray()),
+                        new BinTreeContainer(H("values"), BinPropertyType.Vector4,
+                            curve.Select(k => (BinTreeProperty)new BinTreeVector4(0, k.Color)).ToArray()),
+                    }),
+                }));
+            else if (curve.Count == 1)
+                props.Add(new BinTreeEmbedded(H("birthColor"), H("ValueColor"), new BinTreeProperty[]
+                {
+                    new BinTreeVector4(H("constantValue"), curve[0].Color),
+                }));
+
+            emitters.Add(new BinTreeStruct(0, EmitterClass, props));
+        }
+
+        uint systemHash = H(particlePath);
+        var system = new BinTreeObject(systemHash, SystemClass, new BinTreeProperty[]
+        {
+            new BinTreeString(H("particleName"), systemName),
+            new BinTreeString(H("particlePath"), particlePath),
+            new BinTreeContainer(H("complexEmitterDefinitionData"), BinPropertyType.Struct, emitters),
+        });
+
+        using var ms = new MemoryStream();
+        new BinTree(new[] { system }, Array.Empty<string>()).Write(ms);
+
+        var assets = used.Concat(troy.SkeletonPath is { } skl ? new[] { skl } : Array.Empty<string>())
+            .Distinct(StringComparer.OrdinalIgnoreCase).Select(ToMapping).ToArray();
+
+        return new TroyConversionResult(ms.ToArray(), systemHash, systemName, particlePath,
+            notes, assets, troy.ColorKeyCount, troy.UndecodedBodyBytes, Array.Empty<string>());
     }
 
     /// <summary>

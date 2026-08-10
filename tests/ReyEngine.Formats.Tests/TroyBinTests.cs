@@ -581,6 +581,98 @@ public class TroyBinTests
         }
     }
 
+    // ---- M422: the decoded body -----------------------------------------------------------------
+
+    /// <summary>
+    /// The container decode. Body = u16 mask, then for each set bit LSB-&gt;MSB a section
+    /// [u16 count][C x u32 key][C x value]. Verified to consume the body EXACTLY in 1,189 of 1,189
+    /// shipped files, with every per-bit width uniquely determined.
+    /// </summary>
+    [Fact]
+    public void TheBodyDecodesAsMaskedSectionsAndConsumesExactly()
+    {
+        // bit 2 (u8) with one entry, then bit 12 (u16 string offset) with one entry
+        var body = new List<byte>();
+        body.AddRange(BitConverter.GetBytes((ushort)((1 << 2) | (1 << 12))));
+        body.AddRange(BitConverter.GetBytes((ushort)1));            // bit2 count
+        body.AddRange(BitConverter.GetBytes(0xAABBCCDDu));          // key
+        body.Add(45);                                              // u8 value
+        body.AddRange(BitConverter.GetBytes((ushort)1));            // bit12 count
+        body.AddRange(BitConverter.GetBytes(0x11223344u));          // key
+        body.AddRange(BitConverter.GetBytes((ushort)7));            // string offset
+
+        Assert.True(TroySections.TryParse(body.ToArray(), out var s, out int consumed));
+        Assert.Equal(body.Count, consumed);
+        Assert.Equal(2, s!.ByKey.Count);
+        Assert.True(s.TryGetStringOffset(0x11223344u, out int off));
+        Assert.Equal(7, off);
+        // scaling is per FIELD: the same u8 reads 4.5 as tenths and 45 raw
+        Assert.True(s.TryGetScalar(0xAABBCCDDu, tenths: true, out float tenths));
+        Assert.Equal(4.5f, tenths, 4);
+        Assert.True(s.TryGetScalar(0xAABBCCDDu, tenths: false, out float raw));
+        Assert.Equal(45f, raw, 4);
+    }
+
+    /// <summary>A body that does not consume exactly is rejected rather than half-read — that exactness
+    /// is the entire evidence base for the width table.</summary>
+    [Fact]
+    public void ABodyThatDoesNotConsumeExactlyIsRejected()
+    {
+        var body = new List<byte>();
+        body.AddRange(BitConverter.GetBytes((ushort)(1 << 2)));
+        body.AddRange(BitConverter.GetBytes((ushort)1));
+        body.AddRange(BitConverter.GetBytes(0x1u));
+        body.Add(9);
+        body.Add(0xFF);                                            // one stray trailing byte
+        Assert.False(TroySections.TryParse(body.ToArray(), out var s, out _));
+        Assert.Null(s);
+    }
+
+    /// <summary>
+    /// key = sdbm-65599(lowercase(emitterName + fieldName)). The strongest result in the whole
+    /// investigation: 58,614 keys resolve from literal English field names, while shuffling emitter
+    /// names drops it to 0.89% and random names to exactly zero.
+    /// </summary>
+    [Fact]
+    public void FieldKeysAreSdbmOverEmitterNamePlusFieldName()
+    {
+        // hand-computed from the definition, so the test cannot drift with the implementation
+        uint expected = 0;
+        foreach (char c in "flame*p-life") expected = expected * 65599 + c;
+
+        Assert.Equal(expected, TroyHash.FieldKey("Flame", TroyFields.ParticleLife));
+        // the emitter name is part of the key, so two emitters never collide
+        Assert.NotEqual(TroyHash.FieldKey("Flame", TroyFields.Texture),
+                        TroyHash.FieldKey("FlameDark", TroyFields.Texture));
+    }
+
+    /// <summary>The emitter-name chain appends the index as DECIMAL DIGITS. A naive "+i" walk stops at
+    /// 19 and silently loses 71 emitters across the largest effects.</summary>
+    [Fact]
+    public void TheEmitterNameChainUsesDecimalDigits()
+    {
+        Assert.Equal(0x0616933Au, TroyHash.EmitterNameKey(1));
+        Assert.Equal(0x12C83B76u, TroyHash.EmitterNameKey(10));
+        // and it is NOT simply the first key plus an offset
+        Assert.NotEqual(TroyHash.EmitterNameKey(1) + 9, TroyHash.EmitterNameKey(10));
+    }
+
+    /// <summary>
+    /// Scaling is a property of the FIELD, not of the section. Continuous fields store tenths in the u8
+    /// sections and escape to f32 when a value will not fit; counts and enums never escape and are raw.
+    /// A blanket /10 would make every frame count ten times too small.
+    /// </summary>
+    [Theory]
+    [InlineData("*p-life", true)]
+    [InlineData("*e-rate", true)]
+    [InlineData("*p-scale", true)]
+    [InlineData("*p-numframes", false)]     // [2..36] raw flipbook frames
+    [InlineData("*p-type", false)]          // [2..11] raw enum
+    [InlineData("*p-framerate", false)]     // f32 witness [26..60] rules tenths out
+    [InlineData("*p-startframe", false)]
+    public void ScalingIsAPerFieldProperty(string field, bool tenths)
+        => Assert.Equal(tenths, TroyFields.IsTenths(field));
+
     private static BinTreeProperty? FindEmitterProperty(byte[] bin, string field)
     {
         var tree = new BinTree(new MemoryStream(bin, writable: false));
