@@ -341,10 +341,21 @@ public static class MapMaterialFactory
                 passProperties.Add(new BinTreeBool(F("blendEnable"), blend));
             if (effectiveCull is { } cull)
                 passProperties.Add(new BinTreeBool(F("cullEnable"), cull));
+            // M415: the ALPHA half of the blend equation is not optional. Measured over every shipped
+            // wad: of 3,192 materials on DefaultEnv_Flat_AlphaTest with PREMULTIPLIED_ALPHA +
+            // MULTIPLY_ALPHA, all 3,192 author dstAlphaBlendFactor beside dstColorBlendFactor. Writing
+            // only the colour factor left the ported Map453 terrain fully transparent in game - it drew,
+            // and it was invisible.
             if (effectiveSource is { } source)
+            {
                 passProperties.Add(new BinTreeU32(F("srcColorBlendFactor"), (uint)source));
+                passProperties.Add(new BinTreeU32(F("srcAlphaBlendFactor"), (uint)source));
+            }
             if (effectiveDestination is { } destination)
+            {
                 passProperties.Add(new BinTreeU32(F("dstColorBlendFactor"), (uint)destination));
+                passProperties.Add(new BinTreeU32(F("dstAlphaBlendFactor"), (uint)destination));
+            }
             var pass = new BinTreeStruct(0, PassClass, passProperties);
             var technique = new BinTreeStruct(0, TechClass, new BinTreeProperty[]
             {

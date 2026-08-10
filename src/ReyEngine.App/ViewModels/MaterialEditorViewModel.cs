@@ -593,6 +593,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     {
         if (_renderStateLoading || value < 0) return;
         Model.SetPassU32("srcColorBlendFactor", (uint)value);
+        Model.SetPassU32("srcAlphaBlendFactor", (uint)value);   // M415: the alpha half moves with it
         Model.SetPassU32("srcAlphaBlendFactor", (uint)value);
         AfterRenderStateEdit();
     }

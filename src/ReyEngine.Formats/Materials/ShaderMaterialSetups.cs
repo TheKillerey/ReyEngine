@@ -127,12 +127,20 @@ public static class ShaderMaterialSetups
         material.SetPassBool("blendEnable", setup.BlendEnable);
         if (setup.CullEnable is { } cull) material.SetPassBool("cullEnable", cull);
         else material.RemovePassProperty("cullEnable");
+        // M415: colour and alpha factors move together - see MapMaterialFactory. A pass carrying only
+        // the colour half is a blend equation Riot never ships and it renders the surface invisible.
         if (setup.SourceBlendFactor >= 0)
+        {
             material.SetPassU32("srcColorBlendFactor", (uint)setup.SourceBlendFactor);
-        else material.RemovePassProperty("srcColorBlendFactor");
+            material.SetPassU32("srcAlphaBlendFactor", (uint)setup.SourceBlendFactor);
+        }
+        else { material.RemovePassProperty("srcColorBlendFactor"); material.RemovePassProperty("srcAlphaBlendFactor"); }
         if (setup.DestinationBlendFactor >= 0)
+        {
             material.SetPassU32("dstColorBlendFactor", (uint)setup.DestinationBlendFactor);
-        else material.RemovePassProperty("dstColorBlendFactor");
+            material.SetPassU32("dstAlphaBlendFactor", (uint)setup.DestinationBlendFactor);
+        }
+        else { material.RemovePassProperty("dstColorBlendFactor"); material.RemovePassProperty("dstAlphaBlendFactor"); }
 
         return (switches, macros, removed);
     }
