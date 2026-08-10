@@ -287,7 +287,7 @@ public static class MapMaterialFactory
                 bool diffuseIsh = t.Name.Contains("Diffuse", StringComparison.OrdinalIgnoreCase);
                 if (diffuseOverride is not null && !overrideUsed && (diffuseIsh || shader.Textures.Count == 1))
                 { path = diffuseOverride; overrideUsed = true; }
-                samplers.Add(new BinTreeStruct(0, SamplerClass, new BinTreeProperty[]
+                samplers.Add(new BinTreeEmbedded(0, SamplerClass, new BinTreeProperty[]
                 {
                     new BinTreeString(F("TextureName"), t.Name),
                     new BinTreeString(F("texturePath"), path),
@@ -305,7 +305,7 @@ public static class MapMaterialFactory
                 var value = parameterOverrides?.GetValueOrDefault(pd.Name)
                             ?? shader.CommonSetup?.Parameters.GetValueOrDefault(pd.Name)
                             ?? new System.Numerics.Vector4(pd.X, pd.Y, pd.Z, pd.W);
-                return (BinTreeProperty)new BinTreeStruct(0, ParamClass, new BinTreeProperty[]
+                return (BinTreeProperty)new BinTreeEmbedded(0, ParamClass, new BinTreeProperty[]
                 {
                     new BinTreeString(F("name"), pd.Name),
                     new BinTreeVector4(F("value"), value),
@@ -313,7 +313,7 @@ public static class MapMaterialFactory
             }).ToList();
 
             var switchValues = (switches ?? shader.CommonSetup?.Switches ?? new Dictionary<string, bool>())
-                .Select(kv => (BinTreeProperty)new BinTreeStruct(0, SwitchClass, new BinTreeProperty[]
+                .Select(kv => (BinTreeProperty)new BinTreeEmbedded(0, SwitchClass, new BinTreeProperty[]
                 {
                     new BinTreeString(F("name"), kv.Key),
                     new BinTreeBool(F("on"), kv.Value),
@@ -356,11 +356,16 @@ public static class MapMaterialFactory
                 passProperties.Add(new BinTreeU32(F("dstColorBlendFactor"), (uint)destination));
                 passProperties.Add(new BinTreeU32(F("dstAlphaBlendFactor"), (uint)destination));
             }
-            var pass = new BinTreeStruct(0, PassClass, passProperties);
-            var technique = new BinTreeStruct(0, TechClass, new BinTreeProperty[]
+            // M416: elements are EMBEDDED (0x83), not struct/pointer (0x82). Measured on every shipped
+            // material: Riot uses Embedded for samplerValues, paramValues, techniques, passes and
+            // switches without exception. A material built with the pointer form parses fine, round-trips
+            // fine, and the GAME DOES NOT RENDER IT - the ported Map453 terrain was invisible for exactly
+            // this, one byte per container.
+            var pass = new BinTreeEmbedded(0, PassClass, passProperties);
+            var technique = new BinTreeEmbedded(0, TechClass, new BinTreeProperty[]
             {
                 new BinTreeString(F("name"), "normal"),
-                new BinTreeContainer(F("passes"), BinPropertyType.Struct, new BinTreeProperty[] { pass }),
+                new BinTreeContainer(F("passes"), BinPropertyType.Embedded, new BinTreeProperty[] { pass }),
             });
 
             // M414: an EMPTY container is a shape Riot never ships (0 of 33,645 shipped materials) and one
@@ -370,16 +375,16 @@ public static class MapMaterialFactory
             {
                 new BinTreeString(F("name"), newName),
                 new BinTreeU32(F("type"), 0),
-                new BinTreeContainer(F("techniques"), BinPropertyType.Struct, new BinTreeProperty[] { technique }),
+                new BinTreeContainer(F("techniques"), BinPropertyType.Embedded, new BinTreeProperty[] { technique }),
             };
             if (macroValues.Count > 0)
                 props.Insert(2, new BinTreeMap(F("shaderMacros"), BinPropertyType.String, BinPropertyType.String, macroValues));
             if (samplers.Count > 0)
-                props.Insert(props.Count - 1, new BinTreeUnorderedContainer(F("samplerValues"), BinPropertyType.Struct, samplers));
+                props.Insert(props.Count - 1, new BinTreeUnorderedContainer(F("samplerValues"), BinPropertyType.Embedded, samplers));
             if (parameters.Count > 0)
-                props.Insert(props.Count - 1, new BinTreeUnorderedContainer(F("paramValues"), BinPropertyType.Struct, parameters));
+                props.Insert(props.Count - 1, new BinTreeUnorderedContainer(F("paramValues"), BinPropertyType.Embedded, parameters));
             if (switchValues.Count > 0)
-                props.Insert(props.Count - 1, new BinTreeUnorderedContainer(F("switches"), BinPropertyType.Struct, switchValues));
+                props.Insert(props.Count - 1, new BinTreeUnorderedContainer(F("switches"), BinPropertyType.Embedded, switchValues));
 
             tree.Objects[newHash] = new BinTreeObject(newHash, materialClass, props);
             using var outMs = new MemoryStream();

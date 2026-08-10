@@ -555,6 +555,15 @@ public sealed class MaterialBinding
     /// material whose current shader authored no switches at all.</summary>
     public bool CanEditSwitches => MaterialObject is not null;
 
+
+    /// <summary>M416: build a struct element whose wire type matches <paramref name="container"/>.
+    /// New containers are Embedded (what Riot ships, and what the game renders), but an already-loaded
+    /// bin may be Struct-typed - and LeagueToolkit refuses an element whose type disagrees.</summary>
+    private static BinTreeStruct NewElement(BinTreeContainer container, uint classHash, IEnumerable<BinTreeProperty> properties)
+        => container.ElementType == BinPropertyType.Embedded
+            ? new BinTreeEmbedded(0, classHash, properties)
+            : new BinTreeStruct(0, classHash, properties);
+
     /// <summary>Enable a shader feature switch this material doesn't carry yet.</summary>
     public MaterialSwitch? AddSwitch(string name)
     {
@@ -562,7 +571,7 @@ public sealed class MaterialBinding
         if (_switchContainer is null)
         {
             uint field = HashAlgorithms.Fnv1a("switches");
-            _switchContainer = new BinTreeContainer(field, BinPropertyType.Struct, Array.Empty<BinTreeProperty>());
+            _switchContainer = new BinTreeContainer(field, BinPropertyType.Embedded, Array.Empty<BinTreeProperty>());
             MaterialObject.Properties[field] = _switchContainer;
         }
 
@@ -572,7 +581,7 @@ public sealed class MaterialBinding
         else
         {
             uint nameField = HashAlgorithms.Fnv1a("name");
-            clone = new BinTreeStruct(0, HashAlgorithms.Fnv1a("StaticMaterialSwitchDef"),
+            clone = NewElement(_switchContainer, HashAlgorithms.Fnv1a("StaticMaterialSwitchDef"),
                 new BinTreeProperty[] { new BinTreeString(nameField, name) });
         }
         uint nameHash = 0;
@@ -901,7 +910,7 @@ public sealed class MaterialBinding
         if (_samplerContainer is null)
         {
             uint field = HashAlgorithms.Fnv1a("samplerValues");
-            _samplerContainer = new BinTreeUnorderedContainer(field, BinPropertyType.Struct,
+            _samplerContainer = new BinTreeUnorderedContainer(field, BinPropertyType.Embedded,
                 Array.Empty<BinTreeProperty>());
             MaterialObject.Properties[field] = _samplerContainer;
         }
@@ -912,7 +921,7 @@ public sealed class MaterialBinding
         if (_samplerContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } proto)
             clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
         else
-            clone = new BinTreeStruct(0, 0x0904b150, new BinTreeProperty[]
+            clone = NewElement(_samplerContainer, 0x0904b150, new BinTreeProperty[]
             {
                 new BinTreeString(nameHash, samplerName),
                 new BinTreeString(pathHash, path),
@@ -978,7 +987,7 @@ public sealed class MaterialBinding
         if (_paramContainer is null)
         {
             uint field = HashAlgorithms.Fnv1a("paramValues");
-            _paramContainer = new BinTreeUnorderedContainer(field, BinPropertyType.Struct,
+            _paramContainer = new BinTreeUnorderedContainer(field, BinPropertyType.Embedded,
                 Array.Empty<BinTreeProperty>());
             MaterialObject.Properties[field] = _paramContainer;
         }
@@ -989,7 +998,7 @@ public sealed class MaterialBinding
         else
         {
             uint nameField = HashAlgorithms.Fnv1a("name"), valueField = HashAlgorithms.Fnv1a("value");
-            clone = new BinTreeStruct(0, HashAlgorithms.Fnv1a("StaticMaterialShaderParamDef"),
+            clone = NewElement(_paramContainer, HashAlgorithms.Fnv1a("StaticMaterialShaderParamDef"),
                 new BinTreeProperty[]
                 {
                     new BinTreeString(nameField, name),
