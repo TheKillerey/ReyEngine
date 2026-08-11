@@ -250,6 +250,21 @@ public sealed class TroyBinFile
             return p.IsEmpty ? null : p;
         }
 
+        IReadOnlyList<TroyEmitRotation> Rotations(string emitter)
+        {
+            var list = new List<TroyEmitRotation>();
+            for (int n = 1; n <= 3; n++)
+            {
+                string field = TroyFields.EmitRotation(n);
+                if (!sections.TryGetScalar(TroyHash.FieldKey(emitter, field), out float angle)) continue;
+                if (!sections.TryGetVector3(TroyHash.FieldKey(emitter, TroyFields.EmitRotationAxis(n)),
+                        o => offsets.TryGetValue(o, out var s) ? s : null, out var axis)
+                    || axis == Vector3.Zero) continue;
+                list.Add(new TroyEmitRotation(axis, angle, Table(emitter, field, "")));
+            }
+            return list;
+        }
+
         System.Numerics.Vector3? Vec(string emitter, string field) =>
             sections.TryGetVector3(TroyHash.FieldKey(emitter, field),
                 o => offsets.TryGetValue(o, out var s) ? s : null, out var v) ? v : null;
@@ -282,7 +297,8 @@ public sealed class TroyBinFile
                 Vec(name, TroyFields.Scale),
                 Spread(name, TroyFields.Velocity3),
                 Spread(name, TroyFields.Offset3),
-                Spread(name, TroyFields.Scale)));
+                Spread(name, TroyFields.Scale),
+                Rotations(name)));
         }
         Emitters = emitters;
     }

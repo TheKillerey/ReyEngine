@@ -329,5 +329,9 @@ public static class TroyFields
     public const string Offset3 = "*p-offset";
     public const string Drag3 = "*p-drag";
     public const string OrbitalVelocity3 = "*p-orbitvel";
+    /// <summary>M427: emitter-space rotations. *e-rotation{n} is the angle, *e-rotation{n}-axis the
+    /// unit axis, *e-rotation{n}P{k} the probability table that randomises it (typically 0..360).</summary>
+    public static string EmitRotation(int n) => "*e-rotation" + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public static string EmitRotationAxis(int n) => EmitRotation(n) + "-axis";
 
 }

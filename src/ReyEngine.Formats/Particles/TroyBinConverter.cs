@@ -209,11 +209,26 @@ public static class TroyBinConverter
             // probability table inside those dynamics is the entire point. Without it every particle
             // spawns at exactly the same offset, which is what made converted effects render as a line
             // while modern ones (which all carry their tables) looked correct.
-            if (e.Offset is { } offset && offset != Vector3.Zero)
-                props.Add(new BinTreeStruct(H("SpawnShape"), H("VfxShapeLegacy"), new BinTreeProperty[]
+            var rotations = e.EmitRotations ?? Array.Empty<TroyEmitRotation>();
+            if ((e.Offset is { } offset && offset != Vector3.Zero) || rotations.Count > 0)
+            {
+                var shape = new List<BinTreeProperty>();
+                if (e.Offset is { } o && o != Vector3.Zero)
+                    shape.Add(ValueVector3("emitOffset", o, e.OffsetSpread));
+
+                // The emit rotations are what turn a radius into a volume. *p-offset (30,0,0) is a
+                // RADIUS along X; spun 0-360 degrees about Y it sweeps a cylinder. Without them every
+                // particle stays in one plane, which is exactly how converted effects rendered while
+                // modern ones - which all carry these - looked correct in the same viewport.
+                if (rotations.Count > 0)
                 {
-                    ValueVector3("emitOffset", offset, e.OffsetSpread),
-                }));
+                    shape.Add(new BinTreeContainer(H("emitRotationAxes"), BinPropertyType.Vector3,
+                        rotations.Select(r => (BinTreeProperty)new BinTreeVector3(0, r.Axis)).ToArray()));
+                    shape.Add(new BinTreeContainer(H("emitRotationAngles"), BinPropertyType.Embedded,
+                        rotations.Select(r => AngleValue(r)).ToArray()));
+                }
+                props.Add(new BinTreeStruct(H("SpawnShape"), H("VfxShapeLegacy"), shape));
+            }
 
             var curve = CurveFor(troy.ColorCurves, i, troy.Emitters.Count);
             if (curve.Count >= 2)
@@ -480,6 +495,29 @@ public static class TroyBinConverter
                 }));
         }
         return new BinTreeEmbedded(H(field), H("ValueVector3"), inner);
+    }
+
+    /// <summary>One emit-rotation angle as a ValueFloat curve. Riot's idiom is a constant of 1 scaled by
+    /// a probability table, so <c>*e-rotation2 = 1</c> with a table reaching 360 means "uniformly random
+    /// between 0 and 360 degrees".</summary>
+    private static BinTreeProperty AngleValue(TroyEmitRotation r)
+    {
+        var inner = new List<BinTreeProperty> { new BinTreeF32(H("constantValue"), r.Angle) };
+        if (r.Table.Count > 0)
+            inner.Add(new BinTreeStruct(H("dynamics"), H("VfxAnimatedFloatVariableData"), new BinTreeProperty[]
+            {
+                new BinTreeContainer(H("probabilityTables"), BinPropertyType.Struct, new BinTreeProperty[]
+                {
+                    new BinTreeStruct(0, H("VfxProbabilityTableData"), new BinTreeProperty[]
+                    {
+                        new BinTreeContainer(H("keyTimes"), BinPropertyType.F32,
+                            r.Table.Select(k => (BinTreeProperty)new BinTreeF32(0, k.Probability)).ToArray()),
+                        new BinTreeContainer(H("keyValues"), BinPropertyType.F32,
+                            r.Table.Select(k => (BinTreeProperty)new BinTreeF32(0, k.Multiplier)).ToArray()),
+                    }),
+                }),
+            }));
+        return new BinTreeEmbedded(0, H("ValueFloat"), inner);
     }
 
     private static BinTreeProperty ValueFloat(string field, float value) =>

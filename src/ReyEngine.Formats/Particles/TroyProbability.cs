@@ -35,3 +35,22 @@ public sealed record TroyProbability(
         return specific.Count > 0 ? specific : Uniform;
     }
 }
+
+/// <summary>
+/// One emitter-space rotation: spin the spawn offset and birth velocity by a random angle about an
+/// axis (M427).
+///
+/// <para><b>This is the missing three-dimensionality.</b> A legacy <c>*p-offset</c> of
+/// <c>(30,0,0)</c> is a RADIUS along X, not a box extent. On its own it puts every particle on a line;
+/// rotated 0-360 degrees about Y it becomes a full cylinder. Measured on <c>firetorch_purple</c>, every
+/// emitter carries <c>*e-rotation2-axis = (0,1,0)</c> with a table reaching <c>360</c>, plus a smaller
+/// tilt about X. Without these the whole effect stays in one plane, which is precisely how it
+/// rendered.</para>
+///
+/// <para>Corpus: <c>*e-rotation1</c> on 931 emitters, <c>*e-rotation2</c> on 458, with unit axes
+/// <c>(0,1,0)</c>, <c>(1,0,0)</c> and <c>(0,0,1)</c>.</para>
+/// </summary>
+public sealed record TroyEmitRotation(
+    System.Numerics.Vector3 Axis,
+    float Angle,
+    IReadOnlyList<(float Probability, float Multiplier)> Table);

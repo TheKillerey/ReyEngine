@@ -36,7 +36,8 @@ public sealed record TroyEmitter(
     Vector3? ScaleVector,
     TroyProbability? VelocitySpread = null,
     TroyProbability? OffsetSpread = null,
-    TroyProbability? ScaleSpread = null)
+    TroyProbability? ScaleSpread = null,
+    IReadOnlyList<TroyEmitRotation>? EmitRotations = null)
 {
     /// <summary>An <c>*e-life</c> of -1 means the emitter runs forever.
     /// Torches, auras and buff loops all use it.</summary>
