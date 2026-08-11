@@ -227,6 +227,29 @@ public sealed class TroyBinFile
             && offsets.TryGetValue(o, out var v) ? v : null;
         float? Num(string emitter, string field) =>
             sections.TryGetScalar(TroyHash.FieldKey(emitter, field), out float v) ? v : null;
+        // M426: probability tables. Keys are numbered suffixes on the field name - P1, P2, ... for a
+        // uniform table and XP1, YP1, ZP1, ... per axis - each a (probability, multiplier) pair.
+        IReadOnlyList<(float, float)> Table(string emitter, string field, string axis)
+        {
+            var keys = new List<(float, float)>();
+            for (int i = 1; i <= 8; i++)
+            {
+                uint k = TroyHash.FieldKey(emitter, field + axis + "P" + i.ToString(CultureInfo.InvariantCulture));
+                if (!sections.TryGetVector2(k, o => offsets.TryGetValue(o, out var s) ? s : null,
+                        out float probability, out float multiplier))
+                    break;
+                keys.Add((probability, multiplier));
+            }
+            return keys;
+        }
+        TroyProbability? Spread(string emitter, string field)
+        {
+            var p = new TroyProbability(
+                Table(emitter, field, ""), Table(emitter, field, "X"),
+                Table(emitter, field, "Y"), Table(emitter, field, "Z"));
+            return p.IsEmpty ? null : p;
+        }
+
         System.Numerics.Vector3? Vec(string emitter, string field) =>
             sections.TryGetVector3(TroyHash.FieldKey(emitter, field),
                 o => offsets.TryGetValue(o, out var s) ? s : null, out var v) ? v : null;
@@ -256,7 +279,10 @@ public sealed class TroyBinFile
                 Vec(name, TroyFields.Offset3),
                 Vec(name, TroyFields.Drag3),
                 Vec(name, TroyFields.OrbitalVelocity3),
-                Vec(name, TroyFields.Scale)));
+                Vec(name, TroyFields.Scale),
+                Spread(name, TroyFields.Velocity3),
+                Spread(name, TroyFields.Offset3),
+                Spread(name, TroyFields.Scale)));
         }
         Emitters = emitters;
     }

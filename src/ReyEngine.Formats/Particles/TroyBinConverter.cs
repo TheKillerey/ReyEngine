@@ -169,10 +169,7 @@ public static class TroyBinConverter
             Vector3 scale = e.ScaleVector is { } sv && sv != Vector3.Zero
                 ? sv
                 : new Vector3(DefaultScale, DefaultScale, DefaultScale);
-            props.Add(new BinTreeEmbedded(H("birthScale0"), H("ValueVector3"), new BinTreeProperty[]
-            {
-                new BinTreeVector3(H("constantValue"), scale),
-            }));
+            props.Add(ValueVector3("birthScale0", scale, e.ScaleSpread));
 
             props.Add(e.MeshPath is { } mesh
                 ? MeshPrimitive(mesh, troy.SkeletonPath)
@@ -195,29 +192,27 @@ public static class TroyBinConverter
             // ---- M423: motion and spawn volume ---------------------------------------------------
             // Without these every particle spawns at one point with zero velocity, which is what made
             // converted effects render as a flat plane of sprites. All are genuine vec3s in the source.
-            void Vec3(string field, Vector3? value)
+            void Vec3(string field, Vector3? value, TroyProbability? spread = null)
             {
                 if (value is not { } v || v == Vector3.Zero) return;
-                props.Add(new BinTreeEmbedded(H(field), H("ValueVector3"), new BinTreeProperty[]
-                {
-                    new BinTreeVector3(H("constantValue"), v),
-                }));
+                props.Add(ValueVector3(field, v, spread));
             }
 
-            Vec3("birthVelocity", e.Velocity);
+            Vec3("birthVelocity", e.Velocity, e.VelocitySpread);
             Vec3("birthAcceleration", e.Acceleration);
             Vec3("worldAcceleration", e.WorldAcceleration);
             Vec3("birthDrag", e.Drag);
             Vec3("birthOrbitalVelocity", e.OrbitalVelocity);
 
-            // The spawn volume: particles are distributed across it instead of all starting at one
-            // point. The class hash is used literally because CDTB cannot name it - it was read off a
-            // shipped system carrying exactly this shape, `SpawnShape -> 0xee39916f { emitOffset }`.
-            // Spelling a guessed class name here would produce a struct the game does not recognise.
+            // The spawn VOLUME. VfxShapeLegacy is used rather than the bare 0xee39916f form because its
+            // emitOffset is an Embedded ValueVector3 and can therefore carry dynamics - and the
+            // probability table inside those dynamics is the entire point. Without it every particle
+            // spawns at exactly the same offset, which is what made converted effects render as a line
+            // while modern ones (which all carry their tables) looked correct.
             if (e.Offset is { } offset && offset != Vector3.Zero)
-                props.Add(new BinTreeStruct(H("SpawnShape"), 0xee39916f, new BinTreeProperty[]
+                props.Add(new BinTreeStruct(H("SpawnShape"), H("VfxShapeLegacy"), new BinTreeProperty[]
                 {
-                    new BinTreeVector3(H("emitOffset"), offset),
+                    ValueVector3("emitOffset", offset, e.OffsetSpread),
                 }));
 
             var curve = CurveFor(troy.ColorCurves, i, troy.Emitters.Count);
@@ -444,6 +439,47 @@ public static class TroyBinConverter
         // and on an additive emitter it is the one that blows the effect out to white.
 
         return new BinTreeStruct(0, EmitterClass, props);
+    }
+
+    /// <summary>
+    /// A vec3 field with its per-particle randomisation attached.
+    ///
+    /// <para>Shape copied from shipped data: <c>Embedded ValueVector3 { constantValue, dynamics }</c>,
+    /// where <c>dynamics</c> is a <c>VfxAnimatedVector3fVariableData</c> holding a
+    /// <c>probabilityTables</c> container of <c>VfxProbabilityTableData { keyTimes, keyValues }</c>.
+    /// The legacy <c>(probability, multiplier)</c> pairs map straight onto that - probability becomes
+    /// keyTimes, multiplier becomes keyValues - so <c>*p-velYP1 = (0,1)</c> with
+    /// <c>*p-velYP2 = (1,3)</c> becomes keyTimes [0,1] and keyValues [1,3]: a speed uniformly random
+    /// between one and three times the base.</para>
+    ///
+    /// <para>Three tables are emitted, X/Y/Z positionally, because the container is read by index.</para>
+    /// </summary>
+    private static BinTreeProperty ValueVector3(string field, Vector3 value, TroyProbability? spread)
+    {
+        var inner = new List<BinTreeProperty> { new BinTreeVector3(H("constantValue"), value) };
+        if (spread is not null && !spread.IsEmpty)
+        {
+            var tables = new List<BinTreeProperty>(3);
+            for (int axis = 0; axis < 3; axis++)
+            {
+                var keys = spread.ForAxis(axis);
+                tables.Add(new BinTreeStruct(0, H("VfxProbabilityTableData"), keys.Count == 0
+                    ? Array.Empty<BinTreeProperty>()
+                    : new BinTreeProperty[]
+                    {
+                        new BinTreeContainer(H("keyTimes"), BinPropertyType.F32,
+                            keys.Select(k => (BinTreeProperty)new BinTreeF32(0, k.Probability)).ToArray()),
+                        new BinTreeContainer(H("keyValues"), BinPropertyType.F32,
+                            keys.Select(k => (BinTreeProperty)new BinTreeF32(0, k.Multiplier)).ToArray()),
+                    }));
+            }
+            inner.Add(new BinTreeStruct(H("dynamics"), H("VfxAnimatedVector3fVariableData"),
+                new BinTreeProperty[]
+                {
+                    new BinTreeContainer(H("probabilityTables"), BinPropertyType.Struct, tables),
+                }));
+        }
+        return new BinTreeEmbedded(H(field), H("ValueVector3"), inner);
     }
 
     private static BinTreeProperty ValueFloat(string field, float value) =>

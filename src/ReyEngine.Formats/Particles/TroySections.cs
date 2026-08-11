@@ -111,6 +111,38 @@ public sealed class TroySections
 
     public bool TryGet(uint key, out TroyEntry entry) => ByKey.TryGetValue(key, out entry!);
 
+    /// <summary>A two-component field: section 9 is 2xf32 raw, section 8 is 2xu8 tenths, and the string
+    /// block carries the integer form. Probability-table keys are stored this way.</summary>
+    public bool TryGetVector2(uint key, Func<int, string?>? resolveString, out float a, out float b)
+    {
+        a = b = 0f;
+        if (!ByKey.TryGetValue(key, out var e)) return false;
+        switch (e.Section)
+        {
+            case 9:
+                a = BitConverter.ToSingle(e.Raw, 0);
+                b = BitConverter.ToSingle(e.Raw, 4);
+                return true;
+            case 8:
+                a = e.Raw[0] / 10f;
+                b = e.Raw[1] / 10f;
+                return true;
+            case 12 when resolveString is not null:
+            {
+                string? s = resolveString(e.Raw[0] | (e.Raw[1] << 8));
+                if (s is null) return false;
+                var parts = s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                var c = System.Globalization.CultureInfo.InvariantCulture;
+                if (parts.Length != 2
+                    || !float.TryParse(parts[0], System.Globalization.NumberStyles.Float, c, out a)
+                    || !float.TryParse(parts[1], System.Globalization.NumberStyles.Float, c, out b))
+                    return false;
+                return true;
+            }
+            default: return false;
+        }
+    }
+
     /// <summary>
     /// A three-component field, in world units.
     ///

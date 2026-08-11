@@ -731,6 +731,81 @@ public class TroyBinTests
         Assert.Equal(0.4f, v.Y, 5);
     }
 
+    // ---- M426: per-particle randomisation is what makes an effect three-dimensional -------------
+
+    /// <summary>
+    /// A legacy value is a BASE that each particle multiplies by a draw from a probability table. Written
+    /// without the table, every particle gets the identical velocity from the identical spawn point and
+    /// the effect collapses to a line - which is exactly what "modern is fully working, only the old
+    /// system shows flat particles" looked like, in a renderer that was never at fault.
+    ///
+    /// <para>Keys are numbered suffixes: <c>*p-velYP1 = (0,1)</c>, <c>*p-velYP2 = (1,3)</c> means the
+    /// upward speed is uniformly random between one and three times the base.</para>
+    /// </summary>
+    [Fact]
+    public void ProbabilityTablesBecomeDynamicsOnTheVectorField()
+    {
+        // *p-vel = (0,50,0) in 3xf32, plus a Y probability table as two string pairs
+        var body = new List<byte>();
+        body.AddRange(BitConverter.GetBytes((ushort)((1 << 7) | (1 << 12))));
+        body.AddRange(BitConverter.GetBytes((ushort)1));
+        body.AddRange(BitConverter.GetBytes(TroyHash.FieldKey("flame", "*p-vel")));
+        foreach (float f in new[] { 0f, 50f, 0f }) body.AddRange(BitConverter.GetBytes(f));
+
+        var strings = new[] { "flame", "0 1", "1 3" };
+        var offsets = new List<int>();
+        int off = 0;
+        foreach (var s in strings) { offsets.Add(off); off += s.Length + 1; }
+
+        var refs = new (uint Key, int Off)[]
+        {
+            (TroyHash.EmitterNameKey(1), offsets[0]),
+            (TroyHash.FieldKey("flame", "*p-velYP1"), offsets[1]),
+            (TroyHash.FieldKey("flame", "*p-velYP2"), offsets[2]),
+        }.OrderBy(x => x.Key).ToArray();
+
+        body.AddRange(BitConverter.GetBytes((ushort)refs.Length));
+        foreach (var r in refs) body.AddRange(BitConverter.GetBytes(r.Key));
+        foreach (var r in refs) body.AddRange(BitConverter.GetBytes((ushort)r.Off));
+
+        byte[] raw = Build(strings, body.ToArray());
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+        Assert.True(troy!.HasDecodedBody);
+
+        var e = Assert.Single(troy.Emitters);
+        Assert.Equal(new Vector3(0f, 50f, 0f), e.Velocity);
+        Assert.NotNull(e.VelocitySpread);
+        Assert.Equal(new[] { (0f, 1f), (1f, 3f) }, e.VelocitySpread!.Y);
+        // the Y table stands in for every axis that has none of its own
+        Assert.Empty(e.VelocitySpread.X);
+
+        // and it reaches the emitted bin as dynamics.probabilityTables
+        var result = TroyBinConverter.Convert(troy, "X", "Particles/X");
+        var vel = Assert.IsType<BinTreeEmbedded>(FindEmitterProperty(result.BinBytes, "birthVelocity"));
+        var dyn = Assert.IsType<BinTreeStruct>(vel.Properties[HashAlgorithms.Fnv1a("dynamics")]);
+        var tables = Assert.IsType<BinTreeContainer>(dyn.Properties[HashAlgorithms.Fnv1a("probabilityTables")]);
+        Assert.Equal(3, tables.Elements.Count);   // X, Y, Z positionally
+
+        var y = (BinTreeStruct)tables.Elements[1];
+        var times = (BinTreeContainer)y.Properties[HashAlgorithms.Fnv1a("keyTimes")];
+        var values = (BinTreeContainer)y.Properties[HashAlgorithms.Fnv1a("keyValues")];
+        Assert.Equal(new[] { 0f, 1f }, times.Elements.Cast<BinTreeF32>().Select(x => x.Value));
+        Assert.Equal(new[] { 1f, 3f }, values.Elements.Cast<BinTreeF32>().Select(x => x.Value));
+    }
+
+    /// <summary>A field with no table gets no dynamics at all - an empty probability table would be an
+    /// invented value, and the field is legitimately constant for every particle.</summary>
+    [Fact]
+    public void AFieldWithoutATableGetsNoDynamics()
+    {
+        byte[] raw = Build(new[] { "plain", "DATA/Particles/plain.dds" });
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+        var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
+
+        if (FindEmitterProperty(result.BinBytes, "birthVelocity") is BinTreeEmbedded v)
+            Assert.False(v.Properties.ContainsKey(HashAlgorithms.Fnv1a("dynamics")));
+    }
+
     private static BinTreeProperty? FindEmitterProperty(byte[] bin, string field)
     {
         var tree = new BinTree(new MemoryStream(bin, writable: false));
