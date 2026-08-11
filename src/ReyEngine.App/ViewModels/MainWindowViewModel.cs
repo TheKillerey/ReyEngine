@@ -6048,6 +6048,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SyncTreeHighlight();
         RefreshSelectionVisuals();
         RefreshMeshDetails();
+        OnPropertyChanged(nameof(CanAddTexcoord7));          // M432
+        OnPropertyChanged(nameof(AddTexcoord7Label));
     }
 
     /// <summary>M76: deselect every placeable (particle/sound/prop/probe) — used when the user clicks
@@ -6473,6 +6475,97 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     [RelayCommand]
     private void ClearSelection() => _selection.Clear();
+
+    /// <summary>M432: can the selected meshes be given a Texcoord7 channel? False once they all have one.</summary>
+    public bool CanAddTexcoord7 => _currentMap is not null && _currentMapEntry is not null && _currentMapBytes is not null
+                                   && _selection.Items.Any(m => !m.HasLightmapUv);
+
+    /// <summary>M432: how many of the selected meshes still lack the channel — drives the button label.</summary>
+    public string AddTexcoord7Label => _selection.Count == 0
+        ? "Add Texcoord7"
+        : $"Add Texcoord7 ({_selection.Items.Count(m => !m.HasLightmapUv)})";
+
+    /// <summary>
+    /// M432: give the SELECTED meshes the baked UV set (Texcoord7) without baking a lightmap.
+    ///
+    /// <para>This is not a shortcut around the light baker — it serves a different need. A shader can want
+    /// Texcoord7 as a vertex contract rather than to sample an atlas: <c>Mantis_Env_Baked_PBR</c> declares
+    /// FEATURE_BAKED_PAINT and reads that UV set for BAKED_* samplers supplied by the MATERIAL. Measured:
+    /// all 18 shipped meshes on the only other FEATURE_BAKED_PAINT shader carry Texcoord7, and 0 of the
+    /// 586 in map11's base_srx do. Use "Generate Lightmap Layout" when you want real lightmap UVs.</para>
+    ///
+    /// <para>The UVs are COPIED FROM TEXCOORD0, which is stated rather than derived: valid, in range, and
+    /// coherent with the diffuse. Charts overlap between meshes, so no atlas reference is written.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task AddTexcoord7()
+    {
+        if (_currentMap is not { } map || _currentMapBytes is null || _currentMapEntry is not { } entry)
+        { _log.Warn("MapGeo", "No map is open, so no mesh can be given a Texcoord7 channel."); return; }
+
+        var targets = _selection.Items.Where(m => !m.HasLightmapUv).Select(m => m.Index).ToList();
+        if (targets.Count == 0)
+        {
+            _log.Warn("MapGeo", _selection.Count == 0
+                ? "Select a mesh first — this adds the channel to the selection."
+                : "Every selected mesh already has a Texcoord7 channel.");
+            return;
+        }
+
+        // Rewriting from _currentMapBytes would drop anything not yet saved, so say so instead.
+        if (MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes) || MapContent.AddedMeshes.Count > 0)
+        { _log.Warn("MapGeo", "Save your pending mesh edits first — this rewrites the mapgeo from the saved bytes."); return; }
+        if (!GuardEditable(entry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            var source = _currentMapBytes;
+            var (bytes, result) = await Task.Run(() =>
+            {
+                byte[] b = Formats.MapGeo.MeshUvChannelBuilder.AddTexcoord7(source, targets, out var r);
+                return (b, r);
+            });
+            if (result.MeshesChanged == 0) { _log.Warn("MapGeo", result.Summary); return; }
+
+            // Validate BEFORE saving: the rewrite has to decode again AND actually carry the channel.
+            var check = await Task.Run(() => MapGeoDecoder.Decode(bytes));
+            var wanted = targets.ToHashSet();
+            int carried = check.Meshes.Count(m => wanted.Contains(m.Index) && m.HasLightmapUv);
+            if (carried != result.MeshesChanged)
+            {
+                _log.Error("MapGeo", $"The rewritten mapgeo decoded but only {carried} of {result.MeshesChanged} " +
+                                     "mesh(es) carry the new channel — not saved.");
+                return;
+            }
+
+            // M417: the project FILE wins when the project ships this mapgeo, or the build drops the edit.
+            string savedTo;
+            if (TryWriteToProjectFile(entry, bytes, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = entry.PathHash,
+                    ResolvedPath = entry.IsResolved ? entry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            foreach (var s in result.Skipped.Take(5)) _log.Warn("MapGeo", s);
+            _log.Success("MapGeo", $"{result.Summary} Copied from Texcoord0 — no lightmap texture was assigned. " +
+                                   $"Saved to {savedTo} ({bytes.Length:n0} bytes).");
+            await LoadMapGeoAsync(entry);
+        }
+        catch (Exception ex) { _log.Error("MapGeo", "Could not add the Texcoord7 channel: " + ex.Message); }
+    }
 
     [RelayCommand]
     private async Task SaveMeshMoves()

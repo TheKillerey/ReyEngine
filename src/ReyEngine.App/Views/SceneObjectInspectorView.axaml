@@ -53,6 +53,13 @@
                       Command="{Binding FlipMeshNormalsCommand}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
                       HorizontalAlignment="Left"
                       ToolTip.Tip="Flip this mesh's vertex normals (live preview). For two-sided (cullEnable=false) materials the two-sided lighting already lights both faces, so flipping darkens instead of fixing." />
+        <!-- M432: shaders declaring FEATURE_BAKED_PAINT (Mantis_Env_Baked_PBR) need Texcoord7 as a vertex
+             contract, not as a lightmap. This adds only the channel — the light baker stays the path for
+             real lightmap UVs. -->
+        <Button Content="{Binding AddTexcoord7Label}" Command="{Binding AddTexcoord7Command}"
+                IsEnabled="{Binding CanAddTexcoord7}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
+                HorizontalAlignment="Left"
+                ToolTip.Tip="Add the baked UV set (Texcoord7) to the selected meshes, copied from Texcoord0 — no lightmap, no atlas. Needed by shaders that declare FEATURE_BAKED_PAINT, such as Mantis_Env_Baked_PBR. Saves the rewritten mapgeo." />
       </StackPanel>
     </Border>
 
@@ -104,6 +111,12 @@
           <Button Classes="primary" Content="Save to Mod" Command="{Binding SaveMeshMovesCommand}" FontSize="11" Padding="8,2"
                   IsEnabled="{Binding HasMapMoves}" />
         </StackPanel>
+        <!-- M432: the batch case is the one that matters for FEATURE_BAKED_PAINT shaders — a whole map's
+             worth of meshes needs the channel, not one. -->
+        <Button Content="{Binding AddTexcoord7Label}" Command="{Binding AddTexcoord7Command}"
+                IsEnabled="{Binding CanAddTexcoord7}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
+                HorizontalAlignment="Left"
+                ToolTip.Tip="Add the baked UV set (Texcoord7) to every selected mesh, copied from Texcoord0 — no lightmap, no atlas. Needed by shaders that declare FEATURE_BAKED_PAINT, such as Mantis_Env_Baked_PBR. Saves the rewritten mapgeo." />
       </StackPanel>
     </Border>
 

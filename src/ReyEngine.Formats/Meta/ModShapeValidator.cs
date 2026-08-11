@@ -295,7 +295,8 @@ public static class ModShapeValidator
                     + "declares FEATURE_BAKED_PAINT and therefore reads the baked UV set — but the mesh has "
                     + $"no Texcoord7 (it carries {string.Join(", ", streams.OrderBy(s => s))}). All 18 shipped "
                     + "meshes on the only other FEATURE_BAKED_PAINT shader carry Texcoord7. The map must "
-                    + "supply that stream before this shader can be used on it."));
+                    + "supply that stream before this shader can be used on it — select the mesh and use "
+                    + "\"Add Texcoord7\" in the inspector (M432), which adds the channel without a lightmap bake."));
             }
         }
         return issues;

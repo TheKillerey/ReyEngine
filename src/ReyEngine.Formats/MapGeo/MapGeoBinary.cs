@@ -127,6 +127,31 @@ public sealed class MapGeoBinary
         return newBufId;
     }
 
+    /// <summary>
+    /// M432: add the Texcoord7 channel and NOTHING else — no BakedLight reference, no atlas.
+    ///
+    /// <para>Some shaders need the baked UV set as a VERTEX CONTRACT rather than to sample a lightmap.
+    /// <c>Mantis_Env_Baked_PBR</c> declares FEATURE_BAKED_PAINT and reads that UV set for its
+    /// BAKED_DIFFUSE/NORMAL/RMA samplers, which come from the MATERIAL — so the mesh needs the stream
+    /// but no lightmap texture. All 18 shipped meshes on the only other FEATURE_BAKED_PAINT shader carry
+    /// Texcoord7; map11's base_srx has none, which is why that shader crashed there at load.</para>
+    ///
+    /// <para>Deliberately does not set <see cref="Mesh.BakedLight"/>: pointing it at an atlas that does
+    /// not exist would trade one missing resource for another. Use <see cref="AddLightmapChannel"/> when
+    /// there IS an atlas.</para>
+    /// </summary>
+    public int AddUvChannelOnly(Mesh mesh, ReadOnlySpan<Vector2> uv)
+    {
+        if (uv.Length != mesh.VertexCount)
+            throw new ArgumentException($"uv length {uv.Length} != vertex count {mesh.VertexCount}", nameof(uv));
+        if (MeshHasLightmapUv(mesh))
+            throw new InvalidOperationException("mesh already has a Texcoord7 channel");
+
+        int newBufId = AddUv7Buffer(uv, mesh.VertexBufferIds.Count > 0 ? VertexBuffers[mesh.VertexBufferIds[0]] : null);
+        RewireWithUv7Buffer(mesh, newBufId);
+        return newBufId;
+    }
+
     /// <summary>Attach an EXISTING uv7 buffer (from a previous <see cref="AddLightmapChannel"/>) to
     /// another mesh that shares the same geometry/vertex layout — the instancing case, where one unwrapped
     /// buffer serves many meshes and only the per-mesh scale/bias differs.</summary>
