@@ -34,6 +34,76 @@ public static class ModShapeValidator
     private static readonly uint F_dstColor = HashAlgorithms.Fnv1a("dstColorBlendFactor");
     private static readonly uint F_dstAlpha = HashAlgorithms.Fnv1a("dstAlphaBlendFactor");
 
+    /// <summary>
+    /// M430: the shader contract rules. Both were found by a crash with no useful Riot log, on
+    /// <c>Mantis_Env_Baked_PBR</c> - a shader Riot ships but has no material for, so there was no
+    /// template to copy. Both carry a 0-of-N measurement over every shipped WAD.
+    /// </summary>
+    public static IReadOnlyList<BinIssue> ValidateAgainstShaders(
+        BinTree tree, Func<uint, Shaders.LeagueShaderDef?> shaderOf, Func<uint, string?>? resolveName = null)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(shaderOf);
+        var issues = new List<BinIssue>();
+
+        foreach (var (hash, o) in tree.Objects)
+        {
+            if (o.ClassHash != MaterialClass) continue;
+            string name = o.Properties.TryGetValue(F_name, out var np) && np is BinTreeString ns && ns.Value.Length > 0
+                ? ns.Value : resolveName?.Invoke(hash) ?? $"0x{hash:x8}";
+
+            uint shaderHash = 0;
+            foreach (var pass in Passes(o))
+                if (pass.Properties.TryGetValue(HashAlgorithms.Fnv1a("shader"), out var sp)
+                    && sp is BinTreeObjectLink link) { shaderHash = link.Value; break; }
+            if (shaderHash == 0 || shaderOf(shaderHash) is not { } shader) continue;
+
+            // ---- a parameter the shader does not declare ----------------------------------------
+            // Measured: of 31,954 shipped materials that set any paramValue, 0 set one their shader
+            // does not declare. A leftover TintColor from a previous shader is how the Mantis test
+            // material ended up here.
+            if (o.Properties.TryGetValue(HashAlgorithms.Fnv1a("paramValues"), out var pv)
+                && pv is BinTreeContainer pc)
+            {
+                var declared = new HashSet<string>(shader.Parameters.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+                foreach (var el in pc.Elements)
+                    if (el is BinTreeStruct s
+                        && s.Properties.TryGetValue(F_name, out var pn) && pn is BinTreeString ps
+                        && !declared.Contains(ps.Value))
+                        issues.Add(new BinIssue("undeclared-parameter", name,
+                            $"sets parameter '{ps.Value}', which '{shader.Name}' does not declare. Riot ships "
+                            + "none (0 of 31,954 materials with parameters) — usually a leftover from the shader "
+                            + "this material used before.", hash, o.ClassHash));
+            }
+
+            // ---- a shader with staticSwitches always has a switches container ---------------------
+            if (shader.StaticSwitches.Count > 0
+                && !(o.Properties.TryGetValue(HashAlgorithms.Fnv1a("switches"), out var sw)
+                     && sw is BinTreeContainer sc && sc.Elements.Count > 0))
+                issues.Add(new BinIssue("missing-switches", name,
+                    $"'{shader.Name}' declares {shader.StaticSwitches.Count} static switch(es) "
+                    + $"({string.Join(", ", shader.StaticSwitches)}) but the material has no switches container. "
+                    + "All 27,295 shipped materials on a switch-declaring shader carry one.",
+                    hash, o.ClassHash));
+
+            // ---- a sampler the shader does not declare -------------------------------------------
+            if (o.Properties.TryGetValue(F_samplers, out var svp) && svp is BinTreeContainer svc
+                && shader.Textures.Count > 0)
+            {
+                var declaredTex = new HashSet<string>(shader.Textures.Select(t => t.Name), StringComparer.OrdinalIgnoreCase);
+                foreach (var el in svc.Elements)
+                    if (el is BinTreeStruct s
+                        && s.Properties.TryGetValue(HashAlgorithms.Fnv1a("TextureName"), out var tn)
+                        && tn is BinTreeString ts && !declaredTex.Contains(ts.Value))
+                        issues.Add(new BinIssue("undeclared-sampler", name,
+                            $"binds sampler '{ts.Value}', which '{shader.Name}' does not declare. The shader "
+                            + "will never read it, and it is usually a leftover from a previous shader.",
+                            hash, o.ClassHash));
+            }
+        }
+        return issues;
+    }
+
     /// <summary>Shape rules over one already-parsed .bin. <paramref name="raw"/> is the file's bytes,
     /// needed for the null-form check, which is a wire-level question the parsed tree cannot answer.</summary>
     public static IReadOnlyList<BinIssue> ValidateBin(BinTree tree, byte[] raw, Func<uint, string?>? resolveName = null)

@@ -9,14 +9,25 @@ public sealed record MaterialShaderConversionResult(
     int ExistingCompatibleSamplers,
     int AddedSamplers,
     int PreservedTexturePaths,
-    IReadOnlyList<MaterialBinding> ChangedMaterials)
+    IReadOnlyList<MaterialBinding> ChangedMaterials,
+    /// <summary>M430: parameters the TARGET shader does not declare, removed. Leaving them behind is a
+    /// shape Riot never ships (0 of 31,954 materials) and it is what broke the Mantis test material.</summary>
+    int DroppedParameters = 0,
+    int AddedParameters = 0,
+    /// <summary>Switches created because the target declares staticSwitches. Every one of the 27,295
+    /// shipped materials on such a shader carries a switches container.</summary>
+    int AddedSwitches = 0)
 {
     public string Summary =>
         $"Converted {ConvertedMaterials:n0} of {MatchedMaterials:n0} material(s); "
         + $"kept {ExistingCompatibleSamplers:n0} matching sampler binding(s), added {AddedSamplers:n0} missing sampler(s)"
         + (PreservedTexturePaths > 0
-            ? $", and copied {PreservedTexturePaths:n0} compatible texture path(s) into renamed slots."
-            : ".");
+            ? $", copied {PreservedTexturePaths:n0} compatible texture path(s) into renamed slots"
+            : "")
+        + (DroppedParameters > 0 ? $", dropped {DroppedParameters:n0} parameter(s) the target does not declare" : "")
+        + (AddedParameters > 0 ? $", added {AddedParameters:n0} parameter(s) from the target shader" : "")
+        + (AddedSwitches > 0 ? $", added {AddedSwitches:n0} switch(es)" : "")
+        + ".";
 }
 
 /// <summary>
@@ -56,6 +67,7 @@ public static class MaterialShaderConverter
             .ToList();
         var changed = new List<MaterialBinding>(matches.Count);
         int existing = 0, added = 0, preserved = 0;
+        int droppedParams = 0, addedParams = 0, addedSwitches = 0;
 
         foreach (var material in matches)
         {
@@ -80,11 +92,63 @@ public static class MaterialShaderConverter
                 added++;
                 if (!string.IsNullOrWhiteSpace(compatible)) preserved++;
             }
+
+            ReconcileParameters(material, targetDefinition, ref droppedParams, ref addedParams);
+            ReconcileSwitches(material, targetDefinition, ref addedSwitches);
             changed.Add(material);
         }
 
         return new MaterialShaderConversionResult(
-            matches.Count, changed.Count, existing, added, preserved, changed);
+            matches.Count, changed.Count, existing, added, preserved, changed,
+            droppedParams, addedParams, addedSwitches);
+    }
+
+    /// <summary>
+    /// M430: bring <c>paramValues</c> in line with the target shader.
+    ///
+    /// <para>Converting a material used to keep its parameters byte-for-byte, which strands the SOURCE
+    /// shader's parameters on a target that never declares them. Measured over every shipped WAD: of
+    /// <b>31,954</b> materials that set at least one paramValue, <b>0</b> set one their shader does not
+    /// declare. That is the same 0-of-N standard that identified the Map453 defects, and it is exactly
+    /// what the Mantis_Env_Baked_PBR test material hit - a leftover <c>TintColor</c> from
+    /// DefaultEnv_Flat on a shader whose 39 parameters do not include it.</para>
+    ///
+    /// <para>Only runs when the target definition is known. Without it there is nothing to reconcile
+    /// against and silently dropping parameters would be worse than leaving them.</para>
+    /// </summary>
+    private static void ReconcileParameters(
+        MaterialBinding material, LeagueShaderDef? target, ref int dropped, ref int addedParams)
+    {
+        if (target is null || !material.CanEditParameters) return;
+        var declared = new HashSet<string>(target.Parameters.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var p in material.Parameters.ToArray())
+            if (!declared.Contains(p.Name) && material.RemoveParameter(p)) dropped++;
+
+        var present = new HashSet<string>(material.Parameters.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var pd in target.Parameters)
+        {
+            if (present.Contains(pd.Name)) continue;
+            // the shader's own default, so the material starts from what Riot authored rather than zero
+            if (material.SetVectorParameter(pd.Name, new System.Numerics.Vector4(pd.X, pd.Y, pd.Z, pd.W)) is not null)
+                addedParams++;
+        }
+    }
+
+    /// <summary>
+    /// M430: a material on a shader that declares staticSwitches always carries a <c>switches</c>
+    /// container - <b>27,295 of 27,295</b> shipped materials, with zero exceptions. The Mantis test
+    /// material had none, because the conversion path never created one.
+    /// </summary>
+    private static void ReconcileSwitches(MaterialBinding material, LeagueShaderDef? target, ref int addedSwitches)
+    {
+        if (target is null || target.StaticSwitches.Count == 0 || !material.CanEditSwitches) return;
+        var present = new HashSet<string>(material.Switches.Keys, StringComparer.OrdinalIgnoreCase);
+        foreach (string name in target.StaticSwitches)
+        {
+            if (present.Contains(name)) continue;
+            if (material.AddSwitch(name) is not null) addedSwitches++;
+        }
     }
 
     /// <summary>Find an authored texture serving the same conventional role as a target sampler.</summary>

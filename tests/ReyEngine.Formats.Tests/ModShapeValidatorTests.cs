@@ -306,4 +306,105 @@ public class ModShapeValidatorTests
             "broken.mapgeo", new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }, _ => null));
         Assert.Equal("mapgeo-unreadable", issue.Category);
     }
+
+    // ---- M430: the shader contract ---------------------------------------------------------------
+
+    private static ReyEngine.Formats.Shaders.LeagueShaderDef Shader(
+        string name, string[] parameters, string[] switches, string[] textures)
+        => new(name, "StaticMesh",
+            textures.Select(t => new ReyEngine.Formats.Shaders.ShaderTextureDef(t, "")).ToList(),
+            parameters.Select(p => new ReyEngine.Formats.Shaders.ShaderParamDef(p, 0, 0, 0, 0)).ToList(),
+            switches.ToList());
+
+    /// <summary>
+    /// A parameter the linked shader does not declare. Measured over every shipped WAD: of 31,954
+    /// materials that set any paramValue, ZERO set one their shader does not declare. This is what a
+    /// shader swap used to leave behind - a TintColor from DefaultEnv_Flat stranded on
+    /// Mantis_Env_Baked_PBR, whose 39 parameters do not include it, and the map crashed at load with
+    /// nothing useful in Riot's log.
+    /// </summary>
+    [Fact]
+    public void AParameterTheShaderDoesNotDeclareIsReported()
+    {
+        var tree = Bin();
+        var material = tree.Objects.Values.Single();
+        material.Properties[H("paramValues")] = new BinTreeUnorderedContainer(
+            H("paramValues"), BinPropertyType.Embedded, new BinTreeProperty[]
+            {
+                Element(BinPropertyType.Embedded, "StaticMaterialShaderParamDef",
+                    new BinTreeString(H("name"), "TintColor")),
+            });
+
+        var shader = Shader("Shaders/StaticMesh/Mantis_Env_Baked_PBR",
+            new[] { "WaterFlowTiling", "CausticsStrength" }, Array.Empty<string>(), Array.Empty<string>());
+        var issues = ModShapeValidator.ValidateAgainstShaders(
+            tree, h => h == H("Shaders/StaticMesh/DefaultEnv") ? shader : null);
+
+        var issue = Assert.Single(issues, i => i.Category == "undeclared-parameter");
+        Assert.Contains("TintColor", issue.Detail);
+        Assert.Contains("0 of 31,954", issue.Detail);
+    }
+
+    /// <summary>A declared parameter is fine, and must not be reported.</summary>
+    [Fact]
+    public void ADeclaredParameterIsClean()
+    {
+        var tree = Bin();
+        tree.Objects.Values.Single().Properties[H("paramValues")] = new BinTreeUnorderedContainer(
+            H("paramValues"), BinPropertyType.Embedded, new BinTreeProperty[]
+            {
+                Element(BinPropertyType.Embedded, "StaticMaterialShaderParamDef",
+                    new BinTreeString(H("name"), "WaterFlowTiling")),
+            });
+
+        var shader = Shader("S", new[] { "WaterFlowTiling" }, Array.Empty<string>(), Array.Empty<string>());
+        Assert.DoesNotContain(
+            ModShapeValidator.ValidateAgainstShaders(tree, _ => shader),
+            i => i.Category == "undeclared-parameter");
+    }
+
+    /// <summary>Every one of the 27,295 shipped materials on a shader that declares staticSwitches
+    /// carries a switches container. The Mantis test material had none.</summary>
+    [Fact]
+    public void AMissingSwitchesContainerIsReportedWhenTheShaderDeclaresSwitches()
+    {
+        var shader = Shader("S", Array.Empty<string>(), new[] { "USE_WATER", "USE_VOID" }, Array.Empty<string>());
+        var issue = Assert.Single(
+            ModShapeValidator.ValidateAgainstShaders(Bin(), _ => shader),
+            i => i.Category == "missing-switches");
+        Assert.Contains("USE_VOID", issue.Detail);
+
+        // and a shader with no switches must not produce the finding
+        var plain = Shader("S", Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
+        Assert.DoesNotContain(
+            ModShapeValidator.ValidateAgainstShaders(Bin(), _ => plain),
+            i => i.Category == "missing-switches");
+    }
+
+    /// <summary>A sampler binding the shader never declares is dead weight the shader cannot read -
+    /// the other half of what a shader swap strands.</summary>
+    [Fact]
+    public void ASamplerTheShaderDoesNotDeclareIsReported()
+    {
+        // real materials name the sampler with TextureName - 100% of 102,406 shipped samplers do
+        var tree = Bin();
+        tree.Objects.Values.Single().Properties[H("samplerValues")] = new BinTreeUnorderedContainer(
+            H("samplerValues"), BinPropertyType.Embedded, new BinTreeProperty[]
+            {
+                Element(BinPropertyType.Embedded, "StaticMaterialShaderSamplerDef",
+                    new BinTreeString(H("TextureName"), "LeftoverNormal"),
+                    new BinTreeString(H("texturePath"), "ASSETS/x.tex")),
+            });
+
+        var shader = Shader("S", Array.Empty<string>(), Array.Empty<string>(), new[] { "BAKED_DIFFUSE_TEXTURE" });
+        var issue = Assert.Single(
+            ModShapeValidator.ValidateAgainstShaders(tree, _ => shader),
+            i => i.Category == "undeclared-sampler");
+        Assert.Contains("LeftoverNormal", issue.Detail);
+    }
+
+    /// <summary>No shader definition means no contract to check against, and nothing is claimed.</summary>
+    [Fact]
+    public void AnUnknownShaderProducesNoContractFindings()
+        => Assert.Empty(ModShapeValidator.ValidateAgainstShaders(Bin(), _ => null));
 }

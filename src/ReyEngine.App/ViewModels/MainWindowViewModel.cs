@@ -8970,6 +8970,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                         var shape = Formats.Meta.ModShapeValidator.ValidateBin(tree, bytes, ResolveBinName);
                         if (shape.Count > 0)
                             report = report with { Issues = report.Issues.Concat(shape).ToList() };
+
+                        // M430: the shader CONTRACT rules, when a shader catalog is loaded. These are the
+                        // checks that would have caught the Mantis_Env_Baked_PBR crash - a shader Riot
+                        // ships but has no material for, so there was no template to copy from.
+                        if (MaterialEditor.Catalog is { } catalog)
+                        {
+                            var byHash = catalog.Shaders.ToDictionary(s => HashAlgorithms.Fnv1a(s.Name), s => s);
+                            var contract = Formats.Meta.ModShapeValidator.ValidateAgainstShaders(
+                                tree, h => byHash.GetValueOrDefault(h), ResolveBinName);
+                            if (contract.Count > 0)
+                                report = report with { Issues = report.Issues.Concat(contract).ToList() };
+                        }
                         if (tree.Objects.Values.Any(o => o.ClassHash == materialClass))
                             materialTrees.Add(tree);
                     }
