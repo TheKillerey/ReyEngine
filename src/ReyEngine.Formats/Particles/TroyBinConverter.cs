@@ -171,9 +171,14 @@ public static class TroyBinConverter
                 : new Vector3(DefaultScale, DefaultScale, DefaultScale);
             props.Add(ValueVector3("birthScale0", scale, e.ScaleSpread));
 
-            props.Add(e.MeshPath is { } mesh
-                ? MeshPrimitive(mesh, troy.SkeletonPath)
-                : new BinTreeStruct(H("primitive"), H("VfxPrimitiveArbitraryQuad"), Array.Empty<BinTreeProperty>()));
+            // PRIMITIVE. A mesh emitter names its geometry; everything else gets NO primitive property
+            // at all, which is the camera-facing billboard. Writing VfxPrimitiveArbitraryQuad here was
+            // the flat-particle bug: the renderer branches on it as
+            //     right = uArbitraryQuad != 0 ? placedRight : uCamRight
+            // so an "arbitrary quad" is locked to a fixed WORLD orientation instead of facing the
+            // camera. Every converted particle was therefore a plane pinned to one direction, which is
+            // why orbiting the preview turned an effect edge-on while modern systems stayed correct.
+            if (e.MeshPath is { } mesh) props.Add(MeshPrimitive(mesh, troy.SkeletonPath));
 
             if (!string.IsNullOrWhiteSpace(e.TexturePath))
                 props.Add(new BinTreeString(H("texture"), ToTargetPath(e.TexturePath!)));
@@ -422,12 +427,11 @@ public static class TroyBinConverter
             {
                 new BinTreeVector3(H("constantValue"), new Vector3(DefaultScale, DefaultScale, 0f)),
             }),
-            // a mesh emitter renders its geometry; everything else is the billboard quad the legacy
-            // sprite emitters used
-            note.MeshPath is { } mesh
-                ? MeshPrimitive(mesh, skeletonPath)
-                : new BinTreeStruct(H("primitive"), H("VfxPrimitiveArbitraryQuad"), Array.Empty<BinTreeProperty>()),
         };
+
+        // See ConvertDecoded: NO primitive is the camera-facing billboard, which is what a legacy sprite
+        // emitter is. Naming VfxPrimitiveArbitraryQuad locks the quad to a fixed world orientation.
+        if (note.MeshPath is { } mesh) props.Add(MeshPrimitive(mesh, skeletonPath));
 
         if (!string.IsNullOrWhiteSpace(note.TexturePath))
             props.Add(new BinTreeString(H("texture"), ToTargetPath(note.TexturePath!)));
