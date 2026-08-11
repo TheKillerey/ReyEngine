@@ -806,6 +806,36 @@ public class TroyBinTests
             Assert.False(v.Properties.ContainsKey(HashAlgorithms.Fnv1a("dynamics")));
     }
 
+    /// <summary>
+    /// M429: a flipbook needs the ATLAS GRID, not just a frame count. The renderer reads texDiv as a
+    /// plain Vector2 and defaults it to (1,1), which samples the whole sheet as one frame - so numFrames
+    /// on its own animates nothing. 1,487 legacy emitters carry *p-texdiv, with values like (2,2) and
+    /// (4,4).
+    /// </summary>
+    [Fact]
+    public void TheFlipbookAtlasGridIsWritten()
+    {
+        var body = new List<byte>();
+        body.AddRange(BitConverter.GetBytes((ushort)((1 << 8) | (1 << 12))));
+        body.AddRange(BitConverter.GetBytes((ushort)1));                     // bit8: 2xu8 tenths
+        body.AddRange(BitConverter.GetBytes(TroyHash.FieldKey("flame", "*p-texdiv")));
+        body.AddRange(new byte[] { 40, 40 });                                // (4.0, 4.0)
+        body.AddRange(BitConverter.GetBytes((ushort)1));                     // bit12: the emitter name
+        body.AddRange(BitConverter.GetBytes(TroyHash.EmitterNameKey(1)));
+        body.AddRange(BitConverter.GetBytes((ushort)0));
+
+        byte[] raw = Build(new[] { "flame" }, body.ToArray());
+        Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
+        Assert.Equal(new Vector2(4f, 4f), Assert.Single(troy!.Emitters).TexDiv);
+
+        var result = TroyBinConverter.Convert(troy, "X", "Particles/X");
+        var div = Assert.IsType<BinTreeVector2>(FindEmitterProperty(result.BinBytes, "texDiv"));
+        Assert.Equal(new Vector2(4f, 4f), div.Value);
+        // and the resolver picks it up, or the renderer would still sample the whole sheet
+        Assert.Equal(new Vector2(4f, 4f),
+            VfxSystemResolver.ExtractAll(result.BinBytes).Values.Single().Emitters[0].TexDiv);
+    }
+
     private static BinTreeProperty? FindEmitterProperty(byte[] bin, string field)
     {
         var tree = new BinTree(new MemoryStream(bin, writable: false));

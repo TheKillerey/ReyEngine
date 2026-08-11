@@ -250,6 +250,11 @@ public sealed class TroyBinFile
             return p.IsEmpty ? null : p;
         }
 
+        System.Numerics.Vector2? Vec2(string emitter, string field) =>
+            sections.TryGetVector2(TroyHash.FieldKey(emitter, field),
+                o => offsets.TryGetValue(o, out var s) ? s : null, out float a, out float b)
+                ? new System.Numerics.Vector2(a, b) : null;
+
         IReadOnlyList<TroyEmitRotation> Rotations(string emitter)
         {
             var list = new List<TroyEmitRotation>();
@@ -298,7 +303,8 @@ public sealed class TroyBinFile
                 Spread(name, TroyFields.Velocity3),
                 Spread(name, TroyFields.Offset3),
                 Spread(name, TroyFields.Scale),
-                Rotations(name)));
+                Rotations(name),
+                Vec2(name, TroyFields.TexDiv)));
         }
         Emitters = emitters;
     }

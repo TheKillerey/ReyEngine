@@ -188,10 +188,18 @@ public static class TroyBinConverter
             // a flipbook sheet drawn as one sprite is what made converted effects look like blobs.
             // frameRate is a PLAIN F32 in the modern format (the resolver reads it with GetF32), not a
             // ValueFloat wrapper - wrapping it meant nothing ever read it.
+            // texDiv is the ATLAS GRID and is what actually makes a flipbook animate: the renderer
+            // reads it as a plain Vector2 and defaults it to (1,1), which samples the entire sheet as a
+            // single frame. numFrames on its own animates nothing, which is why the flipbooks stayed
+            // static. Written whenever the legacy file has it, flipbook or not, since a (1,1) grid is
+            // harmless and 1,487 emitters carry the field.
+            if (e.TexDiv is { } div && div.X >= 1f && div.Y >= 1f)
+                props.Add(new BinTreeVector2(H("texDiv"), div));
             if (e.IsFlipbook)
             {
                 props.Add(new BinTreeU16(H("numFrames"), (ushort)e.FrameCount!.Value));
                 if (e.FrameRate is { } fps && fps > 0f) props.Add(new BinTreeF32(H("frameRate"), fps));
+                if (e.StartFrame is { } sf && sf > 0) props.Add(new BinTreeU16(H("startFrame"), (ushort)sf));
             }
 
             // ---- M423: motion and spawn volume ---------------------------------------------------

@@ -316,6 +316,10 @@ public static class TroyFields
     public const string NumFrames = "*p-numframes";
     public const string FrameRate = "*p-framerate";
     public const string StartFrame = "*p-startframe";
+    /// <summary>M429: the flipbook ATLAS GRID - (2,2) means a 2x2 sheet of 4 frames. Present on 1,487
+    /// emitters. Without it the renderer's texDiv defaults to (1,1) and samples the whole sheet as one
+    /// frame, so numFrames alone animates nothing.</summary>
+    public const string TexDiv = "*p-texdiv";
     public const string ParticleType = "*p-type";
     public const string QuadRotation = "*p-quadrot";
     public const string RotationVelocity = "*p-rotvel";
