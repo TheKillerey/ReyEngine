@@ -32,7 +32,8 @@ public sealed record TroyEmitter(
     Vector3? WorldAcceleration,
     Vector3? Offset,
     Vector3? Drag,
-    Vector3? OrbitalVelocity)
+    Vector3? OrbitalVelocity,
+    Vector3? ScaleVector)
 {
     /// <summary>An <c>*e-life</c> of -1 means the emitter runs forever.
     /// Torches, auras and buff loops all use it.</summary>

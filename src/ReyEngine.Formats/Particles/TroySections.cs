@@ -112,20 +112,23 @@ public sealed class TroySections
     public bool TryGet(uint key, out TroyEntry entry) => ByKey.TryGetValue(key, out entry!);
 
     /// <summary>
-    /// A three-component field in RAW world units.
+    /// A three-component field, in world units.
     ///
-    /// <para><b>Only the unambiguous encodings are accepted.</b> A vec3 appears in three forms: the
-    /// 3xf32 section (bit 7), the string block as <c>"x y z"</c>, and the 3xu8 section (bit 6). The
-    /// first two are raw world units and agree with each other - <c>*p-vel</c> 3xf32 has a median
-    /// magnitude of 10 and a p90 of 800, and its string form reads "0 320 0", "300 0 0". The 3xu8 form
-    /// is NOT accepted: whether it is tenths or raw is unresolved, and the two readings differ by 10x.
-    /// <c>*p-scale</c> is the clearest warning - its 3xu8 median is 24 and its 3xf32 median is 60, which
-    /// reconcile as raw but not as tenths. Emitting a wrong scale factor is silent, so those entries are
-    /// skipped rather than guessed.</para>
+    /// <para>The same ladder as the scalars, one arity up: section 7 is 3xf32 raw, section 6 is 3xu8
+    /// DIVIDED BY 10, and the string block carries the integer form as <c>"x y z"</c> (98.3% of
+    /// three-token strings are all-integer, because no raw multi-component byte section exists).</para>
     ///
-    /// <para>Coverage cost of that decision, measured: <c>*p-vel</c> 736 of 1,428 entries usable,
-    /// <c>*p-offset</c> 965 of 2,473, <c>*p-worldaccel</c> 300 of 505 - before the string form, which
-    /// <paramref name="resolveString"/> adds.</para>
+    /// <para><b>Section 6 is tenths, and the witness is unanswerable:</b> <c>*e-rotation1-axis</c> is
+    /// stored as <c>(0,10,0)</c> 261 times and as the string <c>"0 1 0"</c> 117 times. A rotation axis
+    /// is a unit vector, so 10 means 1.0. <c>*p-drag</c> agrees - <c>(10,10,10)</c> x135 against
+    /// <c>"1 1 1"</c> x36 - as does <c>*p-offset</c> with <c>(0,100,0)</c> against <c>"0 10 0"</c>.
+    /// An earlier version of this reader refused section 6 on the grounds that tenths-versus-raw was
+    /// unresolved, which discarded 30.6% of all vec3 entries; the median comparison behind that
+    /// decision was a selection artefact, since truncating section 6 at 25.5 mechanically raises the
+    /// f32 median.</para>
+    ///
+    /// <para>A scalar authored for a vector field is promoted to <c>(v,v,v)</c>. That is not a
+    /// convenience: <c>*p-scale</c> has 954 scalar entries of 4,042, <c>*p-quadrot</c> 503 of 2,721.</para>
     /// </summary>
     public bool TryGetVector3(uint key, Func<int, string?>? resolveString, out System.Numerics.Vector3 value)
     {
@@ -138,6 +141,17 @@ public sealed class TroySections
                 BitConverter.ToSingle(e.Raw, 0),
                 BitConverter.ToSingle(e.Raw, 4),
                 BitConverter.ToSingle(e.Raw, 8));
+            return true;
+        }
+        if (e.Section == 6)
+        {
+            value = new System.Numerics.Vector3(e.Raw[0] / 10f, e.Raw[1] / 10f, e.Raw[2] / 10f);
+            return true;
+        }
+        // a scalar standing in for a vector - same ladder, promoted
+        if (e.Section is 1 or 2 or 3 or 4 or 5 && TryGetScalar(key, out float promoted))
+        {
+            value = new System.Numerics.Vector3(promoted, promoted, promoted);
             return true;
         }
         if (e.Section == 12 && resolveString is not null)
@@ -155,7 +169,6 @@ public sealed class TroySections
             value = new System.Numerics.Vector3(x, y, z);
             return true;
         }
-        // section 6 (3xu8) deliberately not read - see the summary
         return false;
     }
 
@@ -169,39 +182,42 @@ public sealed class TroySections
     }
 
     /// <summary>
-    /// A scalar field as a float, with the per-field scaling applied.
+    /// A scalar field as a float.
     ///
-    /// <para><b>Scaling is a property of the FIELD, not of the section</b>, and that distinction was
-    /// contested until it was measured. Continuous fields store tenths in the u8 sections and ESCAPE to
-    /// f32 when a value will not fit 0..25.5 in 0.1 steps - <c>*p-life</c> is u8 [0..215] (0..21.5s)
-    /// with an f32 witness reaching 1e7, and <c>*e-rate</c> is u8 [1..250] (0.1..25/s) with an f32
-    /// witness reaching 3,400. Count and enum fields never escape and are raw: <c>*p-numframes</c> is
-    /// [2..36] flipbook frames, <c>*p-type</c> is [2..11]. <c>*p-framerate</c> settles it in the other
-    /// direction - its f32 witness is [26..60], which the tenths reading [0.2..24] does not overlap, so
-    /// it is raw too. Applying a blanket /10 would have made every count and enum ten times too small.</para>
+    /// <para><b>Scaling belongs to the SECTION, not to the field.</b> An earlier reading of this format
+    /// had it the other way round, with a per-field allowlist of "tenths" fields; that was wrong and the
+    /// encoder turns out to be a plain minimal-width ladder keyed on the authored literal:</para>
+    ///
+    /// <list type="table">
+    ///   <item><term>integer 0 or 1</term><description>section 5, one bit, raw</description></item>
+    ///   <item><term>integer 2..255</term><description>section 4, u8, RAW</description></item>
+    ///   <item><term>integer outside that</term><description>section 3, i16, raw</description></item>
+    ///   <item><term>decimal n/10, n &lt;= 255</term><description>section 2, u8, DIVIDED BY 10</description></item>
+    ///   <item><term>anything else</term><description>section 1, f32, raw</description></item>
+    /// </list>
+    ///
+    /// <para><b>Two falsifiable predictions, both measured to hold corpus-wide.</b> Section 4 holds a 0
+    /// or a 1 in exactly <b>0 of 7,387</b> entries (its minimum value is 2) - because those go to the
+    /// one-bit section instead. Section 3 holds a value in 2..255 in exactly <b>0 of 1,187</b> entries -
+    /// because section 4 already covers that range. Neither would be true of a per-field scheme.</para>
+    ///
+    /// <para>The old per-field allowlist applied its /10 to sections 2 AND 4 alike, which decoded 1,905
+    /// section-4 entries ten times too small - 979 emission rates, 428 scales, 190 particle lifetimes.
+    /// The apparent per-field evidence was a confound: pooling sections 2 and 4 as "u8" mixed a tenths
+    /// section with a raw one.</para>
     /// </summary>
-    public bool TryGetScalar(uint key, bool tenths, out float value)
+    public bool TryGetScalar(uint key, out float value)
     {
         value = 0f;
         if (!ByKey.TryGetValue(key, out var e)) return false;
         switch (e.Section)
         {
-            case 2:
-            case 4:
-                value = tenths ? e.Raw[0] / 10f : e.Raw[0];
-                return true;
-            case 1:
-                value = BitConverter.ToSingle(e.Raw, 0);
-                return true;
-            case 3:
-                // the i16 section reads RAW - measured values -1, 360, 1000, 10000, 25000, 32767
-                value = BitConverter.ToInt16(e.Raw, 0);
-                return true;
-            case 5:
-                value = e.Raw[0];
-                return true;
-            default:
-                return false;
+            case 1: value = BitConverter.ToSingle(e.Raw, 0); return true;
+            case 2: value = e.Raw[0] / 10f; return true;       // decimal tenths
+            case 3: value = BitConverter.ToInt16(e.Raw, 0); return true;
+            case 4: value = e.Raw[0]; return true;             // integer, raw
+            case 5: value = e.Raw[0]; return true;             // 0 or 1
+            default: return false;
         }
     }
 }
@@ -271,7 +287,9 @@ public static class TroyFields
     public const string ParticleType = "*p-type";
     public const string QuadRotation = "*p-quadrot";
     public const string RotationVelocity = "*p-rotvel";
-    public const string BindWeight = "*p-bindweight";
+    // measured: "*p-bindweight" resolves 0 keys in 0 files; the real name is *p-bindtoemitter
+    // (785 files, 2,443 keys). A bind weight of 1 pins particles to the emitter and cancels velocity.
+    public const string BindToEmitter = "*p-bindtoemitter";
     // M423: three-component motion and shape fields, measured to be genuine vec3s
     public const string Velocity3 = "*p-vel";
     public const string Acceleration3 = "*p-accel";
@@ -280,16 +298,4 @@ public static class TroyFields
     public const string Drag3 = "*p-drag";
     public const string OrbitalVelocity3 = "*p-orbitvel";
 
-    /// <summary>Fields measured to store tenths in the u8 sections (they have an f32 witness whose
-    /// range the tenths reading overlaps).</summary>
-    private static readonly HashSet<string> TenthsFields = new(StringComparer.Ordinal)
-    {
-        ParticleLife, EmitterLife, EmitterRate, Scale, RotationVelocity, QuadRotation,
-        BindWeight, Drag, Velocity, Acceleration,
-    };
-
-    /// <summary>Whether a field's u8 encoding means tenths. Counts and enums return false - measured:
-    /// <c>*p-numframes</c> [2..36], <c>*p-type</c> [2..11], <c>*p-startframe</c> [2..15] never escape to
-    /// f32, and <c>*p-framerate</c>'s f32 witness [26..60] rules the tenths reading out.</summary>
-    public static bool IsTenths(string field) => TenthsFields.Contains(field);
 }

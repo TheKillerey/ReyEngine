@@ -606,11 +606,9 @@ public class TroyBinTests
         Assert.Equal(2, s!.ByKey.Count);
         Assert.True(s.TryGetStringOffset(0x11223344u, out int off));
         Assert.Equal(7, off);
-        // scaling is per FIELD: the same u8 reads 4.5 as tenths and 45 raw
-        Assert.True(s.TryGetScalar(0xAABBCCDDu, tenths: true, out float tenths));
+        // section 2 is decimal tenths, so 45 decodes as 4.5
+        Assert.True(s.TryGetScalar(0xAABBCCDDu, out float tenths));
         Assert.Equal(4.5f, tenths, 4);
-        Assert.True(s.TryGetScalar(0xAABBCCDDu, tenths: false, out float raw));
-        Assert.Equal(45f, raw, 4);
     }
 
     /// <summary>A body that does not consume exactly is rejected rather than half-read — that exactness
@@ -658,20 +656,29 @@ public class TroyBinTests
     }
 
     /// <summary>
-    /// Scaling is a property of the FIELD, not of the section. Continuous fields store tenths in the u8
-    /// sections and escape to f32 when a value will not fit; counts and enums never escape and are raw.
-    /// A blanket /10 would make every frame count ten times too small.
+    /// Scaling belongs to the SECTION, not the field. An earlier reading had a per-field "tenths"
+    /// allowlist, which applied its /10 to sections 2 AND 4 alike and decoded 1,905 section-4 entries
+    /// ten times too small - 979 emission rates among them. The encoder is a minimal-width ladder:
+    /// section 2 is decimal tenths, section 4 is a raw integer.
     /// </summary>
-    [Theory]
-    [InlineData("*p-life", true)]
-    [InlineData("*e-rate", true)]
-    [InlineData("*p-scale", true)]
-    [InlineData("*p-numframes", false)]     // [2..36] raw flipbook frames
-    [InlineData("*p-type", false)]          // [2..11] raw enum
-    [InlineData("*p-framerate", false)]     // f32 witness [26..60] rules tenths out
-    [InlineData("*p-startframe", false)]
-    public void ScalingIsAPerFieldProperty(string field, bool tenths)
-        => Assert.Equal(tenths, TroyFields.IsTenths(field));
+    [Fact]
+    public void SectionTwoIsTenthsAndSectionFourIsRaw()
+    {
+        var body = new List<byte>();
+        body.AddRange(BitConverter.GetBytes((ushort)((1 << 2) | (1 << 4))));
+        body.AddRange(BitConverter.GetBytes((ushort)1));
+        body.AddRange(BitConverter.GetBytes(0xAAu));
+        body.Add(45);                                   // section 2 -> 4.5
+        body.AddRange(BitConverter.GetBytes((ushort)1));
+        body.AddRange(BitConverter.GetBytes(0xBBu));
+        body.Add(12);                                   // section 4 -> 12
+
+        Assert.True(TroySections.TryParse(body.ToArray(), out var s, out _));
+        Assert.True(s!.TryGetScalar(0xAAu, out float tenths));
+        Assert.Equal(4.5f, tenths, 4);
+        Assert.True(s.TryGetScalar(0xBBu, out float raw));
+        Assert.Equal(12f, raw, 4);
+    }
 
     // ---- M423: motion is what makes a particle three-dimensional ---------------------------------
 
@@ -682,7 +689,7 @@ public class TroyBinTests
     /// differ by 10x. <c>*p-scale</c> is the warning case - 3xu8 median 24 against 3xf32 median 60.
     /// </summary>
     [Fact]
-    public void AVectorFieldReadsFromF32AndFromTheStringFormButNotFromBytes()
+    public void AVectorFieldReadsFromEveryEncoding()
     {
         var body = new List<byte>();
         body.AddRange(BitConverter.GetBytes((ushort)((1 << 6) | (1 << 7) | (1 << 12))));
@@ -703,8 +710,9 @@ public class TroyBinTests
         Assert.Equal(new Vector3(0f, 320f, 0f), f32);
         Assert.True(s.TryGetVector3(0x00000003u, Resolve, out var str));
         Assert.Equal(new Vector3(100f, 400f, 100f), str);
-        // the byte form is deliberately refused rather than read at an unverified scale
-        Assert.False(s.TryGetVector3(0x00000001u, Resolve, out _));
+        // section 6 is tenths: (0,10,0) is the unit axis (0,1,0) - the rotation-axis witness
+        Assert.True(s.TryGetVector3(0x00000001u, Resolve, out var bytes3));
+        Assert.Equal(new Vector3(1f, 2f, 3f), bytes3);
     }
 
     /// <summary>The string vec3 form must parse invariantly — the development locale is German, where

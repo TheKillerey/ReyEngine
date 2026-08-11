@@ -163,10 +163,15 @@ public static class TroyBinConverter
             if (e.EmitterLifetime is { } life && life > 0f)
                 props.Add(ValueFloat("lifetime", life));
 
-            float scale = e.Scale is { } s && s > 0f ? s * DefaultScale : DefaultScale;
+            // Legacy and modern both work in League world units, so the decoded scale is used AS IS.
+            // The old path multiplied by 50 because it had no real value to work from; doing that to a
+            // measured scale of 100 would emit 5,000.
+            Vector3 scale = e.ScaleVector is { } sv && sv != Vector3.Zero
+                ? sv
+                : new Vector3(DefaultScale, DefaultScale, DefaultScale);
             props.Add(new BinTreeEmbedded(H("birthScale0"), H("ValueVector3"), new BinTreeProperty[]
             {
-                new BinTreeVector3(H("constantValue"), new Vector3(scale, scale, 0f)),
+                new BinTreeVector3(H("constantValue"), scale),
             }));
 
             props.Add(e.MeshPath is { } mesh
