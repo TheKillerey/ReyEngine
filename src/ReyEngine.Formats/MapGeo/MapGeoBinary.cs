@@ -39,7 +39,7 @@ public sealed class MapGeoBinary
 
     // ---- element enums (values match LeagueToolkit's ElementName / ElementFormat) ----
     public const uint ElemPosition = 0, ElemNormal = 2, ElemPrimaryColor = 4,
-                      ElemTexcoord0 = 7, ElemTexcoord5 = 12, ElemTexcoord7 = 14;
+                      ElemTexcoord0 = 7, ElemTexcoord5 = 12, ElemTexcoord6 = 13, ElemTexcoord7 = 14;
     /// <summary>The lightmap UV channel. Riot stores baked-lightmap atlas UVs here.</summary>
     public const uint LightmapUvElement = ElemTexcoord7;
 
@@ -163,6 +163,40 @@ public sealed class MapGeoBinary
         SetBakedLight(mesh, texture, scale, bias);
     }
 
+    /// <summary>
+    /// M433: add ANY single-element vertex channel — the generalisation of <see cref="AddUvChannelOnly"/>.
+    ///
+    /// <para>Texcoord7 is not the only stream a shader can demand. <c>Mantis_Env_Baked_PBR</c>'s compiled
+    /// vertex shader reads TEXCOORD6 as a fully-used float4 (measured from the DXBC input signature in
+    /// ShaderCache.dx11.wad.client), which is the tangent frame its FEATURE_TANGENT define implies. Map
+    /// geometry essentially never carries it: 1 mesh out of 40,512 across 205 shipped mapgeos.</para>
+    ///
+    /// <para><paramref name="data"/> is the raw payload, exactly <c>FormatSize(format) * VertexCount</c>
+    /// bytes, in vertex order.</para>
+    /// </summary>
+    public int AddVertexChannel(Mesh mesh, uint element, uint format, ReadOnlySpan<byte> data)
+    {
+        int stride = FormatSize(format);
+        if (stride == 0) throw new ArgumentException($"unsupported element format {format}", nameof(format));
+        if (data.Length != stride * mesh.VertexCount)
+            throw new ArgumentException(
+                $"payload {data.Length} B != {stride} B x {mesh.VertexCount} vertices", nameof(data));
+        if (MeshHasElement(mesh, element))
+            throw new InvalidOperationException($"mesh already has element {element}");
+
+        int id = AddChannelBuffer(data, mesh.VertexBufferIds.Count > 0 ? VertexBuffers[mesh.VertexBufferIds[0]] : null);
+        RewireWithChannelBuffer(mesh, id, element, format);
+        return id;
+    }
+
+    /// <summary>Does any of the mesh's declarations carry this element?</summary>
+    public bool MeshHasElement(Mesh mesh, uint element)
+    {
+        for (int i = 0; i < mesh.VertexBufferIds.Count; i++)
+            if (Declarations[mesh.VertexDeclarationBase + i].Has(element)) return true;
+        return false;
+    }
+
     private int AddUv7Buffer(ReadOnlySpan<Vector2> uv, VertexBuffer? proto)
     {
         var data = new byte[uv.Length * 8];
@@ -171,21 +205,29 @@ public sealed class MapGeoBinary
             BitConverter.TryWriteBytes(data.AsSpan(i * 8), uv[i].X);
             BitConverter.TryWriteBytes(data.AsSpan(i * 8 + 4), uv[i].Y);
         }
+        return AddChannelBuffer(data, proto);
+    }
+
+    private int AddChannelBuffer(ReadOnlySpan<byte> data, VertexBuffer? proto)
+    {
         int id = VertexBuffers.Count;
         VertexBuffers.Add(new VertexBuffer
         {
-            Data = data,
+            Data = data.ToArray(),
             HasVisibility = proto?.HasVisibility ?? Version >= 13,
             Visibility = proto?.Visibility ?? 0xFF,
         });
         return id;
     }
 
-    private void RewireWithUv7Buffer(Mesh mesh, int uv7BufferId)
+    private void RewireWithUv7Buffer(Mesh mesh, int uv7BufferId) =>
+        RewireWithChannelBuffer(mesh, uv7BufferId, LightmapUvElement, FmtXY_Float32);
+
+    private void RewireWithChannelBuffer(Mesh mesh, int bufferId, uint element, uint format)
     {
         int n = mesh.VertexBufferIds.Count;
-        // Append a fresh consecutive declaration run: clones of the mesh's current declarations, then a
-        // uv7 declaration. Repoint the mesh's base id at the clones so buffer n resolves to the uv7 decl.
+        // Append a fresh consecutive declaration run: clones of the mesh's current declarations, then the
+        // new one. Repoint the mesh's base id so buffer n resolves to the new declaration.
         int newBase = Declarations.Count;
         for (int i = 0; i < n; i++)
         {
@@ -195,11 +237,11 @@ public sealed class MapGeoBinary
         Declarations.Add(new VertexDeclaration
         {
             Usage = 0,
-            Elements = { (LightmapUvElement, FmtXY_Float32) },
+            Elements = { (element, format) },
             Padding = new byte[8 * 14],   // 14 unused element slots
         });
         mesh.VertexDeclarationBase = newBase;
-        mesh.VertexBufferIds.Add(uv7BufferId);
+        mesh.VertexBufferIds.Add(bufferId);
     }
 
     /// <summary>Drop vertex/index buffers and declarations no mesh references any more, remapping the

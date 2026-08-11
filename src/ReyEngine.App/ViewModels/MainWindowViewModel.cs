@@ -6050,6 +6050,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         RefreshMeshDetails();
         OnPropertyChanged(nameof(CanAddTexcoord7));          // M432
         OnPropertyChanged(nameof(AddTexcoord7Label));
+        OnPropertyChanged(nameof(CanAddTangents));           // M433
+        OnPropertyChanged(nameof(AddTangentsLabel));
     }
 
     /// <summary>M76: deselect every placeable (particle/sound/prop/probe) — used when the user clicks
@@ -6565,6 +6567,85 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             await LoadMapGeoAsync(entry);
         }
         catch (Exception ex) { _log.Error("MapGeo", "Could not add the Texcoord7 channel: " + ex.Message); }
+    }
+
+    /// <summary>M433: can the selected meshes be given tangents? The decoder does not surface Texcoord6,
+    /// so unlike <see cref="CanAddTexcoord7"/> this cannot pre-filter meshes that already have it — the
+    /// builder skips those and reports them.</summary>
+    public bool CanAddTangents => _currentMap is not null && _currentMapEntry is not null
+                                  && _currentMapBytes is not null && _selection.Count > 0;
+
+    public string AddTangentsLabel => _selection.Count == 0 ? "Add Tangents" : $"Add Tangents ({_selection.Count})";
+
+    /// <summary>
+    /// M433: give the SELECTED meshes the tangent channel (Texcoord6) that some shaders require.
+    ///
+    /// <para>Measured from Riot's compiled bytecode: <c>Mantis_Env_Baked_PBR</c>'s vertex shader reads
+    /// TEXCOORD6 as a fully-used float4, alongside POSITION0/NORMAL0/TEXCOORD0/TEXCOORD7. A vertex shader
+    /// input with no matching vertex element is an input-layout failure at load. The element named
+    /// <c>Tangent</c> is a red herring — it appears in 0 of 40,512 shipped meshes; the tangent frame
+    /// travels as Texcoord6, which only 1 of those 40,512 carries.</para>
+    ///
+    /// <para>The tangents are DERIVED from positions + Texcoord0 + normals, not authored.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task AddTangents()
+    {
+        if (_currentMap is not { } map || _currentMapBytes is null || _currentMapEntry is not { } entry)
+        { _log.Warn("MapGeo", "No map is open, so no mesh can be given tangents."); return; }
+
+        var targets = _selection.Items.Select(m => m.Index).ToList();
+        if (targets.Count == 0) { _log.Warn("MapGeo", "Select a mesh first — this adds tangents to the selection."); return; }
+
+        if (MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes) || MapContent.AddedMeshes.Count > 0)
+        { _log.Warn("MapGeo", "Save your pending mesh edits first — this rewrites the mapgeo from the saved bytes."); return; }
+        if (!GuardEditable(entry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            var source = _currentMapBytes;
+            var (bytes, result) = await Task.Run(() =>
+            {
+                byte[] b = Formats.MapGeo.MeshTangentBuilder.AddTangents(source, targets, out var r);
+                return (b, r);
+            });
+            if (result.MeshesChanged == 0) { _log.Warn("MapGeo", result.Summary); return; }
+
+            // Validate BEFORE saving: it must decode again with the geometry intact.
+            var check = await Task.Run(() => MapGeoDecoder.Decode(bytes));
+            if (check.Meshes.Count != map.Meshes.Count)
+            {
+                _log.Error("MapGeo", $"The rewritten mapgeo decoded with {check.Meshes.Count} meshes " +
+                                     $"instead of {map.Meshes.Count} — not saved.");
+                return;
+            }
+
+            string savedTo;
+            if (TryWriteToProjectFile(entry, bytes, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = entry.PathHash,
+                    ResolvedPath = entry.IsResolved ? entry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            foreach (var s in result.Skipped.Take(5)) _log.Warn("MapGeo", s);
+            _log.Success("MapGeo", $"{result.Summary} Derived from Position + Texcoord0 + Normal. " +
+                                   $"Saved to {savedTo} ({bytes.Length:n0} bytes).");
+            await LoadMapGeoAsync(entry);
+        }
+        catch (Exception ex) { _log.Error("MapGeo", "Could not add tangents: " + ex.Message); }
     }
 
     [RelayCommand]

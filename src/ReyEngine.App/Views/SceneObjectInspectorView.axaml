@@ -60,6 +60,10 @@
                 IsEnabled="{Binding CanAddTexcoord7}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
                 HorizontalAlignment="Left"
                 ToolTip.Tip="Add the baked UV set (Texcoord7) to the selected meshes, copied from Texcoord0 — no lightmap, no atlas. Needed by shaders that declare FEATURE_BAKED_PAINT, such as Mantis_Env_Baked_PBR. Saves the rewritten mapgeo." />
+        <Button Content="{Binding AddTangentsLabel}" Command="{Binding AddTangentsCommand}"
+                IsEnabled="{Binding CanAddTangents}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
+                HorizontalAlignment="Left"
+                ToolTip.Tip="Add the tangent channel (Texcoord6, float4 = tangent + handedness) to the selected meshes, derived from Position + Texcoord0 + Normal. Mantis_Env_Baked_PBR's compiled vertex shader reads TEXCOORD6 and fails to bind without it. Saves the rewritten mapgeo." />
       </StackPanel>
     </Border>
 
@@ -117,6 +121,10 @@
                 IsEnabled="{Binding CanAddTexcoord7}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
                 HorizontalAlignment="Left"
                 ToolTip.Tip="Add the baked UV set (Texcoord7) to every selected mesh, copied from Texcoord0 — no lightmap, no atlas. Needed by shaders that declare FEATURE_BAKED_PAINT, such as Mantis_Env_Baked_PBR. Saves the rewritten mapgeo." />
+        <Button Content="{Binding AddTangentsLabel}" Command="{Binding AddTangentsCommand}"
+                IsEnabled="{Binding CanAddTangents}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
+                HorizontalAlignment="Left"
+                ToolTip.Tip="Add the tangent channel (Texcoord6, float4 = tangent + handedness) to the selected meshes, derived from Position + Texcoord0 + Normal. Mantis_Env_Baked_PBR's compiled vertex shader reads TEXCOORD6 and fails to bind without it. Saves the rewritten mapgeo." />
       </StackPanel>
     </Border>
 
