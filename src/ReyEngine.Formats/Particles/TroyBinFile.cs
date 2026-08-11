@@ -228,6 +228,9 @@ public sealed class TroyBinFile
         float? Num(string emitter, string field) =>
             sections.TryGetScalar(TroyHash.FieldKey(emitter, field), TroyFields.IsTenths(field), out float v)
                 ? v : null;
+        System.Numerics.Vector3? Vec(string emitter, string field) =>
+            sections.TryGetVector3(TroyHash.FieldKey(emitter, field),
+                o => offsets.TryGetValue(o, out var s) ? s : null, out var v) ? v : null;
 
         var emitters = new List<TroyEmitter>();
         for (int i = 1; i <= 64; i++)
@@ -247,7 +250,13 @@ public sealed class TroyBinFile
                 (int?)Num(name, TroyFields.NumFrames),
                 Num(name, TroyFields.FrameRate),
                 (int?)Num(name, TroyFields.StartFrame),
-                (int?)Num(name, TroyFields.ParticleType)));
+                (int?)Num(name, TroyFields.ParticleType),
+                Vec(name, TroyFields.Velocity3),
+                Vec(name, TroyFields.Acceleration3),
+                Vec(name, TroyFields.WorldAcceleration3),
+                Vec(name, TroyFields.Offset3),
+                Vec(name, TroyFields.Drag3),
+                Vec(name, TroyFields.OrbitalVelocity3)));
         }
         Emitters = emitters;
     }

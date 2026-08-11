@@ -111,6 +111,54 @@ public sealed class TroySections
 
     public bool TryGet(uint key, out TroyEntry entry) => ByKey.TryGetValue(key, out entry!);
 
+    /// <summary>
+    /// A three-component field in RAW world units.
+    ///
+    /// <para><b>Only the unambiguous encodings are accepted.</b> A vec3 appears in three forms: the
+    /// 3xf32 section (bit 7), the string block as <c>"x y z"</c>, and the 3xu8 section (bit 6). The
+    /// first two are raw world units and agree with each other - <c>*p-vel</c> 3xf32 has a median
+    /// magnitude of 10 and a p90 of 800, and its string form reads "0 320 0", "300 0 0". The 3xu8 form
+    /// is NOT accepted: whether it is tenths or raw is unresolved, and the two readings differ by 10x.
+    /// <c>*p-scale</c> is the clearest warning - its 3xu8 median is 24 and its 3xf32 median is 60, which
+    /// reconcile as raw but not as tenths. Emitting a wrong scale factor is silent, so those entries are
+    /// skipped rather than guessed.</para>
+    ///
+    /// <para>Coverage cost of that decision, measured: <c>*p-vel</c> 736 of 1,428 entries usable,
+    /// <c>*p-offset</c> 965 of 2,473, <c>*p-worldaccel</c> 300 of 505 - before the string form, which
+    /// <paramref name="resolveString"/> adds.</para>
+    /// </summary>
+    public bool TryGetVector3(uint key, Func<int, string?>? resolveString, out System.Numerics.Vector3 value)
+    {
+        value = default;
+        if (!ByKey.TryGetValue(key, out var e)) return false;
+
+        if (e.Section == 7)
+        {
+            value = new System.Numerics.Vector3(
+                BitConverter.ToSingle(e.Raw, 0),
+                BitConverter.ToSingle(e.Raw, 4),
+                BitConverter.ToSingle(e.Raw, 8));
+            return true;
+        }
+        if (e.Section == 12 && resolveString is not null)
+        {
+            string? s = resolveString(e.Raw[0] | (e.Raw[1] << 8));
+            if (s is null) return false;
+            var parts = s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 3) return false;
+            // invariant on purpose: the development locale is German, where "0.4" would parse as 4
+            var c = System.Globalization.CultureInfo.InvariantCulture;
+            if (!float.TryParse(parts[0], System.Globalization.NumberStyles.Float, c, out float x)
+                || !float.TryParse(parts[1], System.Globalization.NumberStyles.Float, c, out float y)
+                || !float.TryParse(parts[2], System.Globalization.NumberStyles.Float, c, out float z))
+                return false;
+            value = new System.Numerics.Vector3(x, y, z);
+            return true;
+        }
+        // section 6 (3xu8) deliberately not read - see the summary
+        return false;
+    }
+
     /// <summary>The u16 string-block offset a string-valued entry (section 12) points at.</summary>
     public bool TryGetStringOffset(uint key, out int offset)
     {
@@ -224,6 +272,13 @@ public static class TroyFields
     public const string QuadRotation = "*p-quadrot";
     public const string RotationVelocity = "*p-rotvel";
     public const string BindWeight = "*p-bindweight";
+    // M423: three-component motion and shape fields, measured to be genuine vec3s
+    public const string Velocity3 = "*p-vel";
+    public const string Acceleration3 = "*p-accel";
+    public const string WorldAcceleration3 = "*p-worldaccel";
+    public const string Offset3 = "*p-offset";
+    public const string Drag3 = "*p-drag";
+    public const string OrbitalVelocity3 = "*p-orbitvel";
 
     /// <summary>Fields measured to store tenths in the u8 sections (they have an f32 witness whose
     /// range the tenths reading overlaps).</summary>

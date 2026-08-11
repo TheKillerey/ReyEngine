@@ -178,12 +178,42 @@ public static class TroyBinConverter
             if (!string.IsNullOrWhiteSpace(e.ColorTexturePath))
                 props.Add(new BinTreeString(H("particleColorTexture"), ToTargetPath(e.ColorTexturePath!)));
 
-            // a flipbook sheet drawn as one sprite is what made converted effects look like blobs
+            // a flipbook sheet drawn as one sprite is what made converted effects look like blobs.
+            // frameRate is a PLAIN F32 in the modern format (the resolver reads it with GetF32), not a
+            // ValueFloat wrapper - wrapping it meant nothing ever read it.
             if (e.IsFlipbook)
             {
                 props.Add(new BinTreeU16(H("numFrames"), (ushort)e.FrameCount!.Value));
-                if (e.FrameRate is { } fps && fps > 0f) props.Add(ValueFloat("frameRate", fps));
+                if (e.FrameRate is { } fps && fps > 0f) props.Add(new BinTreeF32(H("frameRate"), fps));
             }
+
+            // ---- M423: motion and spawn volume ---------------------------------------------------
+            // Without these every particle spawns at one point with zero velocity, which is what made
+            // converted effects render as a flat plane of sprites. All are genuine vec3s in the source.
+            void Vec3(string field, Vector3? value)
+            {
+                if (value is not { } v || v == Vector3.Zero) return;
+                props.Add(new BinTreeEmbedded(H(field), H("ValueVector3"), new BinTreeProperty[]
+                {
+                    new BinTreeVector3(H("constantValue"), v),
+                }));
+            }
+
+            Vec3("birthVelocity", e.Velocity);
+            Vec3("birthAcceleration", e.Acceleration);
+            Vec3("worldAcceleration", e.WorldAcceleration);
+            Vec3("birthDrag", e.Drag);
+            Vec3("birthOrbitalVelocity", e.OrbitalVelocity);
+
+            // The spawn volume: particles are distributed across it instead of all starting at one
+            // point. The class hash is used literally because CDTB cannot name it - it was read off a
+            // shipped system carrying exactly this shape, `SpawnShape -> 0xee39916f { emitOffset }`.
+            // Spelling a guessed class name here would produce a struct the game does not recognise.
+            if (e.Offset is { } offset && offset != Vector3.Zero)
+                props.Add(new BinTreeStruct(H("SpawnShape"), 0xee39916f, new BinTreeProperty[]
+                {
+                    new BinTreeVector3(H("emitOffset"), offset),
+                }));
 
             var curve = CurveFor(troy.ColorCurves, i, troy.Emitters.Count);
             if (curve.Count >= 2)

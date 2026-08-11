@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace ReyEngine.Formats.Particles;
 
 /// <summary>
@@ -24,7 +26,13 @@ public sealed record TroyEmitter(
     int? FrameCount,
     float? FrameRate,
     int? StartFrame,
-    int? ParticleType)
+    int? ParticleType,
+    Vector3? Velocity,
+    Vector3? Acceleration,
+    Vector3? WorldAcceleration,
+    Vector3? Offset,
+    Vector3? Drag,
+    Vector3? OrbitalVelocity)
 {
     /// <summary>An <c>*e-life</c> of -1 means the emitter runs forever.
     /// Torches, auras and buff loops all use it.</summary>

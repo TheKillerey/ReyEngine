@@ -673,6 +673,56 @@ public class TroyBinTests
     public void ScalingIsAPerFieldProperty(string field, bool tenths)
         => Assert.Equal(tenths, TroyFields.IsTenths(field));
 
+    // ---- M423: motion is what makes a particle three-dimensional ---------------------------------
+
+    /// <summary>
+    /// Motion fields are genuine vec3s in the source, and only the unambiguous encodings are read.
+    /// The 3xf32 section and the "x y z" string form are raw world units and agree with each other;
+    /// the 3xu8 section is skipped because tenths-versus-raw is unresolved there and the two readings
+    /// differ by 10x. <c>*p-scale</c> is the warning case - 3xu8 median 24 against 3xf32 median 60.
+    /// </summary>
+    [Fact]
+    public void AVectorFieldReadsFromF32AndFromTheStringFormButNotFromBytes()
+    {
+        var body = new List<byte>();
+        body.AddRange(BitConverter.GetBytes((ushort)((1 << 6) | (1 << 7) | (1 << 12))));
+        body.AddRange(BitConverter.GetBytes((ushort)1));            // bit6 (3xu8) - must be REFUSED
+        body.AddRange(BitConverter.GetBytes(0x00000001u));
+        body.AddRange(new byte[] { 10, 20, 30 });
+        body.AddRange(BitConverter.GetBytes((ushort)1));            // bit7 (3xf32)
+        body.AddRange(BitConverter.GetBytes(0x00000002u));
+        foreach (float f in new[] { 0f, 320f, 0f }) body.AddRange(BitConverter.GetBytes(f));
+        body.AddRange(BitConverter.GetBytes((ushort)1));            // bit12 string "100 400 100"
+        body.AddRange(BitConverter.GetBytes(0x00000003u));
+        body.AddRange(BitConverter.GetBytes((ushort)0));
+
+        Assert.True(TroySections.TryParse(body.ToArray(), out var s, out _));
+        string? Resolve(int o) => o == 0 ? "100 400 100" : null;
+
+        Assert.True(s!.TryGetVector3(0x00000002u, Resolve, out var f32));
+        Assert.Equal(new Vector3(0f, 320f, 0f), f32);
+        Assert.True(s.TryGetVector3(0x00000003u, Resolve, out var str));
+        Assert.Equal(new Vector3(100f, 400f, 100f), str);
+        // the byte form is deliberately refused rather than read at an unverified scale
+        Assert.False(s.TryGetVector3(0x00000001u, Resolve, out _));
+    }
+
+    /// <summary>The string vec3 form must parse invariantly — the development locale is German, where
+    /// "0.4" would otherwise read as 4 and a drift value would become a tenfold one.</summary>
+    [Fact]
+    public void TheStringVectorFormParsesInvariantly()
+    {
+        var body = new List<byte>();
+        body.AddRange(BitConverter.GetBytes((ushort)(1 << 12)));
+        body.AddRange(BitConverter.GetBytes((ushort)1));
+        body.AddRange(BitConverter.GetBytes(0x55u));
+        body.AddRange(BitConverter.GetBytes((ushort)0));
+
+        Assert.True(TroySections.TryParse(body.ToArray(), out var s, out _));
+        Assert.True(s!.TryGetVector3(0x55u, _ => "0 .4 0", out var v));
+        Assert.Equal(0.4f, v.Y, 5);
+    }
+
     private static BinTreeProperty? FindEmitterProperty(byte[] bin, string field)
     {
         var tree = new BinTree(new MemoryStream(bin, writable: false));
