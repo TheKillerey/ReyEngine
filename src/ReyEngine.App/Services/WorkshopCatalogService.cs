@@ -24,7 +24,10 @@ public sealed record WorkshopMaterialTemplate(
 public sealed record WorkshopParticleTemplate(
     uint SystemHash, string Name, string ParticlePath, ulong SourceBinHash, string SourceBinPath,
     string SourceWad, int Emitters, int VisualEmitters, string? PreviewTexturePath,
-    bool IsLegacy = false);
+    bool IsLegacy = false,
+    /// <summary>M425: the legacy body decoded, so rates/lifetimes/motion are the file's own values
+    /// rather than engine defaults. The UI must not claim "defaults" for these.</summary>
+    bool IsDecoded = false);
 
 public sealed record WorkshopCatalog(string Fingerprint, DateTime BuiltUtc,
     IReadOnlyList<WorkshopMaterialTemplate> Materials, IReadOnlyList<WorkshopParticleTemplate> Particles);
@@ -54,7 +57,7 @@ public sealed class WorkshopCatalogService
 
     public static string CachePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ReyEngine", "Cache", "workshop-catalog-v6.json");
+        "ReyEngine", "Cache", "workshop-catalog-v7.json");
 
     public async Task<WorkshopCatalog> LoadAsync(string finalDirectory, bool rebuild,
         IProgress<WorkshopCatalogProgress>? progress = null, CancellationToken cancellationToken = default)
@@ -101,12 +104,17 @@ public sealed class WorkshopCatalogService
                             if (!TroyBinFile.TryParse(wad.Extract(entry), out var troy, out _)) continue;
                             string name = Path.GetFileNameWithoutExtension(entry.Path);
                             string? preview = troy!.TexturePaths.FirstOrDefault();
-                            int emitters = Math.Max(1, troy.EmitterNames.Count);
+                            // M425: count the DECODED emitters. The string heuristic over-counts badly -
+                            // firetorch_purple has 4 emitters and the heuristic reported 11 - and showing
+                            // the heuristic figure made the list look like the old path was still running.
+                            int emitters = troy.HasDecodedBody
+                                ? troy.Emitters.Count
+                                : Math.Max(1, troy.EmitterNames.Count);
                             var item = new WorkshopParticleTemplate(
                                 HashAlgorithms.Fnv1a(entry.Path), name, entry.Path,
                                 entry.PathHash, entry.Path, wadPath,
                                 emitters, troy.TexturePaths.Any() ? emitters : 0,
-                                preview is null ? null : Normalize(preview), IsLegacy: true);
+                                preview is null ? null : Normalize(preview), IsLegacy: true, IsDecoded: troy.HasDecodedBody);
                             particles.AddOrUpdate("troy:" + entry.Path, (item, int.MaxValue),
                                 (_, old) => old);
                         }

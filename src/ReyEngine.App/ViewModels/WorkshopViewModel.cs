@@ -26,15 +26,24 @@ public sealed partial class WorkshopParticleViewModel : ObservableObject
     public string Detail => $"{Template.Emitters} emitter(s)  |  {Template.VisualEmitters} visual";
     public bool IsVisual => Template.VisualEmitters > 0;
 
-    /// <summary>M419. Legacy effects are worth flagging in the list rather than only on import: their
-    /// names, textures and colour curves are faithful but every timing and physics value is a modern
-    /// default, because that part of the .troybin format is not decoded.</summary>
+    /// <summary>M419. Legacy effects are flagged in the list, not only on import.</summary>
     public bool IsLegacy => Template.IsLegacy;
 
-    public string LegacyTip =>
-        "Recovered from a legacy .troybin. Emitter names, textures and colour curves come from the "
-        + "original file; rate, lifetime, velocity and scale are engine defaults — tune them in the "
-        + "Particle Editor after adding.";
+    /// <summary>M425: set by the host to describe THIS conversion, since a decoded file keeps its real
+    /// rates and lifetimes while an undecodable one falls back to defaults. The old wording asserted
+    /// "engine defaults" unconditionally, which understated every decoded effect.</summary>
+    public static string LegacyPreviewStatusFor(bool decoded) => decoded
+        ? "Live preview of the CONVERTED effect. Rates, lifetimes, scales, motion and every asset "
+          + "binding were read from the legacy file."
+        : "Live preview of the CONVERTED effect. This file's body could not be decoded, so timing and "
+          + "physics are engine defaults.";
+
+    public string LegacyTip => Template.IsDecoded
+        ? "Recovered from a legacy .troybin, body decoded. Emitter names, textures, colour ramps, "
+          + "rates, lifetimes, scales and motion all come from the original file."
+        : "Recovered from a legacy .troybin whose body could not be decoded. Names, textures and colour "
+          + "curves are faithful; rate, lifetime and scale are engine defaults — tune them in the "
+          + "Particle Editor after adding.";
 }
 
 /// <summary>Searchable, de-duplicated library of one proven game material per shader and every unique VFX
@@ -223,7 +232,7 @@ public sealed partial class WorkshopViewModel : ObservableObject
         PreviewStatus = built is null
             ? "No live preview for this system — showing its texture instead."
             : item.Template.IsLegacy
-                ? "Live preview of the CONVERTED effect — timing and physics are engine defaults."
+                ? WorkshopParticleViewModel.LegacyPreviewStatusFor(item.Template.IsDecoded)
                 : "";
     }
 
