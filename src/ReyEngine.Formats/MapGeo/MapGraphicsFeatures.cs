@@ -177,6 +177,33 @@ public static class MapGraphicsFeatures
         return null;
     }
 
+    /// <summary>
+    /// M435: what a feature needs the map to ALREADY have, measured across the shipped corpus. Null when
+    /// the prerequisite is met or none is known.
+    ///
+    /// <para>The one that matters: <b>179 of 179</b> shipped maps declaring MapLightingV2 also carry
+    /// <c>MapBakeProperties.lightGridFileName</c> — zero exceptions. Declaring V2 without a lightgrid is a
+    /// shape that occurs 0 times in the corpus, which is the same signal that caught empty containers
+    /// (0 of 33,645) and pointer-form container elements. By contrast only 10 of those 179 set
+    /// <c>RmaStaticLightGridTexturePath</c>, so the RMA texture is genuinely optional and is NOT
+    /// required here.</para>
+    ///
+    /// <para>Advisory, not a refusal: the creator may be mid-workflow and about to bake. The caller
+    /// decides whether to proceed.</para>
+    /// </summary>
+    public static string? PrerequisiteWarning(byte[] materialsBin, Feature feature)
+    {
+        if (!ReferenceEquals(feature, LightingV2)) return null;
+
+        var bake = MapBakeProperties.Read(materialsBin);
+        if (bake is { File.Length: > 0 }) return null;
+
+        return "MapLightingV2 without a lightgrid: 179 of 179 shipped maps that declare it also set "
+             + "MapBakeProperties.lightGridFileName, and this map sets none. Bake a lightgrid (Light "
+             + "Baking window) or the V2 lighting path has no probe data to read. "
+             + "(RmaStaticLightGridTexturePath is NOT needed - only 10 of those 179 set it.)";
+    }
+
     /// <summary>The fields map21/ioniabase sets on MapLightingV2 — the closest shipped analogue to a
     /// baked-terrain/PBR map. Offered as a named preset so the values are traceable to their source.</summary>
     public static IReadOnlyList<BinTreeProperty> IoniaBaseLightingV2Fields() => new BinTreeProperty[]

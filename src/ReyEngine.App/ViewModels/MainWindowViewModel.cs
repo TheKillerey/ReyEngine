@@ -6699,6 +6699,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             if (updated is null) { _log.Warn("Map", result.Detail); return; }
 
+            // M435: say what the corpus says the feature still needs. Advisory, not a block - the
+            // creator may be about to bake.
+            if (!row.IsPresent
+                && Formats.MapGeo.MapGraphicsFeatures.PrerequisiteWarning(updated, row.Feature) is { } advice)
+                _log.Warn("Map", advice);
+
             // Validate before saving: it must reparse and report exactly the change we asked for.
             var after = Formats.MapGeo.MapGraphicsFeatures.Read(updated);
             if (after.Contains(row.Feature) == row.IsPresent)

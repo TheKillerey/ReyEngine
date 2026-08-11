@@ -207,4 +207,47 @@ public class MapGraphicsFeatureTests
         Assert.Contains("MapLightRegions", names);     // LightRegionInfo
         Assert.All(MapGraphicsFeatures.All, f => Assert.NotEqual(0u, f.Hash));
     }
+
+    /// <summary>M435: 179 of 179 shipped maps declaring MapLightingV2 also set
+    /// MapBakeProperties.lightGridFileName. Declaring V2 without one is a shape the corpus never
+    /// produces, so the tool should say so.</summary>
+    [Fact]
+    public void Lighting_v2_without_a_lightgrid_is_flagged()
+    {
+        byte[] bin = MapBin();
+
+        string? advice = MapGraphicsFeatures.PrerequisiteWarning(bin, MapGraphicsFeatures.LightingV2);
+
+        Assert.NotNull(advice);
+        Assert.Contains("179 of 179", advice);
+        Assert.Contains("lightGridFileName", advice);
+    }
+
+    /// <summary>Only 10 of those 179 set RmaStaticLightGridTexturePath, so it must NOT be demanded.</summary>
+    [Fact]
+    public void The_rma_lightgrid_texture_is_not_demanded()
+    {
+        string? advice = MapGraphicsFeatures.PrerequisiteWarning(MapBin(), MapGraphicsFeatures.LightingV2);
+
+        Assert.DoesNotContain("required", advice!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("NOT needed", advice!);
+    }
+
+    [Fact]
+    public void A_map_that_already_has_a_lightgrid_is_not_flagged()
+    {
+        byte[] withGrid = MapBakeProperties.Write(MapBin(), "ASSETS/Maps/Lightmaps/Test/LightGrid.dat",
+            256, 0.5f, out var wrote)!;
+        Assert.True(wrote.Written);
+
+        Assert.Null(MapGraphicsFeatures.PrerequisiteWarning(withGrid, MapGraphicsFeatures.LightingV2));
+    }
+
+    /// <summary>The advisory is specific to MapLightingV2 - no other feature has a measured prerequisite.</summary>
+    [Fact]
+    public void Other_features_carry_no_prerequisite()
+    {
+        Assert.Null(MapGraphicsFeatures.PrerequisiteWarning(MapBin(), MapGraphicsFeatures.TerrainPaint));
+        Assert.Null(MapGraphicsFeatures.PrerequisiteWarning(MapBin(), MapGraphicsFeatures.Ssao));
+    }
 }
