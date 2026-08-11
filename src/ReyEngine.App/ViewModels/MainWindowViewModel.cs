@@ -6648,6 +6648,87 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("MapGeo", "Could not add tangents: " + ex.Message); }
     }
 
+    /// <summary>M434: the MapGraphicsFeature components the open map declares, one row per known feature.</summary>
+    public ObservableCollection<MapGraphicsFeatureViewModel> MapGraphicsFeatures { get; } = new();
+
+    public bool HasMapGraphicsFeatures => MapGraphicsFeatures.Count > 0;
+
+    /// <summary>M434: re-read which graphics features the open map's materials.bin declares.</summary>
+    private void RefreshMapGraphicsFeatures()
+    {
+        MapGraphicsFeatures.Clear();
+        try
+        {
+            if (_currentMapEntry is not null && TryResolveMaterialsBin(_currentMapEntry.Path, out var binEntry))
+            {
+                var present = Formats.MapGeo.MapGraphicsFeatures.Read(ReadAsset(binEntry.PathHash));
+                foreach (var f in Formats.MapGeo.MapGraphicsFeatures.All)
+                    MapGraphicsFeatures.Add(new MapGraphicsFeatureViewModel(f, present.Contains(f)));
+            }
+        }
+        catch (Exception ex) { _log.Warn("Map", "Could not read the map's graphics features: " + ex.Message); }
+        OnPropertyChanged(nameof(HasMapGraphicsFeatures));
+    }
+
+    /// <summary>
+    /// M434: add or remove a <c>MapGraphicsFeature</c> in the map's <c>MapContainer.components[]</c>.
+    ///
+    /// <para>These decide which shared rendering resources the engine builds, and map shaders bind them by
+    /// name — measured against Mantis_Env_Baked_PBR's pixel shader: MapLightingV2 ↔ IBL_CUBEMAP,
+    /// MapTerrainPaint ↔ TERRAIN_BLEND, MapSSAO ↔ SSAO_TEXTURE, and so on. 179 of 206 shipped map bins
+    /// declare MapLightingV2; the 27 that do not are the map11 family, i.e. the legacy lighting path.</para>
+    ///
+    /// <para>Added as a bare marker, which is the shipped form (map12/jade's MapLightingV2 has zero
+    /// properties).</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task ToggleMapGraphicsFeature(MapGraphicsFeatureViewModel? row)
+    {
+        if (row is null) return;
+        if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+        { _log.Warn("Map", "No map materials.bin is open."); return; }
+        if (!GuardEditable(binEntry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            var source = ReadAsset(binEntry.PathHash);
+            byte[]? updated = row.IsPresent
+                ? Formats.MapGeo.MapGraphicsFeatures.Remove(source, row.Feature, out var result)
+                : Formats.MapGeo.MapGraphicsFeatures.Add(source, row.Feature, null, out result);
+
+            if (updated is null) { _log.Warn("Map", result.Detail); return; }
+
+            // Validate before saving: it must reparse and report exactly the change we asked for.
+            var after = Formats.MapGeo.MapGraphicsFeatures.Read(updated);
+            if (after.Contains(row.Feature) == row.IsPresent)
+            { _log.Error("Map", $"The rewritten bin does not reflect the {row.Feature.Name} change — not saved."); return; }
+
+            string savedTo;
+            if (TryWriteToProjectFile(binEntry, updated, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, updated, ".bin");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = binEntry.PathHash,
+                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            _log.Success("Map", $"{result.Detail}. Saved to {savedTo} ({updated.Length:n0} bytes).");
+            RefreshMapGraphicsFeatures();
+        }
+        catch (Exception ex) { _log.Error("Map", $"Could not change {row.Feature.Name}: {ex.Message}"); }
+    }
+
     [RelayCommand]
     private async Task SaveMeshMoves()
     {
@@ -7497,6 +7578,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
         OnPropertyChanged(nameof(HasMapForLayout));  // M147
         OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
+                RefreshMapGraphicsFeatures();   // M434
                 _selection.Clear();
                 CurrentModelTextures = textures;
                 ApplySunProperties(sunProperties);

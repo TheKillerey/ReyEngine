@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
              x:Class="ReyEngine.App.Views.SceneObjectInspectorView">
   <!-- M50: Unity/Unreal-style scene-object inspector — Transform / Details / Materials for whatever is
        selected in the outliner or viewport. Lives in the RIGHT panel (moved out of the left outliner). -->
@@ -125,6 +126,39 @@
                 IsEnabled="{Binding CanAddTangents}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
                 HorizontalAlignment="Left"
                 ToolTip.Tip="Add the tangent channel (Texcoord6, float4 = tangent + handedness) to the selected meshes, derived from Position + Texcoord0 + Normal. Mantis_Env_Baked_PBR's compiled vertex shader reads TEXCOORD6 and fails to bind without it. Saves the rewritten mapgeo." />
+      </StackPanel>
+    </Border>
+
+    <!-- M434: MapGraphicsFeature components in MapContainer.components[]. These decide which shared
+         rendering resources the engine builds, and map shaders bind them by name (MapLightingV2 ->
+         IBL_CUBEMAP, MapTerrainPaint -> TERRAIN_BLEND, MapSSAO -> SSAO_TEXTURE, ...). -->
+    <Border Classes="card" IsVisible="{Binding HasMapGraphicsFeatures}">
+      <StackPanel Spacing="3">
+        <TextBlock Classes="cardTitle" Text="MAP GRAPHICS FEATURES" />
+        <TextBlock Text="Components in the map's materials.bin that switch on shared rendering resources. 179 of 206 shipped map bins declare MapLightingV2; the ones that don't are the map11 family."
+                   FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+        <ItemsControl ItemsSource="{Binding MapGraphicsFeatures}" Margin="0,2,0,0">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                <StackPanel Grid.Column="0" Spacing="0" Margin="0,0,6,0">
+                  <StackPanel Orientation="Horizontal" Spacing="5">
+                    <TextBlock Text="{Binding Name}" FontSize="10" VerticalAlignment="Center"
+                               Foreground="{DynamicResource ReyTextBrush}" />
+                    <TextBlock Text="{Binding StateLabel}" FontSize="9" VerticalAlignment="Center"
+                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding Purpose}" FontSize="9" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                </StackPanel>
+                <Button Grid.Column="1" Content="{Binding ActionLabel}" FontSize="10" Padding="8,1"
+                        VerticalAlignment="Top"
+                        Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).ToggleMapGraphicsFeatureCommand}"
+                        CommandParameter="{Binding}" />
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
       </StackPanel>
     </Border>
 

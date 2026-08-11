@@ -502,3 +502,30 @@ public sealed partial class MapContentViewModel : ViewModelBase
         if (node is not null) OpenMap?.Invoke(node);
     }
 }
+
+/// <summary>M434: one row in the map's graphics-feature list — a MapGraphicsFeature component and whether
+/// the open map's MapContainer.components[] currently declares it.</summary>
+public sealed partial class MapGraphicsFeatureViewModel : ObservableObject
+{
+    public MapGraphicsFeatureViewModel(MapGraphicsFeatures.Feature feature, bool present)
+    {
+        Feature = feature;
+        IsPresent = present;
+    }
+
+    public MapGraphicsFeatures.Feature Feature { get; }
+
+    public string Name => Feature.Name;
+    public string Purpose => Feature.Purpose;
+
+    [ObservableProperty] private bool _isPresent;
+
+    public string ActionLabel => IsPresent ? "Remove" : "Add";
+    public string StateLabel => IsPresent ? "declared" : "absent";
+
+    partial void OnIsPresentChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ActionLabel));
+        OnPropertyChanged(nameof(StateLabel));
+    }
+}
