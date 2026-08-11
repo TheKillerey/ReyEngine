@@ -54,7 +54,11 @@ public sealed record LeagueShaderDef(
     List<ShaderTextureDef> Textures,
     List<ShaderParamDef> Parameters,
     List<string> StaticSwitches,
-    ShaderMaterialSetup? CommonSetup = null)
+    ShaderMaterialSetup? CommonSetup = null,
+    /// <summary>M431: the shader's own featureDefines, which name the vertex data and render features
+    /// it needs. FEATURE_BAKED_PAINT means it reads the baked UV set (Texcoord7) - a mesh without one
+    /// cannot satisfy the input layout.</summary>
+    Dictionary<string, string>? FeatureDefines = null)
 {
     /// <summary>Name without the <c>Shaders/Category/</c> prefix (what the dropdown shows).</summary>
     public string ShortName { get { int i = Name.LastIndexOf('/'); return i < 0 ? Name : Name[(i + 1)..]; } }
@@ -138,7 +142,13 @@ public static class ShaderCatalogLoader
             if (Str(st, "name", resolve) is { Length: > 0 } sn)
                 switches.Add(sn);
 
-        return new LeagueShaderDef(name, category, textures, parameters, switches);
+        var features = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (Field(obj.Properties, "featureDefines", resolve) is BinTreeMap fm)
+            foreach (var kv in fm)
+                if (kv.Key is BinTreeString fk)
+                    features[fk.Value] = kv.Value is BinTreeString fv ? fv.Value : "";
+
+        return new LeagueShaderDef(name, category, textures, parameters, switches, null, features);
     }
 
     private static IEnumerable<BinTreeStruct> Structs(BinTreeObject obj, string field, Func<uint, string?> resolve) =>

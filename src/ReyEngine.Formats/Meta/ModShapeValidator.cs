@@ -248,6 +248,59 @@ public static class ModShapeValidator
         return issues;
     }
 
+    /// <summary>
+    /// M431: the VERTEX contract. A shader's <c>featureDefines</c> name the vertex data it needs, and a
+    /// mesh that cannot supply it is an input-layout mismatch the game does not survive.
+    ///
+    /// <para><b>FEATURE_BAKED_PAINT needs the baked UV set (Texcoord7).</b> Measured: all 18 shipped
+    /// meshes using <c>DefaultEnv_Flat_BakedTerrain</c> - the only other shader declaring that feature -
+    /// carry Texcoord7. This is what stops <c>Mantis_Env_Baked_PBR</c> working on map11's base_srx,
+    /// where 0 of 586 meshes have one.</para>
+    ///
+    /// <para>Deliberately narrow. FEATURE_TANGENT is NOT checked: no shipped mapgeo carries a Tangent
+    /// stream at all (0 across 40,512 meshes in 205 files), so the engine derives tangents and a rule
+    /// would fire on everything.</para>
+    /// </summary>
+    public static IReadOnlyList<BinIssue> ValidateMeshFeatures(
+        string mapGeoName, byte[] mapGeo,
+        Func<string, Shaders.LeagueShaderDef?> shaderForMaterial)
+    {
+        ArgumentNullException.ThrowIfNull(mapGeo);
+        ArgumentNullException.ThrowIfNull(shaderForMaterial);
+        var issues = new List<BinIssue>();
+        EnvironmentAsset env;
+        try
+        {
+            using var ms = new MemoryStream(mapGeo, writable: false);
+            env = new EnvironmentAsset(ms);
+        }
+        catch { return issues; }   // ValidateMapGeo already reports an unreadable file
+
+        var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var mesh in env.Meshes)
+        {
+            var streams = mesh.VerticesView.Buffers
+                .SelectMany(b => b.Description.Elements)
+                .Select(e => e.Name.ToString())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var sub in mesh.Submeshes)
+            {
+                if (shaderForMaterial(sub.Material) is not { } shader) continue;
+                if (shader.FeatureDefines is not { } fd || !fd.ContainsKey("FEATURE_BAKED_PAINT")) continue;
+                if (streams.Contains("Texcoord7")) continue;
+                if (!reported.Add(sub.Material)) continue;
+                issues.Add(new BinIssue("mesh-missing-vertex-stream", mapGeoName,
+                    $"mesh '{mesh.Name}' uses material '{sub.Material}' on shader '{shader.Name}', which "
+                    + "declares FEATURE_BAKED_PAINT and therefore reads the baked UV set — but the mesh has "
+                    + $"no Texcoord7 (it carries {string.Join(", ", streams.OrderBy(s => s))}). All 18 shipped "
+                    + "meshes on the only other FEATURE_BAKED_PAINT shader carry Texcoord7. The map must "
+                    + "supply that stream before this shader can be used on it."));
+            }
+        }
+        return issues;
+    }
+
     /// <summary>Material name -> shader path, for <see cref="ValidateMapGeo"/>. Null for names the bin
     /// does not define, which is itself one of the findings.</summary>
     public static Func<string, string?> MaterialShaderLookup(IEnumerable<BinTree> bins, Func<uint, string?> resolveName)
