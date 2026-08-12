@@ -181,7 +181,7 @@
                                  Watermark="(unset - takes the engine default)" />
                         <Button Grid.Column="2" Content="Set" FontSize="9" Padding="6,1" Margin="4,0,0,0"
                                 VerticalAlignment="Center" IsEnabled="{Binding IsEditable}"
-                                Command="{Binding $parent[ItemsControl].$parent[ItemsControl].((vm:MainWindowViewModel)DataContext).SetMapGraphicsFieldCommand}"
+                                Command="{Binding $parent[UserControl].((vm:MainWindowViewModel)DataContext).SetMapGraphicsFieldCommand}"
                                 CommandParameter="{Binding}"
                                 ToolTip.Tip="Write this value into the component. Empty clears the field, which is not the same as zero." />
                       </Grid>
