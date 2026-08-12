@@ -22,8 +22,10 @@ namespace ReyEngine.Formats.MapGeo;
 /// </code>
 ///
 /// <para><b>The texture needs no link.</b> GameplayTextureChannel declares ChannelName, MinimapColor,
-/// SoundName, ShaderParameterOverrides and three unnamed fields — and NO texture field. The texture lives
-/// in the sampler list, which is an embedded struct of two strings and therefore perfectly safe to write.
+/// SoundName, ShaderParameterOverrides and three fields the shipped hash lists do not name — and NO
+/// texture field. (A dictionary search offers ChannelDescription for 0x54a1d02e and RenderToMinimap for
+/// 0xec768d6b as exact FNV-1a preimages; those are CANDIDATES, not confirmed, and 0x10706d43 is
+/// unresolved.) The texture lives in the sampler list, an embedded struct of two strings.
 /// A channel is a semantic slot (what this colour channel MEANS), not a texture reference.</para>
 ///
 /// <para><b>Stated plainly: this is unshipped territory.</b> Neither GameplayTextureChannel nor
@@ -93,8 +95,15 @@ public static class MapGameplayTextureBuilder
             new BinTreeString(FieldTexturePath, texturePath.Trim()),
         }));
 
+        // M440: the schema declares this List2, and the retail client REGISTERS it as wire 0x81
+        // (UnorderedContainer) - disassembled at 0x1406bd1c4 `mov r9b,0x81`. Writing 0x80 (Container)
+        // makes the client's PROP reader jump to its skip-value routine and return SUCCESS: the property
+        // is silently discarded, with no log and no error. That is what starved the AlphaMask sampler.
+        // Riot never mixes the two: 0 cross-encodings across 11,523,742 properties in 12,000 shipped bins.
+        // It round-trips fine in ReyEngine either way because BinTreeUnorderedContainer derives from
+        // BinTreeContainer, which is exactly why nothing caught it here.
         component.Properties[SamplersField] =
-            new BinTreeContainer(SamplersField, BinPropertyType.Embedded, samplers);
+            new BinTreeUnorderedContainer(SamplersField, BinPropertyType.Embedded, samplers);
 
         result = new Result(true, $"sampler '{name}' -> {texturePath.Trim()} ({samplers.Count} sampler(s) total)");
         return Write(tree!);
@@ -135,8 +144,13 @@ public static class MapGameplayTextureBuilder
         return Write(tree);
     }
 
-    /// <summary>Which of the four slots still point at nothing. A null link is what makes the client fail
-    /// with <c>Missing sampler "AlphaMask"</c>.</summary>
+    /// <summary>Which of the four slots still point at nothing.
+    ///
+    /// <para>M440 correction: an earlier version of this comment blamed a null link for
+    /// <c>Missing sampler "AlphaMask"</c>. That was wrong — all four links resolved and the error
+    /// persisted. The actual cause was the sampler list being written with the wrong wire form, which the
+    /// client silently discards. Unlinked slots are still worth reporting, but they are not that
+    /// error.</para></summary>
     public static IReadOnlyList<Slot> UnlinkedSlots(byte[] materialsBin)
     {
         var missing = new List<Slot>();

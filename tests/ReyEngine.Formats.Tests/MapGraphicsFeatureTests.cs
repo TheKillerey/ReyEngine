@@ -593,4 +593,52 @@ public class MapGraphicsFeatureTests
         Assert.Null(updated);
         Assert.Contains("declares no MapGameplayTexture", result.Detail);
     }
+
+    // ---- M440: wire form. The bug that cost three test builds. ----
+
+    /// <summary>The schema declares 0xa5aaf88e as List2 and the retail client registers it as wire 0x81
+    /// (UnorderedContainer). Writing 0x80 (Container) makes the client's PROP reader SKIP the property and
+    /// return success - silently, with no log - which starved the AlphaMask sampler and produced a crash
+    /// with no diagnostic pointing anywhere near the cause.</summary>
+    [Fact]
+    public void The_sampler_list_is_written_as_an_unordered_container()
+    {
+        byte[] bin = MapGameplayTextureBuilder.SetSampler(
+            MapWithGameplayTexture(), "AlphaMask", "ASSETS/A.tex", out _)!;
+
+        var component = ComponentsOf(bin).OfType<BinTreeStruct>()
+            .First(s => s.ClassHash == MapGraphicsFeatures.GameplayTexture.Hash);
+        var list = component.Properties[MapGameplayTextureBuilder.SamplersField];
+
+        Assert.IsType<BinTreeUnorderedContainer>(list);
+        Assert.Equal(BinPropertyType.UnorderedContainer, list.Type);
+    }
+
+    /// <summary>A round-trip test cannot catch this: BinTreeUnorderedContainer derives from
+    /// BinTreeContainer, so `is BinTreeContainer` is true either way. Only the concrete type separates
+    /// them - which is why the defect survived a passing suite.</summary>
+    [Fact]
+    public void An_ordered_container_would_not_be_caught_by_an_is_check()
+    {
+        var ordered = new BinTreeContainer(1u, BinPropertyType.Embedded, Array.Empty<BinTreeProperty>());
+        var unordered = new BinTreeUnorderedContainer(1u, BinPropertyType.Embedded, Array.Empty<BinTreeProperty>());
+
+        Assert.IsAssignableFrom<BinTreeContainer>(ordered);
+        Assert.IsAssignableFrom<BinTreeContainer>(unordered);      // the trap
+        Assert.NotEqual(ordered.Type, unordered.Type);             // what actually distinguishes them
+    }
+
+    [Fact]
+    public void Rewriting_an_existing_sampler_list_keeps_the_unordered_form()
+    {
+        byte[] once = MapGameplayTextureBuilder.SetSampler(
+            MapWithGameplayTexture(), "AlphaMask", "ASSETS/A.tex", out _)!;
+
+        byte[] twice = MapGameplayTextureBuilder.SetSampler(once, "ChannelGrid", "ASSETS/B.tex", out _)!;
+
+        var component = ComponentsOf(twice).OfType<BinTreeStruct>()
+            .First(s => s.ClassHash == MapGraphicsFeatures.GameplayTexture.Hash);
+        Assert.IsType<BinTreeUnorderedContainer>(component.Properties[MapGameplayTextureBuilder.SamplersField]);
+        Assert.Equal(2, MapGameplayTextureBuilder.Samplers(twice).Count);
+    }
 }

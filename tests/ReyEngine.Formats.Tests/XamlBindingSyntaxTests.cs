@@ -22,11 +22,14 @@ namespace ReyEngine.Formats.Tests;
 /// </summary>
 public class XamlBindingSyntaxTests
 {
-    private static string RepoRoot()
+    /// <summary>Walk up from THIS SOURCE FILE, not from the output directory. Build output can be
+    /// redirected (e.g. -p:BaseOutputPath while the app holds a lock on bin/), which moves
+    /// AppContext.BaseDirectory outside the repo and silently broke this scan.</summary>
+    private static string RepoRoot([System.Runtime.CompilerServices.CallerFilePath] string here = "")
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        var dir = new DirectoryInfo(Path.GetDirectoryName(here)!);
         while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "src"))) dir = dir.Parent;
-        return dir?.FullName ?? throw new DirectoryNotFoundException("repo root not found from " + AppContext.BaseDirectory);
+        return dir?.FullName ?? throw new DirectoryNotFoundException("repo root not found from " + here);
     }
 
     private static List<string> AxamlFiles() =>
