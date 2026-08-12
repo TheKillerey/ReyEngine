@@ -37,29 +37,35 @@ public static class MapGraphicsFeatures
 
     /// <summary>One member of the family. <paramref name="Hash"/> is the class hash; the hash-only entries
     /// have no name in any dump and are carried by literal hash.</summary>
-    public sealed record Feature(string Name, uint Hash, string Purpose)
+    /// <param name="ShippedMapCount">How many of the 206 shipped map materials.bin declare it (M436,
+    /// measured). 0 means Riot has never put it in a map — adding it is unshipped territory, and at
+    /// least one such feature (MapGameplayTexture) is confirmed to break the client.</param>
+    public sealed record Feature(string Name, uint Hash, string Purpose, int ShippedMapCount)
     {
         public override string ToString() => Name;
+
+        /// <summary>Never seen in a shipped map bin.</summary>
+        public bool IsUnshipped => ShippedMapCount == 0;
     }
 
     public static readonly Feature LightingV2 = new("MapLightingV2", HashAlgorithms.Fnv1a("MapLightingV2"),
-        "Image-based lighting (IBL cubemap + scales buffer). Required by every shipped map that uses a baked-terrain shader.");
+        "Image-based lighting (IBL cubemap + scales buffer). Required by every shipped map that uses a baked-terrain shader.", 180);
     public static readonly Feature TerrainPaint = new("MapTerrainPaint", HashAlgorithms.Fnv1a("MapTerrainPaint"),
-        "Terrain blend atlas (TERRAIN_BLEND_SharedTexture).");
+        "Terrain blend atlas (TERRAIN_BLEND_SharedTexture).", 29);
     public static readonly Feature Ssao = new("MapSSAO", HashAlgorithms.Fnv1a("MapSSAO"),
-        "Screen-space ambient occlusion buffer (SSAO_TEXTURE_SharedTexture).");
+        "Screen-space ambient occlusion buffer (SSAO_TEXTURE_SharedTexture).", 1);
     public static readonly Feature Clouds = new("MapClouds", HashAlgorithms.Fnv1a("MapClouds"),
-        "Cloud shadow layers (the CLOUD_SHADOWS shader define).");
+        "Cloud shadow layers (the CLOUD_SHADOWS shader define).", 1);
     public static readonly Feature DynamicLighting = new("MapDynamicLighting", HashAlgorithms.Fnv1a("MapDynamicLighting"),
-        "Dynamic environment lights (DYNAMIC_ENV_LIGHT_FACTOR/IDS textures).");
+        "Dynamic environment lights (DYNAMIC_ENV_LIGHT_FACTOR/IDS textures).", 0);
     public static readonly Feature GameplayTexture = new("MapGameplayTexture", HashAlgorithms.Fnv1a("MapGameplayTexture"),
-        "Packed gameplay channels (GAMEPLAY_TEXTURE_SharedTexture).");
+        "Packed gameplay channels (GAMEPLAY_TEXTURE_SharedTexture).", 0);
     public static readonly Feature LightRegions = new("MapLightRegions", HashAlgorithms.Fnv1a("MapLightRegions"),
-        "Per-region lighting overrides (LightRegionInfo_SharedDataBuffer).");
+        "Per-region lighting overrides (LightRegionInfo_SharedDataBuffer).", 0);
     public static readonly Feature AntiAliasing = new("MapAntiAliasing", HashAlgorithms.Fnv1a("MapAntiAliasing"),
-        "Anti-aliasing mode.");
+        "Anti-aliasing mode.", 0);
     public static readonly Feature TransitionPositions = new("MapTransitionPositions", HashAlgorithms.Fnv1a("MapTransitionPositions"),
-        "Transition locator positions.");
+        "Transition locator positions.", 0);
 
     /// <summary>Every member we can name. Ordered with the ones that have shipped examples first.</summary>
     public static readonly IReadOnlyList<Feature> All = new[]
@@ -193,6 +199,24 @@ public static class MapGraphicsFeatures
     /// </summary>
     public static string? PrerequisiteWarning(byte[] materialsBin, Feature feature)
     {
+        // M436: the strongest guard is the corpus itself. 5 of the 9 named features appear in 0 of the
+        // 206 shipped map bins, and one of those - MapGameplayTexture - is CONFIRMED to break the client:
+        // it declares Red/Green/Blue/AlphaChannel as Link fields defaulting to "0x0", so a bare marker
+        // leaves the alpha channel pointing at nothing and the client fails with
+        // Missing sampler "AlphaMask". Never-shipped features are reported before anything else.
+        if (feature.IsUnshipped)
+        {
+            string extra = ReferenceEquals(feature, GameplayTexture)
+                ? " CONFIRMED to break the client as a bare marker: its Red/Green/Blue/AlphaChannel are "
+                + "Link fields defaulting to \"0x0\", and the client then fails with Missing sampler "
+                + "\"AlphaMask\". Fill its channel links before shipping it."
+                : " Fill in its fields before shipping it - several of these features have Link or "
+                + "container fields that do nothing useful when left at their defaults.";
+
+            return $"{feature.Name} appears in 0 of the 206 shipped map bins, so nothing demonstrates a "
+                 + "working configuration for it." + extra;
+        }
+
         if (!ReferenceEquals(feature, LightingV2)) return null;
 
         var bake = MapBakeProperties.Read(materialsBin);

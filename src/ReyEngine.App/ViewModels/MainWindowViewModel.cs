@@ -6661,9 +6661,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             if (_currentMapEntry is not null && TryResolveMaterialsBin(_currentMapEntry.Path, out var binEntry))
             {
-                var present = Formats.MapGeo.MapGraphicsFeatures.Read(ReadAsset(binEntry.PathHash));
+                var bytes = ReadAsset(binEntry.PathHash);
+                var present = Formats.MapGeo.MapGraphicsFeatures.Read(bytes);
                 foreach (var f in Formats.MapGeo.MapGraphicsFeatures.All)
-                    MapGraphicsFeatures.Add(new MapGraphicsFeatureViewModel(f, present.Contains(f)));
+                {
+                    var row = new MapGraphicsFeatureViewModel(f, present.Contains(f));
+                    // M436: only a DECLARED component has fields to edit.
+                    if (row.IsPresent)
+                        foreach (var field in Formats.MapGeo.MapGraphicsFeatureSettings.Describe(bytes, f, Meta))
+                            row.Fields.Add(new MapFeatureFieldViewModel(f, field));
+                    MapGraphicsFeatures.Add(row);
+                }
             }
         }
         catch (Exception ex) { _log.Warn("Map", "Could not read the map's graphics features: " + ex.Message); }
@@ -6733,6 +6741,55 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             RefreshMapGraphicsFeatures();
         }
         catch (Exception ex) { _log.Error("Map", $"Could not change {row.Feature.Name}: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// M436: write one field of a MapGraphicsFeature component.
+    ///
+    /// <para>Field names, types and defaults come from the meta-class dump, so nothing is guessed. An
+    /// empty box CLEARS the field rather than zeroing it — an absent field takes the engine's default,
+    /// and shipped components rely on that (map12/jade's MapLightingV2 sets none of its fields).</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task SetMapGraphicsField(MapFeatureFieldViewModel? row)
+    {
+        if (row is null) return;
+        if (!row.IsEditable)
+        { _log.Warn("Map", $"{row.Name} is a {row.TypeName} field — it needs structured content this editor will not invent."); return; }
+        if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+        { _log.Warn("Map", "No map materials.bin is open."); return; }
+        if (!GuardEditable(binEntry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            var updated = Formats.MapGeo.MapGraphicsFeatureSettings.SetField(
+                ReadAsset(binEntry.PathHash), row.Owner, row.Field.Hash, row.TypeName, row.Value, out var result);
+            if (updated is null) { _log.Warn("Map", result.Detail); return; }
+
+            string savedTo;
+            if (TryWriteToProjectFile(binEntry, updated, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, updated, ".bin");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = binEntry.PathHash,
+                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            _log.Success("Map", $"{row.Owner.Name}.{row.Name}: {result.Detail}. Saved to {savedTo} ({updated.Length:n0} bytes).");
+            RefreshMapGraphicsFeatures();
+        }
+        catch (Exception ex) { _log.Error("Map", $"Could not set {row.Owner.Name}.{row.Name}: {ex.Message}"); }
     }
 
     [RelayCommand]

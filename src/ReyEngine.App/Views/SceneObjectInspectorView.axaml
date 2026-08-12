@@ -140,22 +140,55 @@
         <ItemsControl ItemsSource="{Binding MapGraphicsFeatures}" Margin="0,2,0,0">
           <ItemsControl.ItemTemplate>
             <DataTemplate>
-              <Grid ColumnDefinitions="*,Auto" Margin="0,2">
-                <StackPanel Grid.Column="0" Spacing="0" Margin="0,0,6,0">
-                  <StackPanel Orientation="Horizontal" Spacing="5">
-                    <TextBlock Text="{Binding Name}" FontSize="10" VerticalAlignment="Center"
-                               Foreground="{DynamicResource ReyTextBrush}" />
-                    <TextBlock Text="{Binding StateLabel}" FontSize="9" VerticalAlignment="Center"
+              <StackPanel Margin="0,3">
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Grid.Column="0" Spacing="0" Margin="0,0,6,0">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                      <TextBlock Text="{Binding Name}" FontSize="10" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource ReyTextBrush}" />
+                      <TextBlock Text="{Binding StateLabel}" FontSize="9" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <!-- M436: 5 of the 9 features appear in 0 shipped map bins. MapGameplayTexture is
+                           one, and adding it as a bare marker breaks the client. -->
+                      <Border IsVisible="{Binding IsUnshipped}" Background="#5A2D2D" CornerRadius="2" Padding="4,0">
+                        <TextBlock Text="{Binding ShippedLabel}" FontSize="9" Foreground="#F0B3B3" />
+                      </Border>
+                      <TextBlock IsVisible="{Binding !IsUnshipped}" Text="{Binding ShippedLabel}" FontSize="9"
+                                 VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding Purpose}" FontSize="9" TextWrapping="Wrap"
                                Foreground="{DynamicResource ReyTextDimBrush}" />
                   </StackPanel>
-                  <TextBlock Text="{Binding Purpose}" FontSize="9" TextWrapping="Wrap"
-                             Foreground="{DynamicResource ReyTextDimBrush}" />
-                </StackPanel>
-                <Button Grid.Column="1" Content="{Binding ActionLabel}" FontSize="10" Padding="8,1"
-                        VerticalAlignment="Top"
-                        Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).ToggleMapGraphicsFeatureCommand}"
-                        CommandParameter="{Binding}" />
-              </Grid>
+                  <Button Grid.Column="1" Content="{Binding ActionLabel}" FontSize="10" Padding="8,1"
+                          VerticalAlignment="Top"
+                          Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).ToggleMapGraphicsFeatureCommand}"
+                          CommandParameter="{Binding}" />
+                </Grid>
+
+                <!-- M436: the component's own fields, named and typed by the meta-class dump. -->
+                <ItemsControl ItemsSource="{Binding Fields}" IsVisible="{Binding HasFields}" Margin="10,2,0,4">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Grid ColumnDefinitions="150,*,Auto" Margin="0,1">
+                        <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                          <TextBlock Text="{Binding Name}" FontSize="9" TextTrimming="CharacterEllipsis"
+                                     Foreground="{DynamicResource ReyTextBrush}" ToolTip.Tip="{Binding Hint}" />
+                          <TextBlock Text="{Binding Hint}" FontSize="8" TextTrimming="CharacterEllipsis"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                        </StackPanel>
+                        <TextBox Grid.Column="1" Text="{Binding Value}" FontSize="9" Padding="3,1"
+                                 IsEnabled="{Binding IsEditable}" VerticalAlignment="Center"
+                                 Watermark="(unset - takes the engine default)" />
+                        <Button Grid.Column="2" Content="Set" FontSize="9" Padding="6,1" Margin="4,0,0,0"
+                                VerticalAlignment="Center" IsEnabled="{Binding IsEditable}"
+                                Command="{Binding $parent[ItemsControl].$parent[ItemsControl].((vm:MainWindowViewModel)DataContext).SetMapGraphicsFieldCommand}"
+                                CommandParameter="{Binding}"
+                                ToolTip.Tip="Write this value into the component. Empty clears the field, which is not the same as zero." />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>

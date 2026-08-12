@@ -250,4 +250,147 @@ public class MapGraphicsFeatureTests
         Assert.Null(MapGraphicsFeatures.PrerequisiteWarning(MapBin(), MapGraphicsFeatures.TerrainPaint));
         Assert.Null(MapGraphicsFeatures.PrerequisiteWarning(MapBin(), MapGraphicsFeatures.Ssao));
     }
+
+    // ---- M436: never-shipped guard + field editing ----
+
+    /// <summary>MapGameplayTexture appears in 0 of 206 shipped map bins, and adding it as a bare marker
+    /// is CONFIRMED to break the client with Missing sampler "AlphaMask" — its Red/Green/Blue/Alpha
+    /// Channel fields are Links defaulting to "0x0".</summary>
+    [Fact]
+    public void A_never_shipped_feature_is_flagged_before_anything_else()
+    {
+        string? advice = MapGraphicsFeatures.PrerequisiteWarning(MapBin(), MapGraphicsFeatures.GameplayTexture);
+
+        Assert.NotNull(advice);
+        Assert.Contains("0 of the 206", advice);
+        Assert.Contains("AlphaMask", advice);
+        Assert.Contains("AlphaChannel", advice);
+    }
+
+    [Fact]
+    public void The_shipped_counts_are_the_measured_ones()
+    {
+        Assert.Equal(180, MapGraphicsFeatures.LightingV2.ShippedMapCount);
+        Assert.Equal(29, MapGraphicsFeatures.TerrainPaint.ShippedMapCount);
+        Assert.Equal(1, MapGraphicsFeatures.Ssao.ShippedMapCount);
+        Assert.Equal(1, MapGraphicsFeatures.Clouds.ShippedMapCount);
+        Assert.True(MapGraphicsFeatures.GameplayTexture.IsUnshipped);
+        Assert.True(MapGraphicsFeatures.DynamicLighting.IsUnshipped);
+        Assert.True(MapGraphicsFeatures.LightRegions.IsUnshipped);
+        Assert.False(MapGraphicsFeatures.LightingV2.IsUnshipped);
+    }
+
+    /// <summary>Link, container, embed and map fields must NOT be offered for editing — inventing
+    /// content for them is how MapGameplayTexture ended up with a null AlphaChannel.</summary>
+    [Fact]
+    public void Only_scalar_field_types_are_editable()
+    {
+        foreach (var t in new[] { "Bool", "U8", "U16", "U32", "I32", "F32", "String", "Vec2", "Vec3", "Vec4" })
+            Assert.True(MapGraphicsFeatureSettings.IsEditable(t), t);
+        foreach (var t in new[] { "Link", "Embed", "Container", "List", "List2", "Map", "Struct", "Optional" })
+            Assert.False(MapGraphicsFeatureSettings.IsEditable(t), t);
+    }
+
+    [Fact]
+    public void Setting_a_float_field_writes_it_and_reading_back_shows_it()
+    {
+        byte[] withV2 = MapGraphicsFeatures.Add(MapBin(), MapGraphicsFeatures.LightingV2, null, out _)!;
+        uint field = HashAlgorithms.Fnv1a("BounceLightFalloffDistance");
+
+        byte[]? updated = MapGraphicsFeatureSettings.SetField(
+            withV2, MapGraphicsFeatures.LightingV2, field, "F32", "2500", out var result);
+
+        Assert.NotNull(updated);
+        Assert.True(result.Changed);
+        var added = ComponentsOf(updated!).OfType<BinTreeStruct>()
+            .First(s => s.ClassHash == MapGraphicsFeatures.LightingV2.Hash);
+        Assert.Equal(2500f, ((BinTreeF32)added.Properties[field]).Value);
+    }
+
+    /// <summary>German locale: a float must parse invariantly, or "2.5" becomes 25.</summary>
+    [Fact]
+    public void Floats_parse_invariantly_regardless_of_locale()
+    {
+        var prior = System.Threading.Thread.CurrentThread.CurrentCulture;
+        try
+        {
+            System.Threading.Thread.CurrentThread.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+            byte[] withV2 = MapGraphicsFeatures.Add(MapBin(), MapGraphicsFeatures.LightingV2, null, out _)!;
+            uint field = HashAlgorithms.Fnv1a("MinimumEnvironmentColorContribution");
+
+            byte[]? updated = MapGraphicsFeatureSettings.SetField(
+                withV2, MapGraphicsFeatures.LightingV2, field, "F32", "0.9", out _);
+
+            var added = ComponentsOf(updated!).OfType<BinTreeStruct>()
+                .First(s => s.ClassHash == MapGraphicsFeatures.LightingV2.Hash);
+            Assert.Equal(0.9f, ((BinTreeF32)added.Properties[field]).Value, 5);
+        }
+        finally { System.Threading.Thread.CurrentThread.CurrentCulture = prior; }
+    }
+
+    /// <summary>Empty CLEARS the field. That is not the same as zero — an absent field takes the
+    /// engine's default, which is what map12/jade relies on.</summary>
+    [Fact]
+    public void An_empty_value_clears_the_field_rather_than_zeroing_it()
+    {
+        byte[] withV2 = MapGraphicsFeatures.Add(MapBin(), MapGraphicsFeatures.LightingV2,
+            MapGraphicsFeatures.IoniaBaseLightingV2Fields(), out _)!;
+        uint field = HashAlgorithms.Fnv1a("BounceLightFalloffDistance");
+
+        byte[]? updated = MapGraphicsFeatureSettings.SetField(
+            withV2, MapGraphicsFeatures.LightingV2, field, "F32", "", out var result);
+
+        Assert.NotNull(updated);
+        Assert.True(result.Changed);
+        var added = ComponentsOf(updated!).OfType<BinTreeStruct>()
+            .First(s => s.ClassHash == MapGraphicsFeatures.LightingV2.Hash);
+        Assert.False(added.Properties.ContainsKey(field));
+        Assert.Single(added.Properties);          // the other ionia field survives
+    }
+
+    [Fact]
+    public void A_value_that_does_not_parse_is_refused_rather_than_written()
+    {
+        byte[] withV2 = MapGraphicsFeatures.Add(MapBin(), MapGraphicsFeatures.LightingV2, null, out _)!;
+
+        byte[]? updated = MapGraphicsFeatureSettings.SetField(withV2, MapGraphicsFeatures.LightingV2,
+            HashAlgorithms.Fnv1a("BounceLightFalloffDistance"), "F32", "not-a-number", out var result);
+
+        Assert.Null(updated);
+        Assert.False(result.Changed);
+        Assert.Contains("not a number", result.Detail);
+    }
+
+    [Fact]
+    public void A_link_field_is_refused_rather_than_invented()
+    {
+        byte[] withGt = MapGraphicsFeatures.Add(MapBin(), MapGraphicsFeatures.GameplayTexture, null, out _)!;
+
+        byte[]? updated = MapGraphicsFeatureSettings.SetField(withGt, MapGraphicsFeatures.GameplayTexture,
+            HashAlgorithms.Fnv1a("AlphaChannel"), "Link", "0x1234", out var result);
+
+        Assert.Null(updated);
+        Assert.False(result.Changed);
+        Assert.Contains("will not invent", result.Detail);
+    }
+
+    [Fact]
+    public void Setting_a_field_on_an_undeclared_feature_is_reported()
+    {
+        byte[]? updated = MapGraphicsFeatureSettings.SetField(MapBin(), MapGraphicsFeatures.Ssao,
+            HashAlgorithms.Fnv1a("whatever"), "F32", "1", out var result);
+
+        Assert.Null(updated);
+        Assert.Contains("not declared", result.Detail);
+    }
+
+    /// <summary>Without a meta database there are no field descriptors — and the editor must offer
+    /// nothing rather than guess names.</summary>
+    [Fact]
+    public void Describe_without_a_meta_database_offers_no_fields()
+    {
+        byte[] withV2 = MapGraphicsFeatures.Add(MapBin(), MapGraphicsFeatures.LightingV2, null, out _)!;
+
+        Assert.Empty(MapGraphicsFeatureSettings.Describe(withV2, MapGraphicsFeatures.LightingV2, null));
+    }
 }

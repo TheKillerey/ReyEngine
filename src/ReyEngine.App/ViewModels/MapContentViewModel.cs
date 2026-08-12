@@ -523,9 +523,52 @@ public sealed partial class MapGraphicsFeatureViewModel : ObservableObject
     public string ActionLabel => IsPresent ? "Remove" : "Add";
     public string StateLabel => IsPresent ? "declared" : "absent";
 
+    /// <summary>M436: how many of the 206 shipped map bins declare it. 0 is the warning that matters -
+    /// MapGameplayTexture is one, and adding it as a bare marker breaks the client.</summary>
+    public int ShippedMapCount => Feature.ShippedMapCount;
+    public bool IsUnshipped => Feature.IsUnshipped;
+    public string ShippedLabel => Feature.IsUnshipped
+        ? "never shipped in a map"
+        : $"in {Feature.ShippedMapCount} shipped map bin(s)";
+
+    /// <summary>M436: the component's own fields, from the meta-class dump. Populated only while the
+    /// feature is declared - there is nothing to edit on a component that is not there.</summary>
+    public ObservableCollection<MapFeatureFieldViewModel> Fields { get; } = new();
+
+    public bool HasFields => Fields.Count > 0;
+
     partial void OnIsPresentChanged(bool value)
     {
         OnPropertyChanged(nameof(ActionLabel));
         OnPropertyChanged(nameof(StateLabel));
     }
+}
+
+/// <summary>M436: one field of a MapGraphicsFeature component, described by the meta-class dump and
+/// editable when its type is a scalar. Container/embed/link/map fields are shown but not editable -
+/// inventing content for them is exactly how MapGameplayTexture ended up with a null AlphaChannel.</summary>
+public sealed partial class MapFeatureFieldViewModel : ObservableObject
+{
+    public MapFeatureFieldViewModel(MapGraphicsFeatures.Feature owner, MapGraphicsFeatureSettings.Field field)
+    {
+        Owner = owner;
+        Field = field;
+        _value = field.Current ?? "";
+    }
+
+    public MapGraphicsFeatures.Feature Owner { get; }
+    public MapGraphicsFeatureSettings.Field Field { get; }
+
+    public string Name => Field.Name;
+    public string TypeName => Field.TypeName;
+    public bool IsEditable => Field.Editable;
+    public bool IsSet => Field.IsSet;
+
+    /// <summary>The edit buffer. Empty means "clear it" - an absent field takes the engine default,
+    /// which is not the same as zero.</summary>
+    [ObservableProperty] private string _value;
+
+    public string Hint => Field.Default is null
+        ? (Field.Editable ? TypeName : $"{TypeName} - not editable here")
+        : (Field.Editable ? $"{TypeName}, default {Field.Default}" : $"{TypeName} (read-only), default {Field.Default}");
 }
