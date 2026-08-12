@@ -6792,6 +6792,72 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Map", $"Could not set {row.Owner.Name}.{row.Name}: {ex.Message}"); }
     }
 
+    /// <summary>
+    /// M438: fill a graphics feature from a map Riot actually ships with it — values, textures and
+    /// nested structs included.
+    ///
+    /// <para>This copies rather than invents. MapSSAO is an embedded renderer with a nested settings
+    /// struct and MapClouds is a 3-element layer container plus a texture path; neither can be built from
+    /// a type tuple, which is why <see cref="Formats.Meta.MetaDefaultProperty"/> refuses them. A
+    /// component lifted whole out of a shipped bin is Riot's own working configuration.</para>
+    ///
+    /// <para>Adds the feature if it is absent, and overwrites the copied fields if it is present.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task FillMapGraphicsPreset(MapGraphicsFeatureViewModel? row)
+    {
+        if (row is null) return;
+        if (row.PresetSource is not { } sourcePath)
+        { _log.Warn("Map", $"{row.Name} appears in no shipped map, so there is no configuration to copy."); return; }
+        if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+        { _log.Warn("Map", "No map materials.bin is open."); return; }
+        if (!GuardEditable(binEntry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            var sourceBin = ReadAssetByPath(sourcePath);
+            if (sourceBin is null)
+            { _log.Warn("Map", $"Could not read {sourcePath} — is the game folder set?"); return; }
+
+            var preset = Formats.MapGeo.MapGraphicsFeaturePresets.Extract(sourceBin, row.Feature, ResolveBinName);
+            if (preset is null || preset.Fields.Count == 0)
+            { _log.Warn("Map", $"{sourcePath} declares no usable {row.Name} fields."); return; }
+
+            var updated = Formats.MapGeo.MapGraphicsFeatures.Add(
+                ReadAsset(binEntry.PathHash), row.Feature, preset.Fields, out var result);
+            if (updated is null) { _log.Warn("Map", result.Detail); return; }
+
+            string savedTo;
+            if (TryWriteToProjectFile(binEntry, updated, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, updated, ".bin");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = binEntry.PathHash,
+                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            if (preset.Dropped.Count > 0)
+                _log.Warn("Map", $"{row.Name}: {preset.Dropped.Count} link field(s) were NOT copied — an "
+                                 + "ObjectLink points into its own bin, so the value would reference nothing here: "
+                                 + string.Join(", ", preset.Dropped));
+            _log.Success("Map", $"{row.Name}: copied {preset.Summary} from {sourcePath}. "
+                                + $"Saved to {savedTo} ({updated.Length:n0} bytes).");
+            RefreshMapGraphicsFeatures();
+        }
+        catch (Exception ex) { _log.Error("Map", $"Could not fill {row.Name}: {ex.Message}"); }
+    }
+
     [RelayCommand]
     private async Task SaveMeshMoves()
     {

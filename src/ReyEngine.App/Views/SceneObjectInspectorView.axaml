@@ -159,10 +159,18 @@
                     <TextBlock Text="{Binding Purpose}" FontSize="9" TextWrapping="Wrap"
                                Foreground="{DynamicResource ReyTextDimBrush}" />
                   </StackPanel>
-                  <Button Grid.Column="1" Content="{Binding ActionLabel}" FontSize="10" Padding="8,1"
-                          VerticalAlignment="Top"
-                          Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).ToggleMapGraphicsFeatureCommand}"
-                          CommandParameter="{Binding}" />
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Top">
+                    <!-- M438: copy the whole component out of a map Riot ships with it - textures,
+                         nested structs and all. Absent for the features no shipped map declares. -->
+                    <Button Content="{Binding PresetLabel}" FontSize="10" Padding="6,1"
+                            IsVisible="{Binding HasPreset}"
+                            Command="{Binding $parent[UserControl].((vm:MainWindowViewModel)DataContext).FillMapGraphicsPresetCommand}"
+                            CommandParameter="{Binding}"
+                            ToolTip.Tip="Copy this component's real configuration from a shipped Riot map, including texture paths and nested settings. Link fields cannot cross bins and are reported rather than copied." />
+                    <Button Content="{Binding ActionLabel}" FontSize="10" Padding="8,1"
+                            Command="{Binding $parent[UserControl].((vm:MainWindowViewModel)DataContext).ToggleMapGraphicsFeatureCommand}"
+                            CommandParameter="{Binding}" />
+                  </StackPanel>
                 </Grid>
 
                 <!-- M436: the component's own fields, named and typed by the meta-class dump. -->

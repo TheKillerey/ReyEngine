@@ -531,6 +531,14 @@ public sealed partial class MapGraphicsFeatureViewModel : ObservableObject
         ? "never shipped in a map"
         : $"in {Feature.ShippedMapCount} shipped map bin(s)";
 
+    /// <summary>M438: a shipped map that carries this feature, whose configuration can be copied whole.
+    /// Null for the five features Riot ships in no map at all.</summary>
+    public string? PresetSource => MapGraphicsFeaturePresets.SourceMap(Feature);
+    public bool HasPreset => PresetSource is not null;
+    public string PresetLabel => PresetSource is null
+        ? "no shipped example"
+        : "Fill from " + System.IO.Path.GetFileNameWithoutExtension(PresetSource).Replace(".materials", "");
+
     /// <summary>M436: the component's own fields, from the meta-class dump. Populated only while the
     /// feature is declared - there is nothing to edit on a component that is not there.</summary>
     public ObservableCollection<MapFeatureFieldViewModel> Fields { get; } = new();

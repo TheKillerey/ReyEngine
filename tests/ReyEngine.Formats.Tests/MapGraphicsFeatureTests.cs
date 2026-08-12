@@ -393,4 +393,90 @@ public class MapGraphicsFeatureTests
 
         Assert.Empty(MapGraphicsFeatureSettings.Describe(withV2, MapGraphicsFeatures.LightingV2, null));
     }
+
+    // ---- M438: fill from a shipped map ----
+
+    /// <summary>Only the four features Riot actually ships have something to copy. The other five have
+    /// no source, and offering an invented one is what broke MapGameplayTexture.</summary>
+    [Fact]
+    public void Only_features_riot_ships_have_a_preset_source()
+    {
+        Assert.NotNull(MapGraphicsFeaturePresets.SourceMap(MapGraphicsFeatures.LightingV2));
+        Assert.NotNull(MapGraphicsFeaturePresets.SourceMap(MapGraphicsFeatures.TerrainPaint));
+        Assert.NotNull(MapGraphicsFeaturePresets.SourceMap(MapGraphicsFeatures.Ssao));
+        Assert.NotNull(MapGraphicsFeaturePresets.SourceMap(MapGraphicsFeatures.Clouds));
+
+        foreach (var f in MapGraphicsFeatures.All.Where(f => f.IsUnshipped))
+            Assert.Null(MapGraphicsFeaturePresets.SourceMap(f));
+    }
+
+    [Fact]
+    public void Extracting_from_a_bin_that_lacks_the_feature_returns_null()
+    {
+        Assert.Null(MapGraphicsFeaturePresets.Extract(MapBin(), MapGraphicsFeatures.Ssao));
+    }
+
+    /// <summary>Nested embeds and containers are the whole point — they are what a type tuple cannot
+    /// build and what MetaDefaultProperty rightly refuses.</summary>
+    [Fact]
+    public void A_nested_embed_is_copied_whole()
+    {
+        uint settings = HashAlgorithms.Fnv1a("settings");
+        var renderer = new BinTreeEmbedded(HashAlgorithms.Fnv1a("MapSSAORenderer"), 0xce8f4190u, new BinTreeProperty[]
+        {
+            new BinTreeEmbedded(settings, 0x502b0c72u, new BinTreeProperty[]
+            {
+                new BinTreeF32(HashAlgorithms.Fnv1a("SampleRadius"), 75f),
+            }),
+        });
+        var source = MapGraphicsFeatures.Add(MapBin(), MapGraphicsFeatures.Ssao,
+            new BinTreeProperty[] { renderer }, out _)!;
+
+        var got = MapGraphicsFeaturePresets.Extract(source, MapGraphicsFeatures.Ssao);
+
+        Assert.NotNull(got);
+        Assert.Single(got!.Fields);
+        Assert.Empty(got.Dropped);
+        var copied = Assert.IsAssignableFrom<BinTreeStruct>(got.Fields[0]);
+        var inner = Assert.IsAssignableFrom<BinTreeStruct>(copied.Properties[settings]);
+        Assert.Equal(75f, ((BinTreeF32)inner.Properties[HashAlgorithms.Fnv1a("SampleRadius")]).Value);
+    }
+
+    /// <summary>An ObjectLink's value is an id in the SOURCE bin; copying the number would point at
+    /// nothing here. Dropped and reported, never carried across.</summary>
+    [Fact]
+    public void Link_fields_are_dropped_and_reported()
+    {
+        uint alpha = HashAlgorithms.Fnv1a("AlphaChannel");
+        var source = MapGraphicsFeatures.Add(MapBin(), MapGraphicsFeatures.GameplayTexture,
+            new BinTreeProperty[]
+            {
+                new BinTreeObjectLink(alpha, 0x1234u),
+                new BinTreeU8(HashAlgorithms.Fnv1a("TextureResolution"), 2),
+            }, out _)!;
+
+        var got = MapGraphicsFeaturePresets.Extract(source, MapGraphicsFeatures.GameplayTexture,
+            h => h == alpha ? "AlphaChannel" : null);
+
+        Assert.NotNull(got);
+        Assert.Single(got!.Fields);                       // only the U8 survives
+        Assert.Contains("AlphaChannel", got.Dropped);
+        Assert.DoesNotContain(got.Fields, f => f.NameHash == alpha);
+    }
+
+    /// <summary>The copy must not share nodes with the source tree, or editing one would mutate the
+    /// other.</summary>
+    [Fact]
+    public void The_copy_is_deep_and_shares_nothing_with_the_source()
+    {
+        var source = MapGraphicsFeatures.Add(MapBin(), MapGraphicsFeatures.LightingV2,
+            MapGraphicsFeatures.IoniaBaseLightingV2Fields(), out _)!;
+
+        var a = MapGraphicsFeaturePresets.Extract(source, MapGraphicsFeatures.LightingV2)!;
+        var b = MapGraphicsFeaturePresets.Extract(source, MapGraphicsFeatures.LightingV2)!;
+
+        Assert.Equal(a.Fields.Count, b.Fields.Count);
+        for (int i = 0; i < a.Fields.Count; i++)
+            Assert.NotSame(a.Fields[i], b.Fields[i]);
+    }
 }
