@@ -6676,6 +6676,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         catch (Exception ex) { _log.Warn("Map", "Could not read the map's graphics features: " + ex.Message); }
         OnPropertyChanged(nameof(HasMapGraphicsFeatures));
+        RefreshGameplayTextureStatus();   // M439
     }
 
     /// <summary>
@@ -6856,6 +6857,104 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             RefreshMapGraphicsFeatures();
         }
         catch (Exception ex) { _log.Error("Map", $"Could not fill {row.Name}: {ex.Message}"); }
+    }
+
+    // ---- M439: MapGameplayTexture authoring (samplers + channel links) ----
+
+    [ObservableProperty] private string _gameplayTextureSamplerName = "Base";
+    [ObservableProperty] private string _gameplayTexturePath = "";
+    [ObservableProperty] private string _gameplayChannelName = "";
+    [ObservableProperty] private string _gameplayChannelSlot = "Alpha";
+
+    /// <summary>M439: is MapGameplayTexture declared, so its sub-structures can be authored?</summary>
+    public bool HasGameplayTexture =>
+        MapGraphicsFeatures.Any(r => ReferenceEquals(r.Feature, Formats.MapGeo.MapGraphicsFeatures.GameplayTexture)
+                                     && r.IsPresent);
+
+    /// <summary>M439: what the component still lacks — the four colour slots start as null links, which
+    /// is the state that makes the client fail with Missing sampler "AlphaMask".</summary>
+    [ObservableProperty] private string _gameplayTextureStatus = "";
+
+    public IReadOnlyList<string> GameplayChannelSlots { get; } = new[] { "Red", "Green", "Blue", "Alpha" };
+
+    private void RefreshGameplayTextureStatus()
+    {
+        OnPropertyChanged(nameof(HasGameplayTexture));
+        GameplayTextureStatus = "";
+        try
+        {
+            if (!HasGameplayTexture) return;
+            if (_currentMapEntry is null || !TryResolveMaterialsBin(_currentMapEntry.Path, out var binEntry)) return;
+            var bytes = ReadAsset(binEntry.PathHash);
+            var unlinked = Formats.MapGeo.MapGameplayTextureBuilder.UnlinkedSlots(bytes);
+            var samplers = Formats.MapGeo.MapGameplayTextureBuilder.Samplers(bytes);
+            GameplayTextureStatus =
+                $"{samplers.Count} sampler(s): {(samplers.Count == 0 ? "none — no texture yet" : string.Join(", ", samplers.Select(s => $"{s.Name}={s.TexturePath}")))}"
+                + Environment.NewLine
+                + $"unlinked channels: {(unlinked.Count == 0 ? "none" : string.Join(", ", unlinked))}";
+        }
+        catch (Exception ex) { GameplayTextureStatus = "could not read: " + ex.Message; }
+    }
+
+    /// <summary>M439: give MapGameplayTexture its texture. The sampler list is an embedded struct of two
+    /// strings, so unlike the channel slots it needs no object link.</summary>
+    [RelayCommand]
+    private Task SetGameplayTextureSampler() => EditGameplayTexture(bytes =>
+        Formats.MapGeo.MapGameplayTextureBuilder.SetSampler(
+            bytes, GameplayTextureSamplerName, GameplayTexturePath, out var r) is { } b ? (b, r) : (null, r));
+
+    /// <summary>M439: create a GameplayTextureChannel object and link the chosen slot to it. A link
+    /// stores the target's path hash, so the object has to exist in THIS bin.</summary>
+    [RelayCommand]
+    private Task SetGameplayTextureChannel() => EditGameplayTexture(bytes =>
+    {
+        if (!Enum.TryParse<Formats.MapGeo.MapGameplayTextureBuilder.Slot>(GameplayChannelSlot, out var slot))
+            return (null, new Formats.MapGeo.MapGameplayTextureBuilder.Result(false, $"unknown slot '{GameplayChannelSlot}'"));
+        var b = Formats.MapGeo.MapGameplayTextureBuilder.SetChannel(bytes, slot, GameplayChannelName, null, out var r);
+        return (b, r);
+    });
+
+    /// <summary>The shared save path for both MapGameplayTexture edits.</summary>
+    private async Task EditGameplayTexture(
+        Func<byte[], (byte[]? Bytes, Formats.MapGeo.MapGameplayTextureBuilder.Result Result)> edit)
+    {
+        if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+        { _log.Warn("Map", "No map materials.bin is open."); return; }
+        if (!GuardEditable(binEntry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            var (updated, result) = edit(ReadAsset(binEntry.PathHash));
+            if (updated is null) { _log.Warn("Map", result.Detail); return; }
+
+            string savedTo;
+            if (TryWriteToProjectFile(binEntry, updated, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, updated, ".bin");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = binEntry.PathHash,
+                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            _log.Success("Map", $"MapGameplayTexture: {result.Detail}. Saved to {savedTo} ({updated.Length:n0} bytes).");
+            var left = Formats.MapGeo.MapGameplayTextureBuilder.UnlinkedSlots(updated);
+            if (left.Count > 0)
+                _log.Warn("Map", $"Still unlinked: {string.Join(", ", left)}. A null channel link is what makes "
+                                 + "the client fail with Missing sampler \"AlphaMask\".");
+            RefreshMapGraphicsFeatures();
+        }
+        catch (Exception ex) { _log.Error("Map", "MapGameplayTexture edit failed: " + ex.Message); }
     }
 
     [RelayCommand]

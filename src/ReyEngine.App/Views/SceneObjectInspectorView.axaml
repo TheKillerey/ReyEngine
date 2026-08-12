@@ -203,6 +203,43 @@
       </StackPanel>
     </Border>
 
+    <!-- M439: MapGameplayTexture is the one feature whose content cannot be typed into the generic field
+         list: its texture lives in an embedded sampler list and its four colour slots are object links
+         that must point at real GameplayTextureChannel objects in this same bin. -->
+    <Border Classes="card" IsVisible="{Binding HasGameplayTexture}">
+      <StackPanel Spacing="3">
+        <TextBlock Classes="cardTitle" Text="MAP GAMEPLAY TEXTURE" />
+        <TextBlock Text="Riot ships no map with this component and no instance of its two sub-classes anywhere, so the structure below is from the schema and the values are yours to choose."
+                   FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+        <TextBlock Text="{Binding GameplayTextureStatus}" FontSize="9" TextWrapping="Wrap"
+                   Foreground="{DynamicResource ReyAccentBrush}" Margin="0,2,0,0" />
+
+        <TextBlock Text="Texture (GameplayTextureSampler — no link needed)" FontSize="9" Margin="0,4,0,0"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <Grid ColumnDefinitions="90,*,Auto">
+          <TextBox Grid.Column="0" Text="{Binding GameplayTextureSamplerName}" FontSize="9" Padding="3,1"
+                   Watermark="name" Margin="0,0,4,0" />
+          <TextBox Grid.Column="1" Text="{Binding GameplayTexturePath}" FontSize="9" Padding="3,1"
+                   Watermark="ASSETS/Maps/.../Texture.tex" />
+          <Button Grid.Column="2" Content="Set" FontSize="9" Padding="6,1" Margin="4,0,0,0"
+                  Command="{Binding SetGameplayTextureSamplerCommand}"
+                  ToolTip.Tip="Add or replace a sampler entry. This is where the texture actually goes — GameplayTextureChannel has no texture field." />
+        </Grid>
+
+        <TextBlock Text="Channel slots (each creates a GameplayTextureChannel object and links it)"
+                   FontSize="9" Margin="0,4,0,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+        <Grid ColumnDefinitions="90,*,Auto">
+          <ComboBox Grid.Column="0" ItemsSource="{Binding GameplayChannelSlots}"
+                    SelectedItem="{Binding GameplayChannelSlot}" FontSize="9" Margin="0,0,4,0" />
+          <TextBox Grid.Column="1" Text="{Binding GameplayChannelName}" FontSize="9" Padding="3,1"
+                   Watermark="channel name, e.g. Grass" />
+          <Button Grid.Column="2" Content="Link" FontSize="9" Padding="6,1" Margin="4,0,0,0"
+                  Command="{Binding SetGameplayTextureChannelCommand}"
+                  ToolTip.Tip="Create a GameplayTextureChannel in this bin and point the slot at it. A null slot link is what makes the client fail with Missing sampler AlphaMask." />
+        </Grid>
+      </StackPanel>
+    </Border>
+
     <!-- MATERIALS — the materials assigned to the selected mesh (Unity Mesh-Renderer style) -->
     <Border Classes="card" IsVisible="{Binding HasSelectedMeshMaterials}">
       <StackPanel Spacing="3">

@@ -479,4 +479,118 @@ public class MapGraphicsFeatureTests
         for (int i = 0; i < a.Fields.Count; i++)
             Assert.NotSame(a.Fields[i], b.Fields[i]);
     }
+
+    // ---- M439: authoring MapGameplayTexture's samplers and channels ----
+
+    private static byte[] MapWithGameplayTexture() =>
+        MapGraphicsFeatures.Add(MapBin(), MapGraphicsFeatures.GameplayTexture, null, out _)!;
+
+    /// <summary>The texture goes in the sampler list, which is an embedded struct of two strings and
+    /// needs no link at all — GameplayTextureChannel has no texture field.</summary>
+    [Fact]
+    public void A_sampler_carries_the_texture_path_without_any_link()
+    {
+        byte[]? updated = MapGameplayTextureBuilder.SetSampler(
+            MapWithGameplayTexture(), "Base", "ASSETS/Maps/Gameplay/Test.tex", out var result);
+
+        Assert.NotNull(updated);
+        Assert.True(result.Changed);
+        var samplers = MapGameplayTextureBuilder.Samplers(updated!);
+        Assert.Single(samplers);
+        Assert.Equal("Base", samplers[0].Name);
+        Assert.Equal("ASSETS/Maps/Gameplay/Test.tex", samplers[0].TexturePath);
+    }
+
+    [Fact]
+    public void Setting_the_same_sampler_name_replaces_rather_than_duplicates()
+    {
+        byte[] once = MapGameplayTextureBuilder.SetSampler(
+            MapWithGameplayTexture(), "Base", "ASSETS/A.tex", out _)!;
+
+        byte[]? twice = MapGameplayTextureBuilder.SetSampler(once, "Base", "ASSETS/B.tex", out _);
+
+        var samplers = MapGameplayTextureBuilder.Samplers(twice!);
+        Assert.Single(samplers);
+        Assert.Equal("ASSETS/B.tex", samplers[0].TexturePath);
+    }
+
+    [Fact]
+    public void A_sampler_without_a_texture_path_is_refused()
+    {
+        byte[]? updated = MapGameplayTextureBuilder.SetSampler(
+            MapWithGameplayTexture(), "Base", "  ", out var result);
+
+        Assert.Null(updated);
+        Assert.Contains("needs a texture path", result.Detail);
+    }
+
+    /// <summary>All four slots start null — which is exactly the state that makes the client fail with
+    /// Missing sampler "AlphaMask".</summary>
+    [Fact]
+    public void A_bare_component_reports_all_four_slots_unlinked()
+    {
+        var unlinked = MapGameplayTextureBuilder.UnlinkedSlots(MapWithGameplayTexture());
+
+        Assert.Equal(4, unlinked.Count);
+        Assert.Contains(MapGameplayTextureBuilder.Slot.Alpha, unlinked);
+    }
+
+    /// <summary>A link stores the target's path hash, so the channel must exist as a real object in THIS
+    /// bin. That is why a link cannot be set by typing a number, and why copying between bins drops it.</summary>
+    [Fact]
+    public void Setting_a_channel_creates_the_object_and_links_it()
+    {
+        byte[]? updated = MapGameplayTextureBuilder.SetChannel(
+            MapWithGameplayTexture(), MapGameplayTextureBuilder.Slot.Alpha, "Grass", null, out var result);
+
+        Assert.NotNull(updated);
+        Assert.True(result.Changed);
+
+        var tree = new BinTree(new MemoryStream(updated!, false));
+        var channel = tree.Objects.Values.FirstOrDefault(o => o.ClassHash == MapGameplayTextureBuilder.ChannelClass);
+        Assert.NotNull(channel);
+        Assert.Equal("Grass", ((BinTreeString)channel!.Properties[MapGameplayTextureBuilder.FieldChannelName]).Value);
+
+        var component = ComponentsOf(updated!).OfType<BinTreeStruct>()
+            .First(s => s.ClassHash == MapGraphicsFeatures.GameplayTexture.Hash);
+        var link = Assert.IsType<BinTreeObjectLink>(
+            component.Properties[MapGameplayTextureBuilder.SlotField(MapGameplayTextureBuilder.Slot.Alpha)]);
+        Assert.Equal(channel.PathHash, link.Value);
+        Assert.DoesNotContain(MapGameplayTextureBuilder.Slot.Alpha, MapGameplayTextureBuilder.UnlinkedSlots(updated!));
+    }
+
+    /// <summary>Re-running with the same name must reuse the id rather than leave an orphan behind.</summary>
+    [Fact]
+    public void Setting_the_same_channel_twice_does_not_mint_a_second_object()
+    {
+        byte[] once = MapGameplayTextureBuilder.SetChannel(
+            MapWithGameplayTexture(), MapGameplayTextureBuilder.Slot.Red, "Grass", null, out _)!;
+
+        byte[] twice = MapGameplayTextureBuilder.SetChannel(
+            once, MapGameplayTextureBuilder.Slot.Red, "Grass", null, out _)!;
+
+        var tree = new BinTree(new MemoryStream(twice, false));
+        Assert.Single(tree.Objects.Values.Where(o => o.ClassHash == MapGameplayTextureBuilder.ChannelClass));
+    }
+
+    [Fact]
+    public void All_four_slots_can_be_linked_to_distinct_channels()
+    {
+        byte[] bin = MapWithGameplayTexture();
+        foreach (var slot in Enum.GetValues<MapGameplayTextureBuilder.Slot>())
+            bin = MapGameplayTextureBuilder.SetChannel(bin, slot, "Ch" + slot, null, out _)!;
+
+        Assert.Empty(MapGameplayTextureBuilder.UnlinkedSlots(bin));
+        var tree = new BinTree(new MemoryStream(bin, false));
+        Assert.Equal(4, tree.Objects.Values.Count(o => o.ClassHash == MapGameplayTextureBuilder.ChannelClass));
+    }
+
+    [Fact]
+    public void Authoring_without_the_component_present_is_reported()
+    {
+        byte[]? updated = MapGameplayTextureBuilder.SetSampler(MapBin(), "Base", "ASSETS/A.tex", out var result);
+
+        Assert.Null(updated);
+        Assert.Contains("declares no MapGameplayTexture", result.Detail);
+    }
 }
