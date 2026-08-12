@@ -196,4 +196,43 @@ public class MeshUvChannelTests
         Assert.Same(original, same);
         Assert.Equal(0, result.MeshesChanged);
     }
+
+    /// <summary>M441: formats 8-12 fell through to 0, silently corrupting VertexDeclaration.Stride for
+    /// 454 of 959 declarations across the shipped corpus. Values are LeagueToolkit's own
+    /// VertexElement.GetFormatSize, printed for all 13 formats rather than derived from the names -
+    /// XYZ_Packed161616 is 8 bytes, not the 6 the name suggests, because it is padded.</summary>
+    [Theory]
+    [InlineData(0u, 4)]   [InlineData(1u, 8)]   [InlineData(2u, 12)]  [InlineData(3u, 16)]
+    [InlineData(4u, 4)]   [InlineData(5u, 4)]   [InlineData(6u, 4)]   [InlineData(7u, 4)]
+    [InlineData(8u, 8)]   [InlineData(9u, 8)]   [InlineData(10u, 2)]  [InlineData(11u, 3)]
+    [InlineData(12u, 4)]
+    public void Every_element_format_has_the_size_leaguetoolkit_reports(uint format, int expected)
+    {
+        Assert.Equal(expected, MapGeoBinary.FormatSize(format));
+    }
+
+    [Fact]
+    public void No_known_element_format_reports_zero_size()
+    {
+        for (uint f = 0; f <= 12; f++)
+            Assert.True(MapGeoBinary.FormatSize(f) > 0, $"format {f} reports 0 bytes, which corrupts stride");
+    }
+
+    /// <summary>A packed declaration's stride must be the sum of real sizes. Riot's most common packed
+    /// layout is Position XYZ_Float32 + Normal XYZ_Packed161616 + Texcoord0 XY_Packed1616.</summary>
+    [Fact]
+    public void A_packed_declaration_computes_a_real_stride()
+    {
+        var decl = new MapGeoBinary.VertexDeclaration
+        {
+            Elements =
+            {
+                (MapGeoBinary.ElemPosition, MapGeoBinary.FmtXYZ_Float32),        // 12
+                (MapGeoBinary.ElemNormal, MapGeoBinary.FmtXYZ_Packed161616),     //  8
+                (MapGeoBinary.ElemTexcoord0, MapGeoBinary.FmtXY_Packed1616),     //  4
+            },
+        };
+
+        Assert.Equal(24, decl.Stride);
+    }
 }

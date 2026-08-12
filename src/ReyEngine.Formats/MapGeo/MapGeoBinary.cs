@@ -44,12 +44,28 @@ public sealed class MapGeoBinary
     public const uint LightmapUvElement = ElemTexcoord7;
 
     public const uint FmtX_Float32 = 0, FmtXY_Float32 = 1, FmtXYZ_Float32 = 2, FmtXYZW_Float32 = 3,
-                      FmtBGRA_Packed8888 = 4;
+                      FmtBGRA_Packed8888 = 4, FmtZYXW_Packed8888 = 5, FmtRGBA_Packed8888 = 6,
+                      FmtXY_Packed1616 = 7, FmtXYZ_Packed161616 = 8, FmtXYZW_Packed16161616 = 9,
+                      FmtXY_Packed88 = 10, FmtXYZ_Packed888 = 11, FmtXYZW_Packed8888 = 12;
 
+    /// <summary>
+    /// Bytes one vertex element occupies. Values taken from LeagueToolkit's own
+    /// <c>VertexElement.GetFormatSize</c>, printed for all 13 formats rather than assumed.
+    ///
+    /// <para>M441: formats 8–12 previously fell through to <c>0</c>, which silently corrupted
+    /// <see cref="VertexDeclaration.Stride"/> for <b>454 of 959</b> declarations across the shipped corpus
+    /// (11,180 of 59,809 mesh-buffer bindings). Nothing had hit it only by luck — the tangent builder
+    /// rejects a packed mesh on a later guard, but not before reading Position at the wrong stride. Note
+    /// XYZ_Packed161616 is <b>8</b> bytes, not 6: it is padded, which is exactly the sort of thing worth
+    /// reading from the library rather than deriving from the name.</para>
+    /// </summary>
     public static int FormatSize(uint format) => format switch
     {
         FmtX_Float32 => 4, FmtXY_Float32 => 8, FmtXYZ_Float32 => 12, FmtXYZW_Float32 => 16,
-        FmtBGRA_Packed8888 => 4, 5 => 4, 6 => 4, 7 => 4, _ => 0,
+        FmtBGRA_Packed8888 => 4, FmtZYXW_Packed8888 => 4, FmtRGBA_Packed8888 => 4,
+        FmtXY_Packed1616 => 4, FmtXYZ_Packed161616 => 8, FmtXYZW_Packed16161616 => 8,
+        FmtXY_Packed88 => 2, FmtXYZ_Packed888 => 3, FmtXYZW_Packed8888 => 4,
+        _ => 0,
     };
 
     public sealed class ShaderOverride { public int Index; public string Name = ""; }
