@@ -2543,6 +2543,112 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>The value <see cref="ApplyBulkLightIntensityCommand"/> writes to every light.</summary>
     [ObservableProperty] private double _bulkLightIntensity = 5;
 
+    /// <summary>Added to every light's Y by <see cref="ApplyBulkLightHeightOffsetCommand"/>.</summary>
+    [ObservableProperty] private double _bulkLightHeightOffset = 100;
+
+    /// <summary>
+    /// M449: raise or lower every light together.
+    ///
+    /// <para>The fit panel offsets X and Z only — <c>LightPositionOffset</c> is a Vector2 and the bake's
+    /// <c>ResolvePosition</c> has no Y term at all, so height could never be adjusted in bulk. This edits
+    /// each light's own Y instead of adding a render-time term, which is the form that survives the port
+    /// (M447) and reaches the game.</para>
+    /// </summary>
+    [RelayCommand]
+    private void ApplyBulkLightHeightOffset()
+    {
+        if (EditableLights.Count == 0) { _log.Warn("Lights", "There are no lights to move."); return; }
+        double dy = BulkLightHeightOffset;
+        if (Math.Abs(dy) < 1e-6) { _log.Info("Lights", "Height offset is zero — nothing to do."); return; }
+        foreach (var l in EditableLights) l.Y += dy;
+        RepublishLights();
+        _log.Success("Lights", $"Moved {EditableLights.Count:n0} light(s) by "
+            + $"{dy.ToString("+0.###;-0.###", CultureInfo.InvariantCulture)} on Y.");
+    }
+
+    /// <summary>
+    /// M449: set the lighting mode on EVERY material in the map at once.
+    ///
+    /// <para><c>NO_BAKED_LIGHTING</c> on = the material stops sampling its baked lightmap, which is the
+    /// state the point lights were observed working in. Off = it uses the baked lightmap again.</para>
+    ///
+    /// <para><b>Turning it OFF is guarded</b>, because clearing the macro asks the client for a define set
+    /// it may never have cooked — on Map11/base_srx 20 of 184 materials have no such permutation, and
+    /// clearing them blindly is what made the client log "Unable to find correct hash for shader" and
+    /// render nothing (M166). Materials without a cooked alternative keep the macro and are reported.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task SetAllMaterialsUnlit() => await SetAllMaterialsNoBakedLighting(true);
+
+    /// <summary>The counterpart to <see cref="SetAllMaterialsUnlitCommand"/> — back to baked lightmaps.</summary>
+    [RelayCommand]
+    private async Task SetAllMaterialsBaked() => await SetAllMaterialsNoBakedLighting(false);
+
+    private async Task SetAllMaterialsNoBakedLighting(bool unlit)
+    {
+        if (_currentMapEntry is not { } entry)
+        { _log.Warn("Materials", "No map is open."); return; }
+        if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
+        { _log.Error("Materials", "No materials.bin was found alongside this mapgeo."); return; }
+        if (!GuardEditable(binEntry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            byte[] source = ReadAsset(binEntry.PathHash);
+            var doc = Formats.Materials.MaterialDocument.Parse(source, ResolveBinName);
+            var perms = ShaderPerms();
+            bool canValidate = perms is not null && perms.IsAvailable;
+            if (!unlit && !canValidate)
+            { _log.Error("Materials", "No shader cache found (set the game folder) — refusing to clear "
+                                    + "NO_BAKED_LIGHTING blindly, it can ask for a permutation Riot never cooked."); return; }
+
+            int changed = 0, refused = 0;
+            foreach (var m in doc.Materials)
+            {
+                if (unlit) { if (m.SetMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting, true) is not null) changed++; }
+                else if (!perms!.CanRemoveMacro(m, Formats.Materials.MaterialBinding.MacroNoBakedLighting)) refused++;
+                else if (m.RemoveMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting)) changed++;
+            }
+            if (changed == 0)
+            { _log.Info("Materials", $"Nothing to change — every material is already {(unlit ? "unlit" : "baked")}."
+                                     + (refused > 0 ? $" {refused} kept the macro (no cooked permutation without it)." : "")); return; }
+
+            byte[] bytes = doc.Serialize();
+            var issues = Formats.Meta.ModShapeValidator.ValidateBin(
+                Formats.Meta.SafeBinTree.Parse(bytes), bytes, ResolveBinName);
+            if (issues.Count > 0)
+            {
+                foreach (var i in issues.Take(5)) _log.Error("Materials", $"[{i.Category}] {i.ObjectName}: {i.Detail}");
+                _log.Error("Materials", $"{issues.Count} shape issue(s) — not saved."); return;
+            }
+
+            string savedTo;
+            if (TryWriteToProjectFile(binEntry, bytes, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = binEntry.PathHash,
+                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            _log.Success("Materials", $"{(unlit ? "Set" : "Cleared")} NO_BAKED_LIGHTING on {changed:n0} material(s)"
+                + (refused > 0 ? $"; {refused:n0} kept it (the game ships no permutation for them without it)" : "")
+                + $". Saved to {savedTo}.");
+        }
+        catch (Exception ex) { _log.Error("Materials", "Material lighting mode could not be set: " + ex.Message); }
+    }
+
     /// <summary>
     /// M447: set the per-light strength on EVERY light at once.
     ///
