@@ -35,10 +35,20 @@ public sealed class LightGridFile
     public int Height { get; set; } = 256;
     public float WorldSizeX { get; set; }
     public float WorldSizeZ { get; set; }
-    public float FullBrightScale { get; set; } = 1f;
+    /// <summary>M443: the AMBIENT CUBE scale. LIGHTGRID_SCALE.x = this * 4, so 0.25 makes the stored
+    /// byte/255 the literal diffuse multiplier. Modal shipped value (80 of 178); 1f - the old default -
+    /// occurs in only 8 and quadruples the cube.</summary>
+    public float FullBrightScale { get; set; } = 0.25f;
     /// <summary>Header float at offset 28. Constant per map, purpose unverified — preserved on load so a
     /// re-written grid keeps whatever the map shipped with.</summary>
-    public float Unknown28 { get; set; } = 0.5f;
+    /// <summary>M443: not unknown - it is the bin's <c>lightGridCharacterFullBrightIntensity</c>, and it
+    /// must equal it (matches in 173/173 joinable shipped pairs). The engine builds
+    /// <c>LIGHTGRID_SCALE = float4(header[24]*4, header[28], 0, 0)</c> at 0x14132bd08, and the shader
+    /// multiplies self-illumination by <c>.y</c>. MapBakeProperties' own ctor default is 0.25.</summary>
+    public float CharacterFullBrightIntensity { get; set; } = 0.25f;
+
+    [Obsolete("Renamed to CharacterFullBrightIntensity (M443) - it was never unknown.")]
+    public float Unknown28 { get => CharacterFullBrightIntensity; set => CharacterFullBrightIntensity = value; }
 
     /// <summary>Width*Height*6 colours, row-major by cell then by direction (see DirectionVectors).</summary>
     public Vector3[] Samples { get; set; } = Array.Empty<Vector3>();
@@ -69,7 +79,10 @@ public sealed class LightGridFile
         uint w = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(8));
         uint h = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(12));
         if (w == 0 || h == 0 || w > 4096 || h > 4096) return false;
-        return HeaderSize + (long)w * h * CellSize == data.Length;
+        // M443: the client reads exactly w*h*24 and IGNORES trailing bytes - it never length-checks.
+        // Two shipped grids are longer (map21/base +14,832 B, map30/arenavote +813 B) and `==` rejected
+        // both. Executed over all 180 shipped grids, `==` returns false for exactly those two.
+        return HeaderSize + (long)w * h * CellSize <= data.Length;
     }
 
     public static LightGridFile Read(byte[] data)
@@ -85,15 +98,21 @@ public sealed class LightGridFile
             WorldSizeX = BitConverter.ToSingle(data, 16),
             WorldSizeZ = BitConverter.ToSingle(data, 20),
             FullBrightScale = BitConverter.ToSingle(data, 24),
-            Unknown28 = BitConverter.ToSingle(data, 28),
+            CharacterFullBrightIntensity = BitConverter.ToSingle(data, 28),
         };
         g.Samples = new Vector3[g.Width * g.Height * Directions];
         for (int c = 0; c < g.Width * g.Height; c++)
         {
             int o = HeaderSize + c * CellSize;
             for (int d = 0; d < Directions; d++)
+                // M443: on disk the cell is 0xAARRGGBB little-endian, i.e. byte order B,G,R,A. The
+                // client's ReadCell (0x14135b1a0) does out.x=(dword>>16)&0xFF (file byte 2 = RED),
+                // out.y=(dword>>8)&0xFF, out.z=dword&0xFF. This used to read R and B swapped. It went
+                // unnoticed because a Read->Write round-trip swaps twice and is byte-identical, and
+                // because every grid we WRITE is neutral grey. Corroborated on the elemental rifts:
+                // base_dragon_fire ground reads red-hot, base_dragon_ocean blue.
                 g.Samples[c * Directions + d] = new Vector3(
-                    data[o + d * 4] / 255f, data[o + d * 4 + 1] / 255f, data[o + d * 4 + 2] / 255f);
+                    data[o + d * 4 + 2] / 255f, data[o + d * 4 + 1] / 255f, data[o + d * 4 + 0] / 255f);
         }
         return g;
     }
@@ -108,7 +127,7 @@ public sealed class LightGridFile
         BitConverter.TryWriteBytes(data.AsSpan(16), WorldSizeX);
         BitConverter.TryWriteBytes(data.AsSpan(20), WorldSizeZ);
         BitConverter.TryWriteBytes(data.AsSpan(24), FullBrightScale);
-        BitConverter.TryWriteBytes(data.AsSpan(28), Unknown28);
+        BitConverter.TryWriteBytes(data.AsSpan(28), CharacterFullBrightIntensity);
 
         for (int c = 0; c < Width * Height; c++)
         {
@@ -116,9 +135,9 @@ public sealed class LightGridFile
             for (int d = 0; d < Directions; d++)
             {
                 var s = c * Directions + d < Samples.Length ? Samples[c * Directions + d] : Vector3.Zero;
-                data[o + d * 4 + 0] = ToByte(s.X);
-                data[o + d * 4 + 1] = ToByte(s.Y);
-                data[o + d * 4 + 2] = ToByte(s.Z);
+                data[o + d * 4 + 0] = ToByte(s.Z);      // B
+                data[o + d * 4 + 1] = ToByte(s.Y);      // G
+                data[o + d * 4 + 2] = ToByte(s.X);      // R  (M443: 0xAARRGGBB, see Read)
                 data[o + d * 4 + 3] = 255;      // alpha is 255 in every shipped sample
             }
         }

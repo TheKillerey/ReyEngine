@@ -7009,17 +7009,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!GuardEditable(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
-        var settings = new Formats.Baking.BakeSettings();          // defaults: 256x256, sized from map bounds
-        var inputs = GatherBakeInputs(settings, requireLightmapLayout: false);
-        if (inputs is null) { _log.Warn("Bake", "Could not gather lighting for this map."); return; }
+        if (_currentMap is not { } map) { _log.Warn("Bake", "No map geometry is loaded."); return; }
 
         try
         {
-            Status = "Baking lightgrid…";
-            var grid = await Task.Run(() => Formats.Baking.LightBaker.BakeLightGrid(
-                inputs.Map, inputs.Lighting, settings, inputs.GroupOccluderEnabled));
+            Status = "Building lightgrid…";
 
-            string gridPath = settings.ResolveOutputFolder(mapEntry.Path) + settings.LightGridFileName();
+            // M443: an ANALYTIC fill, not a probe bake. Measured on the real base_srx: the probe path
+            // produces bit-identical output in 85.3% of cells (its only spatial term is a binary sun
+            // shadow), its cube is 2.5x too flat because ProbeDirection adds sky light isotropically, and
+            // with auto-exposure off every sample saturates to 255 - which the shader's mad_sat turns into
+            // flat, unshaded characters. The corpus-derived constant is strictly better until
+            // ProbeDirection grows real per-direction sky visibility.
+            var grid = Formats.Lighting.NeutralLightGrid.Build(map, characterFullBrightIntensity: 0.25f);
+
+            // Riot's authored casing when the bin has it; the derived form otherwise (which resolves to
+            // the same chunk key either way, since WadPath lowercases before hashing).
+            string mapPath = Formats.Lighting.NeutralLightGrid.MapPathFromBin(ReadAsset(binEntry.PathHash))
+                             ?? Formats.Lighting.NeutralLightGrid.MapPathFromMapGeo(mapEntry.Path);
+            string gridPath = Formats.Lighting.NeutralLightGrid.FileNameFor(mapPath);
             byte[] gridBytes = grid.Write();
 
             // Round-trip before shipping it: the header is fixed-size and the cell count must match, so a
@@ -7032,8 +7040,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             WriteBakedAsset(gridPath, gridBytes, ".dat");
 
             // Link it. MapBakeProperties.Write leaves any other fields the map already has untouched.
+            // lightGridCharacterFullBrightIntensity must EQUAL the file's header[28] - they match in
+            // 173/173 joinable shipped pairs. 0.5 (the old value) would double self-illumination on every
+            // character on this map.
             var linked = Formats.MapGeo.MapBakeProperties.Write(
-                ReadAsset(binEntry.PathHash), gridPath, grid.Width, 0.5f, out var linkResult);
+                ReadAsset(binEntry.PathHash), gridPath, grid.Width,
+                grid.CharacterFullBrightIntensity, out var linkResult);
             if (linked is null)
             { _log.Error("Bake", "The grid was written but could not be linked: " + linkResult.Detail); return; }
 
@@ -7056,7 +7068,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
             UpdateTitle();
 
-            _log.Success("Bake", $"Lightgrid {grid.Width}x{grid.Height} ({gridBytes.Length:n0} B) → {gridPath}; "
+            _log.Success("Bake", $"Lightgrid {grid.Width}x{grid.Height} world {grid.WorldSizeX:0}x{grid.WorldSizeZ:0} "
+                                 + $"({gridBytes.Length:n0} B) → {gridPath}; "
                                  + $"MapBakeProperties: {linkResult.Detail}. Bin saved to {savedTo}.");
             Status = "Lightgrid baked and linked.";
             RefreshLightGridStatus();
