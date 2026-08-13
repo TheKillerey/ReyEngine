@@ -201,6 +201,13 @@
             <Button Classes="tool" Content="+ Add light" Command="{Binding AddLightCommand}"
                     HorizontalAlignment="Stretch" FontSize="11" Padding="8,4"
                     ToolTip.Tip="Add a point light at the gizmo (or the origin) — then drag it into place." />
+            <!-- M446 (C): the bridge off the legacy system. Light.dat lights live only in the editor and
+                 the project file, so a legacy map's lighting could previously only be BAKED in. Written as
+                 MapDynamicPointLight placements they become real dynamic lights the client renders with no
+                 bake at all, and the baker reads them too. -->
+            <Button Classes="tool" Content="→ Port lights into the map" Command="{Binding PortLightsToMapCommand}"
+                    HorizontalAlignment="Stretch" FontSize="11" Padding="8,4" Margin="0,4,0,0"
+                    ToolTip.Tip="Write these lights into the map's materials.bin as MapDynamicPointLight placements — the modern dynamic-light system. They then light the map in game with no baking, and the lightmap baker reads them as well. Replaces any placements already there, so running it twice does not double the lights." />
             <Grid ColumnDefinitions="*,*" Margin="0,4,0,0">
               <Button Grid.Column="0" Classes="tool" Content="💾 Save" Command="{Binding SaveLightDatCommand}"
                       HorizontalAlignment="Stretch" Margin="0,0,3,0" FontSize="11" Padding="8,4"

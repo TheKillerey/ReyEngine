@@ -2429,6 +2429,93 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// M446 (C): write the editor's point lights into the map as <c>MapDynamicPointLight</c> placements —
+    /// the bridge off the legacy light systems.
+    ///
+    /// <para><b>Why this is the port.</b> Light.dat lights (and anything else in the light panel) live only
+    /// in the editor and the project file; the game never sees them, so a legacy map's lighting could only
+    /// ever be BAKED in. Written as placements they become real dynamic lights the client renders with no
+    /// bake at all — verified in game — and part B makes the baker read them too, so the same list now
+    /// drives both paths.</para>
+    ///
+    /// <para>Existing placements are REPLACED, not appended: running this twice must not double the
+    /// lights, and the editor's list is the authority for what the map should contain.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task PortLightsToMap()
+    {
+        if (_currentMapEntry is not { } entry)
+        { _log.Warn("Lighting", "No map is open, so there is nowhere to write lights."); return; }
+        if (EditableLights.Count == 0)
+        { _log.Warn("Lighting", "The light list is empty — import a Light.dat or add lights first."); return; }
+        if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
+        { _log.Error("Lighting", "No materials.bin was found alongside this mapgeo."); return; }
+        if (!GuardEditable(binEntry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            var wanted = EditableLights.Select(vm =>
+            {
+                var pl = vm.ToPointLight();
+                string name = string.IsNullOrWhiteSpace(vm.Name) ? "PortedLight" : vm.Name.Trim();
+                return new Formats.Lighting.DynamicPointLight(name, pl.Position, pl.Color, pl.Radius, pl.Intensity);
+            }).ToList();
+
+            byte[] source = ReadAsset(binEntry.PathHash);
+            var (bytes, removed, written) = await Task.Run(() =>
+            {
+                var b = Formats.Lighting.DynamicPointLights.Write(source, wanted, out int r, out int w);
+                return (b, r, w);
+            });
+            if (bytes is null)
+            { _log.Error("Lighting", "The materials.bin could not be rewritten (it did not parse)."); return; }
+
+            // Validate BEFORE saving: it must read back with exactly the lights we asked for, and pass the
+            // shape rules that caught the pointer-element and empty-container crashes.
+            var back = await Task.Run(() => Formats.Lighting.DynamicPointLights.Read(bytes));
+            if (back.Count != wanted.Count)
+            {
+                _log.Error("Lighting", $"The rewritten bin carries {back.Count} light(s), expected "
+                                       + $"{wanted.Count} — not saved.");
+                return;
+            }
+            var issues = await Task.Run(() => Formats.Meta.ModShapeValidator.ValidateBin(
+                Formats.Meta.SafeBinTree.Parse(bytes), bytes, ResolveBinName));
+            if (issues.Count > 0)
+            {
+                foreach (var i in issues.Take(5)) _log.Error("Lighting", $"[{i.Category}] {i.ObjectName}: {i.Detail}");
+                _log.Error("Lighting", $"{issues.Count} shape issue(s) — not saved.");
+                return;
+            }
+
+            string savedTo;
+            if (TryWriteToProjectFile(binEntry, bytes, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = binEntry.PathHash,
+                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            _log.Success("Lighting", $"Wrote {written:n0} dynamic point light(s) into the map"
+                + (removed > 0 ? $", replacing {removed:n0} existing" : "")
+                + $". They render in game without baking, and the baker now reads them too. Saved to {savedTo}.");
+        }
+        catch (Exception ex) { _log.Error("Lighting", "Lights could not be ported: " + ex.Message); }
+    }
+
+    /// <summary>
     /// M446 (B): the <c>MapDynamicPointLight</c> placements authored into this map's materials.bin.
     ///
     /// <para>Empty is the safe answer for every failure — a map with no placements, an unresolvable bin, an
