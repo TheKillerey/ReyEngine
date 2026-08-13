@@ -105,6 +105,13 @@ public sealed class MapGeoBinary
         public Channel BakedPaint = new(); public bool HasBakedPaintChannel;   // v12–16 only
         public List<ShaderOverride> TextureOverrides = new();                  // v17+
         public Vector2 BakedPaintScale, BakedPaintBias;                        // v17+
+
+        /// <summary>M444: the EXTRA channel entry the client reads when a submesh's material selects the
+        /// 48-byte reader instead of the default 40-byte one. See <see cref="ExtendedChannelRule"/>
+        /// for why this cannot be detected from the mapgeo alone.</summary>
+        public string ExtendedChannelTexture = "";
+        public uint ExtendedChannelValue;
+        public bool HasExtendedChannel;
     }
 
     // ---- editing helpers ----
@@ -121,6 +128,55 @@ public sealed class MapGeoBinary
     /// UVs into that atlas). No buffer surgery — just the channel.</summary>
     public void SetBakedLight(Mesh mesh, string texture, Vector2 scale, Vector2 bias) =>
         mesh.BakedLight = new Channel { Texture = texture, Scale = scale, Bias = bias };
+
+    /// <summary>
+    /// M444: the index a per-mesh texture override uses to name its target sampler. The mapgeo header
+    /// carries ONE table of sampler names for the whole file; a mesh override says "slot N of that table",
+    /// so the name has to be looked up (or appended) here rather than stored per mesh.
+    /// </summary>
+    /// <param name="addIfMissing">Append the sampler to the header table when absent. Safe: shipped files
+    /// and our own agree that the table is a plain append-ordered list, and existing overrides keep their
+    /// indices.</param>
+    /// <returns>The table index, or -1 when absent and <paramref name="addIfMissing"/> is false.</returns>
+    public int ShaderOverrideIndex(string samplerName, bool addIfMissing = false)
+    {
+        for (int i = 0; i < ShaderOverrides.Count; i++)
+            if (string.Equals(ShaderOverrides[i].Name, samplerName, StringComparison.Ordinal))
+                return ShaderOverrides[i].Index;
+        if (!addIfMissing) return -1;
+
+        int index = ShaderOverrides.Count == 0 ? 0 : ShaderOverrides.Max(o => o.Index) + 1;
+        ShaderOverrides.Add(new ShaderOverride { Index = index, Name = samplerName });
+        return index;
+    }
+
+    /// <summary>
+    /// M444: point a mesh's baked-paint sampler at a texture, and set the UV transform that goes with it.
+    ///
+    /// <para>This is what feeds the shader constant <c>BAKED_PAINT_UV_SCALE_BIAS</c>. A mesh with a
+    /// baked-paint-consuming material but NO override here makes the client report
+    /// <c>Missing shader constant "BAKED_PAINT_UV_SCALE_BIAS"</c> — the transform has no sampler to attach
+    /// to. Measured on Map21/IoniaBase mesh #276, which pairs one override at index 0 with
+    /// scale (0.9937, 0.9937) / bias (0.00098, 0.00098).</para>
+    ///
+    /// <para>Riot's values are always sub-1 because their baked textures are sub-rects of a shared atlas.
+    /// For a standalone texture the identity transform — scale (1,1), bias (0,0) — is the analogue, and is
+    /// what shipped in the verified-loading Map11 build.</para>
+    /// </summary>
+    public void SetTextureOverride(Mesh mesh, string samplerName, string texturePath,
+        Vector2 scale, Vector2 bias)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        if (string.IsNullOrEmpty(samplerName)) throw new ArgumentException("sampler name is required", nameof(samplerName));
+
+        int index = ShaderOverrideIndex(samplerName, addIfMissing: true);
+        var existing = mesh.TextureOverrides.FirstOrDefault(o => o.Index == index);
+        if (existing is null) mesh.TextureOverrides.Add(new ShaderOverride { Index = index, Name = texturePath });
+        else existing.Name = texturePath;
+
+        mesh.BakedPaintScale = scale;
+        mesh.BakedPaintBias = bias;
+    }
 
     /// <summary>Add a lightmap UV channel (Texcoord7) to a mesh that lacks one, exactly as Riot lays it
     /// out: a new secondary vertex buffer holding one XY_Float32 per vertex, described by a new
@@ -309,7 +365,10 @@ public sealed class MapGeoBinary
 
     // ---- read ----
 
-    public static MapGeoBinary Read(byte[] data)
+    /// <param name="extendedChannelMaterials">Material names whose submeshes make the client read the
+    /// 48-byte per-mesh channel block instead of the default 40. Pass <c>null</c> for the default reader —
+    /// correct for every file Riot ships. See <see cref="ExtendedChannelRule"/>.</param>
+    public static MapGeoBinary Read(byte[] data, IReadOnlySet<string>? extendedChannelMaterials = null)
     {
         var r = new Reader(data);
         var m = new MapGeoBinary();
@@ -358,13 +417,13 @@ public sealed class MapGeoBinary
         }
 
         uint meshCount = r.U32();
-        for (int i = 0; i < meshCount; i++) m.Meshes.Add(ReadMesh(r, v));
+        for (int i = 0; i < meshCount; i++) m.Meshes.Add(ReadMesh(r, v, extendedChannelMaterials));
 
         m.Tail = r.Rest();
         return m;
     }
 
-    private static Mesh ReadMesh(Reader r, int v)
+    private static Mesh ReadMesh(Reader r, int v, IReadOnlySet<string>? extendedChannelMaterials)
     {
         var m = new Mesh { VertexCount = r.I32() };
         uint bufCount = r.U32();
@@ -388,6 +447,13 @@ public sealed class MapGeoBinary
         if (v is >= 11 and <= 13) { m.RenderFlags = r.U8(); m.RenderFlagsIsUshort = false; }
         else if (v >= 14) { if (v >= 16) { m.RenderFlags = r.U16(); m.RenderFlagsIsUshort = true; } else { m.RenderFlags = r.U8(); m.RenderFlagsIsUshort = false; } }
         if (v >= 9) { m.BakedLight = ReadChannel(r); m.StationaryLight = ReadChannel(r); }
+        if (extendedChannelMaterials is { Count: > 0 }
+            && m.Submeshes.Any(s => extendedChannelMaterials.Contains(s.Material)))
+        {
+            m.ExtendedChannelTexture = r.Str();
+            m.ExtendedChannelValue = r.U32();
+            m.HasExtendedChannel = true;
+        }
         if (v is >= 12 and <= 16) { m.BakedPaint = ReadChannel(r); m.HasBakedPaintChannel = true; }
         else if (v >= 17)
         {
@@ -450,6 +516,7 @@ public sealed class MapGeoBinary
         if (v is >= 11 and <= 13) w.U8((byte)m.RenderFlags);
         else if (v >= 14) { if (m.RenderFlagsIsUshort) w.U16(m.RenderFlags); else w.U8((byte)m.RenderFlags); }
         if (v >= 9) { WriteChannel(w, m.BakedLight); WriteChannel(w, m.StationaryLight); }
+        if (m.HasExtendedChannel) { w.Str(m.ExtendedChannelTexture); w.U32(m.ExtendedChannelValue); }
         if (m.HasBakedPaintChannel) WriteChannel(w, m.BakedPaint);
         else if (v >= 17)
         {
@@ -463,13 +530,20 @@ public sealed class MapGeoBinary
 
     /// <summary>Parse, and refuse the file unless it re-emits BYTE-IDENTICAL. This is the safety gate for
     /// editing: if we can't reproduce a file exactly, we don't understand it fully, so we must not risk
-    /// corrupting it. (The one shipped chunk that fails this also fails LeagueToolkit's own reader.)</summary>
-    public static bool TryReadEditable(byte[] data, out MapGeoBinary map)
+    /// corrupting it. (The one shipped chunk that fails this also fails LeagueToolkit's own reader.)
+    ///
+    /// <para><b>Known blind spot.</b> <see cref="Tail"/> is read as "everything left over", so a desync
+    /// inside the FINAL mesh is absorbed by it and the file still round-trips. This returns true, and the
+    /// last mesh's channel/override fields are silently wrong. Editing any other mesh stays safe — the
+    /// tail is re-emitted verbatim — but do not trust the last mesh's own fields unless the file was read
+    /// with the right <paramref name="extendedChannelMaterials"/>.</para></summary>
+    public static bool TryReadEditable(byte[] data, out MapGeoBinary map,
+        IReadOnlySet<string>? extendedChannelMaterials = null)
     {
         map = null!;
         try
         {
-            var parsed = Read(data);
+            var parsed = Read(data, extendedChannelMaterials);
             if (!parsed.Write().AsSpan().SequenceEqual(data)) return false;
             map = parsed;
             return true;

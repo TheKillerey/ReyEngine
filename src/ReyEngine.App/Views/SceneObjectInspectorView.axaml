@@ -65,6 +65,11 @@
                 IsEnabled="{Binding CanAddTangents}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
                 HorizontalAlignment="Left"
                 ToolTip.Tip="Add the tangent channel (Texcoord6, float4 = tangent + handedness) to the selected meshes, derived from Position + Texcoord0 + Normal. Mantis_Env_Baked_PBR's compiled vertex shader reads TEXCOORD6 and fails to bind without it. Saves the rewritten mapgeo." />
+        <!-- M444: the mapgeo does not record which meshes need the longer channel block - the MATERIAL
+             decides. This reconciles the two, and adds the baked-paint override the transform attaches to. -->
+        <Button Content="Sync Channels to Materials" Command="{Binding SyncMeshChannelsToMaterialsCommand}"
+                FontSize="11" Padding="8,2" Margin="0,2,0,0" HorizontalAlignment="Left"
+                ToolTip.Tip="Reconcile the mapgeo with the materials assigned to it: meshes using a Mantis material get the extra per-mesh channel entry the client reads for them (and meshes that no longer use one lose it), plus a baked-paint texture override so BAKED_PAINT_UV_SCALE_BIAS has a sampler to attach to. Either mismatch crashes map load with no diagnostic. Saves the rewritten mapgeo." />
       </StackPanel>
     </Border>
 
@@ -126,6 +131,9 @@
                 IsEnabled="{Binding CanAddTangents}" FontSize="11" Padding="8,2" Margin="0,2,0,0"
                 HorizontalAlignment="Left"
                 ToolTip.Tip="Add the tangent channel (Texcoord6, float4 = tangent + handedness) to the selected meshes, derived from Position + Texcoord0 + Normal. Mantis_Env_Baked_PBR's compiled vertex shader reads TEXCOORD6 and fails to bind without it. Saves the rewritten mapgeo." />
+        <Button Content="Sync Channels to Materials" Command="{Binding SyncMeshChannelsToMaterialsCommand}"
+                FontSize="11" Padding="8,2" Margin="0,2,0,0" HorizontalAlignment="Left"
+                ToolTip.Tip="Reconcile the mapgeo with the materials assigned to it: meshes using a Mantis material get the extra per-mesh channel entry the client reads for them (and meshes that no longer use one lose it), plus a baked-paint texture override so BAKED_PAINT_UV_SCALE_BIAS has a sampler to attach to. Either mismatch crashes map load with no diagnostic. Saves the rewritten mapgeo." />
       </StackPanel>
     </Border>
 

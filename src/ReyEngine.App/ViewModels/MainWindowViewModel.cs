@@ -2536,11 +2536,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         string atlasFolder = settings.ResolveOutputFolder(entry.Path);
         int atlasStartIndex = NextGeneratedAtlasIndex(_currentMap, atlasFolder);
+        var extendedChannels = ExtendedChannelMaterialsFor(entry.Path);
         var (result, bytes) = await Task.Run(() =>
         {
             // TryReadEditable refuses anything we cannot reproduce byte-for-byte, so we never rewrite a
             // mapgeo we don't fully understand.
-            if (!Formats.MapGeo.MapGeoBinary.TryReadEditable(sourceBytes, out var map))
+            if (!Formats.MapGeo.MapGeoBinary.TryReadEditable(sourceBytes, out var map, extendedChannels))
                 return ((Formats.Baking.LightmapLayoutResult?)null, (byte[]?)null);
 
             var r = Formats.Baking.MapGeoLightmapBuilder.Build(map, new Formats.Baking.MapGeoLightmapBuilder.Settings
@@ -2609,6 +2610,39 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (int.TryParse(indexText, out int index) && index >= next) next = index + 1;
         }
         return next;
+    }
+
+    /// <summary>
+    /// M444: the materials in this map that make the client read a LONGER per-mesh channel block, read
+    /// from the mapgeo's own sibling materials.bin.
+    ///
+    /// <para>Every mapgeo read that may be written back has to pass this, because the mapgeo does not
+    /// record which reader applies — the material does. Getting it wrong is silent: the mesh section
+    /// desyncs, <see cref="Formats.MapGeo.MapGeoBinary.TryReadEditable"/> refuses the file (so we fail
+    /// safe), and on a file we then rewrote the game would crash deep in map load with no useful
+    /// message.</para>
+    ///
+    /// <para>An empty set is the safe answer whenever the bin cannot be read: it reproduces the default
+    /// reader, which is correct for all 207 mapgeo files Riot ships.</para>
+    /// </summary>
+    private IReadOnlySet<string> ExtendedChannelMaterialsFor(string? mapGeoPath)
+    {
+        var empty = (IReadOnlySet<string>)new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(mapGeoPath)) return empty;
+        try
+        {
+            if (!TryResolveMaterialsBin(mapGeoPath, out var binEntry)) return empty;
+            var set = Formats.MapGeo.ExtendedChannelRule.From(ReadAsset(binEntry.PathHash), ResolveBinName);
+            if (set.Count > 0)
+                _log.Info("Map", $"{set.Count} material(s) use the extended mesh channel block: "
+                                 + string.Join(", ", set.Take(4)));
+            return set;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Map", "Extended-channel materials could not be identified: " + ex.Message);
+            return empty;
+        }
     }
 
     /// <summary>
@@ -6530,9 +6564,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             var source = _currentMapBytes;
+            var extendedChannels = ExtendedChannelMaterialsFor(entry.Path);
             var (bytes, result) = await Task.Run(() =>
             {
-                byte[] b = Formats.MapGeo.MeshUvChannelBuilder.AddTexcoord7(source, targets, out var r);
+                byte[] b = Formats.MapGeo.MeshUvChannelBuilder.AddTexcoord7(source, targets, out var r,
+                    extendedChannels);
                 return (b, r);
             });
             if (result.MeshesChanged == 0) { _log.Warn("MapGeo", result.Summary); return; }
@@ -6576,6 +6612,128 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("MapGeo", "Could not add the Texcoord7 channel: " + ex.Message); }
     }
 
+    /// <summary>
+    /// M444: bring the mapgeo's per-mesh data into agreement with the materials assigned to it — the
+    /// editor equivalent of the byte patching that got Map11 loading.
+    ///
+    /// <para>Two things get fixed, both of which are invisible in the mapgeo itself and fatal when
+    /// wrong:</para>
+    /// <list type="number">
+    ///   <item><b>The channel block.</b> A mesh whose material selects the 48-byte reader needs the extra
+    ///   entry; one that no longer uses such a material must lose it. Either mismatch desyncs the client's
+    ///   mesh parse and crashes map load with no diagnostic.</item>
+    ///   <item><b>The baked-paint override.</b> A mesh with no override for the baked diffuse sampler makes
+    ///   the client report <c>Missing shader constant "BAKED_PAINT_UV_SCALE_BIAS"</c> — the UV transform
+    ///   has no sampler to attach to.</item>
+    /// </list>
+    ///
+    /// <para>The override texture is taken from the material's OWN sampler of the same name, so mesh and
+    /// material always agree. The transform is the identity: Riot's shipped values are sub-1 because their
+    /// baked textures are atlas sub-rects, which does not apply to a standalone texture.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task SyncMeshChannelsToMaterials()
+    {
+        if (_currentMap is not { } map || _currentMapBytes is null || _currentMapEntry is not { } entry)
+        { _log.Warn("MapGeo", "No map is open, so mesh channels cannot be synced."); return; }
+
+        if (MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes) || MapContent.AddedMeshes.Count > 0)
+        { _log.Warn("MapGeo", "Save your pending mesh edits first — this rewrites the mapgeo from the saved bytes."); return; }
+
+        var extended = ExtendedChannelMaterialsFor(entry.Path);
+        if (extended.Count == 0)
+        {
+            _log.Info("MapGeo", "No material in this map uses the extended mesh channel block, so there is "
+                              + "nothing to sync. (Only the Mantis shader family selects it.)");
+            return;
+        }
+        if (!GuardEditable(entry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        // sampler name -> texture, per extended material, straight off the material itself
+        var samplers = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+        try
+        {
+            if (TryResolveMaterialsBin(entry.Path, out var binEntry))
+            {
+                var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName);
+                foreach (var mat in doc.Materials.Where(m => extended.Contains(m.Name)))
+                    samplers[mat.Name] = mat.Slots
+                        .Where(s => !string.IsNullOrWhiteSpace(s.SamplerName) && !string.IsNullOrWhiteSpace(s.OriginalPath))
+                        .GroupBy(s => s.SamplerName, StringComparer.Ordinal)
+                        .ToDictionary(g => g.Key, g => g.First().OriginalPath, StringComparer.Ordinal);
+            }
+        }
+        catch (Exception ex) { _log.Warn("MapGeo", "Material samplers could not be read: " + ex.Message); }
+
+        const string BakedDiffuse = "BAKED_DIFFUSE_TEXTURE";
+        try
+        {
+            var source = _currentMapBytes;
+            var (bytes, channelsChanged, overridesAdded, unresolved) = await Task.Run(() =>
+            {
+                if (!Formats.MapGeo.MapGeoBinary.TryReadEditable(source, out var edit, extended))
+                    return ((byte[]?)null, 0, 0, (List<string>?)null);
+
+                int channels = Formats.MapGeo.ExtendedChannelRule.Apply(edit, extended);
+                int added = 0;
+                var missing = new List<string>();
+                foreach (var mesh in edit.Meshes)
+                {
+                    string? material = mesh.Submeshes.Select(s => s.Material).FirstOrDefault(extended.Contains);
+                    if (material is null) continue;
+
+                    int slot = edit.ShaderOverrideIndex(BakedDiffuse);
+                    if (slot >= 0 && mesh.TextureOverrides.Any(o => o.Index == slot)) continue;
+                    if (!samplers.TryGetValue(material, out var bySampler)
+                        || !bySampler.TryGetValue(BakedDiffuse, out var texture))
+                    { if (!missing.Contains(material)) missing.Add(material); continue; }
+
+                    edit.SetTextureOverride(mesh, BakedDiffuse, texture,
+                        System.Numerics.Vector2.One, System.Numerics.Vector2.Zero);
+                    added++;
+                }
+                return (edit.Write(), channels, added, missing);
+            });
+
+            if (bytes is null)
+            { _log.Error("MapGeo", "This mapgeo does not round-trip byte-exactly, so it was not rewritten."); return; }
+            foreach (var m in unresolved ?? new List<string>())
+                _log.Warn("MapGeo", $"{m} declares no {BakedDiffuse} sampler, so its meshes got no override.");
+            if (channelsChanged == 0 && overridesAdded == 0)
+            { _log.Info("MapGeo", "Already in sync — no mesh needed a channel entry or an override."); return; }
+
+            // Validate BEFORE saving: it must re-read with the same material set AND still decode.
+            if (!await Task.Run(() => Formats.MapGeo.MapGeoBinary.TryReadEditable(bytes, out _, extended)))
+            { _log.Error("MapGeo", "The rewritten mapgeo did not re-read cleanly — not saved."); return; }
+            await Task.Run(() => MapGeoDecoder.Decode(bytes));
+
+            string savedTo;
+            if (TryWriteToProjectFile(entry, bytes, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = entry.PathHash,
+                    ResolvedPath = entry.IsResolved ? entry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            _log.Success("MapGeo", $"Synced {channelsChanged:n0} channel block(s) and added {overridesAdded:n0} "
+                                 + $"baked-paint override(s). Saved to {savedTo} ({bytes.Length:n0} bytes).");
+            await LoadMapGeoAsync(entry);
+        }
+        catch (Exception ex) { _log.Error("MapGeo", "Mesh channels could not be synced: " + ex.Message); }
+    }
+
     /// <summary>M433: can the selected meshes be given tangents? The decoder does not surface Texcoord6,
     /// so unlike <see cref="CanAddTexcoord7"/> this cannot pre-filter meshes that already have it — the
     /// builder skips those and reports them.</summary>
@@ -6612,9 +6770,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             var source = _currentMapBytes;
+            var extendedChannels = ExtendedChannelMaterialsFor(entry.Path);
             var (bytes, result) = await Task.Run(() =>
             {
-                byte[] b = Formats.MapGeo.MeshTangentBuilder.AddTangents(source, targets, out var r);
+                byte[] b = Formats.MapGeo.MeshTangentBuilder.AddTangents(source, targets, out var r,
+                    extendedChannels);
                 return (b, r);
             });
             if (result.MeshesChanged == 0) { _log.Warn("MapGeo", result.Summary); return; }

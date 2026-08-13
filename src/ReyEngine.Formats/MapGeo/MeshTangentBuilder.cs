@@ -37,10 +37,13 @@ public static class MeshTangentBuilder
     }
 
     /// <summary>Add Texcoord6 to the meshes at the given ordinals; an empty selection means every mesh.</summary>
-    public static byte[] AddTangents(byte[] mapGeo, IEnumerable<int> meshIndices, out Result result)
+    /// <param name="extendedChannelMaterials">M444: materials that lengthen the per-mesh channel block.
+    /// Tangents are exactly what a Mantis material wants, so this is the path most likely to need it.</param>
+    public static byte[] AddTangents(byte[] mapGeo, IEnumerable<int> meshIndices, out Result result,
+        IReadOnlySet<string>? extendedChannelMaterials = null)
     {
         ArgumentNullException.ThrowIfNull(mapGeo);
-        if (!MapGeoBinary.TryReadEditable(mapGeo, out var map) || map is null)
+        if (!MapGeoBinary.TryReadEditable(mapGeo, out var map, extendedChannelMaterials) || map is null)
             throw new InvalidOperationException(
                 "This mapgeo does not round-trip byte-exactly, so it cannot be safely rewritten.");
         return AddTangents(map, meshIndices, out result) ? map.Write() : mapGeo;

@@ -35,10 +35,13 @@ public static class MeshUvChannelBuilder
     /// every mesh. Meshes that already carry the channel are skipped, never duplicated.
     /// </summary>
     /// <returns>The rewritten mapgeo, or the input unchanged when nothing qualified.</returns>
-    public static byte[] AddTexcoord7(byte[] mapGeo, IEnumerable<int> meshIndices, out UvChannelResult result)
+    /// <param name="extendedChannelMaterials">M444: materials that lengthen the per-mesh channel block.
+    /// Omit only when the map is known to use none — a Mantis map read without it desyncs.</param>
+    public static byte[] AddTexcoord7(byte[] mapGeo, IEnumerable<int> meshIndices, out UvChannelResult result,
+        IReadOnlySet<string>? extendedChannelMaterials = null)
     {
         ArgumentNullException.ThrowIfNull(mapGeo);
-        if (!MapGeoBinary.TryReadEditable(mapGeo, out var map) || map is null)
+        if (!MapGeoBinary.TryReadEditable(mapGeo, out var map, extendedChannelMaterials) || map is null)
             throw new InvalidOperationException(
                 "This mapgeo does not round-trip byte-exactly, so it cannot be safely rewritten.");
         return AddTexcoord7(map, meshIndices, out result) ? map.Write() : mapGeo;
