@@ -2168,6 +2168,42 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         GizmoPivot = value?.Position;   // M75 gizmo drives the selected light
     }
 
+    /// <summary>
+    /// M446 (D): surface the map's own <c>MapDynamicPointLight</c> placements in the light panel, so a
+    /// light authored into the bin is visible and editable in the viewport instead of only appearing in
+    /// game. Without this the editor showed one set of lights and the client rendered another.
+    ///
+    /// <para>Deduped on position+radius against what is already listed — the same rule the bake uses —
+    /// because a ported light legitimately exists both in the panel and in the bin, and importing it twice
+    /// would show (and later write back) a duplicate.</para>
+    /// </summary>
+    /// <returns>How many placements were added to the panel.</returns>
+    public int ImportPlacedLightsIntoPanel(string? mapGeoPath)
+    {
+        int added = 0;
+        foreach (var placed in ReadPlacedPointLights(mapGeoPath))
+        {
+            if (EditableLights.Any(vm =>
+            {
+                var pl = vm.ToPointLight();
+                return System.Numerics.Vector3.Distance(pl.Position, placed.Position) < 1f
+                       && Math.Abs(pl.Radius - placed.Radius) < 1f;
+            })) continue;
+
+            EditableLights.Add(new PointLightViewModel(
+                new PointLight(placed.Position, placed.Color, placed.Radius, placed.IntensityScale), this)
+            { Name = string.IsNullOrWhiteSpace(placed.Name) ? $"Placed {EditableLights.Count + 1}" : placed.Name });
+            added++;
+        }
+        if (added > 0)
+        {
+            RepublishLights();
+            _log.Info("Lights", $"{added} light(s) placed in the map are now in the light list. "
+                              + "Toggle 'Lights' in the viewport toolbar to see them.");
+        }
+        return added;
+    }
+
     /// <summary>Rebuild the render list from the editable set (called after any add/edit/delete).</summary>
     public void RepublishLights()
     {
@@ -8214,6 +8250,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _currentMapEntry = entry;
                 MapGeneration++;
                 HasMapGeo = true;   // M79
+                // M446 (D): show the map's OWN placed lights, not just the ones the editor happens to hold.
+                ImportPlacedLightsIntoPanel(entry.Path);
                 OnPropertyChanged(nameof(CanBakeLighting));   // M158
                 OnPropertyChanged(nameof(HasMapForLayout));  // M147
                 OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
