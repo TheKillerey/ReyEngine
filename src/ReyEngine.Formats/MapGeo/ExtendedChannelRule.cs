@@ -66,6 +66,39 @@ public static class ExtendedChannelRule
     }
 
     /// <summary>
+    /// M445: the same file with every extended channel entry removed — a form LeagueToolkit's
+    /// <c>EnvironmentAsset</c> can parse.
+    ///
+    /// <para><b>Why this exists.</b> ReyEngine has two mapgeo readers. <see cref="MapGeoBinary"/> is ours
+    /// and now knows the rule; the scene decoder is LeagueToolkit's, which assumes the 40-byte block and
+    /// throws <c>IndexOutOfRangeException</c> on a file that uses 48. We cannot teach a third-party reader
+    /// the material-dependent rule, but the VIEWER does not need those bytes — only the shipped file does.
+    /// So the decoder gets a normalized copy while the authoritative bytes stay untouched.</para>
+    ///
+    /// <para><b>Safe because the mesh ORDER and COUNT are unchanged</b>, so
+    /// <c>MapGeoMesh.Index</c> still identifies the same mesh in the real file. Never save the result:
+    /// it is a decoding aid, not an edit.</para>
+    /// </summary>
+    /// <returns>The normalized bytes, or the input unchanged when nothing applies or the file cannot be
+    /// read — callers get today's behaviour rather than an exception.</returns>
+    public static byte[] WithoutExtendedEntries(byte[] mapGeo, IReadOnlySet<string>? extendedChannelMaterials)
+    {
+        ArgumentNullException.ThrowIfNull(mapGeo);
+        if (extendedChannelMaterials is not { Count: > 0 }) return mapGeo;
+        if (!MapGeoBinary.TryReadEditable(mapGeo, out var map, extendedChannelMaterials)) return mapGeo;
+        if (!map.Meshes.Any(m => m.HasExtendedChannel)) return mapGeo;
+
+        foreach (var mesh in map.Meshes)
+        {
+            mesh.HasExtendedChannel = false;
+            mesh.ExtendedChannelTexture = "";
+            mesh.ExtendedChannelValue = 0;
+        }
+        try { return map.Write(); }
+        catch { return mapGeo; }
+    }
+
+    /// <summary>
     /// Bring a mesh's channel block into agreement with its materials: meshes that use an extended-reader
     /// material get the extra entry, meshes that stopped using one lose it. Returns the number of meshes
     /// whose layout changed.

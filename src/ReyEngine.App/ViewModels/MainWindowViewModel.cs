@@ -6574,7 +6574,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (result.MeshesChanged == 0) { _log.Warn("MapGeo", result.Summary); return; }
 
             // Validate BEFORE saving: the rewrite has to decode again AND actually carry the channel.
-            var check = await Task.Run(() => MapGeoDecoder.Decode(bytes));
+            var check = await Task.Run(() => MapGeoDecoder.Decode(bytes, extendedChannels));
             var wanted = targets.ToHashSet();
             int carried = check.Meshes.Count(m => wanted.Contains(m.Index) && m.HasLightmapUv);
             if (carried != result.MeshesChanged)
@@ -6706,7 +6706,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // Validate BEFORE saving: it must re-read with the same material set AND still decode.
             if (!await Task.Run(() => Formats.MapGeo.MapGeoBinary.TryReadEditable(bytes, out _, extended)))
             { _log.Error("MapGeo", "The rewritten mapgeo did not re-read cleanly — not saved."); return; }
-            await Task.Run(() => MapGeoDecoder.Decode(bytes));
+            await Task.Run(() => MapGeoDecoder.Decode(bytes, extended));
 
             string savedTo;
             if (TryWriteToProjectFile(entry, bytes, out var projectFile)) savedTo = projectFile;
@@ -6780,7 +6780,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (result.MeshesChanged == 0) { _log.Warn("MapGeo", result.Summary); return; }
 
             // Validate BEFORE saving: it must decode again with the geometry intact.
-            var check = await Task.Run(() => MapGeoDecoder.Decode(bytes));
+            var check = await Task.Run(() => MapGeoDecoder.Decode(bytes, extendedChannels));
             if (check.Meshes.Count != map.Meshes.Count)
             {
                 _log.Error("MapGeo", $"The rewritten mapgeo decoded with {check.Meshes.Count} meshes " +
@@ -8048,9 +8048,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             _log.Info("MapGeo", $"Decoding {entry.DisplayName} …");
             var rawMapBytes = ReadAsset(entry.PathHash);
+            // M445: the scene decoder is LeagueToolkit's and only knows the 40-byte channel block, so a map
+            // using a Mantis material has to be normalized for it or it throws IndexOutOfRange. The
+            // authoritative bytes (rawMapBytes) are untouched — this only feeds the viewer.
+            var extendedChannels = ExtendedChannelMaterialsFor(entry.Path);
             var (map, mesh, textures, sunProperties) = await Task.Run(() =>
             {
-                var m = MapGeoDecoder.Decode(rawMapBytes);
+                var m = MapGeoDecoder.Decode(rawMapBytes, extendedChannels);
                 var meshAsset = new MeshAsset
                 {
                     Positions = m.Positions,

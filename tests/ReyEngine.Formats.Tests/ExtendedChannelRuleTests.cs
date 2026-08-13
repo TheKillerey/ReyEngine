@@ -168,6 +168,46 @@ public class ExtendedChannelRuleTests
         Assert.All(map.Meshes, m => Assert.False(m.HasExtendedChannel));
     }
 
+    // ---- the normalized form the third-party scene decoder needs ----
+
+    /// <summary>M445: LeagueToolkit's EnvironmentAsset only knows the 40-byte block and throws on a file
+    /// that uses 48. The viewer does not need those bytes, so it gets a copy without them.</summary>
+    [Fact]
+    public void The_normalized_copy_drops_the_entries_and_reads_on_the_default_reader()
+    {
+        var map = MapOf(Plain, Extended, Plain);
+        map.Meshes[1].HasExtendedChannel = true;
+        byte[] original = map.Write();
+
+        byte[] plain = ExtendedChannelRule.WithoutExtendedEntries(original, Set(Extended));
+
+        Assert.Equal(original.Length - 8, plain.Length);
+        Assert.True(MapGeoBinary.TryReadEditable(plain, out var back));      // no set needed any more
+        Assert.Equal(map.Meshes.Count, back.Meshes.Count);                   // order and count preserved,
+        Assert.All(back.Meshes, m => Assert.False(m.HasExtendedChannel));    // so MapGeoMesh.Index still maps
+    }
+
+    /// <summary>It must not touch a file it has no business touching — every other caller relies on
+    /// getting the identical array back.</summary>
+    [Fact]
+    public void A_file_with_no_extended_entries_comes_back_unchanged()
+    {
+        byte[] original = MapOf(Plain, Plain, Plain).Write();
+
+        Assert.Same(original, ExtendedChannelRule.WithoutExtendedEntries(original, Set(Extended)));
+        Assert.Same(original, ExtendedChannelRule.WithoutExtendedEntries(original, Set()));
+        Assert.Same(original, ExtendedChannelRule.WithoutExtendedEntries(original, null));
+    }
+
+    /// <summary>Garbage in must not throw — the decoder path would turn an exception here into a failure
+    /// to open a map that previously opened fine.</summary>
+    [Fact]
+    public void An_unreadable_file_is_returned_as_is_rather_than_throwing()
+    {
+        byte[] junk = { 1, 2, 3, 4, 5 };
+        Assert.Same(junk, ExtendedChannelRule.WithoutExtendedEntries(junk, Set(Extended)));
+    }
+
     [Theory]
     [InlineData("Mantis_Env_Baked_PBR", true)]
     [InlineData("mantis_env_baked_pbr", true)]

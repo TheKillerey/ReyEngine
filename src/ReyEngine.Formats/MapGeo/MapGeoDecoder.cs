@@ -9,8 +9,14 @@ public static class MapGeoDecoder
 {
     private static readonly ElementName[] AllElementNames = (ElementName[])Enum.GetValues(typeof(ElementName));
 
-    public static MapGeoAsset Decode(byte[] data)
+    /// <param name="extendedChannelMaterials">M445: materials whose meshes carry the longer channel block.
+    /// LeagueToolkit's reader assumes the short one and throws <c>IndexOutOfRangeException</c> on such a
+    /// file, so it is handed a normalized copy — see
+    /// <see cref="ExtendedChannelRule.WithoutExtendedEntries"/>. Omitting this keeps the previous
+    /// behaviour exactly, which is correct for every file Riot ships.</param>
+    public static MapGeoAsset Decode(byte[] data, IReadOnlySet<string>? extendedChannelMaterials = null)
     {
+        data = ExtendedChannelRule.WithoutExtendedEntries(data, extendedChannelMaterials);
         int version = data.Length >= 8 ? (int)BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4)) : 0;
 
         using var ms = new MemoryStream(data, writable: false);
