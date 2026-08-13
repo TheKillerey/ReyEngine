@@ -2430,10 +2430,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Assemble the bake inputs from the current map + the live viewport lighting, so a bake
     /// reproduces exactly what the viewport shows. Returns null when nothing can be baked.</summary>
-    public Services.LightBakeInputs? GatherBakeInputs(Formats.Baking.BakeSettings settings)
+    public Services.LightBakeInputs? GatherBakeInputs(Formats.Baking.BakeSettings settings) =>
+        GatherBakeInputs(settings, requireLightmapLayout: true);
+
+    /// <param name="requireLightmapLayout">Atlas baking needs an existing lightmap layout; the LIGHTGRID
+    /// does not. The grid is a probe volume over the geometry and never touches a UV2 channel, so gating it
+    /// on a layout is what made a lightgrid impossible to produce for a map that has none (M442).</param>
+    public Services.LightBakeInputs? GatherBakeInputs(Formats.Baking.BakeSettings settings,
+        bool requireLightmapLayout)
     {
         if (_currentMap is not { } map || _currentMapEntry is not { } entry) return null;
-        if (!Formats.Baking.LightBaker.CanBakeExistingLayout(map)) return null;
+        if (requireLightmapLayout && !Formats.Baking.LightBaker.CanBakeExistingLayout(map)) return null;
 
         var lights = EditableLights
             .Select(l => l.ToPointLight())
@@ -6677,6 +6684,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Warn("Map", "Could not read the map's graphics features: " + ex.Message); }
         OnPropertyChanged(nameof(HasMapGraphicsFeatures));
         RefreshGameplayTextureStatus();   // M439
+        RefreshLightGridStatus();         // M442
     }
 
     /// <summary>
@@ -6955,6 +6963,106 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             RefreshMapGraphicsFeatures();
         }
         catch (Exception ex) { _log.Error("Map", "MapGameplayTexture edit failed: " + ex.Message); }
+    }
+
+    /// <summary>M442: is a standalone lightgrid meaningful here? Only needs an open mapgeo — unlike atlas
+    /// baking it does not need a lightmap layout.</summary>
+    public bool CanBakeLightGrid => _currentMap is not null && _currentMapEntry is not null;
+
+    /// <summary>M442: what the map currently declares, so the button can say whether it would create or
+    /// replace a link.</summary>
+    [ObservableProperty] private string _lightGridStatus = "";
+
+    private void RefreshLightGridStatus()
+    {
+        OnPropertyChanged(nameof(CanBakeLightGrid));
+        LightGridStatus = "";
+        try
+        {
+            if (_currentMapEntry is null || !TryResolveMaterialsBin(_currentMapEntry.Path, out var binEntry)) return;
+            var current = Formats.MapGeo.MapBakeProperties.Read(ReadAsset(binEntry.PathHash));
+            LightGridStatus = current is { File.Length: > 0 }
+                ? $"linked: {current.Value.File} (size {current.Value.Size})"
+                : "no lightGridFileName — MapLightingV2 has no probe data to read";
+        }
+        catch (Exception ex) { LightGridStatus = "could not read: " + ex.Message; }
+    }
+
+    /// <summary>
+    /// M442: bake a lightgrid for the open map and link it, without baking a single atlas.
+    ///
+    /// <para>The probe volume is what lights everything a lightmap cannot cover — characters, effects, and
+    /// any surface whose material sets NO_BAKED_LIGHTING. It is also the prerequisite MapLightingV2 has in
+    /// every shipped map that declares it (180 of 180 carry MapBakeProperties.lightGridFileName), which is
+    /// why a map can declare V2 and still have nothing to read.</para>
+    ///
+    /// <para>Deliberately separate from the full bake: <c>LightBakeService.BakeAsync</c> bakes every atlas
+    /// first, which needs a lightmap layout the map may not have and costs minutes. The grid needs neither.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task BakeLightGrid()
+    {
+        if (_currentMapEntry is not { } mapEntry)
+        { _log.Warn("Bake", "No map is open."); return; }
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+        { _log.Warn("Bake", "No map materials.bin was found, so the grid could not be linked."); return; }
+        if (!GuardEditable(binEntry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        var settings = new Formats.Baking.BakeSettings();          // defaults: 256x256, sized from map bounds
+        var inputs = GatherBakeInputs(settings, requireLightmapLayout: false);
+        if (inputs is null) { _log.Warn("Bake", "Could not gather lighting for this map."); return; }
+
+        try
+        {
+            Status = "Baking lightgrid…";
+            var grid = await Task.Run(() => Formats.Baking.LightBaker.BakeLightGrid(
+                inputs.Map, inputs.Lighting, settings, inputs.GroupOccluderEnabled));
+
+            string gridPath = settings.ResolveOutputFolder(mapEntry.Path) + settings.LightGridFileName();
+            byte[] gridBytes = grid.Write();
+
+            // Round-trip before shipping it: the header is fixed-size and the cell count must match, so a
+            // grid that cannot re-read is one the client would choke on too.
+            var reread = Formats.Lighting.LightGridFile.Read(gridBytes);
+            if (reread.Width != grid.Width || reread.Height != grid.Height
+                || reread.Samples.Length != grid.Samples.Length)
+            { _log.Error("Bake", "The baked lightgrid did not round-trip — not saved."); return; }
+
+            WriteBakedAsset(gridPath, gridBytes, ".dat");
+
+            // Link it. MapBakeProperties.Write leaves any other fields the map already has untouched.
+            var linked = Formats.MapGeo.MapBakeProperties.Write(
+                ReadAsset(binEntry.PathHash), gridPath, grid.Width, 0.5f, out var linkResult);
+            if (linked is null)
+            { _log.Error("Bake", "The grid was written but could not be linked: " + linkResult.Detail); return; }
+
+            string savedTo;
+            if (TryWriteToProjectFile(binEntry, linked, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, linked, ".bin");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = binEntry.PathHash,
+                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            _log.Success("Bake", $"Lightgrid {grid.Width}x{grid.Height} ({gridBytes.Length:n0} B) → {gridPath}; "
+                                 + $"MapBakeProperties: {linkResult.Detail}. Bin saved to {savedTo}.");
+            Status = "Lightgrid baked and linked.";
+            RefreshLightGridStatus();
+            RefreshMapGraphicsFeatures();
+        }
+        catch (Exception ex) { _log.Error("Bake", "Lightgrid bake failed: " + ex.Message); Status = "Lightgrid bake failed."; }
     }
 
     [RelayCommand]

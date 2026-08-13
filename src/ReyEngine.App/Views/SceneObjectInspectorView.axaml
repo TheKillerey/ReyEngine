@@ -203,6 +203,21 @@
       </StackPanel>
     </Border>
 
+    <!-- M442: the lightgrid is MapLightingV2's prerequisite - 180 of 180 shipped maps that declare V2 also
+         set MapBakeProperties.lightGridFileName. Baking it needs no lightmap layout and no atlases. -->
+    <Border Classes="card" IsVisible="{Binding CanBakeLightGrid}">
+      <StackPanel Spacing="3">
+        <TextBlock Classes="cardTitle" Text="LIGHTGRID" />
+        <TextBlock Text="The probe volume that lights characters, effects and NO_BAKED_LIGHTING surfaces. Every shipped map declaring MapLightingV2 has one."
+                   FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+        <TextBlock Text="{Binding LightGridStatus}" FontSize="9" TextWrapping="Wrap"
+                   Foreground="{DynamicResource ReyAccentBrush}" Margin="0,2,0,0" />
+        <Button Content="Bake + Link Lightgrid" Command="{Binding BakeLightGridCommand}"
+                FontSize="11" Padding="8,2" Margin="0,3,0,0" HorizontalAlignment="Left"
+                ToolTip.Tip="Bake a 256x256 probe volume from the map's own sun/sky and lights, write lightgrid.dat next to the map, and set MapBakeProperties.lightGridFileName to point at it. No atlases and no lightmap layout needed." />
+      </StackPanel>
+    </Border>
+
     <!-- M439: MapGameplayTexture is the one feature whose content cannot be typed into the generic field
          list: its texture lives in an embedded sampler list and its four colour slots are object links
          that must point at real GameplayTextureChannel objects in this same bin. -->
