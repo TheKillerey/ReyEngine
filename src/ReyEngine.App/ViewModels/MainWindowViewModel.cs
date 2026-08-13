@@ -2464,6 +2464,82 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ShowLightBakeWindow?.Invoke();
     }
 
+    /// <summary>
+    /// M448: strip the baked-lightmap references from the mapgeo, returning it to its pre-bake state.
+    ///
+    /// <para>Clears every mesh's <c>BakedLight</c> channel — the atlas path and its UV scale/bias. That is
+    /// the reference the client follows to a lightmap texture, so with it gone the map lights dynamically
+    /// again and a fresh bake starts from a clean slate instead of layering on stale atlas assignments.</para>
+    ///
+    /// <para><b>References only.</b> The generated atlas <c>.tex</c> files are left on disk untouched:
+    /// deleting project assets is not something a cleanup button should do silently, and the references are
+    /// what actually change rendering. <c>StationaryLight</c> is also left alone — it is a different
+    /// channel feeding <c>STATIONARY_LIGHT__TX</c>, not the lightmap.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task CleanupLightmaps()
+    {
+        if (_currentMap is null || _currentMapBytes is null || _currentMapEntry is not { } entry)
+        { _log.Warn("Bake", "No map is open."); return; }
+        if (MapGeoWriter.HasMoves(_currentMap.Meshes) || MapGeoLayerWriter.HasEdits(_currentMap.Meshes)
+            || MapContent.AddedMeshes.Count > 0)
+        { _log.Warn("Bake", "Save your pending mesh edits first — this rewrites the mapgeo from the saved bytes."); return; }
+        if (!GuardEditable(entry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            var source = _currentMapBytes;
+            var extended = ExtendedChannelMaterialsFor(entry.Path);
+            var (bytes, cleared) = await Task.Run(() =>
+            {
+                if (!Formats.MapGeo.MapGeoBinary.TryReadEditable(source, out var map, extended))
+                    return ((byte[]?)null, 0);
+                int n = 0;
+                foreach (var mesh in map.Meshes)
+                {
+                    if (mesh.BakedLight.Texture.Length == 0 && mesh.BakedLight.Scale == System.Numerics.Vector2.Zero
+                        && mesh.BakedLight.Bias == System.Numerics.Vector2.Zero) continue;
+                    map.SetBakedLight(mesh, "", System.Numerics.Vector2.Zero, System.Numerics.Vector2.Zero);
+                    n++;
+                }
+                return (n > 0 ? map.Write() : null, n);
+            });
+
+            if (cleared == 0) { _log.Info("Bake", "No mesh carries a baked-lightmap reference — nothing to clean up."); return; }
+            if (bytes is null) { _log.Error("Bake", "This mapgeo does not round-trip byte-exactly, so it was not rewritten."); return; }
+
+            // Validate BEFORE saving: it must re-read with the same material set AND still decode.
+            if (!await Task.Run(() => Formats.MapGeo.MapGeoBinary.TryReadEditable(bytes, out _, extended)))
+            { _log.Error("Bake", "The rewritten mapgeo did not re-read cleanly — not saved."); return; }
+            await Task.Run(() => MapGeoDecoder.Decode(bytes, extended));
+
+            string savedTo;
+            if (TryWriteToProjectFile(entry, bytes, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = entry.PathHash,
+                    ResolvedPath = entry.IsResolved ? entry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            _log.Success("Bake", $"Cleared the lightmap reference on {cleared:n0} mesh(es). The atlas .tex files "
+                               + $"were left on disk. Saved to {savedTo} ({bytes.Length:n0} bytes).");
+            await LoadMapGeoAsync(entry);
+        }
+        catch (Exception ex) { _log.Error("Bake", "Lightmaps could not be cleaned up: " + ex.Message); }
+    }
+
     /// <summary>The value <see cref="ApplyBulkLightIntensityCommand"/> writes to every light.</summary>
     [ObservableProperty] private double _bulkLightIntensity = 5;
 

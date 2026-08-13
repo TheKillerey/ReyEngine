@@ -201,6 +201,13 @@
             <Button Classes="tool" Content="+ Add light" Command="{Binding AddLightCommand}"
                     HorizontalAlignment="Stretch" FontSize="11" Padding="8,4"
                     ToolTip.Tip="Add a point light at the gizmo (or the origin) — then drag it into place." />
+            <!-- M448: back to the pre-bake state. Clears each mesh's BakedLight reference so the map lights
+                 dynamically again and a fresh bake does not layer onto stale atlas assignments. -->
+            <Button Classes="tool" Content="🧹 Clean up lightmaps" Command="{Binding CleanupLightmapsCommand}"
+                    HorizontalAlignment="Stretch" FontSize="11" Padding="8,4" Margin="0,8,0,0"
+                    IsEnabled="{Binding HasMapGeo}"
+                    ToolTip.Tip="Clear every mesh's baked-lightmap reference (atlas path + UV scale/bias), returning the mapgeo to its pre-bake state. The generated atlas .tex files are left on disk — this only removes the references the client follows. Saves the rewritten mapgeo." />
+
             <!-- M447: bulk strength. The Intensity slider above is a viewport/bake multiplier that never
                  reaches the bin; this writes each light's OWN intensityScale, which is what the port
                  persists and the game reads. -->
