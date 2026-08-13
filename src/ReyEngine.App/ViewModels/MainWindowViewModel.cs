@@ -2464,6 +2464,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ShowLightBakeWindow?.Invoke();
     }
 
+    /// <summary>The value <see cref="ApplyBulkLightIntensityCommand"/> writes to every light.</summary>
+    [ObservableProperty] private double _bulkLightIntensity = 5;
+
+    /// <summary>
+    /// M447: set the per-light strength on EVERY light at once.
+    ///
+    /// <para>The existing strength control is <see cref="DynamicLightIntensity"/>, which is a global
+    /// multiplier applied at RENDER and BAKE time — it never reaches the bin, so turning it down dimmed the
+    /// viewport and the ported map stayed bright. This writes each light's own
+    /// <c>intensityScale</c> instead, which is the field the port persists and the game reads.</para>
+    /// </summary>
+    [RelayCommand]
+    private void ApplyBulkLightIntensity()
+    {
+        if (EditableLights.Count == 0) { _log.Warn("Lights", "There are no lights to change."); return; }
+        double v = Math.Max(0, BulkLightIntensity);
+        foreach (var l in EditableLights) l.Intensity = v;
+        RepublishLights();
+        _log.Success("Lights", $"Set intensity {v.ToString(CultureInfo.InvariantCulture)} on "
+                             + $"{EditableLights.Count:n0} light(s). Port them into the map to apply in game.");
+    }
+
     /// <summary>
     /// M446 (C): write the editor's point lights into the map as <c>MapDynamicPointLight</c> placements —
     /// the bridge off the legacy light systems.
@@ -2491,11 +2513,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         try
         {
+            // M447: fold in the SAME global multipliers the viewport and the bake apply
+            // (BakeLighting.ResolvePosition/ResolveRadius and LightIntensity). Without this the port wrote
+            // raw per-light values while the preview showed them scaled, so the map never matched what you
+            // were looking at — the fit panel's sliders moved the preview and did nothing to the export.
+            float gIntensity = (float)DynamicLightIntensity;
+            float gRadius = (float)DynamicLightRadiusScale;
+            var gScaleXZ = new System.Numerics.Vector2((float)DynamicLightScaleX, (float)DynamicLightScaleZ);
+            var gOffset = new System.Numerics.Vector2((float)DynamicLightOffsetX, (float)DynamicLightOffsetZ);
+            float gPosScale = (float)DynamicLightPositionScale;
+
             var wanted = EditableLights.Select(vm =>
             {
                 var pl = vm.ToPointLight();
                 string name = string.IsNullOrWhiteSpace(vm.Name) ? "PortedLight" : vm.Name.Trim();
-                return new Formats.Lighting.DynamicPointLight(name, pl.Position, pl.Color, pl.Radius, pl.Intensity);
+                var p = pl.Position * gPosScale;
+                p.X = p.X * gScaleXZ.X + gOffset.X;
+                p.Z = p.Z * gScaleXZ.Y + gOffset.Y;
+                return new Formats.Lighting.DynamicPointLight(
+                    name, p, pl.Color, pl.Radius * gRadius, pl.Intensity * gIntensity);
             }).ToList();
 
             byte[] source = ReadAsset(binEntry.PathHash);

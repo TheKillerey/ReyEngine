@@ -201,6 +201,18 @@
             <Button Classes="tool" Content="+ Add light" Command="{Binding AddLightCommand}"
                     HorizontalAlignment="Stretch" FontSize="11" Padding="8,4"
                     ToolTip.Tip="Add a point light at the gizmo (or the origin) — then drag it into place." />
+            <!-- M447: bulk strength. The Intensity slider above is a viewport/bake multiplier that never
+                 reaches the bin; this writes each light's OWN intensityScale, which is what the port
+                 persists and the game reads. -->
+            <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,8,0,0">
+              <TextBlock Grid.Column="0" Text="Strength" VerticalAlignment="Center" FontSize="11" Margin="0,0,6,0" />
+              <NumericUpDown Grid.Column="1" Value="{Binding BulkLightIntensity}" Minimum="0" Maximum="10000"
+                             Increment="1" FormatString="0.###" FontSize="11" Padding="6,2" />
+              <Button Grid.Column="2" Classes="tool" Content="Set all" Command="{Binding ApplyBulkLightIntensityCommand}"
+                      FontSize="11" Padding="8,4" Margin="6,0,0,0"
+                      ToolTip.Tip="Write this strength into every light's own intensityScale — the field the map port persists and the game reads. The Intensity slider above only scales the preview and the bake." />
+            </Grid>
+
             <!-- M446 (C): the bridge off the legacy system. Light.dat lights live only in the editor and
                  the project file, so a legacy map's lighting could previously only be BAKED in. Written as
                  MapDynamicPointLight placements they become real dynamic lights the client renders with no
