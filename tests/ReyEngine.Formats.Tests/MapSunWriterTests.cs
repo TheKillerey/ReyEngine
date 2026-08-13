@@ -34,6 +34,7 @@ public class MapSunWriterTests
     private static readonly MapSunProperties Authored = new()
     {
         SunColor = new Vector4(0.46f, 0.55f, 0.76f, 1f),
+        SunIntensityScale = 0.5f,     // M451: the split strength field jade authors
         SunDirection = new Vector3(-0.156f, 0.936f, 0.317f),
         SkyLightColor = new Vector4(0.78f, 0.52f, 0.94f, 1f),
         SkyLightScale = 1.5f,
@@ -137,6 +138,24 @@ public class MapSunWriterTests
 
         Assert.False(s.Properties.ContainsKey(Raw("sunColor")));
         Assert.Equal(Authored.SunColor, Assert.IsType<BinTreeVector4>(s.Properties[H("sunColor")]).Value);
+    }
+
+    /// <summary>M451: the strength field follows the same rules as every other — round-trips when real,
+    /// stays absent at its default of 1 so an unauthored map is not silently annotated.</summary>
+    [Fact]
+    public void Sun_intensity_scale_round_trips_and_defaults_stay_absent()
+    {
+        byte[] bin = BinWith(new BinTreeVector4(H("sunColor"), Vector4.One));
+
+        byte[]? strong = MapSunProperties.Write(bin, new MapSunProperties { SunIntensityScale = 0.5f }, out _);
+        Assert.Equal(0.5f, MapSunProperties.Extract(strong!)!.SunIntensityScale);
+
+        byte[]? neutral = MapSunProperties.Write(bin, new MapSunProperties(), out _);
+        var tree = new BinTree(new MemoryStream(neutral!, false));
+        var s = tree.Objects.Values.SelectMany(o => o.Properties.Values)
+            .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
+            .OfType<BinTreeStruct>().Single(x => x.ClassHash == H("MapSunProperties"));
+        Assert.False(s.Properties.ContainsKey(H("SunIntensityScale")));
     }
 
     [Fact]

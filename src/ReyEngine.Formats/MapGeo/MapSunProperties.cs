@@ -16,6 +16,10 @@ namespace ReyEngine.Formats.MapGeo;
 public sealed record MapSunProperties
 {
     public Vector4 SunColor { get; init; } = Vector4.One;
+    /// <summary>M451: the sun's own strength multiplier, separate from its colour. Authored in shipped
+    /// maps (map12/jade carries 0.5) — the game applies it while a viewport that ignores it renders the
+    /// sun up to 2x off, which is exactly the "not the same as in game" report.</summary>
+    public float SunIntensityScale { get; init; } = 1f;
     public Vector3 SunDirection { get; init; } = new(0f, 1f, 0f);
     public Vector4 SkyLightColor { get; init; } = Vector4.One;
     public float SkyLightScale { get; init; } = 1f;
@@ -57,6 +61,7 @@ public sealed record MapSunProperties
                     return new MapSunProperties
                     {
                         SunColor = Vec4(s, "sunColor", Vector4.One),
+                        SunIntensityScale = F32(s, "SunIntensityScale", 1f),
                         SunDirection = Vec3(s, "sunDirection", new Vector3(0f, 1f, 0f)),
                         SkyLightColor = Vec4(s, "skyLightColor", Vector4.One),
                         SkyLightScale = F32(s, "skyLightScale", 1f),
@@ -90,7 +95,7 @@ public sealed record MapSunProperties
     /// carry is added ONLY when its value differs from the read-side default — <see cref="Extract"/>
     /// returns the default for an absent field anyway, so adding a default-valued field changes nothing
     /// for ReyEngine and only risks meaning something different to the game. Fields this record does not
-    /// model (SunIntensityScale, fogAlternateColor, …) are never touched.</para>
+    /// model (fogAlternateColor, CharacterSunLight*, …) are never touched.</para>
     /// </summary>
     /// <returns>The rewritten bin, or null when it cannot be done (unparseable, no MapContainer).</returns>
     public static byte[]? Write(byte[] materialsBin, MapSunProperties sun, out WriteResult result)
@@ -138,6 +143,7 @@ public sealed record MapSunProperties
             }
 
             Set("sunColor", new BinTreeVector4(HashAlgorithms.Fnv1a("sunColor"), sun.SunColor), sun.SunColor == defaults.SunColor);
+            Set("SunIntensityScale", new BinTreeF32(HashAlgorithms.Fnv1a("SunIntensityScale"), sun.SunIntensityScale), sun.SunIntensityScale == defaults.SunIntensityScale);
             Set("sunDirection", new BinTreeVector3(HashAlgorithms.Fnv1a("sunDirection"), sun.SunDirection), sun.SunDirection == defaults.SunDirection);
             Set("skyLightColor", new BinTreeVector4(HashAlgorithms.Fnv1a("skyLightColor"), sun.SkyLightColor), sun.SkyLightColor == defaults.SkyLightColor);
             Set("skyLightScale", new BinTreeF32(HashAlgorithms.Fnv1a("skyLightScale"), sun.SkyLightScale), sun.SkyLightScale == defaults.SkyLightScale);

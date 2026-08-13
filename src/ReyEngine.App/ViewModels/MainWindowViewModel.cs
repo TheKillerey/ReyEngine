@@ -8615,7 +8615,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             _suppressSunRebuild = true;
             SunColorR = Clamp01(_baseSun.SunColor.X); SunColorG = Clamp01(_baseSun.SunColor.Y); SunColorB = Clamp01(_baseSun.SunColor.Z);
-            SunIntensity = 1.0;
+            // M451: the slider IS SunIntensityScale now. Resetting it to 1.0 was what made the viewport
+            // ignore the strength the game applies (jade authors 0.5 - a 2x mismatch), and what made a
+            // save report "stays at 1".
+            SunIntensity = System.Math.Clamp(_baseSun.SunIntensityScale, 0f, 8f);
             SkyColorR = Clamp01(_baseSun.SkyLightColor.X); SkyColorG = Clamp01(_baseSun.SkyLightColor.Y); SkyColorB = Clamp01(_baseSun.SkyLightColor.Z);
             SkyIntensity = System.Math.Clamp(_baseSun.SkyLightScale, 0f, 8f);
             _suppressSunRebuild = false;
@@ -8648,7 +8651,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_suppressSunRebuild) return;
         CurrentSunProperties = _baseSun with
         {
+            // M451: this is the RENDER form - strength folded into the colour, scale normalised to 1 so
+            // nothing can ever apply it twice. The SAVE form keeps them split (hue + SunIntensityScale),
+            // which is how Riot authors it (jade: sunColor 0.87/0.75/0.6 with SunIntensityScale 0.5).
             SunColor = new System.Numerics.Vector4((float)(SunColorR * SunIntensity), (float)(SunColorG * SunIntensity), (float)(SunColorB * SunIntensity), 1f),
+            SunIntensityScale = 1f,
             SkyLightColor = new System.Numerics.Vector4((float)SkyColorR, (float)SkyColorG, (float)SkyColorB, 1f),
             SkyLightScale = (float)SkyIntensity,
         };
@@ -8722,7 +8729,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         try
         {
-            var sun = (CurrentSunProperties ?? _baseSun) with { LightMapColorScale = (float)CurrentLightmapScale };
+            // M451: the SAVE form splits colour and strength the way Riot authors them - sunColor is the
+            // plain hue and SunIntensityScale carries the slider. Saving the folded render form instead
+            // would zero out an authored scale and bake the strength into the hue, which is exactly the
+            // lossy fold that made saved strength "stay at 1".
+            var sun = _baseSun with
+            {
+                SunColor = new System.Numerics.Vector4((float)SunColorR, (float)SunColorG, (float)SunColorB, 1f),
+                SunIntensityScale = (float)SunIntensity,
+                SkyLightColor = new System.Numerics.Vector4((float)SkyColorR, (float)SkyColorG, (float)SkyColorB, 1f),
+                SkyLightScale = (float)SkyIntensity,
+                LightMapColorScale = (float)CurrentLightmapScale,
+            };
             byte[] source = ReadAsset(binEntry.PathHash);
             var (bytes, result) = await Task.Run(() =>
             {
