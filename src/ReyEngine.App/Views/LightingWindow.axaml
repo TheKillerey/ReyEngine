@@ -20,12 +20,17 @@
                 Command="{Binding OpenLightBakeCommand}" IsEnabled="{Binding HasMapForLayout}"
                 Padding="16,5" FontSize="11"
                 ToolTip.Tip="Bake this lighting into the map's lightmap atlases. If the map has no lightmap layout yet, that window offers to generate one first." />
+        <!-- M450: the missing half of this panel. Until now the sliders edited a copy the viewport
+             rendered and nothing could persist - "not saveable" was literally true. -->
+        <Button DockPanel.Dock="Right" Classes="tool" Content="💾 Save sun to map" Margin="0,0,8,0"
+                Command="{Binding SaveSunToMapCommand}" IsEnabled="{Binding HasMapGeo}" Padding="14,5" FontSize="11"
+                ToolTip.Tip="Write the current sun, sky, fog and lightmap scale into the map's materials.bin (the MapContainer's MapSunProperties component). Sun and sky are live in game — no bake needed. Fields this panel does not edit are left untouched, and Reset then returns to these saved values." />
         <Button DockPanel.Dock="Right" Classes="tool" Content="↺ Reset to map" Margin="0,0,8,0"
                 Command="{Binding ResetLightingCommand}" Padding="14,5" FontSize="11"
                 ToolTip.Tip="Discard these tweaks and go back to the values the map itself authored." />
         <TextBlock VerticalAlignment="Center" FontSize="10" TextWrapping="Wrap"
                    Foreground="{DynamicResource ReyTextDimBrush}"
-                   Text="These are viewport values — they drive the preview and are what a bake reproduces." />
+                   Text="These values drive the preview and the bake — 'Save sun to map' writes them into the map itself." />
       </DockPanel>
     </Border>
 

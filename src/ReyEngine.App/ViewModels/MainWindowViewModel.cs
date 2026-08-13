@@ -8701,6 +8701,81 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private Formats.MapGeo.MapSunProperties? _baseSunAuthored;
 
     /// <summary>
+    /// M450: persist the panel's sun/sky/fog into the map's materials.bin — the missing half of the
+    /// lighting panel. Until now the sliders edited a copy the viewport rendered and nothing could save;
+    /// "not saveable" was literally true, there was no writer.
+    ///
+    /// <para>Writes <see cref="CurrentSunProperties"/> (which already folds the sliders in — sun colour is
+    /// hue × intensity, sky scale carries the sky intensity) with <see cref="CurrentLightmapScale"/> as
+    /// <c>lightMapColorScale</c>, into the MapContainer's <c>MapSunProperties</c> component. Fields the
+    /// panel does not model (SunIntensityScale, fogAlternateColor, …) are left untouched.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task SaveSunToMap()
+    {
+        if (_currentMapEntry is not { } entry)
+        { _log.Warn("Lighting", "No map is open, so there is nowhere to save the sun."); return; }
+        if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
+        { _log.Error("Lighting", "No materials.bin was found alongside this mapgeo."); return; }
+        if (!GuardEditable(binEntry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        try
+        {
+            var sun = (CurrentSunProperties ?? _baseSun) with { LightMapColorScale = (float)CurrentLightmapScale };
+            byte[] source = ReadAsset(binEntry.PathHash);
+            var (bytes, result) = await Task.Run(() =>
+            {
+                var b = Formats.MapGeo.MapSunProperties.Write(source, sun, out var r);
+                return (b, r);
+            });
+            if (bytes is null)
+            { _log.Error("Lighting", "Sun could not be written: " + result.Detail); return; }
+
+            // Validate BEFORE saving: shape rules, then read the sun back and require exact agreement.
+            var issues = await Task.Run(() => Formats.Meta.ModShapeValidator.ValidateBin(
+                Formats.Meta.SafeBinTree.Parse(bytes), bytes, ResolveBinName));
+            if (issues.Count > 0)
+            {
+                foreach (var i in issues.Take(5)) _log.Error("Lighting", $"[{i.Category}] {i.ObjectName}: {i.Detail}");
+                _log.Error("Lighting", $"{issues.Count} shape issue(s) — not saved."); return;
+            }
+            var back = Formats.MapGeo.MapSunProperties.Extract(bytes);
+            if (back is null || back != sun)
+            { _log.Error("Lighting", "The rewritten bin did not read back with the saved sun — not saved."); return; }
+
+            string savedTo;
+            if (TryWriteToProjectFile(binEntry, bytes, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = binEntry.PathHash,
+                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+
+            // The saved values are now the map's authored values, so Reset should return HERE.
+            _baseSunAuthored = sun;
+            _baseSun = sun;
+
+            _log.Success("Lighting", $"Saved sun & sky to the map ({result.Detail}). "
+                + $"sunColor=({sun.SunColor.X:0.##}, {sun.SunColor.Y:0.##}, {sun.SunColor.Z:0.##}), "
+                + $"skyScale={sun.SkyLightScale:0.##}, lightMapColorScale={sun.LightMapColorScale:0.##}. "
+                + $"Saved to {savedTo}.");
+        }
+        catch (Exception ex) { _log.Error("Lighting", "Sun could not be saved: " + ex.Message); }
+    }
+
+    /// <summary>
     /// Resolve a mapgeo's companion .materials.bin, tolerating renamed copies (a mod folder often holds
     /// "base_srx - Kopie.mapgeo" whose materials are still the original "base_srx.materials.bin").
     /// </summary>

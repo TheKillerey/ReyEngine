@@ -73,6 +73,91 @@ public sealed record MapSunProperties
         return null;
     }
 
+    /// <summary>What a write did, so the caller can report it honestly.</summary>
+    public sealed record WriteResult(bool Written, bool CreatedComponent, int FieldsUpdated, int FieldsAdded, string Detail);
+
+    /// <summary>
+    /// M450: write this sun/atmosphere back into the bin's <c>MapContainer.components[]</c> — the missing
+    /// half of <see cref="Extract"/>. Until now the panel edited a copy the viewport rendered and nothing
+    /// could persist.
+    ///
+    /// <para>Follows <see cref="MapBakeProperties.Write"/>, the proven writer for a SIBLING component in
+    /// the same container: find the struct by class hash (index varies across shipped maps), field name
+    /// hashes are FNV-1a over the LOWERCASED name (Fnv1aRaw does not match — measured there), and a
+    /// created struct carries NameHash 0 like every shipped container element.</para>
+    ///
+    /// <para><b>Update vs add.</b> A field that exists is updated in place. A field the component does not
+    /// carry is added ONLY when its value differs from the read-side default — <see cref="Extract"/>
+    /// returns the default for an absent field anyway, so adding a default-valued field changes nothing
+    /// for ReyEngine and only risks meaning something different to the game. Fields this record does not
+    /// model (SunIntensityScale, fogAlternateColor, …) are never touched.</para>
+    /// </summary>
+    /// <returns>The rewritten bin, or null when it cannot be done (unparseable, no MapContainer).</returns>
+    public static byte[]? Write(byte[] materialsBin, MapSunProperties sun, out WriteResult result)
+    {
+        result = new WriteResult(false, false, 0, 0, "");
+        ArgumentNullException.ThrowIfNull(sun);
+        BinTree tree;
+        try { tree = SafeBinTree.Parse(materialsBin); }
+        catch (Exception ex) { result = result with { Detail = $"bin did not parse: {ex.Message}" }; return null; }
+
+        uint containerCls = HashAlgorithms.Fnv1a("MapContainer");
+        uint sunCls = HashAlgorithms.Fnv1a("MapSunProperties");
+        var defaults = new MapSunProperties();
+
+        foreach (var obj in tree.Objects.Values)
+        {
+            if (obj.ClassHash != containerCls) continue;
+            uint componentsField = Field(obj.Properties, "components")?.NameHash ?? HashAlgorithms.Fnv1a("components");
+            if (!obj.Properties.TryGetValue(componentsField, out var prop) || prop is not BinTreeContainer comps) continue;
+
+            var s = comps.Elements.OfType<BinTreeStruct>().FirstOrDefault(e => e.ClassHash == sunCls);
+            bool created = false;
+            if (s is null)
+            {
+                // All 207 shipped map bins carry a sun component; creating one is the mod-bin fallback.
+                s = new BinTreeStruct(0, sunCls, Array.Empty<BinTreeProperty>());
+                if (comps.Elements is IList<BinTreeProperty> list) list.Add(s);
+                else obj.Properties[componentsField] =
+                    new BinTreeContainer(componentsField, comps.ElementType, comps.Elements.Append(s));
+                created = true;
+            }
+
+            int updated = 0, added = 0;
+            void Set(string name, BinTreeProperty fresh, bool isDefault)
+            {
+                uint h = HashAlgorithms.Fnv1a(name);
+                uint raw = HashAlgorithms.Fnv1aRaw(name);
+                bool exists = s.Properties.ContainsKey(h) || s.Properties.ContainsKey(raw);
+                if (!exists && isDefault) return;              // absent + default = leave absent
+                // One canonical form: the game resolves fields by the lowercased hash, so a stale
+                // raw-hash duplicate would be dead weight next to the field we write.
+                if (raw != h) s.Properties.Remove(raw);
+                s.Properties[h] = fresh;
+                if (exists) updated++; else added++;
+            }
+
+            Set("sunColor", new BinTreeVector4(HashAlgorithms.Fnv1a("sunColor"), sun.SunColor), sun.SunColor == defaults.SunColor);
+            Set("sunDirection", new BinTreeVector3(HashAlgorithms.Fnv1a("sunDirection"), sun.SunDirection), sun.SunDirection == defaults.SunDirection);
+            Set("skyLightColor", new BinTreeVector4(HashAlgorithms.Fnv1a("skyLightColor"), sun.SkyLightColor), sun.SkyLightColor == defaults.SkyLightColor);
+            Set("skyLightScale", new BinTreeF32(HashAlgorithms.Fnv1a("skyLightScale"), sun.SkyLightScale), sun.SkyLightScale == defaults.SkyLightScale);
+            Set("lightMapColorScale", new BinTreeF32(HashAlgorithms.Fnv1a("lightMapColorScale"), sun.LightMapColorScale), sun.LightMapColorScale == defaults.LightMapColorScale);
+            Set("horizonColor", new BinTreeVector4(HashAlgorithms.Fnv1a("horizonColor"), sun.HorizonColor), sun.HorizonColor == defaults.HorizonColor);
+            Set("groundColor", new BinTreeVector4(HashAlgorithms.Fnv1a("groundColor"), sun.GroundColor), sun.GroundColor == defaults.GroundColor);
+            Set("fogColor", new BinTreeVector4(HashAlgorithms.Fnv1a("fogColor"), sun.FogColor), sun.FogColor == defaults.FogColor);
+            Set("fogStartAndEnd", new BinTreeVector2(HashAlgorithms.Fnv1a("fogStartAndEnd"), sun.FogStartAndEnd), sun.FogStartAndEnd == defaults.FogStartAndEnd);
+
+            var ms = new MemoryStream();
+            tree.Write(ms);
+            result = new WriteResult(true, created, updated, added,
+                (created ? "created the component; " : "") + $"{updated} field(s) updated, {added} added");
+            return ms.ToArray();
+        }
+
+        result = result with { Detail = "no MapContainer in this bin" };
+        return null;
+    }
+
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> props, string name)
     {
         if (props.TryGetValue(HashAlgorithms.Fnv1aRaw(name), out var p)) return p;
