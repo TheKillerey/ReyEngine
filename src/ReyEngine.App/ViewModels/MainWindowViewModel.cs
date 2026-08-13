@@ -2428,6 +2428,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ShowLightBakeWindow?.Invoke();
     }
 
+    /// <summary>
+    /// M446 (B): the <c>MapDynamicPointLight</c> placements authored into this map's materials.bin.
+    ///
+    /// <para>Empty is the safe answer for every failure — a map with no placements, an unresolvable bin, an
+    /// unparseable one — because the bake then behaves exactly as it did before placements existed.</para>
+    /// </summary>
+    private IReadOnlyList<Formats.Lighting.DynamicPointLight> ReadPlacedPointLights(string? mapGeoPath)
+    {
+        if (string.IsNullOrEmpty(mapGeoPath)) return Array.Empty<Formats.Lighting.DynamicPointLight>();
+        try
+        {
+            if (!TryResolveMaterialsBin(mapGeoPath, out var binEntry))
+                return Array.Empty<Formats.Lighting.DynamicPointLight>();
+            var placed = Formats.Lighting.DynamicPointLights.Read(ReadAsset(binEntry.PathHash));
+            if (placed.Count > 0)
+                _log.Info("Bake", $"{placed.Count} dynamic point light(s) placed in the map will be baked: "
+                                  + string.Join(", ", placed.Take(4).Select(p => p.Name)));
+            return placed;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Bake", "Placed point lights could not be read: " + ex.Message);
+            return Array.Empty<Formats.Lighting.DynamicPointLight>();
+        }
+    }
+
     /// <summary>Assemble the bake inputs from the current map + the live viewport lighting, so a bake
     /// reproduces exactly what the viewport shows. Returns null when nothing can be baked.</summary>
     public Services.LightBakeInputs? GatherBakeInputs(Formats.Baking.BakeSettings settings) =>
@@ -2446,6 +2472,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .Select(l => l.ToPointLight())
             .Select(pl => new Formats.Baking.BakePointLight(pl.Position, pl.Color, pl.Radius, pl.Intensity))
             .ToList();
+
+        // M446 (B): lights PLACED IN THE MAP bake too. MapDynamicPointLight is the only point-light class
+        // that ships with a position (M196: 0 MapPointLight placements across 50,107 bins), so before this
+        // a light authored into the bin lit the game and contributed nothing to a bake — the two disagreed
+        // by construction. Placements are appended to the editor's own list rather than replacing it.
+        foreach (var placed in ReadPlacedPointLights(entry.Path))
+        {
+            // Once Light.dat import writes placements (part C), the same light can exist in BOTH lists.
+            // Position+radius is enough to spot that, and the editor's copy wins because it is what the
+            // viewport is currently showing — the whole point of BuildLighting is bake == preview.
+            if (lights.Any(l => System.Numerics.Vector3.Distance(l.Position, placed.Position) < 1f
+                                && Math.Abs(l.Radius - placed.Radius) < 1f)) continue;
+            lights.Add(new Formats.Baking.BakePointLight(
+                placed.Position, placed.Color, placed.Radius, placed.IntensityScale));
+        }
 
         var sun = CurrentSunProperties ?? _baseSun;
         var lighting = Services.LightBakeService.BuildLighting(
