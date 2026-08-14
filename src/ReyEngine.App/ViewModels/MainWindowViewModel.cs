@@ -3257,6 +3257,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // _currentMapEntry, which are UI-thread state.
         string? grassTintPath = FindGrassTintTexturePath();
 
+        // M456: does this map have point lights at all? Decides whether the builder pins Riot's own
+        // USE_DYNAMIC_LIGHTING permutation, which is what moves the lights from the M452 additive overlay
+        // into the material's own pixel shader. Read here, on the UI thread, for the same reason as the
+        // two lines above - DynamicLights is view-model state.
+        //
+        // NOTE the consequence: the choice is baked into the scene. Loading a Light.dat AFTER the D3D11
+        // scene was built leaves those materials on the overlay until the scene is rebuilt (a map change
+        // or a viewport re-toggle). Turning the lights OFF afterwards is fine - an empty cluster grid
+        // makes the in-shader loop a no-op.
+        bool hasDynamicLights = DynamicLights is { Count: > 0 };
+
         Services.Dx11SceneBuilder.PreparedScene? prepared = null;
         string? error = null;
         await Task.Run(() =>
@@ -3265,7 +3276,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName);
                 prepared = Services.Dx11SceneBuilder.Prepare(cache, perms, map, doc.Materials,
-                    TryReadAssetBytes, mapEntry.Path, grassTintPath);
+                    TryReadAssetBytes, mapEntry.Path, grassTintPath, hasDynamicLights);
             }
             catch (Exception ex) { error = ex.Message; }
         });
@@ -3284,6 +3295,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Info("DX11", $"grass tint: {result.GrassTintBound} slice(s) bound"
                               + (result.GrassTintNoSlot > 0
                                   ? $", {result.GrassTintNoSlot} whose permutation declares no tint sampler"
+                                  : ""));
+        // M456: same reasoning as the grass-tint line. On a map WITH lights, a pinned count of zero means
+        // every slice quietly stayed on the additive overlay - which looks identical to it working.
+        if (hasDynamicLights)
+            _log.Info("DX11", $"dynamic lighting: {result.DynamicLightingPinned} slice(s) pinned to Riot's "
+                              + "in-shader light loop"
+                              + (result.DynamicLightingPinFailed > 0
+                                  ? $", {result.DynamicLightingPinFailed} declare the axis but cooked no "
+                                    + "matching permutation"
                                   : ""));
         // M278: never log a failure COUNT on its own. This exact line read "0 material(s), 21 unresolved"
         // for an afternoon while the shader cache had simply been renamed underneath us, and it named

@@ -297,7 +297,7 @@ float4 psmain(VOut i) : SV_Target
         var factor = stackalloc float[4] { 0f, 0f, 0f, 0f };
         _ctx.OMSetBlendState(_lightBlend, factor, 0xFFFFFFFF);
 
-        int draws = 0;
+        int draws = 0, overlaySlices = 0;
         int floats = 16 + 4 + MaxLightsPerDraw * 8;
         if (_lightCbData.Length != floats) _lightCbData = new float[floats];
         int batches = LightBatchCount(lights.Count);
@@ -312,6 +312,11 @@ float4 psmain(VOut i) : SV_Target
                 // Map slices only: everything else (particles, mesh emitters, props, ribbons, overlays)
                 // reports MapGroupIndex -1 and owns its own lighting story.
                 if (mat.MapGroupIndex < 0 || !mat.Visible || mat.UsesDynamicMesh) continue;
+                // M456: THE gate that makes this a fallback. A slice whose pixel shader declares the
+                // cluster map already added every light inside its own shading pass, so overlaying the
+                // term again would double it. Read off the bytecode, so it cannot disagree with what the
+                // cluster upload decided to feed.
+                if (mat.UsesClusterLighting) continue;
                 if (mat.MeshGeometryId is not null || mat.RibbonId is not null
                     || mat.DistortionStrength is not null) continue;
                 if (mat.Bounds is { } bb && !FrustumContains(planes, bb.Min, bb.Max)) continue;
@@ -322,8 +327,12 @@ float4 psmain(VOut i) : SV_Target
                 _ctx.PSSetShaderResources(0, 1, ref srv);
                 _ctx.DrawIndexed(count, (uint)Math.Max(0, mat.StartIndex), 0);
                 draws++;
+                // Slices, not draws: the same slice is redrawn once per light batch, and the number that
+                // means something is how many surfaces are still on the old path.
+                if (batch == 0) overlaySlices++;
             }
         }
+        OverlayLitSlices = overlaySlices;
 
         // Unbind t0 - the next frame's material pass binds per material without clearing unused slots.
         var none = stackalloc ID3D11ShaderResourceView*[1];

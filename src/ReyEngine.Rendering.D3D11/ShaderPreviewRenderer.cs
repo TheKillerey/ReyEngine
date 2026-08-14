@@ -306,6 +306,20 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// image and must be preserved.</summary>
     public bool SortableByPipeline { get; set; }
 
+    /// <summary>M456: this material's pixel shader carries Riot's own clustered light loop, so the lights
+    /// are evaluated INSIDE it and the M452 additive overlay must skip the slice.
+    ///
+    /// <para>Derived from the BYTECODE, not from what the scene builder intended to select. A permutation
+    /// that declares <c>CLUSTER_MAP_SharedTexture</c> has the loop compiled in whether we asked for it or
+    /// not, and the same fact has to decide both "upload the cluster data" and "skip the overlay" or a
+    /// surface gets lit twice. Cached because it is asked once per material per frame.</para></summary>
+    public bool UsesClusterLighting => _usesClusterLighting ??= PsRefl.Resources.Any(r =>
+        r.Name.Equals(ClusterMapTextureName, StringComparison.OrdinalIgnoreCase));
+    private bool? _usesClusterLighting;
+
+    /// <summary>The reflected name that identifies a cluster-lit permutation. One spelling, one place.</summary>
+    public const string ClusterMapTextureName = "CLUSTER_MAP_SharedTexture";
+
     /// <summary>Whether anything is bound under this key. The texture dictionary itself is internal - the
     /// views in it are pool-owned and handing them out invites a caller to dispose one - but a material's
     /// builder legitimately needs to know whether an OPTIONAL stage resolved, which is a question about the
@@ -3403,6 +3417,32 @@ float4 psmain(VOut i) : SV_Target
         {
             float[]? data = null;
 
+            // M456: ENV_LIGHTING_MASK is a UINT bitmask, and the only constant here that is not a float.
+            //
+            // The shader ANDs it in two halves and requires BOTH to overlap the light's own 16-bit mask
+            // (light-system.md §2.3): a light is drawn only when (mask & ENV & 0x00FF) != 0 AND
+            // (mask & ENV & 0xFF00) != 0. Leaving this zero culls every light in complete silence - the
+            // single easiest way to build this whole path correctly and see nothing at all.
+            //
+            // Written as raw BITS rather than through the float[] path below, which would upload the
+            // floating-point value 65535.0 (bit pattern 0x477FFF00) and fail both halves.
+            //
+            // Deliberately NOT deferring to mat.Params: a float[] cannot express a bitmask, so a material
+            // parameter of this name could only ever be wrong here. Measured: the string
+            // "ENV_LIGHTING_MASK" appears ZERO times in shaders.bin, so no shader definition declares it
+            // as a parameter and no material can inherit a default for it - it is engine-supplied per
+            // object. An explicit Overrides entry (the Constants tab) still wins, read as an INTEGER,
+            // which is the only sane reading of a typed-in value for a uint constant.
+            if (v.Name.Equals("ENV_LIGHTING_MASK", StringComparison.OrdinalIgnoreCase))
+            {
+                uint mask = Overrides.TryGetValue(v.Name, out var om) && om.Length > 0
+                    ? (uint)Math.Clamp(om[0], 0f, uint.MaxValue)
+                    : Formats.Lighting.ClusterLightBuilder.EnvLightingMaskAll;
+                if (v.Offset >= 0 && v.Offset + 4 <= bytes.Length)
+                    BitConverter.TryWriteBytes(bytes.AsSpan(v.Offset, 4), mask);
+                continue;
+            }
+
             // a material's own authored value wins over the window's global override, which wins over
             // the engine stand-ins below
             if (mat is not null && mat.Params.TryGetValue(v.Name, out var pv)) data = pv;
@@ -3453,6 +3493,20 @@ float4 psmain(VOut i) : SV_Target
                     // a missing input and cannot hide a genuinely destructive unbound constant.
                     "CONSTANT_DEPTH_BIAS" or "SLOPE_SCALED_DEPTH_BIAS" or "TEEMO_ACTIVE"
                         => new[] { 0f, 0f, 0f, 0f },
+
+                    // M456: the world->cluster affine map and its clamp, for Riot's own light loop.
+                    //
+                    // NOT run through Mat(): the shader consumes these as three CONSTANT REGISTERS dotted
+                    // with float4(worldPos, 1) - Mantis blob 27 lines 636-638, DefaultEnv_Flat blob 226
+                    // lines 208-210 - so the float order is fixed by the disassembly and the row/column
+                    // -major transpose toggle must not touch it. ClusterLightGrid.WorldToCluster is
+                    // already in that order.
+                    //
+                    // The identity default is a ZERO scale with w = 1, which maps every pixel to cell 0.
+                    // Cell 0 of an unbuilt grid points at the all-zero header, so an unbuilt or failed
+                    // grid means "no lights here" rather than an out-of-range read.
+                    "WORLD_TO_CLUSTER_TRANSFORM" => _clusterXform,
+                    "CLUSTER_MAX_CLAMP" => _clusterMaxClamp,
 
                     // A one-texel neutral light-region texture has size 1x1. Zero makes reciprocal-size
                     // arithmetic non-finite in map PBR shaders even when the stand-in texture is white.
@@ -3987,6 +4041,12 @@ float4 psmain(VOut i) : SV_Target
             EnsureTargets(width, height);
             UpdateStates(s);
 
+            // M456: Riot's own in-shader light loop needs its cluster map, data stream and transform
+            // ready BEFORE the first material binds a constant buffer - FillConstantBuffer reads
+            // _clusterXform / _clusterMaxClamp by name. Rebuilds only when the lights or the grid bounds
+            // actually changed, and returns immediately when no live material can consume it.
+            UpdateClusterLights(s);
+
             float radius = MathF.Max(0.05f, Mesh?.Radius ?? 1f);
             var view = s.SuppliedView ?? Matrix4x4.CreateLookAt(
                 CameraPosition(s) * radius, Vector3.Zero, Vector3.UnitY);
@@ -4194,10 +4254,11 @@ float4 psmain(VOut i) : SV_Target
             }
             }
 
-            // M452: the editor's point lights, additively over the finished scene - Riot's fixed pixel
-            // shaders leave nowhere to add the term inside the material pass. Before the editor
-            // furniture, which must stay unlit on top.
+            // M452/M456: the FALLBACK light pass. Slices whose permutation carries Riot's own light loop
+            // were already lit inside their own pixel shader and are skipped here; only the ones that
+            // could not be pinned to a USE_DYNAMIC_LIGHTING permutation get the additive overlay.
             int lightDraws = DrawDynamicLights(s, view, proj, planes);
+            LogLightPath();
 
             // M269: editor furniture last, over the finished shading.
             HighlightDraws = DrawHighlight(view, proj);
@@ -4331,10 +4392,24 @@ float4 psmain(VOut i) : SV_Target
                 else _ctx.VSSetShaderResources(t.BindPoint, 1, ref d);
                 continue;
             }
+            // M456: engine-owned lighting resources. These are NOT material bindings and never appear in
+            // mat.Textures, so without this they took the generic white stand-in - which for
+            // CLUSTER_MAP_SharedTexture (a Texture3D<uint>) and DYNAMIC_ENV_LIGHT_IDS (a Texture2D<uint4>)
+            // is a type mismatch the runtime resolves as undefined rather than as an error.
+            if (IsEngineLightingResource(t.Name))
+            {
+                var engineOwned = ClusterResourceFor(t.Name);
+                if (pixel) _ctx.PSSetShaderResources(t.BindPoint, 1, ref engineOwned);
+                else _ctx.VSSetShaderResources(t.BindPoint, 1, ref engineOwned);
+                continue;
+            }
             var srv = mat.Textures.TryGetValue(t.Name, out var bound) ? bound : StandIn(t);
             if (pixel) _ctx.PSSetShaderResources(t.BindPoint, 1, ref srv);
             else _ctx.VSSetShaderResources(t.BindPoint, 1, ref srv);
         }
+        // M456: StructuredBuffers reflect as DxbcResourceKind.Structured, which DxbcShader.Textures
+        // filters out - so the loop above cannot reach CLUSTER_DATA_BUFFER at all.
+        BindStructuredBuffers(refl, pixel);
         foreach (var smp in refl.Samplers)
         {
             // "Clamp_" prefixed shared samplers are always clamped. Ordinary samplers use the material's
@@ -4412,6 +4487,7 @@ float4 psmain(VOut i) : SV_Target
         DisposeSky();
         DisposeRibbon();
         DisposeDynamicLights();
+        DisposeClusterLights();
         _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();
         _meshCullCw.Dispose(); _meshCullCcw.Dispose();
         ReleaseMeshGeometry();

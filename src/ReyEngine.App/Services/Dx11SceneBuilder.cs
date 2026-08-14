@@ -43,7 +43,8 @@ public static class Dx11SceneBuilder
     /// caller that logs <paramref name="Failed"/> without one of these is reporting a number nobody can
     /// act on - which is what "0 material(s), 21 unresolved" was.</summary>
     public sealed record Result(int Materials, int Failed, int Textures, int Slices, string Report,
-        IReadOnlyList<string> Reasons, int GrassTintBound = 0, int GrassTintNoSlot = 0);
+        IReadOnlyList<string> Reasons, int GrassTintBound = 0, int GrassTintNoSlot = 0,
+        int DynamicLightingPinned = 0, int DynamicLightingPinFailed = 0);
 
     /// <summary>One slice, resolved and ready to become a pipeline. Everything here is CPU-side.
     /// <para>M279: <paramref name="Profile"/> is the material's OWN render state, derived from its
@@ -80,6 +81,13 @@ public static class Dx11SceneBuilder
         public int GrassTintBound { get; set; }
         public int GrassTintNoSlot { get; set; }
 
+        /// <summary>M456: slices whose pixel permutation was pinned to Riot's own dynamic-light loop, and
+        /// slices where the shader declared the axis but no cooked permutation matched with it pinned.
+        /// The second number is the one worth watching: it means a material that COULD have taken the real
+        /// path silently fell back to the additive overlay.</summary>
+        public int DynamicLightingPinned { get; set; }
+        public int DynamicLightingPinFailed { get; set; }
+
         /// <summary>M278: why the failures failed, first example per distinct kind, in the order they were
         /// first hit. The report used to say "21 unresolved" and nothing else, so a shader cache whose
         /// entries had all been renamed underneath us read exactly like a scene bug - and was chased as one
@@ -106,9 +114,14 @@ public static class Dx11SceneBuilder
         // correct in review. Required parameters make the next omission a build error instead of a feature
         // that quietly does nothing. Pass null explicitly when a caller genuinely has no path.
         string? mapGeoPath,
-        string? grassTintPath)
+        string? grassTintPath,
+        // M456: does this map have dynamic point lights to draw? Required rather than optional, for the
+        // exact reason grassTintPath became required in M365d - an omitted argument silently disables a
+        // whole feature while every count in the log still looks healthy.
+        bool pinDynamicLighting)
     {
         var t0 = DateTime.UtcNow;
+        int pinnedDynamic = 0, pinFailed = 0;
 
         bool usesRawUv7 = map.RawLightmapUvs is not null;
         var mesh = PreviewGeometry.FromLeagueArrays(
@@ -159,6 +172,39 @@ public static class Dx11SceneBuilder
             var pp = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out var pwhy);
             if (vp is null || pp is null)
             { scene.Fail("no cooked permutation", $"{b.Name}: {(vp is null ? vwhy : pwhy)}"); continue; }
+
+            // M456: prefer Riot's own USE_DYNAMIC_LIGHTING permutation when the map has lights to draw.
+            //
+            // The whole clustered point/spot loop is already compiled into it (light-system.md §2), so
+            // selecting this blob instead of the baseline is the entire shader half of dynamic lighting -
+            // there is nothing to author. What we owe it is the CPU-side cluster data, which
+            // ClusterLightBuilder produces and ShaderPreviewRenderer.ClusterLights binds.
+            //
+            // PIXEL STAGE ONLY, and that is measured rather than assumed: DefaultEnv_Flat's vertex TOC has
+            // five axes and USE_DYNAMIC_LIGHTING is not among them, and the pixel INPUT SIGNATURES of the
+            // lit blob (226) and the base blob (152) are identical - both read TEXCOORD0..4 the same way.
+            // The base vertex shader already supplies the world position the light loop needs
+            // (worldPos = (TEXCOORD3.x, TEXCOORD0.w, TEXCOORD3.y), blob 226 lines 206-207), so no vertex
+            // permutation changes and no input-layout change is involved.
+            //
+            // FAIL-SAFE BY CONSTRUCTION. Three independent conditions must all hold, and any of them
+            // failing leaves the material rendering EXACTLY as it did before this milestone:
+            //   1. the map actually has dynamic lights,
+            //   2. this stage's TOC declares the axis at all (most shaders do not), and
+            //   3. the pinned resolve finds a cooked permutation.
+            // A material that authored the macro itself is left alone: its own value already reached the
+            // resolve above, and overriding an author's explicit choice is not this milestone's business.
+            if (pinDynamicLighting
+                && !b.Macros.ContainsKey(DynamicLightingAxis)
+                && HasAxis(psToc, DynamicLightingAxis))
+            {
+                var lit = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kv in b.Macros) lit[kv.Key] = kv.Value;
+                lit[DynamicLightingAxis] = "1";
+                var litPp = ShaderCacheReader.ResolvePermutation(psToc, lit, b.Switches, feat, swDef, out _);
+                if (litPp is not null) { pp = litPp; pinnedDynamic++; }
+                else pinFailed++;
+            }
 
             var vs = cache.LoadShader(vsPath, vp.BlobIndex, out var vsErr);
             var ps = cache.LoadShader(psPath, pp.BlobIndex, out var psErr);
@@ -339,6 +385,9 @@ public static class Dx11SceneBuilder
                 wanted, parameters, b.Profile, slice.Group));
         }
 
+        scene.DynamicLightingPinned = pinnedDynamic;
+        scene.DynamicLightingPinFailed = pinFailed;
+
         DecodeTextures(distinct, readAsset, scene);
         scene.PrepareMs = (DateTime.UtcNow - t0).TotalMilliseconds;
         return scene;
@@ -503,6 +552,15 @@ public static class Dx11SceneBuilder
             sb.AppendLine($"{transparent} transparent slice(s): no depth write, drawn after the solid pass in authored order");
         if (clamped > 0)
             sb.AppendLine($"{clamped} slice(s) use authored per-axis UV clamp addressing");
+        // M456: which light path each slice landed on. A pin count of 0 on a map that has lights is the
+        // whole feature silently not happening, and it looks exactly like the overlay working as before.
+        if (scene.DynamicLightingPinned > 0 || scene.DynamicLightingPinFailed > 0)
+            sb.AppendLine($"{scene.DynamicLightingPinned} slice(s) pinned to Riot's dynamic-light "
+                          + "permutation (lit inside their own pixel shader)"
+                          + (scene.DynamicLightingPinFailed > 0
+                              ? $"; {scene.DynamicLightingPinFailed} declare the axis but cooked no such "
+                                + "permutation and fall back to the additive overlay"
+                              : ""));
         // M278: never report a count of failures without a reason for them. The FIRST distinct reason is
         // what localises a categorical failure; the rest are usually the same one repeated.
         foreach (var (kind, detail) in reasons) sb.AppendLine($"   unresolved - {kind}: {Trim(detail)}");
@@ -511,7 +569,8 @@ public static class Dx11SceneBuilder
         sb.AppendLine($"timing: {scene.PrepareMs:F0} ms off-thread + {commitMs:F0} ms on the UI thread");
         return new Result(ok, failed, textures, scene.Slices.Count, sb.ToString(),
             reasons.Select(kv => $"{kv.Key}: {Trim(kv.Value)}").ToList(),
-            scene.GrassTintBound, scene.GrassTintNoSlot);
+            scene.GrassTintBound, scene.GrassTintNoSlot,
+            scene.DynamicLightingPinned, scene.DynamicLightingPinFailed);
     }
 
     // ---------------------------------------------------------------- helpers
@@ -598,6 +657,22 @@ public static class Dx11SceneBuilder
             lastId = s.Id;
         }
         return merged;
+    }
+
+    /// <summary>M456: the shader-cache axis that selects Riot's clustered forward light loop. Present on
+    /// <c>DefaultEnv_Flat</c>, <c>Mantis_Env_Baked_PBR</c> and <c>skinnedmesh/lit_uber_ps</c>; absent from
+    /// most other families, which is why every use of it is guarded by <see cref="HasAxis"/>.</summary>
+    public const string DynamicLightingAxis = "USE_DYNAMIC_LIGHTING";
+
+    /// <summary>Does this cooked stage declare <paramref name="axis"/> at all? Pinning a macro the TOC has
+    /// never heard of is not an error - <c>ResolvePermutation</c> only consults the macro dictionary for
+    /// names it finds in <c>toc.Axes</c> - but asking first is what lets the caller COUNT the shaders that
+    /// simply cannot take the axis, instead of reading them as resolution failures.</summary>
+    public static bool HasAxis(ShaderStageToc toc, string axis)
+    {
+        foreach (var (name, _) in toc.Axes)
+            if (name.Equals(axis, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     /// <summary>M210: a material sampler binds to the shader texture named after it plus "__TX". Anything
