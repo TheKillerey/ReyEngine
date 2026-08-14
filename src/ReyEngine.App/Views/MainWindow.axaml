@@ -340,7 +340,7 @@
                 ModelSubmeshMaterials="{Binding CurrentModelSubmeshMaterials}"
                 MeshVerticesRevision="{Binding MeshVerticesRevision}"
                 SelectionBoxes="{Binding SelectionBoxes}"
-                HighlightSubmeshes="{Binding SelectedSubmeshIndices}"
+                HighlightSubmeshes="{Binding HighlightSubmeshesForViewport}"
                 GroupBoundsMin="{Binding GroupBoundsMin}"
                 GroupBoundsMax="{Binding GroupBoundsMax}"
                 GizmoPivot="{Binding GizmoPivot}"
@@ -568,6 +568,12 @@
                                 ToolTip.Tip="Baked lightmap AND dynamic lights together — a debug overlay to compare the two." />
                 </StackPanel>
               </Border>
+              <!-- M462: one switch for "show me what the game shows". Decoration only - lighting, fog
+                   and bloom are deliberately untouched, since turning those off would make the viewport
+                   match the game LESS. -->
+              <ToggleButton Classes="vp" Content="🎮 Game Mode" IsChecked="{Binding GameMode}"
+                            IsVisible="{Binding HasMapGeo}"
+                            ToolTip.Tip="Hide every editor overlay at once - placement icons (audio, mobs, particles), light markers, the bucket grid, the bake box, bounds, bones, wireframe and the selection outline - so the viewport shows only what the game draws. Lighting, fog and bloom are left exactly as you set them. Turning it off restores every toggle to what it was, and your selection is never cleared." />
               <ToggleButton Classes="vp" Content="✧ Particles" IsChecked="{Binding ShowParticles}"
                             IsVisible="{Binding HasParticles}"
                             ToolTip.Tip="Show placed particle-system markers (MapParticle)" />

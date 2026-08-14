@@ -2099,6 +2099,63 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     [ObservableProperty] private bool _showBloom = true;
 
+    /// <summary>
+    /// M462: hide every piece of editor decoration at once, so the viewport shows only what the GAME draws.
+    ///
+    /// <para>The distinction that defines the set: a toggle is decoration when it draws something the
+    /// client never renders — placement icons, markers, debug grids, wireframe, bounds, bones, the
+    /// selection outline. It is NOT decoration when it changes the rendered image itself: lightmaps,
+    /// dynamic lights, fog and bloom all stay exactly as the user left them, because turning those off
+    /// would make the viewport match the game LESS, which is the opposite of the point.</para>
+    ///
+    /// <para><c>ShowParticles</c> is in the hidden set despite its name: it toggles the MapParticle
+    /// placement MARKERS, not the particle systems themselves (see its tooltip). Prop MESHES
+    /// (<c>ShowPropMeshes</c>) are real geometry and stay.</para>
+    ///
+    /// <para>Every hidden toggle is restored to whatever it was on the way out, so this is a view mode and
+    /// never a destructive edit to the user's setup.</para>
+    /// </summary>
+    [ObservableProperty] private bool _gameMode;
+
+    /// <summary>The decoration toggles as they were before Game Mode turned them off. Null when off.</summary>
+    private bool[]? _preGameModeToggles;
+
+    partial void OnGameModeChanged(bool value)
+    {
+        if (value)
+        {
+            // Capture first, then clear - the setters below fire their own OnChanged handlers.
+            _preGameModeToggles = new[]
+            {
+                ShowSoundIcons, ShowPropIcons, ShowParticles, ShowPlaceables, ShowLightMarkers,
+                ShowBucketGrid, ShowBakeBox, ShowBounds, ShowBones, ShowWireframe,
+            };
+            ShowSoundIcons = ShowPropIcons = ShowParticles = ShowPlaceables = ShowLightMarkers = false;
+            ShowBucketGrid = ShowBakeBox = ShowBounds = ShowBones = ShowWireframe = false;
+            _log.Info("Viewport", "Game Mode: editor icons, markers and overlays hidden. "
+                                + "Lighting, fog and bloom are untouched - this only removes decoration.");
+        }
+        else if (_preGameModeToggles is { Length: 10 } p)
+        {
+            ShowSoundIcons = p[0]; ShowPropIcons = p[1]; ShowParticles = p[2]; ShowPlaceables = p[3];
+            ShowLightMarkers = p[4]; ShowBucketGrid = p[5]; ShowBakeBox = p[6]; ShowBounds = p[7];
+            ShowBones = p[8]; ShowWireframe = p[9];
+            _preGameModeToggles = null;
+            _log.Info("Viewport", "Game Mode off - editor overlays restored.");
+        }
+        // The selection outline is drawn from SelectedSubmeshIndices, so it is suppressed by the binding
+        // below rather than by clearing the selection - losing the user's selection on a view toggle would
+        // be a destructive side effect of looking at something.
+        OnPropertyChanged(nameof(HighlightSubmeshesForViewport));
+    }
+
+    /// <summary>What the viewport actually outlines: the selection, unless Game Mode is hiding decoration.
+    /// The selection itself is preserved either way.</summary>
+    public IReadOnlyList<int>? HighlightSubmeshesForViewport => GameMode ? null : SelectedSubmeshIndices;
+
+    partial void OnSelectedSubmeshIndicesChanged(IReadOnlyList<int>? value) =>
+        OnPropertyChanged(nameof(HighlightSubmeshesForViewport));
+
     [ObservableProperty] private bool _showWireframe;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;
