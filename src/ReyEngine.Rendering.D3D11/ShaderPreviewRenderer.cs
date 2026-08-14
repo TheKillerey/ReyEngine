@@ -2877,14 +2877,25 @@ float4 psmain(VOut i) : SV_Target
     /// can hand over a slice of it unchanged: [x,y,z, sizeX,sizeY, r,g,b,a, rot, frame].</summary>
     public const int MeshInstanceStride = 11;
 
-    /// <summary>M282: the heat-haze pass, ported line for line from the GL original at
-    /// <c>VfxParticleRenderer.cs:1631-1640</c>. Two details are worth stating because they look like bugs:
+    /// <summary>M282, corrected in M461: the heat-haze pass.
     ///
-    /// <para>The DIFFUSE texture contributes only its alpha. That is not a simplification - the refracted
-    /// scene sample replaces the emitter's colour outright, which is why a heat-haze emitter can ship a
-    /// deliberately blank sprite (Jade_FireTorch_Med's is an 8x8 all-white "color-hold") and still look
-    /// right. A path that draws that sprite normally draws a solid white card, which is exactly the bug
-    /// this fixes.</para>
+    /// <para><b>This is a transcription of Riot's <c>particlesystem/distortion_ps</c> blob 0</b>, not a
+    /// port of the GL original it started as. ReyEngine draws heat haze with its own HLSL rather than
+    /// Riot's blob only because Riot's <c>distortion_vs</c> wants a vertex stream the shared quad buffer
+    /// does not carry; every line of the pixel maths below has a counterpart in
+    /// <see cref="ParticleShading"/>, which carries the disassembly line numbers and is what the tests and
+    /// the <c>distortgpu</c> probe hold this to.</para>
+    ///
+    /// <para>M461 fixed three measured divergences (frame-pipeline.md §5.2 item 3). The offset is scaled by
+    /// the colour-over-life ramp's alpha alone - not by <c>normal.a * diffuse.a</c>, which Riot does not
+    /// have there. The refracted sample is TINTED by <c>diffuse.rgb * vertexColour.rgb * ramp.rgb</c>
+    /// rather than returned raw. And the output alpha is <c>normal.a * ramp.a</c>, so the shape comes from
+    /// the normal map rather than from a diffuse that is routinely a deliberate blank.</para>
+    ///
+    /// <para>The DIFFUSE texture now contributes its RGB, and only its RGB. A heat-haze emitter can ship a
+    /// blank sprite (Jade_FireTorch_Med's is an 8x8 all-white "color-hold") and still look right, because
+    /// white is the tint's identity - drawing that sprite normally instead is what produces a solid white
+    /// card, which is the bug M282 fixed and this keeps fixed.</para>
     ///
     /// <para>SV_Position.y needs no flip. GL's gl_FragCoord is bottom-up and D3D's SV_Position is top-down,
     /// but the scene copy is stored in the same top-down order the target was rendered in, so screen
@@ -2894,7 +2905,7 @@ float4 psmain(VOut i) : SV_Target
 cbuffer DistortCB : register(b0)
 {
     row_major float4x4 gMvp;
-    float4 gParams;      // x = strength, yz = 1/viewport, w unused
+    float4 gParams;      // x = strength (Riot's DistortionPower), yz = 1/viewport, w unused
 };
 Texture2D gScene   : register(t0);
 Texture2D gNormal  : register(t1);
@@ -2918,13 +2929,23 @@ float4 psmain(VOut i) : SV_Target
 {
     float4 n = gNormal.Sample(gWrap, i.uv);
     float4 t = gDiffuse.Sample(gWrap, i.uv);
-    float mask = n.a * t.a * i.col.a;
-    float2 offset = n.rg * 2.0 - 1.0;
-    float2 sceneUv = i.pos.xy * gParams.yz;
-    sceneUv = clamp(sceneUv + offset * gParams.x * mask, 0.0, 1.0);
-    float3 refracted = gScene.Sample(gClamp, sceneUv).rgb;
-    return float4(refracted, mask);
+
+    // ParticleShading.SubstituteRamp. Riot samples PARTICLE_COLOR_TEXTURE at uv1; ReyEngine's uv1 is
+    // still the sprite corner UV, so the texture is deliberately not bound and the vertex alpha - which
+    // already carries the same authored colorOverLife curve - stands in for the ramp alpha.
+    float4 p = float4(1.0, 1.0, 1.0, i.col.a);
+
+    float2 offset = (n.rg - 0.5) * gParams.x * p.a * 2.0;
+    float2 sceneUv = clamp(i.pos.xy * gParams.yz + offset, 0.0, 1.0);
+    float3 bb = gScene.Sample(gClamp, sceneUv).rgb;
+    float3 tint = t.rgb * i.col.rgb * p.rgb;
+    return float4(bb * tint, n.a * p.a);
 }";
+
+    /// <summary>M461: the shipped heat-haze source, so the <c>distortgpu</c> probe compiles THIS string
+    /// rather than a copy of it. A probe that transcribes the shader can only ever prove the transcription
+    /// right, which is the one thing that was never in doubt.</summary>
+    public static string DistortionHlslForTests => DistortHlsl;
 
     private bool EnsureDistort()
     {
@@ -3058,9 +3079,11 @@ float4 psmain(VOut i) : SV_Target
         _ctx.VSSetConstantBuffers(0, 1, ref _distortCb);
         _ctx.PSSetConstantBuffers(0, 1, ref _distortCb);
 
-        // The emitter's own diffuse, for its alpha only. A distortion emitter that ships no diffuse gets
-        // the opaque white stand-in, which leaves the mask as normal.a * colour.a - the same value GL
-        // computes when its diffuse sample is opaque.
+        // M461: the emitter's own diffuse, for its RGB - it is one of the three factors in Riot's tint
+        // (diffuse x vertexColour x ramp). Its ALPHA is no longer read at all: Riot's blob 0 takes the
+        // output alpha from the normal map, and a heat-haze diffuse is routinely a deliberate blank whose
+        // alpha carries no information. An emitter that ships no diffuse gets the opaque white stand-in,
+        // which is the tint's identity and leaves the refraction untinted.
         var diffuse = BoundTexture(mat, "TEXTURE");
         if (diffuse.Handle is null) diffuse = _white;
 
@@ -3230,31 +3253,13 @@ float4 psmain(VOut i) : SV_Target
         BindSceneTargets();
     }
 
-    /// <summary>M363: window depth to view distance, for <c>cDepthConversionParams</c>. The shader spends it
-    /// as <c>1/(z*DC.y + DC.x)</c>.
-    ///
-    /// <para><b>This is deliberately NOT the constant the GL path uses,</b> and the difference is not a bug in
-    /// either. System.Numerics emits a Direct3D-convention projection (near maps to 0, not -1). D3D's viewport
-    /// transform passes that through unchanged, so window depth fills [0,1] and the textbook pair is correct
-    /// here. GL then applies its OWN transform d = (z+1)/2 on top of an already-D3D-convention matrix, so its
-    /// window depth only occupies [0.5,1] and it must double the slope to compensate - see the note in
-    /// VfxParticleRenderer, where an offscreen probe caught that exact factor of two. Copying GL's pair into
-    /// D3D would reintroduce that 1.9x error mirrored, and it would be invisible to inspection because the
-    /// result still looks like a plausible soft particle.</para></summary>
+    /// <summary>M363, moved to <see cref="ParticleShading.DepthConversion"/> in M461 so the soft-particle
+    /// arithmetic lives in one asserted place. This adapts it to the <c>float[]</c> the constant feed
+    /// wants.</summary>
     private static float[] DepthConversionFrom(Matrix4x4 proj)
     {
-        // CreatePerspectiveFieldOfView writes M33 = f/(n-f) and M43 = n*f/(n-f), so both planes come back
-        // out: n = M43/M33 and f = M43/(M33+1). Recovered from the matrix rather than passed in, so a
-        // caller-supplied projection is handled as correctly as a derived one.
-        float m33 = proj.M33, m43 = proj.M43;
-        // Neutral fallback. Both terms feed reciprocals, so neither may be zero or the quad turns NaN and
-        // vanishes - the same trap the placeholder value guarded against.
-        var neutral = new[] { 1f, 1f, 0f, 0f };
-        if (MathF.Abs(m33) < 1e-9f || MathF.Abs(m33 + 1f) < 1e-9f) return neutral;
-        float near = m43 / m33, far = m43 / (m33 + 1f);
-        if (!(near > 1e-6f) || !(far > near) || float.IsNaN(near) || float.IsNaN(far)) return neutral;
-        float invN = 1f / near, invF = 1f / far;
-        return new[] { invN, invF - invN, 0f, 0f };
+        var dc = ParticleShading.DepthConversion(proj);
+        return new[] { dc.X, dc.Y, dc.Z, dc.W };
     }
 
     private (bool wire, bool cull, bool depth, bool blend, bool mirror)? _stateKey;
@@ -3638,28 +3643,14 @@ float4 psmain(VOut i) : SV_Target
                     "CPALETTESELECTMAIN" => new[] { 0f, 0f, 0f, 0f },
                     "CPALETTESRCMIXERMAIN" => new[] { 1f, 0f, 0f, 0f },
 
-                    // SOFT_PARTICLES, from ps blob 129:
-                    //     d    = 1/(sceneDepth*DC.y + DC.x) - 1/(SV_Position.z*DC.y + DC.x)
-                    //     fade = smoothstep(sat((d - P.x)*P.z)) - smoothstep(sat((d - P.y)*P.w))
-                    // P.x = -1e6 with P.z = 1 makes the first term sat(d + 1e6) = 1 for any finite d, and
-                    // P.w = 0 makes the second sat(0) = 0, so fade = 1 - 0 = 1 regardless of what depth
-                    // the stand-in texture holds. The earlier guess (0, 1e6, 0, 1e6) evaluated to 0 - 0 = 0
-                    // - fully transparent - which is why SOFT_PARTICLES never drew a pixel.
-                    "CSOFTPARTICLEPARAMS" => new[] { -1e6f, 0f, 1f, 0f },
-                    // M234b: NOT a parameter - a SELECTOR, and calling it unused was what made every
-                    // SOFT_PARTICLES permutation render nothing. The tail of ps blob 129 is
-                    //     mad o0.xyz, cb0[1].xxxx, colour, fade*colour*cb0[1].y
-                    //     mad o0.w,   cb0[1].z,    alpha,  fade*alpha *cb0[1].w
-                    // so it picks, per channel, between the un-faded value and the faded one. All zeros
-                    // multiplies the whole output by zero, which is exactly the black frame observed.
-                    //
-                    // Which channel should carry the fade depends on how the emitter blends, which is
-                    // presumably why Riot made it selectable at all: an additive sprite is invisible when
-                    // its RGB goes to zero and ignores alpha entirely, while an alpha-blended one is the
-                    // other way round.
-                    "CSOFTPARTICLECONTROL" => mat is { Additive: true }
-                        ? new[] { 0f, 1f, 1f, 0f }      // additive: fade the RGB, leave alpha
-                        : new[] { 1f, 0f, 0f, 1f },     // alpha:    leave RGB, fade the alpha
+                    // SOFT_PARTICLES, from ps blob 129. Both values are derived and explained in
+                    // ParticleShading, which is also what the tests assert them through - a wrong value
+                    // here does not misdraw the particle, it erases it, and neither failure is legible on
+                    // screen. The params are the NEUTRAL band (fade = 1 at every depth) for a material
+                    // whose emitter authored no widths; a real emitter's own values arrive through
+                    // mat.Params, which is consulted before this switch.
+                    "CSOFTPARTICLEPARAMS" => Vec(ParticleShading.NeutralSoftParams),
+                    "CSOFTPARTICLECONTROL" => Vec(ParticleShading.SoftControl(mat is { Additive: true })),
                     // M363: derived from the live projection now, rather than the neutral placeholder that
                     // stood here while nothing sampled depth. Feeds two reciprocals, so DepthConversionFrom
                     // falls back to that same placeholder rather than ever returning a zero component - a
@@ -3959,6 +3950,9 @@ float4 psmain(VOut i) : SV_Target
         _device.CreateBuffer(in d, null, ref b);
         _compareCb = b;
     }
+
+    /// <summary>M461: a Vector4 as the float[] the constant feed uploads.</summary>
+    private static float[] Vec(Vector4 v) => new[] { v.X, v.Y, v.Z, v.W };
 
     private static float[] Mat(Matrix4x4 m, PreviewSettings s)
     {
