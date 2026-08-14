@@ -122,6 +122,18 @@ public sealed class PreviewSettings
     /// </summary>
     public bool Bloom = true;
 
+    /// <summary>
+    /// M465: render the map from the sun into a depth map and let Riot's own PCF read it.
+    ///
+    /// <para>On by default, for the same reason bloom is: the five <c>SampleCmpLevelZero</c> taps are
+    /// already executing in every environment pixel shader ReyEngine runs, against a 1x1 white stand-in, so
+    /// this supplies an input rather than adding an effect. Off is the A/B - the expected gain is bounded
+    /// (a baked map's shader takes <c>min(pcf, baked.w)</c>, so the bake's own static mask already darkens
+    /// static geometry and this mostly adds props and fixes stale bakes), and bias artefacts are the kind
+    /// of thing only an eye can judge, which needs a switch.</para>
+    /// </summary>
+    public bool Shadows = true;
+
     /// <summary>M223: mirror world X, which is what the rest of the editor's viewport does. League's data is
     /// authored in the opposite handedness to the renderer, so without this a map is laid out mirrored
     /// against every other view in the app.</summary>
@@ -503,6 +515,9 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     private int _width, _height;
 
     private ComPtr<ID3D11SamplerState> _linearWrap, _linearClampU, _linearClampV, _linearClamp, _comparison;
+    /// <summary>M465: the comparison sampler used while a real shadow map is bound. See CreateStaticStates
+    /// for why the pair exists rather than one state.</summary>
+    private ComPtr<ID3D11SamplerState> _comparisonLessEqual;
     private ComPtr<ID3D11RasterizerState> _raster;
     private ComPtr<ID3D11BlendState> _blend, _blendOpaque;
     private ComPtr<ID3D11DepthStencilState> _depthState;
@@ -638,6 +653,28 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         ComPtr<ID3D11SamplerState> s5 = default;
         _device.CreateSamplerState(in cmp, ref s5);
         _comparison = s5;
+
+        // M465: and the one that means something, for the frames a real shadow map exists.
+        //
+        // The Always state above is correct ONLY while the stand-in is bound - it is what keeps every tap
+        // returning "lit" against a texture whose contents mean nothing. Left in place once a real depth map
+        // arrives it would defeat the whole pass in complete silence: the map would be rendered, bound and
+        // sampled, every comparison would pass, and the frame would be identical to one with no shadows.
+        //
+        // LessEqual because the depth stored is the CLOSEST caster to the sun and the reference is the
+        // receiver's own depth: a receiver behind a caster has the larger depth, the comparison fails, and
+        // the tap returns 0 = shadowed. Equal is included so a surface comparing against ITSELF - which is
+        // every lit surface that also cast - counts as lit; that is the case the bias exists to protect,
+        // and Less alone would make it a coin toss on the first texel of every sunlit slope.
+        //
+        // Filter stays ComparisonMinMagMipLinear: on a comparison sampler that is hardware PCF, so each of
+        // Riot's five taps is itself a bilinear blend of four comparisons. Twenty effective samples for the
+        // price of five is why the kernel is as small as it is.
+        var cmpLe = cmp;
+        cmpLe.ComparisonFunc = ComparisonFunc.LessEqual;
+        ComPtr<ID3D11SamplerState> s6 = default;
+        _device.CreateSamplerState(in cmpLe, ref s6);
+        _comparisonLessEqual = s6;
 
         // Opaque white stand-ins must match the reflected resource DIMENSION. D3D11 accepts a Texture2D
         // SRV at a Texture2DArray/TextureCubeArray slot, but sampling the mismatched view returns zero.
@@ -3554,8 +3591,22 @@ float4 psmain(VOut i) : SV_Target
                     // The standalone preview has no terrain depth raster or Teemo gameplay overlay.
                     // Zero is the correct disabled value, but bind it explicitly so it is not reported as
                     // a missing input and cannot hide a genuinely destructive unbound constant.
-                    "CONSTANT_DEPTH_BIAS" or "SLOPE_SCALED_DEPTH_BIAS" or "TEEMO_ACTIVE"
-                        => new[] { 0f, 0f, 0f, 0f },
+                    "TEEMO_ACTIVE" => new[] { 0f, 0f, 0f, 0f },
+
+                    // M465: the two depth biases, in the form the shader applies them (light-system.md §1.7,
+                    // re-verified at DefaultEnv_Flat blob 226 lines 172-177):
+                    //     bias = SLOPE_SCALED * (1 - dot(Ngeo, normalize(SUN_LIGHT_DIRECTION))) + CONSTANT
+                    //     ref  = saturate(shadowCoord.z - bias)
+                    // Ngeo is the GEOMETRIC normal, rebuilt per pixel from ddx/ddy of the world position
+                    // (lines 163-171), so it follows the triangle rather than the shading normal - which is
+                    // what makes the slope term track the actual depth gradient across a texel.
+                    //
+                    // Both are in NORMALISED depth units, so both are derived from the frustum fit rather
+                    // than being constants: SunShadowFit expresses them in shadow texels of world size and
+                    // divides by the fitted depth range. Zero when no fit exists, which is what they always
+                    // were - and zero bias with the white stand-in is still fully lit.
+                    "CONSTANT_DEPTH_BIAS" => new[] { _shadowFrame?.ConstantDepthBias ?? 0f, 0f, 0f, 0f },
+                    "SLOPE_SCALED_DEPTH_BIAS" => new[] { _shadowFrame?.SlopeScaledDepthBias ?? 0f, 0f, 0f, 0f },
 
                     // M456: the world->cluster affine map and its clamp, for Riot's own light loop.
                     //
@@ -3586,33 +3637,43 @@ float4 psmain(VOut i) : SV_Target
                         ? Repeat(new[] { sky, sky, sky, sky }, 32)
                         : NeutralIblCubemapScales,
 
-                    // M256: the shadow plumbing. These are PLACEHOLDERS, and worth being plain about why:
-                    // the preview renders no shadow pass, so there is no shadow camera to derive them from.
-                    // Their job is to be finite and non-degenerate, not to be right - and with the M254
-                    // comparison sampler set to Always, every PCF tap returns 1 regardless of what these
-                    // hold, so the lit result does not depend on them today.
+                    // M256/M465: the shadow plumbing. LIVE when this frame rendered a shadow map, and the
+                    // M256 placeholders otherwise - a scene with no sun, no caster on screen or no shadow
+                    // blobs still has to bind something finite here, because an unbound constant is the
+                    // signal this project uses to find real bugs (M229, M230, M235, M255 were all found that
+                    // way) and a permanent false positive is worse than none.
                     //
-                    // Binding them anyway matters for one reason: an unbound constant is the signal this
-                    // project uses to find real bugs (M229, M230, M235, M255 were all found that way), and
-                    // three permanent entries in that report are three lines of noise every future
-                    // diagnosis has to look past.
+                    // The placeholders are what they always were, and are safe for the same reason: with no
+                    // fit, _shadowFrame is null, StandIn hands back the 1x1 white depth texture and the
+                    // comparison sampler stays on Always, so every PCF tap returns 1 whatever these hold.
                     //
-                    // mShadowProj maps world into shadow-map space. Identity is the only defensible stand-in
-                    // without a shadow camera; it makes the lookup coordinate the world position, which is
-                    // meaningless but bounded. A zero matrix would collapse every tap onto one texel.
-                    "MSHADOWPROJ" => Mat(Matrix4x4.Identity, s),
+                    // mShadowProj maps world into shadow-map space - (u, v, depth), with the NDC-to-texture
+                    // remap already folded in, because the consuming vertex shader takes rows 0-2 and uses
+                    // the result directly (defaultenv_flat.vs blob 13 lines 107-110: three dp4s against
+                    // cb2[11..13], no divide by w). Identity is the only defensible stand-in without a
+                    // shadow camera; a zero matrix would collapse every tap onto one texel.
+                    "MSHADOWPROJ" => Mat(_shadowFrame?.ShadowProj ?? Matrix4x4.Identity, s),
 
-                    // Pushes the shadow lookup along the normal to avoid acne. Zero = no offset, which is
-                    // the honest value when there is nothing to be biased against. It sits at
-                    // PerFrameVertexCB+540, immediately after the float3 SUN_LIGHT_DIRECTION at +528 - the
-                    // sun binding writes three floats and stops, which is why this stayed unbound.
+                    // Pushes the shadow lookup along the normal before projecting it, which trades acne for
+                    // a little contact-shadow shrinkage. Applied in the VERTEX shader, not the pixel shader -
+                    // defaultenv_flat.vs lines 103-106 do
+                    //     world += N * ((1 - abs(dot(N, SUN_LIGHT_DIRECTION))) * NORMAL_OFFSET_BIAS)
+                    // so it reaches its maximum on surfaces edge-on to the sun, exactly like the slope-scaled
+                    // depth bias, and is in WORLD units rather than depth units.
+                    //
+                    // Left at zero even with a live fit. It is a third bias knob layered on the two the
+                    // pixel shader already applies, its useful magnitude depends on the map's scale, and
+                    // tuning three interacting biases against a frame nobody has looked at yet would be
+                    // guessing three times instead of once. Wired here so it is one edit away.
                     "NORMAL_OFFSET_BIAS" => new[] { 0f, 0f, 0f, 0f },
 
-                    // Texel offsets for the four surrounding PCF taps, as (±x, ±y) pairs. Zero would make
-                    // all five taps read the same texel - harmless now, but it would silently disable the
-                    // filtering the moment a real shadow map arrives. One texel of a 2048 map is a
-                    // defensible default and degrades to correct rather than to broken.
-                    "SHADOW_SAMPLE_OFFSETS" => new[] { 1f / 2048f, 1f / 2048f, -1f / 2048f, 1f / 2048f },
+                    // The 5-tap PCF kernel, as two UV offset pairs: centre, uv+O1, uv-O1, uv-O2, uv+O2.
+                    // Derived from the shadow map's actual size rather than a hardcoded 2048 - see
+                    // SunShadowFit.SampleOffsets, which also records that only .xy/.zw are offsets and that
+                    // light-system.md §4.3's "(du, dv, dz)" is wrong for this constant.
+                    "SHADOW_SAMPLE_OFFSETS" => _shadowFrame is { } sf
+                        ? new[] { sf.SampleOffsets.X, sf.SampleOffsets.Y, sf.SampleOffsets.Z, sf.SampleOffsets.W }
+                        : new[] { 1f / 2048f, 1f / 2048f, -1f / 2048f, 1f / 2048f },
                     "VCAMERA" or "CAMERA_POSITION" => new[] { cam.X, cam.Y, cam.Z, 1f },
 
                     // M231: the particle flipbook atlas descriptor. Derived from quad_vs, which spends it as
@@ -4118,6 +4179,17 @@ float4 psmain(VOut i) : SV_Target
                 s.Fov, (float)width / height, radius * 0.02f, radius * 40f);
             var world = Matrix4x4.Identity;
 
+            // M465: the sun shadow map, FIRST - before the scene's targets are bound and before anything
+            // samples it. It binds a depth-stencil view of its own and its own viewport, which the line
+            // below then replaces; everything else it touches (raster, blend, depth state, topology, input
+            // layout, shaders, constant buffers) the scene pass sets for itself per material.
+            //
+            // Its side effect is _shadowFrame, which decides for the whole rest of the frame whether
+            // FillConstantBuffer uploads a real mShadowProj and real biases, whether StandIn binds the depth
+            // texture or the 1x1 white one, and whether the comparison sampler means LessEqual or Always.
+            // Those four have to agree, which is why they all read that one field.
+            RenderSunShadowMap(s, view, proj);
+
             var vpRect = new Viewport(0, 0, width, height, 0, 1);
             _ctx.RSSetViewports(1, in vpRect);
 
@@ -4525,7 +4597,12 @@ float4 psmain(VOut i) : SV_Target
             // M254: the shader's own RDEF flag decides this, not the sampler's name. D3D_SIF_COMPARISON_SAMPLER
             // is the only place that distinction is recorded, and binding an ordinary state where the shader
             // uses sample_c fails silently as "fully shadowed" rather than as an error.
-            var st = smp.IsComparisonSampler ? _comparison
+            // M465: and which of the TWO comparison states depends on whether this frame rendered a shadow
+            // map. Safe to apply to all three shadow samplers at once, not just the sun's: the spot and
+            // point maps are still the 1x1 R32_FLOAT stand-in holding 1.0, every one of their references is
+            // saturated into [0,1] by the shader before the compare (light-system.md §2.5), so LessEqual
+            // against 1.0 returns "lit" exactly as Always did.
+            var st = smp.IsComparisonSampler ? (_shadowFrame is null ? _comparison : _comparisonLessEqual)
                 : smp.Name.StartsWith("Clamp", StringComparison.OrdinalIgnoreCase) ? _linearClamp
                 : MaterialSampler(mat.SamplerAddress);
             if (pixel) _ctx.PSSetSamplers(smp.BindPoint, 1, ref st);
@@ -4546,6 +4623,16 @@ float4 psmain(VOut i) : SV_Target
     private ComPtr<ID3D11ShaderResourceView> StandIn(DxbcResource resource)
     {
         if (resource.Name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase)) return _identityRamp;
+
+        // M465: the SUN shadow map, when this frame rendered one. StartsWith, not Contains, and this arm
+        // must stay above the stand-in below: SPOT_SHADOW_MAP_DEPTH_PCF and POINT_SHADOW_MAP_DEPTH_PCF both
+        // CONTAIN this name, and neither is this texture - the point one is a cubemap, and handing either a
+        // 2D view of the sun's depth would shadow every spot and point light with the sun's silhouette.
+        // Those two keep the stand-in; spot and point shadows are out of scope for this milestone.
+        if (_shadowFrame is not null && _shadowSrv.Handle is not null
+            && resource.Name.StartsWith("SHADOW_MAP_DEPTH_PCF", StringComparison.OrdinalIgnoreCase))
+            return _shadowSrv;
+
         // M366: shadow maps are read with sample_c, which is undefined against the RGBA8 white stand-in.
         // See the _whiteDepth creation for the measurement.
         if (_whiteDepth.Handle is not null
@@ -4603,6 +4690,7 @@ float4 psmain(VOut i) : SV_Target
         DisposeDynamicLights();
         DisposeClusterLights();
         DisposeBloom();
+        DisposeShadow();
         _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();
         _meshCullCw.Dispose(); _meshCullCcw.Dispose();
         ReleaseMeshGeometry();
@@ -4612,6 +4700,7 @@ float4 psmain(VOut i) : SV_Target
         _rtv.Dispose(); _rt.Dispose(); _stage.Dispose(); _dsv.Dispose(); _depth.Dispose();
         _linearWrap.Dispose(); _linearClampU.Dispose(); _linearClampV.Dispose(); _linearClamp.Dispose();
         _comparison.Dispose();
+        _comparisonLessEqual.Dispose();
         foreach (var state in _authoredBlendStates.Values) state.Dispose();
         _authoredBlendStates.Clear();
         _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();

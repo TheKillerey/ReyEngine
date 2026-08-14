@@ -530,6 +530,11 @@
               <ToggleButton Classes="vp" Content="✷ Bloom" IsChecked="{Binding ShowBloom}"
                             IsVisible="{Binding UseDx11Viewport}"
                             ToolTip.Tip="Collect Riot's glow output (SV_Target1) into a second render target, blur it with their own mip chain and composite it back with their screen blend. Riot's shaders compute this every frame regardless; with this off it is discarded, which is what the viewport did before M460. Only emissive materials - lanterns, glowsigns, holograms - write a glow at all, so on a map without them there is nothing to see either way." />
+              <!-- M465: the sun shadow map. DX11 only - it needs a depth-only pass from the sun and a
+                   comparison sampler, and the OpenGL path has neither. -->
+              <ToggleButton Classes="vp" Content="☀ Shadows" IsChecked="{Binding ShowSunShadows}"
+                            IsVisible="{Binding UseDx11Viewport}"
+                            ToolTip.Tip="Render the map from the sun into a 2048x2048 depth map and let Riot's own five-tap PCF sample it. Those taps already run in every environment shader; with this off they sample a 1x1 white stand-in and nothing is ever shadowed, which is what the viewport did before M465. On a baked map the shader takes min(pcf, lightmap alpha), so this cannot darken what the bake already shadows - it mostly adds props and fixes maps whose bake is stale or missing." />
               <TextBlock Text="{Binding Dx11ViewportStatus}" VerticalAlignment="Center" Margin="8,0,0,0"
                          FontFamily="Consolas" FontSize="10" Opacity="0.7"
                          Foreground="{DynamicResource ReyTextBrush}"

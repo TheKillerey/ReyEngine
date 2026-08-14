@@ -94,6 +94,12 @@ public static class Dx11SceneBuilder
         /// off rather than running a partial one.</summary>
         public byte[]?[]? BloomShaders { get; set; }
 
+        /// <summary>M465: Riot's <c>environment/shadowmap</c> vertex and pixel blobs, in that order. Same
+        /// contract as <see cref="BloomShaders"/> - loaded in the CPU half because that is where the shader
+        /// cache is, and null when either could not be loaded, which switches the pass off rather than
+        /// running it half-built.</summary>
+        public byte[]?[]? ShadowShaders { get; set; }
+
         /// <summary>M278: why the failures failed, first example per distinct kind, in the order they were
         /// first hit. The report used to say "21 unresolved" and nothing else, so a shader cache whose
         /// entries had all been renamed underneath us read exactly like a scene bug - and was chased as one
@@ -394,6 +400,7 @@ public static class Dx11SceneBuilder
         scene.DynamicLightingPinned = pinnedDynamic;
         scene.DynamicLightingPinFailed = pinFailed;
         scene.BloomShaders = LoadBloomShaders(cache);
+        scene.ShadowShaders = LoadShadowShaders(cache);
 
         DecodeTextures(distinct, readAsset, scene);
         scene.PrepareMs = (DateTime.UtcNow - t0).TotalMilliseconds;
@@ -459,6 +466,12 @@ public static class Dx11SceneBuilder
             renderer.SetBloomShaders(bs[0], bs[1], bs[2], bs[3], bs[4]);
         else
             renderer.SetBloomShaders(null, null, null, null, null);
+
+        // M465: and Riot's two shadow-map blobs, on the same all-or-nothing contract.
+        if (scene.ShadowShaders is { } ss && ss.Length == 2)
+            renderer.SetShadowShaders(ss[0], ss[1]);
+        else
+            renderer.SetShadowShaders(null, null);
 
         int ok = 0, textures = 0, failed = scene.Failed, transparent = 0, clamped = 0;
         var reasons = new Dictionary<string, string>(scene.FailureReasons);
@@ -636,6 +649,45 @@ public static class Dx11SceneBuilder
             else if (define is not null) return null;   // the composite MUST be the bloom permutation
 
             var bytes = cache.LoadBlob(tocPath, blob, out _, out _);
+            if (bytes is null || bytes.Length == 0) return null;
+            loaded[i] = bytes;
+        }
+        return loaded;
+    }
+
+    // ---------------------------------------------------------------- shadow map (M465)
+
+    /// <summary>
+    /// Riot's sun shadow-map write pass: <c>environment/shadowmap.vs</c> then <c>.ps</c>, in the order
+    /// <c>ShaderPreviewRenderer.SetShadowShaders</c> takes them. Both are run verbatim; nothing here is
+    /// reimplemented.
+    ///
+    /// <para>Measured in M465 (docs/research/frame-pipeline.md §4.2 lists this TOC as reflected-only, so it
+    /// was disassembled first): each ships <b>one permutation over one blob</b> and declares no axes at all,
+    /// which is why blob 0 is asked for directly rather than through <c>ResolvePermutation</c>. That also
+    /// rules out the "blob 0 is a stub" trap the same document warns about - with one blob in the TOC there
+    /// is no other blob it could be a stub for.</para>
+    ///
+    /// <para>The vertex shader takes <c>POSITION</c> and nothing else and writes only <c>SV_Position</c>;
+    /// the pixel shader has no inputs, no resources and no constant buffers and is <c>mov o0, 1; ret</c>.
+    /// So the product is a depth buffer, and the pixel shader is there only because the pipeline wants one
+    /// bound.</para>
+    /// </summary>
+    public static byte[]?[]? LoadShadowShaders(ShaderCacheReader cache)
+    {
+        var stages = new[]
+        {
+            ("assets/shaders/hlsl/environment/shadowmap", DxbcStage.Vertex),
+            ("assets/shaders/hlsl/environment/shadowmap", DxbcStage.Pixel),
+        };
+
+        var loaded = new byte[]?[stages.Length];
+        for (int i = 0; i < stages.Length; i++)
+        {
+            var (name, stage) = stages[i];
+            string tocPath = ShaderCacheReader.TocPathFor(name, stage);
+            if (cache.ReadToc(tocPath) is null) return null;
+            var bytes = cache.LoadBlob(tocPath, 0, out _, out _);
             if (bytes is null || bytes.Length == 0) return null;
             loaded[i] = bytes;
         }

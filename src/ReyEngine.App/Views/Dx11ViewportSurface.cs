@@ -131,6 +131,11 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// viewport runs, and before this it was thrown away. See <c>PreviewSettings.Bloom</c>.</summary>
     public bool Bloom { get; set; } = true;
 
+    /// <summary>M465: render the map from the sun into a depth map and let Riot's own 5-tap PCF sample it.
+    /// On by default - the taps are already executing against a 1x1 white stand-in, so this supplies an
+    /// input rather than adding an effect. See <c>PreviewSettings.Shadows</c>.</summary>
+    public bool Shadows { get; set; } = true;
+
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
     private float _frozenTime;
 
@@ -341,6 +346,7 @@ public sealed class Dx11ViewportSurface : IDisposable
             TimeSeconds = t,
             Wireframe = Wireframe,
             Bloom = Bloom,
+            Shadows = Shadows,   // M465
             MapSunColor = MapSun?.SunColor,
             MapSunDirection = MapSun?.SunDirection,
             MapLightMapScale = (float)LightmapScale,

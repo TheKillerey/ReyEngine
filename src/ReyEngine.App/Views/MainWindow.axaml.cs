@@ -223,6 +223,7 @@ public partial class MainWindow : Window
         _dx11.AnimateTime = vm.AnimationsPlaying;
         _dx11.Wireframe = vm.ShowWireframe;
         _dx11.Bloom = vm.ShowBloom;   // M460
+        _dx11.Shadows = vm.ShowSunShadows;   // M465
         // M452: the dynamic point lights, from the SAME view-model properties the GL viewport is bound to
         // in XAML (DynamicLights / ShowDynamicLights / the fit sliders). Pushed every frame like the sun,
         // because every one of them is live-editable from the Lighting window.

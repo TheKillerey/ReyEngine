@@ -2100,6 +2100,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showBloom = true;
 
     /// <summary>
+    /// M465: the sun shadow map. DX11 only.
+    ///
+    /// <para>Not a new effect either. Every environment pixel shader this viewport runs already samples
+    /// <c>SHADOW_MAP_DEPTH_PCF_SharedTexture</c> with five <c>SampleCmpLevelZero</c> taps
+    /// (docs/research/light-system.md §1.7); until this milestone they sampled a 1x1 white texel, so
+    /// nothing was ever in shadow. Turning this off restores that stand-in, which is the A/B.</para>
+    ///
+    /// <para>The gain is bounded and worth stating: a baked map's shader takes
+    /// <c>shadow = min(pcf, bakedLightmap.a)</c>, so wherever the bake already carries a shadow this
+    /// cannot darken it further. What it adds is props, anything the bake omits, and maps whose bake is
+    /// stale or absent.</para>
+    /// </summary>
+    [ObservableProperty] private bool _showSunShadows = true;
+
+    /// <summary>
     /// M462: hide every piece of editor decoration at once, so the viewport shows only what the GAME draws.
     ///
     /// <para>The distinction that defines the set: a toggle is decoration when it draws something the
