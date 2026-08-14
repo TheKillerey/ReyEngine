@@ -202,12 +202,39 @@ which issues `ld_structured ... l(16)` and `l(32)` alongside `l(0)`:
 
 | offset | type | shader use | matching `LightRegionRenderData` property |
 |---|---|---|---|
-| +0 | float3 | env/map sun-and-ambient colour (Mantis env) | `SunLightColor` (Vec3, default 1,1,1) |
+| +0 | float3 | env sun radiance — **sun only, not ambient** (see M463 note below) | `SunLightColor` (Vec3, default 1,1,1) |
 | +12 | uint | env IBL cubemap array index → `IBL_CUBEMAP_SCALES[i].x` | `ProbeIndex` (U32) |
 | +16 | float3 | character sun colour (`lit_uber`) | `CharacterSunLightColor` |
 | +28 | uint | character IBL cubemap index (`lit_uber` line 299-303) | `CharacterProbeIndex` (U32) |
 | +32 | float3 | character sun **direction**, normalised at `lit_uber` lines 369-371 | `CharacterSunLightDirection` |
 | +48..+111 | 64 B | **never read** by either shader | fog fields (`DepthFog*`, `HeightFog*`), `priority`, `0x2119af58` Vec3 |
+
+**M463 correction — the struct is DECLARED in the bytecode, names and all.** Blob 27's own resource-bind
+comment block (`hdump dis` output lines 85-110) carries the full HLSL declaration, so the offsets above are
+no longer a reconstruction and the "never read" tail is no longer unnamed:
+
+```hlsl
+struct LightRegionRenderData          // stride 112
+{
+    float3 SunLightColor;             //   0        float3 CharacterSunLightDirection; //  32
+    uint   ProbeIndex;                //  12        uint   Priority;                   //  44
+    float3 CharacterSunLightColor;    //  16        float3 DepthFogColor;              //  48
+    uint   CharacterProbeIndex;       //  28        float  DepthFogMaxIntensity;       //  60
+    float3 HeightFogColor;            //  64        float  DepthFogStart;              //  80
+    float  HeightFogMaxIntensity;     //  76        float  DepthFogEnd;                //  84
+    float  HeightFogStart;            //  88        float3 ReflectionSkyTint;          //  96
+    float  HeightFogEnd;              //  92        float  mUnusedPadding0;            // 108
+}
+```
+
+**And +0 is SUN RADIANCE ONLY — the "sun-and-ambient" label above was too loose.** Re-traced in blob 27:
+the weighted region colour accumulates into `r10` (lines 532, 535, 538, 541), and `r10` has exactly ONE
+consumer — the `movc` at line 545 that picks between it and white on the RMA sentinel. Line 550 then
+overwrites `r10`. The value flows 545 → 548 (`* (1 - CLOUD_CARDS)`) → 549 (`* sunShadow`) → 634
+(`* BRDF * NdotL`) and nowhere else. **Mantis's AMBIENT is a separate quantity**: the two
+`texturecubearray` samples at lines 494/498, each scaled by `IBL_CUBEMAP_SCALES[probeIndex].x` at lines
+495/499 and accumulated by the same weights. Anything wiring a map's *sky* colour must therefore target the
+IBL pair, not this field.
 
 ### 1.5 Cross-check against the bin schema — it matches exactly
 
@@ -697,9 +724,12 @@ Listed with what evidence would settle each.
 4. **Which of the six loops the six header fields belong to, if a cluster has zero of some types.** The
    payload cursor is shared and advances per *processed* light, and the skip path advances it too (lines
    681-687), so the ordering claim in §2.2 holds. It has not been checked against real data.
-5. **Whether `LightRegionInfo` +48..+111 is the fog block.** The 64 remaining bytes are unread by both
-   shaders disassembled, and `LightRegionRenderData` has exactly the fog fields left over. The mapping is
-   inference from the schema, not measurement.
+5. ~~**Whether `LightRegionInfo` +48..+111 is the fog block.**~~ **SETTLED (M463): it is.** Blob 27's
+   resource-bind comment block declares the whole struct with field names — see the correction in §1.4.
+   `Priority` is at +44, `DepthFog*` at +48..+60 and +80..+84, `HeightFog*` at +64..+76 and +88..+92,
+   `ReflectionSkyTint` at +96, padding at +108. Still unmeasured, and the reason M463 leaves these bytes
+   zero: whether `DepthFogStart`/`DepthFogEnd` use the same negative, reversed convention as
+   `MapSunProperties.fogStartAndEnd`. Nothing ReyEngine renders reads them, so nothing can reveal it.
 6. **Blend/depth/cull state for any of these shaders.** DXBC carries no state. All statements about
    blending in §3 are about what the *pixel shader emits*; the actual `D3D11_BLEND_DESC` comes from the
    material bin and was not read in this milestone.

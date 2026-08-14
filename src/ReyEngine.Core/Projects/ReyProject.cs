@@ -143,6 +143,29 @@ public sealed class MapLightingRecord
     public double SkyColorB { get; set; } = 0.35;
     public double LightmapScale { get; set; } = 1.0;
 
+    // M463: the six MapSunProperties fields the Lighting panel gained controls for. Without them, an
+    // unsaved fog or sun-direction edit was lost on the next map switch while an unsaved sun-colour edit
+    // survived - the same panel remembering four of its ten fields.
+    //
+    // NULLABLE, and that is load-bearing rather than tidy. These records are JSON and every project saved
+    // before this milestone has no such keys, so a non-nullable double would deserialize to 0 and the
+    // restore would then overwrite the map's AUTHORED sun direction with (0,0,0) - a degenerate vector
+    // that lights nothing. Null means "this record predates the field, keep what the map authored".
+    public double? SunDirX { get; set; }
+    public double? SunDirY { get; set; }
+    public double? SunDirZ { get; set; }
+    public double? HorizonColorR { get; set; }
+    public double? HorizonColorG { get; set; }
+    public double? HorizonColorB { get; set; }
+    public double? GroundColorR { get; set; }
+    public double? GroundColorG { get; set; }
+    public double? GroundColorB { get; set; }
+    public double? FogColorR { get; set; }
+    public double? FogColorG { get; set; }
+    public double? FogColorB { get; set; }
+    public double? FogStartRaw { get; set; }
+    public double? FogEndRaw { get; set; }
+
     // The Light.dat fit block - what "spread and shift this table onto this map" resolved to.
     public double LightIntensity { get; set; } = 1.0;
     public double LightRadiusScale { get; set; } = 1.0;

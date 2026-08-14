@@ -87,10 +87,28 @@
             </DockPanel>
             <TextBlock Text="{Binding SunIntensity, StringFormat='Intensity  {0:0.00}'}" FontSize="11"
                        Foreground="{DynamicResource ReyTextBrush}" />
-            <Slider Minimum="0" Maximum="3" Value="{Binding SunIntensity}" />
+            <Slider Minimum="0" Maximum="3" Value="{Binding SunIntensity}"
+                    ToolTip.Tip="MapSunProperties.SunIntensityScale. Saved as its own field, separate from the hue — the viewport multiplies the two." />
             <ColorPicker Color="{Binding SunColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
                          IsAlphaVisible="False" IsAlphaEnabled="False"
-                         ToolTip.Tip="Sun hue. Brightness stays on the Intensity slider above." />
+                         ToolTip.Tip="MapSunProperties.sunColor. Drives the viewport: SUN_LIGHT_COLOR for the DefaultEnv_Flat family, and LightRegionInfo.SunLightColor for the PBR/Mantis family, which does not read SUN_LIGHT_COLOR at all. Brightness stays on the Intensity slider above." />
+
+            <!-- M463: sunDirection. NumericUpDown rather than a slider because Riot ships this NON-UNIT
+                 (Map22 base_dragon_cloud is <2, 8, -3>, length 8.775) and a -1..1 slider would clamp an
+                 authored vector, then save the clamped one. -->
+            <TextBlock Text="Direction (points TOWARD the sun)" FontSize="11" Margin="0,6,0,0"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <UniformGrid Columns="3">
+              <NumericUpDown Value="{Binding SunDirX}" Minimum="-10" Maximum="10" Increment="0.05"
+                             FormatString="0.###" FontSize="11" Margin="0,0,3,0"
+                             ToolTip.Tip="MapSunProperties.sunDirection X. Drives the viewport — SUN_LIGHT_DIRECTION, and the character sun direction in LightRegionInfo. Not normalised on save: Riot ships non-unit vectors and this round-trips whatever the map holds." />
+              <NumericUpDown Value="{Binding SunDirY}" Minimum="-10" Maximum="10" Increment="0.05"
+                             FormatString="0.###" FontSize="11" Margin="3,0"
+                             ToolTip.Tip="MapSunProperties.sunDirection Y. Drives the viewport. Positive is up." />
+              <NumericUpDown Value="{Binding SunDirZ}" Minimum="-10" Maximum="10" Increment="0.05"
+                             FormatString="0.###" FontSize="11" Margin="3,0,0,0"
+                             ToolTip.Tip="MapSunProperties.sunDirection Z. Drives the viewport." />
+            </UniformGrid>
           </StackPanel>
         </Border>
 
@@ -103,10 +121,41 @@
             </DockPanel>
             <TextBlock Text="{Binding SkyIntensity, StringFormat='Intensity  {0:0.00}'}" FontSize="11"
                        Foreground="{DynamicResource ReyTextBrush}" />
-            <Slider Minimum="0" Maximum="3" Value="{Binding SkyIntensity}" />
+            <Slider Minimum="0" Maximum="3" Value="{Binding SkyIntensity}"
+                    ToolTip.Tip="MapSunProperties.skyLightScale. Drives the PBR/Mantis ambient in the D3D11 viewport (IBL_CUBEMAP_SCALES) and the ambient term in the OpenGL viewport. Always saved to the map." />
             <ColorPicker Color="{Binding SkyColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
                          IsAlphaVisible="False" IsAlphaEnabled="False"
-                         ToolTip.Tip="Sky/ambient hue. Brightness stays on the Intensity slider above." />
+                         ToolTip.Tip="MapSunProperties.skyLightColor. Brightness stays on the Intensity slider above." />
+            <TextBlock FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0"
+                       Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="D3D11: ambient reaches PBR/Mantis materials only. Riot's DefaultEnv_Flat — what nearly all shipped map geometry uses — has no ambient input in its shader (it is sun + baked lightmap), so on those surfaces this is saved to the map but cannot change the picture. The OpenGL viewport applies it everywhere." />
+          </StackPanel>
+        </Border>
+
+        <!-- M463: the sky-gradient pair. SAVE-ONLY and labelled as such: this renderer draws the sky from a
+             cubemap/equirect/mesh TEXTURE, and no shader constant in PerFramePixelCB carries a two-colour
+             gradient, so there is nowhere honest to send these. Exposed anyway because the map authors them
+             and the writer persists them - without a control they could only ever be saved back unchanged. -->
+        <Border Classes="card" Padding="12" CornerRadius="6">
+          <StackPanel Spacing="4">
+            <DockPanel>
+              <Border DockPanel.Dock="Right" Width="26" Height="13" CornerRadius="2"
+                      Background="{Binding HorizonSwatch}" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" />
+              <TextBlock Text="SKY GRADIENT — SAVED, NOT SHOWN" FontSize="10" FontWeight="Bold"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+            </DockPanel>
+            <TextBlock Text="Horizon" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+            <ColorPicker Color="{Binding HorizonColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                         IsAlphaVisible="False" IsAlphaEnabled="False"
+                         ToolTip.Tip="MapSunProperties.horizonColor. Written to the map for the game to read. NOT shown in either viewport — the sky here is a texture, not a gradient, and no shader constant carries one." />
+            <DockPanel Margin="0,4,0,0">
+              <Border DockPanel.Dock="Right" Width="26" Height="13" CornerRadius="2"
+                      Background="{Binding GroundSwatch}" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" />
+              <TextBlock Text="Ground" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+            </DockPanel>
+            <ColorPicker Color="{Binding GroundColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                         IsAlphaVisible="False" IsAlphaEnabled="False"
+                         ToolTip.Tip="MapSunProperties.groundColor. Written to the map for the game to read. NOT shown in either viewport, for the same reason as Horizon above." />
           </StackPanel>
         </Border>
       </StackPanel>
@@ -266,11 +315,32 @@
           </StackPanel>
         </Border>
 
-        <Border Classes="card" Padding="12" CornerRadius="6" IsVisible="{Binding HasMapFog}">
+        <!-- M463: fog is now editable rather than merely announced. No IsVisible gate any more - it was
+             bound to HasMapFog, which is derived from the range, so a map that authors no fog could never
+             be given one. -->
+        <Border Classes="card" Padding="12" CornerRadius="6">
           <StackPanel Spacing="4">
-            <TextBlock Text="FOG" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
-            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
-                       Text="This map authors a distance-fog range (MapSunProperties). Toggle it under MODE." />
+            <DockPanel>
+              <Border DockPanel.Dock="Right" Width="26" Height="13" CornerRadius="2"
+                      Background="{Binding FogSwatch}" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" />
+              <TextBlock Text="FOG" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+            </DockPanel>
+            <ColorPicker Color="{Binding FogColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                         IsAlphaVisible="False" IsAlphaEnabled="False"
+                         ToolTip.Tip="MapSunProperties.fogColor. Drives the viewport (ENV_FOG_COLOR and ENV_FOG_ALT_COLOR) whenever the Fog toggle under MODE is on." />
+            <TextBlock Text="Range — raw, in Riot's own convention" FontSize="11" Margin="0,6,0,0"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <UniformGrid Columns="2">
+              <NumericUpDown Value="{Binding FogStartRaw}" Minimum="-1000000" Maximum="1000000" Increment="500"
+                             FormatString="0.###" FontSize="11" Margin="0,0,3,0"
+                             ToolTip.Tip="MapSunProperties.fogStartAndEnd X. Drives the viewport when Fog is on. Shown RAW because the shader consumes it raw: Riot stores these negative and reversed (Twisted Treeline ships -10000, -50000, meaning fog from 10000 to 50000)." />
+              <NumericUpDown Value="{Binding FogEndRaw}" Minimum="-1000000" Maximum="1000000" Increment="500"
+                             FormatString="0.###" FontSize="11" Margin="3,0,0,0"
+                             ToolTip.Tip="MapSunProperties.fogStartAndEnd Y. Drives the viewport when Fog is on. Also raw — see the X box." />
+            </UniformGrid>
+            <TextBlock FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0"
+                       Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="Toggle fog on under MODE to see it. The toggle appears once the two numbers describe a real range." />
           </StackPanel>
         </Border>
       </StackPanel>

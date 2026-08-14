@@ -345,6 +345,11 @@ public sealed class Dx11ViewportSurface : IDisposable
             MapSunDirection = MapSun?.SunDirection,
             MapLightMapScale = (float)LightmapScale,
 
+            // M463: the whole record as well, for the two inputs that are not single constants - the
+            // LightRegionInfo structured buffer (Mantis reads its SUN from there, not from
+            // SUN_LIGHT_COLOR) and the IBL ambient pair the sky drives. Ungated like the sun above.
+            MapSun = MapSun,
+
             // M396: the environment crossfade. Riot's shaders do
             // lerp(GRASS_TINT_MAP, GRASS_TINT_MAP_ALTERNATE, GRASS_INTERP) themselves, so passing this
             // through is the whole of the transition here.

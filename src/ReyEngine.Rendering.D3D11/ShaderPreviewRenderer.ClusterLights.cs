@@ -47,10 +47,24 @@ public sealed unsafe partial class ShaderPreviewRenderer
     private ComPtr<ID3D11ShaderResourceView> _clusterDataSrv;
     private int _clusterDataCapacityUint4;
 
-    /// <summary>Zeroed one-element <c>LightRegionRenderData</c> (112 B stride, §1.4). Bound so the read is
-    /// DEFINED rather than an unbound-SRV read that merely happens to return zero today.</summary>
+    /// <summary>The one-element <c>LightRegionRenderData</c> (112 B stride, §1.4), packed from the map's
+    /// authored sun by <see cref="LightRegionInfoBuilder"/>.
+    ///
+    /// <para><b>M463 corrects M456 here.</b> This buffer used to be zero-filled, on the same reasoning that
+    /// is genuinely right for the two dynamic-env TEXTURES below (§1.6: nothing on Live authors a light
+    /// region). It does not transfer. With the FACTOR texture at zero the shader computes
+    /// <c>wDefault = 1 - saturate(0) = 1</c> and routes the whole contribution to element 0 - so element 0
+    /// is not the unused fallback, it is the ONLY entry read. And offset +0 is the sun: Mantis never reads
+    /// <c>SUN_LIGHT_COLOR</c> (§1.7), so a zeroed record multiplied every Mantis pixel's sun by zero.</para>
+    ///
+    /// <para>Dynamic rather than Immutable now, because the Lighting panel edits it live.</para></summary>
     private ComPtr<ID3D11Buffer> _lightRegionBuf;
     private ComPtr<ID3D11ShaderResourceView> _lightRegionSrv;
+
+    /// <summary>The record last uploaded, so an unchanged sun does not re-Map the buffer every frame.
+    /// Null until the first upload, which is why <see cref="UpdateLightRegion"/> cannot skip on a null
+    /// sun - the zero state has to be written once too.</summary>
+    private byte[]? _lightRegionPacked;
 
     /// <summary>1x1 zero stand-ins for the light-region lookup textures. The IDS one must be a real
     /// uint4 texture: the ordinary white stand-in is RGBA8, and binding it to a <c>Texture2D&lt;uint4&gt;</c>
@@ -313,24 +327,34 @@ public sealed unsafe partial class ShaderPreviewRenderer
         _ctx.Unmap(_clusterDataBuf, 0);
     }
 
-    /// <summary>The zeroed light-region dummies. §1.6 measured this directly: across 18 map WADs and 12,747
-    /// bins, ZERO author a light region, so on Live every Mantis pixel samples these and gets nothing. Zero
-    /// is not a placeholder here - it is the shipped value.</summary>
+    /// <summary>Create the light-region buffer and the two zero lookup TEXTURES.
+    ///
+    /// <para>§1.6 measured the textures directly: across 18 map WADs and 12,747 bins, ZERO author a light
+    /// region, so on Live every Mantis pixel samples these and gets nothing. Zero is not a placeholder
+    /// there - it is the shipped value, and it is what makes <c>wDefault</c> resolve to 1.</para>
+    ///
+    /// <para>The BUFFER is a different matter and M463 stopped treating it the same way - see
+    /// <see cref="_lightRegionBuf"/>. It is created zeroed here only so a frame that reaches a shader
+    /// before <see cref="UpdateLightRegion"/> has run reads defined memory rather than whatever the
+    /// allocator had.</para></summary>
     private void EnsureClusterStandIns()
     {
         if (_clusterStandInsTried) return;
         _clusterStandInsTried = true;
 
+        // Dynamic + CPU write, because M463 makes these 112 bytes editable from the Lighting panel. The
+        // stride is the shader's own: every consumer issues ld_structured_indexable(..., stride=112).
         var lrDesc = new BufferDesc
         {
-            ByteWidth = 112,                      // one LightRegionRenderData, stride from §1.4
-            Usage = Usage.Default,
+            ByteWidth = LightRegionInfoBuilder.Stride,
+            Usage = Usage.Dynamic,
             BindFlags = (uint)BindFlag.ShaderResource,
+            CPUAccessFlags = (uint)CpuAccessFlag.Write,
             MiscFlags = (uint)ResourceMiscFlag.BufferStructured,
-            StructureByteStride = 112,
+            StructureByteStride = LightRegionInfoBuilder.Stride,
         };
-        var zeros = stackalloc byte[112];
-        for (int i = 0; i < 112; i++) zeros[i] = 0;
+        var zeros = stackalloc byte[LightRegionInfoBuilder.Stride];
+        for (int i = 0; i < LightRegionInfoBuilder.Stride; i++) zeros[i] = 0;
         var init = new SubresourceData { PSysMem = zeros };
         ComPtr<ID3D11Buffer> lrBuf = default;
         if (_device.CreateBuffer(ref lrDesc, ref init, ref lrBuf) >= 0)
@@ -382,6 +406,115 @@ public sealed unsafe partial class ShaderPreviewRenderer
             idTex.Dispose();
         }
         else Log("cluster: DYNAMIC_ENV_LIGHT_IDS stand-in texture failed");
+    }
+
+    // ---------------------------------------------------------------- the light region
+
+    /// <summary>M463: pack the map's authored sun into <c>LightRegionInfo[0]</c> and upload it.
+    ///
+    /// <para>This is the whole fix for "the sun does not work on Mantis materials". Mantis's sun radiance is
+    /// this record's <c>SunLightColor</c>, not <c>PerFramePixelCB.SUN_LIGHT_COLOR</c> - reflection marks
+    /// that constant UNUSED in blob 27 and <c>cb1[6]</c> appears zero times in the listing (§1.7). While
+    /// this buffer was zero-filled, every Mantis pixel multiplied its sun by zero and kept only its ambient
+    /// IBL, which reads as a flat, directionless surface rather than as an obvious error.</para>
+    ///
+    /// <para>Runs before any material binds, alongside <see cref="UpdateClusterLights"/>. Deliberately NOT
+    /// behind the <see cref="AnyClusterLitMaterial"/> gate that guards the cluster upload: that gate asks
+    /// whether a shader declares the CLUSTER MAP, and a Mantis permutation cooked without
+    /// <c>USE_DYNAMIC_LIGHTING</c> declares this buffer and the IBL cubemap while declaring no cluster map
+    /// at all. Gating on the wrong question is how the sun would have stayed black on exactly the
+    /// permutations that have no point lights to distract from it.</para></summary>
+    private void UpdateLightRegion(PreviewSettings s)
+    {
+        EnsureClusterStandIns();
+        UpdateSkyAmbient(s);
+        if (_lightRegionBuf.Handle is null) return;
+
+        byte[] packed = LightRegionInfoBuilder.Pack(s.MapSun);
+
+        // Sequence equality rather than a cached MapSunProperties reference: the view-model rebuilds the
+        // record on EVERY slider tick (RebuildSun does `_baseSun with { ... }`), so reference equality would
+        // re-upload constantly, and record equality would still miss the case where two different records
+        // pack to the same bytes. The bytes are what the GPU sees, so the bytes are what is compared.
+        if (_lightRegionPacked is not null && _lightRegionPacked.AsSpan().SequenceEqual(packed)) return;
+
+        MappedSubresource m = default;
+        if (_ctx.Map(_lightRegionBuf, 0, Map.WriteDiscard, 0, ref m) < 0) return;
+        packed.AsSpan().CopyTo(new Span<byte>(m.PData, LightRegionInfoBuilder.Stride));
+        _ctx.Unmap(_lightRegionBuf, 0);
+        _lightRegionPacked = packed;
+
+        // InvariantCulture: these are FLOATS reaching a string, which is the case the project's German-
+        // locale rule is actually about. A comma decimal separator here would make the diagnostics panel
+        // disagree with every other number in it.
+        var c = System.Globalization.CultureInfo.InvariantCulture;
+        float r = BitConverter.ToSingle(packed, 0), g = BitConverter.ToSingle(packed, 4),
+              b = BitConverter.ToSingle(packed, 8);
+        string line = "light region[0]: sun colour ("
+            + r.ToString("0.###", c) + ", " + g.ToString("0.###", c) + ", " + b.ToString("0.###", c)
+            + "), probe " + LightRegionInfoBuilder.ProbeIndex.ToString(c)
+            + " - Mantis reads its sun from HERE, not SUN_LIGHT_COLOR";
+        if (line != _lightRegionLastLog) { Log(line); _lightRegionLastLog = line; }
+    }
+
+    private string _lightRegionLastLog = "";
+
+    // ---------------------------------------------------------------- the sky / ambient half
+
+    /// <summary>A 1x1 cube ARRAY tinted with the map's <c>skyLightColor</c>, standing in for
+    /// <c>IBL_CUBEMAP_SharedTexture</c> when the map supplied no real probe.</summary>
+    private ComPtr<ID3D11ShaderResourceView> _skyIblSrv;
+    private Vector4? _skyIblColor;
+    private bool _skyIblBuilt;
+
+    /// <summary>The value <c>IBL_CUBEMAP_SCALES</c> is filled with. Null = no map sky, keep the neutral 1.</summary>
+    public float? SkyAmbientScale { get; private set; }
+
+    /// <summary>
+    /// M463: make the SKY slider do something on the one family whose shader has an ambient input.
+    ///
+    /// <para><b>Why the sky needed a different answer from the sun.</b> The report was "skylight was not
+    /// changing", and the reason is not a missing upload - it is that <c>DefaultEnv_Flat</c>, which nearly
+    /// all shipped map geometry runs, HAS NO AMBIENT TERM. Blob 226's entire lighting equation is
+    /// <c>light = NdotL * shadow * SUN_LIGHT_COLOR + baked.rgb * LIGHT_MAP_COLOR_SCALE</c> (lines 201-205,
+    /// re-read for this milestone) - a sun and a lightmap, and nowhere to put a sky colour. On that family
+    /// the field is genuinely save-only and the UI says so rather than shipping a dead slider.</para>
+    ///
+    /// <para><b>The PBR family is different, and it is measured.</b> Mantis's ambient is the pair of
+    /// <c>texturecubearray</c> samples at blob 27 lines 494 and 498, each multiplied by
+    /// <c>IBL_CUBEMAP_SCALES[probeIndex].x</c> at lines 495 and 499, accumulated by the same region weights
+    /// as the sun. That is exactly an ambient environment colour times a scalar - so the authored sky maps
+    /// onto it with no invention: HUE into the cube texels, STRENGTH into the scale. Keeping those two apart
+    /// mirrors M451's sun split for the same reason, and it is also forced here: the cube stand-in is RGBA8
+    /// and would clamp a scale above 1, while the scale is a float.</para>
+    ///
+    /// <para>Only ever a STAND-IN. It reaches the shader through <c>StandIn</c>, which runs only for a
+    /// texture nothing else bound, so a map that ships a real IBL probe (MapLightingV2) keeps it.</para>
+    /// </summary>
+    private void UpdateSkyAmbient(PreviewSettings s)
+    {
+        // Sanitised BEFORE the change check, for two reasons that are both about NaN: (int)float.NaN is an
+        // unspecified conversion in C#, and NaN != NaN would make the equality test below never match, so
+        // an unsanitised NaN would rebuild this texture every single frame forever.
+        static float Safe(float f) => float.IsFinite(f) ? Math.Clamp(f, 0f, 1f) : 0f;
+        Vector4? want = s.MapSun is { } ms
+            ? new Vector4(Safe(ms.SkyLightColor.X), Safe(ms.SkyLightColor.Y), Safe(ms.SkyLightColor.Z), 1f)
+            : null;
+        float? scale = s.MapSun?.SkyLightScale;
+        SkyAmbientScale = scale is { } sc && float.IsFinite(sc) ? Math.Clamp(sc, 0f, 64f) : null;
+
+        if (_skyIblBuilt && Nullable.Equals(_skyIblColor, want)) return;
+        _skyIblBuilt = true;
+        _skyIblColor = want;
+
+        _skyIblSrv.Dispose();
+        _skyIblSrv = default;
+        if (want is not { } c) return;      // no map sun: the white neutral stays
+
+        static byte Chan(float f) => (byte)Math.Clamp((int)MathF.Round(f * 255f), 0, 255);
+        var texel = new byte[] { Chan(c.X), Chan(c.Y), Chan(c.Z), 255 };
+        if (MakeTexture(texel, 1, 1, resourceDimension: 10) is { } srv) _skyIblSrv = srv;
+        else Log("sky: IBL cube-array stand-in failed; ambient stays neutral white");
     }
 
     // ---------------------------------------------------------------- binding
@@ -461,5 +594,6 @@ public sealed unsafe partial class ShaderPreviewRenderer
         _clusterDataSrv.Dispose(); _clusterDataBuf.Dispose();
         _lightRegionSrv.Dispose(); _lightRegionBuf.Dispose();
         _zeroFloat4Srv.Dispose(); _zeroUint4Srv.Dispose();
+        _skyIblSrv.Dispose();
     }
 }

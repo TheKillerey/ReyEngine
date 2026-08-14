@@ -158,6 +158,59 @@ public class MapSunWriterTests
         Assert.False(s.Properties.ContainsKey(H("SunIntensityScale")));
     }
 
+    /// <summary>M463: the five fields the Lighting panel gained controls for. Each is round-tripped ON ITS
+    /// OWN, from a bin that authors none of them, so a writer that dropped exactly one would fail here
+    /// rather than hide behind the four that still worked — which is what the all-fields-at-once test
+    /// above cannot distinguish.</summary>
+    [Theory]
+    [MemberData(nameof(NewlyExposedFields))]
+    public void Each_newly_exposed_field_round_trips_on_its_own(string name, MapSunProperties sun)
+    {
+        byte[] bin = BinWith(new BinTreeVector4(H("sunColor"), Vector4.One));
+
+        byte[]? outBin = MapSunProperties.Write(bin, sun, out var result);
+
+        Assert.True(result.Written, name);
+        Assert.Equal(sun, MapSunProperties.Extract(outBin!));
+    }
+
+    public static TheoryData<string, MapSunProperties> NewlyExposedFields() => new()
+    {
+        // Non-unit on purpose: Riot ships sunDirection with lengths up to 8.775 (Map22
+        // base_dragon_cloud is <2, 8, -3>), and the panel must not normalise it on the way to the bin.
+        { "sunDirection", new MapSunProperties { SunDirection = new Vector3(2f, 8f, -3f) } },
+        { "horizonColor", new MapSunProperties { HorizonColor = new Vector4(0.35f, 0.55f, 0.91f, 1f) } },
+        { "groundColor", new MapSunProperties { GroundColor = new Vector4(0.1f, 0.12f, 0.14f, 1f) } },
+        { "fogColor", new MapSunProperties { FogColor = new Vector4(0.2f, 0.3f, 0.4f, 1f) } },
+        // RAW, in Riot's negative reversed convention - the panel edits these unmodified.
+        { "fogStartAndEnd", new MapSunProperties { FogStartAndEnd = new Vector2(-10000f, -50000f) } },
+    };
+
+    /// <summary>A guard against the defect M463 fixed, restated so it cannot come back: the record carried
+    /// ten fields, the writer persisted ten, and the panel edited four — so six could only ever be saved
+    /// back exactly as loaded. This walks the record by REFLECTION, so a field added to
+    /// <see cref="MapSunProperties"/> later fails here until the writer round-trips it too.</summary>
+    [Fact]
+    public void Every_field_the_record_declares_survives_a_write()
+    {
+        byte[] bin = BinWith(new BinTreeVector4(H("sunColor"), Vector4.One));
+
+        byte[]? outBin = MapSunProperties.Write(bin, Authored, out var result);
+        var back = MapSunProperties.Extract(outBin!);
+
+        Assert.True(result.Written);
+        Assert.NotNull(back);
+        // Public instance properties only. A sealed record's compiler-generated EqualityContract is
+        // private, so it never shows up here.
+        var declared = typeof(MapSunProperties).GetProperties()
+            .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
+            .ToList();
+        // Ten today. A new field must be added to Extract AND Write, not just to the record.
+        Assert.Equal(10, declared.Count);
+        foreach (var p in declared)
+            Assert.Equal(p.GetValue(Authored), p.GetValue(back));
+    }
+
     [Fact]
     public void An_unwritable_bin_reports_null_rather_than_corrupting()
     {

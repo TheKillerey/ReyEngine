@@ -59,6 +59,23 @@ public sealed class PreviewSettings
     public Vector4? MapFogColor;
     public Vector2? MapFogStartEnd;
 
+    /// <summary>
+    /// M463: the whole authored sun record, for the two inputs that are not single constants -
+    /// <c>LightRegionInfo_SharedDataBuffer</c> (a 112-byte structured buffer, see
+    /// <see cref="ReyEngine.Formats.Lighting.LightRegionInfoBuilder"/>) and the IBL ambient pair.
+    ///
+    /// <para>Added ALONGSIDE the granular <c>MapSun*</c> fields above rather than replacing them: those are
+    /// consumed by name in <c>FillConstantBuffer</c> and each has its own null-means-neutral fallback that
+    /// predates this. Both call sites already hold the record, so carrying it costs nothing.</para>
+    ///
+    /// <para><b>Which FORM arrives here matters.</b> The view-model hands over its RENDER form
+    /// (<c>CurrentSunProperties</c>), in which M451 has already folded the intensity slider into
+    /// <c>SunColor</c> and pinned <c>SunIntensityScale</c> to 1. The packer multiplies the two anyway, so it
+    /// is correct for the folded form (x1) AND for a raw authored record - which is what makes it safe to
+    /// unit-test against the values a bin actually carries.</para>
+    /// </summary>
+    public ReyEngine.Formats.MapGeo.MapSunProperties? MapSun;
+
     /// <summary>M452: the editor's dynamic point lights (the Lighting window list), for the additive
     /// overlay pass. The list and every knob below mirror the GL viewport's bindings one for one
     /// (ViewportControl.DynamicLights*), and the same clamps are applied at draw time - see
@@ -3560,7 +3577,14 @@ float4 psmain(VOut i) : SV_Target
 
                     // The engine normally fills one scale per IBL cube. All-zero scales erase the entire
                     // indirect-light contribution, which leaves PBR materials black despite valid albedo.
-                    "IBL_CUBEMAP_SCALES" => NeutralIblCubemapScales,
+                    //
+                    // M463: the map's skyLightScale when it authored one - this is the STRENGTH half of the
+                    // sky, the hue half being the cube stand-in (UpdateSkyAmbient). The shader reads only
+                    // .x of the indexed element (blob 27 lines 495/499), but all 32 slots are filled so the
+                    // value does not depend on which probe index a record happens to carry.
+                    "IBL_CUBEMAP_SCALES" => SkyAmbientScale is { } sky
+                        ? Repeat(new[] { sky, sky, sky, sky }, 32)
+                        : NeutralIblCubemapScales,
 
                     // M256: the shadow plumbing. These are PLACEHOLDERS, and worth being plain about why:
                     // the preview renders no shadow pass, so there is no shadow camera to derive them from.
@@ -4082,6 +4106,10 @@ float4 psmain(VOut i) : SV_Target
             // actually changed, and returns immediately when no live material can consume it.
             UpdateClusterLights(s);
 
+            // M463: and the light-region record, for the same reason and at the same moment - Mantis reads
+            // its SUN out of that buffer rather than out of SUN_LIGHT_COLOR (light-system.md §1.7).
+            UpdateLightRegion(s);
+
             float radius = MathF.Max(0.05f, Mesh?.Radius ?? 1f);
             var view = s.SuppliedView ?? Matrix4x4.CreateLookAt(
                 CameraPosition(s) * radius, Vector3.Zero, Vector3.UnitY);
@@ -4524,6 +4552,12 @@ float4 psmain(VOut i) : SV_Target
             && (resource.Name.Contains("SHADOW_MAP", StringComparison.OrdinalIgnoreCase)
                 || resource.Name.Contains("DEPTH_PCF", StringComparison.OrdinalIgnoreCase)))
             return _whiteDepth;
+        // M463: the map's authored skyLightColor, as the ambient environment the PBR family samples. This
+        // arm is reached ONLY when nothing else bound the slot, so a map shipping a real IBL probe keeps it.
+        // See UpdateSkyAmbient for why the sky lands here and not on a PerFramePixelCB constant.
+        if (_skyIblSrv.Handle is not null
+            && resource.Name.Contains("IBL_CUBEMAP", StringComparison.OrdinalIgnoreCase))
+            return _skyIblSrv;
         return resource.Dimension switch
         {
             5 => _whiteArray,

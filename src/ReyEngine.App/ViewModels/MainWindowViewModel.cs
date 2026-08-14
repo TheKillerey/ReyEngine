@@ -2319,6 +2319,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         rec.SkyColorR = SkyColorR; rec.SkyColorG = SkyColorG; rec.SkyColorB = SkyColorB;
         rec.LightmapScale = CurrentLightmapScale;
 
+        // M463: the six added fields. Always written, so once a record has been touched by this build it
+        // carries real values rather than the "predates the field" null.
+        rec.SunDirX = SunDirX; rec.SunDirY = SunDirY; rec.SunDirZ = SunDirZ;
+        rec.HorizonColorR = HorizonColorR; rec.HorizonColorG = HorizonColorG; rec.HorizonColorB = HorizonColorB;
+        rec.GroundColorR = GroundColorR; rec.GroundColorG = GroundColorG; rec.GroundColorB = GroundColorB;
+        rec.FogColorR = FogColorR; rec.FogColorG = FogColorG; rec.FogColorB = FogColorB;
+        rec.FogStartRaw = FogStartRaw; rec.FogEndRaw = FogEndRaw;
+
         rec.LightIntensity = DynamicLightIntensity;
         rec.LightRadiusScale = DynamicLightRadiusScale;
         rec.FalloffSoftness = LightFalloffSoftness;
@@ -2362,6 +2370,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             SunColorR = rec.SunColorR; SunColorG = rec.SunColorG; SunColorB = rec.SunColorB;
             SkyIntensity = rec.SkyIntensity;
             SkyColorR = rec.SkyColorR; SkyColorG = rec.SkyColorG; SkyColorB = rec.SkyColorB;
+
+            // M463: null = a record written before these fields existed. Leaving the property alone then
+            // keeps what ApplySunProperties just read out of the map, which is the only safe reading of
+            // "this project has no opinion" - restoring a 0 would blank an authored sun direction.
+            if (rec.SunDirX is { } sdx) SunDirX = sdx;
+            if (rec.SunDirY is { } sdy) SunDirY = sdy;
+            if (rec.SunDirZ is { } sdz) SunDirZ = sdz;
+            if (rec.HorizonColorR is { } hr) HorizonColorR = hr;
+            if (rec.HorizonColorG is { } hg) HorizonColorG = hg;
+            if (rec.HorizonColorB is { } hb) HorizonColorB = hb;
+            if (rec.GroundColorR is { } gr) GroundColorR = gr;
+            if (rec.GroundColorG is { } gg) GroundColorG = gg;
+            if (rec.GroundColorB is { } gb) GroundColorB = gb;
+            if (rec.FogColorR is { } fr) FogColorR = fr;
+            if (rec.FogColorG is { } fg) FogColorG = fg;
+            if (rec.FogColorB is { } fb) FogColorB = fb;
+            if (rec.FogStartRaw is { } fs) FogStartRaw = fs;
+            if (rec.FogEndRaw is { } fe) FogEndRaw = fe;
+
             _suppressSunRebuild = false;
             RebuildSun();
 
@@ -4285,6 +4312,37 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private double _skyColorR = 0.35;
     [ObservableProperty] private double _skyColorG = 0.35;
     [ObservableProperty] private double _skyColorB = 0.35;
+
+    // M463: the rest of MapSunProperties. Until now the panel edited 4 of the record's 10 fields, the
+    // writer persisted all 10, and the other 6 could only ever be saved back exactly as loaded.
+    //
+    // NOT sliders, deliberately. Riot ships sunDirection NON-UNIT - lengths up to 8.775 (Map22
+    // base_dragon_cloud is <2, 8, -3>) - so a -1..1 slider would silently clamp an authored vector and the
+    // next save would write the clamped one. A wide NumericUpDown round-trips whatever the map holds.
+    [ObservableProperty] private double _sunDirX = 0.4;
+    [ObservableProperty] private double _sunDirY = 0.85;
+    [ObservableProperty] private double _sunDirZ = 0.45;
+
+    // Sky-gradient colours. SAVE-ONLY in this viewport - see the tooltips in LightingWindow.axaml and the
+    // note on RebuildSun. They are carried through CurrentSunProperties so nothing downstream loses them.
+    [ObservableProperty] private double _horizonColorR = 1.0;
+    [ObservableProperty] private double _horizonColorG = 1.0;
+    [ObservableProperty] private double _horizonColorB = 1.0;
+    [ObservableProperty] private double _groundColorR = 1.0;
+    [ObservableProperty] private double _groundColorG = 1.0;
+    [ObservableProperty] private double _groundColorB = 1.0;
+
+    // Fog. These DO drive the D3D11 viewport (ENV_FOG_COLOR / ENV_FOG_START_END_SCALE_EMISSIVE_REMAP),
+    // gated on the Fog toggle exactly as Dx11ViewportSurface already gates them.
+    [ObservableProperty] private double _fogColorR = 1.0;
+    [ObservableProperty] private double _fogColorG = 1.0;
+    [ObservableProperty] private double _fogColorB = 1.0;
+
+    // RAW, in Riot's own convention: negative and "reversed" (Twisted Treeline ships -10000, -50000).
+    // The shader consumes them unmodified, so they are edited unmodified. Normalising to a friendly
+    // (near, far) here would mean guessing how to put the sign back on save.
+    [ObservableProperty] private double _fogStartRaw;
+    [ObservableProperty] private double _fogEndRaw;
     [ObservableProperty] private bool _hasMaterialData;
     [ObservableProperty] private bool _hasInspectorBody;
     [ObservableProperty] private int _inspectorTab;
@@ -8714,6 +8772,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             SunIntensity = System.Math.Clamp(_baseSun.SunIntensityScale, 0f, 8f);
             SkyColorR = Clamp01(_baseSun.SkyLightColor.X); SkyColorG = Clamp01(_baseSun.SkyLightColor.Y); SkyColorB = Clamp01(_baseSun.SkyLightColor.Z);
             SkyIntensity = System.Math.Clamp(_baseSun.SkyLightScale, 0f, 8f);
+
+            // M463: the six fields the panel could not previously reach. NOT Clamp01 for the direction -
+            // Riot ships non-unit sun vectors and clamping one would corrupt it on the next save.
+            SunDirX = _baseSun.SunDirection.X; SunDirY = _baseSun.SunDirection.Y; SunDirZ = _baseSun.SunDirection.Z;
+            HorizonColorR = Clamp01(_baseSun.HorizonColor.X); HorizonColorG = Clamp01(_baseSun.HorizonColor.Y); HorizonColorB = Clamp01(_baseSun.HorizonColor.Z);
+            GroundColorR = Clamp01(_baseSun.GroundColor.X); GroundColorG = Clamp01(_baseSun.GroundColor.Y); GroundColorB = Clamp01(_baseSun.GroundColor.Z);
+            FogColorR = Clamp01(_baseSun.FogColor.X); FogColorG = Clamp01(_baseSun.FogColor.Y); FogColorB = Clamp01(_baseSun.FogColor.Z);
+            FogStartRaw = _baseSun.FogStartAndEnd.X; FogEndRaw = _baseSun.FogStartAndEnd.Y;
+
             _suppressSunRebuild = false;
             RebuildSun();
             CurrentLightmapScale = sun?.LightMapColorScale ?? 1.0;
@@ -8751,11 +8818,36 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             SunIntensityScale = 1f,
             SkyLightColor = new System.Numerics.Vector4((float)SkyColorR, (float)SkyColorG, (float)SkyColorB, 1f),
             SkyLightScale = (float)SkyIntensity,
+
+            // M463: the remaining six. They travel in the RENDER form whether or not this viewport can show
+            // them, because CurrentSunProperties is also what the GL viewport and the per-map project record
+            // read - a field dropped here would be a field the panel appears to edit and nothing remembers.
+            //
+            // Which of them a rendered frame actually reflects, measured rather than assumed:
+            //   SunDirection    D3D11 SUN_LIGHT_DIRECTION + LightRegionInfo+32, and GL's own sun. VISIBLE.
+            //   FogColor        D3D11 ENV_FOG_COLOR / ENV_FOG_ALT_COLOR, when the Fog toggle is on. VISIBLE.
+            //   FogStartAndEnd  D3D11 ENV_FOG_START_END_SCALE_EMISSIVE_REMAP, likewise. VISIBLE.
+            //   HorizonColor    SAVE-ONLY. Nothing in either viewport reads it: the sky is drawn from a
+            //   GroundColor     cubemap/equirect/mesh TEXTURE (ShaderPreviewRenderer.Sky.cs), not from a
+            //                   two-colour gradient, and no shader constant in PerFramePixelCB carries one.
+            SunDirection = new System.Numerics.Vector3((float)SunDirX, (float)SunDirY, (float)SunDirZ),
+            HorizonColor = new System.Numerics.Vector4((float)HorizonColorR, (float)HorizonColorG, (float)HorizonColorB, 1f),
+            GroundColor = new System.Numerics.Vector4((float)GroundColorR, (float)GroundColorG, (float)GroundColorB, 1f),
+            FogColor = new System.Numerics.Vector4((float)FogColorR, (float)FogColorG, (float)FogColorB, 1f),
+            FogStartAndEnd = new System.Numerics.Vector2((float)FogStartRaw, (float)FogEndRaw),
         };
         OnPropertyChanged(nameof(SunSwatch));
         OnPropertyChanged(nameof(SkySwatch));
         OnPropertyChanged(nameof(SunColorPick));   // M155
         OnPropertyChanged(nameof(SkyColorPick));
+        OnPropertyChanged(nameof(HorizonSwatch));  // M463
+        OnPropertyChanged(nameof(GroundSwatch));
+        OnPropertyChanged(nameof(FogSwatch));
+        OnPropertyChanged(nameof(HorizonColorPick));
+        OnPropertyChanged(nameof(GroundColorPick));
+        OnPropertyChanged(nameof(FogColorPick));
+        // HasMapFog is NOT re-raised here: CurrentSunProperties is a record, so assigning a new one with a
+        // different fog range already trips OnCurrentSunPropertiesChanged, which re-raises it.
         // M287: the sun/sky sliders all funnel through here, so one capture covers the panel.
         CaptureMapLighting();
     }
@@ -8778,6 +8870,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         set { _suppressSunRebuild = true; SkyColorR = value.R / 255.0; SkyColorG = value.G / 255.0; _suppressSunRebuild = false; SkyColorB = value.B / 255.0; }
     }
 
+    // M463: the three added pickers, on the same two-channels-suppressed pattern so one edit fires exactly
+    // one RebuildSun rather than three.
+    public Avalonia.Media.Color HorizonColorPick
+    {
+        get => Col(HorizonColorR, HorizonColorG, HorizonColorB);
+        set { _suppressSunRebuild = true; HorizonColorR = value.R / 255.0; HorizonColorG = value.G / 255.0; _suppressSunRebuild = false; HorizonColorB = value.B / 255.0; }
+    }
+
+    public Avalonia.Media.Color GroundColorPick
+    {
+        get => Col(GroundColorR, GroundColorG, GroundColorB);
+        set { _suppressSunRebuild = true; GroundColorR = value.R / 255.0; GroundColorG = value.G / 255.0; _suppressSunRebuild = false; GroundColorB = value.B / 255.0; }
+    }
+
+    public Avalonia.Media.Color FogColorPick
+    {
+        get => Col(FogColorR, FogColorG, FogColorB);
+        set { _suppressSunRebuild = true; FogColorR = value.R / 255.0; FogColorG = value.G / 255.0; _suppressSunRebuild = false; FogColorB = value.B / 255.0; }
+    }
+
+    public Avalonia.Media.IBrush HorizonSwatch => Swatch(HorizonColorR, HorizonColorG, HorizonColorB);
+    public Avalonia.Media.IBrush GroundSwatch => Swatch(GroundColorR, GroundColorG, GroundColorB);
+    public Avalonia.Media.IBrush FogSwatch => Swatch(FogColorR, FogColorG, FogColorB);
+
     private static Avalonia.Media.Color Col(double r, double g, double b) => Avalonia.Media.Color.FromRgb(
         (byte)Math.Clamp(Math.Round(r * 255), 0, 255),
         (byte)Math.Clamp(Math.Round(g * 255), 0, 255),
@@ -8795,6 +8911,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnSkyColorGChanged(double value) => RebuildSun();
     partial void OnSkyColorBChanged(double value) => RebuildSun();
 
+    // M463: every added field funnels through the SAME republish, which is what makes it reach the viewport
+    // and the project record. A property added without one of these binds fine, shows fine and does nothing
+    // - the exact failure this milestone exists to fix.
+    partial void OnSunDirXChanged(double value) => RebuildSun();
+    partial void OnSunDirYChanged(double value) => RebuildSun();
+    partial void OnSunDirZChanged(double value) => RebuildSun();
+    partial void OnHorizonColorRChanged(double value) => RebuildSun();
+    partial void OnHorizonColorGChanged(double value) => RebuildSun();
+    partial void OnHorizonColorBChanged(double value) => RebuildSun();
+    partial void OnGroundColorRChanged(double value) => RebuildSun();
+    partial void OnGroundColorGChanged(double value) => RebuildSun();
+    partial void OnGroundColorBChanged(double value) => RebuildSun();
+    partial void OnFogColorRChanged(double value) => RebuildSun();
+    partial void OnFogColorGChanged(double value) => RebuildSun();
+    partial void OnFogColorBChanged(double value) => RebuildSun();
+    partial void OnFogStartRawChanged(double value) => RebuildSun();
+    partial void OnFogEndRawChanged(double value) => RebuildSun();
+
     /// <summary>M71: restore sun/sky/lightmap to the loaded map's authored values.</summary>
     [RelayCommand]
     private void ResetLighting() => ApplySunProperties(_baseSunAuthored);
@@ -8805,10 +8939,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// lighting panel. Until now the sliders edited a copy the viewport rendered and nothing could save;
     /// "not saveable" was literally true, there was no writer.
     ///
-    /// <para>Writes <see cref="CurrentSunProperties"/> (which already folds the sliders in — sun colour is
-    /// hue × intensity, sky scale carries the sky intensity) with <see cref="CurrentLightmapScale"/> as
-    /// <c>lightMapColorScale</c>, into the MapContainer's <c>MapSunProperties</c> component. Fields the
-    /// panel does not model (SunIntensityScale, fogAlternateColor, …) are left untouched.</para>
+    /// <para>Builds the SAVE form from <see cref="_baseSun"/> plus the raw panel values — NOT from
+    /// <see cref="CurrentSunProperties"/>, which is the folded RENDER form. M451 split the two and this
+    /// comment described the pre-M451 behaviour until M463 corrected it.</para>
+    ///
+    /// <para>M463: the panel now edits all ten of the record's fields, so all ten are written from it.
+    /// Fields the record itself does not model (fogAlternateColor, CharacterSunLight*, …) are still left
+    /// untouched by <see cref="Formats.MapGeo.MapSunProperties.Write"/>.</para>
     /// </summary>
     [RelayCommand]
     private async Task SaveSunToMap()
@@ -8833,6 +8970,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 SkyLightColor = new System.Numerics.Vector4((float)SkyColorR, (float)SkyColorG, (float)SkyColorB, 1f),
                 SkyLightScale = (float)SkyIntensity,
                 LightMapColorScale = (float)CurrentLightmapScale,
+
+                // M463: the six fields the panel gained. Written from the panel values rather than left on
+                // _baseSun, or the new controls would edit the viewport and be silently discarded on save -
+                // which is the same class of defect as a control that edits nothing at all.
+                SunDirection = new System.Numerics.Vector3((float)SunDirX, (float)SunDirY, (float)SunDirZ),
+                HorizonColor = new System.Numerics.Vector4((float)HorizonColorR, (float)HorizonColorG, (float)HorizonColorB, 1f),
+                GroundColor = new System.Numerics.Vector4((float)GroundColorR, (float)GroundColorG, (float)GroundColorB, 1f),
+                FogColor = new System.Numerics.Vector4((float)FogColorR, (float)FogColorG, (float)FogColorB, 1f),
+                FogStartAndEnd = new System.Numerics.Vector2((float)FogStartRaw, (float)FogEndRaw),
             };
             byte[] source = ReadAsset(binEntry.PathHash);
             var (bytes, result) = await Task.Run(() =>

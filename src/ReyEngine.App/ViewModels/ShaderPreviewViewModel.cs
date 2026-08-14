@@ -1908,6 +1908,9 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
         // M228: the map's measured sun beats the sliders, unless the user turns it off
         bool useMap = UseMapSun && _mapSun is not null;
+        // M463: the record itself too, for LightRegionInfo (Mantis's real sun input) and the IBL ambient
+        // pair. Follows the same UseMapSun gate as every other field here.
+        _settings.MapSun = useMap ? _mapSun : null;
         _settings.MapSunColor = useMap ? _mapSun!.SunColor : null;
         _settings.MapSunDirection = useMap ? _mapSun!.SunDirection : null;
         _settings.MapLightMapScale = useMap ? _mapSun!.LightMapColorScale : null;
