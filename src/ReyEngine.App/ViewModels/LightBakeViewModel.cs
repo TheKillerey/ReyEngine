@@ -125,7 +125,7 @@ public sealed partial class LightBakeViewModel : ObservableObject
     [ObservableProperty] private double _exposure = 1.0;
     /// <summary>What auto-exposure resolved to for this map, shown so the choice isn't invisible.</summary>
     [ObservableProperty] private string _exposureNote = "";
-    [ObservableProperty] private double _falloffSoftness = 0.6;
+    [ObservableProperty] private double _falloffSoftness;   // M457: 0 = Riot's linear falloff
     [ObservableProperty] private bool _smoothNormals = true;
     [ObservableProperty] private double _smoothingAngle = 120;
 

@@ -61,7 +61,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _lightCount;
     private float _lightIntensity = 1f;
     private float _lightRadiusScale = 1f;
-    private float _lightFalloffSoftness;   // M160: 0 = classic (1-t)^2 falloff
+    private float _lightFalloffSoftness;   // M457: 0 = Riot's linear falloff (the default)
     private float _lightPosScale = 1f;
     private Vector2 _lightPosScaleXZ = Vector2.One;
     private Vector2 _lightPosOffset = Vector2.Zero;
@@ -358,7 +358,7 @@ uniform float uGrassInterp;
 uniform highp sampler2D uLightsTex;
 uniform int uNumLights;
 uniform float uLightIntensity;
-uniform float uLightFalloffSoftness; // M160: 0 = (1-t)^2, 1 = (1-t^2)^2 (wider, softer rim)
+uniform float uLightFalloffSoftness; // M457: 0 = Riot's linear 1-t, 1 = the legacy (1-t^2)^2 (wide, soft rim)
 uniform float uLightRadiusScale;   // M71: global multiplier on every light's radius (fit lights to the map)
 uniform float uLightPosScale;      // M71: master multiplier on every light's XZ position (spread the layout)
 uniform vec2 uLightPosScaleXZ;     // M71: per-axis fine scale (x, z), on top of the master spread
@@ -685,10 +685,32 @@ void main() {
         col = mix(col, lit, smoothstep(0.0, 0.05, vlum));
     }
 
-    // M70: legacy Riot dynamic point lights (Light.dat) added on top of the baked/fallback lighting - this is
-    // how the old client lit torches and braziers. Each light is a radial term with a quadratic falloff to its
-    // radius, wrapped by a softened N.L so surfaces turned partly away still catch some glow. Off entirely when
-    // no Light.dat is loaded (uNumLights = 0); the const loop bound keeps the shader ANGLE/GLES friendly.
+    // M70/M457: Riot dynamic point lights (Light.dat / the Lighting window list), added on top of the
+    // baked/fallback lighting - this is how the client lights torches and braziers.
+    //
+    // M457 replaced M70's hand-written approximation with Riot's OWN point-light term, read out of
+    // compiled DXBC (docs/research/light-system.md 2.4, DefaultEnv_Flat blob 226 loop 1, lines 261-276):
+    //
+    //     atten = 1.0 - saturate(dist * invRadius);                    // LINEAR. no square, no smoothstep
+    //     out  += lightColour * albedo * max(dot(Ldir, N), 0) * atten;
+    //
+    // That is the LAMBERT family: plain N.L, no 1/PI, no specular, and NO ambient wrap. M70's
+    // 0.35 + 0.65*ndl lift is therefore gone - nothing in Riot's loop brightens a surface that faces away
+    // from the light - and so is its (1-t)^2 curve.
+    //
+    // WHY LAMBERT AND NOT THE PBR FORM. GL draws every material with this one generic program and cannot
+    // switch BRDF per material family the way Riot's permutation system does, so it has to pick one term
+    // for all of them. The env family (DefaultEnv_Flat) is what the overwhelming majority of shipped map
+    // geometry actually runs, so its term is the one to standardise on. THE DIVERGENCE, STATED PLAINLY:
+    // a Mantis material gets the full GGX/Smith-Schlick/Schlick term in the D3D11 path (that path feeds
+    // Riot's own compiled USE_DYNAMIC_LIGHTING shader since M456) and this Lambert term here, so the two
+    // viewports will NOT agree pixel-for-pixel on Mantis surfaces. That is by design for this milestone;
+    // porting the GGX BRDF plus per-material family selection to GL is a separate piece of work.
+    //
+    // Kept from ours on purpose: the per-light strength in .a (Riot's Lambert family reads word1.xyz only
+    // and ignores word1.w - the PBR family is the one that multiplies by it - but .a is the editor's
+    // per-light knob and the user tunes lights with it) and the global uLightIntensity. Off entirely when
+    // no light table is loaded (uNumLights = 0); the const loop bound keeps the shader ANGLE/GLES friendly.
     if (uNumLights > 0) {
         vec3 dynamicLight = vec3(0.0);
         for (int i = 0; i < 1024; i++) {
@@ -704,19 +726,19 @@ void main() {
             vec3 toLight = lightPos - vWorld;
             float dist = length(toLight);
             if (dist < radius) {
-                // Falloff. The classic (1-t)^2 is already smooth into zero, but it collapses fast (4% by
-                // half radius) so the pool ends in a visible terminator. uLightFalloffSoftness blends it
-                // toward (1-t^2)^2, which holds brightness further out and lands far more gently, so the
-                // rim fades instead of drawing an edge. The baker uses this EXACT blend (BakeLighting) -
-                // if the two ever differ, baked and dynamic stop matching.
+                // Falloff. M457: index 0 IS Riot's curve now - a straight 1 - saturate(dist * invRadius).
+                // uLightFalloffSoftness blends AWAY from it toward the legacy (1-t^2)^2, which holds
+                // brightness further out and lands more gently; that is an artistic escape hatch, not the
+                // reference, which is why its default is 0. The baker evaluates this same blend
+                // (BakeLighting.Attenuation), so a bake still matches the preview that produced it.
                 float t = dist / radius;
-                float sharpF = 1.0 - t;      sharpF *= sharpF;
-                float softF  = 1.0 - t * t;  softF  *= softF;
-                float atten = mix(sharpF, softF, uLightFalloffSoftness);
+                float riotF = 1.0 - t;                   // Riot's linear attenuation
+                float softF = 1.0 - t * t;  softF *= softF;
+                float atten = mix(riotF, softF, uLightFalloffSoftness);
                 // M153: .a is the light's OWN strength; uLightIntensity below stays the global multiplier.
                 vec4 lightColour = texelFetch(uLightsTex, ivec2(i, 1), 0);
                 float ndl = max(dot(n, toLight / max(dist, 0.0001)), 0.0);
-                dynamicLight += lightColour.rgb * lightColour.a * atten * (0.35 + 0.65 * ndl);
+                dynamicLight += lightColour.rgb * lightColour.a * atten * ndl;
             }
         }
         col += base * dynamicLight * uLightIntensity;
@@ -1610,9 +1632,10 @@ void main(){
     /// <summary>M71: global multiplier on every point light's radius, so a Light.dat authored for one map's
     /// scale can be fit to the geometry currently loaded.</summary>
     public void SetLightRadiusScale(float scale) => _lightRadiusScale = System.Math.Clamp(scale, 0.01f, 40f);
-    /// <summary>M160: 0 = the classic (1-t)^2 falloff, 1 = (1-t^2)^2 - a wider pool with a much gentler
-    /// rim, so a light fades out instead of ending on a visible terminator. The baker applies the SAME
-    /// blend, so baked and dynamic stay in agreement.</summary>
+    /// <summary>M457: 0 = Riot's own linear falloff (1 - saturate(dist/radius)) - the reference, and the
+    /// default; 1 = the legacy (1-t^2)^2 - a wider pool with a much gentler rim, so a light fades out
+    /// instead of ending on a visible terminator. The baker applies the SAME blend
+    /// (BakeLighting.Attenuation), so baked and dynamic stay in agreement at every slider value.</summary>
     public void SetLightFalloffSoftness(float softness) => _lightFalloffSoftness = System.Math.Clamp(softness, 0f, 1f);
     /// <summary>M71: global multiplier on every point light's XZ position (about world origin), to spread a
     /// light layout authored for one map's footprint across a bigger/smaller one. Height is unaffected.</summary>

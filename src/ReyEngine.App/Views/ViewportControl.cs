@@ -89,9 +89,10 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, VfxPlayback?>(nameof(ParticlePlayback));
     public static readonly StyledProperty<bool> AnimateWaterProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(AnimateWater));
-    // M160: point-light falloff shape, shared with the baker so Dynamic and Baked agree.
+    // M160/M457: point-light falloff shape, shared with the baker so Dynamic and Baked agree.
+    // 0 = Riot's own linear falloff, and now the default.
     public static readonly StyledProperty<double> LightFalloffSoftnessProperty =
-        AvaloniaProperty.Register<ViewportControl, double>(nameof(LightFalloffSoftness), 0.6);
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(LightFalloffSoftness), 0.0);
 
     public static readonly StyledProperty<double> LightmapScaleProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(LightmapScale), 1.0);

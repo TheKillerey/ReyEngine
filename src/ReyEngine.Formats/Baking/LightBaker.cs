@@ -244,7 +244,10 @@ public static class LightBaker
             var ld = toLight / MathF.Max(dist, 1e-4f);
             float nl = MathF.Max(Vector3.Dot(dir, ld), 0f);
             if (lighting.PointLightShadows && scene.Occluded(p, ld, dist)) continue;
-            lit += l.Color * (Math.Clamp(l.Intensity, 0f, 64f) * atten * (0.35f + 0.65f * nl)) * lighting.LightIntensity;
+            // M457: plain N.L, as Riot's loop has (light-system.md 2.4). The 0.35 + 0.65*nl wrap that
+            // used to be here is gone from the atlas bake and the GL viewport alike; a probe that kept it
+            // would light characters on a curve no other surface in the editor uses.
+            lit += l.Color * (Math.Clamp(l.Intensity, 0f, 64f) * atten * nl) * lighting.LightIntensity;
         }
         return lit * settings.Exposure;   // same brightness lever the atlas bake uses
     }
@@ -281,8 +284,10 @@ public static class LightBaker
     /// <summary>Average vertex normals across coincident positions, so flat-shaded map geometry stops
     /// baking light pools as polygonal facets.
     ///
-    /// Why this is needed: the light term carries a (0.35 + 0.65 * N.L) wrap, so a facet turned away from
-    /// a light is ~3x darker than one turned toward it. On architecture authored with hard normals — 59.5%
+    /// Why this is needed: the light term is scaled by N.L, so a facet turned away from a light is much
+    /// darker than one turned toward it — since M457 it goes all the way to black, where the old
+    /// (0.35 + 0.65 * N.L) wrap bottomed out at ~3x darker, which makes this smoothing MORE important
+    /// rather than less. On architecture authored with hard normals — 59.5%
     /// of shared positions on the user's map carry split normals — that steps discontinuously at every
     /// triangle, and a smooth round pool bakes as a faceted polygon. The diffuse texture hides it in a
     /// normal render; a lightmap shows it plainly.

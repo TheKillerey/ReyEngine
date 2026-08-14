@@ -78,10 +78,11 @@ public sealed class BakeSettings
     /// baked look back up to it. 1 = physically-matched (baked is darker by exactly its occlusion).</summary>
     public float Exposure { get; set; } = 1f;
 
-    /// <summary>Shape of the point-light falloff: 0 = the classic (1-t)^2 (tight pool, visible rim),
-    /// 1 = (1-t^2)^2 (wider pool that fades out gently). Applied identically by the bake and the
-    /// viewport shader, so Baked and Dynamic always agree.</summary>
-    public float FalloffSoftness { get; set; } = 0.6f;
+    /// <summary>M457: shape of the point-light falloff. 0 = Riot's own linear falloff
+    /// (<c>1 - saturate(dist/radius)</c>, measured off compiled DXBC - see BakeLighting.Attenuation),
+    /// 1 = the legacy (1-t^2)^2 (wider pool that fades out gently). Applied identically by the bake and
+    /// the viewport shader, so Baked and Dynamic always agree.</summary>
+    public float FalloffSoftness { get; set; }
 
     /// <summary>Smooth (area-average) vertex normals across coincident positions before lighting, for
     /// normals that meet within <see cref="SmoothingAngleDegrees"/>. Map geometry is largely flat-shaded

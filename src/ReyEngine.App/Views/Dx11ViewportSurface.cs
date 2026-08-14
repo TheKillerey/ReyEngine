@@ -98,7 +98,7 @@ public sealed class Dx11ViewportSurface : IDisposable
     public bool ShowDynamicLights { get; set; }
     public double DynamicLightIntensity { get; set; } = 1.0;
     public double DynamicLightRadiusScale { get; set; } = 1.0;
-    public double LightFalloffSoftness { get; set; } = 0.6;
+    public double LightFalloffSoftness { get; set; }   // M457: 0 = Riot's linear falloff
     public double DynamicLightPositionScale { get; set; } = 1.0;
     public double DynamicLightScaleX { get; set; } = 1.0;
     public double DynamicLightScaleZ { get; set; } = 1.0;

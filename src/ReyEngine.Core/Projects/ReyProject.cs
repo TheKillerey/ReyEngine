@@ -146,7 +146,9 @@ public sealed class MapLightingRecord
     // The Light.dat fit block - what "spread and shift this table onto this map" resolved to.
     public double LightIntensity { get; set; } = 1.0;
     public double LightRadiusScale { get; set; } = 1.0;
-    public double FalloffSoftness { get; set; } = 0.6;
+    // M457: 0 is Riot's own linear falloff. A project saved before M457 carries whatever it was tuned to
+    // and keeps it - only a NEW project starts on Riot's curve.
+    public double FalloffSoftness { get; set; }
     public double PositionScale { get; set; } = 1.0;
     public double ScaleX { get; set; } = 1.0;
     public double ScaleZ { get; set; } = 1.0;

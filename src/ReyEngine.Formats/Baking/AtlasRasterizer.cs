@@ -163,7 +163,10 @@ public static class AtlasRasterizer
             ? AmbientOcclusion(origin, nrm, scene, settings, texelSeed) : 1f;
         var ambient = lighting.SkyLight * ao + lighting.SunColor * (ndl * sunVis);
 
-        // --- point lights: identical falloff to the shader's, including the 0.35/0.65 N.L wrap ---
+        // --- point lights: identical term to the shader's. M457: Riot's Lambert form - linear falloff
+        // (BakeLighting.Attenuation) times a PLAIN N.L. The 0.35 + 0.65*nl ambient wrap that used to sit
+        // here is gone, because Riot's loop has no such lift (light-system.md 2.4) and the GL viewport no
+        // longer draws one; keeping it here would have made every bake disagree with its own preview.
         var pointLight = Vector3.Zero;
         var lights = lighting.PointLights;
         for (int i = 0; i < lights.Count; i++)
@@ -182,7 +185,7 @@ public static class AtlasRasterizer
             float vis = 1f;
             if (lighting.PointLightShadows && scene is not null)
                 vis = PointVisibility(origin, lp, l, radius, scene, settings, texelSeed + i);
-            pointLight += l.Color * (Math.Clamp(l.Intensity, 0f, 64f) * atten * (0.35f + 0.65f * nl) * vis);
+            pointLight += l.Color * (Math.Clamp(l.Intensity, 0f, 64f) * atten * nl * vis);
         }
         pointLight *= lighting.LightIntensity;
 

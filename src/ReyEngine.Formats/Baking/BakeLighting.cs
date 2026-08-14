@@ -74,9 +74,10 @@ public sealed class BakeLighting
 
     public float ResolveRadius(in BakePointLight l) => l.Radius * LightRadiusScale;
 
-    /// <summary>0 = the classic (1-t)^2 falloff, 1 = (1-t^2)^2. Blending toward the latter holds the
-    /// light further out and lands far more gently, so its rim fades instead of drawing a visible
-    /// terminator. Must stay identical to the shader's uLightFalloffSoftness blend.</summary>
+    /// <summary>M457: 0 = Riot's own linear falloff (the default and the reference), 1 = the legacy
+    /// (1-t^2)^2. Blending toward the latter holds the light further out and lands far more gently, so
+    /// its rim fades instead of drawing a visible terminator. Must stay identical to the shader's
+    /// uLightFalloffSoftness blend.</summary>
     public float FalloffSoftness { get; init; }
 
     /// <summary>M165: the exposure that keeps this map's ambient term inside the atlas's 8-bit range.
@@ -103,14 +104,34 @@ public sealed class BakeLighting
     }
 
     /// <summary>The shared falloff curve. THE single definition used by the atlas bake, the lightgrid
-    /// probes and (mirrored in GLSL) the viewport — so all three agree by construction.</summary>
+    /// probes and (mirrored in GLSL) the viewport — so all three agree by construction.
+    ///
+    /// <para>M457: at <see cref="FalloffSoftness"/> = 0 this is now <b>Riot's own curve</b>,
+    /// <c>1 - saturate(dist * invRadius)</c> — linear, no square, no smoothstep — read out of compiled
+    /// DXBC (docs/research/light-system.md 2.4; it is the same expression in the Lambert family,
+    /// DefaultEnv_Flat blob 226 line 261ff, and in the PBR family, Mantis blob 27 line 693). It replaces
+    /// the old <c>(1-t)^2</c> that used to sit at index 0.</para>
+    ///
+    /// <para>WHY THE BAKER MOVED TOO, rather than being left alone. The runtime lights a bake is
+    /// emulating <i>are</i> linear, so the old curve was baking a falloff the game never produces —
+    /// changing only the viewport would have fixed the preview and left the shipped lightmap wrong.
+    /// And this method's whole reason to exist is that the bake, the probes and the viewport agree by
+    /// construction: had GL gone linear alone, a baked atlas would no longer match the preview that
+    /// produced it, which is precisely the property the comment above promises. The cost is stated
+    /// plainly: <b>an atlas or lightgrid baked before M457 no longer matches what the editor now shows,
+    /// and has to be re-baked to agree with it.</b> Nothing rewrites those files, so a mod already
+    /// shipped keeps working; it is the preview that has moved.</para>
+    ///
+    /// <para>Softness > 0 blends AWAY from Riot toward the legacy wide curve. It is an artistic escape
+    /// hatch, kept because the user has maps tuned with it, and it stays honest because bake and preview
+    /// evaluate this same blend at every value.</para></summary>
     public float Attenuation(float dist, float radius)
     {
         if (radius <= 0f || dist >= radius) return 0f;
         float t = dist / radius;
-        float sharp = 1f - t;      sharp *= sharp;
+        float riot = 1f - t;       // Riot: 1 - saturate(dist * invRadius)
         float soft = 1f - t * t;   soft *= soft;
-        return sharp + (soft - sharp) * Math.Clamp(FalloffSoftness, 0f, 1f);
+        return riot + (soft - riot) * Math.Clamp(FalloffSoftness, 0f, 1f);
     }
 
     /// <summary>Build the lighting model straight from the renderer-facing values the viewport is using,

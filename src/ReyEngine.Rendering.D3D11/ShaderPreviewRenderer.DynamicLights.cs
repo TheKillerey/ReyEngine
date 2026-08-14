@@ -51,9 +51,15 @@ public sealed unsafe partial class ShaderPreviewRenderer
 
     // ASCII only - the compiler is handed these bytes raw (same trap as the GL sources, M117b).
     //
-    // The pixel math mirrors ViewportMeshRenderer's uNumLights loop EXACTLY - falloff blend, the
-    // 0.35 + 0.65*ndl wrap, per-light strength in .a, global intensity applied once at the end. No
-    // specular, no shadows: GL has neither, and this pass must not invent light the reference lacks.
+    // The pixel math mirrors ViewportMeshRenderer's uNumLights loop EXACTLY - falloff blend, plain N.L,
+    // per-light strength in .a, global intensity applied once at the end. No specular, no shadows: GL has
+    // neither, and this pass must not invent light the reference lacks.
+    //
+    // M457: GL moved to Riot's Lambert point-light term (linear attenuation, no ambient wrap), so this
+    // moved with it. Note what that means for the two D3D11 paths: a slice whose own pixel shader carries
+    // the cluster loop (M456) is skipped here and gets Riot's real BRDF - GGX on Mantis - while a slice
+    // that falls through to this overlay gets the same Lambert term GL draws. That is intentional: this
+    // pass exists to agree with GL, not to out-do it.
     private const string LightHlsl = @"
 cbuffer LightCB : register(b0)
 {
@@ -96,13 +102,14 @@ float4 psmain(VOut i) : SV_Target
         float dist = length(toLight);
         if (dist < radius)
         {
-            // The falloff blend the baker uses (BakeLighting.Attenuation): 0 = (1-t)^2, 1 = (1-t^2)^2.
+            // The falloff blend the baker uses (BakeLighting.Attenuation): 0 = Riot's linear 1-t,
+            // 1 = the legacy (1-t^2)^2.
             float t = dist / radius;
-            float sharpF = 1.0 - t;      sharpF *= sharpF;
-            float softF  = 1.0 - t * t;  softF  *= softF;
-            float atten = lerp(sharpF, softF, gCounts.z);
+            float riotF = 1.0 - t;                   // Riot: 1 - saturate(dist * invRadius)
+            float softF = 1.0 - t * t;  softF *= softF;
+            float atten = lerp(riotF, softF, gCounts.z);
             float ndl = max(dot(n, toLight / max(dist, 0.0001)), 0.0);
-            acc += gColorStrength[k].rgb * gColorStrength[k].a * atten * (0.35 + 0.65 * ndl);
+            acc += gColorStrength[k].rgb * gColorStrength[k].a * atten * ndl;
         }
     }
     // base * light * global intensity, added onto the frame by the ONE/ONE blend - the same

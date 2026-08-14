@@ -200,7 +200,7 @@
             <Grid ColumnDefinitions="150,*">
               <TextBlock Grid.Column="0" Text="Falloff softness" VerticalAlignment="Center" FontSize="11"
                          Foreground="{DynamicResource ReyTextBrush}"
-                         ToolTip.Tip="Shape of each point light's falloff. 0 = tight pool that ends in a visible rim; 1 = wider pool that fades out gently. The viewport uses the same curve, so Dynamic and Baked stay in agreement." />
+                         ToolTip.Tip="Shape of each point light's falloff. 0 = Riot's own falloff, linear from the light to its radius - what the game draws. 1 = the legacy wider pool that fades out more gently. The viewport uses the same curve, so Dynamic and Baked stay in agreement." />
               <NumericUpDown Grid.Column="1" Value="{Binding FalloffSoftness}" Increment="0.1" Minimum="0" Maximum="1"
                              FormatString="0.##" FontSize="11" HorizontalAlignment="Left" MinWidth="120" />
             </Grid>
