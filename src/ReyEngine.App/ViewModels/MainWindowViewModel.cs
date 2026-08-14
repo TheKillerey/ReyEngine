@@ -8856,38 +8856,75 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public Avalonia.Media.IBrush SkySwatch => Swatch(SkyColorR * SkyIntensity, SkyColorG * SkyIntensity, SkyColorB * SkyIntensity);
 
     /// <summary>M155: sun/sky colour as a real Color so the lighting panel can use the picker instead of
-    /// three sliders. These are the UNSCALED hues — the Intensity sliders stay separate, which is what
-    /// makes a colour picker usable here (picking a hue shouldn't also change the brightness).</summary>
+    /// three sliders. These are the UNSCALED hues - the Intensity sliders stay separate, which is what
+    /// makes a colour picker usable here (picking a hue shouldn't also change the brightness).
+    ///
+    /// <para>M464: every one of these setters used to suppress the rebuild for R and G and rely on the B
+    /// assignment to fire it. [ObservableProperty] only raises OnChanged when the value actually CHANGES,
+    /// so picking any colour whose blue happened to match the current one wrote R and G under suppression
+    /// and then fired nothing: the swatch, the viewport and the save form all kept the old colour while the
+    /// picker showed the new one. That is the "colour sometimes not changing" bug, and it got one-in-256
+    /// worse for every channel that happened to line up. Suppress all three, then rebuild unconditionally -
+    /// the trigger no longer depends on which channels the user happened to move.</para></summary>
     public Avalonia.Media.Color SunColorPick
     {
         get => Col(SunColorR, SunColorG, SunColorB);
-        set { _suppressSunRebuild = true; SunColorR = value.R / 255.0; SunColorG = value.G / 255.0; _suppressSunRebuild = false; SunColorB = value.B / 255.0; }
+        set
+        {
+            _suppressSunRebuild = true;
+            SunColorR = value.R / 255.0; SunColorG = value.G / 255.0; SunColorB = value.B / 255.0;
+            _suppressSunRebuild = false;
+            RebuildSun();   // unconditional: an unchanged channel must not swallow the edit
+        }
     }
 
     public Avalonia.Media.Color SkyColorPick
     {
         get => Col(SkyColorR, SkyColorG, SkyColorB);
-        set { _suppressSunRebuild = true; SkyColorR = value.R / 255.0; SkyColorG = value.G / 255.0; _suppressSunRebuild = false; SkyColorB = value.B / 255.0; }
+        set
+        {
+            _suppressSunRebuild = true;
+            SkyColorR = value.R / 255.0; SkyColorG = value.G / 255.0; SkyColorB = value.B / 255.0;
+            _suppressSunRebuild = false;
+            RebuildSun();   // unconditional: an unchanged channel must not swallow the edit
+        }
     }
 
-    // M463: the three added pickers, on the same two-channels-suppressed pattern so one edit fires exactly
-    // one RebuildSun rather than three.
+    // M463: the three added pickers. One edit still fires exactly one RebuildSun - see the M464 note above.
     public Avalonia.Media.Color HorizonColorPick
     {
         get => Col(HorizonColorR, HorizonColorG, HorizonColorB);
-        set { _suppressSunRebuild = true; HorizonColorR = value.R / 255.0; HorizonColorG = value.G / 255.0; _suppressSunRebuild = false; HorizonColorB = value.B / 255.0; }
+        set
+        {
+            _suppressSunRebuild = true;
+            HorizonColorR = value.R / 255.0; HorizonColorG = value.G / 255.0; HorizonColorB = value.B / 255.0;
+            _suppressSunRebuild = false;
+            RebuildSun();   // unconditional: an unchanged channel must not swallow the edit
+        }
     }
 
     public Avalonia.Media.Color GroundColorPick
     {
         get => Col(GroundColorR, GroundColorG, GroundColorB);
-        set { _suppressSunRebuild = true; GroundColorR = value.R / 255.0; GroundColorG = value.G / 255.0; _suppressSunRebuild = false; GroundColorB = value.B / 255.0; }
+        set
+        {
+            _suppressSunRebuild = true;
+            GroundColorR = value.R / 255.0; GroundColorG = value.G / 255.0; GroundColorB = value.B / 255.0;
+            _suppressSunRebuild = false;
+            RebuildSun();   // unconditional: an unchanged channel must not swallow the edit
+        }
     }
 
     public Avalonia.Media.Color FogColorPick
     {
         get => Col(FogColorR, FogColorG, FogColorB);
-        set { _suppressSunRebuild = true; FogColorR = value.R / 255.0; FogColorG = value.G / 255.0; _suppressSunRebuild = false; FogColorB = value.B / 255.0; }
+        set
+        {
+            _suppressSunRebuild = true;
+            FogColorR = value.R / 255.0; FogColorG = value.G / 255.0; FogColorB = value.B / 255.0;
+            _suppressSunRebuild = false;
+            RebuildSun();   // unconditional: an unchanged channel must not swallow the edit
+        }
     }
 
     public Avalonia.Media.IBrush HorizonSwatch => Swatch(HorizonColorR, HorizonColorG, HorizonColorB);
