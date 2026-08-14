@@ -310,7 +310,7 @@ uniform int uVertexBakedLight; // M89: 1 = add PrimaryColor as a baked light ter
 uniform float uVertexBakedScale;
 uniform int uVertexLightmap;   // M142.4: 1 = use PrimaryColor AS the baked lightmap (legacy NVR statics)
 uniform float uVertexLightmapScale;
-// M145: MapSunProperties distance fog — linear ramp from fogStartAndEnd.x to .y toward fogColor.
+// M145: MapSunProperties distance fog - linear ramp from fogStartAndEnd.x to .y toward fogColor.
 // uFogEnabled gates it; alpha of uFogColor scales the maximum density (1 = fully fogged at the end).
 uniform int uFogEnabled;
 uniform vec4 uFogColor;
@@ -607,11 +607,28 @@ void main() {
     }
 
     float d = max(dot(n, normalize(-uLight)), 0.0);
-    // Encode the fallback illumination the same way as BakedLight: it is a linear light term, so display
-    // encode it before it modulates the already display-encoded diffuse. Without this, geometry with no
-    // BakedLight UV (alpha decals, effects, props) is systematically darker than the encoded baked ground
-    // it sits on - the M64/M65 encode only covered the lightmap path, leaving decals too dark.
-    // M142: the composite ground atlas is already fully baked (lighting + AO) — use it as-is.
+    // M453: the fallback sun/sky term is LINEAR - no display encode. Riot's baked environment pixel
+    // shaders (the ones D3D11 executes with the map's real constants) combine sun and ambient and spend
+    // the result in ONE raw multiply against the diffuse texel, straight into the target:
+    //
+    //   staticmesh/defaultenv_flat ps blob 153 (FEATURE_MASKED=1):
+    //     max r1.x, r1.x, l(0)                   // ndl = max(N . SUN_LIGHT_DIRECTION, 0)
+    //     mul r1.yzw, r2.xxyz, cb1[8].xxxx       // baked.rgb * LIGHT_MAP_COLOR_SCALE
+    //     mad r1.xyz, r1.xxxx, r3.xyzx, r1.yzwy  // light = ndl * (occl * SUN_LIGHT_COLOR) + baked*scale
+    //     mul r2.xyz, r0.xyzx, r1.xyzx           // colour = diffuse * light
+    //   staticmesh/env_glowsign ps blob 67 (baked, DISABLE_SHADOWS=1) is instruction-identical (118-125),
+    //   and so is staticmesh/vertexdeform ps blob 23 (112-122) - three families, one formula.
+    //
+    // Checked for and ABSENT in both: a modulate-2x (the only x2s are glowsign's Overlay tint), any
+    // saturate on the combined light (only ndl is clamped), and any log/exp encode (the exps are the
+    // M229 height fog, constants 0.135335/1.156518). The old bakedLightColour() wrap here (M64/65)
+    // pow-encoded this term, brightening any sun+sky sum below 1 (0.35 -> 0.62) and dimming any above 1
+    // (2.0 -> 1.37) against that arithmetic - the reported wrong Dynamic-mode sky/sun. uSkyLight stands
+    // in for the ambient Riot reads from the atlas; the baker writes exactly skyLight + sunColor*ndl
+    // linear (BakeLighting), and D3D11 multiplies a bake's atlas raw - so Dynamic preview and the D3D11
+    // view of its own bake now agree by construction. The lightmapped GL branch below keeps its M64/65
+    // encode: that trade-off was measured on its own evidence and is not reopened here.
+    // M142: the composite ground atlas is already fully baked (lighting + AO) - use it as-is.
     // M375: a NO_BAKED_LIGHTING surface gets NO lighting term at all - not this fallback either.
     //
     // Measured, not assumed: in Riot's own shaders the NO_BAKED_LIGHTING permutations mark
@@ -626,14 +643,14 @@ void main() {
     // would flatten the model preview.
     vec3 col = (uCompositeGround == 1 || uNoBakedLighting == 1)
         ? base
-        : base * bakedLightColour(uSkyLight + uSunColor * d);
+        : base * (uSkyLight + uSunColor * d);
 
     // Baked lightmap: when the mesh carries a real BakedLight atlas, that IS the lighting for this
     // surface, so it replaces the fake directional term (finalColor = diffuse * lightmap * scale). The
     // scale is MapSunProperties.lightMapColorScale (2.0 on live Map12) - without it the map is too dark.
     if (uHasLightmap == 1) col = base * bakedLightColour(texture(uLightmap, vLmUv).rgb * uLightmapScale);
 
-    // M142.2: composite ground — the baked atlas (lightmap slot) modulates the height-blended detail 2X
+    // M142.2: composite ground - the baked atlas (lightmap slot) modulates the height-blended detail 2X
     // (classic D3D9 modulate2x). The atlas is already fully lit AND display-encoded, so no bakedLightColour
     // re-encode here; without the atlas the earlier assignment keeps the raw composite/detail colour.
     if (uCompositeGround == 1 && uHasLightmap == 1) col = base * texture(uLightmap, vLmUv).rgb * 2.0;
@@ -655,8 +672,8 @@ void main() {
     // authors these dark on purpose - the map is meant to be lit mostly by Light.dat, so scale is tunable.
     if (uVertexBakedLight == 1) col += base * vColor.rgb * uVertexBakedScale;
 
-    // M142.4: legacy NVR static meshes (structures/trees/props) bake their night lighting — a dark, blue-
-    // tinted ambient + AO — into PrimaryColor. Use it AS the lightmap so they read the map's night mood
+    // M142.4: legacy NVR static meshes (structures/trees/props) bake their night lighting - a dark, blue-
+    // tinted ambient + AO - into PrimaryColor. Use it AS the lightmap so they read the map's night mood
     // instead of the flat neutral fallback. The ground uses its composite atlas, so it is excluded.
     // M142.5: LM_ and decal meshes were lightmapped with a separate texture instead and ship PrimaryColor =
     // pure black; multiplying by that blacks them out (stairs, rubble, ground decals). Where the baked
@@ -725,7 +742,7 @@ void main() {
             float gate = (uHasMask == 1) ? mix(0.5, 1.0, texture(uMask, uv).r) : 1.0;
             col += fres * 0.6 * rimCol * gate;
         }
-        // M142.2: composite ground reuses the matcap/emissive slots as height-blend colour layers —
+        // M142.2: composite ground reuses the matcap/emissive slots as height-blend colour layers -
         // they are part of the ground diffuse, never matcap/glow terms.
         if (uHasMatCap == 1 && uIsTerrainBlend == 0 && uCompositeGround == 0) {
             float mcGate = (uHasMatCapMask == 1) ? texture(uMatCapMask, uv).r : 1.0;
