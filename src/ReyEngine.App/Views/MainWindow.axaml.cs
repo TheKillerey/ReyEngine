@@ -222,6 +222,19 @@ public partial class MainWindow : Window
         _dx11.LightmapScale = vm.CurrentLightmapScale;
         _dx11.AnimateTime = vm.AnimationsPlaying;
         _dx11.Wireframe = vm.ShowWireframe;
+        // M452: the dynamic point lights, from the SAME view-model properties the GL viewport is bound to
+        // in XAML (DynamicLights / ShowDynamicLights / the fit sliders). Pushed every frame like the sun,
+        // because every one of them is live-editable from the Lighting window.
+        _dx11.Lights = vm.DynamicLights;
+        _dx11.ShowDynamicLights = vm.ShowDynamicLights;
+        _dx11.DynamicLightIntensity = vm.DynamicLightIntensity;
+        _dx11.DynamicLightRadiusScale = vm.DynamicLightRadiusScale;
+        _dx11.LightFalloffSoftness = vm.LightFalloffSoftness;
+        _dx11.DynamicLightPositionScale = vm.DynamicLightPositionScale;
+        _dx11.DynamicLightScaleX = vm.DynamicLightScaleX;
+        _dx11.DynamicLightScaleZ = vm.DynamicLightScaleZ;
+        _dx11.DynamicLightOffsetX = vm.DynamicLightOffsetX;
+        _dx11.DynamicLightOffsetZ = vm.DynamicLightOffsetZ;
         // M400: same frame-driven tick on the D3D11 side - QueueDx11Frame is already the frame loop.
         vm.TickGrassTransition();
         _dx11.GrassInterp = vm.GrassInterp;

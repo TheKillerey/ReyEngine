@@ -89,6 +89,22 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// difference that is a UI setting rather than a rendering one.</summary>
     public bool FogEnabled { get; set; }
 
+    /// <summary>M452: the editor's dynamic point lights, from the SAME view-model list the GL viewport is
+    /// bound to (<c>DynamicLights</c>, rebuilt by <c>RepublishLights</c>). Until now this surface carried
+    /// none of it, so lights that render in game and in GL were invisible the moment the user switched
+    /// renderers. The fit/strength knobs below mirror the GL bindings one for one.</summary>
+    public IReadOnlyList<ReyEngine.Formats.Lighting.PointLight>? Lights { get; set; }
+    /// <summary>Mirrors <c>ShowDynamicLights</c> - the same gate GL applies via SetDynamicLightsEnabled.</summary>
+    public bool ShowDynamicLights { get; set; }
+    public double DynamicLightIntensity { get; set; } = 1.0;
+    public double DynamicLightRadiusScale { get; set; } = 1.0;
+    public double LightFalloffSoftness { get; set; } = 0.6;
+    public double DynamicLightPositionScale { get; set; } = 1.0;
+    public double DynamicLightScaleX { get; set; } = 1.0;
+    public double DynamicLightScaleZ { get; set; } = 1.0;
+    public double DynamicLightOffsetX { get; set; }
+    public double DynamicLightOffsetZ { get; set; }
+
     /// <summary>M396: GRASS_INTERP for this frame, pushed from the view-model's running transition.
     /// 0 when nothing is fading, which is the correct resting value.</summary>
     public float GrassInterp { get; set; }
@@ -334,6 +350,17 @@ public sealed class Dx11ViewportSurface : IDisposable
             // place rather than fail loudly.
             MapFogColor = FogEnabled ? MapSun?.FogColor : null,
             MapFogStartEnd = FogEnabled ? MapSun?.FogStartAndEnd : null,
+
+            // M452: the point-light overlay. Ungated here beyond the toggle - the renderer applies the
+            // same clamps the GL setters do, so the two viewports see identical values.
+            DynamicLights = Lights,
+            DynamicLightsEnabled = ShowDynamicLights,
+            DynamicLightIntensity = (float)DynamicLightIntensity,
+            DynamicLightRadiusScale = (float)DynamicLightRadiusScale,
+            DynamicLightFalloffSoftness = (float)LightFalloffSoftness,
+            DynamicLightPositionScale = (float)DynamicLightPositionScale,
+            DynamicLightPositionScaleXZ = new Vector2((float)DynamicLightScaleX, (float)DynamicLightScaleZ),
+            DynamicLightPositionOffset = new Vector2((float)DynamicLightOffsetX, (float)DynamicLightOffsetZ),
         };
 
         // M266: advance the particles and refill the dynamic buffer, HERE and not in the host window.

@@ -59,6 +59,19 @@ public sealed class PreviewSettings
     public Vector4? MapFogColor;
     public Vector2? MapFogStartEnd;
 
+    /// <summary>M452: the editor's dynamic point lights (the Lighting window list), for the additive
+    /// overlay pass. The list and every knob below mirror the GL viewport's bindings one for one
+    /// (ViewportControl.DynamicLights*), and the same clamps are applied at draw time - see
+    /// <see cref="ShaderPreviewRenderer.DrawDynamicLights"/>.</summary>
+    public IReadOnlyList<ReyEngine.Formats.Lighting.PointLight>? DynamicLights;
+    public bool DynamicLightsEnabled;
+    public float DynamicLightIntensity = 1f;
+    public float DynamicLightRadiusScale = 1f;
+    public float DynamicLightFalloffSoftness;
+    public float DynamicLightPositionScale = 1f;
+    public Vector2 DynamicLightPositionScaleXZ = Vector2.One;
+    public Vector2 DynamicLightPositionOffset = Vector2.Zero;
+
     /// <summary>
     /// M395: GRASS_INTERP - the environment-transition crossfade factor, 0 = GRASS_TINT_MAP (the state
     /// being left) and 1 = GRASS_TINT_MAP_ALTERNATE (the state being entered).
@@ -4181,6 +4194,11 @@ float4 psmain(VOut i) : SV_Target
             }
             }
 
+            // M452: the editor's point lights, additively over the finished scene - Riot's fixed pixel
+            // shaders leave nowhere to add the term inside the material pass. Before the editor
+            // furniture, which must stay unlit on top.
+            int lightDraws = DrawDynamicLights(s, view, proj, planes);
+
             // M269: editor furniture last, over the finished shading.
             HighlightDraws = DrawHighlight(view, proj);
             IconDraws = DrawIcons(view, proj);
@@ -4188,7 +4206,7 @@ float4 psmain(VOut i) : SV_Target
             int gizmoDraws = DrawGizmo(view, proj);
  DrawBrushRing(view, proj);   // M361: after the gizmo, same overlay pipeline      // M296, last so it is over everything
             DrawBakeBox(view, proj);     // M412: same overlay pipeline
-            DrawCalls += HighlightDraws + IconDraws + gridDraws + gizmoDraws;
+            DrawCalls += HighlightDraws + IconDraws + gridDraws + gizmoDraws + lightDraws;
 
             _ctx.CopyResource(_stage, _rt);
             MappedSubresource map = default;
@@ -4393,6 +4411,7 @@ float4 psmain(VOut i) : SV_Target
         _bakeBoxVb.Dispose();
         DisposeSky();
         DisposeRibbon();
+        DisposeDynamicLights();
         _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();
         _meshCullCw.Dispose(); _meshCullCcw.Dispose();
         ReleaseMeshGeometry();
