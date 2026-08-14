@@ -110,7 +110,15 @@ float4 psmain(VOut i) : SV_Target
     // diffuse where one is identifiable, else a 0.5 grey stand-in (see LightBaseTexture); the UV is the
     // raw TEXCOORD0 - authored per-material UV transforms are not re-applied here, which off-tints the
     // rare scrolling material but never moves or reshapes the pool. Alpha 0: the blend keeps dest alpha.
-    return float4(gDiffuse.Sample(gSamp, i.uv).rgb * acc * gCounts.y, 0.0);
+    float4 d = gDiffuse.Sample(gSamp, i.uv);
+    // COVERAGE. The first cut sampled .rgb and ignored .a, so an additive pool landed on every texel of a
+    // decal or cutout quad including the fully transparent ones - a rectangular glow patch where the decal
+    // is invisible, which is the decal regression this fixes. A texel that covers nothing can reflect no
+    // light, so the term is scaled by coverage and dropped entirely below the alpha-test floor. The grey
+    // stand-in is a=1, so an opaque slice is unaffected. (Note for the reader: no double quotes in here -
+    // this whole listing lives in a C# verbatim string and a stray quote ends it.)
+    if (d.a < 0.02) discard;
+    return float4(d.rgb * acc * gCounts.y * d.a, 0.0);
 }";
 
     private bool EnsureDynamicLights()
