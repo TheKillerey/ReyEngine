@@ -9530,7 +9530,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             NoBakedLighting: p.NoBakedLighting,   // M150: shaderMacros NO_BAKED_LIGHTING
             DisableDepthFog: p.DisableDepthFog,   //           DISABLE_DEPTH_FOG
             SrcBlendFactor: p.SrcBlendFactor,
-            DstBlendFactor: p.DstBlendFactor);
+            DstBlendFactor: p.DstBlendFactor,
+            IsPbrLighting: p.IsPbrShader);   // M458: Mantis submeshes run Riot's GGX BRDF for point lights
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 

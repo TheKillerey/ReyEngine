@@ -89,7 +89,12 @@ public sealed record MaterialProfile(
     bool NoBakedLighting = false,   // NO_BAKED_LIGHTING  — ignore the baked lightmap
     bool DisableDepthFog = false,   // DISABLE_DEPTH_FOG  — exclude from distance fog
     int SrcBlendFactor = -1,
-    int DstBlendFactor = -1)
+    int DstBlendFactor = -1,
+    // M458: this material is the Mantis/PBR family (Mantis_Env_Baked_PBR and its cooked permutations).
+    // It decides which BRDF a dynamic point light runs: the PBR family evaluates GGX/Smith-Schlick/Schlick
+    // and reads the per-light intensity, the env family (DefaultEnv_Flat) evaluates plain Lambert and
+    // ignores it. Set from ExtendedChannelRule.IsExtendedShader so there is ONE Mantis test in the app.
+    bool IsPbrShader = false)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -294,7 +299,9 @@ public static class MaterialProfiles
             b.MacroOn(MaterialBinding.MacroNoBakedLighting),   // M150
             b.MacroOn(MaterialBinding.MacroDisableDepthFog),
             b.SrcBlendFactor,
-            b.DstBlendFactor);
+            b.DstBlendFactor,
+            // M458: reuse the app's single Mantis test rather than adding a second name check here.
+            MapGeo.ExtendedChannelRule.IsExtendedShader(shaderName));
     }
 
     /// <summary>Detect shader 0xe25b830f and read its authored terrain layer paths, tiling, and RGB mask weights.</summary>

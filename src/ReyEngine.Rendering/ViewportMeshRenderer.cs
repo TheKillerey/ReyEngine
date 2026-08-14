@@ -77,6 +77,17 @@ public sealed class ViewportMeshRenderer : IDisposable
     private Matrix4x4 _worldModel = Matrix4x4.Identity;   // M89: world transform for the whole mesh (move/rotate map)
     private int _mLightsTex, _mNumLights, _mLightIntensity, _mLightRadiusScale, _mLightPosScale, _mLightPosScaleXZ, _mLightPosOffset;
     private int _mLightFalloffSoftness;   // M160
+    private int _mPbrLighting, _mPbrRoughness, _mPbrMetal;   // M458: Riot's GGX BRDF for Mantis submeshes
+
+    /// <summary>M458 STATED APPROXIMATION. Riot's PBR point light reads roughness and metalness per texel
+    /// from <c>BAKED_RMA_TEXTURE</c> (R and G, Mantis blob 27 lines 411-425). ReyEngine has no RMA texture
+    /// path at any layer, so a Mantis submesh gets the correct BRDF driven by these two invented constants
+    /// instead: a plain mid-rough DIELECTRIC. Metal 0 makes F0 collapse to Riot's own 0.04 base (blob 27
+    /// line 551) and leaves the diffuse lobe at full strength; 0.5 roughness is a neutral middle, chosen
+    /// rather than measured - no shipped map authors a Mantis material, so there is nothing to measure it
+    /// against. Replace both with a sampled texture and the shader needs no change.</summary>
+    private const float DefaultPbrRoughness = 0.5f;
+    private const float DefaultPbrMetal = 0f;
     private Vector3 _lightDirection = new(-0.4f, -0.85f, -0.45f);
     private Vector3 _sunColor = new(0.75f);
     private Vector3 _skyLight = new(0.35f);
@@ -198,6 +209,9 @@ public sealed class ViewportMeshRenderer : IDisposable
         public bool DisableDepthFog;
         public bool UsesBakedPaint;   // M320: diffuse comes from mesh-owned atlas on transformed Texcoord7
 
+        // M458: Mantis/PBR family - point lights use Riot's GGX BRDF rather than the env family's Lambert.
+        public bool IsPbrLighting;
+
         public static SubmeshDraw Create(int start, int count) =>
             new()
             {
@@ -236,7 +250,12 @@ public sealed class ViewportMeshRenderer : IDisposable
         bool UsesBakedPaint = false,
         int SrcBlendFactor = -1, int DstBlendFactor = -1,
         // M376: emissive glow (ENV_GlowSign and friends). Intensity 0 = no glow, and is the gate too.
-        Vector4? EmissiveColor = null, float EmissiveIntensity = 0f)
+        Vector4? EmissiveColor = null, float EmissiveIntensity = 0f,
+        // M458: this material is the Mantis/PBR family, so its dynamic point lights run Riot's GGX BRDF
+        // instead of the env family's Lambert term. Decided App-side by ExtendedChannelRule.IsExtendedShader
+        // - ReyEngine.Rendering does not reference the MapGeo namespace that owns the rule, and every other
+        // per-material family flag here (IsFlowmap, IsTerrainBlend, CompositeGround) arrives the same way.
+        bool IsPbrLighting = false)
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
@@ -363,6 +382,19 @@ uniform float uLightRadiusScale;   // M71: global multiplier on every light's ra
 uniform float uLightPosScale;      // M71: master multiplier on every light's XZ position (spread the layout)
 uniform vec2 uLightPosScaleXZ;     // M71: per-axis fine scale (x, z), on top of the master spread
 uniform vec2 uLightPosOffset;      // M71: world-space translate (x, z) applied after scaling
+// M458: which BRDF this submesh plugs the point lights into. 0 = the env/Lambert family
+// (DefaultEnv_Flat, what nearly all shipped map geometry runs), 1 = the Mantis/PBR family
+// (Mantis_Env_Baked_PBR). Riot picks this with its shader permutation system; GL draws everything with
+// one program, so it is a uniform flag instead. Set from ExtendedChannelRule.IsExtendedShader.
+uniform int uPbrLighting;
+// M458 STATED APPROXIMATION. Riot reads these per texel from BAKED_RMA_TEXTURE (t21): R = roughness,
+// G = metalness through smoothstep(0.4, 0.6, G), B = ambient occlusion (blob 27 lines 411-428).
+// ReyEngine has no RMA texture path at any layer - not in the material profile, not in the texture
+// loader, not in this renderer - so these are CONSTANTS, not sampled data. A Mantis surface therefore
+// gets the right BRDF driven by an invented, spatially uniform material. A negative roughness still
+// takes Riot's own sentinel branch below, so wiring a real texture up later needs no shader change.
+uniform float uPbrRoughness;
+uniform float uPbrMetal;
 uniform float uTerrainWorldScale;
 uniform vec2 uTerrainBottomTiling;
 uniform vec2 uTerrainMiddleTiling;
@@ -698,21 +730,57 @@ void main() {
     // 0.35 + 0.65*ndl lift is therefore gone - nothing in Riot's loop brightens a surface that faces away
     // from the light - and so is its (1-t)^2 curve.
     //
-    // WHY LAMBERT AND NOT THE PBR FORM. GL draws every material with this one generic program and cannot
-    // switch BRDF per material family the way Riot's permutation system does, so it has to pick one term
-    // for all of them. The env family (DefaultEnv_Flat) is what the overwhelming majority of shipped map
-    // geometry actually runs, so its term is the one to standardise on. THE DIVERGENCE, STATED PLAINLY:
-    // a Mantis material gets the full GGX/Smith-Schlick/Schlick term in the D3D11 path (that path feeds
-    // Riot's own compiled USE_DYNAMIC_LIGHTING shader since M456) and this Lambert term here, so the two
-    // viewports will NOT agree pixel-for-pixel on Mantis surfaces. That is by design for this milestone;
-    // porting the GGX BRDF plus per-material family selection to GL is a separate piece of work.
+    // WHICH FAMILY GETS WHICH TERM. Riot ships two different point-light models and picks between them
+    // with its shader permutation system. GL draws every material with this one generic program, so the
+    // choice is a uniform instead: uPbrLighting. The env family (DefaultEnv_Flat), which is what the
+    // overwhelming majority of shipped map geometry runs, keeps the Lambert term above. The Mantis/PBR
+    // family gets Riot's GGX BRDF in the branch below (M458), matching what the D3D11 path already does
+    // by feeding Riot's own compiled USE_DYNAMIC_LIGHTING shader (M456).
     //
     // Kept from ours on purpose: the per-light strength in .a (Riot's Lambert family reads word1.xyz only
     // and ignores word1.w - the PBR family is the one that multiplies by it - but .a is the editor's
     // per-light knob and the user tunes lights with it) and the global uLightIntensity. Off entirely when
     // no light table is loaded (uNumLights = 0); the const loop bound keeps the shader ANGLE/GLES friendly.
+    //
+    // M458 CLOSES THE DIVERGENCE M457 DECLARED. The paragraph above used to end by saying a Mantis
+    // material gets GGX in D3D11 and Lambert here. It no longer does: uPbrLighting selects Riot's PBR
+    // BRDF per submesh, read off Mantis_Env_Baked_PBR pixel blob 27 (docs/research/light-system.md 2.4).
+    // The Lambert branch is byte-for-byte the term M457 shipped - no env-family surface changes.
     if (uNumLights > 0) {
-        vec3 dynamicLight = vec3(0.0);
+        vec3 dynamicLight = vec3(0.0);   // Lambert family: albedo multiplied in once, after the loop
+        vec3 pbrLight = vec3(0.0);       // PBR family: albedo is already inside kD, so it accumulates lit
+
+        // M458 PRECOMPUTE. Riot hoists every view-dependent term out of its six light loops (blob 27
+        // line 570 and lines 585-608) and so does this - the loop below is bounded at 1024 iterations
+        // and none of these depend on which light is being shaded.
+        //
+        // F0 and oneMinusMetal are NOT in the doc; they are read straight off the dump:
+        //   line 411      rma   = BAKED_RMA_TEXTURE.Sample(uv)
+        //   lines 419-420 rough = rma.R
+        //   lines 421-425 metal = smoothstep(0.4, 0.6, rma.G)      <- a hard step, not a linear read
+        //   lines 427-428 rma.B is ambient occlusion; it never enters the light loop
+        //   lines 550-551 F0    = lerp(vec3(0.04), albedo, metal)
+        //   line  565     oneMinusMetal = 1.0 - metal
+        float pbrRough = uPbrRoughness;
+        vec3 pbrF0 = mix(vec3(0.04), base, uPbrMetal);
+        // Lines 585-587, and this is the whole sentinel: a NEGATIVE roughness means the surface carries
+        // no RMA data, which forces roughness to 0.075 AND zeroes F0. It is a material-authored signal
+        // for a stylised look, NOT the missing-texture case - a missing texture samples as 0 or 1, never
+        // below zero - so our constant default deliberately does not trip it.
+        if (pbrRough < 0.0) { pbrRough = 0.075; pbrF0 = vec3(0.0); }
+        float pbrOneMinusMetal = 1.0 - uPbrMetal;
+        float pbrA = clamp(pbrRough, 0.04, 1.0);   // lines 588-589
+        pbrA = pbrA * pbrA;                        // line 590: a = rough*rough
+        float pbrA2 = pbrA * pbrA;                 // line 591: a2 = a*a
+        float pbrA2m1 = pbrA2 - 1.0;               // line 595
+        // Lines 600-602 read the roughness BEFORE the 0.04 clamp - r0.w, the movc output of line 586,
+        // not r1.w. The doc writes k as clamp(rough)+1 squared over 8; the dump does not clamp here.
+        // Identical for any roughness at or above 0.04, which is every value a real RMA texel can hold.
+        float pbrK = (pbrRough + 1.0) * (pbrRough + 1.0) * 0.125;
+        float pbrNdotV = max(dot(n, viewDir), 0.0);                     // lines 553-554
+        float pbrGv = pbrNdotV / (pbrNdotV * (1.0 - pbrK) + pbrK);      // lines 604-605
+        float pbrNv4 = pbrNdotV * 4.0;                                  // line 570
+
         for (int i = 0; i < 1024; i++) {
             if (i >= uNumLights) break;
             vec4 posRadius = texelFetch(uLightsTex, ivec2(i, 0), 0);
@@ -737,11 +805,41 @@ void main() {
                 float atten = mix(riotF, softF, uLightFalloffSoftness);
                 // M153: .a is the light's OWN strength; uLightIntensity below stays the global multiplier.
                 vec4 lightColour = texelFetch(uLightsTex, ivec2(i, 1), 0);
-                float ndl = max(dot(n, toLight / max(dist, 0.0001)), 0.0);
-                dynamicLight += lightColour.rgb * lightColour.a * atten * ndl;
+                vec3 ldir = toLight / max(dist, 0.0001);
+                float ndl = max(dot(n, ldir), 0.0);
+                if (uPbrLighting == 1) {
+                    // M458: Riot's GGX / Smith-Schlick / Schlick BRDF, Mantis blob 27 loop 1, lines
+                    // 702-741. Every line number below is that dump. uPbrLighting is a uniform, so this
+                    // branch is coherent across the whole draw and costs nothing on the Lambert path.
+                    vec3 h = normalize(viewDir + ldir);                   // lines 703-706
+                    float ndh = max(dot(n, h), 0.0);                      // lines 707-708
+                    float dDen = ndh * ndh * pbrA2m1 + 1.0;               // lines 709-710
+                    float dTerm = pbrA2 / (3.14159265 * dDen * dDen);     // lines 711-713
+                    float gTerm = pbrGv * (ndl / (ndl * (1.0 - pbrK) + pbrK));   // lines 714-716
+                    float fBase = max(1.0 - max(dot(h, viewDir), 0.0), 0.0);     // lines 717-720
+                    float fSq = fBase * fBase;
+                    vec3 fTerm = pbrF0 + (1.0 - pbrF0) * (fSq * fSq * fBase);    // lines 721-724
+                    // The 1e-4 keeps the divide finite at grazing angles; it is Riot's own constant, and
+                    // the trailing * ndl kills whatever it produces when the light is edge-on anyway.
+                    vec3 spec = fTerm * (dTerm * gTerm) / (pbrNv4 * ndl + 0.0001);   // lines 727-730
+                    vec3 kD = base * (1.0 - fTerm) * pbrOneMinusMetal;    // lines 725-726, 731
+                    // Line 739 adds kD * 0.318310 (1/PI) to spec, line 740 multiplies by the radiance and
+                    // line 741 by N.L. Riot's radiance is colour * atten * intensity (word1.w, lines
+                    // 700-701) - the PBR family DOES read that intensity where the Lambert family drops
+                    // it, and lightColour.a is exactly our per-light strength, so this matches.
+                    pbrLight += lightColour.rgb * lightColour.a * atten
+                              * (kD * 0.31830989 + spec) * ndl;
+                    // NOT PORTED, on purpose: lines 732-738 replace spec with pow(spec, 0.8) plus a hard
+                    // 0.5 step above 0.1 when roughness is negative - a stylised highlight behind the same
+                    // sentinel. It cannot fire while roughness comes from a non-negative constant.
+                } else {
+                    dynamicLight += lightColour.rgb * lightColour.a * atten * ndl;
+                }
             }
         }
-        col += base * dynamicLight * uLightIntensity;
+        // The Lambert branch keeps M457's shape exactly: albedo applied once, outside the loop. The PBR
+        // branch already carries albedo inside kD, so it is added lit.
+        col += (uPbrLighting == 1 ? pbrLight : base * dynamicLight) * uLightIntensity;
     }
 
     // Specular highlight - computed only when the material's profile enables it (League materials are
@@ -920,6 +1018,9 @@ void main() { FragColor = uColor; }";
         _mLightIntensity = gl.GetUniformLocation(_meshProgram, "uLightIntensity");
         _mLightRadiusScale = gl.GetUniformLocation(_meshProgram, "uLightRadiusScale");
         _mLightFalloffSoftness = gl.GetUniformLocation(_meshProgram, "uLightFalloffSoftness");   // M160
+        _mPbrLighting = gl.GetUniformLocation(_meshProgram, "uPbrLighting");     // M458
+        _mPbrRoughness = gl.GetUniformLocation(_meshProgram, "uPbrRoughness");
+        _mPbrMetal = gl.GetUniformLocation(_meshProgram, "uPbrMetal");
         _mLightPosScale = gl.GetUniformLocation(_meshProgram, "uLightPosScale");
         _mLightPosScaleXZ = gl.GetUniformLocation(_meshProgram, "uLightPosScaleXZ");
         _mLightPosOffset = gl.GetUniformLocation(_meshProgram, "uLightPosOffset");
@@ -1747,6 +1848,7 @@ void main(){
         _submeshes[index].NoBakedLighting = mat.NoBakedLighting;   // M150
         _submeshes[index].DisableDepthFog = mat.DisableDepthFog;
         _submeshes[index].UsesBakedPaint = mat.UsesBakedPaint;
+        _submeshes[index].IsPbrLighting = mat.IsPbrLighting;   // M458
         _drawOrderDirty = true;
     }
 
@@ -1776,6 +1878,7 @@ void main(){
             _submeshes[i].NoBakedLighting = false;   // M150
             _submeshes[i].DisableDepthFog = false;
             _submeshes[i].UsesBakedPaint = false;
+            _submeshes[i].IsPbrLighting = false;   // M458: back to the env family's Lambert term
         }
         _drawOrderDirty = true;
     }
@@ -2277,6 +2380,9 @@ void main(){
                 _gl.Uniform1(_mLightIntensity, _lightIntensity);
                 _gl.Uniform1(_mLightRadiusScale, _lightRadiusScale);
                 _gl.Uniform1(_mLightFalloffSoftness, _lightFalloffSoftness);   // M160
+                // M458: the stand-in RMA constants. Per frame, not per submesh - nothing varies them yet.
+                _gl.Uniform1(_mPbrRoughness, DefaultPbrRoughness);
+                _gl.Uniform1(_mPbrMetal, DefaultPbrMetal);
                 _gl.Uniform1(_mLightPosScale, _lightPosScale);
                 _gl.Uniform2(_mLightPosScaleXZ, _lightPosScaleXZ.X, _lightPosScaleXZ.Y);
                 _gl.Uniform2(_mLightPosOffset, _lightPosOffset.X, _lightPosOffset.Y);
@@ -2370,6 +2476,9 @@ void main(){
                     // into one zero - no atlas, no UV, or opted out - and the shader needs the last one
                     // apart: only NO_BAKED_LIGHTING means no lighting term at all.
                     _gl.Uniform1(_mNoBakedLighting, s.NoBakedLighting ? 1 : 0);
+                    // M458: Mantis submeshes run Riot's GGX BRDF for point lights; everything else keeps
+                    // the env family's Lambert term untouched.
+                    _gl.Uniform1(_mPbrLighting, s.IsPbrLighting ? 1 : 0);
                     _gl.Uniform3(_mEmissiveColor, s.EmissiveColor.X, s.EmissiveColor.Y, s.EmissiveColor.Z);   // M376
                     _gl.Uniform1(_mEmissiveIntensity, s.EmissiveIntensity);
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
@@ -2461,6 +2570,11 @@ void main(){
             _gl.Uniform1(_mHasMask, 0); _gl.Uniform1(_mHasGradient, 0); _gl.Uniform1(_mHasEmissive, 0);
             _gl.Uniform1(_mHasMatCap, 0); _gl.Uniform1(_mHasMatCapMask, 0); _gl.Uniform1(_mHasLightmap, 0);
             _gl.Uniform1(_mNoBakedLighting, 0);   // M375: props are lit; never leak a stale opt-out
+            // M458: props are not Mantis - never leak a stale PBR flag out of the map pass either. The
+            // roughness/metal constants are pushed with the per-frame light block, which this path shares.
+            _gl.Uniform1(_mPbrLighting, 0);
+            _gl.Uniform1(_mPbrRoughness, DefaultPbrRoughness);
+            _gl.Uniform1(_mPbrMetal, DefaultPbrMetal);
             _gl.Uniform1(_mEmissiveIntensity, 0f);   // M376: and never leak a stale glow
             _gl.Uniform1(_mHasGrassTint, 0);   // M78: props never grass-tint
             _gl.Uniform1(_mUsesRim, 0); _gl.Uniform1(_mUsesSpec, 0);
