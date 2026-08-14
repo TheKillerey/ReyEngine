@@ -2084,6 +2084,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// it, so this holds a moment rather than jumping back to frame zero.</summary>
     [ObservableProperty] private bool _animationsPlaying = true;
 
+    /// <summary>
+    /// M460: the D3D11 glow buffer and bloom chain. On by default, and DX11-only.
+    ///
+    /// <para>Not a new effect. Riot's environment pixel shaders - the ones this viewport already runs -
+    /// write their glow to <c>SV_Target1</c>, and with a single render target bound it was discarded every
+    /// frame (docs/research/frame-pipeline.md §3.3). Turning this off restores that: one render target,
+    /// no chain, no composite, which is the A/B.</para>
+    ///
+    /// <para>Measured before it was built: over all 206 shipped map material bins, 116 of 8,714 drawn
+    /// materials resolve to a permutation that writes a computed glow - so on most maps the difference is
+    /// confined to lanterns, glowsigns and emissive props, and on a map with none of those there is
+    /// nothing to see either way.</para>
+    /// </summary>
+    [ObservableProperty] private bool _showBloom = true;
+
     [ObservableProperty] private bool _showWireframe;
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;

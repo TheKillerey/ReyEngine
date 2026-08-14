@@ -525,6 +525,11 @@
               <ToggleButton Classes="vp" Content="▶" IsChecked="{Binding AnimationsPlaying}"
                             IsVisible="{Binding UseDx11Viewport}"
                             ToolTip.Tip="Play or pause shader animation (scrolling UVs, flipbooks, flow) and particle simulation. Pausing holds the current moment; the camera still orbits it. OpenGL has no equivalent button, so its particles keep running." />
+              <!-- M460: the glow buffer and Riot's bloom chain. DX11 only - it needs a second render
+                   target and three full-screen passes, and the OpenGL path has neither. -->
+              <ToggleButton Classes="vp" Content="✷ Bloom" IsChecked="{Binding ShowBloom}"
+                            IsVisible="{Binding UseDx11Viewport}"
+                            ToolTip.Tip="Collect Riot's glow output (SV_Target1) into a second render target, blur it with their own mip chain and composite it back with their screen blend. Riot's shaders compute this every frame regardless; with this off it is discarded, which is what the viewport did before M460. Only emissive materials - lanterns, glowsigns, holograms - write a glow at all, so on a map without them there is nothing to see either way." />
               <TextBlock Text="{Binding Dx11ViewportStatus}" VerticalAlignment="Center" Margin="8,0,0,0"
                          FontFamily="Consolas" FontSize="10" Opacity="0.7"
                          Foreground="{DynamicResource ReyTextBrush}"

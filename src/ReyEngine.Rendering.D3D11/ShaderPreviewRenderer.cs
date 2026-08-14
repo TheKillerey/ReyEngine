@@ -93,6 +93,18 @@ public sealed class PreviewSettings
     /// able to switch this off is how it gets identified rather than guessed at.</summary>
     public bool SortByPipeline = true;
 
+    /// <summary>
+    /// M460: bind Riot's glow buffer as a second render target, run their bloom chain on it and composite
+    /// it back with their screen blend.
+    ///
+    /// <para>On by default because it is not an added effect: the shaders ReyEngine already runs compute
+    /// the glow into <c>SV_Target1</c> every frame, and with one render target bound it was discarded
+    /// (frame-pipeline.md §3.3). Off is the A/B - with the whole chain being three full-screen passes over
+    /// an output nobody has seen before, being able to switch it off is how a regression gets attributed
+    /// rather than guessed at.</para>
+    /// </summary>
+    public bool Bloom = true;
+
     /// <summary>M223: mirror world X, which is what the rest of the editor's viewport does. League's data is
     /// authored in the opposite handedness to the renderer, so without this a map is laid out mirrored
     /// against every other view in the app.</summary>
@@ -3082,6 +3094,29 @@ float4 psmain(VOut i) : SV_Target
         if (_sceneCopy.Handle is null || _rt.Handle is null) return;
         _ctx.OMSetRenderTargets(0, (ID3D11RenderTargetView**)null, (ID3D11DepthStencilView*)null);
         _ctx.CopyResource(_sceneCopy, _rt);
+        BindSceneTargets();
+    }
+
+    /// <summary>
+    /// M460: the ONE place the scene's render targets are bound, so RT1 cannot be dropped by accident.
+    ///
+    /// <para>This used to be a literal <c>OMSetRenderTargets(1, ref _rtv, _dsv)</c> in three places: once
+    /// before the draw loop and once in each of the two capture helpers, which unbind everything so a
+    /// <c>CopyResource</c> can run and then put the targets back. Both helpers are called from INSIDE the
+    /// material loop - the first heat-haze material and the first soft-particle material - so with the glow
+    /// buffer bound, a literal rebind of one RTV there would silently switch RT1 off partway through the
+    /// frame. Every emissive material sorted after that point would stop contributing, and the bloom would
+    /// come and go depending on which materials a camera angle happened to make visible.</para>
+    /// </summary>
+    private void BindSceneTargets()
+    {
+        if (_glowBound && _glowRtv.Handle is not null)
+        {
+            var rtvs = stackalloc ID3D11RenderTargetView*[2];
+            rtvs[0] = _rtv; rtvs[1] = _glowRtv;
+            _ctx.OMSetRenderTargets(2, rtvs, _dsv);
+            return;
+        }
         _ctx.OMSetRenderTargets(1, ref _rtv, _dsv);
     }
 
@@ -3176,6 +3211,12 @@ float4 psmain(VOut i) : SV_Target
             else Log("soft particles: CreateShaderResourceView for the depth copy failed");
         }
         else Log("soft particles: the depth-copy texture could not be created; the fade will stay neutral");
+
+        // M460: drop the glow buffer and its mip chain. They are rebuilt lazily, from _width/_height, by
+        // the first frame that actually wants them - but they MUST go here, because a glow target left at
+        // the old size would be a different size from RT0, and D3D11 rejects a mismatched set at bind time,
+        // taking the whole scene down with the bloom.
+        ResetBloomTargets();
     }
 
     /// <summary>M363: snapshot the depth buffer so particles can sample the scene behind them. Called from
@@ -3186,7 +3227,7 @@ float4 psmain(VOut i) : SV_Target
         if (_depthCopy.Handle is null || _depth.Handle is null) return;
         _ctx.OMSetRenderTargets(0, (ID3D11RenderTargetView**)null, (ID3D11DepthStencilView*)null);
         _ctx.CopyResource(_depthCopy, _depth);
-        _ctx.OMSetRenderTargets(1, ref _rtv, _dsv);
+        BindSceneTargets();
     }
 
     /// <summary>M363: window depth to view distance, for <c>cDepthConversionParams</c>. The shader spends it
@@ -4057,10 +4098,24 @@ float4 psmain(VOut i) : SV_Target
 
             var vpRect = new Viewport(0, 0, width, height, 0, 1);
             _ctx.RSSetViewports(1, in vpRect);
-            _ctx.OMSetRenderTargets(1, ref _rtv, _dsv);
+
+            // M460: TWO render targets for the scene pass, whenever the chain can actually run. Riot's
+            // environment shaders declare o0 AND o1, and o1 is the glow - see ShaderPreviewRenderer.Bloom.
+            // Decided here, once, and remembered for the frame, because BindSceneTargets and the clear and
+            // the unbind after the loop all have to agree with each other.
+            _glowBound = BloomAvailable(s);
+            BindSceneTargets();
 
             var clear = stackalloc float[4] { s.ClearColor.X, s.ClearColor.Y, s.ClearColor.Z, s.ClearColor.W };
             _ctx.ClearRenderTargetView(_rtv, clear);
+            // Black, every frame, and NOT the scene's clear colour: RT1 is a light contribution, so its
+            // zero is black. Clearing it to the viewport background would add the background to every
+            // pixel the geometry misses and turn the whole frame into a uniform haze.
+            if (_glowBound)
+            {
+                var glowClear = stackalloc float[4] { 0f, 0f, 0f, 1f };
+                _ctx.ClearRenderTargetView(_glowRtv, glowClear);
+            }
             _ctx.ClearDepthStencilView(_dsv, (uint)ClearFlag.Depth, 1f, 0);
 
             // M362: the sky, FIRST and before any geometry - exactly where the GL viewport draws it. It
@@ -4254,11 +4309,42 @@ float4 psmain(VOut i) : SV_Target
             }
             }
 
+            // M460: RT1 comes off here, and everything below draws to the colour target alone.
+            //
+            // WHICH PASSES BIND TWO TARGETS, AND WHY. Two: the sky and the material loop - i.e. everything
+            // that is a rendering of the MAP. That is where Riot's own shaders run, and they are the only
+            // shaders in this renderer that declare o1 at all. One: the fallback dynamic-light overlay and
+            // every piece of editor furniture below it.
+            //
+            // The overlay is deliberate rather than incidental. It is ReyEngine's own approximation for
+            // materials that could not be pinned to Riot's in-shader light loop; the real path writes its
+            // glow contribution from inside the material's own pixel shader, so having the stand-in ALSO
+            // deposit into RT1 would make the approximation glow where the real thing does not. Its colour
+            // still lands in RT0 and is still composited over, it just does not create bloom.
+            //
+            // The editor furniture - highlight, icons, bucket grid, gizmo, brush ring, bake box - is not
+            // part of the map at all, and a gizmo that blooms is an editor artefact.
+            //
+            // The particle branches inside the loop above (heat haze, ribbons, mesh emitters) keep both
+            // targets bound and declare only o0, as does the sky. MEASURED on a real device rather than
+            // reasoned about (`disasm bloomgpu`, part 1): with two RTVs bound and RT1 pre-cleared to a
+            // green sentinel, a pixel shader declaring only SV_Target0 reads back (0,255,0,255) - the
+            // sentinel intact - while one declaring both overwrites it. "Undefined" was the other
+            // plausible answer, and it would have seeded the glow buffer with noise from every particle
+            // draw, which on screen would look like an art problem rather than a binding one.
+            if (_glowBound) _ctx.OMSetRenderTargets(1, ref _rtv, _dsv);
+
             // M452/M456: the FALLBACK light pass. Slices whose permutation carries Riot's own light loop
             // were already lit inside their own pixel shader and are skipped here; only the ones that
             // could not be pinned to a USE_DYNAMIC_LIGHTING permutation get the additive overlay.
             int lightDraws = DrawDynamicLights(s, view, proj, planes);
             LogLightPath();
+
+            // M460: the chain and the screen composite, over the finished scene and UNDER the editor
+            // furniture - the game composites bloom before its UI layer, and the furniture is this app's
+            // equivalent of one. Leaves the scene target and the full viewport bound behind it.
+            BloomPasses = 0;
+            if (_glowBound) DrawBloom();
 
             // M269: editor furniture last, over the finished shading.
             HighlightDraws = DrawHighlight(view, proj);
@@ -4488,6 +4574,7 @@ float4 psmain(VOut i) : SV_Target
         DisposeRibbon();
         DisposeDynamicLights();
         DisposeClusterLights();
+        DisposeBloom();
         _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();
         _meshCullCw.Dispose(); _meshCullCcw.Dispose();
         ReleaseMeshGeometry();

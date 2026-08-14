@@ -126,6 +126,11 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// nothing was passing it.</summary>
     public bool Wireframe { get; set; }
 
+    /// <summary>M460: bind Riot's glow buffer as RT1, blur it with their own mip chain and composite it
+    /// with their screen blend. On by default - the glow is already being computed by the shaders this
+    /// viewport runs, and before this it was thrown away. See <c>PreviewSettings.Bloom</c>.</summary>
+    public bool Bloom { get; set; } = true;
+
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
     private float _frozenTime;
 
@@ -335,6 +340,7 @@ public sealed class Dx11ViewportSurface : IDisposable
             // unconditionally. Fog is gated on the toggle, also matching it.
             TimeSeconds = t,
             Wireframe = Wireframe,
+            Bloom = Bloom,
             MapSunColor = MapSun?.SunColor,
             MapSunDirection = MapSun?.SunDirection,
             MapLightMapScale = (float)LightmapScale,

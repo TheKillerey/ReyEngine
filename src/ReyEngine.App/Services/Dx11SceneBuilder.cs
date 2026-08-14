@@ -88,6 +88,12 @@ public static class Dx11SceneBuilder
         public int DynamicLightingPinned { get; set; }
         public int DynamicLightingPinFailed { get; set; }
 
+        /// <summary>M460: Riot's five bloom-chain blobs, in <see cref="BloomStages"/> order. Loaded here in
+        /// the CPU half because that is where the shader cache is - the D3D half only turns bytes into
+        /// pipeline objects. Null when any one of them could not be loaded, which switches the whole chain
+        /// off rather than running a partial one.</summary>
+        public byte[]?[]? BloomShaders { get; set; }
+
         /// <summary>M278: why the failures failed, first example per distinct kind, in the order they were
         /// first hit. The report used to say "21 unresolved" and nothing else, so a shader cache whose
         /// entries had all been renamed underneath us read exactly like a scene bug - and was chased as one
@@ -387,6 +393,7 @@ public static class Dx11SceneBuilder
 
         scene.DynamicLightingPinned = pinnedDynamic;
         scene.DynamicLightingPinFailed = pinFailed;
+        scene.BloomShaders = LoadBloomShaders(cache);
 
         DecodeTextures(distinct, readAsset, scene);
         scene.PrepareMs = (DateTime.UtcNow - t0).TotalMilliseconds;
@@ -444,6 +451,14 @@ public static class Dx11SceneBuilder
         renderer.GameVersion = gameVersion;
         renderer.ClearMaterials();
         renderer.SetMesh(scene.Mesh);
+
+        // M460: hand over Riot's bloom blobs. Null means one of the five would not load, and
+        // SetBloomShaders takes that as "no chain" - the scene then renders exactly as it did before this
+        // milestone rather than half-composited.
+        if (scene.BloomShaders is { } bs && bs.Length == 5)
+            renderer.SetBloomShaders(bs[0], bs[1], bs[2], bs[3], bs[4]);
+        else
+            renderer.SetBloomShaders(null, null, null, null, null);
 
         int ok = 0, textures = 0, failed = scene.Failed, transparent = 0, clamped = 0;
         var reasons = new Dictionary<string, string>(scene.FailureReasons);
@@ -571,6 +586,60 @@ public static class Dx11SceneBuilder
             reasons.Select(kv => $"{kv.Key}: {Trim(kv.Value)}").ToList(),
             scene.GrassTintBound, scene.GrassTintNoSlot,
             scene.DynamicLightingPinned, scene.DynamicLightingPinFailed);
+    }
+
+    // ---------------------------------------------------------------- bloom (M460)
+
+    /// <summary>
+    /// The five stages of Riot's bloom chain, in the order <c>ShaderPreviewRenderer.SetBloomShaders</c>
+    /// takes them: full-screen quad, 13-tap downsample, 3x3 tent upsample, 7-tap separable Gaussian, screen
+    /// composite. All five are loaded from the shader cache and run verbatim - none of this is reimplemented.
+    ///
+    /// <para>Measured in M460 against the shipped cache (docs/research/frame-pipeline.md §2.2, §2.3):
+    /// <c>bloom.ps</c>, <c>mipchainbloomdownsample.ps</c> and <c>mipchainbloomupsample.ps</c> each ship one
+    /// permutation over one blob; <c>post_effect.vs</c> ships two permutations that DEDUPLICATE onto one
+    /// blob, so its <c>FLIP</c> axis provably changes nothing. <c>ps_copy_post.ps</c> has four axes and six
+    /// blobs, and the bloom composite is the <c>BLOOM=1</c> permutation.</para>
+    /// </summary>
+    private static readonly (string Name, DxbcStage Stage, string? Define)[] BloomStages =
+    {
+        ("assets/shaders/hlsl/gamma/post_effect", DxbcStage.Vertex, null),
+        ("assets/shaders/hlsl/filters/mipchainbloomdownsample", DxbcStage.Pixel, null),
+        ("assets/shaders/hlsl/filters/mipchainbloomupsample", DxbcStage.Pixel, null),
+        ("assets/shaders/hlsl/filters/bloom", DxbcStage.Pixel, null),
+        ("assets/shaders/hlsl/gamma/ps_copy_post", DxbcStage.Pixel, "BLOOM"),
+    };
+
+    /// <summary>
+    /// Load all five, or none. The blob index is RESOLVED through the permutation machinery rather than
+    /// hardcoded: <c>ps_copy_post</c>'s composite is blob 1 in today's cache, but a re-cook can renumber
+    /// blobs freely, and the failure mode of a stale index is the worst kind available here - blob 0 of
+    /// that TOC is the plain copy, which would build, bind, draw, and silently composite no bloom at all.
+    /// Asking for <c>BLOOM=1</c> by name cannot land on it.
+    /// </summary>
+    public static byte[]?[]? LoadBloomShaders(ShaderCacheReader cache)
+    {
+        var loaded = new byte[]?[BloomStages.Length];
+        for (int i = 0; i < BloomStages.Length; i++)
+        {
+            var (name, stage, define) = BloomStages[i];
+            string tocPath = ShaderCacheReader.TocPathFor(name, stage);
+            var toc = cache.ReadToc(tocPath);
+            if (toc is null) return null;
+
+            uint blob = 0;
+            var macros = define is null
+                ? null
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [define] = "1" };
+            var perm = ShaderCacheReader.ResolvePermutation(toc, macros, null, null, null, out _);
+            if (perm is not null) blob = perm.BlobIndex;
+            else if (define is not null) return null;   // the composite MUST be the bloom permutation
+
+            var bytes = cache.LoadBlob(tocPath, blob, out _, out _);
+            if (bytes is null || bytes.Length == 0) return null;
+            loaded[i] = bytes;
+        }
+        return loaded;
     }
 
     // ---------------------------------------------------------------- helpers
