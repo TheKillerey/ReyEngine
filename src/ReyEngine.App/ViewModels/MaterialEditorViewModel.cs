@@ -30,6 +30,7 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
         _editedPath = model.Path;
         _lastApplied = model.Path;
         RefreshResolved();
+        SyncAddressFromModel();
     }
 
     public string SamplerName => Model.SamplerName;
@@ -74,7 +75,67 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
         _lastApplied = Model.Path;
         InvalidateThumbnail();
         RefreshResolved();
+        SyncAddressFromModel();
         RaiseDirty();
+    }
+
+    // ---- M493: sampler address modes -------------------------------------------------------------
+    //
+    // Four choices per axis, not three, because ABSENT and 0 are different things in the file even though
+    // they behave the same: Riot writes the field only when it has something to say, and censused over the
+    // nine shipped map WADs 4,726 samplers author none at all against 8,667 that author addressW=1 alone
+    // (M490). An editor that could only write 0/1/2 could never reproduce what the game actually ships.
+    //
+    // The enum is Unity's TextureWrapMode ordering, NOT D3D11's — 0 = Wrap, 2 = Mirror read off Riot's own
+    // NAMED shared samplers (M184), leaving 1 = Clamp. 0 is not even a legal D3D value.
+    // Instance, not static: Avalonia's reflection binding resolves INSTANCE properties off the
+    // DataContext, so a static one binds to nothing and the box comes up empty — a failure that compiles,
+    // passes the suite, and only shows up on screen.
+    private static readonly string[] AddressOptionValues = { "— not set (Wrap)", "0 · Wrap", "1 · Clamp", "2 · Mirror" };
+    public IReadOnlyList<string> AddressOptions => AddressOptionValues;
+
+    public bool CanEditAddress => Model.CanEditAddress;
+
+    [ObservableProperty] private int _addressUIndex;
+    [ObservableProperty] private int _addressVIndex;
+    [ObservableProperty] private int _addressWIndex;
+
+    private bool _syncingAddress;
+
+    private static int ToIndex(int? value) => value switch { null => 0, 0 => 1, 1 => 2, 2 => 3, _ => 0 };
+    private static int? FromIndex(int index) => index switch { 1 => 0, 2 => 1, 3 => 2, _ => null };
+
+    public void SyncAddressFromModel()
+    {
+        _syncingAddress = true;
+        AddressUIndex = ToIndex(Model.AddressU);
+        AddressVIndex = ToIndex(Model.AddressV);
+        AddressWIndex = ToIndex(Model.AddressW);
+        _syncingAddress = false;
+    }
+
+    partial void OnAddressUIndexChanged(int value) => ApplyAddress(TextureSlot.AddressAxis.U, value);
+    partial void OnAddressVIndexChanged(int value) => ApplyAddress(TextureSlot.AddressAxis.V, value);
+    partial void OnAddressWIndexChanged(int value) => ApplyAddress(TextureSlot.AddressAxis.W, value);
+
+    private void ApplyAddress(TextureSlot.AddressAxis axis, int index)
+    {
+        if (_syncingAddress || !Model.CanEditAddress) return;
+        int? oldValue = axis switch
+        {
+            TextureSlot.AddressAxis.U => Model.AddressU,
+            TextureSlot.AddressAxis.V => Model.AddressV,
+            _ => Model.AddressW,
+        };
+        int? newValue = FromIndex(index);
+        if (oldValue == newValue) return;
+
+        Model.SetAddress(axis, newValue);
+        _owner.UndoService?.PushApplied(new SamplerAddressEditCommand(
+            _owner.DocContext, Model, axis, oldValue, newValue, () => { SyncAddressFromModel(); RaiseDirty(); }));
+        RaiseDirty();
+        Binding?.RaiseDirty();
+        _owner.NotifyChanged();
     }
 
     public void RefreshResolved() => Unresolved = !(_owner.TextureExists?.Invoke(EditedPath) ?? true);

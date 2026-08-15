@@ -29,6 +29,44 @@ public sealed class TexturePathEditCommand : IEditorCommand
     public void MergeWith(IEditorCommand next) => _newPath = ((TexturePathEditCommand)next)._newPath;
 }
 
+/// <summary>
+/// M493: reversible sampler ADDRESS-MODE edit. Same-axis edits on the same slot merge.
+///
+/// <para>The value is nullable because ABSENT is a distinct, common state rather than a synonym for 0:
+/// censused over the nine shipped map WADs, 4,726 samplers author no address field at all while 8,667
+/// author addressW=1 alone (M490). Undo therefore has to be able to put the field back to "not present",
+/// which a plain int could not express.</para>
+/// </summary>
+public sealed class SamplerAddressEditCommand : IEditorCommand
+{
+    private readonly TextureSlot _slot;
+    private readonly TextureSlot.AddressAxis _axis;
+    private readonly int? _oldValue;
+    private int? _newValue;
+    private readonly Action? _onApplied;
+
+    public SamplerAddressEditCommand(object? context, TextureSlot slot, TextureSlot.AddressAxis axis,
+        int? oldValue, int? newValue, Action? onApplied)
+    {
+        Context = context;
+        _slot = slot;
+        _axis = axis;
+        _oldValue = oldValue;
+        _newValue = newValue;
+        _onApplied = onApplied;
+    }
+
+    public string Name => $"Edit {_slot.SamplerName} address{_axis}";
+    public object? Context { get; }
+
+    public void Execute() { _slot.SetAddress(_axis, _newValue); _onApplied?.Invoke(); }
+    public void Undo() { _slot.SetAddress(_axis, _oldValue); _onApplied?.Invoke(); }
+
+    public bool CanMergeWith(IEditorCommand next) =>
+        next is SamplerAddressEditCommand s && ReferenceEquals(s._slot, _slot) && s._axis == _axis;
+    public void MergeWith(IEditorCommand next) => _newValue = ((SamplerAddressEditCommand)next)._newValue;
+}
+
 /// <summary>Reversible material parameter (vec4 tint etc.) edit. Same-parameter edits merge.</summary>
 public sealed class MaterialParamEditCommand : IEditorCommand
 {

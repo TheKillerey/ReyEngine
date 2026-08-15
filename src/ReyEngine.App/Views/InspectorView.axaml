@@ -330,6 +330,28 @@
                                           <Button Grid.Column="1" Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" Margin="3,0,0,0" ToolTip.Tip="Apply path" />
                                           <Button Grid.Column="2" Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" Margin="3,0,0,0" ToolTip.Tip="Revert" />
                                         </Grid>
+                                        <!-- M493: sampler address modes. Four choices per axis, because
+                                             "not set" and "0" are different in the file even though they
+                                             behave the same — Riot writes the field only when it has
+                                             something to say (4,726 shipped samplers author none at all,
+                                             8,667 author addressW=1 alone). -->
+                                        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" Margin="0,2,0,0" IsVisible="{Binding CanEditAddress}">
+                                          <TextBlock Grid.Column="0" Text="U" FontSize="9" VerticalAlignment="Center" Margin="0,0,3,0"
+                                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                                          <ComboBox Grid.Column="1" ItemsSource="{Binding AddressOptions}" SelectedIndex="{Binding AddressUIndex}"
+                                                    FontSize="9" Padding="4,0" MinWidth="0" HorizontalAlignment="Stretch"
+                                                    ToolTip.Tip="addressU — Riot's enum is Unity's TextureWrapMode ordering (0 Wrap, 1 Clamp, 2 Mirror), not D3D11's. 'Not set' omits the field, which is the schema default and what most shipped samplers do." />
+                                          <TextBlock Grid.Column="2" Text="V" FontSize="9" VerticalAlignment="Center" Margin="5,0,3,0"
+                                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                                          <ComboBox Grid.Column="3" ItemsSource="{Binding AddressOptions}" SelectedIndex="{Binding AddressVIndex}"
+                                                    FontSize="9" Padding="4,0" MinWidth="0" HorizontalAlignment="Stretch"
+                                                    ToolTip.Tip="addressV — see addressU." />
+                                          <TextBlock Grid.Column="4" Text="W" FontSize="9" VerticalAlignment="Center" Margin="5,0,3,0"
+                                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                                          <ComboBox Grid.Column="5" ItemsSource="{Binding AddressOptions}" SelectedIndex="{Binding AddressWIndex}"
+                                                    FontSize="9" Padding="4,0" MinWidth="0" HorizontalAlignment="Stretch"
+                                                    ToolTip.Tip="addressW — only affects volume textures, but Riot sets it to 1 on most map samplers." />
+                                        </Grid>
                                         <!-- M96: wraps instead of clipping when the inspector is narrow -->
                                         <WrapPanel>
                                           <Button Classes="tool" Content="Open" Command="{Binding OpenCommand}" Margin="0,0,4,2" />

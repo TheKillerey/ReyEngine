@@ -1139,13 +1139,90 @@ public sealed class TextureSlot
         _prop = prop;
         OriginalPath = prop.Value;
         Element = element;
+        _originalAddress = (ReadAddress(AddressFieldU), ReadAddress(AddressFieldV), ReadAddress(AddressFieldW));
     }
 
     public string Path => _prop.Value;
     public bool IsRemovable => Element is not null;
     public void SetPath(string path) => _prop.Value = path ?? "";
-    public void Revert() => _prop.Value = OriginalPath;
-    public bool IsDirty => !string.Equals(_prop.Value, OriginalPath, StringComparison.Ordinal);
+
+    public void Revert()
+    {
+        _prop.Value = OriginalPath;
+        SetAddress(AddressAxis.U, _originalAddress.U);
+        SetAddress(AddressAxis.V, _originalAddress.V);
+        SetAddress(AddressAxis.W, _originalAddress.W);
+    }
+
+    public bool IsDirty => !string.Equals(_prop.Value, OriginalPath, StringComparison.Ordinal)
+                           || AddressU != _originalAddress.U
+                           || AddressV != _originalAddress.V
+                           || AddressW != _originalAddress.W;
+
+    // ---- M493: sampler ADDRESS MODES -------------------------------------------------------------
+    //
+    // Riot's enum is Unity's TextureWrapMode ordering, NOT D3D11_TEXTURE_ADDRESS_MODE: 0 = Wrap and
+    // 2 = Mirror were read off their own NAMED shared samplers (M184), leaving 1 = Clamp. 0 is not even a
+    // legal value in the D3D enum, and it is the schema default here.
+    //
+    // ABSENT IS NOT THE SAME AS ZERO. Censused over the nine shipped map WADs in M490 (16,904 samplers):
+    // 4,726 author no address field at all and 8,667 author addressW=1 alone. Riot writes the field only
+    // when it has something to say, so removing it has to be expressible or the editor cannot reproduce
+    // what the game ships — hence null meaning "absent" throughout, rather than a 0 that would look the
+    // same to a reader and different in the bytes.
+
+    public enum AddressAxis { U, V, W }
+
+    private const string AddressFieldU = "addressU", AddressFieldV = "addressV", AddressFieldW = "addressW";
+    private readonly (int? U, int? V, int? W) _originalAddress;
+
+    /// <summary>Address modes can only be edited on a real sampler struct; inline/default slots have no
+    /// element to carry them.</summary>
+    public bool CanEditAddress => Element is BinTreeStruct;
+
+    /// <summary>Null means the field is absent, which is the schema default (Wrap) and what 4,726 shipped
+    /// samplers do — distinct from an authored 0.</summary>
+    public int? AddressU => ReadAddress(AddressFieldU);
+    public int? AddressV => ReadAddress(AddressFieldV);
+    public int? AddressW => ReadAddress(AddressFieldW);
+
+    private static string FieldFor(AddressAxis axis) => axis switch
+    {
+        AddressAxis.U => AddressFieldU,
+        AddressAxis.V => AddressFieldV,
+        _ => AddressFieldW,
+    };
+
+    private int? ReadAddress(string field)
+    {
+        if (Element is not BinTreeStruct s) return null;
+        if (!s.Properties.TryGetValue(ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(field), out var p)) return null;
+        return p switch
+        {
+            BinTreeU32 u => (int)u.Value,
+            BinTreeI32 i => i.Value,
+            BinTreeU8 b => b.Value,
+            BinTreeU16 h => h.Value,
+            _ => null,
+        };
+    }
+
+    /// <summary>Set an address mode, or remove the field entirely with null. Written as U32, matching all
+    /// 11,625 shipped occurrences — a narrower integer is a property the client reads at the wrong width,
+    /// which is the silent-skip failure of M416 and M476 and is invisible to our own reader.</summary>
+    public bool SetAddress(AddressAxis axis, int? value)
+    {
+        if (Element is not BinTreeStruct s) return false;
+        uint hash = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(FieldFor(axis));
+
+        if (value is null) return s.Properties.Remove(hash);
+        if (s.Properties.TryGetValue(hash, out var existing) && existing is BinTreeU32 u32)
+        { u32.Value = (uint)value.Value; return true; }
+
+        s.Properties.Remove(hash);                    // a differently-typed field is replaced, not left
+        s.Properties[hash] = new BinTreeU32(hash, (uint)value.Value);
+        return true;
+    }
 
     public bool IsDiffuse =>
         SamplerName.Contains("Diffuse", OIC) || SamplerName.Contains("Albedo", OIC) ||
