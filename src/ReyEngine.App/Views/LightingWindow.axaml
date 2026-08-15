@@ -358,7 +358,7 @@
                        Foreground="{DynamicResource ReyTextBrush}" />
             <NumericUpDown Value="{Binding SunRadiusForShadows}" Minimum="0" Maximum="20000" Increment="5"
                            FormatString="0.###" FontSize="11"
-                           ToolTip.Tip="MapSunProperties.SunRadiusForShadows. Schema default 0. 176 of 207 shipped maps author this, 151 of them to 75 (then 100, 15, 250, 150) - but Summoner's Rift authors NONE of these four and so runs at 0. That is the sharpest correlation with 'map geometry casts no shadow in game', and it is a correlation, not a proven switch: the name also reads as a soft-shadow penumbra radius, and no shader constant in the disassembly is named after it. Try 75 - Riot's own dominant value - and judge it in game." />
+                           ToolTip.Tip="MapSunProperties.SunRadiusForShadows. Schema default 0; 176 of 207 shipped maps author it, 151 of them to 75. TESTED IN GAME AND IT DOES NOT ENABLE MAP-GEOMETRY SHADOWS - that hypothesis is refuted, not pending. Static map geometry never casts a real-time sun shadow in League; its shadows are BAKED into the lightmap alpha (Riot's shader reads shadow = min(realtime PCF, lightmap alpha)). If your terrain casts nothing, re-bake the lightmap - see the warning on map load. This field most likely controls the soft-shadow penumbra radius, which remains unmeasured." />
             <TextBlock Text="Shadow intensity scale" FontSize="11" Margin="0,6,0,0"
                        Foreground="{DynamicResource ReyTextBrush}" />
             <NumericUpDown Value="{Binding ScaleSunShadowIntensity}" Minimum="0" Maximum="4" Increment="0.05"
@@ -380,7 +380,7 @@
             </UniformGrid>
             <TextBlock FontSize="10" TextWrapping="Wrap" Margin="0,6,0,0"
                        Foreground="{DynamicResource ReyTextDimBrush}"
-                       Text="These four change the GAME, not this viewport - use Save Sun To Map, then test in client. Summoner's Rift ships none of them, which is why its terrain casts nothing while characters still do: castShadows is a character-mesh field and map geometry has no equivalent." />
+                       Text="These four change the GAME, not this viewport - use Save Sun To Map, then test in client. They do NOT make map geometry cast shadows: that was tested and refuted. Static geometry's shadows are baked into the lightmap, so a map that casts nothing needs a BAKE, not a setting here." />
           </StackPanel>
         </Border>
       </StackPanel>

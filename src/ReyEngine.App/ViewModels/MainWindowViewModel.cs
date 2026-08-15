@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using Avalonia.Platform.Storage;
@@ -2975,6 +2975,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// (HasLightmapUv reads Texcoord7 — see the M158 fix; it used to read the wrong channel.)</summary>
     public int MeshesWithoutLightmapUv => _currentMap?.Meshes.Count(m => !m.HasLightmapUv) ?? 0;
 
+    /// <summary>
+    /// M468: meshes that have lightmap UVs but NO lightmap texture bound — a map whose baked lighting has
+    /// been stripped while the layout it was baked into survives.
+    ///
+    /// <para>This is worth its own counter because of what it actually costs, which is not obvious and cost
+    /// this project a whole investigation. <b>In League, static map geometry does not cast a real-time sun
+    /// shadow — its shadows ARE the lightmap.</b> defaultenv_flat blob 226 line 200 reads
+    /// <c>shadow = min(realtimePCF, lightmap.w)</c>, so the lightmap's ALPHA is the static shadow mask, and
+    /// line 204 adds <c>lightmap.rgb * LIGHT_MAP_COLOR_SCALE</c> on top. Strip the texture and both halves
+    /// go with it. Characters and mobs keep their shadows either way, because they are drawn into the
+    /// real-time shadow map by a different, skinned caster shader
+    /// (<c>hlsl/skinnedmesh/shadow_map_vs</c>) that the lightmap has no say over — which is exactly the
+    /// "shadows on characters but not on the terrain" symptom.</para>
+    ///
+    /// <para>Measured on the user's own map: Riot's shipped Map453 binds a lightmap on 447 of 448 meshes
+    /// and ships the atlases; the edited copy bound 0 while keeping all 447 UV channels. That is the state
+    /// <see cref="CleanupLightmaps"/> leaves behind, and it is recoverable by baking rather than by any
+    /// material or MapSunProperties setting.</para>
+    /// </summary>
+    public int MeshesWithStrippedLightmap =>
+        _currentMap?.Meshes.Count(m => m.HasLightmapUv && string.IsNullOrEmpty(m.BakedLightTexture)) ?? 0;
+
+    /// <summary>M468: the map has a lightmap layout sitting unused. Surfaced rather than silent because the
+    /// map still renders — it just renders with no baked light and no static shadows.</summary>
+    public bool HasStrippedLightmap => HasMapForLayout && MeshesWithStrippedLightmap > 0;
+
     /// <summary>M147: is a mapgeo open at all (the layout panel is meaningful only then).</summary>
     public bool HasMapForLayout => _currentMap is not null && _currentMapEntry is not null;
 
@@ -3089,6 +3115,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanBakeLighting));
         OnPropertyChanged(nameof(NeedsLightmapLayout));
         OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
+        OnPropertyChanged(nameof(MeshesWithStrippedLightmap));   // M468
+        OnPropertyChanged(nameof(HasStrippedLightmap));
         return result;
     }
 
@@ -5683,6 +5711,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanBakeLighting));   // M158
         OnPropertyChanged(nameof(HasMapForLayout));  // M147
         OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
+        OnPropertyChanged(nameof(MeshesWithStrippedLightmap));   // M468
+        OnPropertyChanged(nameof(HasStrippedLightmap));
         _selection.Clear();
         HasMapMoves = false;
         CurrentModelTextures = null;
@@ -8649,8 +8679,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 OnPropertyChanged(nameof(CanBakeLighting));   // M158
                 OnPropertyChanged(nameof(HasMapForLayout));  // M147
                 OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
-        OnPropertyChanged(nameof(HasMapForLayout));  // M147
-        OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
+                OnPropertyChanged(nameof(MeshesWithStrippedLightmap));   // M468
+                OnPropertyChanged(nameof(HasStrippedLightmap));
+                // M468: say it out loud on load. A map in this state renders perfectly well and looks
+                // merely "unlit", so nothing about the picture tells you the terrain's shadows are gone -
+                // and they are, because in League a static mesh's shadow IS the lightmap.
+                if (MeshesWithStrippedLightmap > 0)
+                    _log.Warn("Map", $"{MeshesWithStrippedLightmap} mesh(es) have lightmap UVs but NO lightmap "
+                        + "texture bound. Baked light AND baked static shadows are both off for them - Riot's "
+                        + "shader reads shadow = min(realtime PCF, lightmap alpha), so map geometry casts "
+                        + "nothing in game until this is re-baked. Character and mob shadows are unaffected; "
+                        + "they come from a separate skinned caster pass.");
                 RefreshMapGraphicsFeatures();   // M434
                 _selection.Clear();
                 CurrentModelTextures = textures;

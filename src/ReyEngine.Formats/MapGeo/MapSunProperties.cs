@@ -45,10 +45,16 @@ public sealed record MapSunProperties
     ///
     /// <para><b>176 of 207 shipped MapSunProperties author this</b>, overwhelmingly to 75 (151 of them;
     /// then 100 x12, 15 x4, 250, 150). <b>Map11 — Summoner's Rift — authors none of the four</b>, so it
-    /// takes 0 here, which is the single sharpest correlation with "SR map geometry casts no sun shadow".
-    /// That correlation is NOT proof of causation: the name equally supports a penumbra/soft-shadow radius
-    /// reading, and nothing in the shader disassembly names this constant. Treat 75 as the value to TEST,
-    /// evidenced by Map12/jade and 150 other shipped maps, not as a documented switch.</para></summary>
+    /// takes 0 here.
+    ///
+    /// <para><b>M468 — REFUTED as a cast switch.</b> Setting it to 75 on a real map and testing in the
+    /// client produced no map-geometry shadows. The correlation was real and the causal reading was wrong,
+    /// which is why it was labelled a correlation. <b>Static map geometry never casts a real-time sun
+    /// shadow in League</b>: its shadows are baked into the lightmap's ALPHA channel, which
+    /// <c>defaultenv_flat</c> blob 226 line 200 reads as <c>shadow = min(realtimePCF, lightmap.w)</c>.
+    /// A map whose terrain casts nothing needs a BAKE, not this field. The value most likely controls the
+    /// soft-shadow penumbra radius; that remains unmeasured, and no shader constant is named after it.
+    /// </para></summary>
     public float SunRadiusForShadows { get; init; }
 
     /// <summary>Multiplier on sun shadow darkness. Schema default 1. Authored by 30 of 207 (0.05, 0.4, 0,
