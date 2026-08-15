@@ -8545,6 +8545,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // no longer the same thing now that the port window can override it.
                 (correctedLegacyPosition ? $"; imported geometry moved by ({legacyCorrection.X:0.###}, " +
                     $"{legacyCorrection.Y:0.###}, {legacyCorrection.Z:0.###})." : "."));
+            // M474: stated explicitly because the number is legitimately small and looks like a failure.
+            // Measured on two real rooms, only 0.3% (Map10) and 2% (Map8) of source geometry declares a
+            // second UV at all - it is the four-blend terrain's mask UV, not a map-wide lightmap unwrap.
+            _log.Info("Legacy Port", result.ImportedMeshesWithSecondUv > 0
+                ? $"{result.ImportedMeshesWithSecondUv:n0} of {result.ImportedMeshCount:n0} imported mesh(es) carried a "
+                  + "SECOND UV set from the source into Texcoord7. The rest is normally correct: legacy rooms "
+                  + "only author that channel on four-blend terrain, so this is not a full lightmap unwrap. "
+                  + "Use the lightmap layout generator if you need UVs on everything."
+                : "No imported mesh had a second UV set — this source authors Texcoord7 nowhere.");
             if (TryResolveEntry(mapEntry.PathHash, out var reloaded)) await LoadMapGeoAsync(reloaded);
             Status = "Legacy map port complete.";
         }

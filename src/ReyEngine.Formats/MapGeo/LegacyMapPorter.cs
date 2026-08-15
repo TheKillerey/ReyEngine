@@ -72,7 +72,14 @@ public sealed record LegacyMapPortResult(
     int PreservedRenderRegionMeshCount,
     int SourceMaterialCount,
     IReadOnlyList<string> Warnings,
-    int DestinationMeshCount = 0);
+    int DestinationMeshCount = 0,
+    /// <summary>M474: imported meshes that carried a SECOND UV set from the source into Texcoord7.
+    /// Reported because it is legitimately small and the number invites a wrong conclusion: measured on
+    /// two real rooms, only 82 of 2,351 (Map10) and 647 of 3,017 (Map8) source meshes declare the channel
+    /// at all - roughly 0.3% and 2% of vertices. It is the four-blend terrain's mask UV, not a map-wide
+    /// lightmap unwrap, so "most meshes still have no Texcoord7" is the source being sparse rather than
+    /// the port dropping anything.</summary>
+    int ImportedMeshesWithSecondUv = 0);
 
 /// <summary>
 /// Converts Riot's pre-mapgeo NVR/WGEO environments into a modern mapgeo container. The destination
@@ -493,7 +500,10 @@ public static class LegacyMapPorter
                                 LegacyMaterialRole.FourBlendTerrain when blendMask is not null => Sample(blendMask, uv7![index]),
                                 _ => Vector4.One,
                             };
-                            return new LegacyVertex(p, n, uv, color, meshPivot, normals is not null);
+                            // M474: carry the second UV set through instead of discarding it after the
+                            // blend-mask sample above. It is the same uv7 that sample already reads.
+                            return new LegacyVertex(p, n, uv, color, meshPivot, normals is not null,
+                                uv7?[index] ?? Vector2.Zero, uv7 is not null);
                         }
                         chunk.AddTriangle(meshIndex, i0, i1, i2, Make);
                     }
@@ -534,6 +544,9 @@ public static class LegacyMapPorter
         int preservedCount = target.Meshes.Count(m => m.HasRegionHash && m.RegionHash != 0);
 
         var materialNames = BuildMaterialNames(slug, built.Select(x => new MaterialKey(x.Key.Role, x.Key.TextureSet)));
+        // M474: counted here rather than inside AddMesh so the number reported is the number of meshes
+        // that actually got the channel, not the number that were offered it.
+        int withSecondUv = built.Count(acc => acc.Vertices.Any(v => v.HasUv2));
         foreach (var acc in built)
             AddMesh(target, acc, materialNames[new MaterialKey(acc.Key.Role, acc.Key.TextureSet)]);
 
@@ -550,7 +563,7 @@ public static class LegacyMapPorter
         var materialPlans = BuildMaterialPlans(materialNames, built, LegacyPortShaderOptions.Defaults);
         return new LegacyMapPortResult(ported, textureCopies.Values.ToList(), materialPlans, source,
             isWgeo ? "WGEO" : "NVR", environment.Meshes.Count, built.Count, 0, preservedCount,
-            sourceMaterialCount, warnings.Distinct().ToList(), destinationMeshCount);
+            sourceMaterialCount, warnings.Distinct().ToList(), destinationMeshCount, withSecondUv);
     }
 
     private static string FindSingleSource(string root)
@@ -676,6 +689,24 @@ public static class LegacyMapPorter
             IndexCount = source.Indices.Count, MinVertex = 0, MaxVertex = source.VertexCount - 1,
         });
         target.Meshes.Add(mesh);
+
+        // M474: the source's second UV set, as a real Texcoord7 channel.
+        //
+        // Via AddUvChannelOnly rather than by extending the declaration above, because that is the proven
+        // path: it puts the UVs in their OWN vertex buffer and rewires the declaration, which is the
+        // instanced layout Riot ships, and it deliberately leaves BakedLight unset — pointing a mesh at a
+        // lightmap atlas that does not exist would trade one missing resource for another. The channel is
+        // what a bake needs to have somewhere to write; the atlas comes from baking.
+        //
+        // Only when the source really had the channel. A group assembled from meshes where some had it
+        // and some did not gets zeros for the rest, which is why the flag is per VERTEX and the decision
+        // is "any" — dropping the channel because one contributing mesh lacked it would lose real data.
+        if (source.Vertices.Any(v => v.HasUv2))
+        {
+            var uv2 = new Vector2[source.VertexCount];
+            for (int i = 0; i < uv2.Length; i++) uv2[i] = source.Vertices[i].Uv2;
+            target.AddUvChannelOnly(mesh, uv2);
+        }
     }
 
     private sealed record NvrMaterial(string Base, string Blend, string Color1, string Color2, string Color3);
@@ -791,8 +822,17 @@ public static class LegacyMapPorter
 
     private readonly record struct SurfaceKey(LegacyMaterialRole Role, string TextureSet, bool DoubleSided);
     private readonly record struct MaterialKey(LegacyMaterialRole Role, string TextureSet);
+    /// <param name="Uv2">M474: the source's SECOND UV set. WGEO/NVR carry two — the diffuse UV and a
+    /// second one LeagueToolkit surfaces as Texcoord7 — and the port used to read the second only to
+    /// sample a blend mask into vertex colour, then throw it away. Nothing reached the ported mesh, so
+    /// every imported mesh came out with no Texcoord7 at all: no lightmap UVs to bake into, and no
+    /// vertex stream for the shaders that require the channel as a contract.</param>
+    /// <param name="HasUv2">Whether the source mesh actually had that channel. Zeroed UVs and absent UVs
+    /// are different things — a mesh whose neighbours have the channel still has to be padded, but a
+    /// GROUP with no real data must not gain a fabricated one.</param>
     private readonly record struct LegacyVertex(
-        Vector3 Position, Vector3 Normal, Vector2 Uv, Vector4 Color, Vector3 Pivot, bool HasNormal);
+        Vector3 Position, Vector3 Normal, Vector2 Uv, Vector4 Color, Vector3 Pivot, bool HasNormal,
+        Vector2 Uv2 = default, bool HasUv2 = false);
 
     private sealed class MeshAccumulator
     {
