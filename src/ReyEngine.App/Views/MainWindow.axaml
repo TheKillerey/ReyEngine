@@ -945,39 +945,73 @@
       <Border Grid.Column="4" Background="{DynamicResource ReyPanelBrush}">
         <DockPanel>
           <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="INSPECTOR" />
-          <ScrollViewer>
-            <StackPanel Margin="10" Spacing="8">
-              <!-- M50: Unity-style scene-object sections (Transform / Mesh Details / Particle / Placeable)
-                   for the outliner/viewport selection — moved here from the left outliner -->
-              <views:SceneObjectInspectorView />
+          <!-- M471: the inspector is SECTIONED. It used to be one scrolling column holding, in order:
+               per-selection transform cards, map-wide graphics features, the selection's material list and
+               the whole material editor. Three unrelated subjects in one scroll, so reaching any of them
+               meant passing the other two.
 
-              <!-- M351c: the asset identity card moved into InspectorView, so the whole inspector -
-                   header, tabs and all - lives in one file. -->
-              <views:InspectorHeaderView />
-
-              <!-- texture preview (M90: closable — there was no way back out of it) -->
-              <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8"
-                      IsVisible="{Binding Inspector.HasPreview}">
-                <StackPanel Spacing="6">
-                  <Button Classes="tool" Content="✕ Close preview" HorizontalAlignment="Right" FontSize="10" Padding="6,2"
-                          Command="{Binding Inspector.ClearPreviewCommand}" />
-                  <Image Source="{Binding Inspector.PreviewImage}" Stretch="Uniform" MaxHeight="340" />
+               The split is by SUBJECT, which is the only division that stays stable as cards are added:
+                 Object - what is selected (transform, mesh details, particle/sound/light/prop)
+                 Map    - what the MAP turns on (graphics features, lightgrid, gameplay texture, layers)
+                 Asset  - the opened FILE (identity, preview, and the Overview/Materials/Shaders tabs)
+               Each tab's content is the same XAML as before, moved verbatim into its own UserControl. -->
+          <TabControl SelectedIndex="{Binding InspectorSection}" Padding="0" Margin="4,2,4,0">
+            <TabItem FontSize="12">
+              <TabItem.Header><TextBlock Text="Object" FontSize="12" /></TabItem.Header>
+              <ScrollViewer>
+                <StackPanel Margin="8" Spacing="8">
+                  <!-- M50: Unity-style scene-object sections (Transform / Mesh Details / Particle /
+                       Placeable) for the outliner/viewport selection. -->
+                  <views:SceneObjectInspectorView />
                 </StackPanel>
-              </Border>
+              </ScrollViewer>
+            </TabItem>
 
-              <TextBlock Text="{Binding Inspector.Details}" Foreground="{DynamicResource ReyTextDimBrush}"
-                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
+            <TabItem FontSize="12">
+              <TabItem.Header><TextBlock Text="Map" FontSize="12" /></TabItem.Header>
+              <ScrollViewer>
+                <StackPanel Margin="8" Spacing="8">
+                  <views:MapInspectorView />
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
 
-              <!-- note (e.g. bin placeholder) -->
-              <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8"
-                      IsVisible="{Binding Inspector.HasNote}">
-                <TextBlock Text="{Binding Inspector.Note}" Foreground="{DynamicResource ReyAccent2Brush}"
-                           FontSize="11" TextWrapping="Wrap" />
-              </Border>
+            <TabItem FontSize="12">
+              <TabItem.Header><TextBlock Text="Asset" FontSize="12" /></TabItem.Header>
+              <ScrollViewer>
+                <StackPanel Margin="8" Spacing="8">
+                  <!-- M351c: the asset identity card. -->
+                  <views:InspectorHeaderView />
 
-              <views:InspectorView />
-            </StackPanel>
-          </ScrollViewer>
+                  <!-- texture preview (M90: closable — there was no way back out of it) -->
+                  <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8"
+                          IsVisible="{Binding Inspector.HasPreview}">
+                    <StackPanel Spacing="6">
+                      <Button Classes="tool" Content="✕ Close preview" HorizontalAlignment="Right" FontSize="10" Padding="6,2"
+                              Command="{Binding Inspector.ClearPreviewCommand}" />
+                      <Image Source="{Binding Inspector.PreviewImage}" Stretch="Uniform" MaxHeight="340" />
+                    </StackPanel>
+                  </Border>
+
+                  <TextBlock Text="{Binding Inspector.Details}" Foreground="{DynamicResource ReyTextDimBrush}"
+                             FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
+
+                  <!-- note (e.g. bin placeholder) -->
+                  <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8"
+                          IsVisible="{Binding Inspector.HasNote}">
+                    <TextBlock Text="{Binding Inspector.Note}" Foreground="{DynamicResource ReyAccent2Brush}"
+                               FontSize="11" TextWrapping="Wrap" />
+                  </Border>
+
+                  <!-- M471: the SELECTION's materials, moved next to the material editor below it. These
+                       two were previously separated by the entire map section. -->
+                  <views:SelectionMaterialsView />
+
+                  <views:InspectorView />
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
+          </TabControl>
         </DockPanel>
       </Border>
 

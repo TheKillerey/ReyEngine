@@ -254,7 +254,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (slot is null) return;
         AssetDataExpanded = true;
-        InspectorTab = 1;
+        InspectorTab = InspectorTabs.Materials;
         MaterialEditor.Search = slot.Name;
         MaterialEditor.AutoPreviewDiffuse(slot.Name);   // M50c: show the texture immediately
     }
@@ -4417,6 +4417,45 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _hasMaterialData;
     [ObservableProperty] private bool _hasInspectorBody;
     [ObservableProperty] private int _inspectorTab;
+
+    /// <summary>
+    /// M471: which top-level INSPECTOR section is showing. The panel used to be one scrolling column with
+    /// every card in it — per-selection transform, map-wide graphics features, the selection's materials
+    /// and the material editor all stacked — so finding anything meant scrolling past everything.
+    ///
+    /// <para>Distinct from <see cref="InspectorTab"/>, which selects Overview/Materials/Shaders INSIDE the
+    /// Asset section. Both exist because they answer different questions ("what am I looking at" vs "which
+    /// view of this asset"), and collapsing them into one index would have renumbered the six existing
+    /// <c>InspectorTab</c> call sites — an off-by-one no test in this repo could catch.</para>
+    /// </summary>
+    [ObservableProperty] private int _inspectorSection;
+
+    /// <summary>Named indices for <see cref="InspectorSection"/>. Constants rather than literals because
+    /// the tab order lives in XAML and a bare "2" in C# is exactly how those two drift apart.</summary>
+    public static class InspectorSections
+    {
+        public const int Object = 0;
+        public const int Map = 1;
+        public const int Asset = 2;
+    }
+
+    /// <summary>Named indices for <see cref="InspectorTab"/> — the tabs inside the Asset section.</summary>
+    public static class InspectorTabs
+    {
+        public const int Overview = 0;
+        public const int Materials = 1;
+        public const int Shaders = 2;
+    }
+
+    /// <summary>
+    /// M471: selecting an inner tab has to reveal the section that contains it.
+    ///
+    /// <para>Six places already set <c>InspectorTab</c> to jump the user somewhere useful — opening a
+    /// .materials.bin lands on Materials, for instance. Once the panel became sectioned, every one of those
+    /// would have selected a tab inside a section the user could not see, and the jump would silently do
+    /// nothing. Routing it here means those callers keep working unchanged.</para>
+    /// </summary>
+    partial void OnInspectorTabChanged(int value) => InspectorSection = InspectorSections.Asset;
     [ObservableProperty] private int _previewMode; // 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal
     [ObservableProperty] private string _shaderDbStatus = "Riot shaders not scanned.";
     /// <summary>
@@ -4715,7 +4754,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return;
         }
         MaterialEditor.Search = material.FullName; // filter the editor to the clicked material
-        InspectorTab = 1;                          // the "Materials" tab
+        InspectorTab = InspectorTabs.Materials;
         _log.Info("Material", $"Opened '{material.FullName}' ({material.Profile}) from {material.SourceBin}" +
                               (material.ReadOnly ? " — read-only reference (Copy To Project to edit)." : "."));
     }
@@ -4937,7 +4976,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasMapMoves = s.HasMoves;
         Inspector.ShowEntry(s.Entry);
         HasInspectorBody = true;
-        InspectorTab = 0;
+        InspectorTab = InspectorTabs.Overview;
         TryLoadMaterialBin(s.Entry, alsoRawBin: true);
 
         var meshes = s.SelectedMeshIndices
@@ -5451,7 +5490,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasInspectorBody = entry.Type is AssetType.SkinnedMesh or AssetType.StaticMesh or AssetType.MapGeometry or AssetType.Bin;
         // M351g: the Raw BIN Tree tab is gone (index 2). A materials bin still lands on the Materials
         // tab via the dedicated path below; everything else opens on Overview.
-        InspectorTab = 0;
+        InspectorTab = InspectorTabs.Overview;
         if (!HasInspectorBody)
         {
             MaterialEditor.Clear();
@@ -5608,7 +5647,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // M50: the materials list lives in the Inspector's Materials tab now (the Content
                 // Browser quick-list was removed) — jump straight to it for materials.bin selections.
                 if (binEntry.Path.EndsWith(".materials.bin", StringComparison.OrdinalIgnoreCase))
-                { InspectorTab = 1; AssetDataExpanded = true; }
+                { InspectorTab = InspectorTabs.Materials; AssetDataExpanded = true; }
                 if (MaterialEditor.UnresolvedCount > 0)
                     _log.Warn("Material", $"{binEntry.DisplayName}: {matDoc.Materials.Count} material(s), {MaterialEditor.UnresolvedCount} texture path(s) unresolved in this WAD.");
                 else
@@ -10446,7 +10485,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 Suggestion = i.Suggestion,
                 GoTo = mat is null ? null : () =>
                 {
-                    InspectorTab = 1;
+                    InspectorTab = InspectorTabs.Materials;
                     AssetDataExpanded = true;
                     MaterialEditor.SetMeshFilter(null);      // the filter must not hide the target
                     MaterialEditor.OnlyUnresolved = false;

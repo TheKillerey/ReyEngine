@@ -1,0 +1,39 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+             x:Class="ReyEngine.App.Views.SelectionMaterialsView">
+  <!-- M471: the materials of the CURRENT SELECTION, moved verbatim out of SceneObjectInspectorView so
+       it can sit next to the material editor on the Materials tab instead of a screen away from it. -->
+  <StackPanel Spacing="8">
+
+    <Border Classes="card" IsVisible="{Binding HasSelectedMeshMaterials}">
+      <StackPanel Spacing="3">
+        <TextBlock Classes="cardTitle" Text="MATERIALS" />
+        <ItemsControl ItemsSource="{Binding SelectedMeshMaterials}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Button Background="Transparent" BorderThickness="0" Padding="4,2"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                      Command="{Binding $parent[ItemsControl].DataContext.EditSelectedMaterialCommand}"
+                      CommandParameter="{Binding}"
+                      ToolTip.Tip="Open this material in the Materials editor">
+                <StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="🎨" FontSize="10" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding Name}" FontSize="11" Foreground="{DynamicResource ReyTextBrush}"
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding Detail}" FontSize="9" Opacity="0.55" Margin="20,0,0,0"
+                             TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+              </Button>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+    </Border>
+
+    <!-- M105: MAP LAYERS — assign selected meshes to map-defined layers / a visibility
+         controller. Edits preview live and save with "Save to Mod". -->
+  </StackPanel>
+</UserControl>
