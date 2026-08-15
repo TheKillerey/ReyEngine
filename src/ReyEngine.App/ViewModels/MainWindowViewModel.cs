@@ -4056,6 +4056,75 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     public Action? ShowTextureRecolorWindow { get; set; }
+    public Action? ShowUvEditorWindow { get; set; }
+
+    /// <summary>M492: open the second-UV viewer/editor for the current map.</summary>
+    [RelayCommand]
+    private void OpenUvEditor()
+    {
+        if (_currentMap is null)
+        { _log.Warn("MapGeo", "Open a map (.mapgeo) first — the UV editor works on its meshes."); return; }
+        ShowUvEditorWindow?.Invoke();
+    }
+
+    /// <summary>M492: everything the UV editor needs about the open map, so it never reaches into project
+    /// or asset state itself.</summary>
+    public UvEditorContext? GatherUvEditorContext()
+    {
+        if (_currentMap is not { } map || _currentMapBytes is null || _currentMapEntry is not { } entry)
+            return null;
+        return new UvEditorContext(
+            map, _currentMapBytes, ExtendedChannelMaterialsFor(entry.Path),
+            _selection.Items.Select(m => m.Index).ToList(),
+            MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes)
+                || MapContent.AddedMeshes.Count > 0,
+            System.IO.Path.GetFileName(entry.Path));
+    }
+
+    /// <summary>
+    /// M492: validate and save a mapgeo the UV editor rewrote.
+    ///
+    /// <para>Validation is the same shape AddTexcoord7 uses and for the same reason: our own writer and our
+    /// own reader agree with each other by construction, so a rewrite that decodes cleanly has proved very
+    /// little. Here the check is that the bytes decode AND the mesh count survives — an in-place UV write
+    /// must not change either, and if it did, something touched the layout that had no business doing so.</para>
+    /// </summary>
+    public async Task SaveUvEditorResultAsync(byte[] bytes, Formats.MapGeo.UvEditResult result)
+    {
+        if (_currentMapEntry is not { } entry) throw new InvalidOperationException("No map is open.");
+        if (!GuardEditable(entry)) throw new InvalidOperationException("This map is a read-only Riot asset.");
+        if (!await EnsureProjectSavedAsync()) throw new InvalidOperationException("The project was not saved.");
+
+        int meshesBefore = _currentMap?.Meshes.Count ?? -1;
+        var extended = ExtendedChannelMaterialsFor(entry.Path);
+        var check = await Task.Run(() => MapGeoDecoder.Decode(bytes, extended));
+        if (meshesBefore >= 0 && check.Meshes.Count != meshesBefore)
+            throw new InvalidDataException($"The rewritten mapgeo has {check.Meshes.Count} mesh(es) instead of "
+                                         + $"{meshesBefore} — a UV write must not change the layout. Not saved.");
+
+        string savedTo;
+        if (TryWriteToProjectFile(entry, bytes, out var projectFile)) savedTo = projectFile;
+        else
+        {
+            savedTo = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".mapgeo");
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = entry.PathHash,
+                ResolvedPath = entry.IsResolved ? entry.Path : null,
+                OverrideFile = savedTo,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            _overrides.SaveTo(Project);
+        }
+        SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+        Project.IsDirty = true;
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        UpdateTitle();
+
+        foreach (var s in result.Skipped.Take(5)) _log.Warn("MapGeo", s);
+        _log.Success("MapGeo", $"{result.Summary} Saved to {savedTo} ({bytes.Length:n0} bytes).");
+        await LoadMapGeoAsync(entry);
+    }
 
     [RelayCommand]
     private void OpenTextureRecolor()

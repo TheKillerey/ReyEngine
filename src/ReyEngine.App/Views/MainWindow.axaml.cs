@@ -473,6 +473,7 @@ public partial class MainWindow : Window
                     : 0;
             vm.ShowLightingWindow = () => ShowLighting(vm);               // M169
             vm.ShowTextureRecolorWindow = () => ShowTextureRecolor(vm);   // M171
+            vm.ShowUvEditorWindow = () => ShowUvEditor(vm);               // M492
             vm.PushTextureRegion = Viewport.QueueTextureUpdate;            // M172c: live brush strokes
             // M360: the same stroke to the D3D11 viewport, which the paint path never reached. Gated on the
             // surface being up: with DX11 off there is no device and nothing to update, and the pool lookup
@@ -755,6 +756,25 @@ public partial class MainWindow : Window
             _lightingWindow.Show(this);
         }
         else _lightingWindow.Activate();
+    }
+
+    // M492: Second UV (Texcoord7) — non-modal, one instance. Reloaded on re-open so it follows whatever
+    // map and selection are current, the same way the recolor window does.
+    private UvEditorWindow? _uvEditorWindow;
+    private void ShowUvEditor(MainWindowViewModel vm)
+    {
+        if (_uvEditorWindow is null)
+        {
+            var uvVm = new UvEditorViewModel(vm.GatherUvEditorContext, vm.SaveUvEditorResultAsync);
+            _uvEditorWindow = new UvEditorWindow { DataContext = uvVm };
+            _uvEditorWindow.Closed += (_, _) => _uvEditorWindow = null;
+            _uvEditorWindow.Show(this);
+        }
+        else
+        {
+            if (_uvEditorWindow.DataContext is UvEditorViewModel uvm) uvm.Refresh();
+            _uvEditorWindow.Activate();
+        }
     }
 
     // M171: Recolor Textures — non-modal, one instance, and the list is re-read on each open so it

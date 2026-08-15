@@ -113,6 +113,8 @@
           <MenuItem Header="Save Light.dat As…" Command="{Binding SaveLightDatAsCommand}" />
         </MenuItem>
         <Separator />
+        <MenuItem Header="Second UV (Texcoord7)…" Command="{Binding OpenUvEditorCommand}"
+                  ToolTip.Tip="See a mesh's UV layout drawn against the 0..1 square, compare it with Texcoord0, and rewrite the second UV set — as a world-planar canvas, a copy of the diffuse UVs, or a scale/offset of what is there. Only the UV floats change; the vertex layout is untouched." />
         <MenuItem Header="Recolor Textures…" Command="{Binding OpenTextureRecolorCommand}"
                   ToolTip.Tip="Recolour map surfaces, placed mobs / animated props and baked lightmaps — hue, saturation, levels and tint across as many as you like. Every texture is re-derived from Riot's original, so re-tuning never stacks compression loss, and each one keeps its own pixel format and mip chain" />
         <MenuItem Header="Map Skin Switcher…" Command="{Binding OpenMapSkinSwitcherCommand}"
