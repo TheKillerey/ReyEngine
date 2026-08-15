@@ -12127,10 +12127,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             MaterialEditor.SetCatalog(null);
             return;
         }
-        var cachePath = ShaderCatalogCachePath(environment);
-        var cached = await Task.Run(() => ShaderCatalogCache.Load(cachePath, gameDir));
-        if (cached is not null) { MaterialEditor.SetCatalog(cached); return; }
-
+        // M475: locate the WAD BEFORE consulting the cache — the cache is only valid for a specific build
+        // of it. It used to be served on a game-directory match alone, and a directory path does not change
+        // when Riot patches. Measured on this install: a Live catalogue written 2026-07-20 with 347 shaders
+        // kept being served against a client whose shaders.bin now declares 351, so four shaders (including
+        // 4TextureBlend_UVBased_baseMat) were unpickable in every dropdown, permanently, with no refresh
+        // short of deleting the file by hand.
         var wad = GameReferenceLibrary.FindGlobalWad(gameDir);
         if (wad is null)
         {
@@ -12138,6 +12140,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Warn("Shader", $"{environment}: Global.wad.client not found under {gameDir} — no shader list.");
             return;
         }
+
+        var cachePath = ShaderCatalogCachePath(environment);
+        string stamp = ShaderCatalogLoader.StampFor(wad);
+        var cached = await Task.Run(() => ShaderCatalogCache.Load(cachePath, gameDir, stamp));
+        if (cached is not null) { MaterialEditor.SetCatalog(cached); return; }
+        if (File.Exists(cachePath))
+            _log.Info("Shader", $"{environment}: the cached shader catalogue came from a different build of "
+                              + "Global.wad — rescanning. A Riot patch used to leave it stale.");
+
         _log.Info("Shader", $"Reading {environment} shader definitions…");
         var catalog = await Task.Run(() =>
             ShaderCatalogLoader.Load(wad, gameDir, environment, _resolver, h => ResolveBinName(h)));

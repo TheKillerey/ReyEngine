@@ -73,6 +73,22 @@ public sealed class ShaderCatalog
     public string Environment { get; init; } = "";
     /// <summary>The game directory this was scanned from (so a stale cache can be spotted).</summary>
     public string GameDirectory { get; init; } = "";
+
+    /// <summary>
+    /// M475: identity of the <c>Global.wad.client</c> this was read from — size and last-write time.
+    ///
+    /// <para>Matching the game DIRECTORY was the only cache check, and a directory does not change when
+    /// Riot patches it. Measured on this install: the Live cache was written 2026-07-20 holding 347
+    /// shaders while the installed client's shaders.bin declares 351, so four shaders — including
+    /// <c>Shaders/StaticMesh/4TextureBlend_UVBased_baseMat</c> — could not be picked in any shader
+    /// dropdown and would never come back on their own. The PBE cache, written the same day, has all 351,
+    /// which is what made it look like a per-shader problem rather than a stale file.</para>
+    ///
+    /// <para>Empty on a cache written before this field existed, which mismatches any real stamp and makes
+    /// those caches rebuild once — the migration is the invalidation.</para>
+    /// </summary>
+    public string SourceStamp { get; init; } = "";
+
     public List<LeagueShaderDef> Shaders { get; init; } = new();
 
     public IEnumerable<string> Categories =>
@@ -114,9 +130,28 @@ public static class ShaderCatalogLoader
                 shaders.Add(Parse(name, obj, resolveBinName));
             }
             shaders.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
-            return new ShaderCatalog { Environment = environment, GameDirectory = gameDirectory, Shaders = shaders };
+            return new ShaderCatalog
+            {
+                Environment = environment,
+                GameDirectory = gameDirectory,
+                SourceStamp = StampFor(globalWadPath),   // M475
+                Shaders = shaders,
+            };
         }
         catch { return null; }
+    }
+
+    /// <summary>M475: size + last-write time of the shader source, the same shape
+    /// <c>WorkshopCatalogService.Fingerprint</c> already uses per wad. Cheap enough to compute on every
+    /// load, which is the point — the check has to run before the cache is trusted.</summary>
+    public static string StampFor(string globalWadPath)
+    {
+        try
+        {
+            var info = new FileInfo(globalWadPath);
+            return info.Exists ? $"{info.Length}:{info.LastWriteTimeUtc.Ticks}" : "";
+        }
+        catch { return ""; }
     }
 
     private static LeagueShaderDef Parse(string name, BinTreeObject obj, Func<uint, string?> resolve)
@@ -187,15 +222,26 @@ public static class ShaderCatalogCache
         catch { /* a cache we can't write just means we rescan next time */ }
     }
 
-    public static ShaderCatalog? Load(string path, string gameDirectory)
+    /// <param name="expectedStamp">
+    /// M475: <see cref="ShaderCatalogLoader.StampFor"/> of the CURRENT Global.wad. Required, because
+    /// matching only the game directory meant a Riot patch never invalidated the cache — the directory
+    /// path is identical before and after. Pass "" only where no source file can be identified; that
+    /// disables the check and restores the old behaviour deliberately rather than by omission.
+    /// </param>
+    public static ShaderCatalog? Load(string path, string gameDirectory, string expectedStamp)
     {
         try
         {
             if (!File.Exists(path)) return null;
             var c = JsonSerializer.Deserialize<ShaderCatalog>(File.ReadAllText(path));
+            if (c is not { Shaders.Count: > 0 }) return null;
             // A cache from a different install must not be served for this one.
-            return c is { Shaders.Count: > 0 }
-                   && string.Equals(c.GameDirectory, gameDirectory, StringComparison.OrdinalIgnoreCase) ? c : null;
+            if (!string.Equals(c.GameDirectory, gameDirectory, StringComparison.OrdinalIgnoreCase)) return null;
+            // ...nor one read from a different build of the same install. A cache written before this
+            // field existed has an empty stamp and therefore rebuilds once.
+            if (expectedStamp.Length > 0 && !string.Equals(c.SourceStamp, expectedStamp, StringComparison.Ordinal))
+                return null;
+            return c;
         }
         catch { return null; }
     }
