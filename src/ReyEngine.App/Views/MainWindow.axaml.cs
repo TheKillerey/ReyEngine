@@ -336,6 +336,13 @@ public partial class MainWindow : Window
               // M266: the quad budget is the one place D3D11 can legitimately draw fewer particles than GL,
               // so the line that says how many were thinned belongs where the draw counts are, not in a log.
               + (_dx11.ParticleStatus.Length > 0 ? "\n" + _dx11.ParticleStatus : "")
+              // M466: the sun shadow pass. Three distinguishable states rather than a silent absence -
+              // switched off, ran and drew N casters, or on but drew nothing (which is the bail-out, and is
+              // NOT the same as the lightmap vetoing a shadow that did render).
+              + "\nshadow: " + (!vm.ShowSunShadows ? "off"
+                  : _dx11.ShadowDraws > 0
+                      ? $"{_dx11.ShadowDraws} casters, fit radius {_dx11.ShadowRadius:F0}"
+                      : "ON but the pass drew nothing (no blobs / no sun direction / no caster bounds)")
             // No scene is a legitimate state, not a failure - say which, rather than showing an empty
             // viewport and letting it read as a broken renderer.
             : "D3D11 no scene: " + WhyNoScene(_dx11.SceneReport);

@@ -284,6 +284,16 @@ public sealed class Dx11ViewportSurface : IDisposable
     public int LastDrawCalls { get; private set; }
     public int LastCulled { get; private set; }
 
+    /// <summary>M466: the sun shadow pass's own counters, forwarded for the status detail.
+    ///
+    /// <para>M465 computed both and surfaced neither, which left the two ways to see no shadows
+    /// indistinguishable from the app: a pass that bailed (no blobs, no sun direction, no caster bounds)
+    /// looks exactly like a pass that ran and was then vetoed by the lightmap, because Riot's own combine is
+    /// <c>min(realtime PCF, lightmap alpha)</c> — measured, defaultenv_flat blob 226 line 200. Zero draws
+    /// says the first; a live radius with visible-nothing says the second.</para></summary>
+    public int ShadowDraws { get; private set; }
+    public float ShadowRadius { get; private set; }
+
     public bool Initialize()
     {
         if (_ready) return true;
@@ -421,6 +431,8 @@ public sealed class Dx11ViewportSurface : IDisposable
         LastPixels = pixels;
         LastDrawCalls = _renderer.DrawCalls;
         LastCulled = _renderer.CulledSlices;
+        ShadowDraws = _renderer.ShadowDraws;       // M466
+        ShadowRadius = _renderer.ShadowRadius;
 
         EnsureBitmaps(width, height);
         var target = ReferenceEquals(Current, _front) ? _back : _front;
