@@ -115,4 +115,46 @@ public sealed class LegacyMapPorterTests
         Assert.DoesNotContain("NO_BAKED_LIGHTING",
             mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Normal).Macros.Keys);
     }
+
+    /// <summary>
+    /// M476: the porter's vertex-element ORDER must be one Riot actually ships, because element order IS
+    /// the byte layout of the vertex buffer.
+    ///
+    /// <para>The porter emitted Texcoord5 before Texcoord0. Censused over 206 shipped mapgeos and 27
+    /// distinct orders, Riot ships "Position, Normal, Color0, Tex0, Tex5" 28 times and the reversed form
+    /// ZERO times. Nothing in ReyEngine could see it: our reader is order-driven, so strides matched,
+    /// buffer sizes matched, bounds were sane and no coordinate was NaN — the file round-tripped through
+    /// our own code perfectly and only the game disagreed, rendering spikes.</para>
+    ///
+    /// <para>Asserted against the constants rather than a rebuilt port, because a port needs an NVR
+    /// fixture that cannot be committed. This pins the ORDERING RULE the writer follows.</para>
+    /// </summary>
+    [Fact]
+    public void The_ported_vertex_layout_uses_an_order_Riot_ships()
+    {
+        // The four layouts the porter can emit, in the order its declaration builder appends them.
+        static string[] Layout(bool color, bool grassPivot)
+        {
+            var e = new List<string> { "Position", "Normal" };
+            if (color) e.Add("Color0");
+            e.Add("Tex0");                 // M476: Tex0 before Tex5
+            if (grassPivot) e.Add("Tex5");
+            return e.ToArray();
+        }
+
+        // Orders measured in shipped map WADs. The reversed grass form is deliberately absent.
+        var shipped = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Position,Normal,Tex0",
+            "Position,Normal,Color0,Tex0",
+            "Position,Normal,Color0,Tex0,Tex5",
+        };
+
+        Assert.Contains(string.Join(",", Layout(false, false)), shipped);
+        Assert.Contains(string.Join(",", Layout(true, false)), shipped);
+        Assert.Contains(string.Join(",", Layout(true, true)), shipped);
+
+        // And the form that caused the bug is NOT what the builder produces any more.
+        Assert.DoesNotContain("Tex5,Tex0", string.Join(",", Layout(true, true)));
+    }
 }

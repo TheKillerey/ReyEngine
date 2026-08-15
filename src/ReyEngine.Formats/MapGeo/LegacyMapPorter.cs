@@ -633,11 +633,22 @@ public static class LegacyMapPorter
         bool hasColor = source.Key.Role == LegacyMaterialRole.FourBlendTerrain;
         bool hasGrassPivot = source.Key.Role == LegacyMaterialRole.Grass;
         var decl = new MapGeoBinary.VertexDeclaration { Usage = 0 };
+        // M476: ELEMENT ORDER IS THE BYTE LAYOUT, and it must be Riot's.
+        //
+        // This used to emit Texcoord5 BEFORE Texcoord0. Censused across 206 shipped mapgeos and 27 distinct
+        // declaration orders, Riot ships "Position, Normal, Color0, Tex0, Tex5" 28 times and
+        // "Position, Normal, Color0, Tex5, Tex0" ZERO times. Our own reader is order-driven so it read the
+        // result back perfectly - stride and buffer sizes check out, no NaNs, sane bounds - which is why
+        // this survived: it is invisible to every check that goes through our own code, and only the game
+        // disagrees. Same shape as M416, where pointer-form container elements loaded everywhere and
+        // rendered nothing.
+        //
+        // The write loop below follows this order exactly; the two must be changed together.
         decl.Elements.Add((MapGeoBinary.ElemPosition, MapGeoBinary.FmtXYZ_Float32));
         decl.Elements.Add((MapGeoBinary.ElemNormal, MapGeoBinary.FmtXYZ_Float32));
         if (hasColor) decl.Elements.Add((MapGeoBinary.ElemPrimaryColor, MapGeoBinary.FmtBGRA_Packed8888));
-        if (hasGrassPivot) decl.Elements.Add((MapGeoBinary.ElemTexcoord5, MapGeoBinary.FmtXYZ_Float32));
         decl.Elements.Add((MapGeoBinary.ElemTexcoord0, MapGeoBinary.FmtXY_Float32));
+        if (hasGrassPivot) decl.Elements.Add((MapGeoBinary.ElemTexcoord5, MapGeoBinary.FmtXYZ_Float32));
         decl.Padding = new byte[8 * (15 - decl.Elements.Count)];
         int declId = target.Declarations.Count; target.Declarations.Add(decl);
 
@@ -654,11 +665,12 @@ public static class LegacyMapPorter
                     writer.Write((byte)Math.Clamp((int)MathF.Round(v.Color.X * 255), 0, 255));
                     writer.Write((byte)Math.Clamp((int)MathF.Round(v.Color.W * 255), 0, 255));
                 }
+                // M476: Texcoord0 BEFORE Texcoord5, matching the declaration above and Riot's own layout.
+                writer.Write(v.Uv.X); writer.Write(v.Uv.Y);
                 if (hasGrassPivot)
                 {
                     writer.Write(v.Pivot.X); writer.Write(v.Pivot.Y); writer.Write(v.Pivot.Z);
                 }
-                writer.Write(v.Uv.X); writer.Write(v.Uv.Y);
             }
         int vb = target.VertexBuffers.Count;
         target.VertexBuffers.Add(new MapGeoBinary.VertexBuffer { HasVisibility = true, Visibility = 0xff, Data = vertices.ToArray() });
