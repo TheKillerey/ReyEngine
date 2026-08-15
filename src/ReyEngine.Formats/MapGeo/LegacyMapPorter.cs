@@ -494,7 +494,24 @@ public static class LegacyMapPorter
                             Vector3 p = Vector3.Transform(pos[index], transform);
                             Vector3 n = normals is null ? Vector3.Zero : Vector3.TransformNormal(normals[index], normalMatrix);
                             if (n.LengthSquared() > 1e-12f) n = Vector3.Normalize(n); else n = Vector3.UnitY;
-                            Vector2 uv = uv0?[index] ?? Vector2.Zero;
+                            // M479: four-blend terrain takes the CANVAS UV in Texcoord0, not the diffuse UV.
+                            //
+                            // Measured in 4textureblend_uvbased_basemat.vs/ps: the layer textures are
+                            // WORLD-projected (o3/o4 = worldPos.xzxz x tiling x WS_Multiplier, lines
+                            // 106-109), so UV0 feeds exactly one thing - the blend MASK
+                            // (ps blob 8 line 136, sample v2.xyxx from Mask_Texture__TX). "UVBased" names
+                            // the mask, not the layers.
+                            //
+                            // The mask is a map-wide canvas, so its UV must span the map once. The NVR's
+                            // second UV set is precisely that, measured over room.nvr's 342 second-UV
+                            // meshes: u vs worldX R^2 = 0.9997 and v vs worldZ R^2 = 0.9999, against
+                            // 0.0002 and 0.0003 for the opposite pairing - a planar world-XZ projection
+                            // into 0..1, not a lightmap atlas. Feeding the tiling DIFFUSE uv here instead
+                            // sampled the mask with repeat coordinates, which makes the blend weights
+                            // meaningless.
+                            Vector2 uv = role == LegacyMaterialRole.FourBlendTerrain && uv7 is not null
+                                ? uv7[index]
+                                : uv0?[index] ?? Vector2.Zero;
                             Vector4 color = role switch
                             {
                                 LegacyMaterialRole.FourBlendTerrain when blendMask is not null => Sample(blendMask, uv7![index]),
