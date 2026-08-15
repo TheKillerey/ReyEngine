@@ -8395,9 +8395,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     : material).ToList(),
             };
         bool correctedLegacyPosition = selection?.FixImportedMapPosition == true;
+        // M473: the correction the USER typed in the port window, not the constant.
+        var legacyCorrection = selection?.PositionCorrection ?? LegacyMapPorter.LegacyPositionCorrection;
         if (correctedLegacyPosition)
         {
-            try { result = LegacyMapPorter.ApplyImportedPositionCorrection(result); }
+            try { result = LegacyMapPorter.ApplyImportedPositionCorrection(result, legacyCorrection); }
             catch (Exception ex)
             { _log.Error("Legacy Port", $"Imported map position correction failed: {ex.Message}"); return; }
         }
@@ -8539,8 +8541,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 $"and {removedMaterials:n0} unused materials; " +
                 $"rebuilt {replacedGenerated:n0} earlier legacy material(s), retained {meshCleanup.RetainedOriginalMeshCount:n0} " +
                 $"selected destination meshes, and protected {result.PreservedRenderRegionMeshCount:n0} render-region meshes" +
-                (correctedLegacyPosition ? $"; imported geometry moved by ({LegacyMapPorter.LegacyPositionCorrection.X:0.###}, " +
-                    $"{LegacyMapPorter.LegacyPositionCorrection.Y:0.###}, {LegacyMapPorter.LegacyPositionCorrection.Z:0.###})." : "."));
+                // M473: report the correction that was ACTUALLY used, not the default constant - they are
+                // no longer the same thing now that the port window can override it.
+                (correctedLegacyPosition ? $"; imported geometry moved by ({legacyCorrection.X:0.###}, " +
+                    $"{legacyCorrection.Y:0.###}, {legacyCorrection.Z:0.###})." : "."));
             if (TryResolveEntry(mapEntry.PathHash, out var reloaded)) await LoadMapGeoAsync(reloaded);
             Status = "Legacy map port complete.";
         }

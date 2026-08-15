@@ -1,4 +1,5 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Formats.MapGeo;
@@ -32,7 +33,9 @@ public sealed record LegacyMapPortShaderSelection(
     LegacyPortShaderOptions RoleShaders,
     IReadOnlyDictionary<string, string> MaterialShaders,
     LegacyPortCleanupOptions Cleanup,
-    bool FixImportedMapPosition);
+    bool FixImportedMapPosition,
+    // M473: the correction is no longer a constant only a rebuild could change.
+    System.Numerics.Vector3 PositionCorrection);
 
 public sealed record LegacyDestinationContentSummary(
     int OrdinaryMeshes,
@@ -55,6 +58,31 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     [ObservableProperty] private bool _removeOriginalSounds = true;
     [ObservableProperty] private bool _removeOriginalProbes = true;
     [ObservableProperty] private bool _fixImportedMapPosition;
+
+    // M473: the alignment correction, seeded from the measured default but editable. It was a hardcoded
+    // constant, so a port that landed a few hundred units out could not be fixed without a rebuild.
+    [ObservableProperty] private string _correctionX =
+        Formats.MapGeo.LegacyMapPorter.LegacyPositionCorrection.X.ToString("0.###", CultureInfo.InvariantCulture);
+    [ObservableProperty] private string _correctionY =
+        Formats.MapGeo.LegacyMapPorter.LegacyPositionCorrection.Y.ToString("0.###", CultureInfo.InvariantCulture);
+    [ObservableProperty] private string _correctionZ =
+        Formats.MapGeo.LegacyMapPorter.LegacyPositionCorrection.Z.ToString("0.###", CultureInfo.InvariantCulture);
+
+    /// <summary>The typed correction, falling back to the measured default on anything unparseable — a
+    /// half-typed number must not silently port the map to the origin. InvariantCulture because this is a
+    /// German-locale machine and "1000,834" and "1000.834" both have to mean the same thing.</summary>
+    private System.Numerics.Vector3 ParsedCorrection
+    {
+        get
+        {
+            var d = Formats.MapGeo.LegacyMapPorter.LegacyPositionCorrection;
+            return new System.Numerics.Vector3(Num(CorrectionX, d.X), Num(CorrectionY, d.Y), Num(CorrectionZ, d.Z));
+            static float Num(string s, float fallback) =>
+                float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+                || float.TryParse(s, NumberStyles.Float, CultureInfo.CurrentCulture, out v) ? v : fallback;
+        }
+    }
+
     [ObservableProperty] private string _cleanupOutcome = "";
     private readonly LegacyDestinationContentSummary _destination;
     public string Summary { get; }
@@ -211,7 +239,7 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
             RemoveOriginalSounds, RemoveOriginalProbes);
         Confirmed?.Invoke(new LegacyMapPortShaderSelection(options,
             Materials.ToDictionary(material => material.Name, material => material.SelectedShader!, StringComparer.OrdinalIgnoreCase),
-            cleanup, FixImportedMapPosition));
+            cleanup, FixImportedMapPosition, ParsedCorrection));
     }
 
     [RelayCommand]

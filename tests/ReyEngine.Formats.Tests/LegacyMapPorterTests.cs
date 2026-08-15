@@ -4,18 +4,47 @@ namespace ReyEngine.Formats.Tests;
 
 public sealed class LegacyMapPorterTests
 {
+    /// <summary>
+    /// M473: the correction the porter applies by default. Pinned so it cannot drift silently — every
+    /// ported map's alignment depends on it, and a wrong value is only visible by loading a map and
+    /// looking.
+    ///
+    /// <para>This previously asserted (600.406, -66.972, 293.744), derived as an initial pass plus a
+    /// refinement. The user measured the full fix against a ported map and reported
+    /// (+1000.834, -51.318, +499.388), which REPLACES that rather than stacking on it — the assumption is
+    /// recorded on the constant itself. Kept as a hardcoded expectation rather than re-deriving it from
+    /// intermediate vectors: the old form asserted the arithmetic that produced the number, which passes
+    /// happily while the number is wrong for the map.</para>
+    /// </summary>
     [Fact]
-    public void LegacyPositionCorrectionIncludesFinalMeasuredRefinement()
+    public void LegacyPositionCorrectionIsTheMeasuredFullFix()
     {
-        var initialCorrection = new System.Numerics.Vector3(473.120f, -66.972f, 237.756f);
-        var oldFixed = new System.Numerics.Vector3(7937.367f, -22.399f, 2010.147f);
-        var newFixed = new System.Numerics.Vector3(8064.653f, -22.399f, 2066.135f);
+        Assert.Equal(1000.834f, LegacyMapPorter.LegacyPositionCorrection.X, 3);
+        Assert.Equal(-51.318f, LegacyMapPorter.LegacyPositionCorrection.Y, 3);
+        Assert.Equal(499.388f, LegacyMapPorter.LegacyPositionCorrection.Z, 3);
+    }
 
-        var expected = initialCorrection + (newFixed - oldFixed);
+    /// <summary>The superseded value is kept so a map ported by an older build can be reconciled: the
+    /// difference between the two is exactly the nudge such a map needs.</summary>
+    [Fact]
+    public void The_superseded_correction_is_retained_for_reconciling_old_ports()
+    {
+        var delta = LegacyMapPorter.LegacyPositionCorrection - LegacyMapPorter.LegacyPositionCorrectionPreM473;
+        Assert.Equal(400.428f, delta.X, 3);
+        Assert.Equal(15.654f, delta.Y, 3);
+        Assert.Equal(205.644f, delta.Z, 3);
+    }
 
-        Assert.Equal(expected.X, LegacyMapPorter.LegacyPositionCorrection.X, 3);
-        Assert.Equal(expected.Y, LegacyMapPorter.LegacyPositionCorrection.Y, 3);
-        Assert.Equal(expected.Z, LegacyMapPorter.LegacyPositionCorrection.Z, 3);
+    /// <summary>M473: the correction is a PARAMETER now, not only a constant. Ports made before this could
+    /// not be realigned without editing source and rebuilding.</summary>
+    [Fact]
+    public void The_correction_can_be_overridden_per_port()
+    {
+        var m = typeof(LegacyMapPorter).GetMethod(nameof(LegacyMapPorter.ApplyImportedPositionCorrection));
+        Assert.NotNull(m);
+        var p = Assert.Single(m!.GetParameters(), x => x.Name == "correction");
+        Assert.True(p.IsOptional, "the override must be optional so existing callers keep the default");
+        Assert.Equal(typeof(System.Numerics.Vector3?), p.ParameterType);
     }
 
     [Fact]

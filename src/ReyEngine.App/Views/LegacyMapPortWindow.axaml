@@ -59,7 +59,17 @@
             <TextBlock Classes="cardTitle" Text="IMPORTED MAP ALIGNMENT" Foreground="#73A7FF" />
             <CheckBox Content="Fix legacy map position automatically" IsChecked="{Binding FixImportedMapPosition}"
                       FontSize="11" FontWeight="SemiBold" />
-            <TextBlock Text="Moves only the imported NVR/WGEO geometry by the final measured correction: X +600.406, Y -66.972, Z +293.744. This includes the additional refinement from 7937.367 / -22.399 / 2010.147 to 8064.653 / -22.399 / 2066.135. Destination render regions, retained bushes, mobs, particles and sounds are not moved."
+            <!-- M473: editable. This was a hardcoded constant, so an alignment that turned out to be some
+                 hundreds of units off could not be corrected without a rebuild. -->
+            <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" IsEnabled="{Binding FixImportedMapPosition}">
+              <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+              <TextBox Grid.Column="1" Text="{Binding CorrectionX}" FontSize="10" Padding="3,1" />
+              <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+              <TextBox Grid.Column="3" Text="{Binding CorrectionY}" FontSize="10" Padding="3,1" />
+              <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+              <TextBox Grid.Column="5" Text="{Binding CorrectionZ}" FontSize="10" Padding="3,1" />
+            </Grid>
+            <TextBlock Text="Moves ONLY the imported NVR/WGEO geometry. The default (X +1000.834, Y -51.318, Z +499.388) is the measured correction; it replaced an earlier +600.406 / -66.972 / +293.744, so a map ported by an older build sits about 400 units off on X and can be reconciled with Nudge Imported Geometry on the inspector's Map tab. Destination render regions, retained bushes, mobs, particles and sounds are never moved."
                        FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
           </StackPanel>
         </Border>

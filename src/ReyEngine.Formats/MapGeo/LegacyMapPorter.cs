@@ -86,10 +86,29 @@ public static class LegacyMapPorter
     public const string DecalShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest";
     public const string GrassShader = "Shaders/StaticMesh/VertexDeform";
     public const string TerrainShader = "Shaders/StaticMesh/4TextureBlend_WorldProjected";
-    /// <summary>World-space correction measured in two passes: the initial legacy-to-modern alignment
-    /// (+473.120, -66.972, +237.756), then the final refinement from (7937.367, -22.399, 2010.147)
-    /// to (8064.653, -22.399, 2066.135), or (+127.286, 0, +55.988).</summary>
-    public static readonly Vector3 LegacyPositionCorrection = new(600.406f, -66.972f, 293.744f);
+    /// <summary>
+    /// Default world-space correction applied to imported WGEO/NVR geometry.
+    ///
+    /// <para><b>M473: (+1000.834, -51.318, +499.388)</b>, measured by the user against a ported map and
+    /// reported as the correct full fix. It REPLACES the previous (600.406, -66.972, 293.744) — which was
+    /// itself two stacked passes, an initial (+473.120, -66.972, +237.756) plus a (+127.286, 0, +55.988)
+    /// refinement — rather than stacking on top of it.</para>
+    ///
+    /// <para><b>That replace-vs-add reading is an assumption, and it is stated because it is not
+    /// provable from here.</b> The screenshots it came from are of MapGeo_Instance_458, which is not in
+    /// any map in this workspace, so nothing on disk can say whether the old state those numbers were
+    /// measured against already had the previous constant applied. "The port had a value; these are the
+    /// correct values" reads as a replacement, and the two differ by ~600 units on X, so a wrong reading
+    /// is obvious the first time a port is checked rather than subtly wrong forever. It is also no longer
+    /// permanent either way: the value is now a PARAMETER (see the overload of
+    /// <see cref="ApplyImportedPositionCorrection"/>) and editable in the port window, so correcting it
+    /// costs a text box rather than a rebuild.</para>
+    /// </summary>
+    public static readonly Vector3 LegacyPositionCorrection = new(1000.834f, -51.318f, 499.388f);
+
+    /// <summary>The pre-M473 value, kept so a map ported by an older build can be reconciled: the
+    /// difference between the two is exactly what such a map is out by.</summary>
+    public static readonly Vector3 LegacyPositionCorrectionPreM473 = new(600.406f, -66.972f, 293.744f);
     private const int MaxVertices = 65535;
 
     /// <summary>Whether the default shader for a generated role has a cooked no-lightmap permutation.
@@ -162,19 +181,25 @@ public static class LegacyMapPorter
     /// <summary>Translate only the newly imported legacy meshes into the modern map coordinate frame.
     /// Destination meshes occupy the prefix recorded by <see cref="LegacyMapPortResult.DestinationMeshCount"/>;
     /// render regions, retained bushes and every bin placement are therefore untouched.</summary>
-    public static LegacyMapPortResult ApplyImportedPositionCorrection(LegacyMapPortResult result)
+    /// <param name="correction">World-space translation for the imported prefix. Defaults to
+    /// <see cref="LegacyPositionCorrection"/>. M473 made this a parameter because it had been a hardcoded
+    /// constant that only a rebuild could change, which is why an alignment that was 400 units out had no
+    /// answer short of editing source.</param>
+    public static LegacyMapPortResult ApplyImportedPositionCorrection(
+        LegacyMapPortResult result, Vector3? correction = null)
     {
+        Vector3 shift = correction ?? LegacyPositionCorrection;
         if (!MapGeoBinary.TryReadEditable(result.MapGeoBytes, out var map))
             throw new InvalidDataException("The combined legacy mapgeo could not be reopened for position correction.");
         int firstImported = Math.Clamp(result.DestinationMeshCount, 0, map.Meshes.Count);
         if (firstImported == map.Meshes.Count) return result;
-        Matrix4x4 translation = Matrix4x4.CreateTranslation(LegacyPositionCorrection);
+        Matrix4x4 translation = Matrix4x4.CreateTranslation(shift);
         for (int i = firstImported; i < map.Meshes.Count; i++)
         {
             var mesh = map.Meshes[i];
             mesh.Transform *= translation;
-            mesh.BoundsMin += LegacyPositionCorrection;
-            mesh.BoundsMax += LegacyPositionCorrection;
+            mesh.BoundsMin += shift;
+            mesh.BoundsMax += shift;
         }
         byte[] corrected = map.Write();
         corrected = MapGeoWriter.WriteWithRegeneratedBucketGrids(corrected,
