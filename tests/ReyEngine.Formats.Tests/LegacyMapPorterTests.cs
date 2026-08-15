@@ -132,13 +132,14 @@ public sealed class LegacyMapPorterTests
     [Fact]
     public void The_ported_vertex_layout_uses_an_order_Riot_ships()
     {
-        // The four layouts the porter can emit, in the order its declaration builder appends them.
-        static string[] Layout(bool color, bool grassPivot)
+        // The layouts the porter can emit, in the order its declaration builder appends them.
+        static string[] Layout(bool color, bool grassPivot, bool uv2 = false)
         {
             var e = new List<string> { "Position", "Normal" };
             if (color) e.Add("Color0");
             e.Add("Tex0");                 // M476: Tex0 before Tex5
             if (grassPivot) e.Add("Tex5");
+            if (uv2) e.Add("Tex7");        // M477: inline and last, not a separate buffer
             return e.ToArray();
         }
 
@@ -156,5 +157,42 @@ public sealed class LegacyMapPorterTests
 
         // And the form that caused the bug is NOT what the builder produces any more.
         Assert.DoesNotContain("Tex5,Tex0", string.Join(",", Layout(true, true)));
+    }
+
+    /// <summary>
+    /// M477: the four-blend terrain layout, which is the one that rendered WHITE.
+    ///
+    /// <para>Both 4TextureBlend vertex shaders REQUIRE Texcoord7 — measured from the compiled DXBC input
+    /// signatures of <c>4textureblend_worldprojected.vs-dx11</c> and
+    /// <c>4textureblend_uvbased_basemat.vs-dx11</c>, which read POSITION, NORMAL, TEXCOORD0, TEXCOORD7 and
+    /// no COLOR whatsoever. A terrain mesh missing that element gives the shader an incomplete input
+    /// layout.</para>
+    ///
+    /// <para>It also has to be INLINE. M474 attached it through AddUvChannelOnly, which puts the stream in
+    /// its own vertex buffer: Riot ships that shape 3 times against 176 for inline
+    /// "Position, Normal, Tex0, Tex7" and 16 for "Position, Normal, Color0, Tex0, Tex7".</para>
+    /// </summary>
+    [Fact]
+    public void Four_blend_terrain_carries_Texcoord7_inline()
+    {
+        string terrain = string.Join(",", Layout(color: true, grassPivot: false, uv2: true));
+
+        Assert.Equal("Position,Normal,Color0,Tex0,Tex7", terrain);   // Riot ships this 16x
+        Assert.EndsWith("Tex7", terrain);                            // last, so it extends the stride
+        Assert.NotEqual("Tex7", terrain);                            // never a standalone buffer
+
+        // A non-terrain mesh whose source carried a second UV takes Riot's most common form of all.
+        Assert.Equal("Position,Normal,Tex0,Tex7",
+            string.Join(",", Layout(color: false, grassPivot: false, uv2: true)));
+
+        static string[] Layout(bool color, bool grassPivot, bool uv2)
+        {
+            var e = new List<string> { "Position", "Normal" };
+            if (color) e.Add("Color0");
+            e.Add("Tex0");
+            if (grassPivot) e.Add("Tex5");
+            if (uv2) e.Add("Tex7");
+            return e.ToArray();
+        }
     }
 }

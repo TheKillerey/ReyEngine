@@ -632,6 +632,18 @@ public static class LegacyMapPorter
         source.FinishNormals();
         bool hasColor = source.Key.Role == LegacyMaterialRole.FourBlendTerrain;
         bool hasGrassPivot = source.Key.Role == LegacyMaterialRole.Grass;
+
+        // M477: does this mesh need the Texcoord7 stream, and can it fill it?
+        //
+        // BOTH 4TextureBlend vertex shaders REQUIRE it — measured from the compiled DXBC input signatures,
+        // which read POSITION, NORMAL, TEXCOORD0, TEXCOORD7 and no COLOR at all:
+        //     4textureblend_worldprojected.vs-dx11
+        //     4textureblend_uvbased_basemat.vs-dx11
+        // A terrain mesh without that element hands the shader an incomplete input layout, which is what
+        // rendered white. Terrain always HAS the data — the four-blend role is only chosen when the source
+        // mesh carries a second UV (see the `fourBlend` test) — so this is a guarantee, not a synthesis.
+        bool hasUv2 = source.Vertices.Any(v => v.HasUv2);
+        bool needsUv2 = source.Key.Role == LegacyMaterialRole.FourBlendTerrain;
         var decl = new MapGeoBinary.VertexDeclaration { Usage = 0 };
         // M476: ELEMENT ORDER IS THE BYTE LAYOUT, and it must be Riot's.
         //
@@ -649,6 +661,12 @@ public static class LegacyMapPorter
         if (hasColor) decl.Elements.Add((MapGeoBinary.ElemPrimaryColor, MapGeoBinary.FmtBGRA_Packed8888));
         decl.Elements.Add((MapGeoBinary.ElemTexcoord0, MapGeoBinary.FmtXY_Float32));
         if (hasGrassPivot) decl.Elements.Add((MapGeoBinary.ElemTexcoord5, MapGeoBinary.FmtXYZ_Float32));
+        // M477: Texcoord7 INLINE, last. M474 attached it through AddUvChannelOnly, which puts it in a
+        // SEPARATE vertex buffer — a layout Riot ships 3 times against 176 for the inline
+        // "Position, Normal, Tex0, Tex7" form and 16 for "Position, Normal, Color0, Tex0, Tex7". Inline is
+        // both the overwhelming convention and one buffer fewer to get wrong.
+        bool writeUv2 = hasUv2 || needsUv2;
+        if (writeUv2) decl.Elements.Add((MapGeoBinary.ElemTexcoord7, MapGeoBinary.FmtXY_Float32));
         decl.Padding = new byte[8 * (15 - decl.Elements.Count)];
         int declId = target.Declarations.Count; target.Declarations.Add(decl);
 
@@ -670,6 +688,15 @@ public static class LegacyMapPorter
                 if (hasGrassPivot)
                 {
                     writer.Write(v.Pivot.X); writer.Write(v.Pivot.Y); writer.Write(v.Pivot.Z);
+                }
+                // M477: Texcoord7 last, matching the declaration. A vertex whose own source mesh had no
+                // second UV falls back to UV0 rather than zeros: a group can mix source meshes, and a
+                // zeroed run would collapse that whole stretch of terrain onto one texel of the mask,
+                // which reads as a solid colour rather than as missing data.
+                if (writeUv2)
+                {
+                    var uv2 = v.HasUv2 ? v.Uv2 : v.Uv;
+                    writer.Write(uv2.X); writer.Write(uv2.Y);
                 }
             }
         int vb = target.VertexBuffers.Count;
@@ -702,23 +729,13 @@ public static class LegacyMapPorter
         });
         target.Meshes.Add(mesh);
 
-        // M474: the source's second UV set, as a real Texcoord7 channel.
+        // M477: the second UV is written INLINE by the loop above, so the M474 AddUvChannelOnly call that
+        // used to sit here is gone. It is not merely redundant now — running both would produce a mesh
+        // declaring Texcoord7 twice, and AddUvChannelOnly refuses that outright.
         //
-        // Via AddUvChannelOnly rather than by extending the declaration above, because that is the proven
-        // path: it puts the UVs in their OWN vertex buffer and rewires the declaration, which is the
-        // instanced layout Riot ships, and it deliberately leaves BakedLight unset — pointing a mesh at a
-        // lightmap atlas that does not exist would trade one missing resource for another. The channel is
-        // what a bake needs to have somewhere to write; the atlas comes from baking.
-        //
-        // Only when the source really had the channel. A group assembled from meshes where some had it
-        // and some did not gets zeros for the rest, which is why the flag is per VERTEX and the decision
-        // is "any" — dropping the channel because one contributing mesh lacked it would lose real data.
-        if (source.Vertices.Any(v => v.HasUv2))
-        {
-            var uv2 = new Vector2[source.VertexCount];
-            for (int i = 0; i < uv2.Length; i++) uv2[i] = source.Vertices[i].Uv2;
-            target.AddUvChannelOnly(mesh, uv2);
-        }
+        // BakedLight is still deliberately left unset. The mesh now has the UV stream a shader can demand
+        // as a vertex contract; pointing it at a lightmap atlas that does not exist would trade one
+        // missing resource for another. The atlas comes from baking.
     }
 
     private sealed record NvrMaterial(string Base, string Blend, string Color1, string Color2, string Color3);
