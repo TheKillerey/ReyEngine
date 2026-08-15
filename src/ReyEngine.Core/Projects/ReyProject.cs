@@ -66,6 +66,18 @@ public sealed class ReyProject
     public string? ModHome { get; set; }
     public string? ThumbnailPath { get; set; }
 
+    /// <summary>
+    /// M470: which LTK Manager workshop mod "Send to LTK Manager" targets, by its <c>mod.config.json</c>
+    /// name. Null until the first send, which records whatever it used.
+    ///
+    /// <para>Needed because a workshop slug is NOT derivable from the mod name. Measured on the user's own
+    /// workshop: the folder is <c>oldriftday</c> while the display name is "Old Summoner's Rift - Day",
+    /// which slugifies to <c>old-summoners-rift-day</c> — so name-matching alone would CREATE a duplicate
+    /// on a mod the user has been shipping for months, which is precisely the case "update if it already
+    /// exists" has to handle. Set this to the existing slug to adopt a mod that predates ReyEngine.</para>
+    /// </summary>
+    public string? LtkWorkshopSlug { get; set; }
+
     [JsonIgnore] public string EffectiveModName => string.IsNullOrWhiteSpace(ModName) ? Name : ModName!;
     [JsonIgnore] public bool IsFolderProject => RootPath is not null;
     [JsonIgnore] public string? ProjectFilePath { get; set; }

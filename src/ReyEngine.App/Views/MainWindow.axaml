@@ -158,7 +158,10 @@
         <MenuItem Header="Open Build Folder" Command="{Binding OpenBuildFolderCommand}" />
         <Separator />
         <MenuItem Header="Export .fantome…" Command="{Binding ExportFantomeCommand}" />
-        <Separator />
+        <!-- M470: writes SOURCE files into LTK Manager's watched workshop folder, not a package into its
+             library — its library.json also holds the user's profiles, enabled set and mod order. -->
+        <MenuItem Header="Send to LTK Manager" Command="{Binding SendToLtkManagerCommand}"
+                  ToolTip.Tip="Copy this project into LTK Manager's workshop folder as a source mod, creating it or updating it in place. The workshop path is read from LTK Manager's own settings. Updating replaces the mod's content layer so deleted files disappear too, and merges mod.config.json rather than overwriting it, so tags, maps and layer descriptions survive. Your profiles, enabled mods and mod order are never touched." />
         <MenuItem Header="Project Settings…" Command="{Binding OpenProjectSettingsCommand}" />
         <MenuItem Header="Manage Riot References…" Command="{Binding ManageRiotReferencesCommand}" />
         <MenuItem Header="Set Game Folder…" Command="{Binding SetGameFolderCommand}" />
@@ -205,6 +208,10 @@
         </Button>
         <Button Classes="tool" Command="{Binding ExportFantomeCommand}" ToolTip.Tip="Export the mod as a .fantome package">
           <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="👻" FontSize="11"/><TextBlock Text=".fantome"/></StackPanel>
+        </Button>
+        <Button Classes="tool" Command="{Binding SendToLtkManagerCommand}"
+                ToolTip.Tip="Send this project to LTK Manager's workshop folder as a source mod — creating it, or updating it in place if a mod with the same name is already there. The workshop path comes from LTK Manager's own settings; your profiles, enabled mods and mod order are never touched.">
+          <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="🚀" FontSize="11"/><TextBlock Text="LTK Manager"/></StackPanel>
         </Button>
         <Border Width="1" Height="18" Background="{DynamicResource ReyBorderBrush}" Margin="5,0" VerticalAlignment="Center" />
         <!-- hash lookup -->

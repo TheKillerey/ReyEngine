@@ -12141,6 +12141,102 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         finally { IsBuilding = false; }
     }
 
+    /// <summary>
+    /// M470: send this project to LTK Manager's workshop folder, creating the mod or updating it in place.
+    ///
+    /// <para>Deliberately writes SOURCE files to the workshop, not a package to the library. LTK Manager's
+    /// library lives in <c>%APPDATA%\dev.leaguetoolkit.manager</c> as library.json plus
+    /// <c>archives\&lt;uuid&gt;.fantome</c>, and that json also holds the user's profiles, enabled set and
+    /// mod order — minting uuids into someone else's database to save one import click is not a trade worth
+    /// making. The manager already watches the workshop (<c>watcherEnabled: true</c> in its settings), so
+    /// this uses the supported door.</para>
+    ///
+    /// <para>The workshop root is READ from the manager's own settings.json rather than guessed; the
+    /// observed install points at <c>D:\Workshopmods</c>, which no default would have found.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task SendToLtkManager()
+    {
+        if (!ProjectMode || Project.RootPath is null)
+        { _log.Warn("LTK", "Open a project folder first."); return; }
+
+        if (!Core.Build.LtkManagerLocator.TryFindWorkshopRoot(out var root, out var why))
+        { _log.Error("LTK", why); return; }
+
+        // The manager watches this folder. Writing while it is mid-import is a race we can warn about but
+        // not prevent, so say it rather than silently producing a half-imported mod.
+        if (Core.Build.LtkManagerLocator.IsManagerRunning())
+            _log.Warn("LTK", "LTK Manager is running — it may import while files are still being written. "
+                           + "If the mod looks incomplete, re-send it with the manager closed.");
+
+        string name = Project.EffectiveModName;
+        string author = string.IsNullOrWhiteSpace(Project.ModAuthor) ? "Unknown" : Project.ModAuthor!;
+
+        // The project's recorded target wins over a name-derived slug. A workshop slug is NOT derivable
+        // from the mod name — the user's own "Old Summoner's Rift - Day" lives in a folder called
+        // oldriftday — so without this, sending a long-shipped mod would create a duplicate rather than
+        // update it, which is the one case this feature exists to handle.
+        string slug = string.IsNullOrWhiteSpace(Project.LtkWorkshopSlug)
+            ? Core.Build.LtkWorkshopExporter.Slugify(name)
+            : Project.LtkWorkshopSlug!.Trim();
+
+        var options = new Core.Build.LtkSendOptions(
+            WorkshopRoot: root!,
+            Slug: slug,
+            DisplayName: name,
+            Version: string.IsNullOrWhiteSpace(Project.ModVersion) ? "1.0.0" : Project.ModVersion,
+            Description: Project.ModDescription ?? "",
+            Author: author,
+            ThumbnailPath: Project.ThumbnailPath);
+
+        IsBuilding = true; Status = "Sending to LTK Manager…";
+        try
+        {
+            var result = await Task.Run(() =>
+            {
+                // Same enumeration the WAD packer walks, so what LTK Manager gets is what a build would
+                // have contained - one source of truth for "the project's files".
+                var files = new List<(string WadFolder, string RelPath, string AbsPath)>();
+                foreach (var f in Project.ProjectFolders)
+                {
+                    var abs = Project.ResolveProjectPath(f);
+                    if (!Directory.Exists(abs)) continue;
+                    var folderName = Path.GetFileName(abs.TrimEnd('/', '\\'));
+                    foreach (var (_, path) in Core.Build.WadPackService.EnumerateChunkFiles(abs))
+                        files.Add((folderName, Path.GetRelativePath(abs, path).Replace('\\', '/'), path));
+                }
+                if (files.Count == 0)
+                    throw new InvalidOperationException("The project has no packable content to send.");
+                return Core.Build.LtkWorkshopExporter.Send(options, files);
+            });
+
+            _log.Success("LTK", $"{result.Detail} → {result.ModFolder}");
+
+            // Remember what was targeted, so every later send updates this same mod even if the display
+            // name changes. Recorded on create AND on update: an update proves the target is right.
+            if (!string.Equals(Project.LtkWorkshopSlug, slug, StringComparison.Ordinal))
+            {
+                Project.LtkWorkshopSlug = slug;
+                if (Project.ProjectFilePath is { } pf) ReyProjectService.Save(Project, pf);
+            }
+
+            if (result.Created)
+            {
+                // Creating is the risky outcome, not the safe one: if the user already ships this mod under
+                // a slug that does not match its name, they have just gained a duplicate. Name the escape
+                // hatch here rather than leaving them to find it.
+                _log.Info("LTK", $"Created a NEW workshop mod '{slug}'. If you already ship this mod under a "
+                               + "different folder name, set Project ▸ Project Settings ▸ LTK Manager workshop "
+                               + "mod to that folder's name and send again to update it instead.");
+                _log.Info("LTK", "LTK Manager should pick it up from the workshop; if it does not appear, "
+                               + "refresh the workshop view in the manager.");
+            }
+            Status = $"{(result.Created ? "Created" : "Updated")} {slug} in LTK Manager";
+        }
+        catch (Exception ex) { _log.Error("LTK", $"Send failed: {ex.Message}"); }
+        finally { IsBuilding = false; }
+    }
+
     private byte[]? LoadThumbnailPng(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;

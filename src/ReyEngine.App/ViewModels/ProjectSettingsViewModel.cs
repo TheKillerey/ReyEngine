@@ -1,4 +1,4 @@
-using Avalonia.Platform.Storage;
+﻿using Avalonia.Platform.Storage;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.App.Services;
@@ -18,6 +18,11 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     [ObservableProperty] private string _description = "";
     [ObservableProperty] private string _heart = "";
     [ObservableProperty] private string _home = "";
+    /// <summary>M470: the LTK Manager workshop mod this project sends to. Empty = derive it from
+    /// the mod name on first send. Set it to adopt an existing workshop mod whose slug does not
+    /// match the name (the user's own "Old Summoner's Rift - Day" lives in a folder called
+    /// oldriftday, which no slugifier would produce).</summary>
+    [ObservableProperty] private string _ltkWorkshopSlug = "";
     [ObservableProperty] private string _thumbnailPath = "";
     [ObservableProperty] private string _gameDirectory = "";
     [ObservableProperty] private bool _hasGameDirectoryError;
@@ -40,6 +45,7 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         _description = p.ModDescription ?? "";
         _heart = p.ModHeart ?? "";
         _home = p.ModHome ?? "";
+        _ltkWorkshopSlug = p.LtkWorkshopSlug ?? "";
         _thumbnailPath = p.ThumbnailPath ?? "";
         _gameDirectory = p.GameDirectory ?? "";
         _outputDirectory = p.OutputDirectory ?? "";
@@ -72,6 +78,7 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         p.ModDescription = string.IsNullOrWhiteSpace(Description) ? null : Description.Trim();
         p.ModHeart = string.IsNullOrWhiteSpace(Heart) ? null : Heart.Trim();
         p.ModHome = string.IsNullOrWhiteSpace(Home) ? null : Home.Trim();
+        p.LtkWorkshopSlug = string.IsNullOrWhiteSpace(LtkWorkshopSlug) ? null : LtkWorkshopSlug.Trim();
         p.ThumbnailPath = string.IsNullOrWhiteSpace(ThumbnailPath) ? null : ThumbnailPath.Trim();
         var gameStatus = GameReferenceLibrary.Inspect(GameDirectory);
         if (gameStatus.IsValid) p.GameDirectory = gameStatus.GameDirectory;
