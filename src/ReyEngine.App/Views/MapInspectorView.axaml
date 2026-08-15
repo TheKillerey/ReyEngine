@@ -9,6 +9,30 @@
        per-selection cards in one scrolling column, which is what made the inspector hard to read. -->
   <StackPanel Spacing="8">
 
+    <!-- M472: fine-tune a WGEO/NVR port's alignment. Only appears on a map that actually holds imported
+         legacy geometry, since on any other map every control here would be a no-op. -->
+    <Border Classes="card" IsVisible="{Binding HasLegacyImport}">
+      <StackPanel Spacing="4">
+        <TextBlock Classes="cardTitle" Text="LEGACY IMPORT POSITION" />
+        <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap">
+          <Run Text="{Binding LegacyImportedMeshCount}" /><Run Text=" imported mesh(es) · " /><Run Text="{Binding LegacyPortCorrectionText}" />
+        </TextBlock>
+        <TextBlock Text="Nudge (world units, added to the current position)" FontSize="9"
+                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
+        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBox Grid.Column="1" Text="{Binding LegacyNudgeX}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBox Grid.Column="3" Text="{Binding LegacyNudgeY}" FontSize="10" Padding="3,1" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBox Grid.Column="5" Text="{Binding LegacyNudgeZ}" FontSize="10" Padding="3,1" />
+        </Grid>
+        <Button Classes="tool" Content="Nudge Imported Geometry" HorizontalAlignment="Left"
+                Command="{Binding NudgeLegacyImportCommand}"
+                ToolTip.Tip="Move every mesh that came from the WGEO/NVR port by this delta, as one undoable edit. Additive — nudging twice by 10 moves 20 — so you can walk the alignment in. Only meshes with LegacyPort/ materials move; the destination map's own geometry is never touched. The per-mesh TRANSFORM box takes ABSOLUTE world positions instead, which is why it cannot be used to fine-tune a whole import." />
+      </StackPanel>
+    </Border>
+
     <Border Classes="card" IsVisible="{Binding HasMapGraphicsFeatures}">
       <StackPanel Spacing="3">
         <TextBlock Classes="cardTitle" Text="MAP GRAPHICS FEATURES" />

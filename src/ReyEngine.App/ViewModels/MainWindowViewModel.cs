@@ -3135,6 +3135,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
         OnPropertyChanged(nameof(MeshesWithStrippedLightmap));   // M468
         OnPropertyChanged(nameof(HasStrippedLightmap));
+        OnPropertyChanged(nameof(LegacyImportedMeshCount));      // M472
+        OnPropertyChanged(nameof(HasLegacyImport));
         return result;
     }
 
@@ -5770,6 +5772,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(MeshesWithoutLightmapUv));
         OnPropertyChanged(nameof(MeshesWithStrippedLightmap));   // M468
         OnPropertyChanged(nameof(HasStrippedLightmap));
+        OnPropertyChanged(nameof(LegacyImportedMeshCount));      // M472
+        OnPropertyChanged(nameof(HasLegacyImport));
         _selection.Clear();
         HasMapMoves = false;
         CurrentModelTextures = null;
@@ -7077,6 +7081,73 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes);
         _log.Info("MapGeo", $"Transformed '{m.Name}': pos ({target.X:0.#}, {target.Y:0.#}, {target.Z:0.#}), " +
                             $"rot ({rotation.X:0.#}°, {rotation.Y:0.#}°, {rotation.Z:0.#}°), scale ({scale.X:0.##}, {scale.Y:0.##}, {scale.Z:0.##}).");
+    }
+
+    // ---- M472: fine-tune the legacy (NVR/WGEO) import offset ----------------------------------------
+
+    /// <summary>M472: the nudge to apply to every imported legacy mesh, in world units. A DELTA, not a
+    /// position — the whole point is to adjust an alignment that is already mostly right.</summary>
+    [ObservableProperty] private string _legacyNudgeX = "0";
+    [ObservableProperty] private string _legacyNudgeY = "0";
+    [ObservableProperty] private string _legacyNudgeZ = "0";
+
+    /// <summary>How many meshes in the open map came from a WGEO/NVR port, by material prefix.</summary>
+    public int LegacyImportedMeshCount =>
+        _currentMap is { } m ? Formats.MapGeo.LegacyMapPorter.ImportedMeshes(m).Count : 0;
+
+    public bool HasLegacyImport => LegacyImportedMeshCount > 0;
+
+    /// <summary>What the porter baked in, shown so the user can see the number they are adjusting away
+    /// from. It is a constant measured in two passes and stored nowhere in the result, so this is the only
+    /// place the value is visible at all.</summary>
+    public string LegacyPortCorrectionText =>
+        $"port baked in ({Formats.MapGeo.LegacyMapPorter.LegacyPositionCorrection.X:0.###}, "
+        + $"{Formats.MapGeo.LegacyMapPorter.LegacyPositionCorrection.Y:0.###}, "
+        + $"{Formats.MapGeo.LegacyMapPorter.LegacyPositionCorrection.Z:0.###})";
+
+    /// <summary>
+    /// M472: move every imported legacy mesh by a delta, as one undoable edit.
+    ///
+    /// <para>The per-mesh TRANSFORM box could already do this, but only one mesh at a time and only in
+    /// ABSOLUTE world coordinates — so fine-tuning a port meant reading a number like 1030.787, adding the
+    /// nudge by hand, and repeating it for every imported mesh. The port correction itself is a constant
+    /// baked into the geometry at import time and recorded nowhere, so the alternative was re-porting the
+    /// whole map to change one number.</para>
+    ///
+    /// <para>Additive on purpose: <c>TranslateMesh</c> ASSIGNS <c>Offset</c> rather than accumulating, so
+    /// this passes <c>Offset + delta</c>. Nudging twice by 10 moves 20, which is what "fine-tune" means;
+    /// passing the raw delta would instead have made the second nudge undo the first.</para>
+    /// </summary>
+    [RelayCommand]
+    private void NudgeLegacyImport()
+    {
+        if (_currentMap is not { } map) { _log.Warn("MapGeo", "Open a map first."); return; }
+        if (!TryParseVector3(LegacyNudgeX, LegacyNudgeY, LegacyNudgeZ, out var delta))
+        { _log.Warn("MapGeo", "Enter valid nudge X/Y/Z numbers."); return; }
+        if (delta == System.Numerics.Vector3.Zero) { _log.Info("MapGeo", "Nudge is zero — nothing to do."); return; }
+
+        var meshes = Formats.MapGeo.LegacyMapPorter.ImportedMeshes(map);
+        if (meshes.Count == 0)
+        { _log.Warn("MapGeo", "No imported legacy geometry in this map (no LegacyPort/ materials)."); return; }
+
+        var entries = new List<(MapGeoMesh, MeshTransformCommand.State, MeshTransformCommand.State)>(meshes.Count);
+        foreach (var mesh in meshes)
+        {
+            var before = MeshTransformCommand.State.Capture(mesh);
+            map.TranslateMesh(mesh, mesh.Offset + delta);
+            entries.Add((mesh, before, MeshTransformCommand.State.Capture(mesh)));
+        }
+
+        var cmd = new BatchTransformCommand("Nudge Legacy Import", map, entries, MakeBatchRefresh(map));
+        if (cmd.HasChange) UndoService.PushApplied(cmd);
+
+        MeshVerticesRevision++;
+        RefreshSelectionVisuals();
+        if (SelectedMapMesh is { } sel) RefreshMeshTransformFields(sel);
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes);
+        _log.Success("MapGeo", $"Nudged {meshes.Count} imported legacy mesh(es) by "
+                             + $"({delta.X:0.###}, {delta.Y:0.###}, {delta.Z:0.###}). "
+                             + "Undo restores them; Save to Mod writes it.");
     }
 
     [RelayCommand]

@@ -265,8 +265,40 @@ public static class LegacyMapPorter
         return map.Meshes.Count(mesh => (!mesh.HasRegionHash || mesh.RegionHash == 0) && IsPreviousLegacyImport(mesh));
     }
 
+    /// <summary>The material-name prefix every generated legacy material carries. It is the only durable
+    /// marker of "this geometry came from a WGEO/NVR import" once the port has been written and reopened —
+    /// the mesh-count prefix that <see cref="ApplyImportedPositionCorrection"/> uses exists only inside a
+    /// single port run.</summary>
+    public const string LegacyMaterialPrefix = "LegacyPort/";
+
+    public static bool IsLegacyImportMaterial(string? material) =>
+        material is not null && material.StartsWith(LegacyMaterialPrefix, StringComparison.OrdinalIgnoreCase);
+
     private static bool IsPreviousLegacyImport(MapGeoBinary.Mesh mesh) =>
-        mesh.Submeshes.Any(submesh => submesh.Material.StartsWith("LegacyPort/", StringComparison.OrdinalIgnoreCase));
+        mesh.Submeshes.Any(submesh => IsLegacyImportMaterial(submesh.Material));
+
+    /// <summary>
+    /// M472: the imported-legacy meshes of an ALREADY PORTED map, so the import can be nudged as a group
+    /// long after the port ran.
+    ///
+    /// <para><see cref="LegacyPositionCorrection"/> is a constant that was measured in two passes and then
+    /// BAKED into the geometry at port time — it is not stored anywhere and cannot be re-derived from the
+    /// result. So "the alignment is 30 units out" had no answer short of re-porting the whole map, or
+    /// hand-editing every imported mesh through a per-mesh transform box that only takes absolute world
+    /// positions. This is the set those nudges have to apply to.</para>
+    ///
+    /// <para>Identified by material prefix rather than by mesh order: a re-port, a cleanup pass or a mesh
+    /// added later all change the ordering, and a group nudge that silently caught destination geometry
+    /// would move the part of the map that was already correct.</para>
+    /// </summary>
+    public static IReadOnlyList<MapGeoMesh> ImportedMeshes(MapGeoAsset map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        var imported = new HashSet<int>();
+        foreach (var g in map.Groups)
+            if (g.MeshIndex >= 0 && IsLegacyImportMaterial(g.Material)) imported.Add(g.MeshIndex);
+        return map.Meshes.Where(m => imported.Contains(m.Index)).ToList();
+    }
 
     public static LegacyMapPortResult Port(string sourceRoot, byte[] destinationMapGeo,
         string? destinationMapGeoPath = null)
