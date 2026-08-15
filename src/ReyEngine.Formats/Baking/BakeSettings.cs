@@ -27,9 +27,19 @@ public sealed class BakeSettings
     public bool CompressBc3 { get; set; } = true;
 
     /// <summary>Write each texel's alpha as its own luminance instead of a flat 255. Riot's shipped
-    /// atlases DO carry varying alpha that correlates with brightness (r = 0.88, measured on Map12), but
-    /// what consumes it is unverified — and 255 is the identity under any multiply, so it is the
-    /// default. Our own viewport samples .rgb only, so this changes nothing in preview either way.</summary>
+    /// atlases DO carry varying alpha that correlates with brightness (r = 0.88, measured on Map12).
+    ///
+    /// <para><b>M468 — what consumes it is no longer unverified.</b> The alpha is the STATIC SHADOW MASK:
+    /// <c>defaultenv_flat</c> blob 226 line 200 reads <c>shadow = min(realtimePCF, lightmap.w)</c>, so it
+    /// caps the real-time sun shadow, and the brightness correlation follows from a shadowed texel being
+    /// both darker and more occluded. This is also the ONLY mechanism by which static map geometry casts a
+    /// sun shadow in League — there is no real-time environment caster for it.</para>
+    ///
+    /// <para>Still off by default, but now for a stated reason rather than an unknown one: 255 is the
+    /// identity under <c>min</c> as well as under a multiply, so a flat-alpha atlas leaves the real-time
+    /// shadow un-vetoed, while a luminance alpha would clamp it everywhere the bake happens to be dark.
+    /// Turn it on when the bake is meant to BE the shadow; leave it off when real-time shadows should win.
+    /// Our own viewport samples .rgb only, so this changes nothing in preview either way.</para></summary>
     public bool AlphaFromLuminance { get; set; }
 
     /// <summary>Write the full mip chain. Riot's atlases always carry one (12 levels at 2048).</summary>

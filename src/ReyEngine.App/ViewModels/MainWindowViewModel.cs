@@ -2997,6 +2997,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public int MeshesWithStrippedLightmap =>
         _currentMap?.Meshes.Count(m => m.HasLightmapUv && string.IsNullOrEmpty(m.BakedLightTexture)) ?? 0;
 
+    /// <summary>
+    /// M468: materials still compiling the BAKED path — no <c>NO_BAKED_LIGHTING</c> — which is only a
+    /// problem next to <see cref="MeshesWithStrippedLightmap"/>, and next to it is the whole problem.
+    ///
+    /// <para>Stripping the lightmaps and switching the materials are two separate actions, and doing only
+    /// the first leaves a map on the baked path with no bake: the shader still samples a lightmap that is
+    /// no longer bound. Measured on the user's Map453 — <b>90 of 92 materials carry no macros at all</b>,
+    /// one has <c>USE_DYNAMIC_LIGHTING=1</c>, one has <c>NO_BAKED_LIGHTING=1</c>. That map was never
+    /// actually running dynamic lighting.</para>
+    ///
+    /// <para>The macro is what moves them. <c>FaeLights_Prototype_Mat</c>, the single material that has it,
+    /// resolves to blob 45, which <b>samples SHADOW_MAP_DEPTH_PCF and samples NO lightmap</b> — so the
+    /// <c>min(pcf, lightmap.w)</c> veto has nothing to clamp it with and real-time shadows land at full
+    /// strength. Casting is still gone either way; that half is baked-only in League.</para>
+    /// </summary>
+    public int MaterialsStillOnBakedPath => _currentMapProfiles is null ? 0
+        : _currentMapProfiles.Values.Count(p => !p.NoBakedLighting);
+
     /// <summary>M468: the map has a lightmap layout sitting unused. Surfaced rather than silent because the
     /// map still renders — it just renders with no baked light and no static shadows.</summary>
     public bool HasStrippedLightmap => HasMapForLayout && MeshesWithStrippedLightmap > 0;
@@ -8685,11 +8703,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // merely "unlit", so nothing about the picture tells you the terrain's shadows are gone -
                 // and they are, because in League a static mesh's shadow IS the lightmap.
                 if (MeshesWithStrippedLightmap > 0)
+                {
                     _log.Warn("Map", $"{MeshesWithStrippedLightmap} mesh(es) have lightmap UVs but NO lightmap "
                         + "texture bound. Baked light AND baked static shadows are both off for them - Riot's "
-                        + "shader reads shadow = min(realtime PCF, lightmap alpha), so map geometry casts "
-                        + "nothing in game until this is re-baked. Character and mob shadows are unaffected; "
-                        + "they come from a separate skinned caster pass.");
+                        + "shader reads shadow = min(realtime PCF, lightmap alpha), and static map geometry "
+                        + "only ever casts at BAKE time. Character and mob shadows are unaffected; they come "
+                        + "from a separate skinned caster pass.");
+                    // The half that is actually actionable. Stripping the bake and moving the materials to
+                    // the dynamic path are two different actions, and doing only the first leaves the map
+                    // sampling a lightmap that no longer exists.
+                    int stillBaked = MaterialsStillOnBakedPath;
+                    if (stillBaked > 0)
+                        _log.Warn("Map", $"{stillBaked} material(s) still compile the BAKED path "
+                            + "(no NO_BAKED_LIGHTING) while no lightmap is bound - so this map is not running "
+                            + "dynamic lighting, it is running baked lighting with the bake deleted. Use the "
+                            + "material lighting-mode buttons to set them Unlit/NO_BAKED_LIGHTING, or re-bake.");
+                }
                 RefreshMapGraphicsFeatures();   // M434
                 _selection.Clear();
                 CurrentModelTextures = textures;
