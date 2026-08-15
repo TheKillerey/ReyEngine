@@ -343,6 +343,46 @@
                        Text="Toggle fog on under MODE to see it. The toggle appears once the two numbers describe a real range." />
           </StackPanel>
         </Border>
+
+        <!-- M467: the sun's SHADOW half. These are the only map-side shadow controls that exist - the
+             meta database puts `castShadows` on SkinMeshDataProperties (characters) and nowhere else, so
+             there is no per-material or per-mesh cast flag to offer instead. They are written to the bin
+             for the GAME; ReyEngine's own viewport shadow is fitted by SunShadowFit and ignores them. -->
+        <Border Classes="card" Margin="0,8,0,0">
+          <StackPanel Spacing="4">
+            <DockPanel>
+              <TextBlock Text="SUN SHADOWS (game only)" FontSize="10" FontWeight="Bold"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+            </DockPanel>
+            <TextBlock Text="Coverage radius" FontSize="11" Margin="0,4,0,0"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <NumericUpDown Value="{Binding SunRadiusForShadows}" Minimum="0" Maximum="20000" Increment="5"
+                           FormatString="0.###" FontSize="11"
+                           ToolTip.Tip="MapSunProperties.SunRadiusForShadows. Schema default 0. 176 of 207 shipped maps author this, 151 of them to 75 (then 100, 15, 250, 150) - but Summoner's Rift authors NONE of these four and so runs at 0. That is the sharpest correlation with 'map geometry casts no shadow in game', and it is a correlation, not a proven switch: the name also reads as a soft-shadow penumbra radius, and no shader constant in the disassembly is named after it. Try 75 - Riot's own dominant value - and judge it in game." />
+            <TextBlock Text="Shadow intensity scale" FontSize="11" Margin="0,6,0,0"
+                       Foreground="{DynamicResource ReyTextBrush}" />
+            <NumericUpDown Value="{Binding ScaleSunShadowIntensity}" Minimum="0" Maximum="4" Increment="0.05"
+                           FormatString="0.###" FontSize="11"
+                           ToolTip.Tip="MapSunProperties.ScaleSunShadowIntensity. Schema default 1. Authored by 30 of 207 maps (0.05, 0.4, 0, 0.01, 0.1, 0.5) and by 131 of 173 MapLightingVolumes, so Riot uses it heavily as a per-region control. 0 means the sun shadow contributes nothing." />
+            <UniformGrid Columns="2" Margin="0,6,0,0">
+              <StackPanel Margin="0,0,3,0">
+                <TextBlock Text="Depth bias" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+                <NumericUpDown Value="{Binding SunShadowBias}" Minimum="0" Maximum="1" Increment="0.0001"
+                               FormatString="0.#####" FontSize="11"
+                               ToolTip.Tip="MapSunProperties.ShadowBias. Schema default 0.0006. NOT ONE of the 207 shipped maps authors this - every single one takes the default, so any value you set here is unlike anything Riot ships. Too low gives acne, too high detaches shadows from their objects." />
+              </StackPanel>
+              <StackPanel Margin="3,0,0,0">
+                <TextBlock Text="Area / map scale" FontSize="11" Foreground="{DynamicResource ReyTextBrush}" />
+                <NumericUpDown Value="{Binding SurfaceAreaToShadowMapScale}" Minimum="0" Maximum="8" Increment="0.005"
+                               FormatString="0.####" FontSize="11"
+                               ToolTip.Tip="MapSunProperties.surfaceAreaToShadowMapScale. Schema default 0.05 - how much world one shadow texel covers. Authored by 17 of 207 (0.1, 0.02, 0.025, 0.015, 0.03, 1). Lower is sharper and covers less." />
+              </StackPanel>
+            </UniformGrid>
+            <TextBlock FontSize="10" TextWrapping="Wrap" Margin="0,6,0,0"
+                       Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="These four change the GAME, not this viewport - use Save Sun To Map, then test in client. Summoner's Rift ships none of them, which is why its terrain casts nothing while characters still do: castShadows is a character-mesh field and map geometry has no equivalent." />
+          </StackPanel>
+        </Border>
       </StackPanel>
     </Grid>
     </ScrollViewer>

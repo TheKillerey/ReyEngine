@@ -43,6 +43,13 @@ public class MapSunWriterTests
         GroundColor = new Vector4(0.1f, 0.1f, 0.1f, 1f),
         FogColor = new Vector4(0.2f, 0.3f, 0.4f, 1f),
         FogStartAndEnd = new Vector2(-10000f, -50000f),
+        // M467. All four deliberately NON-default, or the reflection guard below would compare a default
+        // against a default and pass without the writer ever touching them. Values are Riot's own: 75 is
+        // what 151 of the 176 authoring maps use, 0.4 and 0.02 both appear in the shipped spread.
+        SunRadiusForShadows = 75f,
+        ScaleSunShadowIntensity = 0.4f,
+        ShadowBias = 0.002f,
+        SurfaceAreaToShadowMapScale = 0.02f,
     };
 
     [Fact]
@@ -205,10 +212,60 @@ public class MapSunWriterTests
         var declared = typeof(MapSunProperties).GetProperties()
             .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
             .ToList();
-        // Ten today. A new field must be added to Extract AND Write, not just to the record.
-        Assert.Equal(10, declared.Count);
+        // Fourteen today: M463's ten plus M467's four shadow fields. A new field must be added to Extract
+        // AND Write, not just to the record.
+        Assert.Equal(14, declared.Count);
         foreach (var p in declared)
             Assert.Equal(p.GetValue(Authored), p.GetValue(back));
+    }
+
+    /// <summary>M467: the four shadow fields land under the hashes the GAME resolves. This is the failure
+    /// that has no symptom — a wrong field hash writes a property the client silently skips, the bin still
+    /// validates, the map still loads, and nothing in the viewport differs. The expected values are Riot's
+    /// published hashes from the shipped binfields list, not recomputed from the same function under
+    /// test.</summary>
+    [Theory]
+    [InlineData("SunRadiusForShadows", 0xd8851203u)]
+    [InlineData("ScaleSunShadowIntensity", 0xba02f116u)]
+    [InlineData("ShadowBias", 0xd14e6310u)]
+    [InlineData("surfaceAreaToShadowMapScale", 0x09c4fe2cu)]
+    public void Shadow_fields_use_Riots_published_hashes(string field, uint published)
+    {
+        Assert.Equal(published, H(field));
+
+        byte[] outBin = MapSunProperties.Write(BinWith(new BinTreeVector4(H("sunColor"), Vector4.One)),
+                                               Authored, out _)!;
+        var tree = new BinTree(new MemoryStream(outBin, false));
+        var sun = tree.Objects.Values.SelectMany(o => o.Properties.Values)
+            .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
+            .OfType<BinTreeStruct>().Single(s => s.ClassHash == H("MapSunProperties"));
+
+        Assert.True(sun.Properties.ContainsKey(published), $"{field} was not written under 0x{published:x8}");
+        Assert.IsType<BinTreeF32>(sun.Properties[published]);
+    }
+
+    /// <summary>Summoner's Rift authors none of the four, so it runs SunRadiusForShadows at 0 — that is the
+    /// state a user starts from. Setting only that one field must add exactly it and leave the other three
+    /// absent, so a map that gains sun shadows does not silently also gain a bias no shipped map uses.</summary>
+    [Fact]
+    public void Enabling_only_the_coverage_radius_adds_only_that_field()
+    {
+        byte[] bin = BinWith(new BinTreeVector4(H("sunColor"), Vector4.One));
+        var sun = new MapSunProperties { SunRadiusForShadows = 75f };   // the Riot-dominant value
+
+        byte[]? outBin = MapSunProperties.Write(bin, sun, out var result);
+
+        var tree = new BinTree(new MemoryStream(outBin!, false));
+        var s = tree.Objects.Values.SelectMany(o => o.Properties.Values)
+            .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
+            .OfType<BinTreeStruct>().Single(x => x.ClassHash == H("MapSunProperties"));
+
+        Assert.True(s.Properties.ContainsKey(H("SunRadiusForShadows")));
+        Assert.False(s.Properties.ContainsKey(H("ScaleSunShadowIntensity")));
+        Assert.False(s.Properties.ContainsKey(H("ShadowBias")));
+        Assert.False(s.Properties.ContainsKey(H("surfaceAreaToShadowMapScale")));
+        Assert.Equal(1, result.FieldsAdded);
+        Assert.Equal(75f, MapSunProperties.Extract(outBin!)!.SunRadiusForShadows);
     }
 
     [Fact]

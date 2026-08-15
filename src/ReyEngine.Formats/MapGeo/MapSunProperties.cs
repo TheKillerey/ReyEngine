@@ -29,6 +29,41 @@ public sealed record MapSunProperties
     public Vector4 FogColor { get; init; } = Vector4.One;
     public Vector2 FogStartAndEnd { get; init; }
 
+    // ---------------------------------------------------------------- M467: the sun SHADOW half
+    //
+    // The report was that in game, shadows land on characters and mobs but map geometry casts none — and
+    // the search for a per-material or per-mesh "cast shadows" flag comes up empty. It is empty because
+    // there isn't one: a sweep of the 5,340-class meta database finds `castShadows` on exactly one class,
+    // SkinMeshDataProperties (the CHARACTER mesh, default true). No map class and no material class has a
+    // counterpart. What the map side has instead is these four, and ReyEngine has never read any of them.
+    //
+    // Not a cook limitation, which was the competing explanation and is now ruled out:
+    // defaultenv_flat.ps-dx11 cooks 48 distinct GENERATE_SHADOW_MAP blobs, so the shader half of drawing map
+    // geometry into the sun shadow map ships. Defaults are from the meta schema, not chosen.
+
+    /// <summary>Sun shadow coverage radius. Schema default <b>0</b>.
+    ///
+    /// <para><b>176 of 207 shipped MapSunProperties author this</b>, overwhelmingly to 75 (151 of them;
+    /// then 100 x12, 15 x4, 250, 150). <b>Map11 — Summoner's Rift — authors none of the four</b>, so it
+    /// takes 0 here, which is the single sharpest correlation with "SR map geometry casts no sun shadow".
+    /// That correlation is NOT proof of causation: the name equally supports a penumbra/soft-shadow radius
+    /// reading, and nothing in the shader disassembly names this constant. Treat 75 as the value to TEST,
+    /// evidenced by Map12/jade and 150 other shipped maps, not as a documented switch.</para></summary>
+    public float SunRadiusForShadows { get; init; }
+
+    /// <summary>Multiplier on sun shadow darkness. Schema default 1. Authored by 30 of 207 (0.05, 0.4, 0,
+    /// 0.01, 0.1, 0.5) and by 131 of 173 MapLightingVolumes, so it is a live per-region control.</summary>
+    public float ScaleSunShadowIntensity { get; init; } = 1f;
+
+    /// <summary>Depth bias for the sun shadow comparison. Schema default 0.0006. <b>Authored by 0 of 207
+    /// shipped maps</b> — every map takes the default, so a non-default here is unlike anything Riot
+    /// ships.</summary>
+    public float ShadowBias { get; init; } = 0.0006f;
+
+    /// <summary>Ratio of world surface area to shadow-map area — i.e. how much world one shadow texel
+    /// covers. Schema default 0.05; authored by 17 of 207 (0.1, 0.02, 0.025, 0.015, 0.03, 1).</summary>
+    public float SurfaceAreaToShadowMapScale { get; init; } = 0.05f;
+
     /// <summary>
     /// M145: the fog range as usable positive world distances. Riot stores <c>fogStartAndEnd</c> in a
     /// view-space depth convention — negative, and with the far value "smaller" (Twisted Treeline ships
@@ -70,6 +105,12 @@ public sealed record MapSunProperties
                         GroundColor = Vec4(s, "groundColor", Vector4.One),
                         FogColor = Vec4(s, "fogColor", Vector4.One),
                         FogStartAndEnd = Vec2(s, "fogStartAndEnd", Vector2.Zero),
+                        // M467. Defaults are the meta schema's, so an absent field reads back as whatever
+                        // the game would use — the same contract every field above already keeps.
+                        SunRadiusForShadows = F32(s, "SunRadiusForShadows", 0f),
+                        ScaleSunShadowIntensity = F32(s, "ScaleSunShadowIntensity", 1f),
+                        ShadowBias = F32(s, "ShadowBias", 0.0006f),
+                        SurfaceAreaToShadowMapScale = F32(s, "surfaceAreaToShadowMapScale", 0.05f),
                     };
                 }
             }
@@ -152,6 +193,14 @@ public sealed record MapSunProperties
             Set("groundColor", new BinTreeVector4(HashAlgorithms.Fnv1a("groundColor"), sun.GroundColor), sun.GroundColor == defaults.GroundColor);
             Set("fogColor", new BinTreeVector4(HashAlgorithms.Fnv1a("fogColor"), sun.FogColor), sun.FogColor == defaults.FogColor);
             Set("fogStartAndEnd", new BinTreeVector2(HashAlgorithms.Fnv1a("fogStartAndEnd"), sun.FogStartAndEnd), sun.FogStartAndEnd == defaults.FogStartAndEnd);
+            // M467. Case matters: these four are FNV-1a over the name AS RIOT SPELLS IT, and Riot spells
+            // three of them capitalised and surfaceAreaToShadowMapScale lower — same inconsistency
+            // SunIntensityScale already has above. The hashes were taken from the shipped hash list, not
+            // guessed from a convention.
+            Set("SunRadiusForShadows", new BinTreeF32(HashAlgorithms.Fnv1a("SunRadiusForShadows"), sun.SunRadiusForShadows), sun.SunRadiusForShadows == defaults.SunRadiusForShadows);
+            Set("ScaleSunShadowIntensity", new BinTreeF32(HashAlgorithms.Fnv1a("ScaleSunShadowIntensity"), sun.ScaleSunShadowIntensity), sun.ScaleSunShadowIntensity == defaults.ScaleSunShadowIntensity);
+            Set("ShadowBias", new BinTreeF32(HashAlgorithms.Fnv1a("ShadowBias"), sun.ShadowBias), sun.ShadowBias == defaults.ShadowBias);
+            Set("surfaceAreaToShadowMapScale", new BinTreeF32(HashAlgorithms.Fnv1a("surfaceAreaToShadowMapScale"), sun.SurfaceAreaToShadowMapScale), sun.SurfaceAreaToShadowMapScale == defaults.SurfaceAreaToShadowMapScale);
 
             var ms = new MemoryStream();
             tree.Write(ms);

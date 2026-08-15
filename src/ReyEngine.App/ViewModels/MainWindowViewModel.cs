@@ -4358,6 +4358,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // (near, far) here would mean guessing how to put the sign back on save.
     [ObservableProperty] private double _fogStartRaw;
     [ObservableProperty] private double _fogEndRaw;
+
+    // M467: MapSunProperties' four SHADOW fields. These are the only map-side shadow controls that exist —
+    // a sweep of the meta database finds `castShadows` on SkinMeshDataProperties (characters) alone, so
+    // there is no per-material or per-mesh cast flag to expose instead. They drive the GAME, not the
+    // viewport: ReyEngine's own shadow map is fitted by SunShadowFit and has no use for a coverage radius
+    // or a Riot bias, so wiring these into the preview would misreport what the client will do.
+    [ObservableProperty] private double _sunRadiusForShadows;
+    [ObservableProperty] private double _scaleSunShadowIntensity = 1.0;
+    [ObservableProperty] private double _sunShadowBias = 0.0006;
+    [ObservableProperty] private double _surfaceAreaToShadowMapScale = 0.05;
     [ObservableProperty] private bool _hasMaterialData;
     [ObservableProperty] private bool _hasInspectorBody;
     [ObservableProperty] private int _inspectorTab;
@@ -8796,6 +8806,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             FogColorR = Clamp01(_baseSun.FogColor.X); FogColorG = Clamp01(_baseSun.FogColor.Y); FogColorB = Clamp01(_baseSun.FogColor.Z);
             FogStartRaw = _baseSun.FogStartAndEnd.X; FogEndRaw = _baseSun.FogStartAndEnd.Y;
 
+            // M467: the shadow four. Loaded here so the panel shows what the MAP authors rather than the
+            // schema default - the difference between the two is the whole finding on Summoner's Rift,
+            // which authors none of them and therefore runs SunRadiusForShadows at 0.
+            SunRadiusForShadows = _baseSun.SunRadiusForShadows;
+            ScaleSunShadowIntensity = _baseSun.ScaleSunShadowIntensity;
+            SunShadowBias = _baseSun.ShadowBias;
+            SurfaceAreaToShadowMapScale = _baseSun.SurfaceAreaToShadowMapScale;
+
             _suppressSunRebuild = false;
             RebuildSun();
             CurrentLightmapScale = sun?.LightMapColorScale ?? 1.0;
@@ -9031,6 +9049,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 GroundColor = new System.Numerics.Vector4((float)GroundColorR, (float)GroundColorG, (float)GroundColorB, 1f),
                 FogColor = new System.Numerics.Vector4((float)FogColorR, (float)FogColorG, (float)FogColorB, 1f),
                 FogStartAndEnd = new System.Numerics.Vector2((float)FogStartRaw, (float)FogEndRaw),
+
+                // M467: the shadow four, on the same rule as M463's six — written from the PANEL, because a
+                // control that edits the viewport and is dropped on save is the same defect as a control
+                // that does nothing. MapSunProperties.Write only ADDS a field whose value differs from the
+                // schema default, so leaving these alone still produces a byte-identical bin.
+                SunRadiusForShadows = (float)SunRadiusForShadows,
+                ScaleSunShadowIntensity = (float)ScaleSunShadowIntensity,
+                ShadowBias = (float)SunShadowBias,
+                SurfaceAreaToShadowMapScale = (float)SurfaceAreaToShadowMapScale,
             };
             byte[] source = ReadAsset(binEntry.PathHash);
             var (bytes, result) = await Task.Run(() =>
