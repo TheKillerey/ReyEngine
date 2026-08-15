@@ -265,6 +265,30 @@ public sealed class ShaderPermutationIndex
         return cooked && sawEvidence;
     }
 
+    /// <summary>M491: the same question in the other direction — if we ADD <paramref name="macro"/> at
+    /// <paramref name="value"/>, will the game still find a cooked shader?
+    ///
+    /// <para>Adding a macro asks the client for a define set exactly as much as removing one does, and it
+    /// had no check. M486 authored NO_BAKED_LIGHTING=1 across 78 DefaultEnv_Flat_AlphaTest materials on the
+    /// strength of a permutation COUNT, and League answered
+    /// <c>Unable to find correct hash for shader '...DefaultEnv_Flat_AlphaTest.ps-dx11' in wad</c> followed
+    /// by <c>Failed to compile shader</c>. Counting permutations that mention an axis is not the same
+    /// question as whether the exact key a material requests was cooked; IsCooked asks the exact question,
+    /// and its "this exact value was never cooked" branch is the one that catches this.</para>
+    ///
+    /// <para>FAIL-SAFE in the same direction as its counterpart: false unless positively proved cooked. The
+    /// cost of a false negative is a material that keeps its baked lightmap; the cost of a false positive is
+    /// a shader the client cannot load at all, which is a map that renders nothing.</para></summary>
+    public bool CanSetMacro(MaterialBinding material, string macro, string value)
+    {
+        if (_cache is null) return false;
+        var with = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, v) in material.Macros) with[name] = v;
+        with[macro] = value;
+        bool cooked = IsCooked(material, with, out bool sawEvidence, forcedAbsent: null);
+        return cooked && sawEvidence;
+    }
+
     /// <summary>M213: the shader's own featureDefines and staticSwitch defaults, from shaders.bin. The DX11
     /// preview needs these to reconstruct a material's COMPLETE define set - a material only authors the
     /// switches it changes, and the rest come from the shader definition.</summary>

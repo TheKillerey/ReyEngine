@@ -2687,10 +2687,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <para><c>NO_BAKED_LIGHTING</c> on = the material stops sampling its baked lightmap, which is the
     /// state the point lights were observed working in. Off = it uses the baked lightmap again.</para>
     ///
-    /// <para><b>Turning it OFF is guarded</b>, because clearing the macro asks the client for a define set
-    /// it may never have cooked — on Map11/base_srx 20 of 184 materials have no such permutation, and
-    /// clearing them blindly is what made the client log "Unable to find correct hash for shader" and
-    /// render nothing (M166). Materials without a cooked alternative keep the macro and are reported.</para>
+    /// <para><b>BOTH directions are guarded</b>, because either one asks the client for a define set it may
+    /// never have cooked. Clearing: on Map11/base_srx 20 of 184 materials have no permutation without the
+    /// macro, and clearing them blindly made the client log "Unable to find correct hash for shader" and
+    /// render nothing (M166). Setting: M486 authored it across 78 DefaultEnv_Flat_AlphaTest materials and got
+    /// the same error — that direction was unguarded until M491. Materials the game cooked no shader for are
+    /// left as they are and reported, in whichever direction was asked.</para>
     /// </summary>
     [RelayCommand]
     private async Task SetAllMaterialsUnlit() => await SetAllMaterialsNoBakedLighting(true);
@@ -2721,13 +2723,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             int changed = 0, refused = 0;
             foreach (var m in doc.Materials)
             {
-                if (unlit) { if (m.SetMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting, true) is not null) changed++; }
+                if (unlit)
+                {
+                    // M491: ADDING the macro asks the client for a define set just as much as clearing it
+                    // does, and this direction had no check at all. M486 authored NO_BAKED_LIGHTING=1 across
+                    // 78 DefaultEnv_Flat_AlphaTest materials and League answered "Unable to find correct hash
+                    // for shader ... in wad" + "Failed to compile shader" - a map that renders nothing.
+                    if (canValidate && !perms!.CanSetMacro(m, Formats.Materials.MaterialBinding.MacroNoBakedLighting, "1"))
+                    { refused++; continue; }
+                    if (m.SetMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting, true) is not null) changed++;
+                }
                 else if (!perms!.CanRemoveMacro(m, Formats.Materials.MaterialBinding.MacroNoBakedLighting)) refused++;
                 else if (m.RemoveMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting)) changed++;
             }
+            // The refusal reads in opposite directions: clearing leaves the macro ON, setting leaves it OFF.
+            string refusedNote = refused == 0 ? "" : unlit
+                ? $" {refused:n0} were left baked (the game ships no cooked permutation for them WITH the macro)."
+                : $" {refused:n0} kept the macro (no cooked permutation without it).";
+            if (unlit && !canValidate)
+                _log.Warn("Materials", "No shader cache found (set the game folder) — writing NO_BAKED_LIGHTING "
+                                     + "without checking that the game cooked a shader for it.");
+
             if (changed == 0)
             { _log.Info("Materials", $"Nothing to change — every material is already {(unlit ? "unlit" : "baked")}."
-                                     + (refused > 0 ? $" {refused} kept the macro (no cooked permutation without it)." : "")); return; }
+                                     + refusedNote); return; }
 
             byte[] bytes = doc.Serialize();
             var issues = Formats.Meta.ModShapeValidator.ValidateBin(
@@ -2757,9 +2776,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
             UpdateTitle();
 
-            _log.Success("Materials", $"{(unlit ? "Set" : "Cleared")} NO_BAKED_LIGHTING on {changed:n0} material(s)"
-                + (refused > 0 ? $"; {refused:n0} kept it (the game ships no permutation for them without it)" : "")
-                + $". Saved to {savedTo}.");
+            _log.Success("Materials", $"{(unlit ? "Set" : "Cleared")} NO_BAKED_LIGHTING on {changed:n0} material(s)."
+                + refusedNote + $" Saved to {savedTo}.");
         }
         catch (Exception ex) { _log.Error("Materials", "Material lighting mode could not be set: " + ex.Message); }
     }
