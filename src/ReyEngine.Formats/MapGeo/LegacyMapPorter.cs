@@ -58,7 +58,8 @@ public sealed record LegacyMaterialPlan(
     IReadOnlyDictionary<string, bool> Macros,
     bool BlendEnabled = false,
     int? SourceBlendFactor = null,
-    int? DestinationBlendFactor = null);
+    int? DestinationBlendFactor = null,
+    int? SamplerAddressMode = null);
 
 public sealed record LegacyMapPortResult(
     byte[] MapGeoBytes,
@@ -93,6 +94,26 @@ public static class LegacyMapPorter
     public const string DecalShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest";
     public const string GrassShader = "Shaders/StaticMesh/VertexDeform";
     public const string TerrainShader = "Shaders/StaticMesh/4TextureBlend_WorldProjected";
+
+    /// <summary>
+    /// M490: the sampler address value the DECAL role authors, so a ported decal stops at its edge instead
+    /// of repeating across the surface it is stamped on.
+    ///
+    /// <para>1 = Clamp in Riot's enum, which is Unity's TextureWrapMode ordering rather than D3D11's:
+    /// 0 = Wrap and 2 = Mirror were read off Riot's own NAMED shared samplers (M184), leaving 1. Censused
+    /// over the nine shipped map WADs (16,904 samplers) the clamp triple addressU=1/addressV=1/addressW=1
+    /// is authored 2,870 times, so this is a shipped form, not an invented one.</para>
+    ///
+    /// <para><b>Riot does NOT clamp their own decals, and that is deliberate on their side.</b> Every one of
+    /// the 103 samplers in the shipped Map453 jade_container.materials.bin carries addressW=1 and NOTHING
+    /// else, and 2 of its 27 decal meshes run u from -0.01 to 2.99 - a road strip meant to tile three times.
+    /// Riot's remaining 25 decals simply keep uv0 inside the unit square, so wrap and clamp look identical
+    /// on them and the question never arises. Legacy NVR decals do not: their uv0 leaves the square, which
+    /// is the repeat the reporter saw. Clamping is therefore the right default HERE and would be the wrong
+    /// one for a decal authored to tile - which is why it is a named constant on the decal role rather than
+    /// a blanket rule over every ported material.</para>
+    /// </summary>
+    public const int ClampAddressMode = 1;
     /// <summary>
     /// Default world-space correction applied to imported WGEO/NVR geometry.
     ///
@@ -639,7 +660,8 @@ public static class LegacyMapPorter
                 : new Dictionary<string, bool>();
             result.Add(new LegacyMaterialPlan(name, key.Role, shader, samplerPlan, parameters, switches,
                 macros,
-                BlendEnabled: decal, SourceBlendFactor: decal ? 6 : null, DestinationBlendFactor: decal ? 7 : null));
+                BlendEnabled: decal, SourceBlendFactor: decal ? 6 : null, DestinationBlendFactor: decal ? 7 : null,
+                SamplerAddressMode: decal ? ClampAddressMode : null));
         }
         return result;
     }

@@ -860,7 +860,11 @@ public sealed class MaterialBinding
         get { int v = GetPassU32("dstColorBlendFactor"); return v >= 0 ? v : _dstBlendInit; }
         init => _dstBlendInit = value;
     }
-    /// <summary>Diffuse sampler's addressU/V wrap mode (Riot enum: 1 = Clamp — used by decals; else Wrap). M34.</summary>
+    /// <summary>Diffuse sampler's addressU/V wrap mode. Riot's enum is Unity's TextureWrapMode ordering, not
+    /// D3D11's: 0 = Wrap, 1 = Clamp, 2 = Mirror (M34, M184). M490 corrects the old "used by decals" note here
+    /// - censused over the nine shipped map WADs, 16,904 samplers, decals are NOT reliably clamped. Riot's own
+    /// Map453 sets addressW=1 and nothing else on all 103 of its samplers, and 2 of its 27 decal meshes tile
+    /// on purpose. Clamp ships 2,870 times as the addressU/V/W triple, mostly on VFX.</summary>
     public int DiffuseAddressU { get; init; }
     public int DiffuseAddressV { get; init; }
 

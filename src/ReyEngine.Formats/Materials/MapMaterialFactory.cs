@@ -239,7 +239,14 @@ public static class MapMaterialFactory
 
     /// <summary>Create a material from a shader while applying authored sampler, parameter, switch and
     /// macro and render-state defaults. The legacy porter uses this to bind each content-unique texture
-    /// set through a real runtime material and to replace an earlier automatic shader choice safely.</summary>
+    /// set through a real runtime material and to replace an earlier automatic shader choice safely.
+    ///
+    /// <para><paramref name="samplerAddressMode"/> writes addressU/V/W on every authored sampler. Riot's
+    /// enum is Unity's TextureWrapMode ordering, not D3D11's: 0 = Wrap and 2 = Mirror are read off their own
+    /// NAMED shared samplers (M184), leaving 1 = Clamp. Censused over the nine shipped map WADs - 16,904
+    /// samplers - the values that ship are 1 and 2, and "addressU=1 addressV=1 addressW=1" is authored 2,870
+    /// times, so the clamp triple is a form Riot ships rather than one we invented. Leave it null to author
+    /// no address field at all, which is the schema default (Wrap) and what 4,726 shipped samplers do.</para></summary>
     public static byte[]? CreateFromShader(byte[] materialsBin, string newName,
         Shaders.LeagueShaderDef shader, out string? error,
         IReadOnlyDictionary<string, string>? samplerOverrides,
@@ -250,7 +257,8 @@ public static class MapMaterialFactory
         bool? blendEnable = null,
         int? sourceBlendFactor = null,
         int? destinationBlendFactor = null,
-        bool? cullEnable = null)
+        bool? cullEnable = null,
+        int? samplerAddressMode = null)
     {
         error = null;
         try
@@ -287,11 +295,20 @@ public static class MapMaterialFactory
                 bool diffuseIsh = t.Name.Contains("Diffuse", StringComparison.OrdinalIgnoreCase);
                 if (diffuseOverride is not null && !overrideUsed && (diffuseIsh || shader.Textures.Count == 1))
                 { path = diffuseOverride; overrideUsed = true; }
-                samplers.Add(new BinTreeEmbedded(0, SamplerClass, new BinTreeProperty[]
+                var samplerProps = new List<BinTreeProperty>
                 {
                     new BinTreeString(F("TextureName"), t.Name),
                     new BinTreeString(F("texturePath"), path),
-                }));
+                };
+                if (samplerAddressMode is { } address)
+                {
+                    // U32, matching all 11,625 shipped occurrences. A narrower integer type here would be a
+                    // property the client reads as the wrong width - the silent-skip failure of M416/M476.
+                    samplerProps.Add(new BinTreeU32(F("addressU"), (uint)address));
+                    samplerProps.Add(new BinTreeU32(F("addressV"), (uint)address));
+                    samplerProps.Add(new BinTreeU32(F("addressW"), (uint)address));
+                }
+                samplers.Add(new BinTreeEmbedded(0, SamplerClass, samplerProps));
             }
             if (diffuseOverride is not null && !overrideUsed && samplers.Count > 0)
             {

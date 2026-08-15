@@ -8489,7 +8489,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     material.Samplers, material.Parameters, material.Switches, material.Macros,
                     replaceExisting: true, blendEnable: material.BlendEnabled,
                     sourceBlendFactor: material.SourceBlendFactor,
-                    destinationBlendFactor: material.DestinationBlendFactor);
+                    destinationBlendFactor: material.DestinationBlendFactor,
+                    samplerAddressMode: material.SamplerAddressMode);
                 if (next is null) throw new InvalidDataException($"Material '{material.Name}': {error}");
                 binBytes = next;
                 if (existed) updated++; else created++;

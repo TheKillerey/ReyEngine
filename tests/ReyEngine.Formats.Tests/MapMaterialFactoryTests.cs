@@ -195,6 +195,52 @@ public sealed class MapMaterialFactoryTests
         Assert.False(Assert.IsType<BinTreeBool>(pass.Properties[H("blendEnable")]).Value);
     }
 
+    /// <summary>
+    /// M490: a ported decal must be able to CLAMP, or its texture repeats across the surface it is stamped
+    /// on. The porter authors samplers as TextureName + texturePath only, so until now every ported texture
+    /// wrapped and there was no way to say otherwise.
+    ///
+    /// <para>The shape asserted here is Riot's, censused over the nine shipped map WADs (16,904 samplers):
+    /// addressU/V/W together as U32, which ships 2,870 times. The wire TYPE is the load-bearing part - a
+    /// narrower integer is a property the client reads wrong, which is the silent-skip failure mode of M416
+    /// and M476 and is invisible to our own reader.</para>
+    /// </summary>
+    [Fact]
+    public void DecalSamplersCanClampAndOmitAddressFieldsEntirelyWhenNotAsked()
+    {
+        var target = Write(new BinTreeObject(0x100u, H("MapSunProperties"), Array.Empty<BinTreeProperty>()));
+        var shader = new LeagueShaderDef("Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest", "StaticMesh",
+            new() { new ShaderTextureDef("DiffuseTexture", "ASSETS/Shared/Materials/white.tex") }, new(), new());
+        var diffuse = new Dictionary<string, string> { ["__diffuse__"] = "assets/maps/legacy/decal.dds" };
+
+        var clamped = MapMaterialFactory.CreateFromShader(target, "LegacyPort/map1/Decal_clamped", shader,
+            out var error, diffuse, samplerAddressMode: 1);
+
+        Assert.Null(error);
+        var sampler = Assert.Single(Assert
+            .IsType<BinTreeUnorderedContainer>(SafeBinTree.Parse(clamped!)
+                .Objects[H("LegacyPort/map1/Decal_clamped")].Properties[H("samplerValues")])
+            .Elements.OfType<BinTreeStruct>());
+        foreach (string field in new[] { "addressU", "addressV", "addressW" })
+            Assert.Equal(1u, Assert.IsType<BinTreeU32>(sampler.Properties[H(field)]).Value);
+        // The texture path is what the porter is protecting; clamping must not disturb it.
+        Assert.Equal("assets/maps/legacy/decal.dds",
+            Assert.IsType<BinTreeString>(sampler.Properties[H("texturePath")]).Value);
+
+        // Absent is the schema default (Wrap) and what 4,726 shipped samplers do, so the ordinary roles must
+        // author NO address field rather than an explicit zero.
+        var wrapped = MapMaterialFactory.CreateFromShader(target, "LegacyPort/map1/Normal_plain", shader,
+            out error, diffuse);
+
+        Assert.Null(error);
+        var plain = Assert.Single(Assert
+            .IsType<BinTreeUnorderedContainer>(SafeBinTree.Parse(wrapped!)
+                .Objects[H("LegacyPort/map1/Normal_plain")].Properties[H("samplerValues")])
+            .Elements.OfType<BinTreeStruct>());
+        foreach (string field in new[] { "addressU", "addressV", "addressW" })
+            Assert.False(plain.Properties.ContainsKey(H(field)));
+    }
+
     [Fact]
     public void ShaderCreationUsesTheCommonRiotSetupInsteadOfUnsafeDeclarationDefaults()
     {
