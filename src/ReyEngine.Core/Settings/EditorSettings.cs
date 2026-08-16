@@ -106,6 +106,15 @@ public sealed class EditorSettings
     public string WwiseConsolePath { get; set; } = "";
     public string WwiseProjectPath { get; set; } = "";
 
+    /// <summary>
+    /// Overwrite this instance's values from another.
+    ///
+    /// <para>This is the ONLY path from the Preferences dialog to the live settings — the app does
+    /// <c>Settings.CopyFrom(dialog.ToSettings()); Settings.Save();</c> — so a field missing here is a
+    /// preference that cannot be changed AND cannot be persisted, with no error anywhere. M505 found
+    /// exactly that: the M503c auto-save toggle was written, shown, and dropped on the way in.
+    /// <c>EditorSettingsTests.CopyFromCarriesEverySetting</c> now fails if a new field is forgotten.</para>
+    /// </summary>
     public void CopyFrom(EditorSettings s)
     {
         FlyForward = s.FlyForward; FlyBack = s.FlyBack; FlyLeft = s.FlyLeft; FlyRight = s.FlyRight;
@@ -116,6 +125,7 @@ public sealed class EditorSettings
         Theme = s.Theme;
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder; PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
         FirstRunCompleted = s.FirstRunCompleted;
+        AutoSaveEdits = s.AutoSaveEdits; AutoSaveDelaySeconds = s.AutoSaveDelaySeconds;   // M505
         ProjectsDirectory = s.ProjectsDirectory;
         WwiseConsolePath = s.WwiseConsolePath; WwiseProjectPath = s.WwiseProjectPath;
     }

@@ -1501,6 +1501,12 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         ApplyToViewport?.Invoke();
     }
 
+    /// <summary>M505: raised after ANY edit, whether or not the viewport can preview it. Auto-save hangs
+    /// off this rather than off the live-preview apply: that path returns early when the open .bin does not
+    /// match the loaded mesh, and with live preview switched off it never runs at all — so editing a
+    /// material could leave the auto-save timer un-armed and the edit unsaved.</summary>
+    public Action? Edited { get; set; }
+
     public void NotifyChanged()
     {
         IsDirty = _doc?.IsDirty ?? false;
@@ -1508,6 +1514,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         UpdateUnresolved();
         if (SelectedMaterial is { } sm) RefreshSphere(sm);   // M351k: edits show on the ball immediately
         ScheduleLiveApply();
+        if (IsDirty) Edited?.Invoke();
     }
 
     // ---- M351i + M351k: what happens when a material becomes the selected one ----

@@ -5082,6 +5082,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.OpenTexture = OpenTextureByPath;
         MaterialEditor.ReplaceTextureAsset = ReplaceTextureForSlot;
         MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
+        MaterialEditor.Edited = ScheduleAutoSave;   // M505: arm auto-save on the EDIT, not on the preview
         MaterialEditor.SaveOverride = SaveMaterialOverride;
         MaterialEditor.RequestCatalog = LoadShaderCatalogAsync;   // M103
         MaterialEditor.RequestCommonShaderSetup = LoadCommonShaderSetupAsync;
@@ -6198,6 +6199,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var bytes = MaterialEditor.Serialize();
         if (bytes is null) return;
+        // M505: arm auto-save BEFORE the viewport branch below, which returns early when the open .bin does
+        // not match the loaded mesh. The edit is unsaved state whether or not anything can preview it.
+        if (MaterialEditor.IsDirty) ScheduleAutoSave();
         try
         {
             if (MaterialEditor.Kind == MaterialSourceKind.ChampionSkin && CurrentMesh is { } mesh)
@@ -6216,7 +6220,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M501: the assignment above only feeds GL. Tell DX11 too, or the two viewports show different
             // materials for the same edit.
             NotifyMaterialsChanged();
-            ScheduleAutoSave();   // M503c: material edits are unsaved state too
             _log.Success("Material", "Applied material edits to the viewport (live).");
         }
         catch (Exception ex) { _log.Error("Material", $"Apply failed: {ex.Message}"); }
@@ -12810,10 +12813,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Called by the view after the Preferences dialog is saved: persist + let the view re-apply.</summary>
     public void ApplyEditorSettings(SettingsViewModel vm)
     {
+        bool wasAutoSaving = Settings.AutoSaveEdits;
         Settings.CopyFrom(vm.ToSettings());
         Settings.Save();
         CullBackfaces = Settings.CullBackfacesDefault;
         _log.Success("Settings", "Preferences saved.");
+        // M505: auto-save has no other sign of life, and for two milestones it silently did nothing because
+        // CopyFrom above dropped the flag. Say which state it is in whenever it changes.
+        if (wasAutoSaving != Settings.AutoSaveEdits)
+        {
+            OnPropertyChanged(nameof(AutoSaveEnabled));
+            _log.Info("Auto-save", Settings.AutoSaveEdits
+                ? $"On — pending edits save after {Settings.EffectiveAutoSaveDelaySeconds}s of quiet."
+                : "Off — edits are saved only when you ask.");
+        }
         // M88: apply the preview backdrop change immediately if a model preview is already open.
         if (MeshPreview.Mesh is not null) _ = ApplyPreviewBackgroundAsync();
     }
