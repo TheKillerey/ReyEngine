@@ -491,6 +491,7 @@ public partial class MainWindow : Window
             vm.ShowTextureRecolorWindow = () => ShowTextureRecolor(vm);   // M171
             vm.ShowUvEditorWindow = () => ShowUvEditor(vm);               // M492
             vm.ShowRitobinEditorWindow = target => ShowRitobinEditor(target);  // M498
+            vm.ShowMaterialBrowserWindow = ctx => ShowMaterialBrowser(ctx);    // M503b
             vm.PushTextureRegion = Viewport.QueueTextureUpdate;            // M172c: live brush strokes
             // M360: the same stroke to the D3D11 viewport, which the paint path never reached. Gated on the
             // surface being up: with DX11 off there is no device and nothing to update, and the pool lookup
@@ -773,6 +774,26 @@ public partial class MainWindow : Window
             _lightingWindow.Show(this);
         }
         else _lightingWindow.Activate();
+    }
+
+    // M503b: the map-wide material browser. One instance, reloaded on each open and on Reload, so the
+    // triage list never shows a state the map has already moved past.
+    private MaterialBrowserWindow? _materialBrowserWindow;
+    private void ShowMaterialBrowser(MaterialBrowserContext context)
+    {
+        if (_materialBrowserWindow is null)
+        {
+            var vm = new MaterialBrowserViewModel();
+            vm.Load(context);
+            _materialBrowserWindow = new MaterialBrowserWindow { DataContext = vm };
+            _materialBrowserWindow.Closed += (_, _) => _materialBrowserWindow = null;
+            _materialBrowserWindow.Show(this);
+        }
+        else
+        {
+            if (_materialBrowserWindow.DataContext is MaterialBrowserViewModel vm) vm.Load(context);
+            _materialBrowserWindow.Activate();
+        }
     }
 
     // M498: bin-as-ritobin-text. One instance, retargeted on each open so opening a second bin replaces

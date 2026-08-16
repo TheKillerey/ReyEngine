@@ -110,6 +110,26 @@
                          Text="Respects each material's cullEnable flag on load. Turn off to force two-sided rendering everywhere." />
             </StackPanel>
           </Border>
+          <!-- M503c -->
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="settingsTitle" Text="AUTO-SAVE" />
+              <TextBlock Classes="settingsDesc"
+                         Text="Write mesh transforms and material edits to the project once editing goes quiet, instead of waiting for Save." />
+              <CheckBox Content="Save edits automatically" IsChecked="{Binding AutoSaveEdits}"
+                        FontSize="12" Margin="0,4,0,0" />
+              <Grid ColumnDefinitions="Auto,110,*" IsEnabled="{Binding AutoSaveEdits}">
+                <TextBlock Grid.Column="0" Text="Quiet period" FontSize="12" VerticalAlignment="Center"
+                           Margin="0,0,8,0" Foreground="{DynamicResource ReyTextBrush}" />
+                <NumericUpDown Grid.Column="1" Value="{Binding AutoSaveDelaySeconds}" Minimum="2" Maximum="120"
+                               Increment="1" FormatString="0" FontSize="12" Padding="6,2" />
+                <TextBlock Grid.Column="2" Text="seconds" FontSize="12" VerticalAlignment="Center"
+                           Margin="8,0,0,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+              </Grid>
+              <TextBlock Classes="settingsDesc"
+                         Text="Saving a mesh move rewrites the WHOLE mapgeo — 40 MB on a Summoner's Rift port — so this never fires per drag. Every edit restarts the timer and one save covers everything since the last. It does nothing until the project itself has been saved once." />
+            </StackPanel>
+          </Border>
         </StackPanel>
 
         <!-- CAMERA -->

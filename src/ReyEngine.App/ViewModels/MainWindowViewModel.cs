@@ -4071,6 +4071,92 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public Action? ShowTextureRecolorWindow { get; set; }
     public Action? ShowUvEditorWindow { get; set; }
+    public Action<MaterialBrowserContext>? ShowMaterialBrowserWindow { get; set; }   // M503b
+
+    /// <summary>M503b: open the map-wide material browser.</summary>
+    [RelayCommand]
+    private void OpenMaterialBrowser()
+    {
+        if (_currentMap is null) { _log.Warn("Materials", "Open a map (.mapgeo) first."); return; }
+        if (BuildMaterialBrowserContext() is { } context) ShowMaterialBrowserWindow?.Invoke(context);
+    }
+
+    /// <summary>
+    /// M503b: run the audit over the open map and package it for the browser.
+    ///
+    /// <para>Every optional lookup is supplied here, because the audit deliberately SKIPS a check it cannot
+    /// answer — the app is the only layer that knows where textures live, which permutations the install
+    /// cooked, and what each shader declares as its default tint.</para>
+    /// </summary>
+    private MaterialBrowserContext? BuildMaterialBrowserContext()
+    {
+        if (_currentMap is not { } map || _currentMapEntry is not { } mapEntry) return null;
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+        { _log.Warn("Materials", "No materials.bin alongside this mapgeo."); return null; }
+
+        try
+        {
+            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName);
+            var usage = Formats.Materials.MapMaterialAudit.UsageFrom(
+                map.Groups.Select(g => (g.Material, g.MeshIndex)));
+
+            var perms = ShaderPerms();
+            var catalog = MaterialEditor.Catalog;
+
+            var context = new Formats.Materials.MaterialAuditContext(
+                TextureExists: TextureExistsByPath,
+                CanSetMacro: perms is { IsAvailable: true } ? (m, macro) => perms.CanSetMacro(m, macro, "1") : null,
+                ShaderDeclaresMacro: perms is { IsAvailable: true } ? perms.DeclaresMacroAxis : null,
+                ShaderTintDefault: catalog is null ? null : shader =>
+                {
+                    var def = catalog.Find(shader);
+                    var p = def?.Parameters?.FirstOrDefault(x =>
+                        x.Name.Equals("TintColor", StringComparison.OrdinalIgnoreCase));
+                    return p is null ? null : new System.Numerics.Vector4(p.X, p.Y, p.Z, p.W);
+                });
+
+            var rows = Formats.Materials.MapMaterialAudit.Audit(doc.Materials, usage, context);
+            _log.Info("Materials", $"{rows.Count:n0} material(s), {rows.Count(r => r.HasIssues):n0} with findings.");
+
+            return new MaterialBrowserContext(
+                System.IO.Path.GetFileName(binEntry.Path),
+                rows,
+                OpenInEditor: name =>
+                {
+                    // The editor loads a bin through the asset-selection path, so this jumps to the
+                    // material rather than trying to drive that from here. When the bin is not the one
+                    // loaded, say so instead of silently selecting nothing.
+                    var match = MaterialEditor.Materials
+                        .FirstOrDefault(m => string.Equals(m.Model.Name, name, StringComparison.OrdinalIgnoreCase));
+                    if (match is null)
+                    {
+                        _log.Info("Materials", $"Select {binEntry.DisplayName} in the browser first — "
+                                             + $"the material editor is not holding it, so '{name}' cannot be shown.");
+                        return;
+                    }
+                    MaterialEditor.SelectedMaterial = match;
+                    InspectorTab = InspectorTabs.Materials;
+                    AssetDataExpanded = true;
+                },
+                SelectMeshesUsing: names =>
+                {
+                    var wanted = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+                    var meshIndices = map.Groups.Where(g => wanted.Contains(g.Material) && g.MeshIndex >= 0)
+                                               .Select(g => g.MeshIndex).ToHashSet();
+                    var meshes = map.Meshes.Where(m => meshIndices.Contains(m.Index)).ToList();
+                    if (meshes.Count == 0) { _log.Info("Materials", "No mesh uses those materials."); return; }
+                    _selection.SetMany(meshes);
+                    SetMapContentSelection(MapContent.AllMapPieces
+                        .Where(p => meshIndices.Contains(p.MeshIndex)).ToList(), null);
+                    _log.Success("Materials", $"Selected {meshes.Count:n0} mesh(es) using {wanted.Count} material(s).");
+                },
+                Refresh: () =>
+                {
+                    if (BuildMaterialBrowserContext() is { } fresh) ShowMaterialBrowserWindow?.Invoke(fresh);
+                });
+        }
+        catch (Exception ex) { _log.Error("Materials", "Could not audit the materials: " + ex.Message); return null; }
+    }
     public Action<RitobinTarget>? ShowRitobinEditorWindow { get; set; }   // M498
 
     /// <summary>
@@ -5136,6 +5222,59 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnHasMapMovesChanged(bool value)
     {
         if (ActiveDocument is { Kind: DocumentKind.Map } d) d.IsDirty = value;
+        if (value) ScheduleAutoSave();   // M503c
+    }
+
+    // ---- M503c: optional auto-save ---------------------------------------
+    //
+    // Saving a mesh move rewrites the WHOLE mapgeo — Map453's is 40 MB — so this can never fire per drag.
+    // It waits for a quiet period and coalesces everything since the last save, and every edit restarts the
+    // window. Off by default: someone who wants to decide when their project is written should not have
+    // that taken away, and a surprise 40 MB write mid-drag is worse than no feature.
+    private Avalonia.Threading.DispatcherTimer? _autoSaveTimer;
+    private bool _autoSaving;
+
+    /// <summary>Auto-save is on for this session. Exposed so the toolbar can show it.</summary>
+    public bool AutoSaveEnabled => Settings.AutoSaveEdits;
+
+    /// <summary>Restart the quiet window. Called from every edit that produces unsaved state.</summary>
+    public void ScheduleAutoSave()
+    {
+        if (!Settings.AutoSaveEdits || _autoSaving) return;
+        _autoSaveTimer ??= new Avalonia.Threading.DispatcherTimer();
+        _autoSaveTimer.Interval = TimeSpan.FromSeconds(Settings.EffectiveAutoSaveDelaySeconds);
+        _autoSaveTimer.Tick -= OnAutoSaveTick;
+        _autoSaveTimer.Tick += OnAutoSaveTick;
+        _autoSaveTimer.Stop();      // a burst of edits collapses into one save
+        _autoSaveTimer.Start();
+    }
+
+    private async void OnAutoSaveTick(object? sender, EventArgs e)
+    {
+        _autoSaveTimer?.Stop();
+        if (!Settings.AutoSaveEdits || _autoSaving) return;
+
+        _autoSaving = true;
+        try
+        {
+            // Guard against saving into a half-finished state: a project that was never saved has nowhere
+            // to write, and EnsureProjectSavedAsync would pop a dialog the user did not ask for.
+            if (Project.ProjectFilePath is null) return;
+
+            bool savedAnything = false;
+            if (HasMapMoves || MapContent.AllMapPieces.Any(p => p.IsRemoved) || MapContent.AddedMeshes.Count > 0)
+            {
+                await SaveMeshMoves();
+                savedAnything = true;
+            }
+            if (HasParticleMoves) { await SaveParticleMoves(); savedAnything = true; }
+            if (MaterialEditor.IsDirty && MaterialEditor.BinEntry is not null)
+            { await SaveMaterialOverride(); savedAnything = true; }
+
+            if (savedAnything) _log.Info("Auto-save", "Saved pending edits.");
+        }
+        catch (Exception ex) { _log.Warn("Auto-save", "Skipped: " + ex.Message); }
+        finally { _autoSaving = false; }
     }
 
     private MapScene? CaptureMapScene()
@@ -5933,6 +6072,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M501: the assignment above only feeds GL. Tell DX11 too, or the two viewports show different
             // materials for the same edit.
             NotifyMaterialsChanged();
+            ScheduleAutoSave();   // M503c: material edits are unsaved state too
             _log.Success("Material", "Applied material edits to the viewport (live).");
         }
         catch (Exception ex) { _log.Error("Material", $"Apply failed: {ex.Message}"); }

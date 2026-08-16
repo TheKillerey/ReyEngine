@@ -1,0 +1,111 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.MaterialBrowserWindow"
+        x:DataType="vm:MaterialBrowserViewModel"
+        Title="ReyEngine — Materials" Width="1180" Height="720"
+        MinWidth="900" MinHeight="500"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- filters -->
+    <Border DockPanel.Dock="Top" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="12,7">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Left" Text="{Binding MapName}" FontSize="11" FontWeight="SemiBold"
+                   VerticalAlignment="Center" Margin="0,0,12,0"
+                   Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis" />
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+          <ComboBox ItemsSource="{Binding SortModes}" SelectedIndex="{Binding SortMode}"
+                    FontSize="11" MinWidth="140" VerticalAlignment="Center" />
+          <Button Classes="tool" Content="↻ Reload" Command="{Binding ReloadCommand}"
+                  FontSize="11" Padding="10,4" ToolTip.Tip="Re-read the map's materials and re-run the checks." />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <TextBox Text="{Binding Filter}" Watermark="filter by name, shader, texture or problem…"
+                   FontSize="11" MinWidth="280" Padding="6,2"
+                   ToolTip.Tip="Also searches the findings — type 'tint' or 'cooked' to pull up exactly those rows." />
+          <CheckBox Content="Only with findings" IsChecked="{Binding OnlyIssues}" FontSize="11"
+                    VerticalAlignment="Center" />
+          <CheckBox Content="Only used" IsChecked="{Binding OnlyUsed}" FontSize="11"
+                    VerticalAlignment="Center"
+                    ToolTip.Tip="Hide materials no mesh in this map references." />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- actions + summary -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,8">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+          <Button Classes="tool" Content="Tick all shown" Command="{Binding SelectAllShownCommand}"
+                  FontSize="11" Padding="10,4" />
+          <Button Classes="tool" Content="Clear ticks" Command="{Binding ClearSelectionCommand}"
+                  FontSize="11" Padding="10,4" />
+          <Button Classes="tool" Content="Select meshes" Command="{Binding SelectMeshesCommand}"
+                  FontSize="11" Padding="10,4"
+                  ToolTip.Tip="Select every mesh that uses the ticked materials, so a bad material becomes a thing you can see in the viewport." />
+          <Button Classes="primary" Content="Open in editor" Command="{Binding OpenInEditorCommand}"
+                  FontSize="11" Padding="14,4" />
+        </StackPanel>
+        <TextBlock Text="{Binding Summary}" FontSize="11" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ReyTextBrush}" />
+      </DockPanel>
+    </Border>
+
+    <!-- the list -->
+    <Border Margin="12" CornerRadius="5" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1"
+            ClipToBounds="True">
+      <DockPanel>
+        <!-- header row -->
+        <Border DockPanel.Dock="Top" Background="{DynamicResource ReyCardBrush}" Padding="8,5"
+                BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1">
+          <Grid ColumnDefinitions="28,*,220,60,50,120">
+            <TextBlock Grid.Column="1" Text="MATERIAL" FontSize="9" FontWeight="SemiBold"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Grid.Column="2" Text="SHADER" FontSize="9" FontWeight="SemiBold"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Grid.Column="3" Text="MESHES" FontSize="9" FontWeight="SemiBold"
+                       HorizontalAlignment="Right" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Grid.Column="4" Text="TEX" FontSize="9" FontWeight="SemiBold"
+                       HorizontalAlignment="Right" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Grid.Column="5" Text="FINDINGS" FontSize="9" FontWeight="SemiBold"
+                       Margin="8,0,0,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+          </Grid>
+        </Border>
+
+        <ListBox ItemsSource="{Binding Rows}" SelectedItem="{Binding SelectedRow}"
+                 Background="Transparent" BorderThickness="0" FontSize="11">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:MaterialRowViewModel">
+              <Grid ColumnDefinitions="28,*,220,60,50,120" ToolTip.Tip="{Binding Tooltip}">
+                <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected}" Padding="0" MinWidth="0" />
+                <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="{Binding Shader}" TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBlock Grid.Column="3" Text="{Binding MeshCount}" HorizontalAlignment="Right"
+                           VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBlock Grid.Column="4" Text="{Binding TextureCount}" HorizontalAlignment="Right"
+                           VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <Border Grid.Column="5" Margin="8,0,0,0" Padding="6,1" CornerRadius="3"
+                        VerticalAlignment="Center" HorizontalAlignment="Left"
+                        IsVisible="{Binding HasIssues}"
+                        Background="{DynamicResource ReyCardBrush}"
+                        BorderBrush="{DynamicResource ReyWarningBrush}" BorderThickness="1">
+                  <TextBlock Text="{Binding IssueLabel}" FontSize="9"
+                             Foreground="{DynamicResource ReyWarningBrush}" />
+                </Border>
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </Border>
+  </DockPanel>
+</Window>

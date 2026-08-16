@@ -90,6 +90,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _invertLookY;
     [ObservableProperty] private double _flySpeed;
     [ObservableProperty] private bool _cullBackfacesDefault;
+
+    // M503c: auto-save. Off by default — a mesh move rewrites the whole mapgeo (40 MB on Map453), so this
+    // is a quiet-period save, never a per-edit one.
+    [ObservableProperty] private bool _autoSaveEdits;
+    [ObservableProperty] private int _autoSaveDelaySeconds = 5;
     [ObservableProperty] private string _projectsDirectory = "";   // M133
     [ObservableProperty] private string _wwiseConsolePath = "";    // M138
     [ObservableProperty] private string _wwiseProjectPath = "";
@@ -186,6 +191,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         InvertLookY = s.InvertLookY;
         FlySpeed = s.FlySpeed;
         CullBackfacesDefault = s.CullBackfacesDefault;
+        AutoSaveEdits = s.AutoSaveEdits;                       // M503c
+        AutoSaveDelaySeconds = s.EffectiveAutoSaveDelaySeconds;
         ProjectsDirectory = s.ProjectsDirectory;
         WwiseConsolePath = s.WwiseConsolePath;
         WwiseProjectPath = s.WwiseProjectPath;
@@ -210,6 +217,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             MouseLookSensitivity = MouseLookSensitivity, OrbitSensitivity = OrbitSensitivity,
             PanSensitivity = PanSensitivity, ZoomSensitivity = ZoomSensitivity,
             InvertLookY = InvertLookY, FlySpeed = FlySpeed, CullBackfacesDefault = CullBackfacesDefault,
+            AutoSaveEdits = AutoSaveEdits, AutoSaveDelaySeconds = AutoSaveDelaySeconds,   // M503c
             Theme = _theme,
             PreviewBackgroundMapFolder = PreviewBackgroundMapFolder, PreviewBackgroundEnabled = PreviewBackgroundEnabled,
             ProjectsDirectory = ProjectsDirectory.Trim(),

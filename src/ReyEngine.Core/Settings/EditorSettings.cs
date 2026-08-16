@@ -47,6 +47,24 @@ public sealed class EditorSettings
     /// <summary>True once the first-run setup wizard has been completed (or skipped).</summary>
     public bool FirstRunCompleted { get; set; } = false;
 
+    // ---- auto-save (M503c) ----
+    /// <summary>
+    /// Save mesh transforms and material edits automatically once editing goes quiet.
+    ///
+    /// <para>OFF by default, deliberately. Saving a mesh move rewrites the WHOLE mapgeo — Map453's is
+    /// 40 MB — so this can never be per-keystroke or per-drag; it waits for
+    /// <see cref="AutoSaveDelaySeconds"/> of quiet and coalesces everything since the last save. Anyone who
+    /// wants explicit control over when their project is written should leave it off.</para>
+    /// </summary>
+    public bool AutoSaveEdits { get; set; } = false;
+
+    /// <summary>Quiet period before an auto-save fires, in seconds. Clamped to 2..120 on read: a value of
+    /// zero would rewrite the mapgeo on every gizmo drag.</summary>
+    public int AutoSaveDelaySeconds { get; set; } = 5;
+
+    [JsonIgnore]
+    public int EffectiveAutoSaveDelaySeconds => Math.Clamp(AutoSaveDelaySeconds, 2, 120);
+
     [JsonIgnore]
     public static string StorePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ReyEngine", "settings.json");

@@ -113,6 +113,8 @@
           <MenuItem Header="Save Light.dat As…" Command="{Binding SaveLightDatAsCommand}" />
         </MenuItem>
         <Separator />
+        <MenuItem Header="Materials…" Command="{Binding OpenMaterialBrowserCommand}"
+                  ToolTip.Tip="Every material in the open map with the meshes using it, its textures, and what is wrong with it — missing materials, uncooked permutations, macros the shader ignores, tints away from the shader's default. Filter, tick several, and select the meshes they affect." />
         <MenuItem Header="Edit Bin as Text (ritobin)…" Command="{Binding OpenRitobinEditorCommand}"
                   ToolTip.Tip="Open the selected .bin as ritobin #PROP_text — the format the modding community edits bins in, usually saved as .py. Editable, with import/export, and written back byte-exactly; nothing is saved unless the text parses and the result reads back cleanly." />
         <MenuItem Header="Second UV (Texcoord7)…" Command="{Binding OpenUvEditorCommand}"
