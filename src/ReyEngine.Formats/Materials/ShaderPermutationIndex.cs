@@ -279,6 +279,46 @@ public sealed class ShaderPermutationIndex
     /// <para>FAIL-SAFE in the same direction as its counterpart: false unless positively proved cooked. The
     /// cost of a false negative is a material that keeps its baked lightmap; the cost of a false positive is
     /// a shader the client cannot load at all, which is a map that renders nothing.</para></summary>
+    /// <summary>
+    /// M502: does this shader's cooked TOC declare <paramref name="macro"/> as a permutation axis at all?
+    ///
+    /// <para>The distinction matters and <see cref="CanSetMacro"/> cannot express it, because it is
+    /// fail-safe and answers false for two opposite situations:</para>
+    /// <list type="bullet">
+    ///   <item><b>Axis not declared</b> — the client's ResolvePermutation only honours a macro whose name is
+    ///   in the TOC, so authoring it is INERT. Harmless to the game, but it lies to every later reader: the
+    ///   material says "no baked lighting" and the shader lights it anyway.</item>
+    ///   <item><b>Axis declared, this value never cooked</b> — authoring it is FATAL. This is M486, where
+    ///   League answered "Unable to find correct hash for shader ... Failed to compile shader".</item>
+    /// </list>
+    /// <para>Callers that write macros need to tell those apart: one is a pointless line to omit, the other
+    /// is a map that will not load.</para>
+    /// </summary>
+    public bool DeclaresMacroAxis(string shader, string macro)
+    {
+        if (_cache is null || string.IsNullOrEmpty(shader)) return false;
+        foreach (string stage in new[] { "ps", "vs" })
+        {
+            var toc = GetToc(shader, stage);
+            if (toc is null) continue;
+            foreach (var (key, _) in toc.Pool)
+                if (string.Equals(key, macro, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    // M502: there is deliberately NO shader-level "can this macro be set" shortcut here.
+    //
+    // The obvious one — scan the TOC's define pool for (macro, value) — was written and then removed,
+    // because it answers a DIFFERENT question and answers it wrongly. Measured against the live cache it
+    // called DefaultEnv_Flat_AlphaTest safe for NO_BAKED_LIGHTING=1, while CanSetMacro below refuses it and
+    // M486 measured League itself refusing it: "Unable to find correct hash for shader ... Failed to
+    // compile shader". The pool proves the axis is cooked at that value in SOME permutation; it says
+    // nothing about the exact key a given material requests, which combines every axis at once.
+    //
+    // That is the same mistake M486 made with permutation counts, in a new costume. Callers that need this
+    // answer must build the material they intend to write and ask CanSetMacro about it.
+
     public bool CanSetMacro(MaterialBinding material, string macro, string value)
     {
         if (_cache is null) return false;

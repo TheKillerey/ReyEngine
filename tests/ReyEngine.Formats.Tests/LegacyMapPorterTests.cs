@@ -207,4 +207,53 @@ public sealed class LegacyMapPorterTests
             return e.ToArray();
         }
     }
+
+    /// <summary>
+    /// M502: the porter must decide NO_BAKED_LIGHTING from what the shader cache actually says, not from a
+    /// hardcoded role list — and it must tell the two failure modes apart, because they are opposites.
+    ///
+    /// <para>An axis the shader does not declare is IGNORED by the client, so authoring it is inert but
+    /// dishonest. An axis it declares without cooking this value is FATAL — that is M486, where League
+    /// answered "Unable to find correct hash for shader". Measured for the four shaders the porter uses:
+    /// VertexDeform declares and cooks it; 4TextureBlend_WorldProjected does not declare it;
+    /// DefaultEnv_Flat_AlphaTest declares it and never cooked it.</para>
+    /// </summary>
+    [Fact]
+    public void NoBakedLightingIsDecidedByTheShaderCacheNotTheRole()
+    {
+        // Cooked -> author it, whatever the role rule would have said.
+        Assert.True(LegacyMapPorter.ShouldAuthorNoBakedLighting(LegacyMaterialRole.Normal, "Shaders/X",
+            (_, _) => LegacyMapPorter.MacroSupport.Cooked, out var reason));
+        Assert.Null(reason);
+
+        // Not declared -> omit, and say it is because the client would ignore it.
+        Assert.False(LegacyMapPorter.ShouldAuthorNoBakedLighting(LegacyMaterialRole.FourBlendTerrain,
+            "Shaders/StaticMesh/4TextureBlend_WorldProjected",
+            (_, _) => LegacyMapPorter.MacroSupport.NotDeclared, out reason));
+        Assert.Contains("ignore", reason, StringComparison.OrdinalIgnoreCase);
+
+        // Declared but never cooked -> omit, and say it would break the shader. Different reason, and the
+        // difference is the whole point.
+        Assert.False(LegacyMapPorter.ShouldAuthorNoBakedLighting(LegacyMaterialRole.Decal,
+            "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest",
+            (_, _) => LegacyMapPorter.MacroSupport.NotCooked, out reason));
+        Assert.Contains("compile", reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Without a shader cache the porter must behave exactly as it did before — the Formats tests
+    /// and any install without a game directory run in this state.</summary>
+    [Fact]
+    public void WithoutAShaderCacheTheOldRoleRuleStillApplies()
+    {
+        foreach (var role in Enum.GetValues<LegacyMaterialRole>())
+        {
+            bool expected = LegacyMapPorter.UsesNoBakedLightingByDefault(role);
+            Assert.Equal(expected,
+                LegacyMapPorter.ShouldAuthorNoBakedLighting(role, "Shaders/Whatever", null, out var reason));
+            Assert.Null(reason);
+            // ...and an "Unknown" verdict is the same as having no checker at all.
+            Assert.Equal(expected, LegacyMapPorter.ShouldAuthorNoBakedLighting(role, "Shaders/Whatever",
+                (_, _) => LegacyMapPorter.MacroSupport.Unknown, out _));
+        }
+    }
 }

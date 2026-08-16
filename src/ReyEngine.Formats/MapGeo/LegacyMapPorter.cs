@@ -143,11 +143,68 @@ public static class LegacyMapPorter
     public static readonly Vector3 LegacyPositionCorrectionPreM473 = new(600.406f, -66.972f, 293.744f);
     private const int MaxVertices = 65535;
 
-    /// <summary>Whether the default shader for a generated role has a cooked no-lightmap permutation.
-    /// League 16.15 does not ship NO_BAKED_LIGHTING for DefaultEnv_Flat_AlphaTest, which is used by both
-    /// normal imported surfaces and decals. Authoring the macro on either role crashes map loading.</summary>
+    /// <summary>What the shader cache says about authoring a macro on a given shader.</summary>
+    public enum MacroSupport
+    {
+        /// <summary>No shader cache to ask — fall back to the role rule.</summary>
+        Unknown,
+        /// <summary>Declared as a permutation axis AND cooked at this value. Safe to author.</summary>
+        Cooked,
+        /// <summary>Not a permutation axis for this shader. The client ignores the macro, so authoring it is
+        /// INERT — harmless to the game but a lie to every later reader.</summary>
+        NotDeclared,
+        /// <summary>Declared, but this value was never cooked. Authoring it is FATAL (M486).</summary>
+        NotCooked,
+    }
+
+    /// <summary>
+    /// Whether the default shader for a generated role has a cooked no-lightmap permutation.
+    ///
+    /// <para>M502 measured all four shaders the porter uses, and the old role list was right for the wrong
+    /// reason on one of them:</para>
+    /// <list type="table">
+    ///   <item><term>VertexDeform (Grass)</term><description>declares the axis, cooked — correct to author</description></item>
+    ///   <item><term>4TextureBlend_WorldProjected (Terrain)</term><description>does NOT declare the axis, so
+    ///   the macro is ignored by the client. Authoring it was pointless, and actively misleading: the
+    ///   material claims "no baked lighting" while the shader lights the surface anyway, which is exactly
+    ///   what made the DX11 sun investigation hard to read.</description></item>
+    ///   <item><term>DefaultEnv_Flat_AlphaTest (Normal/Decal)</term><description>declares the axis but never
+    ///   cooked it — authoring it is the M486 crash. Already excluded, now for a measured reason.</description></item>
+    /// </list>
+    ///
+    /// <para>Kept as the FALLBACK for when no shader cache is available (no game directory, or the Formats
+    /// tests), so behaviour without an install is unchanged.</para>
+    /// </summary>
     public static bool UsesNoBakedLightingByDefault(LegacyMaterialRole role) =>
         role is LegacyMaterialRole.Grass or LegacyMaterialRole.FourBlendTerrain;
+
+    /// <summary>M502: should this role author NO_BAKED_LIGHTING, given what the shader cache says about the
+    /// shader it will actually use? <paramref name="ask"/> is supplied by the app, which owns the game
+    /// directory; null falls back to the role rule above.</summary>
+    public static bool ShouldAuthorNoBakedLighting(LegacyMaterialRole role, string shader,
+        Func<string, string, MacroSupport>? ask, out string? reason)
+    {
+        reason = null;
+        var support = ask?.Invoke(shader, "NO_BAKED_LIGHTING") ?? MacroSupport.Unknown;
+        switch (support)
+        {
+            case MacroSupport.Cooked:
+                return true;
+            case MacroSupport.NotDeclared:
+                reason = $"{role}: {Short(shader)} does not declare NO_BAKED_LIGHTING as a permutation axis, "
+                       + "so the client would ignore it — omitted rather than written as a claim the shader "
+                       + "does not honour.";
+                return false;
+            case MacroSupport.NotCooked:
+                reason = $"{role}: {Short(shader)} declares NO_BAKED_LIGHTING but the game ships no cooked "
+                       + "permutation for it — writing it would make the client fail to compile the shader.";
+                return false;
+            default:
+                return UsesNoBakedLightingByDefault(role);
+        }
+
+        static string Short(string s) { int i = s.LastIndexOf('/'); return i >= 0 ? s[(i + 1)..] : s; }
+    }
     private static readonly IReadOnlySet<string> JadeContainerBushMaterials = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         // Map453's gameplay brush is intentionally DefaultEnv_Flat, not VertexDeform. Do not broaden
@@ -167,7 +224,12 @@ public static class LegacyMapPorter
             : null;
     }
 
-    public static LegacyMapPortResult ApplyShaderOptions(LegacyMapPortResult result, LegacyPortShaderOptions options)
+    /// <param name="macroSupport">M502: asks the shader cache whether a macro is safe on a given shader.
+    /// Null keeps the pre-M502 role rule, which is what happens with no game directory.</param>
+    /// <param name="note">Receives one line per macro the porter declined to author, and why.</param>
+    public static LegacyMapPortResult ApplyShaderOptions(LegacyMapPortResult result,
+        LegacyPortShaderOptions options,
+        Func<string, string, MacroSupport>? macroSupport = null, Action<string>? note = null)
     {
         string ShaderFor(LegacyMaterialRole role) => role switch
         {
@@ -176,15 +238,27 @@ public static class LegacyMapPorter
             LegacyMaterialRole.FourBlendTerrain => options.TerrainShader,
             _ => options.NormalShader,
         };
+
+        // Report each declined macro ONCE per role rather than once per material: a port generates dozens
+        // of materials per role and the same sentence eighty times is noise, not information.
+        var reported = new HashSet<string>(StringComparer.Ordinal);
+
         return result with
         {
-            Materials = result.Materials.Select(material => material with
+            Materials = result.Materials.Select(material =>
             {
-                Shader = ShaderFor(material.Role),
-                Parameters = MaterialParameters(material.Role, material.Parameters),
-                Macros = UsesNoBakedLightingByDefault(material.Role)
-                    ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true }
-                    : new Dictionary<string, bool>(),
+                string shader = ShaderFor(material.Role);
+                bool noBake = ShouldAuthorNoBakedLighting(material.Role, shader, macroSupport, out var why);
+                if (why is not null && reported.Add(material.Role + "|" + shader)) note?.Invoke(why);
+
+                return material with
+                {
+                    Shader = shader,
+                    Parameters = MaterialParameters(material.Role, material.Parameters),
+                    Macros = noBake
+                        ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true }
+                        : new Dictionary<string, bool>(),
+                };
             }).ToList(),
         };
     }

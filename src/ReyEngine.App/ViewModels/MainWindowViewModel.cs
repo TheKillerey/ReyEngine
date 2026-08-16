@@ -4130,6 +4130,50 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ShowUvEditorWindow?.Invoke();
     }
 
+    /// <summary>
+    /// M502: can the shader the porter is about to use actually take this macro?
+    ///
+    /// <para>Answered by BUILDING the material the porter would write and asking the real
+    /// <see cref="Formats.Materials.ShaderPermutationIndex.CanSetMacro"/> about it — the same guard M491
+    /// added for the Dynamic (unlit) button. The tempting shortcut, scanning the shader's TOC define pool
+    /// for the macro at this value, was tried and thrown away: it reported DefaultEnv_Flat_AlphaTest as
+    /// safe, which is precisely the material League refused in M486. The pool proves an axis value is
+    /// cooked in SOME permutation; only the full resolve answers whether the exact key this material
+    /// requests exists.</para>
+    ///
+    /// <para>The probe material is built in memory from an empty bin and thrown away.</para>
+    /// </summary>
+    private LegacyMapPorter.MacroSupport MacroSupportFor(
+        Formats.Materials.ShaderPermutationIndex perms, Formats.Shaders.ShaderCatalog catalog,
+        string shader, string macro)
+    {
+        if (!perms.DeclaresMacroAxis(shader, macro)) return LegacyMapPorter.MacroSupport.NotDeclared;
+
+        var def = catalog.Find(shader);
+        if (def is null) return LegacyMapPorter.MacroSupport.Unknown;
+        try
+        {
+            var seed = new LeagueToolkit.Core.Meta.BinTree(
+                Array.Empty<LeagueToolkit.Core.Meta.BinTreeObject>(), Array.Empty<string>());
+            using var ms = new MemoryStream();
+            seed.Write(ms);
+
+            var made = Formats.Materials.MapMaterialFactory.CreateFromShader(
+                ms.ToArray(), "PortProbe/" + shader, def, out _, samplerOverrides: null,
+                macros: new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { [macro] = true });
+            if (made is null) return LegacyMapPorter.MacroSupport.Unknown;
+
+            var probe = Formats.Materials.MaterialDocument.Parse(made, ResolveBinName)
+                .Materials.FirstOrDefault(m => m.Name == "PortProbe/" + shader);
+            if (probe is null) return LegacyMapPorter.MacroSupport.Unknown;
+
+            return perms.CanSetMacro(probe, macro, "1")
+                ? LegacyMapPorter.MacroSupport.Cooked
+                : LegacyMapPorter.MacroSupport.NotCooked;
+        }
+        catch { return LegacyMapPorter.MacroSupport.Unknown; }
+    }
+
     /// <summary>M492: everything the UV editor needs about the open map, so it never reaches into project
     /// or asset state itself.</summary>
     public UvEditorContext? GatherUvEditorContext()
@@ -8646,7 +8690,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (selection is null) { Status = "Legacy map port cancelled."; return; }
         }
         var cleanup = selection?.Cleanup ?? LegacyPortCleanupOptions.FullReplacement;
-        result = LegacyMapPorter.ApplyShaderOptions(result, selection?.RoleShaders ?? LegacyPortShaderOptions.Defaults);
+        // M502: let the porter ask the real shader cache before authoring NO_BAKED_LIGHTING, instead of
+        // trusting a hardcoded role list. Measured: 4TextureBlend_WorldProjected does not declare the axis
+        // at all (macro ignored by the client, so writing it only misleads later readers), while
+        // DefaultEnv_Flat_AlphaTest declares it and never cooked it (writing it is the M486 crash).
+        var portPerms = ShaderPerms();
+        Func<string, string, LegacyMapPorter.MacroSupport>? macroSupport =
+            portPerms is { IsAvailable: true }
+                ? (shader, macro) => MacroSupportFor(portPerms, catalog, shader, macro)
+                : null;
+
+        result = LegacyMapPorter.ApplyShaderOptions(result,
+            selection?.RoleShaders ?? LegacyPortShaderOptions.Defaults,
+            macroSupport, m => _log.Info("Port", m));
         if (selection is not null)
             result = result with
             {
