@@ -72,6 +72,14 @@ public partial class MainWindow : Window
                     // one on screen - stale geometry that looked like the new map had failed to load.
                     else if (e.PropertyName == nameof(MainWindowViewModel.MapGeneration)
                              && vm.UseDx11Viewport) OnDx11Toggled(vm);
+                    // M501: ...and when the MATERIALS change under a viewport that is already on. The scene
+                    // caches resolved shader permutations, decoded textures and every authored parameter,
+                    // so a material edit, a legacy port or a bulk macro change left DX11 drawing the old
+                    // ones until the map was reloaded. A full rebuild is heavier than a material-only
+                    // refresh would be, but it is the honest fix: a changed material can change the
+                    // permutation, which changes the input layout, so nothing shallower is safe yet.
+                    else if (e.PropertyName == nameof(MainWindowViewModel.MaterialsRevision)
+                             && vm.UseDx11Viewport && _dx11?.IsReady == true) OnDx11Toggled(vm);
                 };
         };
         Closed += (_, _) => { _closed = true; _dx11?.Dispose(); _dx11 = null; };

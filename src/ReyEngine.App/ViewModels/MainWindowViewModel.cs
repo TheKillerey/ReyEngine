@@ -3426,6 +3426,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try { binBytes = GetAssetBytes(binEntry); }
         catch (Exception ex) { return $"{binEntry.DisplayName}: {ex.Message}"; }
 
+        // M501: prefer the material editor's LIVE bytes when it is editing this map's own bin. GetAssetBytes
+        // reads the project file or WAD chunk from disk, so without this the D3D11 scene could only ever
+        // show SAVED materials — while the GL path, fed by ApplyMaterialToViewport, showed unsaved ones.
+        // The two viewports disagreeing about the same material is the thing that made this look like a
+        // rendering bug rather than a plumbing one.
+        if (MaterialEditor.Kind == MaterialSourceKind.MapMaterials
+            && MaterialEditor.BinEntry is { } editing && editing.PathHash == binEntry.PathHash
+            && MaterialEditor.IsDirty
+            && MaterialEditor.Serialize() is { } liveBytes)
+        {
+            binBytes = liveBytes;
+        }
+
         var cache = _dx11ShaderCache;
         var perms = ShaderPerms();
         // M365d: THE grass-tint bug. This overload is the only one the app calls, and it omitted this
@@ -4608,6 +4621,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private int _mapGeneration;
 
     /// <summary>
+    /// M501: bumped whenever the open map's MATERIALS change — edited in the material editor, saved,
+    /// rewritten by the legacy porter, or bulk-changed by a lighting command.
+    ///
+    /// <para>Separate from <see cref="MapGeneration"/>, which means "a different map is open". Material
+    /// edits used to signal nothing at all: <c>ApplyMaterialToViewport</c> rebuilds
+    /// <c>CurrentModelTextures</c>, which is the GL path's input, and the D3D11 scene is built once on
+    /// toggle and once per MapGeneration. So a material change repainted GL and left DX11 showing whatever
+    /// it had — the reported "after a restart the materials show, but on DX11 the mesh is still white",
+    /// and the reason a fresh NVR port looked unchanged until the map was reloaded.</para>
+    /// </summary>
+    [ObservableProperty] private int _materialsRevision;
+
+    /// <summary>M501: raise after anything that changes the open map's materials, so both viewports and the
+    /// inspector see the same state without a reload.</summary>
+    public void NotifyMaterialsChanged() => MaterialsRevision++;
+
+    /// <summary>
     /// <para>M269: the current selection as INDEX RANGES, for the D3D11 overlay.</para>
     ///
     /// <para>Ranges rather than material or slice indices, and that is not a style choice.
@@ -5475,6 +5505,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void SetNodeStatus(ulong hash, AssetStatus status)
     {
         if (_nodesByHash.TryGetValue(hash, out var node)) node.Status = status;
+
+        // M501: every path that writes an asset marks it Modified here, which makes this the one choke
+        // point where "the open map's materials just changed" can be detected without hunting a dozen save
+        // sites and missing one. It covers the legacy porter, the NO_BAKED_LIGHTING commands, sampler
+        // address edits, the ritobin editor and the light bake alike.
+        if (status == AssetStatus.Modified && _currentMapEntry is { } mapEntry
+            && TryResolveMaterialsBin(mapEntry.Path, out var materialsBin)
+            && materialsBin.PathHash == hash)
+            NotifyMaterialsChanged();
     }
 
     /// <summary>Bytes for an asset — the project override if one exists, otherwise the WAD chunk.</summary>
@@ -5847,6 +5886,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 CurrentModelTextures = BuildMapTextures(map, m2t, profiles, names.Count, _currentMapEntry?.Path);
             }
             else { _log.Info("Material", "Nothing in the viewport to preview — select the matching .skn/.mapgeo."); return; }
+            // M501: the assignment above only feeds GL. Tell DX11 too, or the two viewports show different
+            // materials for the same edit.
+            NotifyMaterialsChanged();
             _log.Success("Material", "Applied material edits to the viewport (live).");
         }
         catch (Exception ex) { _log.Error("Material", $"Apply failed: {ex.Message}"); }
