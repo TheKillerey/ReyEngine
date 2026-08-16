@@ -131,13 +131,27 @@ public sealed class ZstdSeekable
     private readonly Queue<int> _cacheOrder = new();
     private long _cacheBytes;
 
+    /// <summary>
+    /// M508: the cache is shared, and hash resolution is NOT single-threaded — mounting a 17,365-entry
+    /// reference wad resolves names while the viewport, the material save and the texture loader resolve
+    /// their own. Two threads writing a Dictionary corrupt its bucket array, and the symptom is an
+    /// IndexOutOfRangeException from inside the dictionary itself. That surfaced as
+    /// "reference Map453.wad.client: Index was outside the bounds of the array" and the Riot reference
+    /// assets silently disappearing from the project for the rest of the session.
+    ///
+    /// <para>A plain lock, not a ConcurrentDictionary: the eviction queue and the byte counter have to move
+    /// with the dictionary, and three separately-atomic structures are not an atomic cache.</para>
+    /// </summary>
+    private readonly object _cacheLock = new();
+
     /// <summary>Cap on retained decompressed frames. Bounded in BYTES rather than frames because frame size
     /// is a writer choice we do not control.</summary>
     public long CacheLimitBytes { get; set; } = 48L * 1024 * 1024;
 
     private byte[] FrameBytes(ReadOnlySpan<byte> stream, int index)
     {
-        if (_cache.TryGetValue(index, out var hit)) return hit;
+        lock (_cacheLock)
+            if (_cache.TryGetValue(index, out var hit)) return hit;
 
         var frame = _frames[index];
         var compressed = stream.Slice((int)frame.CompressedOffset, frame.CompressedSize).ToArray();
@@ -159,19 +173,30 @@ public sealed class ZstdSeekable
 
         // FIFO rather than true LRU: the access pattern is a scan through sorted keys, where the oldest
         // frame really is the least likely to be wanted again, and this costs no per-hit bookkeeping.
-        _cache[index] = buffer;
-        _cacheOrder.Enqueue(index);
-        _cacheBytes += buffer.Length;
-        while (_cacheBytes > CacheLimitBytes && _cacheOrder.Count > 1)
+        //
+        // Decompression happened OUTSIDE the lock: two threads racing the same frame both inflate it and
+        // one of the two buffers is dropped here, which costs a duplicate inflate and keeps the lock off
+        // the expensive path. Both buffers hold identical bytes, so either is a correct answer.
+        lock (_cacheLock)
         {
-            int evict = _cacheOrder.Dequeue();
-            if (_cache.Remove(evict, out var gone)) _cacheBytes -= gone.Length;
+            if (_cache.TryGetValue(index, out var raced)) return raced;
+            _cache[index] = buffer;
+            _cacheOrder.Enqueue(index);
+            _cacheBytes += buffer.Length;
+            while (_cacheBytes > CacheLimitBytes && _cacheOrder.Count > 1)
+            {
+                int evict = _cacheOrder.Dequeue();
+                if (_cache.Remove(evict, out var gone)) _cacheBytes -= gone.Length;
+            }
         }
         return buffer;
     }
 
     /// <summary>Drop every cached frame.</summary>
-    public void ClearCache() { _cache.Clear(); _cacheOrder.Clear(); _cacheBytes = 0; }
+    public void ClearCache()
+    {
+        lock (_cacheLock) { _cache.Clear(); _cacheOrder.Clear(); _cacheBytes = 0; }
+    }
 
     /// <summary>Decompress exactly the frames spanning the requested range and return that slice.</summary>
     public byte[] Read(ReadOnlySpan<byte> stream, long offset, int length)

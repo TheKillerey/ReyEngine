@@ -12536,12 +12536,48 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         foreach (var w in Project.ProjectWads)
             try { _mounts.Add(new WadMount(WadArchive.Open(Project.ResolveProjectPath(w), _resolver), AssetSourceKind.ProjectWad, editable: true)); }
             catch (Exception ex) { _log.Warn("Project", $"WAD {w}: {ex.Message}"); }
-        foreach (var r in Project.ReferenceWads)
-            try { _mounts.Add(new WadMount(WadArchive.Open(r, _resolver), AssetSourceKind.RiotReference, editable: false, name: Path.GetFileName(r))); }
-            catch (Exception ex) { _log.Warn("Project", $"reference {Path.GetFileName(r)}: {ex.Message}"); }
+        foreach (var r in Project.ReferenceWads) MountReference(r);
 
         AddGameFallback();
         _mounts.Rebuild();
+    }
+
+    /// <summary>
+    /// M508: mount one Riot reference wad, with one retry.
+    ///
+    /// <para>Losing this mount is not cosmetic — every Riot asset the project reads through it disappears
+    /// for the rest of the session, which is what a user saw as "the wad.client for the project is not
+    /// there any more". The cause was a data race in the hash tables (fixed in ZstdSeekable), and the
+    /// symptom was an IndexOutOfRangeException that said nothing about where it came from.</para>
+    ///
+    /// <para>So: name the exception TYPE, say what was lost, and try once more — a torn read is transient,
+    /// and a second attempt costs milliseconds against losing the reference set.</para>
+    /// </summary>
+    private void MountReference(string path)
+    {
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                _mounts!.Add(new WadMount(WadArchive.Open(path, _resolver), AssetSourceKind.RiotReference,
+                    editable: false, name: Path.GetFileName(path)));
+                if (attempt > 1) _log.Info("Project", $"reference {Path.GetFileName(path)}: mounted on retry.");
+                return;
+            }
+            catch (Exception ex) when (attempt == 1)
+            {
+                _log.Warn("Project", $"reference {Path.GetFileName(path)}: {ex.GetType().Name}: {ex.Message} "
+                                   + "— retrying once.");
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Project", $"reference {Path.GetFileName(path)} could not be mounted "
+                                    + $"({ex.GetType().Name}: {ex.Message}). Riot assets from that wad are "
+                                    + (File.Exists(path)
+                                        ? "unavailable until the project is reopened — the file is still on disk."
+                                        : "unavailable: the file is GONE from " + path));
+            }
+        }
     }
 
     /// <summary>Mount the original Riot game WADs as read-only fallback so missing assets resolve from the install.</summary>

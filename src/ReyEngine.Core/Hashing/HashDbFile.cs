@@ -213,11 +213,23 @@ public sealed class HashDbFile : IDisposable
         if (_seek is not null) return Encoding.UTF8.GetString(_seek.Read(arena, offset, length));
 
         // Non-seekable zstd arena: inflate once and keep it, since there is no way to seek into it.
-        var whole = _wholeArena ??= InflateWholeArena(arena);
+        // M508: under the lock. Resolution runs on several threads at once, and the unguarded '??=' let
+        // one thread read a half-published buffer.
+        byte[] whole;
+        lock (_arenaLock) whole = _wholeArena ??= InflateWholeArena(arena);
         return Encoding.UTF8.GetString(whole, (int)offset, length);
     }
 
     private byte[]? _wholeArena;
+    private readonly object _arenaLock = new();
+
+    /// <summary>M508: shrink the seekable frame cache, so a test can force the eviction path — the branch
+    /// that moves the dictionary, the queue and the byte counter together, and the one a second thread
+    /// corrupted. No effect on a table whose arena is not seekable.</summary>
+    public void SetFrameCacheLimit(long bytes)
+    {
+        if (_seek is not null) _seek.CacheLimitBytes = bytes;
+    }
 
     private byte[] InflateWholeArena(ReadOnlySpan<byte> arena)
     {
@@ -254,7 +266,7 @@ public sealed class HashDbFile : IDisposable
 
     public void Dispose()
     {
-        _wholeArena = null;
+        lock (_arenaLock) _wholeArena = null;
         try { _view.SafeMemoryMappedViewHandle.ReleasePointer(); } catch { /* already released */ }
         _view.Dispose();
         _file.Dispose();
