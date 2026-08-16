@@ -440,11 +440,16 @@
                                     <ItemsControl ItemsSource="{Binding Switches}">
                                       <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                          <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
-                                            <CheckBox Grid.Column="0" Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="9" />
-                                            <Ellipse Grid.Column="1" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
+                                          <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,1">
+                                            <!-- Name in a TextBlock, not CheckBox.Content: content text treats
+                                                 the first underscore as an access-key marker and eats it. -->
+                                            <CheckBox Grid.Column="0" IsChecked="{Binding IsOn}" FontSize="9"
+                                                      Padding="0" MinWidth="0" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="9" Margin="4,0,0,0"
+                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                            <Ellipse Grid.Column="2" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
                                                      Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsDirty}" />
-                                            <Button Grid.Column="2" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
+                                            <Button Grid.Column="3" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
                                                     Command="{Binding RemoveCommand}" ToolTip.Tip="Remove this switch" />
                                           </Grid>
                                         </DataTemplate>
@@ -459,9 +464,13 @@
                                       <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                           <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
-                                                  Content="{Binding StringFormat='+ {0}'}"
                                                   Command="{Binding $parent[ItemsControl].DataContext.AddShaderSwitchCommand}"
-                                                  CommandParameter="{Binding}" />
+                                                  CommandParameter="{Binding}">
+                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                              <TextBlock Text="+" FontSize="9" />
+                                              <TextBlock Text="{Binding}" FontSize="9" />
+                                            </StackPanel>
+                                          </Button>
                                         </DataTemplate>
                                       </ItemsControl.ItemTemplate>
                                     </ItemsControl>
@@ -472,12 +481,32 @@
                                     <ItemsControl ItemsSource="{Binding Macros}">
                                       <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                          <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,1">
-                                            <CheckBox Grid.Column="0" Content="{Binding Name}" IsChecked="{Binding IsOn}" FontSize="9"
-                                                      ToolTip.Tip="{Binding Hint}" />
-                                            <Ellipse Grid.Column="1" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
+                                          <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,1"
+                                                ToolTip.Tip="{Binding StatusTip}">
+                                            <!-- The name goes in a TextBlock, not CheckBox.Content: content is
+                                                 access-key text, so NO_BAKED_LIGHTING rendered as NOBAKED_LIGHTING
+                                                 (the first underscore was eaten as a mnemonic marker). -->
+                                            <CheckBox Grid.Column="0" IsChecked="{Binding IsOn}" FontSize="9"
+                                                      Padding="0" MinWidth="0" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="9" Margin="4,0,0,0"
+                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                            <!-- Two badges rather than one recoloured: "would crash" and
+                                                 "ignored" are opposite problems and must not read alike. -->
+                                            <Border Grid.Column="2" Padding="4,0" CornerRadius="3" Margin="4,0,0,0"
+                                                    VerticalAlignment="Center" IsVisible="{Binding IsFatal}"
+                                                    Background="{DynamicResource ReyCardBrush}"
+                                                    BorderBrush="#FFE05252" BorderThickness="1">
+                                              <TextBlock Text="{Binding StatusLabel}" FontSize="8" Foreground="#FFE05252" />
+                                            </Border>
+                                            <Border Grid.Column="2" Padding="4,0" CornerRadius="3" Margin="4,0,0,0"
+                                                    VerticalAlignment="Center" IsVisible="{Binding IsWarning}"
+                                                    Background="{DynamicResource ReyCardBrush}">
+                                              <TextBlock Text="{Binding StatusLabel}" FontSize="8"
+                                                         Foreground="{DynamicResource ReyTextDimBrush}" />
+                                            </Border>
+                                            <Ellipse Grid.Column="3" Width="6" Height="6" VerticalAlignment="Center" Margin="3,0"
                                                      Fill="{DynamicResource ReyAccent2Brush}" IsVisible="{Binding IsDirty}" />
-                                            <Button Grid.Column="2" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
+                                            <Button Grid.Column="4" Classes="tool" Content="✕" FontSize="8" Padding="4,0"
                                                     Command="{Binding RemoveCommand}"
                                                     ToolTip.Tip="Remove the define entirely — not the same as unticking it, which writes 0. Absent means the shader's own default applies." />
                                           </Grid>
@@ -494,10 +523,25 @@
                                       <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                                       <ItemsControl.ItemTemplate>
                                         <DataTemplate>
+                                          <!-- A define the game never cooked for this shader is offered as a
+                                               DISABLED chip that explains itself, not as a working button that
+                                               breaks the map (M486). The name lives in a TextBlock because
+                                               Button.Content eats the first underscore as an access key. -->
                                           <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
-                                                  Content="{Binding StringFormat='+ {0}'}"
+                                                  IsEnabled="{Binding CanAdd}"
+                                                  ToolTip.Tip="{Binding Tip}"
                                                   Command="{Binding $parent[ItemsControl].DataContext.AddMacroCommand}"
-                                                  CommandParameter="{Binding}" />
+                                                  CommandParameter="{Binding}">
+                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                              <TextBlock Text="+" FontSize="9" />
+                                              <TextBlock Text="{Binding Name}" FontSize="9" />
+                                              <TextBlock Text="{Binding StatusLabel}" FontSize="8" IsVisible="{Binding IsWarning}"
+                                                         VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource ReyTextDimBrush}" />
+                                              <TextBlock Text="{Binding StatusLabel}" FontSize="8" IsVisible="{Binding IsFatal}"
+                                                         VerticalAlignment="Center" Foreground="#FFE05252" />
+                                            </StackPanel>
+                                          </Button>
                                         </DataTemplate>
                                       </ItemsControl.ItemTemplate>
                                     </ItemsControl>

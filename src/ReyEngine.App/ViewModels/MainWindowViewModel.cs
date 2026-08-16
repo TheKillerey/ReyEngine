@@ -4194,16 +4194,39 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>The shader-cache and texture lookups the applier needs. Anything missing SKIPS its check
     /// rather than guessing, and the applier says so in its notes.</summary>
-    private Formats.Materials.MaterialPresetContext BuildMaterialPresetContext()
+    private Formats.Materials.MaterialPresetContext BuildMaterialPresetContext() => new(
+        TextureExists: TextureExistsByPath,
+        MacroSupport: CachedMacroSupport);
+
+    /// <summary>
+    /// M506: the one macro-safety oracle, shared by the preset applier and the material editor's inline
+    /// badges. Memoised because each miss builds a probe material and re-parses a bin, and the editor asks
+    /// about roughly a dozen defines every time a material is selected or its shader changes.
+    ///
+    /// <para>Returns Unknown — never a guess — when there is no shader cache or no catalogue. Callers show
+    /// that as "unchecked".</para>
+    /// </summary>
+    private readonly Dictionary<string, LegacyMapPorter.MacroSupport> _macroSupportCache = new(StringComparer.Ordinal);
+
+    private LegacyMapPorter.MacroSupport CachedMacroSupport(
+        string shader, IReadOnlyDictionary<string, bool> switches, string macro, string value)
     {
         var perms = ShaderPerms();
         var catalog = MaterialEditor.Catalog;
-        return new Formats.Materials.MaterialPresetContext(
-            TextureExists: TextureExistsByPath,
-            MacroSupport: perms is { IsAvailable: true } && catalog is not null
-                ? (shader, switches, macro, value) =>
-                    MacroSupportFor(perms, catalog, shader, macro, switches, value)
-                : null);
+        if (perms is not { IsAvailable: true } || catalog is null) return LegacyMapPorter.MacroSupport.Unknown;
+
+        // The switch set is part of the key, not decoration: it is part of the permutation the client
+        // resolves, so two materials on the same shader can get different answers.
+        string key = shader + "" + macro + "" + value + ""
+                   + string.Join(",", switches.Where(s => s.Value)
+                       .Select(s => s.Key.ToUpperInvariant()).OrderBy(x => x, StringComparer.Ordinal));
+        if (_macroSupportCache.TryGetValue(key, out var hit)) return hit;
+
+        var support = MacroSupportFor(perms, catalog, shader, macro, switches, value);
+        // Unknown is not cached: it usually means the catalogue has not finished loading, and caching it
+        // would freeze "unchecked" onto the UI for the rest of the session.
+        if (support != LegacyMapPorter.MacroSupport.Unknown) _macroSupportCache[key] = support;
+        return support;
     }
 
     /// <summary>
@@ -5083,6 +5106,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.ReplaceTextureAsset = ReplaceTextureForSlot;
         MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
         MaterialEditor.Edited = ScheduleAutoSave;   // M505: arm auto-save on the EDIT, not on the preview
+        MaterialEditor.AskMacroSupport = CachedMacroSupport;   // M506: inline permutation verdicts
         MaterialEditor.SaveOverride = SaveMaterialOverride;
         MaterialEditor.RequestCatalog = LoadShaderCatalogAsync;   // M103
         MaterialEditor.RequestCommonShaderSetup = LoadCommonShaderSetupAsync;

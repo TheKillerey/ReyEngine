@@ -673,6 +673,25 @@ public sealed class MaterialBinding
         var newKey = new BinTreeString(0, name);
         var newVal = new BinTreeString(0, value);
         _macroMap.Add(newKey, newVal);
+
+        // M506: re-use the entry this material ALREADY has for that name instead of adding a second one.
+        // Getting here with one in hand is the remove-then-add case, which is what two shader changes do:
+        // the first shader's common setup does not list the macro so it is removed, the second one does so
+        // it comes back. Without this the editor showed the define twice - two tick boxes and two remove
+        // buttons for one map entry - and MaterialBinding.Macros THREW on the duplicate key, taking the
+        // material browser and the preset applier with it.
+        //
+        // AllSwitches never had this problem because it filters on the element still being in the
+        // container. A macro is a map entry with no element to check, so the identity has to be kept here.
+        var existing = MacroEntries.Concat(_macroEdits)
+            .FirstOrDefault(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            existing.Apply(value);
+            _structurallyEdited = true;
+            return existing;
+        }
+
         var macro = new MaterialMacro(name, value);
         _macroEdits.Add(macro);
         _structurallyEdited = true;

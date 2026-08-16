@@ -8,6 +8,7 @@ using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Undo;
 using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.Shaders;
+using MacroSupport = ReyEngine.Formats.MapGeo.LegacyMapPorter.MacroSupport;
 
 namespace ReyEngine.App.ViewModels;
 
@@ -265,27 +266,133 @@ public sealed partial class MaterialMacroViewModel : ViewModelBase
 
     public string Name => Model.Name;
     public bool IsDirty => Model.IsDirty;
-    public string Hint => Name.ToUpperInvariant() switch
-    {
-        MaterialBinding.MacroNoBakedLighting => "Ignores the baked lightmap on this surface",
-        MaterialBinding.MacroDisableDepthFog => "Excludes this surface from the map's distance fog",
-        "PREMULTIPLIED_ALPHA" => "Colour is already multiplied by alpha",
-        "DISABLE_FOW" => "Not darkened by fog of war",
-        _ => "",
-    };
+    public string Hint => MacroHints.For(Name);
     public void RaiseDirty() => OnPropertyChanged(nameof(IsDirty));
+
+    // ---- M506: what the shader cache says about THIS macro on THIS material's shader ----
+
+    private MacroSupport _support = MacroSupport.Unknown;
+
+    /// <summary>Re-ask the shader cache. Called when the material is shown and after a shader change,
+    /// because the answer belongs to the (shader, switches, macro, value) combination — not to the macro.</summary>
+    public void RefreshStatus()
+    {
+        _support = _binding.SupportFor(Name, Model.Value);
+        OnPropertyChanged(nameof(StatusLabel));
+        OnPropertyChanged(nameof(HasStatus));
+        OnPropertyChanged(nameof(IsFatal));
+        OnPropertyChanged(nameof(IsWarning));
+        OnPropertyChanged(nameof(StatusTip));
+    }
+
+    public string StatusLabel => MacroStatus.Label(_support);
+    public bool HasStatus => StatusLabel.Length > 0;
+    public bool IsFatal => _support == MacroSupport.NotCooked;
+    /// <summary>Has something to say, but not the fatal thing. Two badges rather than one recoloured:
+    /// "would crash" and "ignored" are opposite problems and must not read alike.</summary>
+    public bool IsWarning => HasStatus && !IsFatal;
+    public string StatusTip => MacroStatus.Tip(_support, _binding.Model.RenderShader) is { Length: > 0 } tip
+        ? (Hint.Length > 0 ? Hint + "\n\n" + tip : tip)
+        : Hint;
 
     partial void OnIsOnChanged(bool value)
     {
         if (_initializing) return;
         _binding.SetMacro(Name, value);
         RaiseDirty();
+        RefreshStatus();      // 0 and 1 are different permutation keys — the verdict can differ too
         _binding.RaiseDirty();
         _binding.Owner?.NotifyChanged();
     }
 
     [RelayCommand]
     private void Remove() => _binding.RemoveMacro(this);
+}
+
+/// <summary>M506: how a macro's shader-cache verdict reads in the editor. Shared by the rows and the
+/// add chips so one define cannot be described two ways in the same panel.</summary>
+public static class MacroStatus
+{
+    public static string Label(MacroSupport support) => support switch
+    {
+        MacroSupport.NotCooked => "would crash",
+        MacroSupport.NotDeclared => "ignored",
+        MacroSupport.Unknown => "unchecked",
+        _ => "",
+    };
+
+    public static string Tip(MacroSupport support, string? shader)
+    {
+        string name = Short(shader);
+        return support switch
+        {
+            // The two failures are opposites and must not read alike: one is a map that will not load, the
+            // other is a line that quietly means nothing. M486 measured the first, M502 the second.
+            MacroSupport.NotCooked =>
+                $"{name} declares this axis but the game ships no cooked permutation for this value. "
+                + "Writing it makes the client fail to compile the shader, and the map renders nothing.",
+            MacroSupport.NotDeclared =>
+                $"{name} does not declare this as a permutation axis, so the client ignores it. Harmless, "
+                + "but the material would claim something the shader will not do.",
+            MacroSupport.Unknown =>
+                "Not checked — set the game folder in Preferences so the shader cache can be read.",
+            _ => $"{name} ships a cooked permutation for this.",
+        };
+    }
+
+    private static string Short(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return "This shader";
+        int i = s.LastIndexOf('/');
+        return i >= 0 ? s[(i + 1)..] : s;
+    }
+}
+
+/// <summary>One offered-but-absent define, with what the shader cache says about adding it.</summary>
+public sealed partial class MacroCandidateViewModel : ViewModelBase
+{
+    private readonly MaterialBindingViewModel _binding;
+
+    public MacroCandidateViewModel(string name, MaterialBindingViewModel binding)
+    {
+        Name = name;
+        _binding = binding;
+        Support = binding.SupportFor(name, "1");
+    }
+
+    public string Name { get; }
+    public MacroSupport Support { get; }
+    public string Hint => MacroHints.For(Name);
+
+    /// <summary>A define the game never cooked for this shader is not offered as a one-click button. It is
+    /// the M486 crash, and a disabled button that explains itself beats a working one that breaks the map.</summary>
+    public bool CanAdd => Support != MacroSupport.NotCooked;
+
+    public string StatusLabel => MacroStatus.Label(Support);
+    public bool HasStatus => StatusLabel.Length > 0;
+    public bool IsFatal => Support == MacroSupport.NotCooked;
+    public bool IsWarning => HasStatus && !IsFatal;
+    public string Tip => MacroStatus.Tip(Support, _binding.Model.RenderShader) is { Length: > 0 } tip
+        ? (Hint.Length > 0 ? Hint + "\n\n" + tip : tip)
+        : Hint;
+}
+
+/// <summary>What each define does, in one line. Kept in one place so the row and the chip agree.</summary>
+public static class MacroHints
+{
+    public static string For(string name) => name.ToUpperInvariant() switch
+    {
+        MaterialBinding.MacroNoBakedLighting => "Ignores the baked lightmap on this surface",
+        MaterialBinding.MacroDisableDepthFog => "Excludes this surface from the map's distance fog",
+        "PREMULTIPLIED_ALPHA" => "Colour is already multiplied by alpha",
+        "DISABLE_FOW" => "Not darkened by fog of war",
+        "DISABLE_SHADOWS" => "Receives no shadows",
+        "LOW_QUALITY_MODE" => "The reduced-cost variant of this shader",
+        "USE_DYNAMIC_LIGHTING" => "Lit by the clustered dynamic lights, not only the bake",
+        "CLOUD_SHADOWS" => "Cloud shadow projection over the surface",
+        "NUM_BLEND_WEIGHTS" => "Skinning weight count — a geometry fact, not a look",
+        _ => "",
+    };
 }
 
 public sealed partial class MaterialSwitchViewModel : ViewModelBase
@@ -431,10 +538,28 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         "USE_DYNAMIC_LIGHTING", "CLOUD_SHADOWS", "NUM_BLEND_WEIGHTS",
     };
 
-    public ObservableCollection<string> MissingMacros { get; } = new();
+    public ObservableCollection<MacroCandidateViewModel> MissingMacros { get; } = new();
     public bool HasMacros => Macros.Count > 0;
     public bool CanEditMacros => Model.CanEditMacros;
     public bool HasMissingMacros => MissingMacros.Count > 0;
+
+    /// <summary>M506: what the shader cache says about writing <paramref name="macro"/>=<paramref name="value"/>
+    /// on THIS material — its current shader and its current switch set, because the permutation key the
+    /// client looks up combines every axis at once.</summary>
+    internal MacroSupport SupportFor(string macro, string value)
+    {
+        string shader = Model.RenderShader ?? "";
+        if (shader.Length == 0 || Owner?.AskMacroSupport is not { } ask) return MacroSupport.Unknown;
+        return ask(shader, Model.Switches, macro, value);
+    }
+
+    /// <summary>Re-ask for every macro on this material. The verdict belongs to the shader, so it has to be
+    /// recomputed whenever the shader changes — not cached against the macro name.</summary>
+    public void RefreshMacroStatus()
+    {
+        foreach (var m in Macros) m.RefreshStatus();
+        RefreshMissingMacros();
+    }
 
     private void RefreshMissingMacros()
     {
@@ -442,7 +567,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         var have = Macros.Select(m => m.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (CanEditMacros)
             foreach (var m in KnownMacros)
-                if (!have.Contains(m)) MissingMacros.Add(m);
+                if (!have.Contains(m)) MissingMacros.Add(new MacroCandidateViewModel(m, this));
         OnPropertyChanged(nameof(HasMacros));
         OnPropertyChanged(nameof(HasMissingMacros));
     }
@@ -451,12 +576,14 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
 
     /// <summary>Add a define this material doesn't carry yet (enabled — the reason you'd add it).</summary>
     [RelayCommand]
-    private void AddMacro(string? name)
+    private void AddMacro(MacroCandidateViewModel? candidate)
     {
-        if (string.IsNullOrWhiteSpace(name)) return;
-        var macro = Model.SetMacro(name.Trim(), true);
+        if (candidate is null || !candidate.CanAdd) return;
+        var macro = Model.SetMacro(candidate.Name, true);
         if (macro is null) return;
-        Macros.Add(new MaterialMacroViewModel(macro, this));
+        var vm = new MaterialMacroViewModel(macro, this);
+        vm.RefreshStatus();
+        Macros.Add(vm);
         RefreshMissingMacros();
         RaiseDirty();
         Owner!.NotifyChanged();
@@ -554,6 +681,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         OnPropertyChanged(nameof(CurrentShaderText));
         OnPropertyChanged(nameof(ShaderName));
         OnPropertyChanged(nameof(IsDirty));
+        RefreshMacroStatus();   // M506: every macro's verdict belongs to the shader, not to the macro
     }
 
     /// <summary>Bring the row collection in sync after a headless bulk conversion added target slots.</summary>
@@ -580,7 +708,11 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
             Switches.Add(new MaterialSwitchViewModel(feature, this));
         Macros.Clear();
         foreach (var macro in Model.AllMacros)
-            Macros.Add(new MaterialMacroViewModel(macro, this));
+        {
+            var vm = new MaterialMacroViewModel(macro, this);
+            vm.RefreshStatus();     // M506
+            Macros.Add(vm);
+        }
         RefreshMissingMacros();
         LoadRenderState();
         OnPropertyChanged(nameof(HasParameters));
@@ -1105,6 +1237,17 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     /// Workshop index. Kept as a host hook so the editor remains testable without opening game WADs.</summary>
     public Func<string, Task<ShaderMaterialSetup?>>? RequestCommonShaderSetup { get; set; }
 
+    /// <summary>
+    /// M506: (shader, switches, macro, value) -&gt; what the installed game's shader cache says about writing
+    /// that define. Supplied by the app, which owns the game directory.
+    ///
+    /// <para>Null means the editor shows every macro as unchecked rather than inventing a verdict — the
+    /// same rule the audit and the preset applier follow. The switch set is part of the question, not
+    /// context: the permutation key combines every axis at once, which is what made M486's and M502's
+    /// narrower checks answer confidently and wrongly.</para>
+    /// </summary>
+    public Func<string, IReadOnlyDictionary<string, bool>, string, string, MacroSupport>? AskMacroSupport { get; set; }
+
     partial void OnSelectedShaderEnvironmentChanged(string? value)
     {
         if (!string.IsNullOrEmpty(value) && RequestCatalog is { } req) _ = req(value);
@@ -1523,6 +1666,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         if (value is null) return;
         foreach (var s in value.Slots) s.EnsureThumbnail();   // M351i: thumbnails always on
         RefreshSphere(value);                                  // M351k: the material ball
+        value.RefreshMacroStatus();                            // M506: ask the shader cache for this one
     }
 
     /// <summary>M351k: render the material ball from the diffuse texture and the current UV fields.
