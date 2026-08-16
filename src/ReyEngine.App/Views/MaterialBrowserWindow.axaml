@@ -2,10 +2,11 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:ReyEngine.App.Views"
         xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        xmlns:mat="clr-namespace:ReyEngine.Formats.Materials;assembly=ReyEngine.Formats"
         x:Class="ReyEngine.App.Views.MaterialBrowserWindow"
         x:DataType="vm:MaterialBrowserViewModel"
-        Title="ReyEngine — Materials" Width="1180" Height="720"
-        MinWidth="900" MinHeight="500"
+        Title="ReyEngine — Materials" Width="1420" Height="760"
+        MinWidth="1000" MinHeight="500"
         WindowStartupLocation="CenterOwner"
         ExtendClientAreaToDecorationsHint="True"
         Background="{DynamicResource ReyBgBrush}">
@@ -55,6 +56,95 @@
         </StackPanel>
         <TextBlock Text="{Binding Summary}" FontSize="11" VerticalAlignment="Center"
                    Foreground="{DynamicResource ReyTextBrush}" />
+      </DockPanel>
+    </Border>
+
+    <!-- M504: presets + bulk apply -->
+    <Border DockPanel.Dock="Right" Width="360" Margin="0,12,12,12" CornerRadius="5"
+            IsVisible="{Binding PresetsAvailable}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" ClipToBounds="True">
+      <DockPanel>
+        <Border DockPanel.Dock="Top" Background="{DynamicResource ReyCardBrush}" Padding="8,5"
+                BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1">
+          <TextBlock Text="PRESETS" FontSize="9" FontWeight="SemiBold"
+                     Foreground="{DynamicResource ReyTextDimBrush}" />
+        </Border>
+
+        <StackPanel DockPanel.Dock="Top" Margin="10,10,10,6" Spacing="7">
+          <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}"
+                    HorizontalAlignment="Stretch" FontSize="11"
+                    PlaceholderText="choose a preset…">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="mat:MaterialPreset">
+                <TextBlock Text="{Binding Name}" FontSize="11" />
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+
+          <TextBlock Text="{Binding PresetDetail}" FontSize="10" TextWrapping="Wrap"
+                     Foreground="{DynamicResource ReyTextDimBrush}" />
+
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+            <TextBox Grid.Column="0" Text="{Binding NewPresetName}" FontSize="11" Padding="6,2"
+                     Watermark="name for a new preset…" />
+            <Button Grid.Column="1" Classes="tool" Content="Capture" FontSize="11" Padding="10,4"
+                    Command="{Binding CapturePresetCommand}"
+                    ToolTip.Tip="Snapshot the HIGHLIGHTED material — shader, samplers, parameters, switches, macros and render state." />
+          </Grid>
+
+          <TextBlock Text="COPY" FontSize="9" FontWeight="SemiBold" Margin="0,4,0,0"
+                     Foreground="{DynamicResource ReyTextDimBrush}" />
+          <WrapPanel Orientation="Horizontal">
+            <CheckBox Content="Shader" IsChecked="{Binding PartShader}" IsEnabled="{Binding CanPickShader}"
+                      FontSize="11" MinWidth="112"
+                      ToolTip.Tip="Off by default: the shader decides which compiled permutation the client looks up, and a wrong one is a map that loads and renders nothing (M482/M486)." />
+            <CheckBox Content="Samplers" IsChecked="{Binding PartSamplers}" IsEnabled="{Binding CanPickSamplers}"
+                      FontSize="11" MinWidth="112"
+                      ToolTip.Tip="Sets or adds the preset's textures. Samplers the target has and the preset does not are kept." />
+            <CheckBox Content="Parameters" IsChecked="{Binding PartParameters}" IsEnabled="{Binding CanPickParameters}"
+                      FontSize="11" MinWidth="112" />
+            <CheckBox Content="Switches" IsChecked="{Binding PartSwitches}" IsEnabled="{Binding CanPickSwitches}"
+                      FontSize="11" MinWidth="112" />
+            <CheckBox Content="Macros" IsChecked="{Binding PartMacros}" IsEnabled="{Binding CanPickMacros}"
+                      FontSize="11" MinWidth="112"
+                      ToolTip.Tip="Macros REPLACE, so a macro the preset lacks is removed — that is how a preset can clear a bad one. Each is checked against the shader cache before it is written." />
+            <CheckBox Content="Render state" IsChecked="{Binding PartRenderState}" IsEnabled="{Binding CanPickRenderState}"
+                      FontSize="11" MinWidth="112"
+                      ToolTip.Tip="blendEnable, cullEnable and both colour blend factors." />
+          </WrapPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+            <Button Classes="tool" Content="Preview" FontSize="11" Padding="14,4"
+                    Command="{Binding PreviewPresetCommand}"
+                    ToolTip.Tip="Show exactly what would change on the ticked materials. Nothing is written." />
+            <Button Classes="primary" Content="Apply" FontSize="11" Padding="18,4"
+                    Command="{Binding ApplyPresetCommand}" IsEnabled="{Binding CanApplyPreset}"
+                    ToolTip.Tip="Write the previewed changes and save the bin." />
+            <Button Classes="tool" Content="Delete" FontSize="11" Padding="10,4"
+                    Command="{Binding DeletePresetCommand}" />
+          </StackPanel>
+
+          <TextBlock Text="{Binding PresetStatus}" FontSize="10" TextWrapping="Wrap"
+                     Foreground="{DynamicResource ReyTextBrush}" />
+        </StackPanel>
+
+        <ListBox ItemsSource="{Binding Preview}" Background="Transparent" BorderThickness="0"
+                 FontSize="11" Margin="4,0,4,4">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:MaterialPlanRowViewModel">
+              <StackPanel Spacing="1">
+                <DockPanel>
+                  <TextBlock DockPanel.Dock="Right" Text="{Binding Summary}" FontSize="10"
+                             Margin="8,0,0,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+                </DockPanel>
+                <TextBlock Text="{Binding Detail}" FontSize="10" TextWrapping="Wrap"
+                           FontFamily="Consolas,Menlo,monospace"
+                           Foreground="{DynamicResource ReyTextDimBrush}" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
       </DockPanel>
     </Border>
 

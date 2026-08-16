@@ -4153,9 +4153,145 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 Refresh: () =>
                 {
                     if (BuildMaterialBrowserContext() is { } fresh) ShowMaterialBrowserWindow?.Invoke(fresh);
-                });
+                },
+                Presets: BuildMaterialPresetService(binEntry));
         }
         catch (Exception ex) { _log.Error("Materials", "Could not audit the materials: " + ex.Message); return null; }
+    }
+
+    // ---- M504: material presets + bulk apply ------------------------------------------------------
+
+    private Formats.Materials.MaterialPresetLibrary? _materialPresets;
+
+    /// <summary>Saved next to the editor settings rather than inside a project: a preset is a way of
+    /// working, and the point of one is to reuse it on the NEXT map too.</summary>
+    private Formats.Materials.MaterialPresetLibrary MaterialPresets =>
+        _materialPresets ??= Formats.Materials.MaterialPresetLibrary.Load();
+
+    private MaterialPresetService BuildMaterialPresetService(WadAssetEntry binEntry) => new(
+        MaterialPresets,
+        () => MaterialPresets.Save(),
+        (material, name) => CaptureMaterialPreset(binEntry, material, name),
+        (preset, names, parts, write) => RunMaterialPreset(binEntry, preset, names, parts, write));
+
+    private Formats.Materials.MaterialPreset? CaptureMaterialPreset(
+        WadAssetEntry binEntry, string materialName, string presetName)
+    {
+        try
+        {
+            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName);
+            var source = doc.Materials.FirstOrDefault(m =>
+                m.Name.Equals(materialName, StringComparison.OrdinalIgnoreCase));
+            if (source is null)
+            { _log.Warn("Materials", $"'{materialName}' is not in {binEntry.DisplayName}."); return null; }
+
+            var preset = Formats.Materials.MaterialPreset.Capture(source, presetName);
+            _log.Success("Materials", $"Captured preset '{presetName}': {preset.Summary}");
+            return preset;
+        }
+        catch (Exception ex) { _log.Error("Materials", "Could not capture the preset: " + ex.Message); return null; }
+    }
+
+    /// <summary>The shader-cache and texture lookups the applier needs. Anything missing SKIPS its check
+    /// rather than guessing, and the applier says so in its notes.</summary>
+    private Formats.Materials.MaterialPresetContext BuildMaterialPresetContext()
+    {
+        var perms = ShaderPerms();
+        var catalog = MaterialEditor.Catalog;
+        return new Formats.Materials.MaterialPresetContext(
+            TextureExists: TextureExistsByPath,
+            MacroSupport: perms is { IsAvailable: true } && catalog is not null
+                ? (shader, switches, macro, value) =>
+                    MacroSupportFor(perms, catalog, shader, macro, switches, value)
+                : null);
+    }
+
+    /// <summary>
+    /// Preview or perform a preset application over a set of materials.
+    ///
+    /// <para>Both directions re-read the bin and run the same <see cref="Formats.Materials.MaterialPresetApplier"/>
+    /// walk, so the diff the user approved is computed from the same bytes and the same rules as the edit
+    /// that follows it. The save is the standard bin path: shape-validate, project file first, override
+    /// store second (M417 — an override written for an asset the project ships is dropped at build).</para>
+    /// </summary>
+    private IReadOnlyList<Formats.Materials.MaterialPresetPlanRow> RunMaterialPreset(
+        WadAssetEntry binEntry, Formats.Materials.MaterialPreset preset, IReadOnlyList<string> names,
+        Formats.Materials.MaterialPresetParts parts, bool write)
+    {
+        var empty = Array.Empty<Formats.Materials.MaterialPresetPlanRow>();
+        if (write && !GuardEditable(binEntry)) return empty;
+        if (write && Project.ProjectFilePath is null && Project.SourceWadPath is null)
+        { _log.Warn("Materials", "Create or open a project before applying a preset."); return empty; }
+
+        try
+        {
+            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName);
+            var wanted = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+            var targets = doc.Materials.Where(m => wanted.Contains(m.Name)).ToList();
+            var context = BuildMaterialPresetContext();
+
+            var rows = (write
+                ? Formats.Materials.MaterialPresetApplier.Apply(preset, targets, parts, context)
+                : Formats.Materials.MaterialPresetApplier.Plan(preset, targets, parts, context)).ToList();
+
+            // A name the browser listed that the bin does not contain is a MissingMaterial row — the mesh
+            // asks for it and nothing provides it. Dropping it here would make the report claim a coverage
+            // it does not have.
+            foreach (string name in names)
+                if (!targets.Any(t => t.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                    rows.Add(new Formats.Materials.MaterialPresetPlanRow(name,
+                        Array.Empty<Formats.Materials.MaterialPresetChange>(),
+                        new[] { "this material is not in the bin — a mesh names it, but there is nothing to edit" },
+                        Array.Empty<string>()));
+
+            if (!write) return rows;
+            if (!rows.Any(r => r.HasChanges))
+            { _log.Info("Materials", "Nothing to apply — every selected material already matches."); return rows; }
+
+            byte[] bytes = doc.Serialize();
+            var issues = Formats.Meta.ModShapeValidator.ValidateBin(
+                Formats.Meta.SafeBinTree.Parse(bytes), bytes, ResolveBinName);
+            if (issues.Count > 0)
+            {
+                foreach (var i in issues.Take(5)) _log.Error("Materials", $"[{i.Category}] {i.ObjectName}: {i.Detail}");
+                _log.Error("Materials", $"{issues.Count} shape issue(s) — the preset was NOT saved.");
+                return rows.Select(r => new Formats.Materials.MaterialPresetPlanRow(r.MaterialName,
+                    Array.Empty<Formats.Materials.MaterialPresetChange>(),
+                    new[] { "not saved — the resulting bin failed shape validation" },
+                    r.Notes)).ToList();
+            }
+
+            string savedTo;
+            if (TryWriteToProjectFile(binEntry, bytes, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = binEntry.PathHash,
+                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+            NotifyMaterialsChanged();
+
+            int changed = rows.Count(r => r.HasChanges);
+            int refused = rows.Count(r => r.HasBlockers);
+            _log.Success("Materials", $"Applied preset '{preset.Name}' to {changed:n0} material(s)"
+                + (refused > 0 ? $", {refused:n0} with refusals" : "") + $". Saved to {savedTo}.");
+            return rows;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Materials", $"Preset {(write ? "apply" : "preview")} failed: " + ex.Message);
+            return empty;
+        }
     }
     public Action<RitobinTarget>? ShowRitobinEditorWindow { get; set; }   // M498
 
@@ -4228,10 +4364,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// requests exists.</para>
     ///
     /// <para>The probe material is built in memory from an empty bin and thrown away.</para>
+    ///
+    /// <para>M504 added <paramref name="switches"/> and <paramref name="value"/>. The permutation key
+    /// combines every axis at once, so a probe built without the switches the material will actually carry
+    /// answers a NEIGHBOURING question — which is the shape of mistake M486 and M502 both made in turn.
+    /// The porter passes null (its generated materials take the shader's own switch defaults); the preset
+    /// applier passes the set the material will have after the preset lands.</para>
     /// </summary>
     private LegacyMapPorter.MacroSupport MacroSupportFor(
         Formats.Materials.ShaderPermutationIndex perms, Formats.Shaders.ShaderCatalog catalog,
-        string shader, string macro)
+        string shader, string macro,
+        IReadOnlyDictionary<string, bool>? switches = null, string value = "1")
     {
         if (!perms.DeclaresMacroAxis(shader, macro)) return LegacyMapPorter.MacroSupport.NotDeclared;
 
@@ -4246,6 +4389,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             var made = Formats.Materials.MapMaterialFactory.CreateFromShader(
                 ms.ToArray(), "PortProbe/" + shader, def, out _, samplerOverrides: null,
+                switches: switches,
                 macros: new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { [macro] = true });
             if (made is null) return LegacyMapPorter.MacroSupport.Unknown;
 
@@ -4253,7 +4397,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 .Materials.FirstOrDefault(m => m.Name == "PortProbe/" + shader);
             if (probe is null) return LegacyMapPorter.MacroSupport.Unknown;
 
-            return perms.CanSetMacro(probe, macro, "1")
+            return perms.CanSetMacro(probe, macro, value)
                 ? LegacyMapPorter.MacroSupport.Cooked
                 : LegacyMapPorter.MacroSupport.NotCooked;
         }
