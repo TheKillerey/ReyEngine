@@ -234,7 +234,10 @@ public static class RitobinText
             BinTreeVector3 v => $"{{ {Float(v.Value.X)}, {Float(v.Value.Y)}, {Float(v.Value.Z)} }}",
             BinTreeVector4 v => $"{{ {Float(v.Value.X)}, {Float(v.Value.Y)}, {Float(v.Value.Z)}, {Float(v.Value.W)} }}",
             BinTreeMatrix44 m => Matrix(m),
-            BinTreeColor c => $"{{ {c.Value.R}, {c.Value.G}, {c.Value.B}, {c.Value.A} }}",
+            // rgba is written as 0..255, which is ritobin's convention. LeagueToolkit's Color stores
+            // NORMALISED floats and its byte constructor divides by 255, so printing the raw components
+            // would emit "0.039" where ritobin writes "10" — and reading that back as a byte gives 0.
+            BinTreeColor c => $"{{ {Byte255(c.Value.R)}, {Byte255(c.Value.G)}, {Byte255(c.Value.B)}, {Byte255(c.Value.A)} }}",
             BinTreeString s => Quote(s.Value),
             BinTreeHash h => HashLiteral(h.Value),
             BinTreeObjectLink l => HashLiteral(l.Value),
@@ -258,6 +261,10 @@ public static class RitobinText
         /// as two values.</summary>
         private static string Float(float f) =>
             float.IsFinite(f) ? f.ToString("R", CultureInfo.InvariantCulture) : "0";
+
+        /// <summary>A normalised colour component back to the 0..255 byte it was authored as.</summary>
+        private static int Byte255(float f) =>
+            float.IsFinite(f) ? Math.Clamp((int)MathF.Round(f * 255f), 0, 255) : 0;
 
         private string NameLiteral(uint hash)
         {
