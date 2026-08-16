@@ -17,8 +17,14 @@
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="12,7">
       <DockPanel>
         <TextBlock DockPanel.Dock="Left" Text="{Binding Title}" FontSize="11" FontWeight="SemiBold"
-                   VerticalAlignment="Center" Margin="0,0,12,0"
+                   VerticalAlignment="Center" Margin="0,0,10,0"
                    Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis" />
+        <!-- M499: the buffer holds ONE object by default. Avalonia's TextBox does not virtualise, so a
+             whole 36,697-line bin re-measures its entire layout on every keystroke. -->
+        <ComboBox DockPanel.Dock="Left" ItemsSource="{Binding Scopes}" SelectedItem="{Binding SelectedScope}"
+                  MinWidth="300" MaxWidth="440" FontSize="11" VerticalAlignment="Center"
+                  IsEnabled="{Binding HasTarget}"
+                  ToolTip.Tip="Which object is in the buffer. Editing one object is fast; the whole file is not. Apply replaces only what the buffer describes." />
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
           <Button Classes="tool" Content="Import .py…" Name="ImportButton" FontSize="11" Padding="10,4"
                   IsEnabled="{Binding HasTarget}"
