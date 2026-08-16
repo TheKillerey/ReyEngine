@@ -337,7 +337,19 @@
                  and the two swap by visibility. ViewportControl derives from OpenGlControlBase, so it IS
                  the GL surface and cannot render D3D itself - hence two siblings rather than one control
                  with a mode. Nothing GL is removed; this is reversible by unticking the box. -->
-            <Image x:Name="Dx11Surface" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top"
+            <!-- M500: Stretch=Fill, NOT None. The frame is rendered at Bounds * RenderScaling DEVICE pixels
+                 and wrapped in a WriteableBitmap declared at 96 dpi, so the bitmap's DIP size equals its
+                 PIXEL size while this Image is sized in LOGICAL pixels. With Stretch=None Avalonia
+                 centre-crops that mismatch: measured against Avalonia 11.3.18, a 1750x1000 bitmap in a
+                 1400x800 Image draws sourceRect (175,100,1400,800) — only the middle 80% x 80% of the
+                 frustum, magnified 1.25x. Picking meanwhile maps the FULL control rect to the FULL frustum,
+                 so every click landed 0.2 x (distance from centre) DIP away from what was drawn, and the
+                 10-px gizmo tolerance left the arms grabbable only within +/-50 DIP of the viewport centre.
+                 ShaderPreviewWindow.axaml has always used Fill with the same renderer and the same bitmap;
+                 this is the one place that did not. Invisible at 100% scaling, which is why it survived
+                 M248-M364. Interpolation stays off: the bitmap is already at device resolution. -->
+            <Image x:Name="Dx11Surface" Stretch="Fill"
+                   RenderOptions.BitmapInterpolationMode="None"
                    IsVisible="{Binding UseDx11Viewport}" />
             <views:ViewportControl x:Name="Viewport"
                 IsVisible="{Binding !UseDx11Viewport}"

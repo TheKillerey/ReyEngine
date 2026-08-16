@@ -6851,15 +6851,55 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             SelectedOutlinerItem = bestNode;   // routes by type + highlights the hierarchy
             return;
         }
-        SelectMeshFromViewport(rayOrigin, rayDir, additive);
+        // M500: pass the click pixel through so repeated clicks at the same spot can cycle deeper.
+        SelectMeshFromViewport(rayOrigin, rayDir, additive, clickScreenPx);
     }
 
-    public void SelectMeshFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir, bool additive = false)
+    // M500: Blender-style click-through. Clicking the same spot again steps to the next mesh along the
+    // ray instead of re-selecting the nearest one forever.
+    private System.Numerics.Vector2? _lastPickPx;
+    private int _pickCycleCursor;
+
+    /// <summary>How far the pointer may move and still count as "the same spot" for cycling, in DIP.</summary>
+    private const float PickCycleSlopPx = 4f;
+
+    /// <summary>
+    /// M500: select the mesh under the ray, cycling through everything beneath it on repeated clicks.
+    ///
+    /// <para>Previously this took <c>ClosestHit</c>, which prunes the BVH with its running best distance —
+    /// so anything behind the nearest surface was never even tested, and coincident geometry was arbitrated
+    /// by a fixed "lowest submesh index wins" tie-break. On Summoner's Rift that is not an edge case: decals
+    /// lie exactly on the terrain they decorate and the dragon pit floor exists seven times in one spot, so
+    /// the losing copies were simply unreachable by clicking.</para>
+    ///
+    /// <para>Now the full hit list is collected and repeated clicks at the same pixel advance a cursor
+    /// through it, wrapping at the end. The list is RECOMPUTED every click and only the cursor persists:
+    /// that keeps the cycle correct across camera moves, visibility toggles and geometry edits with no
+    /// invalidation logic to get wrong. Hits are collapsed to distinct meshes first, because one mesh can
+    /// contribute several submeshes along the ray and the user is picking meshes, not triangles.</para>
+    /// </summary>
+    public void SelectMeshFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir,
+        bool additive = false, System.Numerics.Vector2? clickScreenPx = null)
     {
         if (_currentMap is not { } map || map.Groups.Count == 0) return;
-        int hit = RayIndex?.ClosestHit(rayOrigin, rayDir, CurrentModelSubmeshVisible)?.Submesh ?? -1;
-        if (hit < 0)
+
+        var hits = RayIndex?.AllHits(rayOrigin, rayDir, CurrentModelSubmeshVisible);
+
+        // Collapse to distinct meshes, nearest first. A mesh with several submeshes under the cursor must
+        // occupy ONE step of the cycle, or clicking would appear to stall on it.
+        var ordered = new List<int>();
+        if (hits is not null)
+            foreach (var h in hits)
+            {
+                if (h.Submesh < 0 || h.Submesh >= map.Groups.Count) continue;
+                int mi = map.Groups[h.Submesh].MeshIndex;
+                if (mi >= 0 && !ordered.Contains(mi)) ordered.Add(mi);
+            }
+
+        if (ordered.Count == 0)
         {
+            _lastPickPx = null;
+            _pickCycleCursor = 0;
             if (!additive)
             {
                 _selection.Clear(); // empty click clears; Ctrl+empty keeps the set (UE/Blender)
@@ -6867,7 +6907,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
             return;
         }
-        int meshIndex = map.Groups[hit].MeshIndex;
+
+        // Same spot as last time? Step deeper. Additive clicks never cycle — Ctrl+click is "add this one",
+        // and advancing under the user there would add a different mesh than the one they aimed at.
+        bool sameSpot = !additive && clickScreenPx is { } px && _lastPickPx is { } last
+                        && System.Numerics.Vector2.Distance(px, last) <= PickCycleSlopPx;
+        _pickCycleCursor = sameSpot ? (_pickCycleCursor + 1) % ordered.Count : 0;
+        _lastPickPx = additive ? null : clickScreenPx;
+
+        int meshIndex = ordered[_pickCycleCursor];
+        if (ordered.Count > 1)
+            _log.Info("MapGeo", $"Click-through {_pickCycleCursor + 1}/{ordered.Count} under the cursor "
+                              + "(click again for the next one down).");
         var mesh = map.Meshes.FirstOrDefault(x => x.Index == meshIndex);
         if (mesh is null) return;
         if (additive) _selection.Toggle(mesh);

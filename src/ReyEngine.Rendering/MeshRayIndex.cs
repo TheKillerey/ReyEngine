@@ -205,6 +205,71 @@ public sealed class MeshRayIndex
             InterpolateUv(bestTri, bestU, bestV), gn);
     }
 
+    /// <summary>
+    /// M500: EVERY hit along the ray, nearest first — the list Blender-style click-through needs.
+    ///
+    /// <para>Deliberately a sibling of <see cref="ClosestHit"/> rather than a replacement. ClosestHit prunes
+    /// the BVH with its running best distance, which is exactly what makes it fast enough to run per
+    /// pointer-move for the paint brush; this one cannot prune at all, because the geometry it must return
+    /// is precisely the geometry that prune throws away. Two methods, two costs, two callers.</para>
+    ///
+    /// <para>Ties are kept, not broken. Summoner's Rift stacks bit-identical copies — the dragon pit floor
+    /// exists seven times in the same place, and decals lie exactly on the terrain they decorate — so the
+    /// coincident hits ClosestHit has to arbitrate between are the whole point here. They come back in
+    /// submesh order so repeated clicks walk them in a stable sequence.</para>
+    /// </summary>
+    public List<MeshRayHit> AllHits(Vector3 origin, Vector3 dir, IReadOnlyList<bool>? visible = null)
+    {
+        var hits = new List<MeshRayHit>();
+        if (_nodeCount == 0) return hits;
+
+        var inv = new Vector3(
+            1f / (MathF.Abs(dir.X) < 1e-9f ? MathF.CopySign(1e-9f, dir.X == 0 ? 1f : dir.X) : dir.X),
+            1f / (MathF.Abs(dir.Y) < 1e-9f ? MathF.CopySign(1e-9f, dir.Y == 0 ? 1f : dir.Y) : dir.Y),
+            1f / (MathF.Abs(dir.Z) < 1e-9f ? MathF.CopySign(1e-9f, dir.Z == 0 ? 1f : dir.Z) : dir.Z));
+
+        // 128, not ClosestHit's 64: without the bestT prune far more of the tree survives, and the
+        // depth guard below drops whole subtrees SILENTLY when the stack is full — a dropped subtree is
+        // a mesh that cannot be reached by clicking, which is the very complaint this method exists for.
+        Span<int> stack = stackalloc int[128];
+        int sp = 0;
+        stack[sp++] = 0;
+        while (sp > 0)
+        {
+            int ni = stack[--sp];
+            ref var node = ref _nodes[ni];
+            if (!SlabHit(node.Min, node.Max, origin, inv, float.MaxValue)) continue;
+
+            if (node.Count > 0)
+            {
+                for (int i = node.Start; i < node.Start + node.Count; i++)
+                {
+                    int t = _order[i];
+                    int sm = _submeshOf[t];
+                    if (sm < 0) continue;
+                    if (visible is not null && sm < visible.Count && !visible[sm]) continue;
+                    if (!TriHit(t, origin, dir, float.MaxValue, out float dist, out float u, out float v)) continue;
+
+                    var gn = Vector3.Cross(_e1[t], _e2[t]);
+                    gn = gn.LengthSquared() > 1e-12f ? Vector3.Normalize(gn) : Vector3.UnitY;
+                    if (Vector3.Dot(gn, dir) > 0f) gn = -gn;
+                    hits.Add(new MeshRayHit(sm, t, dist, origin + dir * dist, u, v, InterpolateUv(t, u, v), gn));
+                }
+            }
+            else if (sp + 2 <= stack.Length)
+            {
+                stack[sp++] = ni + 1;
+                stack[sp++] = node.Right;
+            }
+        }
+
+        // Nearest first; coincident hits ordered by submesh so the cycle is stable between clicks.
+        hits.Sort((a, b) => a.Distance != b.Distance
+            ? a.Distance.CompareTo(b.Distance)
+            : a.Submesh.CompareTo(b.Submesh));
+        return hits;
+    }
+
     /// <summary>The UV under a hit: the barycentric blend of the triangle's three vertex UVs. This is the
     /// texture address the brush paints into.</summary>
     public Vector2 InterpolateUv(int triangle, float baryU, float baryV)

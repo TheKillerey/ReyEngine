@@ -104,8 +104,20 @@ public sealed class LegacyMapPorterTests
 
         var mapped = LegacyMapPorter.ApplyShaderOptions(source, LegacyPortShaderOptions.Defaults);
 
+        // M500: neutral is 0.5019608, NOT 1.0 — this assertion previously encoded the wrong belief and so
+        // guarded the bug instead of the behaviour. DefaultEnv_Flat applies TintColor as an OVERLAY blend
+        // (defaultenv_flat.ps.dx11 blob 141 lines 159-168) whose identity is 0.5, and Riot's shaders.bin
+        // declares 0.5019608 = 128/255. At 1.0 the ported map rendered its albedo ~2x too bright in DX11
+        // (measured 2.000x and 1.882x on two of this map's real textures, with 6% of channels clipped to
+        // white); GL hid it by dropping TintColor for opaque diffuse-textured materials.
         foreach (var material in mapped.Materials)
-            Assert.Equal(System.Numerics.Vector4.One, material.Parameters["TintColor"]);
+        {
+            var tint = material.Parameters["TintColor"];
+            Assert.Equal(LegacyMapPorter.NeutralTint, tint.X, 5);
+            Assert.Equal(LegacyMapPorter.NeutralTint, tint.Y, 5);
+            Assert.Equal(LegacyMapPorter.NeutralTint, tint.Z, 5);
+            Assert.NotEqual(1f, tint.X);
+        }
         Assert.Equal(0.35f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Normal)
             .Parameters["AlphaTestValue"].X);
         Assert.Equal(0.005f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Decal)

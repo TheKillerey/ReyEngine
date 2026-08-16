@@ -114,6 +114,10 @@ public static class LegacyMapPorter
     /// a blanket rule over every ported material.</para>
     /// </summary>
     public const int ClampAddressMode = 1;
+
+    /// <summary>M500: the identity value of DefaultEnv_Flat's TintColor overlay — Riot's own shaders.bin
+    /// default, 128/255. See <see cref="MaterialParameters"/> for why 1.0 is not neutral.</summary>
+    public const float NeutralTint = 0.5019608f;
     /// <summary>
     /// Default world-space correction applied to imported WGEO/NVR geometry.
     ///
@@ -185,19 +189,37 @@ public static class LegacyMapPorter
         };
     }
 
-    /// <summary>Neutral authored values for generated legacy materials. shaders.bin declares zero for
-    /// TintColor on DefaultEnv_Flat_AlphaTest; copying that definition literally makes DX11 multiply every
-    /// imported diffuse by black. Riot's real materials author the neutral tint explicitly, so generated
-    /// materials must do the same. Extra names are harmless because CreateFromShader only writes parameters
-    /// actually declared by the selected shader.</summary>
+    /// <summary>
+    /// Neutral authored values for generated legacy materials. Extra names are harmless because
+    /// CreateFromShader only writes parameters actually declared by the selected shader.
+    ///
+    /// <para><b>M500: TintColor's neutral value is 0.5, not 1.0.</b> DefaultEnv_Flat applies it as a
+    /// per-channel OVERLAY blend against the diffuse — disassembled from defaultenv_flat.ps.dx11 blob 141,
+    /// lines 159-168: <c>1 - 2*(1-d)*(1-T)</c> above 0.5 and <c>2*d*T</c> below — and overlay's identity is
+    /// 0.5, so 1.0 is a ~2x BRIGHTENER rather than "no tint". Measured over this map's real textures at
+    /// tint 1.0: 2.000x on base_stone_steps, 1.882x on shrine with 6% of channels clipped to pure white.
+    /// Riot's own declared default in shaders.bin is 0.5019608 (=128/255), and Riot's shipped
+    /// Jade_Foliage_Grass_AA_MAT authors exactly (0.5, 0.5, 0.5, 1) across 292 meshes in this very file.
+    /// ReyEngine's GL shader has always documented the same convention (ViewportMeshRenderer.cs:445-453,
+    /// "0.5 = neutral (identity)").</para>
+    ///
+    /// <para>M347 introduced Vector4.One while correctly diagnosing that copying shaders.bin's literal
+    /// zero made DX11 render every import black. Zero was indeed wrong; the correction overshot to 1.0
+    /// instead of to the actual identity. The symptom hid on the GL viewport, which drops TintColor
+    /// entirely for opaque diffuse-textured materials (MaterialProfile.cs:268-272), so only DX11 ever
+    /// showed the doubled albedo.</para>
+    ///
+    /// <para>Only .xyz is read — ps blob 141 line 167 takes output alpha from the diffuse texture — so .w
+    /// is left at 1 and is inert either way.</para>
+    /// </summary>
     private static IReadOnlyDictionary<string, Vector4> MaterialParameters(
         LegacyMaterialRole role, IReadOnlyDictionary<string, Vector4>? existing = null)
     {
         var parameters = existing is null
             ? new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, Vector4>(existing, StringComparer.OrdinalIgnoreCase);
-        parameters["TintColor"] = Vector4.One;
-        parameters["Tint"] = Vector4.One;
+        parameters["TintColor"] = new Vector4(NeutralTint, NeutralTint, NeutralTint, 1f);
+        parameters["Tint"] = new Vector4(NeutralTint, NeutralTint, NeutralTint, 1f);
         if (role == LegacyMaterialRole.FourBlendTerrain)
             parameters["WS_Multiplier"] = new Vector4(0.01f, 0, 0, 0);
         else

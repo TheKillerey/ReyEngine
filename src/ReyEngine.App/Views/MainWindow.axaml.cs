@@ -209,9 +209,16 @@ public partial class MainWindow : Window
         // Match the GL surface's pixel size, scaling included - a mismatch would silently change the
         // aspect ratio and make the two viewports disagree for a reason that has nothing to do with either
         // renderer.
+        //
+        // M500: sized from ViewportInput, NOT from Viewport. Viewport is the GL control, and it is HIDDEN
+        // whenever DX11 is on; Avalonia freezes Bounds on an invisible control, so resizing the window in
+        // DX11 mode left the render size, the image size and the pick rect all stuck at whatever the GL
+        // control last measured. ViewportInput is the transparent Border that receives the clicks and is
+        // visible in both modes, which makes it the only correct source of truth for all three.
+        var surface = ViewportInput.Bounds;
         double scale = RenderScaling;
-        int w = (int)(Viewport.Bounds.Width * scale);
-        int h = (int)(Viewport.Bounds.Height * scale);
+        int w = (int)(surface.Width * scale);
+        int h = (int)(surface.Height * scale);
         if (w <= 0 || h <= 0) return;
 
         // M261: the same lighting inputs the GL surface is bound to in XAML. Pushed every frame rather
@@ -315,12 +322,13 @@ public partial class MainWindow : Window
         if (!_dx11.Render(Viewport.Camera, w, h)) return;
 
         Dx11Surface.Source = _dx11.Current;
-        Dx11Surface.Width = Viewport.Bounds.Width;
-        Dx11Surface.Height = Viewport.Bounds.Height;
+        Dx11Surface.Width = surface.Width;
+        Dx11Surface.Height = surface.Height;
 
         // M263: the GL control is hidden and not rendering, so nothing else refreshes the matrices that
         // mesh picking raycasts against. Same size the GL path caches - logical bounds, not pixels.
-        Viewport.SyncPickMatrices(Viewport.Bounds.Width, Viewport.Bounds.Height);
+        // M500: and the SAME rect the image is stretched over, so what is drawn and what is picked agree.
+        Viewport.SyncPickMatrices(surface.Width, surface.Height);
         // M263: the toolbar shows the frame cost and nothing else.
         vm.Dx11ViewportStatus = _dx11.HasScene ? $"{_dx11.LastFrameMs:F2} ms" : "no scene";
 
