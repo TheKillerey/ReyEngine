@@ -13,6 +13,12 @@ public static class ReyPaths
     public static string CommunityDragonDir => Path.Combine(HashesDir, "communitydragon", "lol");
     public static string MergedCache => Path.Combine(HashesDir, "merged_hashes.cache");
 
+    /// <summary>M495: Mimir's .hashdb tables and the manifest they were published with. Gitignored for the
+    /// same reasons as the CommunityDragon lists: third-party data this repo should not redistribute, and
+    /// re-generated per patch, so a committed copy would be stale immediately.</summary>
+    public static string MimirDir => Path.Combine(HashesDir, "mimir");
+    public static string MimirManifestFile => Path.Combine(MimirDir, "manifest.json");
+
     /// <summary>M367: the LeagueToolkit meta-class database. Downloaded and cached exactly like the
     /// CommunityDragon hashes above and gitignored for the same two reasons: it is third-party data this
     /// repo should not redistribute (lol-meta-classes ships no licence), and it is re-dumped every patch,
@@ -25,6 +31,8 @@ public static class ReyPaths
         Directory.CreateDirectory(HashesDir);
         Directory.CreateDirectory(CommunityDragonDir);
     }
+
+    public static void EnsureMimirDir() => Directory.CreateDirectory(MimirDir);
 
     public static void EnsureMetaDir() => Directory.CreateDirectory(MetaDir);
 

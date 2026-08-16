@@ -16,22 +16,70 @@ public sealed class HashDatabase : IHashResolver
     private readonly Dictionary<ulong, List<string>> _wadConflicts = new();
     private readonly Dictionary<uint, List<string>> _binConflicts = new();
 
+    // ---- M495: Mimir tables ---------------------------------------------
+    //
+    // Memory-mapped .hashdb tables consulted BENEATH the dictionaries above. That order is Mimir's own
+    // (LayeredHashDb: overlay first, then each base in push order) and it is the order that keeps the
+    // editor's behaviour intact: hashes discovered from an open WAD, typed into a project, or merged from a
+    // manual .txt must still win over a table published weeks ago.
+    //
+    // The tables are the REPLACEMENT for ~554 MB of CommunityDragon text and merged cache; the dictionaries
+    // stay because they hold everything Mimir does not — local discoveries and user data.
+    private readonly List<(MimirTableKind Kind, HashDbFile Db)> _tables = new();
+
+    /// <summary>Attach a table. Order matters: earlier tables win ties.</summary>
+    public void AttachTable(MimirTableKind kind, HashDbFile db)
+    {
+        if (kind == MimirTableKind.Ignored) return;
+        _tables.Add((kind, db));
+    }
+
+    /// <summary>Close and forget every attached table.</summary>
+    public void DetachTables()
+    {
+        foreach (var (_, db) in _tables) { try { db.Dispose(); } catch { /* already gone */ } }
+        _tables.Clear();
+    }
+
+    public int TableCount => _tables.Count;
+
+    /// <summary>Entries reachable through the attached tables. Counted, not loaded.</summary>
+    public long TableEntryCount => _tables.Sum(t => t.Db.EntryCount);
+
     public int WadCount => _wad.Count;
     public int BinCount => _bin.Count;
     public int ConflictCount => _wadConflicts.Count + _binConflicts.Count;
 
-    public bool TryGetPath(ulong hash, out string path) => _wad.TryGetValue(hash, out path!);
-    public string ResolvePath(ulong hash) => _wad.TryGetValue(hash, out var p) ? p : $"0x{hash:x16}.unknown";
-    public bool TryGetBinName(uint hash, out string name) => _bin.TryGetValue(hash, out name!);
+    public bool TryGetPath(ulong hash, out string path)
+    {
+        if (_wad.TryGetValue(hash, out path!)) return true;
+        foreach (var (kind, db) in _tables)
+            if (kind == MimirTableKind.Wad && db.TryGet(hash, out path!)) return true;
+        path = null!;
+        return false;
+    }
+
+    public string ResolvePath(ulong hash) => TryGetPath(hash, out var p) ? p : $"0x{hash:x16}.unknown";
+
+    public bool TryGetBinName(uint hash, out string name)
+    {
+        if (_bin.TryGetValue(hash, out name!)) return true;
+        foreach (var (kind, db) in _tables)
+            if (kind == MimirTableKind.Bin && db.TryGet(hash, out name!)) return true;
+        name = null!;
+        return false;
+    }
 
     public IReadOnlyList<string> WadCandidates(ulong hash) =>
         _wadConflicts.TryGetValue(hash, out var l) ? l
         : _wad.TryGetValue(hash, out var s) ? new[] { s }
+        : TryGetPath(hash, out var t) ? new[] { t }
         : Array.Empty<string>();
 
     public IReadOnlyList<string> BinCandidates(uint hash) =>
         _binConflicts.TryGetValue(hash, out var l) ? l
         : _bin.TryGetValue(hash, out var s) ? new[] { s }
+        : TryGetBinName(hash, out var t) ? new[] { t }
         : Array.Empty<string>();
 
     public void AddWad(ulong hash, string value)

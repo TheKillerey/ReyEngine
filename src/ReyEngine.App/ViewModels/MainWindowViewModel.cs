@@ -36,6 +36,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 {
     private readonly Logger _log = new();
     private readonly HashSyncService _sync = new();
+    private readonly MimirSyncService _mimir = new();   // M495
 
     // M367: the LeagueToolkit meta-class schema. Lazy and thread-safe: it is a ~3.6 MB parse that most
     // sessions never need, and when it IS needed the first call arrives from a background bin parse.
@@ -5470,6 +5471,36 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             _log.Error("Hashes", $"Sync failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// M495: fetch Mimir's hash tables — the replacement for the CommunityDragon text lists.
+    ///
+    /// <para>Same tables, ~64 MB of memory-mapped binaries instead of ~554 MB of text plus a merged cache,
+    /// and each one is verified against the manifest's SHA-256 before it is kept. Once these are present
+    /// <see cref="Formats"/>-side lookups resolve through them and the old path is not loaded at all.</para>
+    ///
+    /// <para>Separate from Sync Hashes rather than replacing it: an existing install already has the merged
+    /// cache and must keep working untouched if the user never runs this.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task SyncMimirHashes()
+    {
+        try
+        {
+            Status = "Syncing Mimir hash tables…";
+            var result = await Task.Run(() => _mimir.SyncAsync(m => _log.Info("Mimir", m)));
+
+            // Re-open through the normal path so the tables are attached exactly as a fresh launch would.
+            var db = _sync.LoadLocal(m => _log.Info("Hashes", m));
+            _resolver.Swap(db);
+            ApplyHashesToOpenWad();
+
+            Status = result.Summary;
+            _log.Success("Mimir", $"{result.Summary} {db.TableEntryCount:n0} entries reachable through "
+                                + $"{db.TableCount} memory-mapped table(s).");
+        }
+        catch (Exception ex) { _log.Error("Mimir", $"Sync failed: {ex.Message}"); }
     }
 
     /// <summary>M367: download the LeagueToolkit meta-class database. Companion to Sync Hashes, and

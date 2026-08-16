@@ -53,15 +53,37 @@ public sealed class HashSyncService
     public HashDatabase LoadLocal(Action<string> log)
     {
         var db = new HashDatabase();
-        if (db.LoadCache(ReyPaths.MergedCache))
+
+        // M495: Mimir's memory-mapped tables come first, because when they are present the expensive
+        // CommunityDragon path has nothing left to do. They are ~64 MB mapped rather than ~554 MB parsed
+        // into dictionaries, and mapping them costs nothing until a lookup actually happens.
+        var tables = MimirSyncService.OpenLocal(m => log($"  mimir: {m}"));
+        foreach (var (name, kind, table) in tables)
         {
-            log($"Loaded hash cache: {db.WadCount:n0} WAD + {db.BinCount:n0} bin entries.");
+            db.AttachTable(kind, table);
+            log($"  {name}: {table.EntryCount:n0} entries ({kind}, memory-mapped)");
         }
-        else if (Directory.Exists(ReyPaths.CommunityDragonDir) &&
-                 Directory.EnumerateFiles(ReyPaths.CommunityDragonDir).Any())
+        if (tables.Count > 0)
+            log($"Mimir hash tables: {tables.Count} table(s), {db.TableEntryCount:n0} entries.");
+
+        // The legacy path stays as a FALLBACK rather than being deleted. Existing installs already have the
+        // merged cache, and a user who never syncs Mimir must keep working exactly as before. Loading both
+        // is also harmless: the dictionaries win ties by design, so anything locally known still shadows a
+        // published table.
+        if (tables.Count == 0)
         {
-            db = ParseLocalRaw(log);
-            if (db.WadCount + db.BinCount > 0) db.SaveCache(ReyPaths.MergedCache);
+            if (db.LoadCache(ReyPaths.MergedCache))
+            {
+                log($"Loaded hash cache: {db.WadCount:n0} WAD + {db.BinCount:n0} bin entries.");
+            }
+            else if (Directory.Exists(ReyPaths.CommunityDragonDir) &&
+                     Directory.EnumerateFiles(ReyPaths.CommunityDragonDir).Any())
+            {
+                var parsed = ParseLocalRaw(log);
+                if (parsed.WadCount + parsed.BinCount > 0) parsed.SaveCache(ReyPaths.MergedCache);
+                foreach (var (_, kind, table) in tables) parsed.AttachTable(kind, table);
+                db = parsed;
+            }
         }
 
         db.LoadManualDirectory(ReyPaths.HashesDir);

@@ -141,7 +141,10 @@
                     ToolTip.Tip="Update this mod to the current patch: old originals from CommunityDragon + three-way merge carries only the mod's edits onto the new base — with backups, a per-bin report and validation" />
         </MenuItem>
         <MenuItem Header="Hashes &amp; Names">
-          <MenuItem Header="Sync Hashes (CommunityDragon)" Command="{Binding SyncHashesCommand}" />
+          <MenuItem Header="Sync Hash Tables (Mimir)" Command="{Binding SyncMimirHashesCommand}"
+                    ToolTip.Tip="The same hash tables CommunityDragon publishes, as ~64 MB of memory-mapped binaries instead of ~554 MB of text. Each table is verified against the release manifest's SHA-256, and lookups resolve straight out of the mapped file. Once synced, this replaces the CommunityDragon download." />
+          <MenuItem Header="Sync Hashes (CommunityDragon)" Command="{Binding SyncHashesCommand}"
+                    ToolTip.Tip="The original text-list path. Still here for installs that already use it, and as a fallback when no Mimir tables are present." />
           <MenuItem Header="Sync Meta Classes (LeagueToolkit)" Command="{Binding SyncMetaClassesCommand}"
                     ToolTip.Tip="Riot's own .bin class and property schema, dumped per patch — adds names, types and authored defaults" />
           <MenuItem Header="Reload Local Hashes" Command="{Binding ReloadLocalHashesCommand}" />
