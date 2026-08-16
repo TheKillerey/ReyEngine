@@ -4058,6 +4058,55 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public Action? ShowTextureRecolorWindow { get; set; }
     public Action? ShowUvEditorWindow { get; set; }
+    public Action<RitobinTarget>? ShowRitobinEditorWindow { get; set; }   // M498
+
+    /// <summary>
+    /// M498: open the selected .bin as ritobin text.
+    ///
+    /// <para>The conversion is byte-exact in both directions (M496/M497), so this is a real editing surface
+    /// rather than a viewer: what comes back out is the file that went in, plus whatever was changed. The
+    /// save goes through the same project-file-first path every other bin edit uses, because an override
+    /// written for an asset the project ships is silently dropped at build.</para>
+    /// </summary>
+    [RelayCommand]
+    private void OpenRitobinEditor()
+    {
+        var entry = ContextNode?.Entry ?? SelectedNode?.Entry;
+        if (entry is null || entry.Type != AssetType.Bin)
+        { _log.Warn("Ritobin", "Select a .bin first — this edits bins as ritobin text."); return; }
+        if (!GuardEditable(entry)) return;
+
+        ShowRitobinEditorWindow?.Invoke(new RitobinTarget(
+            entry.DisplayName,
+            () => ReadAsset(entry.PathHash),
+            async bytes =>
+            {
+                if (!await EnsureProjectSavedAsync()) throw new InvalidOperationException("The project was not saved.");
+
+                string savedTo;
+                if (TryWriteToProjectFile(entry, bytes, out var projectFile)) savedTo = projectFile;
+                else
+                {
+                    savedTo = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".bin");
+                    _overrides.Set(new ProjectAssetOverride
+                    {
+                        PathHash = entry.PathHash,
+                        ResolvedPath = entry.IsResolved ? entry.Path : null,
+                        OverrideFile = savedTo,
+                        AddedUtc = DateTime.UtcNow.ToString("o"),
+                    });
+                    _overrides.SaveTo(Project);
+                }
+                SetNodeStatus(entry.PathHash, AssetStatus.Modified);
+                Project.IsDirty = true;
+                if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+                UpdateTitle();
+                return savedTo;
+            },
+            ResolveBinName,
+            h => _resolver.Database.TryGetPath(h, out var p) ? p : null,
+            m => _log.Info("Ritobin", m)));
+    }
 
     /// <summary>M492: open the second-UV viewer/editor for the current map.</summary>
     [RelayCommand]

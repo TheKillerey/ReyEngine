@@ -113,6 +113,8 @@
           <MenuItem Header="Save Light.dat As…" Command="{Binding SaveLightDatAsCommand}" />
         </MenuItem>
         <Separator />
+        <MenuItem Header="Edit Bin as Text (ritobin)…" Command="{Binding OpenRitobinEditorCommand}"
+                  ToolTip.Tip="Open the selected .bin as ritobin #PROP_text — the format the modding community edits bins in, usually saved as .py. Editable, with import/export, and written back byte-exactly; nothing is saved unless the text parses and the result reads back cleanly." />
         <MenuItem Header="Second UV (Texcoord7)…" Command="{Binding OpenUvEditorCommand}"
                   ToolTip.Tip="See a mesh's UV layout drawn against the 0..1 square, compare it with Texcoord0, and rewrite the second UV set — as a world-planar canvas, a copy of the diffuse UVs, or a scale/offset of what is there. Only the UV floats change; the vertex layout is untouched." />
         <MenuItem Header="Recolor Textures…" Command="{Binding OpenTextureRecolorCommand}"

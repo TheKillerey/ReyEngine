@@ -474,6 +474,7 @@ public partial class MainWindow : Window
             vm.ShowLightingWindow = () => ShowLighting(vm);               // M169
             vm.ShowTextureRecolorWindow = () => ShowTextureRecolor(vm);   // M171
             vm.ShowUvEditorWindow = () => ShowUvEditor(vm);               // M492
+            vm.ShowRitobinEditorWindow = target => ShowRitobinEditor(target);  // M498
             vm.PushTextureRegion = Viewport.QueueTextureUpdate;            // M172c: live brush strokes
             // M360: the same stroke to the D3D11 viewport, which the paint path never reached. Gated on the
             // surface being up: with DX11 off there is no device and nothing to update, and the pool lookup
@@ -756,6 +757,26 @@ public partial class MainWindow : Window
             _lightingWindow.Show(this);
         }
         else _lightingWindow.Activate();
+    }
+
+    // M498: bin-as-ritobin-text. One instance, retargeted on each open so opening a second bin replaces
+    // what is shown rather than stacking windows the user then has to tell apart.
+    private RitobinEditorWindow? _ritobinWindow;
+    private void ShowRitobinEditor(RitobinTarget target)
+    {
+        if (_ritobinWindow is null)
+        {
+            var vm = new RitobinEditorViewModel();
+            _ritobinWindow = new RitobinEditorWindow { DataContext = vm };
+            _ritobinWindow.Closed += (_, _) => _ritobinWindow = null;
+            vm.Open(target);
+            _ritobinWindow.Show(this);
+        }
+        else
+        {
+            if (_ritobinWindow.DataContext is RitobinEditorViewModel vm) vm.Open(target);
+            _ritobinWindow.Activate();
+        }
     }
 
     // M492: Second UV (Texcoord7) — non-modal, one instance. Reloaded on re-open so it follows whatever
