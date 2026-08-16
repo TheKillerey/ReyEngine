@@ -227,4 +227,42 @@ public sealed class MapMaterialAuditTests
         Assert.True(MaterialIssue.MissingMaterial < MaterialIssue.Unused,
             "issue order is the ranking — the ones that break rendering must come first");
     }
+
+    [Fact]
+    public void AMeshWithNoLightmapUvUnderABakedShaderIsReported()
+    {
+        // M509: the lightmap UV lives on the MESH and the decision to sample it lives in the MATERIAL, so
+        // neither file is wrong on its own — which is exactly why this survives every per-file check and
+        // shows up only as geometry that looks wrong in game.
+        var rows = MapMaterialAudit.Audit(
+            new[] { Material("Baked", "Shaders/Flat"), Material("Unlit", "Shaders/Flat",
+                        macros: ("NO_BAKED_LIGHTING", "1")) },
+            Usage(("Baked", 4), ("Unlit", 2)),
+            new MaterialAuditContext(LightmapUvCoverage: m => m.Name == "Baked" ? (0, 4) : (0, 2)));
+
+        var finding = Assert.Single(rows.Single(r => r.Name == "Baked").Findings,
+            f => f.Issue == MaterialIssue.MissingLightmapUv);
+        Assert.Contains("4 mesh", finding.Detail);
+        Assert.Contains("NO_BAKED_LIGHTING", finding.Detail);
+
+        // A material that already opts out of baked lighting has nothing to sample and nothing to report.
+        Assert.DoesNotContain(rows.Single(r => r.Name == "Unlit").Findings,
+            f => f.Issue == MaterialIssue.MissingLightmapUv);
+    }
+
+    [Fact]
+    public void AMaterialSharedByBothKindsOfMeshSaysSoRatherThanSuggestingTheUnsafeFix()
+    {
+        // Marking it unlit would unlight the meshes that are currently fine. On the real map this split
+        // was clean — 0 shared materials — but the advice must not depend on that luck.
+        var rows = MapMaterialAudit.Audit(
+            new[] { Material("Shared", "Shaders/Flat") },
+            Usage(("Shared", 10)),
+            new MaterialAuditContext(LightmapUvCoverage: _ => (7, 3)));
+
+        var finding = Assert.Single(rows.Single().Findings, f => f.Issue == MaterialIssue.MissingLightmapUv);
+        Assert.Contains("3 of 10", finding.Detail);
+        Assert.Contains("their own material", finding.Detail);
+        Assert.DoesNotContain("Set NO_BAKED_LIGHTING on it", finding.Detail);
+    }
 }

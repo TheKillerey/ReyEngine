@@ -4111,6 +4111,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 ExactKey: perms is { IsAvailable: true }
                     ? m => perms.TryExactKey(m, out string key, out bool cooked) ? (true, cooked, key) : (false, false, "")
                     : null,
+                LightmapUvCoverage: BuildLightmapUvCoverage(map),   // M509
                 ShaderTintDefault: catalog is null ? null : shader =>
                 {
                     var def = catalog.Find(shader);
@@ -4219,6 +4220,31 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                                     + $"have skipped. Saved to {savedTo}.");
         }
         catch (Exception ex) { _log.Error("Materials", "Repair failed: " + ex.Message); }
+    }
+
+    /// <summary>
+    /// M509: per material, how many of the meshes drawn with it carry Texcoord7.
+    ///
+    /// <para>The lightmap UV lives on the MESH and the decision to sample it lives in the MATERIAL, so
+    /// neither file can answer this alone — which is why a map can be entirely valid on both sides and
+    /// still render wrong. Measured on a real ported map: 81 of 384 submeshes were drawn by a
+    /// baked-lighting shader on geometry with no Texcoord7, and the meshes that had it looked fine.</para>
+    /// </summary>
+    private static Func<Formats.Materials.MaterialBinding, (int With, int Without)> BuildLightmapUvCoverage(
+        MapGeoAsset map)
+    {
+        var byMaterial = new Dictionary<string, (int With, int Without)>(StringComparer.OrdinalIgnoreCase);
+        var counted = new HashSet<(string, int)>();
+        foreach (var group in map.Groups)
+        {
+            if (string.IsNullOrWhiteSpace(group.Material) || group.MeshIndex < 0) continue;
+            if (!counted.Add((group.Material, group.MeshIndex))) continue;   // one mesh counts once
+            var mesh = map.Meshes.FirstOrDefault(x => x.Index == group.MeshIndex);
+            if (mesh is null) continue;
+            byMaterial.TryGetValue(group.Material, out var c);
+            byMaterial[group.Material] = mesh.HasLightmapUv ? (c.With + 1, c.Without) : (c.With, c.Without + 1);
+        }
+        return m => byMaterial.TryGetValue(m.Name, out var c) ? c : (0, 0);
     }
 
     // ---- M504: material presets + bulk apply ------------------------------------------------------

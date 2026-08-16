@@ -12,6 +12,9 @@ public enum MaterialIssue
     /// <summary>A container written in a wire form the client SKIPS. The game loads a different material
     /// than the one shown here — M507's crash.</summary>
     DroppedByClient,
+    /// <summary>The shader samples the baked lightmap, but the meshes drawn with it carry no Texcoord7 to
+    /// sample it with. Riot ships no such pairing. M509.</summary>
+    MissingLightmapUv,
     /// <summary>A sampler points at a texture that could not be found.</summary>
     UnresolvedTexture,
     /// <summary>The macro set asks for a shader permutation the game never cooked — M486's crash.</summary>
@@ -64,6 +67,8 @@ public sealed record MaterialAuditContext(
     /// shader cache for. This is the check that catches a map which will not load; the per-macro checks
     /// below catch edits that would break one.</summary>
     Func<MaterialBinding, (bool Checked, bool Cooked, string Key)>? ExactKey = null,
+    /// <summary>M509: (meshes WITH Texcoord7, meshes WITHOUT) for this material, from the open map.</summary>
+    Func<MaterialBinding, (int With, int Without)>? LightmapUvCoverage = null,
     Func<string, Vector4?>? ShaderTintDefault = null);
 
 /// <summary>
@@ -129,6 +134,27 @@ public static class MapMaterialAudit
                         findings.Add(new MaterialFinding(MaterialIssue.UnresolvedTexture,
                             $"{slot.SamplerName}: {slot.Path}"));
                 }
+
+            // M509: does the geometry carry the UV the shader will sample the lightmap with?
+            //
+            // DefaultEnv_Flat and friends read Texcoord7 unless NO_BAKED_LIGHTING is set. A mesh that has
+            // no Texcoord7 gives that input nothing, and the surface is shaded from whatever the missing
+            // channel resolves to — the "glitchy meshes" nobody can point at a material for, because every
+            // value IN the material is correct.
+            if (context.LightmapUvCoverage is { } coverage && shader.Length > 0
+                && !m.MacroOn(MaterialBinding.MacroNoBakedLighting))
+            {
+                var (withUv, withoutUv) = coverage(m);
+                if (withoutUv > 0)
+                    findings.Add(new MaterialFinding(MaterialIssue.MissingLightmapUv,
+                        withUv > 0
+                            ? $"{withoutUv} of {withUv + withoutUv} meshes using this material carry no "
+                              + "Texcoord7, but the shader samples the baked lightmap. Those meshes need "
+                              + "their own material — marking this one unlit would unlight the rest."
+                            : $"{withoutUv} mesh(es) using this material carry no Texcoord7 (the lightmap "
+                              + "UV) and the shader samples the baked lightmap anyway. Set "
+                              + "NO_BAKED_LIGHTING on it, or give the meshes a lightmap UV."));
+            }
 
             // M507: the whole-material question first — is the exact key this material resolves to one the
             // game actually ships? A material with no macros at all can still be unloadable (its switches

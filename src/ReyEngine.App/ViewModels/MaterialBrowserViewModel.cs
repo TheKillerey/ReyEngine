@@ -40,6 +40,7 @@ public sealed partial class MaterialRowViewModel : ObservableObject
         MaterialIssue.MissingMaterial => "missing",
         MaterialIssue.NoShader => "no shader",
         MaterialIssue.DroppedByClient => "game skips a field",
+        MaterialIssue.MissingLightmapUv => "no lightmap UV",
         MaterialIssue.UnresolvedTexture => "texture not found",
         MaterialIssue.UncookedPermutation => "not cooked",
         MaterialIssue.InertMacro => "macro ignored",
