@@ -157,6 +157,21 @@ public static class ModShapeValidator
                         $"'{label}' holds {c.ElementType} elements; Riot always uses Embedded here. The file loads "
                         + "everywhere and the game renders nothing for this material.",
                         hash, o.ClassHash));
+
+                // ---- 3b. the CONTAINER's own wire form (M507) -----------------------------------
+                // Rule 3 above checks what is INSIDE the container. This checks the container itself:
+                // Container (0x80, "list") and UnorderedContainer (0x81, "list2") parse the same here and
+                // the client SKIPS the property when the tag disagrees with the schema. A skipped
+                // 'switches' is a material whose feature set silently reverts to the shader's defaults -
+                // which is how a ported Map453 asked DefaultEnv_Flat_AlphaTest for a permutation Riot
+                // never cooked and failed to load ("Unable to find correct hash for shader").
+                if (Materials.MaterialContainerShape.Matches(label, prop) == false)
+                    issues.Add(new BinIssue("container-wire-form", Name(hash, o),
+                        $"'{label}' is a {prop.GetType().Name}; Riot always writes "
+                        + $"{(Materials.MaterialContainerShape.IsUnordered(label) == true ? "UnorderedContainer (list2)" : "Container (list)")} "
+                        + $"({Materials.MaterialContainerShape.Evidence(label)}). The client SKIPS a container "
+                        + "whose tag disagrees with the schema, so this field does not reach the game at all.",
+                        hash, o.ClassHash));
             }
 
             foreach (var pass in Passes(o))

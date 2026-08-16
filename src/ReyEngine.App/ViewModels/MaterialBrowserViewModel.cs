@@ -39,6 +39,7 @@ public sealed partial class MaterialRowViewModel : ObservableObject
     {
         MaterialIssue.MissingMaterial => "missing",
         MaterialIssue.NoShader => "no shader",
+        MaterialIssue.DroppedByClient => "game skips a field",
         MaterialIssue.UnresolvedTexture => "texture not found",
         MaterialIssue.UncookedPermutation => "not cooked",
         MaterialIssue.InertMacro => "macro ignored",
@@ -73,7 +74,8 @@ public sealed record MaterialBrowserContext(
     Action<string>? OpenInEditor = null,
     Action<IReadOnlyList<string>>? SelectMeshesUsing = null,
     Action? Refresh = null,
-    MaterialPresetService? Presets = null);
+    MaterialPresetService? Presets = null,
+    Action? Repair = null);
 
 /// <summary>One material's line in the diff preview.</summary>
 public sealed class MaterialPlanRowViewModel
@@ -186,6 +188,9 @@ public sealed partial class MaterialBrowserViewModel : ObservableObject
         Rows.Clear();
         foreach (var r in q) Rows.Add(r);
 
+        OnPropertyChanged(nameof(DroppedCount));
+        OnPropertyChanged(nameof(HasDropped));
+        OnPropertyChanged(nameof(DroppedSummary));
         int issues = _all.Count(r => r.HasIssues);
         Summary = _all.Count == 0
             ? "No materials."
@@ -395,6 +400,23 @@ public sealed partial class MaterialBrowserViewModel : ObservableObject
 
     [RelayCommand]
     private void Reload() => _context?.Refresh?.Invoke();
+
+    /// <summary>M507: how many materials the game would load with a field missing, because a container
+    /// carries a wire form the client skips.</summary>
+    public int DroppedCount => _all.Count(r =>
+        r.Row.Findings.Any(f => f.Issue == MaterialIssue.DroppedByClient));
+    public bool HasDropped => DroppedCount > 0;
+    public string DroppedSummary => DroppedCount == 0 ? "" :
+        $"{DroppedCount:n0} material(s) have a container the game SKIPS — the map loads a different "
+        + "material than the one shown here, and that is enough to stop it loading at all.";
+
+    [RelayCommand]
+    private void RepairWireForms()
+    {
+        if (_context?.Repair is not { } repair) return;
+        repair();
+        _context?.Refresh?.Invoke();
+    }
 
     [RelayCommand]
     private void SelectAllShown()

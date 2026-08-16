@@ -39,6 +39,22 @@
       </DockPanel>
     </Border>
 
+    <!-- M507: the one problem that stops the map loading outright, with its own repair. Above everything
+         else because a skipped container means the game reads a DIFFERENT material than this window shows,
+         which makes every other finding below unreliable. -->
+    <Border DockPanel.Dock="Top" IsVisible="{Binding HasDropped}" Margin="12,10,12,0" Padding="10,7"
+            CornerRadius="5" Background="{DynamicResource ReyCardBrush}"
+            BorderBrush="#FFE05252" BorderThickness="1">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Classes="primary" Content="Repair" FontSize="11" Padding="16,4"
+                Margin="10,0,0,0" VerticalAlignment="Center"
+                Command="{Binding RepairWireFormsCommand}"
+                ToolTip.Tip="Rewrite the container tags to the form Riot ships. The values inside are moved untouched." />
+        <TextBlock Text="{Binding DroppedSummary}" FontSize="11" TextWrapping="Wrap"
+                   VerticalAlignment="Center" Foreground="#FFE05252" />
+      </DockPanel>
+    </Border>
+
     <!-- actions + summary -->
     <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,8">

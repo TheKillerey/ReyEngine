@@ -197,7 +197,10 @@ public sealed class ShaderPermutationIndex
                 if (!values.Contains(mv)) return false;            // this exact value was never cooked
                 fixedParts.Add(name + "=" + mv);
             }
-            else if (material.Switches.TryGetValue(name, out bool on)
+            // M507: ClientVisibleSwitches, not Switches. A container written with the wrong wire form is
+            // SKIPPED by the client, so pinning an axis from a switch the game never reads answers a
+            // different question than the one that crashes the map.
+            else if (material.ClientVisibleSwitches.TryGetValue(name, out bool on)
                      || (switchDefaults?.TryGetValue(name, out on) ?? false))
             {
                 string sv = on ? "1" : "0";
@@ -318,6 +321,139 @@ public sealed class ShaderPermutationIndex
     //
     // That is the same mistake M486 made with permutation counts, in a new costume. Callers that need this
     // answer must build the material they intend to write and ask CanSetMacro about it.
+
+    /// <summary>
+    /// M507: the EXACT define key a live client asks for, and whether the game ships it.
+    ///
+    /// <para><see cref="IsCooked"/> is deliberately optimistic — it enumerates the axes a material does not
+    /// pin and answers "could this ever resolve", which is the right question before an EDIT. It is the
+    /// wrong question for "will this map load", and answering the wrong one is why a Map453 shipped with
+    /// fourteen materials the client could not compile.</para>
+    ///
+    /// <para>The model here is taken from a real r3d log, and reproduces it exactly — same keys, same
+    /// 64-bit hashes, same verdicts (14 of 16 AlphaTest materials refused, matching the crash):</para>
+    /// <list type="bullet">
+    ///   <item>every staticSwitch the shader declares contributes NAME=0 or NAME=1, from the material's
+    ///   CLIENT-VISIBLE switches or the shader's own default — a switch always has a value;</item>
+    ///   <item>a shaderMacro contributes only when the material sets it — absent is absent, not 0;</item>
+    ///   <item>the shader's featureDefines are added as they ship (FEATURE_MASKED=1);</item>
+    ///   <item>the client's own globals are added; the observed one that is a real axis here is
+    ///   USE_DYNAMIC_LIGHTING=1 (COLORPALETTE_COLORBLIND and MRT_SUPPORTED were filtered out as
+    ///   non-axes);</item>
+    ///   <item>the result is filtered to the axes this shader's TOC declares, then hashed.</item>
+    /// </list>
+    /// <para>Returns false when there is no cache or no TOC — no evidence is not a verdict.</para>
+    /// </summary>
+    public bool TryExactKey(MaterialBinding material, out string key, out bool cooked)
+    {
+        key = ""; cooked = false;
+        if (_cache is null) return false;
+        string shader = material.RenderShader ?? "";
+        var toc = GetToc(shader, "ps");
+        if (toc is null) return false;
+
+        var declared = new HashSet<string>(toc.Pool.Select(p => p.Key), StringComparer.Ordinal);
+        var parts = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (_switchDefaults.TryGetValue(shader, out var switchDefaults))
+            foreach (var (name, on) in switchDefaults)
+                if (declared.Contains(name)) parts[name] = on ? "1" : "0";
+        foreach (var (name, on) in material.ClientVisibleSwitches)
+            if (declared.Contains(name)) parts[name] = on ? "1" : "0";
+
+        if (_featureDefines.TryGetValue(shader, out var features))
+            foreach (var (name, value) in features)
+                if (declared.Contains(name)) parts[name] = value;
+
+        foreach (var (name, value) in material.Macros)
+            if (declared.Contains(name)) parts[name] = value;
+
+        foreach (string global in ClientGlobals)
+            if (declared.Contains(global)) parts.TryAdd(global, "1");
+
+        var sorted = parts.Select(p => p.Key + "=" + p.Value).ToList();
+        sorted.Sort(StringComparer.Ordinal);
+        key = string.Join(" ", sorted);
+        cooked = toc.Hashes.Contains(PermutationHash(sorted));
+        return true;
+    }
+
+    /// <summary>Re-ask <see cref="TryExactKey"/> with one macro added or removed, without mutating the
+    /// material — the caller is looking for advice, not applying it.</summary>
+    private bool WouldBeCooked(MaterialBinding material, string macro, string? value)
+    {
+        if (_cache is null) return false;
+        string shader = material.RenderShader ?? "";
+        var toc = GetToc(shader, "ps");
+        if (toc is null) return false;
+
+        var declared = new HashSet<string>(toc.Pool.Select(p => p.Key), StringComparer.Ordinal);
+        if (!declared.Contains(macro)) return false;
+
+        var parts = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (_switchDefaults.TryGetValue(shader, out var switchDefaults))
+            foreach (var (name, on) in switchDefaults)
+                if (declared.Contains(name)) parts[name] = on ? "1" : "0";
+        foreach (var (name, on) in material.ClientVisibleSwitches)
+            if (declared.Contains(name)) parts[name] = on ? "1" : "0";
+        if (_featureDefines.TryGetValue(shader, out var features))
+            foreach (var (name, v) in features)
+                if (declared.Contains(name)) parts[name] = v;
+        foreach (var (name, v) in material.Macros)
+            if (declared.Contains(name)) parts[name] = v;
+        foreach (string global in ClientGlobals)
+            if (declared.Contains(global)) parts.TryAdd(global, "1");
+
+        if (value is null) parts.Remove(macro); else parts[macro] = value;
+
+        var sorted = parts.Select(p => p.Key + "=" + p.Value).ToList();
+        sorted.Sort(StringComparer.Ordinal);
+        return toc.Hashes.Contains(PermutationHash(sorted));
+    }
+
+    /// <summary>Defines the client contributes itself. Read off a live r3d log; only those the shader
+    /// declares as an axis survive the filter, so listing one that does not apply is harmless.</summary>
+    private static readonly string[] ClientGlobals = { "USE_DYNAMIC_LIGHTING", "MRT_SUPPORTED" };
+
+    /// <summary>
+    /// M507: this material's define set is not cooked — what single change would make it so?
+    ///
+    /// <para>Derived from the cache, never from a rule of thumb. On DefaultEnv_Flat_AlphaTest, for example,
+    /// all 256 cooked permutations carrying PREMULTIPLIED_ALPHA=1 also carry MULTIPLY_ALPHA and
+    /// DISABLE_DEPTH_FOG — so a premultiplied decal without fog disabled has no shader, and the answer
+    /// "add DISABLE_DEPTH_FOG=1" falls out of the data rather than out of a guess about decals.</para>
+    ///
+    /// <para>Empty when nothing single-step helps, which is honest: it means the combination needs a real
+    /// look, not that it is fine.</para>
+    /// </summary>
+    public IReadOnlyList<string> SuggestFixes(MaterialBinding material)
+    {
+        if (_cache is null) return Array.Empty<string>();
+        // Judged on the EXACT key, not on IsCooked's optimistic enumeration: a suggestion that assumes the
+        // client will choose a convenient value for an axis it actually pins is not a suggestion.
+        if (!TryExactKey(material, out _, out bool nowCooked) || nowCooked) return Array.Empty<string>();
+        var current = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, value) in material.Macros) current[name] = value;
+
+        var candidates = new List<string>(current.Keys);
+        string shader = material.RenderShader ?? "";
+        foreach (string stage in new[] { "ps", "vs" })
+            if (GetToc(shader, stage) is { } toc)
+                foreach (var (key, _) in toc.Pool)
+                    if (!candidates.Contains(key, StringComparer.OrdinalIgnoreCase)) candidates.Add(key);
+
+        var fixes = new List<string>();
+        foreach (string axis in candidates)
+        {
+            // Removing one the material sets.
+            if (current.ContainsKey(axis))
+            {
+                if (WouldBeCooked(material, axis, null)) fixes.Add($"remove {axis}");
+            }
+            else if (WouldBeCooked(material, axis, "1")) fixes.Add($"add {axis}=1");
+        }
+        return fixes;
+    }
 
     public bool CanSetMacro(MaterialBinding material, string macro, string value)
     {

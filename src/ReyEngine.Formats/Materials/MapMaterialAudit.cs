@@ -9,6 +9,9 @@ public enum MaterialIssue
     MissingMaterial,
     /// <summary>The material has no shader link, so nothing decides how to draw it.</summary>
     NoShader,
+    /// <summary>A container written in a wire form the client SKIPS. The game loads a different material
+    /// than the one shown here — M507's crash.</summary>
+    DroppedByClient,
     /// <summary>A sampler points at a texture that could not be found.</summary>
     UnresolvedTexture,
     /// <summary>The macro set asks for a shader permutation the game never cooked — M486's crash.</summary>
@@ -54,6 +57,13 @@ public sealed record MaterialAuditContext(
     Func<string, bool>? TextureExists = null,
     Func<MaterialBinding, string, bool>? CanSetMacro = null,
     Func<string, string, bool>? ShaderDeclaresMacro = null,
+    /// <summary>M507: when a define set is not cooked, what single change would make it so. Derived from
+    /// the shader cache, so the advice is measured rather than a rule of thumb.</summary>
+    Func<MaterialBinding, IReadOnlyList<string>>? SuggestFixes = null,
+    /// <summary>M507: (checked?, cooked?, the key) — the EXACT define set a live client will ask the
+    /// shader cache for. This is the check that catches a map which will not load; the per-macro checks
+    /// below catch edits that would break one.</summary>
+    Func<MaterialBinding, (bool Checked, bool Cooked, string Key)>? ExactKey = null,
     Func<string, Vector4?>? ShaderTintDefault = null);
 
 /// <summary>
@@ -100,6 +110,14 @@ public static class MapMaterialAudit
                 findings.Add(new MaterialFinding(MaterialIssue.NoShader,
                     "no technique/pass shader link — nothing decides how this draws"));
 
+            // M507: before anything else about the CONTENT, does the game even read this material's
+            // fields? A container with the wrong wire form is skipped whole, so everything below is being
+            // checked against a material the client will never see.
+            foreach (string bad in m.MistaggedContainers)
+                findings.Add(new MaterialFinding(MaterialIssue.DroppedByClient,
+                    $"'{bad}' is written in a wire form the client skips — the game loads this material "
+                    + "without that field. Repair it from the material browser."));
+
             if (m.Slots.Count == 0)
                 findings.Add(new MaterialFinding(MaterialIssue.NoTextures, "no sampler is bound"));
 
@@ -111,6 +129,27 @@ public static class MapMaterialAudit
                         findings.Add(new MaterialFinding(MaterialIssue.UnresolvedTexture,
                             $"{slot.SamplerName}: {slot.Path}"));
                 }
+
+            // M507: the whole-material question first — is the exact key this material resolves to one the
+            // game actually ships? A material with no macros at all can still be unloadable (its switches
+            // and the shader's own defines decide the key too), which the per-macro checks below cannot
+            // see. Reported once, with the key and what would fix it.
+            bool exactBroken = false;
+            if (context.ExactKey is { } exact && shader.Length > 0)
+            {
+                var (wasChecked, isCooked, key) = exact(m);
+                if (wasChecked && !isCooked)
+                {
+                    exactBroken = true;
+                    string advice = "";
+                    if (context.SuggestFixes is { } suggest && suggest(m) is { Count: > 0 } fixes)
+                        advice = " Fix: " + string.Join(", or ", fixes.Take(3)) + ".";
+                    findings.Add(new MaterialFinding(MaterialIssue.UncookedPermutation,
+                        $"{Short(shader)} ships no compiled shader for this material's defines "
+                        + $"[{key}] — the map fails to load with \"Unable to find correct hash for shader\"."
+                        + advice));
+                }
+            }
 
             // Macro checks. Split deliberately: a macro the shader never declares is IGNORED by the client
             // (inert but misleading), while one it declares without cooking this value makes the client fail
@@ -125,9 +164,16 @@ public static class MapMaterialAudit
                             $"{macro} is not a permutation axis of {Short(shader)} — the client ignores it"));
                         continue;                       // no point asking whether an ignored macro is cooked
                     }
+                    if (exactBroken) continue;      // already reported once, with the whole key
                     if (context.CanSetMacro is { } can && !can(m, macro))
+                    {
+                        string advice = "";
+                        if (context.SuggestFixes is { } suggest && suggest(m) is { Count: > 0 } fixes)
+                            advice = " — would be cooked if you " + string.Join(" or ", fixes.Take(3));
                         findings.Add(new MaterialFinding(MaterialIssue.UncookedPermutation,
-                            $"{macro}: {Short(shader)} ships no cooked permutation for it"));
+                            $"{macro}: {Short(shader)} ships no cooked permutation for this material's "
+                            + "define set" + advice));
+                    }
                 }
 
             if (context.ShaderTintDefault is { } tintDefault && shader.Length > 0)

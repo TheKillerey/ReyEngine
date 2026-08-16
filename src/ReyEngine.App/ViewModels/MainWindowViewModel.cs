@@ -4107,6 +4107,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 TextureExists: TextureExistsByPath,
                 CanSetMacro: perms is { IsAvailable: true } ? (m, macro) => perms.CanSetMacro(m, macro, "1") : null,
                 ShaderDeclaresMacro: perms is { IsAvailable: true } ? perms.DeclaresMacroAxis : null,
+                SuggestFixes: perms is { IsAvailable: true } ? perms.SuggestFixes : null,   // M507
+                ExactKey: perms is { IsAvailable: true }
+                    ? m => perms.TryExactKey(m, out string key, out bool cooked) ? (true, cooked, key) : (false, false, "")
+                    : null,
                 ShaderTintDefault: catalog is null ? null : shader =>
                 {
                     var def = catalog.Find(shader);
@@ -4154,9 +4158,67 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 {
                     if (BuildMaterialBrowserContext() is { } fresh) ShowMaterialBrowserWindow?.Invoke(fresh);
                 },
-                Presets: BuildMaterialPresetService(binEntry));
+                Presets: BuildMaterialPresetService(binEntry),
+                Repair: () => RepairMaterialWireForms(binEntry));
         }
         catch (Exception ex) { _log.Error("Materials", "Could not audit the materials: " + ex.Message); return null; }
+    }
+
+    /// <summary>
+    /// M507: rewrite material containers whose wire form the client skips.
+    ///
+    /// <para>One byte per container, and it decides whether the game reads the field at all. This is a
+    /// general, measured transformation rather than a hand-patch: the elements are moved untouched, and
+    /// what Riot writes for each field was censused over the 18 shipped map wads.</para>
+    /// </summary>
+    private void RepairMaterialWireForms(WadAssetEntry binEntry)
+    {
+        if (!GuardEditable(binEntry)) return;
+        if (Project.ProjectFilePath is null && Project.SourceWadPath is null)
+        { _log.Warn("Materials", "Create or open a project before repairing."); return; }
+
+        try
+        {
+            var tree = Formats.Meta.SafeBinTree.Parse(ReadAsset(binEntry.PathHash));
+            var repaired = Formats.Materials.MaterialContainerShape.Repair(
+                tree, ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a("StaticMaterialDef"));
+            if (repaired.Count == 0)
+            { _log.Info("Materials", "Every material container already has the wire form Riot ships."); return; }
+
+            using var ms = new MemoryStream();
+            tree.Write(ms);
+            byte[] bytes = ms.ToArray();
+
+            var issues = Formats.Meta.ModShapeValidator.ValidateBin(
+                Formats.Meta.SafeBinTree.Parse(bytes), bytes, ResolveBinName);
+            if (issues.Any(i => i.Category == "container-wire-form"))
+            { _log.Error("Materials", "The repair did not take — not saved."); return; }
+
+            string savedTo;
+            if (TryWriteToProjectFile(binEntry, bytes, out var projectFile)) savedTo = projectFile;
+            else
+            {
+                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
+                _overrides.Set(new ProjectAssetOverride
+                {
+                    PathHash = binEntry.PathHash,
+                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                    OverrideFile = savedTo,
+                    AddedUtc = DateTime.UtcNow.ToString("o"),
+                });
+                _overrides.SaveTo(Project);
+            }
+            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+            Project.IsDirty = true;
+            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
+            NotifyMaterialsChanged();
+
+            foreach (string line in repaired.Take(10)) _log.Info("Materials", "  " + line);
+            _log.Success("Materials", $"Repaired {repaired.Count:n0} material container(s) the client would "
+                                    + $"have skipped. Saved to {savedTo}.");
+        }
+        catch (Exception ex) { _log.Error("Materials", "Repair failed: " + ex.Message); }
     }
 
     // ---- M504: material presets + bulk apply ------------------------------------------------------

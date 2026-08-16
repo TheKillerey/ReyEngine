@@ -491,6 +491,39 @@ public sealed class MaterialBinding
     public IReadOnlyCollection<uint> PresentHashes =>
         MaterialObject is { } o ? o.Properties.Keys.ToList() : Array.Empty<uint>();
 
+    /// <summary>
+    /// M507: container fields written with the wrong wire form. The client SKIPS these entirely, so the
+    /// material it loads is not the material this editor shows.
+    /// </summary>
+    public IReadOnlyList<string> MistaggedContainers
+    {
+        get
+        {
+            if (MaterialObject is not { } obj) return Array.Empty<string>();
+            List<string>? bad = null;
+            // Not named 'field': C# 14 makes that a contextual keyword inside a property accessor.
+            foreach (string name in MaterialContainerShape.KnownFields)
+            {
+                if (!obj.Properties.TryGetValue(HashAlgorithms.Fnv1a(name), out var prop)) continue;
+                if (MaterialContainerShape.Matches(name, prop) != false) continue;
+                (bad ??= new List<string>()).Add(name);
+            }
+            return (IReadOnlyList<string>?)bad ?? Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// The switches AS THE GAME WILL SEE THEM — empty when the container's wire form makes the client skip
+    /// the field, whatever this editor can read out of it.
+    ///
+    /// <para>Every permutation check must use this rather than <see cref="Switches"/>. Our reader is more
+    /// forgiving than the client, and a check run against the forgiving reading answers a question nobody
+    /// asked: a ported Map453 had MULTIPLY_ALPHA authored and readable here, invisible to the game, and no
+    /// cooked shader for the difference.</para>
+    /// </summary>
+    public IReadOnlyDictionary<string, bool> ClientVisibleSwitches =>
+        MistaggedContainers.Contains("switches") ? EmptySwitches : Switches;
+
     private bool _schemaPropertyAdded;
 
     /// <summary>M370: true once a schema field has been materialised onto this material, so the editor
@@ -570,8 +603,14 @@ public sealed class MaterialBinding
         if (MaterialObject is null) return null;
         if (_switchContainer is null)
         {
+            // M507: UnorderedContainer (0x81), not Container (0x80). Riot ships switches that way in all
+            // 6,561 shipped occurrences, and the tag is not cosmetic - the client SKIPS a container whose
+            // wire form disagrees with the schema. Writing 0x80 here made the client miss MULTIPLY_ALPHA
+            // on a ported Map453, fall back to the shader default of 0, and then fail to find any cooked
+            // permutation for the material's PREMULTIPLIED_ALPHA=1. The map did not load.
             uint field = HashAlgorithms.Fnv1a("switches");
-            _switchContainer = new BinTreeContainer(field, BinPropertyType.Embedded, Array.Empty<BinTreeProperty>());
+            _switchContainer = MaterialContainerShape.Create("switches", BinPropertyType.Embedded,
+                Array.Empty<BinTreeProperty>());
             MaterialObject.Properties[field] = _switchContainer;
         }
 

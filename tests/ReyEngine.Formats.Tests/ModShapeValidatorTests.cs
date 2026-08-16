@@ -52,7 +52,7 @@ public class ModShapeValidatorTests
         var props = new List<BinTreeProperty>
         {
             new BinTreeString(H("name"), MaterialName),
-            new BinTreeContainer(H("samplerValues"), elementType, new[]
+            new BinTreeUnorderedContainer(H("samplerValues"), elementType, new[]
             {
                 Element(elementType, "StaticMaterialShaderSamplerDef",
                     new BinTreeString(H("samplerName"), "DiffuseTexture"),
@@ -61,7 +61,7 @@ public class ModShapeValidatorTests
             new BinTreeContainer(H("techniques"), elementType, new[] { technique }),
         };
         if (emptySwitches)
-            props.Add(new BinTreeContainer(H("switches"), BinPropertyType.Embedded, Array.Empty<BinTreeProperty>()));
+            props.Add(new BinTreeUnorderedContainer(H("switches"), BinPropertyType.Embedded, Array.Empty<BinTreeProperty>()));
 
         return new BinTree(
             new[] { new BinTreeObject(H(MaterialName), H("StaticMaterialDef"), props) },
@@ -138,7 +138,7 @@ public class ModShapeValidatorTests
     {
         var tree = Bin();
         var material = tree.Objects.Values.Single();
-        material.Properties[H("switches")] = new BinTreeContainer(
+        material.Properties[H("switches")] = new BinTreeUnorderedContainer(
             H("switches"), BinPropertyType.Struct, Array.Empty<BinTreeProperty>());
 
         var issue = Assert.Single(Validate(tree));
