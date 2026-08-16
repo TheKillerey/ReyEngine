@@ -1,5 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <!-- M494: HashDbFile reads Mimir tables through a memory-mapped pointer. Going via the accessor's
+         Read* methods instead would copy every field individually, which defeats the point of mapping. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- Asset format decoding (WAD, tex, skn/skl, mapgeo, bin, anm). GPL-3.0. -->
     <PackageReference Include="LeagueToolkit" Version="4.1.0-beta.53" />
