@@ -1605,9 +1605,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (SelectedAddedMesh is not { } mesh || materialName.Length == 0) return;
         mesh.Material = materialName;
-        InvalidateMapMaterialNames();
         PublishAddedMeshPreview();
-        NotifyMaterialsChanged();
+        MaterialsRevision++;   // M518: the viewport, not the picker's list - see AfterMeshMaterialEdit
         _log.Success("AddMesh", $"'{mesh.Name}' now uses '{materialName}' (from {source}).");
     }
 
@@ -6778,7 +6777,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 || MapGeoMaterialWriter.HasEdits(map.Meshes)
                 || MapContent.AllMapPieces.Any(x => x.IsRemoved);
         RefreshSelectedMeshMaterial();
-        NotifyMaterialsChanged();     // the viewport rebuilds from the swapped assignment
+
+        // M518: bump the viewport revision WITHOUT invalidating MapMaterialNames.
+        //
+        // NotifyMaterialsChanged does both, and the second half made the picker unusable: replacing the
+        // ComboBox's ItemsSource while it is processing a selection makes it re-resolve and snap back to
+        // the previous value, so every pick reverted instantly. Measured on the headless platform - with
+        // the ItemsSource replaced the view model stayed on the old material, without it the pick stuck.
+        //
+        // And the list has not changed anyway. Which material a MESH uses is not which materials EXIST.
+        MaterialsRevision++;
         ScheduleAutoSave();
     }
 
