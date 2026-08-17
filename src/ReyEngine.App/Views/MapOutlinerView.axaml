@@ -71,7 +71,10 @@
           <Button Classes="tool" Content="Enable" Command="{Binding EnableMapContentSelectionCommand}" FontSize="9" Padding="5,1" Margin="0,0,3,3" />
           <Button Classes="tool" Content="Disable" Command="{Binding DisableMapContentSelectionCommand}" FontSize="9" Padding="5,1" Margin="0,0,3,3"
                   ToolTip.Tip="Persistently disable selected objects by assigning visibility mask 0" />
-          <Button Classes="tool" Content="Delete…" Command="{Binding DeleteMapContentSelectionCommand}" FontSize="9" Padding="5,1" Margin="0,0,3,3" />
+          <Button Classes="tool" Content="Delete…" Command="{Binding DeleteMapContentSelectionCommand}" FontSize="9" Padding="5,1" Margin="0,0,3,3"
+                  ToolTip.Tip="Marks the selection for deletion. Undo (Ctrl+Z) brings it back, and so does Restore — nothing is written until you save." />
+          <Button Classes="tool" Content="↺ Restore" Command="{Binding RestoreMapContentSelectionCommand}" FontSize="9" Padding="5,1" Margin="0,0,3,3"
+                  ToolTip.Tip="Clear the deletion mark on the selected objects (the ones showing a red DEL badge)." />
           <Button Classes="primary" Content="Save Edits" Command="{Binding SaveMapContentEditsCommand}" FontSize="9" Padding="6,1" Margin="0,0,3,3" />
         </WrapPanel>
       </StackPanel>

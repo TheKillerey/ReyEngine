@@ -7120,6 +7120,43 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void EnableMapContentSelection()
     { foreach (var item in _mapContentSelection.ToList()) item.IsDisabled = false; }
 
+    /// <summary>
+    /// M513: put deleted objects back.
+    ///
+    /// <para>The undo stack covers the misclick you notice straight away; this covers the one you notice
+    /// twenty edits later, or after reopening the map. Deleted pieces never left the outliner — they carry
+    /// a red DEL badge — so the only thing missing was a way to act on them.</para>
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanEditMapContentSelection))]
+    private void RestoreMapContentSelection()
+    {
+        var flagged = _mapContentSelection.Where(item => item.IsRemoved).ToList();
+        if (flagged.Count == 0)
+        { _log.Info("Map Content", "Nothing in the selection is marked for deletion."); return; }
+
+        // The same command, run backwards: restoring IS the undo of a delete, and writing it twice is how
+        // the two drift apart.
+        var command = new MapContentDeleteCommand(flagged,
+            Array.Empty<(AddedMapMeshViewModel, int)>(), MapContent.AddedMeshes,
+            _currentMap, AfterMapContentDelete);
+        command.Undo();
+        UndoService.PushApplied(new RestoreCommand(command));
+        _log.Success("Map Content", $"Restored {flagged.Count} object(s).");
+    }
+
+    /// <summary>A delete command with its direction flipped, so undoing a restore deletes again.</summary>
+    private sealed class RestoreCommand : ReyEngine.Core.Undo.IEditorCommand
+    {
+        private readonly MapContentDeleteCommand _inner;
+        public RestoreCommand(MapContentDeleteCommand inner) { _inner = inner; }
+        public string Name => "Restore Map Objects";
+        public object? Context => _inner.Context;
+        public void Execute() => _inner.Undo();
+        public void Undo() => _inner.Execute();
+        public bool CanMergeWith(ReyEngine.Core.Undo.IEditorCommand next) => false;
+        public void MergeWith(ReyEngine.Core.Undo.IEditorCommand next) => throw new NotSupportedException();
+    }
+
     [RelayCommand(CanExecute = nameof(CanEditMapContentSelection))]
     private async Task DeleteMapContentSelection()
     {
@@ -7129,15 +7166,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 $"Mark {selected.Count} selected object(s) for deletion?\n\nThe viewport updates immediately. The map files are changed only when you save map edits.", "Delete"))
             return;
 
-        foreach (var item in selected)
-        {
-            if (item is AddedMapMeshViewModel added) MapContent.AddedMeshes.Remove(added);
-            else item.IsRemoved = true;
-        }
+        // M513: through the undo stack, like every other map edit. Deleting was already non-destructive on
+        // disk - a map piece is only flagged and nothing is written until the map is saved - but there was
+        // no way to un-flag it, so a misclick cost whatever it took to rebuild the object.
+        var flagged = selected.Where(item => item is not AddedMapMeshViewModel).ToList();
+        var added = selected.OfType<AddedMapMeshViewModel>()
+            .Select(mesh => (Mesh: mesh, Index: MapContent.AddedMeshes.IndexOf(mesh)))
+            .Where(entry => entry.Index >= 0)
+            .ToList();
+
+        var command = new MapContentDeleteCommand(flagged, added, MapContent.AddedMeshes,
+            _currentMap, AfterMapContentDelete);
+        command.Execute();
+        UndoService.PushApplied(command);
+
+        _log.Info("Map Content", $"Marked {selected.Count} object(s) for deletion — undo (Ctrl+Z) brings "
+                               + "them back. Save Map Content Edits to persist.");
+    }
+
+    /// <summary>Everything the viewport and the outliner need after objects come or go. Shared by the
+    /// delete and its undo so the two can never refresh different things.</summary>
+    private void AfterMapContentDelete()
+    {
         OnPropertyChanged(nameof(HasAddedMeshes));
         PublishAddedMeshPreview();
         ApplyMapVisibility();
-        _log.Info("Map Content", $"Marked {selected.Count} object(s) for deletion. Save Map Content Edits to persist.");
+        NotifyMaterialsChanged();     // the DX11 scene is built from the surviving pieces
     }
 
     [RelayCommand]
