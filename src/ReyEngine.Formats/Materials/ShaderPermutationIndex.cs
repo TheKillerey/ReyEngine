@@ -345,11 +345,42 @@ public sealed class ShaderPermutationIndex
     /// <para>Returns false when there is no cache or no TOC — no evidence is not a verdict.</para>
     /// </summary>
     public bool TryExactKey(MaterialBinding material, out string key, out bool cooked)
+        => TryExactKey(material, out key, out cooked, out _);
+
+    /// <param name="stage">Which stage the verdict came from — "vs" or "ps". The failing stage is the one
+    /// worth naming, because its axis pool is what the key was filtered against.</param>
+    public bool TryExactKey(MaterialBinding material, out string key, out bool cooked, out string stage)
+    {
+        key = ""; cooked = false; stage = "";
+        if (_cache is null) return false;
+
+        // M510: BOTH stages, each filtered to ITS OWN pool.
+        //
+        // The client resolves a vertex shader and a pixel shader separately, and the two declare different
+        // axes - SRX_Blend_Chemtech_Decal's VS has 6, its PS has 15. Checking only the pixel stage passed a
+        // material whose VERTEX stage had no cooked permutation, and the map failed to load with the key
+        // "FEATURE_WORLD_POSITION=1" that the PS pool would never have produced.
+        bool sawAny = false;
+        foreach (string s in new[] { "vs", "ps" })
+        {
+            if (!TryStageKey(material, s, null, out string stageKey, out bool stageCooked)) continue;
+            sawAny = true;
+            if (key.Length == 0 || !stageCooked) { key = stageKey; stage = s; }
+            if (!stageCooked) { cooked = false; return true; }   // the first stage that fails is the answer
+        }
+        if (!sawAny) return false;
+        cooked = true;
+        return true;
+    }
+
+    /// <summary>One stage's key: the axes THAT stage declares, filled from the material and the client's
+    /// globals, hashed the way the cache is keyed.</summary>
+    private bool TryStageKey(MaterialBinding material, string stage,
+        (string Macro, string? Value)? with, out string key, out bool cooked)
     {
         key = ""; cooked = false;
-        if (_cache is null) return false;
         string shader = material.RenderShader ?? "";
-        var toc = GetToc(shader, "ps");
+        var toc = GetToc(shader, stage);
         if (toc is null) return false;
 
         var declared = new HashSet<string>(toc.Pool.Select(p => p.Key), StringComparer.Ordinal);
@@ -371,6 +402,12 @@ public sealed class ShaderPermutationIndex
         foreach (string global in ClientGlobals)
             if (declared.Contains(global)) parts.TryAdd(global, "1");
 
+        if (with is { } change && declared.Contains(change.Macro))
+        {
+            if (change.Value is null) parts.Remove(change.Macro);
+            else parts[change.Macro] = change.Value;
+        }
+
         var sorted = parts.Select(p => p.Key + "=" + p.Value).ToList();
         sorted.Sort(StringComparer.Ordinal);
         key = string.Join(" ", sorted);
@@ -383,32 +420,68 @@ public sealed class ShaderPermutationIndex
     private bool WouldBeCooked(MaterialBinding material, string macro, string? value)
     {
         if (_cache is null) return false;
-        string shader = material.RenderShader ?? "";
-        var toc = GetToc(shader, "ps");
-        if (toc is null) return false;
+        bool sawAny = false;
+        foreach (string stage in new[] { "vs", "ps" })
+        {
+            if (!TryStageKey(material, stage, (macro, value), out _, out bool cooked)) continue;
+            sawAny = true;
+            if (!cooked) return false;      // a change that fixes one stage and breaks the other is no fix
+        }
+        return sawAny;
+    }
 
-        var declared = new HashSet<string>(toc.Pool.Select(p => p.Key), StringComparer.Ordinal);
-        if (!declared.Contains(macro)) return false;
+    /// <summary>
+    /// M510: the defines EVERY cooked permutation of a stage carries — the shader's non-negotiables.
+    ///
+    /// <para>Measured rather than assumed, and it is where the real advice comes from. All 16 cooked vertex
+    /// permutations of SRX_Blend_Chemtech_Decal carry NO_BAKED_LIGHTING and FEATURE_WORLD_POSITION; all 256
+    /// pixel permutations additionally carry DISABLE_DEPTH_FOG and PREMULTIPLIED_ALPHA. A material missing
+    /// any of them has no shader, and no amount of looking at the material says why.</para>
+    ///
+    /// <para>Empty when the pool is too large to enumerate — a silent cap would read as "nothing required".</para>
+    /// </summary>
+    public IReadOnlyList<string> RequiredDefines(string shader, string stage)
+    {
+        var toc = GetToc(shader, stage);
+        if (toc is null) return Array.Empty<string>();
 
-        var parts = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (_switchDefaults.TryGetValue(shader, out var switchDefaults))
-            foreach (var (name, on) in switchDefaults)
-                if (declared.Contains(name)) parts[name] = on ? "1" : "0";
-        foreach (var (name, on) in material.ClientVisibleSwitches)
-            if (declared.Contains(name)) parts[name] = on ? "1" : "0";
-        if (_featureDefines.TryGetValue(shader, out var features))
-            foreach (var (name, v) in features)
-                if (declared.Contains(name)) parts[name] = v;
-        foreach (var (name, v) in material.Macros)
-            if (declared.Contains(name)) parts[name] = v;
-        foreach (string global in ClientGlobals)
-            if (declared.Contains(global)) parts.TryAdd(global, "1");
+        var axes = new List<(string Name, List<string> Values)>();
+        foreach (var (k, v) in toc.Pool)
+        {
+            int i = axes.FindIndex(x => x.Name == k);
+            if (i < 0) axes.Add((k, new List<string> { v }));
+            else if (!axes[i].Values.Contains(v)) axes[i].Values.Add(v);
+        }
 
-        if (value is null) parts.Remove(macro); else parts[macro] = value;
+        long space = 1;
+        foreach (var a in axes) space *= a.Values.Count + 1;
+        if (space > 1_000_000) return Array.Empty<string>();
 
-        var sorted = parts.Select(p => p.Key + "=" + p.Value).ToList();
-        sorted.Sort(StringComparer.Ordinal);
-        return toc.Hashes.Contains(PermutationHash(sorted));
+        var cooked = new List<List<string>>();
+        for (long c = 0; c < space; c++)
+        {
+            long rem = c;
+            var parts = new List<string>();
+            foreach (var (name, values) in axes)
+            {
+                int sel = (int)(rem % (values.Count + 1)); rem /= values.Count + 1;
+                if (sel > 0) parts.Add(name + "=" + values[sel - 1]);
+            }
+            parts.Sort(StringComparer.Ordinal);
+            if (toc.Hashes.Contains(PermutationHash(parts))) cooked.Add(parts);
+        }
+        if (cooked.Count == 0) return Array.Empty<string>();
+
+        var required = new List<string>();
+        foreach (var (name, values) in axes)
+        {
+            if (!cooked.All(k => k.Any(x => x.StartsWith(name + "=", StringComparison.Ordinal)))) continue;
+            // Name it with its value only when every cooked permutation agrees on one.
+            var distinct = cooked.Select(k => k.First(x => x.StartsWith(name + "=", StringComparison.Ordinal)))
+                                 .Distinct().ToList();
+            required.Add(distinct.Count == 1 ? distinct[0] : name);
+        }
+        return required;
     }
 
     /// <summary>Defines the client contributes itself. Read off a live r3d log; only those the shader
@@ -451,6 +524,30 @@ public sealed class ShaderPermutationIndex
                 if (WouldBeCooked(material, axis, null)) fixes.Add($"remove {axis}");
             }
             else if (WouldBeCooked(material, axis, "1")) fixes.Add($"add {axis}=1");
+        }
+        if (fixes.Count > 0) return fixes;
+
+        // M510: no single change is enough, which is common - a shader family often has several
+        // non-negotiables at once. Say which ones this material is missing rather than "no idea".
+        foreach (string stage in new[] { "vs", "ps" })
+        {
+            if (!TryStageKey(material, stage, null, out string stageKey, out bool ok) || ok) continue;
+            var have = new HashSet<string>(stageKey.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+                StringComparer.Ordinal);
+            foreach (string required in RequiredDefines(shader, stage))
+            {
+                if (have.Contains(required)) continue;
+                string name = required.Split('=')[0];
+                bool present = have.Any(h => h.StartsWith(name + "=", StringComparison.Ordinal));
+                // A required axis with no single agreed value is satisfied by ANY value, so the material
+                // already having one means there is nothing to advise. Saying otherwise is noise, and this
+                // list is only worth reading if every line on it is actionable.
+                if (present && !required.Contains('=')) continue;
+                string advice = required.Contains('=')
+                    ? (present ? $"set {required}" : $"add {required}")
+                    : $"set {name} (every cooked {stage} permutation has it)";
+                if (!fixes.Contains(advice)) fixes.Add(advice);
+            }
         }
         return fixes;
     }

@@ -4109,7 +4109,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 ShaderDeclaresMacro: perms is { IsAvailable: true } ? perms.DeclaresMacroAxis : null,
                 SuggestFixes: perms is { IsAvailable: true } ? perms.SuggestFixes : null,   // M507
                 ExactKey: perms is { IsAvailable: true }
-                    ? m => perms.TryExactKey(m, out string key, out bool cooked) ? (true, cooked, key) : (false, false, "")
+                    ? m => perms.TryExactKey(m, out string key, out bool cooked, out string stage)
+                        ? (true, cooked, stage.Length > 0 ? $"{stage}: {key}" : key)
+                        : (false, false, "")
                     : null,
                 LightmapUvCoverage: BuildLightmapUvCoverage(map),   // M509
                 ShaderTintDefault: catalog is null ? null : shader =>
