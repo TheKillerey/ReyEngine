@@ -755,6 +755,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         SrcColorBlendFactor = Model.GetPassU32("srcColorBlendFactor");
         DstColorBlendFactor = Model.GetPassU32("dstColorBlendFactor");
         _renderStateLoading = false;
+        OnPropertyChanged(nameof(SrcBlendChoice));
+        OnPropertyChanged(nameof(DstBlendChoice));
     }
 
     partial void OnCullEnableChanged(bool value)
@@ -782,21 +784,69 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     [ObservableProperty] private int _srcColorBlendFactor = -1;
     [ObservableProperty] private int _dstColorBlendFactor = -1;
 
+    /// <summary>
+    /// M511: the picker's entries, with ABSENT at the head.
+    ///
+    /// <para>Absent is not 0 (Zero) — Riot omits the field on most materials and writes it only when the
+    /// pass has something to say, exactly like the sampler address modes (M493). Binding the combo box
+    /// straight to the factor made -1 render as "nothing selected" and, once a value had been picked, gave
+    /// no way back to it: the field could be set but never cleared.</para>
+    ///
+    /// <para>Instance, not static: Avalonia's reflection binding resolves instance properties, and the
+    /// templates this is used from have compiled bindings off (M493 again).</para>
+    /// </summary>
+    public IReadOnlyList<string> BlendFactorChoices { get; } =
+        new[] { "— not set (absent)" }.Concat(BlendFactorNames).ToArray();
+
+    /// <summary>Index into <see cref="BlendFactorChoices"/>: 0 = absent, 1..10 = factor 0..9.</summary>
+    public int SrcBlendChoice
+    {
+        get => SrcColorBlendFactor + 1;
+        set { if (value - 1 != SrcColorBlendFactor) WriteBlendFactor("src", value - 1); }
+    }
+
+    public int DstBlendChoice
+    {
+        get => DstColorBlendFactor + 1;
+        set { if (value - 1 != DstColorBlendFactor) WriteBlendFactor("dst", value - 1); }
+    }
+
+    /// <summary>Write or REMOVE one half of the blend equation. The colour and alpha factors move together
+    /// — of 3,192 shipped materials on DefaultEnv_Flat_AlphaTest with PREMULTIPLIED_ALPHA, all 3,192
+    /// author both, and half an equation can leave the surface fully transparent in game (M415).</summary>
+    private void WriteBlendFactor(string half, int factor)
+    {
+        if (_renderStateLoading) return;
+        if (factor < 0)
+        {
+            Model.RemovePassProperty(half + "ColorBlendFactor");
+            Model.RemovePassProperty(half + "AlphaBlendFactor");
+        }
+        else
+        {
+            Model.SetPassU32(half + "ColorBlendFactor", (uint)factor);
+            Model.SetPassU32(half + "AlphaBlendFactor", (uint)factor);
+        }
+
+        _renderStateLoading = true;      // the setter below is the display, not a second edit
+        if (half == "src") SrcColorBlendFactor = factor; else DstColorBlendFactor = factor;
+        _renderStateLoading = false;
+
+        OnPropertyChanged(nameof(SrcBlendChoice));
+        OnPropertyChanged(nameof(DstBlendChoice));
+        AfterRenderStateEdit();
+    }
+
     partial void OnSrcColorBlendFactorChanged(int value)
     {
-        if (_renderStateLoading || value < 0) return;
-        Model.SetPassU32("srcColorBlendFactor", (uint)value);
-        Model.SetPassU32("srcAlphaBlendFactor", (uint)value);   // M415: the alpha half moves with it
-        Model.SetPassU32("srcAlphaBlendFactor", (uint)value);
-        AfterRenderStateEdit();
+        if (_renderStateLoading) return;
+        WriteBlendFactor("src", value);
     }
 
     partial void OnDstColorBlendFactorChanged(int value)
     {
-        if (_renderStateLoading || value < 0) return;
-        Model.SetPassU32("dstColorBlendFactor", (uint)value);
-        Model.SetPassU32("dstAlphaBlendFactor", (uint)value);
-        AfterRenderStateEdit();
+        if (_renderStateLoading) return;
+        WriteBlendFactor("dst", value);
     }
 
     private void AfterRenderStateEdit()

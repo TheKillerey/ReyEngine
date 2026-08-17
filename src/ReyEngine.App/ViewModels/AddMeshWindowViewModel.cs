@@ -26,8 +26,16 @@ public sealed partial class AddMeshMaterialViewModel : ObservableObject
     public required IReadOnlyList<string> ExistingMaterials { get; init; }
     public required IReadOnlyList<string> ShaderChoices { get; init; }   // League shaders from the catalogue
 
-    /// <summary>0 = use an existing map material, 1 = create a new one from a League shader.</summary>
+    /// <summary>0 = use an existing map material, 1 = create a new one from a League shader,
+    /// 2 = copy the real material out of the source map's own .materials.bin (M512).</summary>
     [ObservableProperty] private int _mode = 1;
+
+    /// <summary>M512: set when the import came from a mapgeo whose sibling .materials.bin actually holds
+    /// this material. Copying it is the best option by a distance — the shader, samplers, macros and
+    /// render state are Riot's own, and the permutation is cooked by definition because the game ships
+    /// it. Only offered when it is really there.</summary>
+    public string? SourceBinPath { get; init; }
+    public bool CanCopyFromSource => SourceBinPath is { Length: > 0 };
     [ObservableProperty] private string? _existingMaterial;
     [ObservableProperty] private string _newName = "";
     [ObservableProperty] private int _shaderIndex;
@@ -35,10 +43,12 @@ public sealed partial class AddMeshMaterialViewModel : ObservableObject
 
     public bool IsExistingMode => Mode == 0;
     public bool IsNewMode => Mode == 1;
+    public bool IsCopyMode => Mode == 2;
     partial void OnModeChanged(int value)
     {
         OnPropertyChanged(nameof(IsExistingMode));
         OnPropertyChanged(nameof(IsNewMode));
+        OnPropertyChanged(nameof(IsCopyMode));
     }
 
     public bool HasImportedTexture => Source.HasTexture;
@@ -55,7 +65,10 @@ public sealed record AddMeshMaterialPlan(
     string? NewName,                   // when CreateNew == true
     string? ShaderPath,                // the League shader the new material is built from
     byte[]? TextureBytes,              // png/jpg blob to convert + save (null = no texture change)
-    string? TextureFileNameHint);
+    string? TextureFileNameHint,
+    // M512: copy the material verbatim out of another map's bin instead of building one.
+    string? CopyFromBin = null,
+    string? CopyFromMaterial = null);
 
 public sealed record AddMeshPlan(
     IReadOnlyList<ImportedSceneMesh> Meshes,
@@ -119,8 +132,17 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
 
         ImportedScene? scene;
         string? err = null;
+        string? sourceBin = null;
         var ext = Path.GetExtension(path).ToLowerInvariant();
-        if (ext is ".obj" or ".scb" or ".sco")
+        if (ext is ".mapgeo")
+        {
+            // M512: a League map is the richest source of League-shaped geometry, and its materials are
+            // already right. The sibling bin is where they live.
+            scene = ReyEngine.Formats.MapGeo.MapGeoMeshImporter.ToScene(File.ReadAllBytes(path), out err);
+            string sibling = Path.ChangeExtension(path, null) + ".materials.bin";
+            if (File.Exists(sibling)) sourceBin = sibling;
+        }
+        else if (ext is ".obj" or ".scb" or ".sco")
             scene = ImportLegacy(path, out err);
         else
             scene = SceneMeshImporter.Import(path, out err);
@@ -145,10 +167,14 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
                 NewName = SanitizeName(mat.Name),
                 ShaderIndex = defaultShader,
                 UseImportedTexture = mat.HasTexture,
+                SourceBinPath = sourceBin,
+                // Copying the real thing beats rebuilding it from a shader whenever it is available.
+                Mode = sourceBin is null ? 1 : 2,
             });
         HasScene = true;
         int totalVerts = scene.Meshes.Sum(m => m.Positions.Length / 3);
-        Status = $"{scene.Meshes.Count} mesh(es), {scene.Materials.Count} material(s), {totalVerts:n0} verts total.";
+        Status = $"{scene.Meshes.Count} mesh(es), {scene.Materials.Count} material(s), {totalVerts:n0} verts total."
+            + (sourceBin is not null ? $" Materials can be copied from {Path.GetFileName(sourceBin)}." : "");
     }
 
     /// <summary>.obj/.scb/.sco keep working through the old importers — one mesh, no material info.</summary>
@@ -196,11 +222,14 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
         foreach (var m in Materials)
         {
             bool createNew = m.Mode == 1;
-            string final = createNew
+            bool copyFromSource = m.Mode == 2 && m.CanCopyFromSource;
+            string final = createNew || copyFromSource
                 ? m.NewName.Trim()
                 : m.ExistingMaterial ?? "";
-            if (createNew && final.Length == 0) { Status = $"Material '{m.Source.Name}' needs a name."; return; }
-            if (!createNew && final.Length == 0) { Status = $"Material '{m.Source.Name}': pick an existing material."; return; }
+            if ((createNew || copyFromSource) && final.Length == 0)
+            { Status = $"Material '{m.Source.Name}' needs a name."; return; }
+            if (!createNew && !copyFromSource && final.Length == 0)
+            { Status = $"Material '{m.Source.Name}': pick an existing material."; return; }
 
             string? shader = createNew && m.ShaderIndex >= 0 && m.ShaderIndex < m.ShaderChoices.Count
                 ? m.ShaderChoices[m.ShaderIndex] : null;
@@ -217,7 +246,10 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
                     if (File.Exists(abs)) { texBytes = File.ReadAllBytes(abs); texHint = Path.GetFileNameWithoutExtension(abs); }
                 }
             }
-            plans.Add(new AddMeshMaterialPlan(m.Source.Name, createNew, m.ExistingMaterial, final, shader, texBytes, texHint));
+            plans.Add(new AddMeshMaterialPlan(m.Source.Name, createNew, m.ExistingMaterial, final, shader,
+                texBytes, texHint,
+                copyFromSource ? m.SourceBinPath : null,
+                copyFromSource ? m.Source.Name : null));
             nameMap[m.Source.Name] = final;
         }
 

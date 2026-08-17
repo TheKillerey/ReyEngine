@@ -400,15 +400,15 @@
                                         <TextBlock Grid.Column="0" Text="Src blend" FontSize="9" VerticalAlignment="Center"
                                                    Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
                                         <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
-                                                  ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding SrcColorBlendFactor}"
-                                                  ToolTip.Tip="Riot blend factor. Map22 shadow receivers use 4 (DstColor); normal alpha materials use 6 (SrcAlpha)." />
+                                                  ItemsSource="{Binding BlendFactorChoices}" SelectedIndex="{Binding SrcBlendChoice}"
+                                                  ToolTip.Tip="Riot blend factor. Map22 shadow receivers use 4 (DstColor); normal alpha materials use 6 (SrcAlpha). 'not set' REMOVES the field — absent is not the same as 0 (Zero), and it is what most shipped materials do." />
                                       </Grid>
                                       <Grid ColumnDefinitions="Auto,*">
                                         <TextBlock Grid.Column="0" Text="Dst blend" FontSize="9" VerticalAlignment="Center"
                                                    Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0" />
                                         <ComboBox Grid.Column="1" FontSize="9" HorizontalAlignment="Stretch"
-                                                  ItemsSource="{Binding BlendFactorNames}" SelectedIndex="{Binding DstColorBlendFactor}"
-                                                  ToolTip.Tip="Sets both the colour and alpha destination factor" />
+                                                  ItemsSource="{Binding BlendFactorChoices}" SelectedIndex="{Binding DstBlendChoice}"
+                                                  ToolTip.Tip="Sets both the colour and alpha destination factor; 'not set' removes both." />
                                       </Grid>
                                     </StackPanel>
                         </StackPanel>

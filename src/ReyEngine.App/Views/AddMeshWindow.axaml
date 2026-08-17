@@ -79,10 +79,24 @@
                       <ComboBox SelectedIndex="{Binding Mode}" FontSize="10" HorizontalAlignment="Stretch">
                         <ComboBoxItem Content="Use an existing map material" />
                         <ComboBoxItem Content="Create a new material from a League shader" />
+                        <!-- M512: only reachable for a mapgeo import whose sibling bin really has it. -->
+                        <ComboBoxItem Content="Copy the material from the source map"
+                                      IsEnabled="{Binding CanCopyFromSource}" />
                       </ComboBox>
 
                       <ComboBox ItemsSource="{Binding ExistingMaterials}" SelectedItem="{Binding ExistingMaterial}"
                                 FontSize="10" HorizontalAlignment="Stretch" IsVisible="{Binding IsExistingMode}" />
+
+                      <StackPanel Spacing="4" IsVisible="{Binding IsCopyMode}">
+                        <TextBlock Text="Copied verbatim from the source map's materials.bin — shader, samplers, macros and render state included."
+                                   FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <Grid ColumnDefinitions="Auto,*">
+                          <TextBlock Grid.Column="0" Text="Name" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <TextBox Grid.Column="1" Text="{Binding NewName}" FontSize="10" Padding="4,2"
+                                   ToolTip.Tip="The name it gets in THIS map's bin. Keeping the original name is fine as long as this map has no material by that name." />
+                        </Grid>
+                      </StackPanel>
 
                       <StackPanel Spacing="4" IsVisible="{Binding IsNewMode}">
                         <Grid ColumnDefinitions="Auto,*">

@@ -1506,9 +1506,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task AddMeshToMap()
     {
         if (_currentMap is null) { _log.Warn("AddMesh", "Open a map (.mapgeo) first."); return; }
-        var file = await Dialogs.OpenFileAsync("Import mesh (.fbx / .glb / .gltf / .obj / .scb / .sco)",
+        var file = await Dialogs.OpenFileAsync("Import mesh (.mapgeo / .fbx / .glb / .gltf / .obj / .scb / .sco)",
             new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
-            { Patterns = new[] { "*.fbx", "*.glb", "*.gltf", "*.obj", "*.scb", "*.sco" } },
+            { Patterns = new[] { "*.mapgeo", "*.fbx", "*.glb", "*.gltf", "*.obj", "*.scb", "*.sco" } },
             DialogService.All);
         if (file is null) return;
 
@@ -1529,7 +1529,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         vm.SetVisibilityLayers(_mapVisibility.Primary?.Layers ?? Array.Empty<VisibilityLayer>());
         vm.PickFile = async title => await Dialogs.OpenFileAsync(title,
             new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
-            { Patterns = new[] { "*.fbx", "*.glb", "*.gltf", "*.obj", "*.scb", "*.sco" } },
+            { Patterns = new[] { "*.mapgeo", "*.fbx", "*.glb", "*.gltf", "*.obj", "*.scb", "*.sco" } },
             DialogService.All);
         vm.Confirmed = plan => _ = ExecuteAddMeshPlanAsync(plan);
         vm.LoadFile(file);
@@ -1881,6 +1881,37 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_currentMap is not { } map || _currentMapEntry is not { } mapEntry) return;
         try
         {
+            // M512: 0) materials copied verbatim out of the source map's own bin. Done first and as its
+            // own step because nothing about them is derived - the shader, samplers, macros and render
+            // state are Riot's, and the permutation is cooked by definition because the game ships it.
+            var toCopy = plan.Materials.Where(m => m.CopyFromBin is { Length: > 0 }).ToList();
+            if (toCopy.Count > 0)
+            {
+                if (!TryResolveMaterialsBin(mapEntry.Path, out var copyTarget))
+                { _log.Error("AddMesh", "No materials .bin found for this map — cannot copy materials."); return; }
+                var targetBytes = GetAssetBytes(copyTarget);
+                if (targetBytes is null) { _log.Error("AddMesh", "Could not read the materials .bin."); return; }
+
+                foreach (var m in toCopy)
+                {
+                    byte[] sourceBytes;
+                    try { sourceBytes = File.ReadAllBytes(m.CopyFromBin!); }
+                    catch (Exception ex)
+                    { _log.Error("AddMesh", $"Source bin {m.CopyFromBin}: {ex.Message}"); return; }
+
+                    uint hash = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(m.CopyFromMaterial!);
+                    var imported = MapMaterialFactory.ImportMaterial(targetBytes, sourceBytes, hash,
+                        m.CopyFromMaterial!, m.NewName!, out var copyError);
+                    if (imported is null)
+                    { _log.Error("AddMesh", $"Material '{m.CopyFromMaterial}': {copyError}"); return; }
+                    targetBytes = imported;
+                    _log.Success("AddMesh", $"Copied material '{m.CopyFromMaterial}' from "
+                        + $"{Path.GetFileName(m.CopyFromBin)} as '{m.NewName}'.");
+                }
+                if (!await SaveMapBinBytesAsync(copyTarget, targetBytes))
+                { _log.Error("AddMesh", "Could not save the materials .bin — meshes were NOT staged."); return; }
+            }
+
             // 1) new materials (cloned templates), textures first so the clone can point at them
             var toCreate = plan.Materials.Where(m => m.CreateNew).ToList();
             if (toCreate.Count > 0)
