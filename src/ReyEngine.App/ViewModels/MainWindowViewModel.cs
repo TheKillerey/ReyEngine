@@ -2424,6 +2424,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (Project.MapLighting.FirstOrDefault(r => r.PathHash == entry.PathHash) is not { } rec) return;
 
+        // M515: heal a record the capture bug wrote. Its sun block is the renderer's no-sun fallback to
+        // 1e-9, which is not something anyone dials in - and restoring it would put that fallback back
+        // over the sun this map actually authors, which is the reported symptom.
+        if (_baseSunAuthored is not null && Core.Projects.MapLightingArtefact.LooksLikeUntouchedFallback(rec))
+        {
+            _log.Info("Lighting", "The saved lighting for this map is the editor's default sun, not "
+                                + "something authored - keeping the map's own sun. Adjust the sliders and "
+                                + "it will be remembered from here on.");
+            RestoreMapPointLights(rec);      // the LIGHTS in that record are real; only the sun was junk
+            return;
+        }
+
         _applyingLighting = true;
         try
         {
@@ -2454,29 +2466,49 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _suppressSunRebuild = false;
             RebuildSun();
 
-            CurrentLightmapScale = rec.LightmapScale;
-            DynamicLightIntensity = rec.LightIntensity;
-            DynamicLightRadiusScale = rec.LightRadiusScale;
-            LightFalloffSoftness = rec.FalloffSoftness;
-            DynamicLightPositionScale = rec.PositionScale;
-            DynamicLightScaleX = rec.ScaleX;
-            DynamicLightScaleZ = rec.ScaleZ;
-            DynamicLightOffsetX = rec.OffsetX;
-            DynamicLightOffsetZ = rec.OffsetZ;
-            LightDatPath = rec.LightDatPath;
-
-            EditableLights.Clear();
-            foreach (var s in rec.Lights)
-                EditableLights.Add(new PointLightViewModel(
-                    PointLightViewModel.FromStored(s.X, s.Y, s.Z, s.R, s.G, s.B, s.Radius, s.Intensity), this)
-                { Name = s.Name });
-            SelectedLight = null;
+            ApplyStoredPointLights(rec);
         }
         finally { _applyingLighting = false; }
 
         RepublishLights();
         _log.Info("Lights", $"Restored this map's saved lighting — {rec.Lights.Count} point light(s)"
             + (rec.LightDatPath is { } p ? $", from {Path.GetFileName(p)}" : ""));
+    }
+
+    /// <summary>M515: the point-light half of a stored record, on its own. A record whose SUN block is the
+    /// capture bug's artefact still holds real lights — the user placed those — so the two halves have to
+    /// be restorable separately.</summary>
+    private void RestoreMapPointLights(ReyEngine.Core.Projects.MapLightingRecord rec)
+    {
+        _applyingLighting = true;
+        try { ApplyStoredPointLights(rec); }
+        finally { _applyingLighting = false; }
+
+        RepublishLights();
+        if (rec.Lights.Count > 0)
+            _log.Info("Lights", $"Restored {rec.Lights.Count} saved point light(s)"
+                + (rec.LightDatPath is { } p ? $", from {Path.GetFileName(p)}" : "") + ".");
+    }
+
+    private void ApplyStoredPointLights(ReyEngine.Core.Projects.MapLightingRecord rec)
+    {
+        CurrentLightmapScale = rec.LightmapScale;
+        DynamicLightIntensity = rec.LightIntensity;
+        DynamicLightRadiusScale = rec.LightRadiusScale;
+        LightFalloffSoftness = rec.FalloffSoftness;
+        DynamicLightPositionScale = rec.PositionScale;
+        DynamicLightScaleX = rec.ScaleX;
+        DynamicLightScaleZ = rec.ScaleZ;
+        DynamicLightOffsetX = rec.OffsetX;
+        DynamicLightOffsetZ = rec.OffsetZ;
+        LightDatPath = rec.LightDatPath;
+
+        EditableLights.Clear();
+        foreach (var s in rec.Lights)
+            EditableLights.Add(new PointLightViewModel(
+                PointLightViewModel.FromStored(s.X, s.Y, s.Z, s.R, s.G, s.B, s.Radius, s.Intensity), this)
+            { Name = s.Name });
+        SelectedLight = null;
     }
 
     private void LoadEditableLights(IEnumerable<PointLight> lights)
@@ -9591,6 +9623,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task LoadMapGeoAsync(WadAssetEntry entry)
     {
         if (!ContentLoaded) return;
+        // M515: suppress lighting capture across the WHOLE open, not just across ApplySunProperties.
+        //
+        // M287 guarded the reset itself, but the load publishes the map's point lights on the way in, and
+        // RepublishLights captures — so the record was written from whatever the sun sliders happened to
+        // hold at that moment, which is the fallback default, BEFORE the map's own MapSunProperties had
+        // been read. Every later open then restored that default over the map's authored sun, and only
+        // "Reset to map" (which reads _baseSunAuthored) put it back.
+        bool wasApplyingLighting = _applyingLighting;
+        _applyingLighting = true;
         try
         {
             _log.Info("MapGeo", $"Decoding {entry.DisplayName} …");
@@ -9668,6 +9709,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // just overwritten sun/sky with the map's own values and forced SunIntensity to 1.0, which
                 // is correct as a starting point and wrong as a final answer once the project holds edits.
                 RestoreMapLighting(entry);
+                // M515: from here on the user's edits are their own again.
+                _applyingLighting = wasApplyingLighting;
                 ClearSecondaryTextures(); // maps don't use champion secondary samplers
                 PublishMapMaterialLayers(); // re-apply map special-material layers wiped above
                 MapGeoInspector.Show(map, entry.Path);
@@ -9689,6 +9732,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Error("MapGeo", $"{entry.DisplayName}: {ex.Message}");
             await Dispatcher.UIThread.InvokeAsync(ClearViewport);
         }
+        // M515: a load that threw before the restore must not leave capture suppressed for the session -
+        // every later slider move would then be silently dropped.
+        finally { _applyingLighting = wasApplyingLighting; }
     }
 
     /// <summary>Resolve the map's materials .bin → per-group diffuse textures (shared instances for reuse).</summary>

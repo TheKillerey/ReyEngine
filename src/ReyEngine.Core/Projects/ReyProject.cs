@@ -140,6 +140,37 @@ public sealed class TextureRecolorRecord
 /// <summary>M287: one map's authored lighting. Defaults match the view-model's own initial values, so a
 /// record written by an older build - or a hand-edited one missing a field - restores to what the editor
 /// would have shown anyway rather than to zero.</summary>
+/// <summary>
+/// M515: is this record the artefact of the capture bug rather than something a person chose?
+///
+/// <para>Until M515 a map load published the map's point lights BEFORE the map's own MapSunProperties had
+/// been read, and the publish captured — so the record was written with the sun sliders still at the
+/// renderer's no-sun fallback. Every later open then restored that fallback over the map's authored sun,
+/// and only "Reset to map" put it back. A user reported it as "sunlight never applies when we open the
+/// map".</para>
+///
+/// <para>The signature is the fallback exactly: sun 0.75 grey at intensity 1, sky 0.35 grey at 1,
+/// direction (0.4, 0.85, 0.45), and fog 0..0 — which is a range the fog code treats as "none" and nobody
+/// dials in by hand. Matched to 1e-9, so a value a person actually typed is safe.</para>
+/// </summary>
+public static class MapLightingArtefact
+{
+    // 1e-9, not something looser: the only error to absorb is a JSON round trip of an exact constant,
+    // which is ~1e-16. Anything wider starts swallowing values a person actually chose.
+    private static bool Is(double value, double expected) => Math.Abs(value - expected) < 1e-9;
+
+    public static bool LooksLikeUntouchedFallback(MapLightingRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return Is(record.SunIntensity, 1.0)
+            && Is(record.SunColorR, 0.75) && Is(record.SunColorG, 0.75) && Is(record.SunColorB, 0.75)
+            && Is(record.SkyIntensity, 1.0)
+            && Is(record.SkyColorR, 0.35) && Is(record.SkyColorG, 0.35) && Is(record.SkyColorB, 0.35)
+            && Is(record.SunDirX ?? 0.4, 0.4) && Is(record.SunDirY ?? 0.85, 0.85) && Is(record.SunDirZ ?? 0.45, 0.45)
+            && Is(record.FogStartRaw ?? 0.0, 0.0) && Is(record.FogEndRaw ?? 0.0, 0.0);
+    }
+}
+
 public sealed class MapLightingRecord
 {
     public ulong PathHash { get; set; }
