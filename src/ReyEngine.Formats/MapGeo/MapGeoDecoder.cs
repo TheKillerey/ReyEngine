@@ -206,6 +206,9 @@ public static class MapGeoDecoder
                     TextureOverrides = meshTextureOverrides,
                     BakedPaintScale = mesh.BakedPaintScale,
                     BakedPaintBias = mesh.BakedPaintBias,
+                    // M517: what the FILE names, so the inspector can offer to change it and show what is
+                    // being replaced. Submesh order, because that is the order the writer applies to.
+                    Materials = mesh.Submeshes.Select(sm => sm.Material ?? "").ToArray(),
                 });
                 if (mesh.Submeshes.Count > 0)
                 {

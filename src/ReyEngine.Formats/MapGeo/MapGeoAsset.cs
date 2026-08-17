@@ -252,6 +252,23 @@ public sealed class MapGeoMesh
         || (ControllerEdit is { } ce && ce != ControllerHash)
         || (BackfaceEdit is { } b && b != DisableBackfaceCulling);
 
+    /// <summary>
+    /// M517: the material this mesh should be drawn with instead of the one the file names. Null = keep
+    /// the file's. Applied by <see cref="MapGeoMaterialWriter"/>, which needs a full round trip rather
+    /// than a byte patch because a material name is a length-prefixed string.
+    /// </summary>
+    public string? MaterialEdit;
+
+    /// <summary>The materials this mesh's submeshes name in the FILE, in submesh order. Filled by the
+    /// decoder so the inspector can show what an edit is replacing.</summary>
+    public IReadOnlyList<string> Materials { get; set; } = System.Array.Empty<string>();
+
+    public string EffectiveMaterial => MaterialEdit ?? (Materials.Count > 0 ? Materials[0] : "");
+
+    public bool HasMaterialEdit =>
+        MaterialEdit is { Length: > 0 } edit
+        && !(Materials.Count == 1 && string.Equals(Materials[0], edit, System.StringComparison.Ordinal));
+
     public Vector3 Offset;                                // accumulated single-select move (world space), default zero
     public Vector3 RotationDegrees;                        // accumulated single-select rotation (XYZ euler, degrees)
     public Vector3 Scale = Vector3.One;                     // accumulated single-select scale, default one

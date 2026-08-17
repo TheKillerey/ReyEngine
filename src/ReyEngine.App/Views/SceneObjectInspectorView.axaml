@@ -140,6 +140,30 @@
     <!-- M434: MapGraphicsFeature components in MapContainer.components[]. These decide which shared
          rendering resources the engine builds, and map shaders bind them by name (MapLightingV2 ->
          IBL_CUBEMAP, MapTerrainPaint -> TERRAIN_BLEND, MapSSAO -> SSAO_TEXTURE, ...). -->
+    <!-- M517: the material an EXISTING mesh is drawn with. Queued like every other mesh edit and written
+         by Save Map Edits; the mapgeo is not touched before that. -->
+    <Border Classes="card" IsVisible="{Binding MeshDetails.HasMesh}">
+      <StackPanel Spacing="4">
+        <TextBlock Classes="cardTitle" Text="MATERIAL" />
+        <ComboBox ItemsSource="{Binding MapMaterialNames}" SelectedItem="{Binding SelectedMeshMaterial}"
+                  HorizontalAlignment="Stretch" FontSize="10"
+                  ToolTip.Tip="Every material this map's materials.bin defines. Choosing one queues the swap; Save Map Edits writes it into the mapgeo." />
+        <TextBlock IsVisible="{Binding SelectedMeshHasSeveralMaterials}" FontSize="9" TextWrapping="Wrap"
+                   Foreground="#FFB454"
+                   Text="This mesh has more than one submesh material — the chosen one replaces ALL of them." />
+        <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding SelectedMeshMaterialChanged}">
+          <TextBlock Text="changed — Save Map Edits to write it" FontSize="9" VerticalAlignment="Center"
+                     Foreground="{DynamicResource ReyAccent2Brush}" />
+          <Button Classes="tool" Content="↺ Revert" FontSize="9" Padding="6,1"
+                  Command="{Binding RevertSelectedMeshMaterialCommand}"
+                  ToolTip.Tip="Put this mesh back on the material the file names." />
+        </StackPanel>
+        <TextBlock IsVisible="{Binding SelectedMeshMaterialChanged}" FontSize="9" TextWrapping="Wrap"
+                   Foreground="{DynamicResource ReyTextDimBrush}"
+                   Text="{Binding SelectedMeshOriginalMaterial, StringFormat='was: {0}'}" />
+      </StackPanel>
+    </Border>
+
     <Expander IsExpanded="False" IsVisible="{Binding MeshDetails.HasMesh}" FontSize="11">
       <Expander.Header>
         <StackPanel Orientation="Horizontal" Spacing="6">

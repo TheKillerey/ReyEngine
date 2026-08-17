@@ -6742,6 +6742,67 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>The full mesh-details inspector for the selected mapgeo mesh (M33).</summary>
     public MeshDetailsViewModel MeshDetails { get; } = new();
 
+    // ---- M517: change the material of an EXISTING mesh -------------------------------------------
+
+    /// <summary>The selected mesh's material, as the picker sees it. Setting it queues the swap; it is
+    /// written into the mapgeo by Save Map Edits, like every other mesh edit.</summary>
+    public string? SelectedMeshMaterial
+    {
+        get => _selection.Primary is { } mesh ? mesh.EffectiveMaterial : null;
+        set
+        {
+            if (_selection.Primary is not { } mesh || value is not { Length: > 0 } name) return;
+            if (string.Equals(mesh.EffectiveMaterial, name, StringComparison.Ordinal)) return;
+
+            string? before = mesh.MaterialEdit;
+            mesh.MaterialEdit = name;
+            UndoService.PushApplied(new MeshMaterialCommand(_currentMap, mesh, before, name,
+                AfterMeshMaterialEdit));
+            AfterMeshMaterialEdit();
+        }
+    }
+
+    /// <summary>How many submeshes the swap will cover. A mesh with several is being told to draw
+    /// entirely in the chosen material, which is worth saying out loud before it happens.</summary>
+    public int SelectedMeshSubmeshCount => _selection.Primary?.Materials.Count ?? 0;
+    public bool SelectedMeshHasSeveralMaterials =>
+        _selection.Primary is { } m && m.Materials.Distinct(StringComparer.Ordinal).Count() > 1;
+    public bool SelectedMeshMaterialChanged => _selection.Primary?.HasMaterialEdit == true;
+    public string SelectedMeshOriginalMaterial =>
+        _selection.Primary is { Materials.Count: > 0 } m ? m.Materials[0] : "";
+
+    private void AfterMeshMaterialEdit()
+    {
+        if (_currentMap is { } map)
+            HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes)
+                || MapGeoMaterialWriter.HasEdits(map.Meshes)
+                || MapContent.AllMapPieces.Any(x => x.IsRemoved);
+        RefreshSelectedMeshMaterial();
+        NotifyMaterialsChanged();     // the viewport rebuilds from the swapped assignment
+        ScheduleAutoSave();
+    }
+
+    private void RefreshSelectedMeshMaterial()
+    {
+        OnPropertyChanged(nameof(SelectedMeshMaterial));
+        OnPropertyChanged(nameof(SelectedMeshSubmeshCount));
+        OnPropertyChanged(nameof(SelectedMeshHasSeveralMaterials));
+        OnPropertyChanged(nameof(SelectedMeshMaterialChanged));
+        OnPropertyChanged(nameof(SelectedMeshOriginalMaterial));
+    }
+
+    /// <summary>M517: put the mesh back on the material the file names.</summary>
+    [RelayCommand]
+    private void RevertSelectedMeshMaterial()
+    {
+        if (_selection.Primary is not { HasMaterialEdit: true } mesh) return;
+        string? before = mesh.MaterialEdit;
+        mesh.MaterialEdit = null;
+        UndoService.PushApplied(new MeshMaterialCommand(_currentMap, mesh, before, null,
+            AfterMeshMaterialEdit));
+        AfterMeshMaterialEdit();
+    }
+
     /// <summary>M101: scope the Materials tab to the selected mesh/meshes; empty selection = show all.</summary>
     private void RefreshMaterialMeshFilter()
     {
@@ -6755,6 +6816,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void RefreshMeshDetails()
     {
         RefreshMaterialMeshFilter();
+        RefreshSelectedMeshMaterial();   // M517
         RefreshLayerEditor();   // M105
         if (_selection.Primary is not { } m || _visibilityResolver is null)
         { MeshVisibilityReason = ""; MeshDetails.Clear(); return; }
@@ -8881,15 +8943,31 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         bool hasMoves = MapGeoWriter.HasMoves(map.Meshes);
         bool hasLayers = MapGeoLayerWriter.HasEdits(map.Meshes);
+        bool hasMaterials = MapGeoMaterialWriter.HasEdits(map.Meshes);   // M517
         var added = MapContent.AddedMeshes.ToList();
         var removedIndices = MapContent.AllMapPieces.Where(p => p.IsRemoved).Select(p => p.MeshIndex).Distinct().ToList();
-        if (!hasMoves && !hasLayers && added.Count == 0 && removedIndices.Count == 0) { _log.Info("MapGeo", "No map edits to save."); return; }
+        if (!hasMoves && !hasLayers && !hasMaterials && added.Count == 0 && removedIndices.Count == 0)
+        { _log.Info("MapGeo", "No map edits to save."); return; }
         if (!GuardEditable(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
         {
             byte[] bytes = _currentMapBytes;
+
+            // M517: material edits before everything else. They REWRITE the file (a material name is a
+            // length-prefixed string, so a longer one moves every byte after it), which invalidates any
+            // byte offset computed earlier - so this has to happen while nothing has been patched yet.
+            // Both passes below re-locate meshes by signature and are unaffected by the rewrite.
+            if (hasMaterials)
+            {
+                var swapped = MapGeoMaterialWriter.TryWriteMaterialEdits(
+                    bytes, map.Meshes, ExtendedChannelMaterialsFor(entry.Path), out var mErr);
+                if (swapped is null) { _log.Error("MapGeo", mErr ?? "Material edits could not be written."); return; }
+                bytes = swapped;
+                int changed = map.Meshes.Count(m => m.HasMaterialEdit);
+                _log.Success("MapGeo", $"Changed the material on {changed:n0} mesh(es).");
+            }
 
             // 0) M105: layer/controller/backface edits FIRST — they don't touch the [bbox][transform]
             //    signatures, so the move patching that follows still locates every mesh.
