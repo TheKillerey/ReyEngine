@@ -20,8 +20,72 @@ public sealed partial class AddMeshRowViewModel : ObservableObject
 }
 
 /// <summary>Per imported material: how it becomes a map material.</summary>
+/// <summary>
+/// M514: one sampler of the shader being set up, with the texture it will point at.
+///
+/// <para>Without this the new material was born pointing at the shader's declared default — which for
+/// DefaultEnv_Flat is ASSETS/Shared/Materials/rock_texture.tex, a path that exists in no wad and no
+/// project. The material was structurally perfect and drew untextured, which is what "the material is
+/// empty" looks like from the outside.</para>
+/// </summary>
+public sealed partial class AddMeshSamplerViewModel : ObservableObject
+{
+    public required string Name { get; init; }
+    /// <summary>Asked of the host, which is the only layer that knows where textures live.</summary>
+    public Func<string, bool>? Exists { private get; init; }
+
+    [ObservableProperty] private string _path = "";
+
+    partial void OnPathChanged(string value)
+    {
+        OnPropertyChanged(nameof(Resolved));
+        OnPropertyChanged(nameof(Note));
+    }
+
+    /// <summary>Null when there is no way to check — the same restraint the audit uses, so an unknown
+    /// never renders as a warning.</summary>
+    public bool? Resolved => Exists is null || Path.Length == 0 ? null : Exists(Path);
+    public bool IsMissing => Resolved == false;
+    public string Note => Resolved switch
+    {
+        false => "not found — the surface will draw untextured",
+        true => "found",
+        _ => "",
+    };
+}
+
 public sealed partial class AddMeshMaterialViewModel : ObservableObject
 {
+    /// <summary>M514: the samplers this shader declares, editable before the material is created.</summary>
+    public ObservableCollection<AddMeshSamplerViewModel> Samplers { get; } = new();
+    public bool HasSamplers => Samplers.Count > 0;
+
+    /// <summary>(shader name) -> its declared samplers and their default paths. Supplied by the host,
+    /// which owns the shader catalogue.</summary>
+    public Func<string, IReadOnlyList<(string Name, string DefaultPath)>>? SamplersForShader { private get; init; }
+    public Func<string, bool>? TextureExists { private get; init; }
+
+    /// <summary>Rebuild the sampler rows for the currently chosen shader, keeping any path the user has
+    /// already typed for a sampler of the same name.</summary>
+    public void RefreshSamplers()
+    {
+        if (SamplersForShader is null || ShaderIndex < 0 || ShaderIndex >= ShaderChoices.Count)
+        { Samplers.Clear(); OnPropertyChanged(nameof(HasSamplers)); return; }
+
+        var kept = Samplers.ToDictionary(x => x.Name, x => x.Path, StringComparer.OrdinalIgnoreCase);
+        Samplers.Clear();
+        foreach (var (name, defaultPath) in SamplersForShader(ShaderChoices[ShaderIndex]))
+            Samplers.Add(new AddMeshSamplerViewModel
+            {
+                Name = name,
+                Exists = TextureExists,
+                Path = kept.TryGetValue(name, out var already) && already.Length > 0 ? already : defaultPath,
+            });
+        OnPropertyChanged(nameof(HasSamplers));
+    }
+
+    partial void OnShaderIndexChanged(int value) => RefreshSamplers();
+
     public required ImportedSceneMaterial Source { get; init; }
     public required IReadOnlyList<string> ExistingMaterials { get; init; }
     public required IReadOnlyList<string> ShaderChoices { get; init; }   // League shaders from the catalogue
@@ -68,7 +132,9 @@ public sealed record AddMeshMaterialPlan(
     string? TextureFileNameHint,
     // M512: copy the material verbatim out of another map's bin instead of building one.
     string? CopyFromBin = null,
-    string? CopyFromMaterial = null);
+    string? CopyFromMaterial = null,
+    // M514: sampler name -> texture path, as set up in the window.
+    IReadOnlyDictionary<string, string>? SamplerPaths = null);
 
 public sealed record AddMeshPlan(
     IReadOnlyList<ImportedSceneMesh> Meshes,
@@ -102,6 +168,10 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
     public IReadOnlyList<string> ExistingMaterials { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> ShaderChoices { get; init; } = Array.Empty<string>();
     public Func<string, Task<string?>>? PickFile;       // returns a path or null
+    /// <summary>M514: (shader) -> its declared samplers, so the window can offer them for setup.</summary>
+    public Func<string, IReadOnlyList<(string Name, string DefaultPath)>>? SamplersForShader { get; init; }
+    /// <summary>M514: does this texture path resolve? Used to mark a sampler that would draw nothing.</summary>
+    public Func<string, bool>? TextureExists { get; init; }
     public Action<AddMeshPlan>? Confirmed;
     public Action? Cancelled;
 
@@ -167,10 +237,14 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
                 NewName = SanitizeName(mat.Name),
                 ShaderIndex = defaultShader,
                 UseImportedTexture = mat.HasTexture,
+                SamplersForShader = SamplersForShader,
+                TextureExists = TextureExists,
                 SourceBinPath = sourceBin,
                 // Copying the real thing beats rebuilding it from a shader whenever it is available.
                 Mode = sourceBin is null ? 1 : 2,
             });
+        // Fill the sampler rows for whatever shader each material starts on.
+        foreach (var m in Materials) m.RefreshSamplers();
         HasScene = true;
         int totalVerts = scene.Meshes.Sum(m => m.Positions.Length / 3);
         Status = $"{scene.Meshes.Count} mesh(es), {scene.Materials.Count} material(s), {totalVerts:n0} verts total."
@@ -246,10 +320,17 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
                     if (File.Exists(abs)) { texBytes = File.ReadAllBytes(abs); texHint = Path.GetFileNameWithoutExtension(abs); }
                 }
             }
+            // M514: only the samplers the user actually filled in. An empty path means "leave the
+            // shader's own default", which is a different intent from "point it at nothing".
+            var samplerPaths = m.Samplers
+                .Where(x => x.Path.Trim().Length > 0)
+                .ToDictionary(x => x.Name, x => x.Path.Trim(), StringComparer.OrdinalIgnoreCase);
+
             plans.Add(new AddMeshMaterialPlan(m.Source.Name, createNew, m.ExistingMaterial, final, shader,
                 texBytes, texHint,
                 copyFromSource ? m.SourceBinPath : null,
-                copyFromSource ? m.Source.Name : null));
+                copyFromSource ? m.Source.Name : null,
+                samplerPaths.Count > 0 ? samplerPaths : null));
             nameMap[m.Source.Name] = final;
         }
 

@@ -104,6 +104,30 @@
                                      Foreground="{DynamicResource ReyTextDimBrush}" />
                           <TextBox Grid.Column="1" Text="{Binding NewName}" FontSize="10" Padding="4,2" />
                         </Grid>
+
+                        <!-- M514: the shader's samplers, set up here rather than discovered as an empty
+                             material afterwards. Pre-filled with the shader's declared defaults, which are
+                             often paths Riot does not actually ship. -->
+                        <StackPanel Spacing="2" IsVisible="{Binding HasSamplers}" Margin="0,2,0,0">
+                          <TextBlock Text="TEXTURES" FontSize="8" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                          <ItemsControl ItemsSource="{Binding Samplers}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                <Grid ColumnDefinitions="120,*,Auto" Margin="0,1">
+                                  <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="9" VerticalAlignment="Center"
+                                             TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}"
+                                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                                  <TextBox Grid.Column="1" Text="{Binding Path}" FontSize="9" Padding="4,1"
+                                           Watermark="assets/…/texture.tex" />
+                                  <TextBlock Grid.Column="2" Text="{Binding Note}" FontSize="8" Margin="6,0,0,0"
+                                             VerticalAlignment="Center" IsVisible="{Binding IsMissing}"
+                                             Foreground="#FFE05252" />
+                                </Grid>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
                         <Grid ColumnDefinitions="Auto,*">
                           <TextBlock Grid.Column="0" Text="Shader" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
                                      Foreground="{DynamicResource ReyTextDimBrush}" />

@@ -1525,6 +1525,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ShaderChoices = cat.Shaders
                 .Where(sh => sh.Category is "StaticMesh" or "Environment")
                 .Select(sh => sh.Name).ToList(),
+            // M514: set the textures up in the window, rather than discovering afterwards that the new
+            // material points at the shader's declared default - which for DefaultEnv_Flat is
+            // ASSETS/Shared/Materials/rock_texture.tex, a path that exists in no wad and no project.
+            SamplersForShader = shader => cat.Find(shader) is { } def
+                ? def.Textures.Select(t => (t.Name, t.DefaultTexturePath)).ToList()
+                : Array.Empty<(string, string)>(),
+            TextureExists = TextureExistsByPath,
         };
         vm.SetVisibilityLayers(_mapVisibility.Primary?.Layers ?? Array.Empty<VisibilityLayer>());
         vm.PickFile = async title => await Dialogs.OpenFileAsync(title,
@@ -1932,7 +1939,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (def is null) { _log.Error("AddMesh", $"Material '{m.NewName}': shader '{m.ShaderPath}' not in the catalogue."); return; }
                     var commonSetup = await LoadCommonShaderSetupAsync(def.Name);
                     if (commonSetup is not null) def = def with { CommonSetup = commonSetup };
-                    var newBytes = MapMaterialFactory.CreateFromShader(binBytes, m.NewName!, def, out var err, diffusePath);
+                    // M514: the sampler paths set up in the window, with the imported texture still
+                    // winning for the diffuse when there was one.
+                    var samplerOverrides = m.SamplerPaths is { Count: > 0 }
+                        ? new Dictionary<string, string>(m.SamplerPaths, StringComparer.OrdinalIgnoreCase)
+                        : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    if (diffusePath is not null) samplerOverrides["__diffuse__"] = diffusePath;
+
+                    var newBytes = MapMaterialFactory.CreateFromShader(binBytes, m.NewName!, def, out var err,
+                        samplerOverrides.Count > 0 ? samplerOverrides : null);
                     if (newBytes is null)
                     {
                         // dump the exact input so the failure is reproducible offline
