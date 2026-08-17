@@ -8,6 +8,10 @@ public sealed class ConsoleViewModel : ViewModelBase, ILogSink
 {
     public ObservableCollection<LogEntry> Entries { get; } = new();
 
+    /// <summary>M519: raised on the UI thread for every line, so the dock can badge its Console tab when a
+    /// warning or error arrives while the browser is in front.</summary>
+    public event Action<LogEntry>? EntryWritten;
+
     public void Write(LogEntry entry)
     {
         if (Dispatcher.UIThread.CheckAccess()) Add(entry);
@@ -18,6 +22,7 @@ public sealed class ConsoleViewModel : ViewModelBase, ILogSink
     {
         Entries.Add(entry);
         if (Entries.Count > 2000) Entries.RemoveAt(0);
+        EntryWritten?.Invoke(entry);
     }
 
     public void Clear() => Entries.Clear();

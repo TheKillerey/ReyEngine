@@ -83,6 +83,11 @@
         <MenuItem Header="Preferences…" Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+," />
       </MenuItem>
       <MenuItem Header="_View">
+        <!-- M519: the two panes share one dock now, so there has to be a way to ask for the one that
+             is behind — the console in particular, which used to be permanently on screen. -->
+        <MenuItem Header="Content Browser" Command="{Binding ShowContentBrowserCommand}" />
+        <MenuItem Header="Console" Command="{Binding ShowConsoleCommand}" />
+        <Separator />
         <MenuItem Header="Reload WAD" Command="{Binding ReloadWadCommand}" />
       </MenuItem>
       <!-- M143: grouped by purpose — open-an-editor and per-asset actions up top (used constantly),
@@ -285,12 +290,11 @@
 
       <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
 
-      <!-- CENTER: Viewport + Content Browser (top block) · Console (bottom).
-           Nesting the viewport + browser means the console splitter trades height with the VIEWPORT,
-           not the content browser (M43 fix). -->
-      <Grid Grid.Column="2" RowDefinitions="*,4,170">
-      <!-- M100: browser sits between viewport and console; 200px keeps the viewport large. -->
-      <Grid Grid.Row="0" RowDefinitions="*,4,200">
+      <!-- CENTER: viewport on top, one TABBED dock below (M519).
+           The browser and the console used to be two stacked panes with two splitters, each permanently
+           holding height the other might need. One dock means the full height goes to whichever is in
+           front, and one splitter to size it. -->
+      <Grid Grid.Column="2" RowDefinitions="*,4,260">
         <Border Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
           <DockPanel>
             <!-- Document / viewport tabs (M33): the loaded map stays alive while other assets are inspected -->
@@ -696,11 +700,16 @@
 
         <GridSplitter Grid.Row="1" Background="{DynamicResource ReyBorderBrush}" />
 
-        <!-- CONTENT BROWSER (Unreal/Windows-style: folder tree + tiles) -->
+        <!-- M519: the bottom dock. Tab headers carry the names the two panel headers used to. -->
         <Border Grid.Row="2" Background="{DynamicResource ReyPanelBrush}">
+          <TabControl SelectedIndex="{Binding BottomDockTab}" Padding="0" Margin="0">
+
+            <!-- CONTENT BROWSER (Unreal/Windows-style: folder tree + tiles) -->
+            <TabItem FontSize="12">
+              <TabItem.Header><TextBlock Text="Content Browser" FontSize="11" /></TabItem.Header>
           <DockPanel>
+            <!-- Column 0 held the "CONTENT BROWSER" header; the tab header names the pane now. -->
             <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto">
-              <TextBlock Classes="panelHeader" Text="CONTENT BROWSER" VerticalAlignment="Center" />
               <Button Grid.Column="1" Classes="tool" Content="↑ Up" Margin="6,4"
                       Command="{Binding ContentBrowser.GoUpCommand}" IsEnabled="{Binding ContentBrowser.CanGoUp}" />
               <!-- M43: clickable breadcrumb path -->
@@ -926,15 +935,25 @@
               </DockPanel>
             </Grid>
           </DockPanel>
-        </Border>
-      </Grid>
+            </TabItem>
 
-        <GridSplitter Grid.Row="1" Background="{DynamicResource ReyBorderBrush}" />
-
-        <Border Grid.Row="2" Background="{DynamicResource ReyPanelBrush}">
+            <TabItem FontSize="12">
+              <TabItem.Header>
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <TextBlock Text="Console" FontSize="11" VerticalAlignment="Center" />
+                  <!-- M519: a console behind a tab can hide an error. The badge counts what has arrived
+                       since this tab was last looked at, and clears when it is opened. -->
+                  <Border CornerRadius="7" Padding="5,0" VerticalAlignment="Center"
+                          IsVisible="{Binding HasUnseenConsoleProblems}"
+                          Background="{DynamicResource ReyCardBrush}"
+                          BorderBrush="#FFE05252" BorderThickness="1">
+                    <TextBlock Text="{Binding UnseenConsoleProblems}" FontSize="9" Foreground="#FFE05252" />
+                  </Border>
+                </StackPanel>
+              </TabItem.Header>
           <DockPanel>
+            <!-- Column 0 held the "CONSOLE" header; the tab header names the pane now. -->
             <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto">
-              <TextBlock Classes="panelHeader" Text="CONSOLE · IMPORT LOG" />
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="8,0">
                 <StackPanel Orientation="Horizontal" Spacing="3"><Ellipse Width="6" Height="6" Fill="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center"/><TextBlock Text="info" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}"/></StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="3"><Ellipse Width="6" Height="6" Fill="{DynamicResource ReySuccessBrush}" VerticalAlignment="Center"/><TextBlock Text="success" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}"/></StackPanel>
@@ -957,6 +976,8 @@
               </ListBox.ItemTemplate>
             </ListBox>
           </DockPanel>
+            </TabItem>
+          </TabControl>
         </Border>
       </Grid>
 

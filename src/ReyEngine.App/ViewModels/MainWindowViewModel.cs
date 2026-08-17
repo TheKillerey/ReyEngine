@@ -84,6 +84,44 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public DialogService Dialogs { get; } = new();
     public ConsoleViewModel Console { get; } = new();
+
+    // ---- M519: the bottom dock (Content Browser | Console) --------------------------------------
+    //
+    // Merging the two panes into one tabbed dock means the console can be behind a tab when something
+    // goes wrong. The badge is what keeps that honest: it counts the warnings and errors that have
+    // arrived since the tab was last looked at, and clears when it is opened.
+
+    /// <summary>0 = Content Browser, 1 = Console.</summary>
+    [ObservableProperty] private int _bottomDockTab;
+
+    [ObservableProperty] private int _unseenConsoleProblems;
+    public bool HasUnseenConsoleProblems => UnseenConsoleProblems > 0;
+
+    partial void OnUnseenConsoleProblemsChanged(int value) => OnPropertyChanged(nameof(HasUnseenConsoleProblems));
+
+    partial void OnBottomDockTabChanged(int value)
+    {
+        if (value == ConsoleTabIndex) UnseenConsoleProblems = 0;
+    }
+
+    private const int ConsoleTabIndex = 1;
+
+    /// <summary>Called for every log line. Only counts while the console is NOT the visible tab —
+    /// a problem you are already looking at is not unseen.</summary>
+    private void OnConsoleEntry(ReyEngine.Core.Diagnostics.LogEntry entry)
+    {
+        if (BottomDockTab == ConsoleTabIndex) return;
+        if (entry.Level is ReyEngine.Core.Diagnostics.LogLevel.Warning
+            or ReyEngine.Core.Diagnostics.LogLevel.Error)
+            UnseenConsoleProblems++;
+    }
+
+    /// <summary>Bring the console to the front — used by anything that wants the user to read it.</summary>
+    [RelayCommand]
+    private void ShowConsole() => BottomDockTab = ConsoleTabIndex;
+
+    [RelayCommand]
+    private void ShowContentBrowser() => BottomDockTab = 0;
     public InspectorViewModel Inspector { get; } = new();
     public MeshInspectorViewModel MeshInspector { get; } = new();
     public MapGeoInspectorViewModel MapGeoInspector { get; } = new();
@@ -5304,6 +5342,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public MainWindowViewModel()
     {
         _log.AddSink(Console);
+        Console.EntryWritten += OnConsoleEntry;   // M519: badge the Console tab while it is behind
         // M367: deferred, not eager - LoadLocal reads and parses ~3.6 MB, and a session that never opens a
         // bin should not pay for it at startup. Lazy is thread-safe, which matters because the first
         // ResolveBinName usually arrives from a background parse.
@@ -14668,7 +14707,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (PromptOwner is not null) win.Show(PromptOwner); else win.Show();
         _log.Info("Shader", "DX11 Shader Preview opened (experimental).");
     }
-    [RelayCommand] private void ClearConsole() => Console.Clear();
+    [RelayCommand] private void ClearConsole() { Console.Clear(); UnseenConsoleProblems = 0; }
 
     [RelayCommand]
     private void Exit() =>
