@@ -1598,6 +1598,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return template?.CommonSetup;
     }
 
+    /// <summary>M516: after a Workshop import, put the new material on the mesh that is selected. The
+    /// import already puts it in the bin; without this the user has to go and find it in a picker that,
+    /// until M516, did not even list it.</summary>
+    private void AssignToSelectedAddedMesh(string materialName, string source)
+    {
+        if (SelectedAddedMesh is not { } mesh || materialName.Length == 0) return;
+        mesh.Material = materialName;
+        InvalidateMapMaterialNames();
+        PublishAddedMeshPreview();
+        NotifyMaterialsChanged();
+        _log.Success("AddMesh", $"'{mesh.Name}' now uses '{materialName}' (from {source}).");
+    }
+
     private async Task<string> ImportWorkshopMaterialAsync(WorkshopMaterialTemplate template, string newName)
     {
         if (_currentMapEntry is not { } mapEntry || _currentMap is null)
@@ -1621,9 +1634,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!await SaveMapBinBytesAsync(binEntry, imported))
             throw new InvalidOperationException("The edited materials bin could not be saved.");
 
+        // M516: remembered across the reload below, which clears the selection.
+        var meshToAssign = SelectedAddedMesh;
+
         FinishWorkshopMutation();
         await LoadMapGeoAsync(mapEntry);
         _log.Success("Workshop", $"Added material '{newName}' from {template.Shader} with {staged.Written} asset(s).");
+
+        // Put it on the mesh that was selected when the import started. Only if that mesh is still staged -
+        // a reload can drop it, and assigning to something no longer in the scene would be a lie.
+        if (meshToAssign is not null && MapContent.AddedMeshes.Contains(meshToAssign))
+        {
+            SelectedAddedMesh = meshToAssign;
+            AssignToSelectedAddedMesh(newName, "the Workshop");
+            return $"Added '{newName}' and put it on '{meshToAssign.Name}'. {staged.Written} texture asset(s) copied.";
+        }
         return $"Added '{newName}' to the current map. {staged.Written} texture asset(s) copied.";
     }
 
@@ -2076,10 +2101,59 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return (opaque ?? map.Groups.First(g => g.Material.Length > 0)).Material;
     }
 
-    /// <summary>All map material names — for the inspector's material picker on an added mesh.</summary>
-    public IReadOnlyList<string> MapMaterialNames =>
-        _currentMap?.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().OrderBy(m => m).ToList()
-        ?? (IReadOnlyList<string>)System.Array.Empty<string>();
+    private List<string>? _mapMaterialNames;
+
+    /// <summary>
+    /// Every material this map can use — for the inspector's picker on an added mesh, and for the Add Mesh
+    /// window's "use an existing material".
+    ///
+    /// <para>M516: read from the materials.bin, which is the thing that DEFINES materials. It used to be
+    /// built from the mapgeo's groups, i.e. from the materials existing geometry already REFERENCES — so a
+    /// material you had just created (Add Mesh, the Workshop, an import) was in the bin, used by nothing,
+    /// and therefore absent from the only list you could pick from. The mesh kept a name the picker could
+    /// not offer and the inspector could not show, which is what "I cannot apply any material to this
+    /// mesh" looked like.</para>
+    ///
+    /// <para>The group materials are unioned in on purpose: a name the geometry uses and the bin has lost
+    /// stays visible, because hiding it would hide the problem too.</para>
+    /// </summary>
+    public IReadOnlyList<string> MapMaterialNames
+    {
+        get
+        {
+            if (_mapMaterialNames is not null) return _mapMaterialNames;
+
+            var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (_currentMapEntry is { } entry && TryResolveMaterialsBin(entry.Path, out var binEntry))
+                try
+                {
+                    foreach (var m in Formats.Materials.MaterialDocument
+                                 .Parse(ReadAsset(binEntry.PathHash), ResolveBinName).Materials)
+                        if (m.Name.Length > 0) names.Add(m.Name);
+                }
+                catch { /* unreadable bin - the group names below are still worth offering */ }
+
+            if (_currentMap is { } map)
+                foreach (var g in map.Groups)
+                    if (g.Material.Length > 0) names.Add(g.Material);
+
+            return _mapMaterialNames = names.ToList();
+        }
+    }
+
+    /// <summary>Re-read the material list. Cheap to call: the parse only happens on the next read.</summary>
+    private void InvalidateMapMaterialNames()
+    {
+        _mapMaterialNames = null;
+        OnPropertyChanged(nameof(MapMaterialNames));
+        OnPropertyChanged(nameof(AddedMeshMaterialMissing));
+    }
+
+    /// <summary>M516: the selected added mesh names a material this map does not have. Silent until now —
+    /// the mesh drew with a fallback and the inspector showed an empty list.</summary>
+    public bool AddedMeshMaterialMissing =>
+        SelectedAddedMesh is { Material.Length: > 0 } mesh
+        && !MapMaterialNames.Contains(mesh.Material, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Publish the added meshes as a preview overlay (combined with the prop overlay).</summary>
     private void PublishAddedMeshPreview()
@@ -5100,7 +5174,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M501: raise after anything that changes the open map's materials, so both viewports and the
     /// inspector see the same state without a reload.</summary>
-    public void NotifyMaterialsChanged() => MaterialsRevision++;
+    public void NotifyMaterialsChanged()
+    {
+        MaterialsRevision++;
+        InvalidateMapMaterialNames();   // M516: a new material must show up in the pickers
+    }
 
     /// <summary>
     /// <para>M269: the current selection as INDEX RANGES, for the D3D11 overlay.</para>
@@ -9717,6 +9795,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MapContent.SetBucketGrids(map.BucketGrids);   // M55: culling grid showcase
                 HasBucketGrids = map.BucketGrids.Count > 0;   // M77
                 RebuildBucketGridLines();
+                InvalidateMapMaterialNames();   // M516: a different map, a different materials.bin
                 MapContent.ShowMap(entry.DisplayName, map.Groups
                     .Select((g, i) => new MapPieceViewModel { Name = string.IsNullOrEmpty(g.Material) ? $"Mesh {i}" : g.Material, Info = $"{g.IndexCount / 3:n0} tris" })
                     .ToList());

@@ -320,7 +320,15 @@
         <TextBlock Text="Material" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <ComboBox ItemsSource="{Binding MapMaterialNames}" SelectedItem="{Binding SelectedAddedMesh.Material}"
                   HorizontalAlignment="Stretch" FontSize="10"
-                  ToolTip.Tip="Which of the map's existing materials this mesh uses. It must exist in the materials.bin." />
+                  ToolTip.Tip="Every material this map's materials.bin defines, plus any the geometry already names. Pick one to put it on this mesh." />
+        <!-- M516: the mesh names a material the map does not have. Until now this was silent: the mesh
+             drew with a fallback and the picker could not even offer the name it was carrying. -->
+        <TextBlock IsVisible="{Binding AddedMeshMaterialMissing}" FontSize="9" TextWrapping="Wrap"
+                   Foreground="#FFE05252"
+                   Text="This mesh names a material the map does not have — it will draw untextured. Pick one above, or create it in the Materials tab." />
+        <TextBlock Text="{Binding SelectedAddedMesh.Material}" FontSize="9" TextWrapping="Wrap"
+                   IsVisible="{Binding AddedMeshMaterialMissing}"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
         <TextBlock Text="Move / rotate / scale it with the viewport gizmo (Move·Rotate·Scale tools)." FontSize="9"
                    Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
         <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
