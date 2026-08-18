@@ -372,6 +372,47 @@ is still bound by the M46 string-scan heuristic — runs of five-token strings a
 positionally — while section 12 holds 23,391 five-number entries that are keyed like everything else.
 Binding colour by key is the single biggest fidelity win left.
 
+## The colour curve, solved algebraically (M525)
+
+Colour was the last field still assigned by heuristic, and the largest remaining disagreement with
+Riot: 456 differed against 1,036 agreed. The field name was not in the text twin — FireTorch tints with
+a colour RAMP TEXTURE rather than inline keys — and no amount of guessing found it.
+
+**sdbm can be attacked instead of guessed.** With `key = sdbm(F, base)` and
+`sdbm(F, base) = base * 65599^n + sdbm(F)`, two emitters sharing a field give
+
+```
+k1 - k2 = (base1 - base2) * 65599^n     (mod 2^32)
+```
+
+which solves the field's **length** without knowing the field at all: invert `(base1 - base2)` and test
+`65599^n` for n = 1..25. Over 600 files that returns **n = 9**, with the recovered `sdbm(F)` values
+falling into runs differing by 1 — the signature of a numbered suffix. Sweeping every 9-character name
+of the shape `*p-` / `*e-` + five letters + a digit against the solved hash leaves exactly one that
+means anything:
+
+| | |
+|---|---|
+| field | `*p-xrgba{n}`, value `time r g b a` |
+| multiplier | `*p-xrgba`, a vec4 |
+| `sdbm("*p-xrgba1")` | `0x2C73C4AC` |
+| resolves | 16,147 of the corpus's 23,559 five-number keys (68.5%) |
+
+It is parallel to `*p-xscale{n}` / `*p-xscale`, which is what makes it credible rather than merely
+arithmetically valid. A five-component value has no fixed-width section — the widths run 1, 2, 3, 4, 8,
+12, 16 — so a colour key is always stored as text.
+
+The multiplier folds into the curve the same way `*p-xscale` folds into `scale0`, and that was measured
+rather than assumed by running the harness both ways:
+
+| | Color differed |
+|---|---|
+| multiplier ignored | 135 |
+| multiplier folded in | **66** |
+
+Parity over the paired systems: **Color 456 → 66 differed**, and overall agreement
+**93.9% → 97.9%** across 10,720 comparisons.
+
 ## What this sets up
 
 1. ~~Probability tables → `VfxAnimatedFloatVariableData.probabilityTables`~~ — done, M521.

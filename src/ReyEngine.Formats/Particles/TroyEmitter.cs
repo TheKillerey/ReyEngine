@@ -81,7 +81,12 @@ public sealed record TroyEmitter(
     /// agrees at <c>1.75</c>. Left as a separate value here because the file stores it separately;
     /// the converter is what folds it in, because folding it in is Riot's rule and not the
     /// format's.</para></summary>
-    System.Numerics.Vector3? ScaleMultiplier = null)
+    System.Numerics.Vector3? ScaleMultiplier = null,
+    /// <summary>M525: colour over life, read BY KEY from <c>*p-xrgba{n}</c> - so it belongs to this
+    /// emitter by construction rather than by the positional guess the converter used to make.</summary>
+    IReadOnlyList<(float Time, System.Numerics.Vector4 Color)>? ColorOverLife = null,
+    /// <summary>M525: <c>*p-xrgba</c>, the vec4 multiplier for <see cref="ColorOverLife"/>.</summary>
+    System.Numerics.Vector4? ColorMultiplier = null)
 {
     /// <summary>An <c>*e-life</c> of -1 means the emitter runs forever.
     /// Torches, auras and buff loops all use it.</summary>

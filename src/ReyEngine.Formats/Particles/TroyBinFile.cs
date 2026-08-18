@@ -378,6 +378,32 @@ public sealed class TroyBinFile
             return keys;
         }
 
+        // M525: colour over life, by key. Five components (time r g b a) have no fixed-width section,
+        // so the value is always text. Both authored scales occur, exactly as in the old string scan:
+        // a key whose colour components exceed 1 is 0..255 and is divided down. Time is never rescaled.
+        IReadOnlyList<(float, Vector4)>? ColorCurve(string emitter)
+        {
+            List<(float, Vector4)>? keys = null;
+            for (int i = 1; i <= 16; i++)
+            {
+                if (!sections.TryGetStringOffset(TroyHash.FieldKey(emitter, TroyFields.ColorKey(i)), out int o))
+                    break;
+                if (StringAt(o) is not { } text) break;
+                var parts = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 5) break;
+                var f = new float[5];
+                bool ok = true;
+                for (int c = 0; c < 5 && ok; c++)
+                    ok = float.TryParse(parts[c], NumberStyles.Float, CultureInfo.InvariantCulture, out f[c]);
+                if (!ok) break;
+                (keys ??= new List<(float, Vector4)>()).Add((f[0], new Vector4(f[1], f[2], f[3], f[4])));
+            }
+            if (keys is null) return null;
+            if (keys.Any(k => k.Item2.X > 1f || k.Item2.Y > 1f || k.Item2.Z > 1f || k.Item2.W > 1f))
+                for (int i = 0; i < keys.Count; i++) keys[i] = (keys[i].Item1, keys[i].Item2 / 255f);
+            return keys;
+        }
+
         var emitters = new List<TroyEmitter>();
         var groupParts = new List<TroyGroupPart>();
         for (int i = 1; i <= 64; i++)
@@ -421,7 +447,10 @@ public sealed class TroyBinFile
                 Spread(name, TroyFields.EmitterRate),
                 Spread(name, TroyFields.ParticleLife),
                 ScaleCurve(name),
-                Vec(name, TroyFields.XScale)));
+                Vec(name, TroyFields.XScale),
+                ColorCurve(name),
+                sections.TryGetVector4(TroyHash.FieldKey(name, TroyFields.ColorOverLife), Resolve, out var cm)
+                    ? cm : null));
         }
         Emitters = emitters;
         ForceFields = forceFields;

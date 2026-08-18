@@ -281,7 +281,18 @@ public static class TroyBinConverter
                 props.Add(new BinTreeStruct(H("SpawnShape"), H("VfxShapeLegacy"), shape));
             }
 
-            var curve = CurveFor(troy.ColorCurves, i, troy.Emitters.Count);
+            // M525: the colour curve, read by KEY from *p-xrgba{n}. The old route was the string-scan
+            // heuristic - runs of five-token strings assigned to emitters POSITIONALLY - which is what
+            // made Color the largest remaining disagreement with Riot: 456 differed against 1,036
+            // agreed, with the first key's time landing on 0.2 or 0.5 where Riot always has 0. Bound by
+            // key, an emitter's curve belongs to it by construction.
+            //
+            // The multiplier is folded in the way *p-xscale is folded into scale0, which is the same
+            // shape of rule and was measured there.
+            var keyed = e.ColorOverLife;
+            var curve = keyed is { Count: > 0 }
+                ? keyed.Select(k => (k.Time, Color: k.Color * (e.ColorMultiplier ?? Vector4.One))).ToList()
+                : CurveFor(troy.ColorCurves, i, troy.Emitters.Count);
             if (curve.Count >= 2)
                 props.Add(new BinTreeEmbedded(H("Color"), H("ValueColor"), new BinTreeProperty[]
                 {

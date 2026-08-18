@@ -462,6 +462,21 @@ public static class TroyFields
     /// flag.</summary>
     public const string XScale = "*p-xscale";
     public static string XScaleKey(int n) => XScale + N(n);
+    /// <summary>
+    /// M525: colour over life. <c>*p-xrgba{n}</c> is a key of five numbers - <c>time r g b a</c> - and
+    /// <c>*p-xrgba</c> is the vec4 multiplier, exactly parallel to the xscale pair.
+    ///
+    /// <para>The name was not guessed. sdbm is algebraically invertible, and two emitters sharing a
+    /// field satisfy <c>k1 - k2 = (base1 - base2) * 65599^n</c>, which solves the field's LENGTH without
+    /// knowing the field: 9, with the tail sums falling into runs that differ by 1, the signature of a
+    /// numbered suffix. Sweeping every 9-character name of that shape against the solved hash leaves
+    /// exactly one that means anything. It resolves 16,147 of the corpus's 23,559 five-number keys.</para>
+    ///
+    /// <para>A five-component value has no fixed-width section - the widths run 1, 2, 3, 4, 8, 12, 16 -
+    /// so a colour key is always stored as text.</para>
+    /// </summary>
+    public const string ColorOverLife = "*p-xrgba";
+    public static string ColorKey(int n) => ColorOverLife + N(n);
     /// <summary>Render-order bucket. -1 puts the emitter behind, 1 in front.</summary>
     public const string Pass = "*pass";
     public const string RenderMode = "*rendermode";
