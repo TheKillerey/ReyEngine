@@ -177,6 +177,17 @@ public static class TroyBinConverter
                 : new Vector3(DefaultScale, DefaultScale, DefaultScale);
             props.Add(ValueVector3("birthScale0", scale, e.ScaleSpread));
 
+            // M522: the force fields this emitter pulls in. Look each reference up by name - the field
+            // sections never appear in the group list, so this is the only route to them.
+            if (e.FieldReferences is { Count: > 0 } refs)
+            {
+                var fields = refs
+                    .Select(n => troy.ForceFields.FirstOrDefault(f =>
+                        string.Equals(f.Name, n, StringComparison.OrdinalIgnoreCase)))
+                    .Where(f => f is not null).Select(f => f!).ToList();
+                if (FieldCollection(fields) is { } collection) props.Add(collection);
+            }
+
             // M521: the scale-over-life curve, which is a separate property from the birth size.
             if (e.ScaleOverLife is { Count: > 0 } curveKeys)
                 props.Add(ScaleOverLife(curveKeys, e.ScaleMultiplier));
@@ -561,6 +572,106 @@ public static class TroyBinConverter
                         new BinTreeProperty[] { new BinTreeF32(0, value) }),
                 }));
         return new BinTreeEmbedded(H(field), H("ValueFloat"), inner);
+    }
+
+    /// <summary>
+    /// The emitter's force fields as a <c>VfxFieldCollectionDefinitionData</c> (M522).
+    ///
+    /// <para>Every shape and every mapping below is read off Riot's own conversion rather than guessed:
+    /// the collection is a POINTER, each list a container of EMBEDDED elements, and the per-kind
+    /// properties are what a census of 5,138 shipped collections turns up. Values agree with Riot on
+    /// the paired systems for acceleration, isLocalSpace, radius, strength, direction, velocityDelta,
+    /// axisFraction and position.</para>
+    ///
+    /// <para>Two rules are Riot's rather than the format's, and both are measured. <c>frequency</c> is
+    /// the RECIPROCAL of <c>f-period</c> - period 0.5 becomes frequency 2, 0.25 becomes 4, 0.4 becomes
+    /// 2.5, exactly, every time. And a <c>Position</c> of zero is omitted rather than written, which is
+    /// why only 222 of 848 shipped drag fields carry one.</para>
+    /// </summary>
+    private static BinTreeProperty? FieldCollection(IReadOnlyList<TroyForceField> fields)
+    {
+        if (fields.Count == 0) return null;
+
+        var lists = new List<BinTreeProperty>();
+        foreach (var (kind, listName) in new[]
+        {
+            (TroyFieldKind.Acceleration, "fieldAccelerationDefinitions"),
+            (TroyFieldKind.Attraction, "fieldAttractionDefinitions"),
+            (TroyFieldKind.Drag, "fieldDragDefinitions"),
+            (TroyFieldKind.Orbital, "fieldOrbitalDefinitions"),
+            (TroyFieldKind.Noise, "fieldNoiseDefinitions"),
+        })
+        {
+            var of = fields.Where(f => f.Kind == kind).ToList();
+            if (of.Count == 0) continue;   // an empty container crashes the client at load (M414)
+            lists.Add(new BinTreeContainer(H(listName), BinPropertyType.Embedded,
+                of.Select(f => FieldDefinition(kind, f)).ToArray()));
+        }
+
+        return lists.Count == 0
+            ? null
+            : new BinTreeStruct(H("fieldCollectionDefinition"), H("VfxFieldCollectionDefinitionData"), lists);
+    }
+
+    private static BinTreeProperty FieldDefinition(TroyFieldKind kind, TroyForceField f)
+    {
+        var props = new List<BinTreeProperty>();
+
+        void Scalar(string name, float? value)
+        {
+            if (value is { } v) props.Add(ValueFloat(name, v));
+        }
+        void Vector(string name, Vector3? value)
+        {
+            // Riot omits a zero Position rather than writing it
+            if (value is { } v && v != Vector3.Zero) props.Add(ValueVector3(name, v, null));
+        }
+        void LocalSpace()
+        {
+            if (f.LocalSpace) props.Add(new BinTreeBool(H("isLocalSpace"), true));
+        }
+
+        switch (kind)
+        {
+            case TroyFieldKind.Acceleration:
+                Vector("acceleration", f.Acceleration);
+                LocalSpace();
+                break;
+            case TroyFieldKind.Attraction:
+                // f-accel is a SCALAR here - the pull rate toward Position - and a vec3 on an
+                // acceleration field. The kind comes from the reference, which is what makes the two
+                // readable apart at all.
+                Scalar("acceleration", f.Strength);
+                Scalar("radius", f.Radius);
+                Vector("Position", f.Position);
+                break;
+            case TroyFieldKind.Drag:
+                Scalar("strength", f.Drag);
+                Scalar("radius", f.Radius);
+                Vector("Position", f.Position);
+                break;
+            case TroyFieldKind.Orbital:
+                Vector("direction", f.Direction);
+                LocalSpace();
+                break;
+            case TroyFieldKind.Noise:
+                Scalar("radius", f.Radius);
+                Scalar("velocityDelta", f.VelocityDelta);
+                if (f.Period is { } period && period > 0f) Scalar("frequency", 1f / period);
+                // axisFraction is a PLAIN vec3, not a ValueVector3 wrapper - 3,612 of 3,635 shipped
+                // noise fields carry it that way.
+                //
+                // (1,1,1) when the legacy file is silent. That is Riot's rule for the absent case, not
+                // an invention: measured 5 of 5 on the paired systems, and unlike particleLinger's 10
+                // - which is a behavioural value and is therefore NOT copied - (1,1,1) is the identity
+                // for a per-axis weighting, so it cannot change an effect that a correct engine default
+                // would have rendered anyway.
+                props.Add(new BinTreeVector3(H("axisFraction"), f.AxisFraction ?? Vector3.One));
+                Vector("Position", f.Position);
+                break;
+        }
+
+        return new BinTreeEmbedded(0, H("VfxField" + kind + "DefinitionData"), props);
     }
 
     /// <summary>One probability table. An empty key list produces an EMPTY struct rather than empty

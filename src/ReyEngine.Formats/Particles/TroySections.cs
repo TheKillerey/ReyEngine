@@ -478,6 +478,10 @@ public static class TroyFields
     public const string FieldPosition = "*f-pos";
     public const string FieldRadius = "*f-radius";
     public const string FieldVelocityDelta = "*f-veldelta";
+    /// <summary>M522: the noise field's per-axis weighting, e.g. (2,1,0) to swirl mostly on X and not
+    /// at all on Z. Riot's converter writes it to <c>axisFraction</c> unchanged; measured exactly on
+    /// PolenNoise (2,1,0), ManaSnowNoise (1,1,0) and NoiseField1 (0,1,0).</summary>
+    public const string FieldAxisFraction = "*f-axisfrac";
 
     /// <summary>The spelling used inside a <c>field-*-{n}</c> key. Deliberately not
     /// <c>kind.ToString()</c>: the legacy names are abbreviated (<c>orbit</c>, not <c>orbital</c>) and

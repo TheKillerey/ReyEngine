@@ -204,6 +204,10 @@ reading from there to the next NUL gives the suffix the writer meant. See the M5
   named field. Samples like `(255, 255, 255, 50)` and `(-1, -1, -1, -1)` look like RGBA with -1 as
   "unset", which would make it a colour field whose name is not yet known.
 - **The remaining ~41% of keys**, whose field names are simply not in the dictionary yet.
+- **Attraction toward another EMITTER.** `field-attract-1="Butterfly_Anim2"` names an emitter section
+  rather than a field section, so there is no `f-accel` on it to read, yet Riot writes an
+  `acceleration` (259 and 61 in the two observed cases). Where that number comes from is unresolved,
+  so the property is left off for those fields rather than guessed.
 
 ## Converter parity (M521)
 
@@ -242,12 +246,55 @@ Three findings came out of getting there:
   (28 of 30), and a legacy 0 corresponds to Riot writing nothing (218 of 219) — so the field is
   converted when present and never invented when absent.
 
+## Force-field conversion (M522)
+
+A census of **5,138** shipped `VfxFieldCollectionDefinitionData` fixes every shape: the collection is a
+POINTER on the emitter, each list a container of EMBEDDED elements, and the per-kind properties are:
+
+| kind | modern property | wire | legacy source |
+|---|---|---|---|
+| Acceleration | `acceleration` | ValueVector3 | `f-accel` **as a vec3** |
+| | `isLocalSpace` | bool | `f-localspace` |
+| Attraction | `acceleration` | ValueFloat | `f-accel` **as a scalar** |
+| | `radius` | ValueFloat | `f-radius` |
+| | `Position` | ValueVector3 | `f-pos` |
+| Drag | `strength` | ValueFloat | `f-drag` |
+| | `radius` | ValueFloat | `f-radius` |
+| | `Position` | ValueVector3 | `f-pos` |
+| Orbital | `direction` | ValueVector3 | `f-direction` |
+| | `isLocalSpace` | bool | `f-localspace` |
+| Noise | `radius` | ValueFloat | `f-radius` |
+| | `velocityDelta` | ValueFloat | `f-veldelta` |
+| | `frequency` | ValueFloat | **1 / `f-period`** |
+| | `axisFraction` | **plain vec3** | `f-axisfrac` |
+| | `Position` | ValueVector3 | `f-pos` |
+
+That `f-accel` is a vec3 on one kind and a scalar on another is independent confirmation of the
+kind-comes-from-the-reference rule: the shipped classes type it both ways.
+
+Three of Riot's rules, all measured:
+
+- **`frequency` is the reciprocal of `f-period`.** Period 0.5 → frequency 2, 0.25 → 4, 0.4 → 2.5,
+  exactly, every time. Copying the period across would make every noise field run at the wrong rate
+  without looking broken.
+- **A zero `Position` is omitted**, which is why only 222 of 848 shipped drag fields carry one.
+- **A silent `f-axisfrac` becomes `(1,1,1)`** — 5 of 5 on the paired systems. This one *is* copied,
+  unlike `particleLinger`'s 10, because it is the identity for a per-axis weighting and so cannot change
+  how an effect renders; the 10 is a behavioural value and copying it would invent motion.
+
+Converter agreement with Riot over the paired emitters that have fields: list length per kind 22/22 on
+all five kinds, and every value at 100% — acceleration, isLocalSpace, radius, strength, direction,
+frequency, velocityDelta, axisFraction and Position.
+
+`*f-axisfrac` was recovered by guessing candidate names against the sdbm key on three noise sections
+whose Riot-side value was known, and confirming all three: PolenNoise (2,1,0), ManaSnowNoise (1,1,0),
+NoiseField1 (0,1,0).
+
 ## What this sets up
 
 1. ~~Probability tables → `VfxAnimatedFloatVariableData.probabilityTables`~~ — done, M521.
 2. ~~`p-xscale1..4` → the scale-over-life curve~~ — done, M521; section 10 confirmed as 4 × u8 tenths
    against Riot's own `scale0`.
-3. Force fields → `VfxFieldCollectionDefinitionData`, one class per kind. Read since M520, not yet
-   written by the converter.
+3. ~~Force fields → `VfxFieldCollectionDefinitionData`~~ — done, M522.
 4. Widening the parity harness beyond the eight fields it covers today — colour curves, texture paths,
    flipbook state, the spawn shape.

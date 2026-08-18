@@ -340,7 +340,8 @@ public sealed class TroyBinFile
                 Drag: Num(sectionName, TroyFields.FieldDrag),
                 Period: Num(sectionName, TroyFields.FieldPeriod),
                 VelocityDelta: Num(sectionName, TroyFields.FieldVelocityDelta),
-                LocalSpace: Num(sectionName, TroyFields.FieldLocalSpace) is > 0f));
+                LocalSpace: Num(sectionName, TroyFields.FieldLocalSpace) is > 0f,
+                AxisFraction: Vec(sectionName, TroyFields.FieldAxisFraction)));
         }
 
         IReadOnlyList<string> FieldRefs(string emitter)

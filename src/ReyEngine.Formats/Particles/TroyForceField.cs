@@ -44,6 +44,7 @@ public enum TroyFieldKind
 /// <param name="Period"><c>f-period</c> - noise resample interval in seconds.</param>
 /// <param name="VelocityDelta"><c>f-veldelta</c> - noise velocity kick.</param>
 /// <param name="LocalSpace"><c>f-localspace</c>.</param>
+/// <param name="AxisFraction"><c>f-axisfrac</c>, noise only.</param>
 public sealed record TroyForceField(
     string Name,
     TroyFieldKind Kind,
@@ -55,7 +56,10 @@ public sealed record TroyForceField(
     float? Drag = null,
     float? Period = null,
     float? VelocityDelta = null,
-    bool LocalSpace = false);
+    bool LocalSpace = false,
+    /// <summary>M522: <c>f-axisfrac</c> - the noise field's per-axis weighting. Riot copies it into
+    /// <c>axisFraction</c> unchanged.</summary>
+    Vector3? AxisFraction = null);
 
 /// <summary>One entry of the <c>[System]</c> group list: an emitter, its quality tier and its
 /// importance. The tier is what the game uses to drop emitters on low settings, so a converter that
