@@ -205,6 +205,52 @@ public sealed class TroySections
     }
 
     /// <summary>The u16 string-block offset a string-valued entry (section 12) points at.</summary>
+    /// <summary>
+    /// A four-component field (M521). One arity up again: section 11 is 4xf32 raw, section 10 is
+    /// 4xu8 TENTHS, and the string block carries it as four tokens.
+    ///
+    /// <para><b>Section 10 is tenths, measured over the corpus.</b> Read as f32 its bytes are absurd
+    /// denormals - <c>0a0a0a0a</c> is 6.6e-33 - while as tenths the same bytes are
+    /// <c>(1.0, 1.0, 1.0, 1.0)</c>, <c>0a020202</c> is <c>(1.0, 0.2, 0.2, 0.2)</c> and
+    /// <c>06090a0a</c> is <c>(0.6, 0.9, 1.0, 1.0)</c>. 88% of components land in [0,1], which is what a
+    /// (time, x, y, z) scale key should look like.</para>
+    ///
+    /// <para>Its dominant user is <c>*p-xscale{n}</c>, 9,985 of section 10's 21,796 entries.</para>
+    /// </summary>
+    public bool TryGetVector4(uint key, Func<int, string?>? resolveString,
+        out System.Numerics.Vector4 value)
+    {
+        value = default;
+        if (!ByKey.TryGetValue(key, out var e)) return false;
+        switch (e.Section)
+        {
+            case 11:
+                value = new System.Numerics.Vector4(
+                    BitConverter.ToSingle(e.Raw, 0), BitConverter.ToSingle(e.Raw, 4),
+                    BitConverter.ToSingle(e.Raw, 8), BitConverter.ToSingle(e.Raw, 12));
+                return true;
+            case 10:
+                value = new System.Numerics.Vector4(
+                    e.Raw[0] / 10f, e.Raw[1] / 10f, e.Raw[2] / 10f, e.Raw[3] / 10f);
+                return true;
+            case 12 when resolveString is not null:
+            {
+                string? text = resolveString(e.Raw[0] | (e.Raw[1] << 8));
+                if (text is null) return false;
+                var parts = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 4) return false;
+                var c = System.Globalization.CultureInfo.InvariantCulture;
+                var n = System.Globalization.NumberStyles.Float;
+                if (!float.TryParse(parts[0], n, c, out float x) || !float.TryParse(parts[1], n, c, out float y)
+                    || !float.TryParse(parts[2], n, c, out float z) || !float.TryParse(parts[3], n, c, out float w))
+                    return false;
+                value = new System.Numerics.Vector4(x, y, z, w);
+                return true;
+            }
+            default: return false;
+        }
+    }
+
     public bool TryGetStringOffset(uint key, out int offset)
     {
         offset = 0;

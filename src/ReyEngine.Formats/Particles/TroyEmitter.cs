@@ -44,7 +44,8 @@ public sealed record TroyEmitter(
     IReadOnlyList<string>? FieldReferences = null,
     /// <summary>How long the emitter keeps emitting after being told to stop.</summary>
     float? EmitterLinger = null,
-    /// <summary>How long a particle hangs around past its lifetime.</summary>
+    /// <summary>How long a particle hangs around past its lifetime. Riot writes it as
+    /// <c>particleLinger: option[f32]</c>.</summary>
     float? ParticleLinger = null,
     /// <summary>M520: <c>e-active</c>, RAW and uninterpreted.
     ///
@@ -55,7 +56,32 @@ public sealed record TroyEmitter(
     float? EmitterActive = null,
     /// <summary>Render-order bucket: -1 behind, 1 in front.</summary>
     int? Pass = null,
-    int? RenderMode = null)
+    int? RenderMode = null,
+    /// <summary>M521: <c>*e-rateP{n}</c>. Riot's own conversion writes it as the rate's
+    /// <c>probabilityTables[0]</c>, so an emitter that bursts (rate 10, table 0/0.98/1 -> 0/0/2) reads
+    /// as a steady trickle without it.</summary>
+    TroyProbability? RateSpread = null,
+    /// <summary>M521: <c>*p-lifeP{n}</c>. Without it every particle of an emitter dies at exactly the
+    /// same age, which is what makes a converted puff look like a shutter rather than a fade.</summary>
+    TroyProbability? LifetimeSpread = null,
+    /// <summary>
+    /// M521: scale over life, from <c>*p-xscale1..4</c>.
+    ///
+    /// <para>The one curve in this format that is NOT a P{n} probability table - the keys are numbered
+    /// directly and each is (time, scale). Riot converts it to <c>scale0</c>, a ValueVector3 carrying
+    /// only <c>dynamics.times</c>/<c>values</c> and no constant, which is the multiplier applied over
+    /// the particle's life.</para></summary>
+    IReadOnlyList<(float Time, System.Numerics.Vector3 Scale)>? ScaleOverLife = null,
+    /// <summary>
+    /// M521: <c>*p-xscale</c> - the MULTIPLIER for <see cref="ScaleOverLife"/>, not an enable flag.
+    ///
+    /// <para>It reads like a flag because the one file with a text twin has <c>p-xscale=1</c>. It is
+    /// not: SRU_Lane_Motes has <c>(20,20,20)</c> against curve keys of 0.2/1/0.2, and Riot's own
+    /// converted <c>scale0</c> for it holds 4/20/4 - exactly the product. SRU_Chaos_Shopkeeper_smoke
+    /// agrees at <c>1.75</c>. Left as a separate value here because the file stores it separately;
+    /// the converter is what folds it in, because folding it in is Riot's rule and not the
+    /// format's.</para></summary>
+    System.Numerics.Vector3? ScaleMultiplier = null)
 {
     /// <summary>An <c>*e-life</c> of -1 means the emitter runs forever.
     /// Torches, auras and buff loops all use it.</summary>

@@ -77,6 +77,28 @@ public sealed class TroyBinFile
     public int Version { get; }
     public IReadOnlyList<TroyString> Strings { get; }
 
+    private byte[] _block = Array.Empty<byte>();
+
+    /// <summary>
+    /// The string at <paramref name="offset"/>, read to the next NUL (M521).
+    ///
+    /// <para><b>An offset need not land on a string START.</b> The writer deduplicates by pointing into
+    /// the middle of a string whenever the value it needs is a suffix of one already in the block:
+    /// SRU_DragonPit_WaterFall_01 stores <c>"0.000000 1.0 1.0 1.0"</c> at offset 389 and its
+    /// <c>*e-rate</c> points at 406, which is the trailing <c>"1.0"</c>. Resolving only against
+    /// recorded starts left 31,598 references across the corpus - 9% of the whole string section -
+    /// reading as absent, and absent means "use the default" to everything downstream. Riot's own
+    /// converted rate for that emitter is 1, matching the suffix exactly.</para>
+    /// </summary>
+    public string? StringAt(int offset)
+    {
+        if (offset < 0 || offset >= _block.Length) return null;
+        int end = Array.IndexOf(_block, (byte)0, offset);
+        if (end < 0) end = _block.Length;
+        string value = System.Text.Encoding.ASCII.GetString(_block, offset, end - offset).Trim();
+        return value.Length == 0 ? null : value;
+    }
+
     /// <summary>Size of the region whose field layout is unknown. Reported so callers can be honest
     /// about how much of the original effect did not survive the conversion.</summary>
     public int UndecodedBodyBytes { get; }
@@ -191,6 +213,7 @@ public sealed class TroyBinFile
         }
 
         var result = new TroyBinFile(version, strings, Math.Max(0, blockStart - 3));
+        result._block = data.AsSpan(blockStart, blockSize).ToArray();
         result.AssetPaths = ExtractAssets(strings);
         result.ColorCurves = ExtractColorCurves(strings);
         result.DecodeBody(data, blockStart);
@@ -238,16 +261,18 @@ public sealed class TroyBinFile
         if (!TroySections.TryParse(body, out var sections, out _) || sections is null) return;
         Sections = sections;
 
-        var offsets = Strings.ToDictionary(s => s.Offset, s => s.Value);
+        // M521: resolve positionally, not against recorded string starts - an offset is allowed to point
+        // into the middle of a string, and 9% of the corpus's references do.
+        string? Resolve(int offset) => StringAt(offset);
         string? SystemStr(string field) =>
             sections.TryGetStringOffset(TroyHash.SystemKey(field), out int so)
-            && offsets.TryGetValue(so, out var sv) ? sv : null;
+            ? StringAt(so) : null;
         string? Str(string emitter, string field) =>
             sections.TryGetStringOffset(TroyHash.FieldKey(emitter, field), out int o)
-            && offsets.TryGetValue(o, out var v) ? v : null;
+            ? StringAt(o) : null;
         float? Num(string emitter, string field) =>
             sections.TryGetScalar(TroyHash.FieldKey(emitter, field),
-                o => offsets.TryGetValue(o, out var s) ? s : null, out float v) ? v : null;
+                Resolve, out float v) ? v : null;
         // M426: probability tables. Keys are numbered suffixes on the field name - P1, P2, ... for a
         // uniform table and XP1, YP1, ZP1, ... per axis - each a (probability, multiplier) pair.
         IReadOnlyList<(float, float)> Table(string emitter, string field, string axis)
@@ -256,7 +281,7 @@ public sealed class TroyBinFile
             for (int i = 1; i <= 8; i++)
             {
                 uint k = TroyHash.FieldKey(emitter, field + axis + "P" + i.ToString(CultureInfo.InvariantCulture));
-                if (!sections.TryGetVector2(k, o => offsets.TryGetValue(o, out var s) ? s : null,
+                if (!sections.TryGetVector2(k, Resolve,
                         out float probability, out float multiplier))
                     break;
                 keys.Add((probability, multiplier));
@@ -273,7 +298,7 @@ public sealed class TroyBinFile
 
         System.Numerics.Vector2? Vec2(string emitter, string field) =>
             sections.TryGetVector2(TroyHash.FieldKey(emitter, field),
-                o => offsets.TryGetValue(o, out var s) ? s : null, out float a, out float b)
+                Resolve, out float a, out float b)
                 ? new System.Numerics.Vector2(a, b) : null;
 
         IReadOnlyList<TroyEmitRotation> Rotations(string emitter)
@@ -284,7 +309,7 @@ public sealed class TroyBinFile
                 string field = TroyFields.EmitRotation(n);
                 if (!sections.TryGetScalar(TroyHash.FieldKey(emitter, field), out float angle)) continue;
                 if (!sections.TryGetVector3(TroyHash.FieldKey(emitter, TroyFields.EmitRotationAxis(n)),
-                        o => offsets.TryGetValue(o, out var s) ? s : null, out var axis)
+                        Resolve, out var axis)
                     || axis == Vector3.Zero) continue;
                 list.Add(new TroyEmitRotation(axis, angle, Table(emitter, field, "")));
             }
@@ -293,7 +318,7 @@ public sealed class TroyBinFile
 
         System.Numerics.Vector3? Vec(string emitter, string field) =>
             sections.TryGetVector3(TroyHash.FieldKey(emitter, field),
-                o => offsets.TryGetValue(o, out var s) ? s : null, out var v) ? v : null;
+                Resolve, out var v) ? v : null;
 
         // ---- M520: force fields, discovered by following each emitter's field-{kind}-{n} reference.
         // The kind is the REFERENCE's, not the section's: f-accel is a vec3 on an acceleration field
@@ -332,12 +357,32 @@ public sealed class TroyBinFile
             return (IReadOnlyList<string>?)refs ?? Array.Empty<string>();
         }
 
+        // M521: *p-xscale1..4 - scale over life. The only curve here that is not a P{n} probability
+        // table: the keys are numbered directly. Each is (time, scale), and it comes in two arities -
+        // (time, uniform) in the 2-component sections and (time, x, y, z) in the 4-component ones.
+        IReadOnlyList<(float, Vector3)>? ScaleCurve(string emitter)
+        {
+            List<(float, Vector3)>? keys = null;
+            for (int i = 1; i <= 8; i++)
+            {
+                uint k = TroyHash.FieldKey(emitter, TroyFields.XScaleKey(i));
+                if (sections.TryGetVector4(k, Resolve,
+                        out var v4))
+                    (keys ??= new List<(float, Vector3)>()).Add((v4.X, new Vector3(v4.Y, v4.Z, v4.W)));
+                else if (sections.TryGetVector2(k, Resolve,
+                             out float time, out float scale))
+                    (keys ??= new List<(float, Vector3)>()).Add((time, new Vector3(scale, scale, scale)));
+                else break;
+            }
+            return keys;
+        }
+
         var emitters = new List<TroyEmitter>();
         var groupParts = new List<TroyGroupPart>();
         for (int i = 1; i <= 64; i++)
         {
             if (!sections.TryGetStringOffset(TroyHash.EmitterNameKey(i), out int nameOffset)) break;
-            if (!offsets.TryGetValue(nameOffset, out var name)) break;
+            if (StringAt(nameOffset) is not { } name) break;
             groupParts.Add(new TroyGroupPart(i, name,
                 SystemStr(TroyFields.GroupPartType(i)), SystemStr(TroyFields.GroupPartImportance(i))));
             emitters.Add(new TroyEmitter(
@@ -371,13 +416,17 @@ public sealed class TroyBinFile
                 Num(name, TroyFields.ParticleLinger),
                 Num(name, TroyFields.EmitterActive),
                 (int?)Num(name, TroyFields.Pass),
-                (int?)Num(name, TroyFields.RenderMode)));
+                (int?)Num(name, TroyFields.RenderMode),
+                Spread(name, TroyFields.EmitterRate),
+                Spread(name, TroyFields.ParticleLife),
+                ScaleCurve(name),
+                Vec(name, TroyFields.XScale)));
         }
         Emitters = emitters;
         ForceFields = forceFields;
         SystemInfo = new TroySystemInfo(groupParts,
             sections.TryGetScalar(TroyHash.SystemKey(TroyFields.SimulateEveryFrame),
-                o => offsets.TryGetValue(o, out var s) ? s : null, out float sim) && sim > 0f);
+                Resolve, out float sim) && sim > 0f);
     }
 
     private static TroyStringKind Classify(string value)

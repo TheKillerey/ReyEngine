@@ -162,7 +162,7 @@ It is the largest section, and 42% of every key in the corpus lands there. Its p
 | five numbers (colour keys) | 23,391 |
 | four numbers | 15,523 |
 | three numbers | 10,370 |
-| offset resolves to no string start | 31,598 |
+| offset points INTO a string, not at its start | 31,598 |
 
 `TryGetScalar` did not accept section 12, so every one of those 101,530 single numbers read as
 absent. `[Flame] e-rate=100` and `[FlameAttract] f-radius=200` are both in that group — verified
@@ -192,6 +192,9 @@ Treating *every* string in a file as a candidate section name reaches 65.7%, so 
 sit on sections reachable by some route not yet identified — most likely reference field names beyond
 the five kinds above. 404 files yield no sections at all through the GroupPart chain.
 
+Those 31,598 are not corruption: an offset is allowed to point into the middle of a string, and
+reading from there to the next NUL gives the suffix the writer meant. See the M521 section below.
+
 ## Open, and deliberately not guessed
 
 - **`e-active`** is not the on/off flag it looks like. Present on only 270 emitters, **never** 0, and
@@ -200,14 +203,51 @@ the five kinds above. 404 files yield no sections at all through the GroupPart c
 - **Section 11's other users.** 4 × f32 is certain, but only ~1,350 of its 6,086 entries belong to a
   named field. Samples like `(255, 255, 255, 50)` and `(-1, -1, -1, -1)` look like RGBA with -1 as
   "unset", which would make it a colour field whose name is not yet known.
-- **The 31,598 section-12 offsets** that do not land on a string start.
 - **The remaining ~41% of keys**, whose field names are simply not in the dictionary yet.
+
+## Converter parity (M521)
+
+Running our converter over every paired legacy file and diffing the result against Riot's shipped
+output, across the 199 paired systems and the 444 emitters matched by name:
+
+| field | compared | agree |
+|---|---|---|
+| `rate` probability table | 36 | **100%** |
+| `particleLifetime` probability table | 158 | **100%** |
+| `birthVelocity` tables (X, Y) | 85 | **100%** |
+| `birthScale0` table | 155 | **100%** |
+| `birthVelocity` constants | 176 | **100%** |
+| `birthScale0` constant | 285 | **100%** |
+| `particleLifetime` constant | 395 | 98.5% |
+| `rate` constant | 441 | 97.3% |
+| `scale0` curve (separate run, 1,720 emitters) | 1,720 | **99.9%** |
+
+The residue is not converter error. `runeTimeGlow`'s particle lifetime is 320 in the legacy file and
+598 in the shipped one — Riot re-tuned it in the decade between. The single `scale0` disagreement is
+0.9 against 0.99, which is the binary's own tenths quantisation.
+
+Three findings came out of getting there:
+
+- **`p-xscale` is a multiplier, not an enable flag.** It reads like a flag because the one file with a
+  text twin has `p-xscale=1`. SRU_Lane_Motes has `(20,20,20)` against curve keys of 0.2/1/0.2, and
+  Riot's `scale0` for it is 4/20/4. Applying it moved scale-curve agreement from 95.6% to 99.9%.
+- **A string offset need not land on a string START.** The writer deduplicates by pointing into the
+  middle of a string when the value it needs is a suffix of one already present:
+  `SRU_DragonPit_WaterFall_01` stores `"0.000000 1.0 1.0 1.0"` at offset 389 and its `*e-rate` points
+  at 406 — the trailing `"1.0"`, which is exactly Riot's converted rate. Resolving only against
+  recorded starts left 31,598 references reading as absent. Fixing it moved rate-constant agreement
+  from 87.5% to 97.3%.
+- **Riot applies defaults its own source does not carry.** `particleLinger` is 10 on 224 emitters whose
+  legacy file has no `p-linger` at all. Where the legacy file *does* carry one the mapping is exact
+  (28 of 30), and a legacy 0 corresponds to Riot writing nothing (218 of 219) — so the field is
+  converted when present and never invented when absent.
 
 ## What this sets up
 
-1. Probability tables → `VfxAnimatedFloatVariableData.probabilityTables` in Riot's shape.
-2. Force fields → `VfxFieldCollectionDefinitionData`, one class per kind.
-3. `p-xscale1..4` → the scale-over-life curve, once section 10/11's 4-tuple is confirmed against a
-   converted pair.
-4. A parity harness that converts all 201 paired legacy files and diffs the result against Riot's own
-   output, field by field — the only way to know the converter is right rather than plausible.
+1. ~~Probability tables → `VfxAnimatedFloatVariableData.probabilityTables`~~ — done, M521.
+2. ~~`p-xscale1..4` → the scale-over-life curve~~ — done, M521; section 10 confirmed as 4 × u8 tenths
+   against Riot's own `scale0`.
+3. Force fields → `VfxFieldCollectionDefinitionData`, one class per kind. Read since M520, not yet
+   written by the converter.
+4. Widening the parity harness beyond the eight fields it covers today — colour curves, texture paths,
+   flipbook state, the spawn shape.
