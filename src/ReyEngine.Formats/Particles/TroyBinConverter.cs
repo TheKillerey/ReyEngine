@@ -160,14 +160,27 @@ public static class TroyBinConverter
             var props = new List<BinTreeProperty>
             {
                 new BinTreeString(H("emitterName"), e.Name),
-                new BinTreeU8(H("blendMode"), 1),
                 ValueFloat("rate", e.Rate ?? DefaultRate, e.RateSpread),
                 ValueFloat("particleLifetime", e.ParticleLifetime ?? DefaultLifetime, e.LifetimeSpread),
             };
 
-            // -1 means "runs forever"; a positive value is a real emitter runtime
+            // M524: blendMode IS the legacy *rendermode, unchanged - 324 of the 325 paired emitters map
+            // identity, the lone exception being one emitter Riot re-authored. Mode 0 is the default and
+            // Riot omits it rather than writing a zero, so this does too. The old code hardcoded 1, which
+            // was right for 168 emitters and wrong for the 157 that use additive (4) or another mode.
+            if (e.RenderMode is { } mode && mode > 0 && mode <= 255)
+                props.Add(new BinTreeU8(H("blendMode"), (byte)mode));
+
+            // M524: the render-order bucket, which the reader has had since M520 and nothing wrote.
+            // Riot ships it as I16 - 188 of the paired emitters carry one.
+            if (e.Pass is { } pass) props.Add(new BinTreeI16(H("pass"), (short)pass));
+
+            // -1 means "runs forever"; a positive value is a real emitter runtime.
+            // M524: an OPTION, not a ValueFloat. Riot ships it as option[f32] in 136 of 136 shipped
+            // emitters that have one - a ValueFloat in that slot is a different wire type, so the client
+            // reads the property as malformed and the emitter runs forever regardless.
             if (e.EmitterLifetime is { } life && life > 0f)
-                props.Add(ValueFloat("lifetime", life));
+                props.Add(new BinTreeOptional(H("lifetime"), new BinTreeF32(0, life)));
 
             // Legacy and modern both work in League world units, so the decoded scale is used AS IS.
             // The old path multiplied by 50 because it had no real value to work from; doing that to a

@@ -325,12 +325,60 @@ Measured over the paired systems, comparing which axes carry a table at all:
 
 The 17 disagreements were all `riot[K,-,-]` against `ours[K,K,K]` — every one the uniform case.
 
+## The parity harness (M524)
+
+`TroyConversionParity` walks the WHOLE property tree of a converted system against Riot's, rather than
+checking an enumerated list of fields. That is the point: the enumerated version compared
+`probabilityTables[0]` and never the other two, and missed a real defect for two milestones. A walk can
+be wrong about what it finds — which shows in the report — but not about what it forgot to look at.
+
+Emitters are matched by NAME, with duplicates paired one-to-one (DestroyedBuilding_idle names two of
+its group parts `smoke`). Asset paths compare by FILE NAME, because the converter deliberately rehomes
+legacy art under `ASSETS/Legacy` while Riot's lives elsewhere — by full path that is 226 differences
+that are all policy; by filename, 223 of 228 agree, which is the number that says the emitter points at
+the right art.
+
+Over all 199 paired systems and 442 emitters: **10,051 property comparisons, 93.9% agreement.**
+
+### What it caught immediately
+
+| | |
+|---|---|
+| `lifetime` was the wrong WIRE TYPE | Riot ships `option[f32]` in 136 of 136; the converter wrote a `ValueFloat`, which the client reads as malformed. |
+| `blendMode` was hardcoded to 1 | It *is* the legacy `*rendermode`, identity, in 324 of 325 paired emitters — and mode 0 is omitted rather than written. Right for 168 emitters, wrong for 157. |
+| `pass` was read and never written | M520 decoded it; nothing emitted it. 188 emitters. |
+
+Overall agreement went **86.2% → 93.9%** on those three alone.
+
+### The work-list it produces
+
+Fields Riot writes that the converter still does not, by emitter count — every one has a plausible
+legacy source already in the reader, and none should be written until the mapping is measured the way
+`frequency = 1/f-period` was:
+
+| field | emitters | likely legacy source |
+|---|---|---|
+| `bindWeight` | 254 | `*p-bindtoemitter` |
+| `birthRotation0` | 226 | `*p-quadrot` |
+| `particleLinger` | 193 | Riot's own default (see above) |
+| `birthUvScrollRate` | 169 | not yet identified |
+| `isUniformScale` | 168 | not yet identified |
+| `textureMult` | 156 | `*p-texture-mult` |
+| `isSingleParticle` | 123 | not yet identified |
+| `EmitterPosition` | 107 | not yet identified |
+
+And the largest remaining disagreement is `Color`: 1,036 agreed against 456 differed. The colour curve
+is still bound by the M46 string-scan heuristic — runs of five-token strings assigned to emitters
+positionally — while section 12 holds 23,391 five-number entries that are keyed like everything else.
+Binding colour by key is the single biggest fidelity win left.
+
 ## What this sets up
 
 1. ~~Probability tables → `VfxAnimatedFloatVariableData.probabilityTables`~~ — done, M521.
 2. ~~`p-xscale1..4` → the scale-over-life curve~~ — done, M521; section 10 confirmed as 4 × u8 tenths
    against Riot's own `scale0`.
 3. ~~Force fields → `VfxFieldCollectionDefinitionData`~~ — done, M522.
-4. Widening the parity harness beyond the fields it covers today — colour curves, texture paths,
-   flipbook state, the spawn shape. The uniform-axis bug is the argument for it: a field compared only
-   at index 0 hid a real divergence for two milestones.
+4. ~~Widening the parity harness~~ — done, M524; it is a whole-tree walk now.
+5. Binding the colour curve BY KEY instead of by the string-scan heuristic — the largest remaining
+   disagreement, 456 differed against 1,036 agreed.
+6. Working through the field work-list above, measuring each mapping before writing it.
