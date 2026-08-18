@@ -38,7 +38,24 @@ public sealed record TroyEmitter(
     TroyProbability? OffsetSpread = null,
     TroyProbability? ScaleSpread = null,
     IReadOnlyList<TroyEmitRotation>? EmitRotations = null,
-    System.Numerics.Vector2? TexDiv = null)
+    System.Numerics.Vector2? TexDiv = null,
+    /// <summary>M520: the names of the force fields this emitter pulls in, in reference order. Look
+    /// them up in <see cref="TroyBinFile.ForceFields"/>.</summary>
+    IReadOnlyList<string>? FieldReferences = null,
+    /// <summary>How long the emitter keeps emitting after being told to stop.</summary>
+    float? EmitterLinger = null,
+    /// <summary>How long a particle hangs around past its lifetime.</summary>
+    float? ParticleLinger = null,
+    /// <summary>M520: <c>e-active</c>, RAW and uninterpreted.
+    ///
+    /// <para>It is not the on/off flag it looks like. Measured over the corpus it is present on only
+    /// 270 emitters, is <b>never</b> 0, and 192 of the 270 hold a value that is neither 0 nor 1 - so
+    /// reading it as a bool would invent a meaning the data does not support. Left raw until something
+    /// pins it down.</para></summary>
+    float? EmitterActive = null,
+    /// <summary>Render-order bucket: -1 behind, 1 in front.</summary>
+    int? Pass = null,
+    int? RenderMode = null)
 {
     /// <summary>An <c>*e-life</c> of -1 means the emitter runs forever.
     /// Torches, auras and buff loops all use it.</summary>

@@ -238,7 +238,14 @@ public sealed class TroySections
     /// The apparent per-field evidence was a confound: pooling sections 2 and 4 as "u8" mixed a tenths
     /// section with a raw one.</para>
     /// </summary>
-    public bool TryGetScalar(uint key, out float value)
+    /// <param name="resolveString">M520: needed for section 12, which stores numbers as TEXT.
+    /// Leaving it out costs 101,530 readable values across the 5,851-file corpus - among them
+    /// <c>e-rate=100</c> and <c>f-radius=200</c>, both confirmed against the FireTorch_Simple
+    /// text/binary twin. Typing here is value-adaptive, so one field is spread over many sections:
+    /// <c>e-rate</c> alone lands in 1, 2, 3, 4, 5 and 12. A reader that declines a section does not
+    /// read that field badly, it reads it as ABSENT - which is worse, because absent means "the author
+    /// left the default" to everything downstream.</param>
+    public bool TryGetScalar(uint key, Func<int, string?>? resolveString, out float value)
     {
         value = 0f;
         if (!ByKey.TryGetValue(key, out var e)) return false;
@@ -249,9 +256,24 @@ public sealed class TroySections
             case 3: value = BitConverter.ToInt16(e.Raw, 0); return true;
             case 4: value = e.Raw[0]; return true;             // integer, raw
             case 5: value = e.Raw[0]; return true;             // 0 or 1
+            case 12 when resolveString is not null:
+            {
+                string? text = resolveString(e.Raw[0] | (e.Raw[1] << 8));
+                if (text is null) return false;
+                // ONE token only: "0.0 30" is a probability key, not a scalar, and taking its first
+                // number as the whole value is how a curve silently becomes a constant
+                var parts = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                return parts.Length == 1
+                       && float.TryParse(parts[0], System.Globalization.NumberStyles.Float,
+                           System.Globalization.CultureInfo.InvariantCulture, out value);
+            }
             default: return false;
         }
     }
+
+    /// <summary>Scalar without a string resolver - sections 1-5 only. Kept for callers that genuinely
+    /// have no string block to hand.</summary>
+    public bool TryGetScalar(uint key, out float value) => TryGetScalar(key, null, out value);
 }
 
 /// <summary>
@@ -279,16 +301,27 @@ public static class TroyHash
     public static uint FieldKey(string emitterName, string field) =>
         Sdbm(field.ToLowerInvariant(), Sdbm(emitterName.ToLowerInvariant()));
 
+    /// <summary>The section every system-level field lives on. M520: recovered - it is literally
+    /// <c>System</c>.</summary>
+    public const string SystemSection = "System";
+
+    /// <summary>Key for <paramref name="field"/> on the <c>[System]</c> section.</summary>
+    public static uint SystemKey(string field) => FieldKey(SystemSection, field);
+
     /// <summary>
     /// The system-level chain that names emitter <paramref name="index"/> (1-based).
     ///
-    /// <para>The root is the sdbm of a prefix string whose literal spelling is still unrecovered; the
-    /// hash itself is verified, reproducing the observed keys exactly (0x0616933A for emitter 1,
-    /// 0x12C83B76 for 10). The index is appended as DECIMAL DIGITS, which matters: a naive
-    /// "0x0616933A + i" walk stops at 19 and silently loses 71 emitters across 7 files, collapsing
-    /// binding in the largest effects from 79.7% to 50.8%.</para>
+    /// <para>M520: the prefix is no longer a magic number. It is <c>System</c> + <c>*grouppart</c> -
+    /// <c>Sdbm("*grouppart", Sdbm("system"))</c> is exactly the 0xAE671AB7 this used to carry as an
+    /// unexplained seed. Recovered from the one shipped text/binary twin, FireTorch_Simple, whose
+    /// <c>[System]</c> section spells the list out as GroupPart1..5 with a Type and an Importance
+    /// beside each.</para>
+    ///
+    /// <para>The index is appended as DECIMAL DIGITS, which matters: a naive "0x0616933A + i" walk
+    /// stops at 19 and silently loses 71 emitters across 7 files, collapsing binding in the largest
+    /// effects from 79.7% to 50.8%.</para>
     /// </summary>
-    public static uint EmitterNameKey(int index) => Sdbm(index.ToString(System.Globalization.CultureInfo.InvariantCulture), 0xAE671AB7);
+    public static uint EmitterNameKey(int index) => SystemKey(TroyFields.GroupPart(index));
 }
 
 /// <summary>
@@ -335,7 +368,89 @@ public static class TroyFields
     public const string OrbitalVelocity3 = "*p-orbitvel";
     /// <summary>M427: emitter-space rotations. *e-rotation{n} is the angle, *e-rotation{n}-axis the
     /// unit axis, *e-rotation{n}P{k} the probability table that randomises it (typically 0..360).</summary>
-    public static string EmitRotation(int n) => "*e-rotation" + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public static string EmitRotation(int n) => "*e-rotation" + N(n);
     public static string EmitRotationAxis(int n) => EmitRotation(n) + "-axis";
 
+    // ---- M520: the rest of the vocabulary, from a text/binary twin ------------------------------
+    //
+    // K:\LeagueSandbox\League_Sandbox_Client\DATA\Particles ships FireTorch_Simple.troy AND
+    // FireTorch_Simple.troybin - the same effect in both the authored text form and the shipped
+    // binary. That pair is self-verifying: a name is only accepted here if sdbm("*"+name,
+    // sdbm(section)) lands on a key that actually exists in the binary, and a wrong name cannot.
+    // 250 of the text's 257 assignments do; the 7 that do not are marked ";UNKNOWN_HASH <n>" in the
+    // text itself. Corpus effect: key coverage over all 5,851 files rises from 31.1% to 58.6%.
+
+    // --- [System] ---
+    /// <summary>Emitter <paramref name="n"/> of the system, 1-based. Lives on the section literally
+    /// named <c>System</c>.</summary>
+    public static string GroupPart(int n) => "*grouppart" + N(n);
+    /// <summary>Quality tier - Simple / High / Low / Basic / Medium. The game drops emitters by this
+    /// on lower settings, so ignoring it promotes every "Low" emitter to always-on.</summary>
+    public static string GroupPartType(int n) => GroupPart(n) + "type";
+    public static string GroupPartImportance(int n) => GroupPart(n) + "importance";
+    public const string SimulateEveryFrame = "*simulateeveryframe";
+
+    // --- emitter-level ---
+    public const string EmitterActive = "*e-active";
+    /// <summary>How long the emitter keeps emitting after being told to stop.</summary>
+    public const string EmitterLinger = "*e-linger";
+    public const string EmitterLocalOrient = "*e-local-orient";
+    public const string EmitterPeriod = "*e-period";
+
+    // --- particle-level ---
+    public const string NormalMap = "*p-normal-map";
+    public const string ColorOffset = "*p-coloroffset";
+    public const string ColorScale = "*p-colorscale";
+    public const string ColorType = "*p-colortype";
+    public const string DistortionMode = "*p-distortion-mode";
+    public const string DistortionPower = "*p-distortion-power";
+    public const string ParticleLinger = "*p-linger";
+    /// <summary>An offset applied after emission rather than at birth - it moves the whole particle
+    /// instead of seeding where it starts.</summary>
+    public const string PostOffset = "*p-postoffset";
+    public const string RandomStartFrame = "*p-randomstartframe";
+    public const string ScaleBias = "*p-scalebias";
+    public const string SimpleOrient = "*p-simpleorient";
+    /// <summary>Non-uniform scale over life. Unlike every other curve in this format it is NOT a P{n}
+    /// probability table: the keys are <c>*p-xscale1..4</c> and <c>*p-xscale</c> is the enable
+    /// flag.</summary>
+    public const string XScale = "*p-xscale";
+    public static string XScaleKey(int n) => XScale + N(n);
+    /// <summary>Render-order bucket. -1 puts the emitter behind, 1 in front.</summary>
+    public const string Pass = "*pass";
+    public const string RenderMode = "*rendermode";
+
+    // --- force fields: the reference on the emitter, then the field's own section ---
+    /// <summary>Reference <paramref name="n"/> of <paramref name="kind"/>, e.g. <c>*field-drag-1</c>.
+    /// The VALUE is the name of the section holding the field.</summary>
+    public static string FieldRef(TroyFieldKind kind, int n) => "*field-" + Slug(kind) + "-" + N(n);
+    public const string FieldAcceleration = "*f-accel";
+    public const string FieldDirection = "*f-direction";
+    public const string FieldDrag = "*f-drag";
+    public const string FieldLocalSpace = "*f-localspace";
+    public const string FieldPeriod = "*f-period";
+    public const string FieldPosition = "*f-pos";
+    public const string FieldRadius = "*f-radius";
+    public const string FieldVelocityDelta = "*f-veldelta";
+
+    /// <summary>The spelling used inside a <c>field-*-{n}</c> key. Deliberately not
+    /// <c>kind.ToString()</c>: the legacy names are abbreviated (<c>orbit</c>, not <c>orbital</c>) and
+    /// a mismatch here silently drops every field of that kind.</summary>
+    public static string Slug(TroyFieldKind kind) => kind switch
+    {
+        TroyFieldKind.Acceleration => "accel",
+        TroyFieldKind.Attraction => "attract",
+        TroyFieldKind.Drag => "drag",
+        TroyFieldKind.Orbital => "orbit",
+        TroyFieldKind.Noise => "noise",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    public static readonly IReadOnlyList<TroyFieldKind> FieldKinds = new[]
+    {
+        TroyFieldKind.Acceleration, TroyFieldKind.Attraction, TroyFieldKind.Drag,
+        TroyFieldKind.Orbital, TroyFieldKind.Noise,
+    };
+
+    private static string N(int n) => n.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }
