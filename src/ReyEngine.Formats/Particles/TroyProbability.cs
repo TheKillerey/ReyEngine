@@ -27,13 +27,26 @@ public sealed record TroyProbability(
 {
     public bool IsEmpty => Uniform.Count == 0 && X.Count == 0 && Y.Count == 0 && Z.Count == 0;
 
-    /// <summary>The table for one axis, falling back to the uniform one. Returns empty when the field
-    /// carries no randomisation at all, in which case no dynamics should be written.</summary>
-    public IReadOnlyList<(float Probability, float Multiplier)> ForAxis(int axis)
+    /// <summary>
+    /// The table for one axis, in the slot Riot's own converter puts it.
+    ///
+    /// <para><b>An unlettered table goes to X ALONE, not to all three</b> (M523). Replicating it across
+    /// the axes looks harmless and is not: each axis then rolls INDEPENDENTLY, so a particle authored to
+    /// scale uniformly comes out 1.0 x 1.5 x 1.2. Measured against Riot's conversion over the paired
+    /// systems, 17 of 156 birthScale0 fields disagreed in exactly this way - Riot writes [K,-,-] where
+    /// the fallback wrote [K,K,K] - and every other axis shape already agreed.</para>
+    ///
+    /// <para>Returns empty when that axis carries no randomisation, which is the signal to write an
+    /// empty table rather than none: the container is read by INDEX, so a missing element would shift
+    /// Y into X.</para>
+    /// </summary>
+    public IReadOnlyList<(float Probability, float Multiplier)> ForAxis(int axis) => axis switch
     {
-        var specific = axis switch { 0 => X, 1 => Y, 2 => Z, _ => Array.Empty<(float, float)>() };
-        return specific.Count > 0 ? specific : Uniform;
-    }
+        0 => X.Count > 0 ? X : Uniform,
+        1 => Y,
+        2 => Z,
+        _ => Array.Empty<(float, float)>(),
+    };
 }
 
 /// <summary>

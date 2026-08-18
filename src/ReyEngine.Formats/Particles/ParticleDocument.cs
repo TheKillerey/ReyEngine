@@ -369,6 +369,51 @@ public sealed class ParticleEmitterEntry
                 displayText: "(nested too deep to expand)",
                 readOnlyReason: $"The editor expands nested structs to {MaxRowDepth} levels. This one sits deeper.");
         into.Add(row);
+
+        // M523: the probability tables hanging off the same Value* struct.
+        if (isValueStruct && prop is BinTreeStruct spread) AddSpreadRows(into, module, spread, depth, previewNote);
+    }
+
+    /// <summary>
+    /// One row per probability table on a Value* struct (M523).
+    ///
+    /// <para><b>Why these need their own rows.</b> A Value* struct is rendered as a leaf - one constant
+    /// plus its over-life curve - which is right for the constant and drops the probability tables
+    /// entirely. Those tables are the PER-PARTICLE randomisation: a rate of 10 with a table of
+    /// (0,0) (0.98,0) (1,2) is an emitter that sits idle and then bursts, and without the table showing
+    /// it reads as a steady trickle of 10. The preview applies them (M47), so editing one is visible
+    /// immediately rather than only on export.</para>
+    ///
+    /// <para>Each key is (probability, multiplier): a particle rolls r in 0..1, looks r up in keyTimes
+    /// and multiplies the constant by the matching keyValues entry. The pair is shaped exactly like a
+    /// curve, so the M190 key editor drives it unchanged - it is just named keyTimes/keyValues here.</para>
+    ///
+    /// <para>A vec3 carries three tables, X/Y/Z BY POSITION, and Riot leaves the unused ones empty; an
+    /// empty table gets no row, because a row with no keys has nothing to show or edit.</para>
+    /// </summary>
+    private static void AddSpreadRows(List<ParticleProperty> into, string module, BinTreeStruct valueStruct,
+        int depth, string? previewNote)
+    {
+        if (Field(valueStruct.Properties, "dynamics") is not BinTreeStruct dyn) return;
+        if (Field(dyn.Properties, "probabilityTables") is not BinTreeContainer tables) return;
+
+        bool perAxis = tables.Elements.Count == 3;
+        for (int i = 0; i < tables.Elements.Count; i++)
+        {
+            if (tables.Elements[i] is not BinTreeStruct table) continue;
+            if (Field(table.Properties, "keyTimes") is not BinTreeContainer kt) continue;
+            if (Field(table.Properties, "keyValues") is not BinTreeContainer kv) continue;
+            var (times, channels) = ParticleProperty.ReadCurve(kt, kv);
+            if (times is null || times.Length == 0) continue;
+
+            string label = perAxis ? "spread " + "XYZ"[i] : tables.Elements.Count > 1 ? $"spread [{i}]" : "spread";
+            into.Add(new ParticleProperty(module, label, table, readOnly: true, depth: depth + 1,
+                curveTimes: times, curveChannels: channels, curveDynamics: table, previewNote: previewNote,
+                curveTimesField: "keyTimes", curveValuesField: "keyValues",
+                displayText: $"({times.Length} key(s), probability -> multiplier)",
+                readOnlyReason: "A probability table has no single value - it is the list of keys below. "
+                              + "Each key is a probability and the multiplier applied at it."));
+        }
     }
 
     /// <summary>How many levels of nested struct the editor expands. Chosen for the editor, not read from
@@ -578,8 +623,11 @@ public sealed class ParticleProperty
         float[]? curveTimes = null, float[][]? curveChannels = null, bool readOnly = false,
         string typeNote = "", string? displayText = null,
         string readOnlyReason = "Read-only property (unsupported type or Riot reference).", int depth = 0,
-        BinTreeStruct? curveDynamics = null, string? previewNote = null)
+        BinTreeStruct? curveDynamics = null, string? previewNote = null,
+        string curveTimesField = "times", string curveValuesField = "values")
     {
+        TimesHash = HashAlgorithms.Fnv1a(curveTimesField);
+        ValuesHash = HashAlgorithms.Fnv1a(curveValuesField);
         Depth = depth;
         PreviewNote = previewNote;
         _dynamics = curveDynamics;
@@ -610,8 +658,12 @@ public sealed class ParticleProperty
     private readonly BinTreeStruct? _dynamics;
     private bool _curveEdited;
 
-    private static readonly uint TimesHash = HashAlgorithms.Fnv1a("times");
-    private static readonly uint ValuesHash = HashAlgorithms.Fnv1a("values");
+    // M523: which two containers hold the keys. A curve keeps them in times/values on the dynamics
+    // struct; a PROBABILITY TABLE keeps the identically-shaped pair in keyTimes/keyValues on its own
+    // VfxProbabilityTableData. Everything below edits either one, because the only difference is the
+    // names of the two parallel float lists.
+    private readonly uint TimesHash = HashAlgorithms.Fnv1a("times");
+    private readonly uint ValuesHash = HashAlgorithms.Fnv1a("values");
 
     private BinTreeContainer? Times => _dynamics?.Properties.GetValueOrDefault(TimesHash) as BinTreeContainer;
     private BinTreeContainer? Values => _dynamics?.Properties.GetValueOrDefault(ValuesHash) as BinTreeContainer;

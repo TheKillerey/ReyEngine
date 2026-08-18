@@ -290,11 +290,47 @@ frequency, velocityDelta, axisFraction and Position.
 whose Riot-side value was known, and confirming all three: PolenNoise (2,1,0), ManaSnowNoise (1,1,0),
 NoiseField1 (0,1,0).
 
+## The editor side (M523)
+
+Checked rather than assumed: the Particle Editor already rendered the force fields and the `scale0`
+curve, because M189's nested-struct expansion covers any struct it does not recognise as a leaf. The
+genuine gap was narrower and more important — **probability tables were invisible**.
+
+A `Value*` struct is deliberately treated as a LEAF: one editable constant plus its over-life curve.
+That is right for the constant and silently dropped `dynamics.probabilityTables`, which is the
+per-particle randomisation. A rate of 10 with keys (0,0) (0.98,0) (1,2) is an emitter that idles and
+then bursts; with the table hidden it reads as a steady trickle of 10.
+
+Each non-empty table now gets its own row under its field — `spread` for a scalar, `spread X/Y/Z` for
+a vector, labelled by POSITION because the container is read by index. The keys are shaped exactly like
+a curve (two parallel float lists), so the M190 key editor drives them unchanged once the container
+names are configurable: `times`/`values` for a curve, `keyTimes`/`keyValues` for a table. The preview
+simulator applies these tables (M47), so an edit shows immediately rather than only on export.
+
+### A converter bug the editor surfaced
+
+Seeing `birthScale0` render `spread X`, `spread Y` and `spread Z` all populated exposed an M521 defect
+that the parity harness had missed by only ever comparing table index 0.
+
+`TroyProbability.ForAxis` fell back to the unlettered table for **every** axis, so a uniform legacy
+spread was written to all three. Riot writes it to **X alone**. It is not cosmetic: three tables means
+three INDEPENDENT rolls, so a particle authored to scale uniformly comes out 1.0 x 1.5 x 1.2.
+
+Measured over the paired systems, comparing which axes carry a table at all:
+
+| | before | after |
+|---|---|---|
+| `birthScale0` axis shape | 139/156 (89.1%) | **156/156** |
+| `birthVelocity` axis shape | 69/69 | 69/69 |
+
+The 17 disagreements were all `riot[K,-,-]` against `ours[K,K,K]` — every one the uniform case.
+
 ## What this sets up
 
 1. ~~Probability tables → `VfxAnimatedFloatVariableData.probabilityTables`~~ — done, M521.
 2. ~~`p-xscale1..4` → the scale-over-life curve~~ — done, M521; section 10 confirmed as 4 × u8 tenths
    against Riot's own `scale0`.
 3. ~~Force fields → `VfxFieldCollectionDefinitionData`~~ — done, M522.
-4. Widening the parity harness beyond the eight fields it covers today — colour curves, texture paths,
-   flipbook state, the spawn shape.
+4. Widening the parity harness beyond the fields it covers today — colour curves, texture paths,
+   flipbook state, the spawn shape. The uniform-axis bug is the argument for it: a field compared only
+   at index 0 hid a real divergence for two milestones.

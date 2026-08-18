@@ -220,7 +220,10 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     {
         if (row is null || Document is null) return;
         if (!IsEditable) { row.ErrorText = "Read-only: Copy To Project first."; return; }
-        if (row.Prop.IsReadOnly) { row.ErrorText = "This property type isn't editable yet."; return; }
+        // M523: the row already knows WHY it is read-only - a struct header, an empty optional, a
+        // probability table that has keys rather than a value - and one blanket sentence misattributes
+        // most of them.
+        if (row.Prop.IsReadOnly) { row.ErrorText = row.ReadOnlyReason; return; }
         try
         {
             row.Prop.Apply(row.EditText);
