@@ -413,6 +413,66 @@ rather than assumed by running the harness both ways:
 Parity over the paired systems: **Color 456 → 66 differed**, and overall agreement
 **93.9% → 97.9%** across 10,720 comparisons.
 
+## The field table (M526)
+
+The work-list M524 produced was worked through with a fan-out of agents, each measuring one group of
+fields against the 197 paired systems and each finding then re-measured by a second agent briefed to
+refute it. 61 findings came back high-confidence, including about twenty field names that were
+**solved algebraically rather than guessed** — several of which break the `*p-`/`*e-` convention
+entirely, which is why every earlier guess had missed them:
+
+| solved name | becomes | evidence |
+|---|---|---|
+| `*single-particle` | `isSingleParticle` | 122/122 |
+| `*uniformscale` | `isUniformScale` | 111/111 |
+| `*p-uvscroll-rgb` | `birthUvScrollRate` | 169/169 |
+| `*p-xquadrot-on` | `isRotationEnabled` | 27/27 |
+| `*p-xquadrot` | `rotation0` | 18/18 |
+| `*particle-velocity` / `*particle-acceleration` | `velocity` / `acceleration` | 16/16, 8/8 |
+| `*e-timeoffset` | `timeBeforeFirstEmission` | 50/51 |
+| `*e-alpharef` | `alphaRef` | 9/9 |
+| `*e-uvoffset` | `birthUVOffset` | 43/44 |
+
+plus the ones whose source was suspected and is now confirmed: `*p-bindtoemitter` → `bindWeight`
+(first component only), `*p-quadrot` → `birthRotation0`, `*p-rotvel` → `birthRotationalVelocity0`,
+`*p-postoffset` → `EmitterPosition`, `*p-local-orient` → `particleIsLocalOrientation`,
+`*p-vecalign` → `isDirectionOriented`, `*p-colorscale`/`*p-coloroffset` → the colour lookup pair.
+
+They live in `TroyFieldMap` as a declarative table, each row carrying its own agreement figure so the
+support for a rule is visible where the rule is.
+
+### Two rows the harness threw out
+
+Both were reported high-confidence by the research and both failed on contact with the parity run,
+which is the entire argument for measuring the output rather than trusting the measurement of the
+input:
+
+- **`isLocalOrientation` has INVERTED sense.** `*e-local-orient` predicts it perfectly by presence
+  (78 hits, 0 misses), so it looks like a clean mapping. It is not: a legacy **0** makes Riot write
+  `false` (78 of 78 on value) and a legacy **1** makes Riot write **nothing**. Local orientation is
+  the engine default and the property exists only to switch it off. Implemented the obvious way round
+  it produced a set of emitters *disjoint* from Riot's — 78 missed, 17 invented, zero agreements. Left
+  unimplemented: 23 legacy zeros are also omitted by Riot, and until that is explained, writing the
+  property on them would be inventing 23 properties Riot chose not to write.
+- **`timeBeforeFirstEmission` is a plain `F32` leaf**, not a `ValueFloat`. As a `ValueFloat` it scored
+  0 of 51 — a right value in the wrong wire type, the same class of bug as `lifetime` in M524.
+
+### Result
+
+| | before | after |
+|---|---|---|
+| properties compared | 10,720 | **11,570** |
+| agreed | 10,496 | **11,337** |
+| agreement | 97.9% | **98.0%** |
+
+The headline percentage barely moves, and that is the wrong number to read. 850 properties that did
+not exist in our output before are now written and compared, and **841 of them are right** — a 98.9%
+hit rate on everything new. `oursOnly` is **0** on every field in the table: the converter gained a
+great deal and invented nothing.
+
+Riot's own defaults stayed uncopied, as before: `isUniformScale` is written by Riot on 57 paired
+emitters whose legacy file has no `*uniformscale` at all, and those 57 are still left alone.
+
 ## What this sets up
 
 1. ~~Probability tables → `VfxAnimatedFloatVariableData.probabilityTables`~~ — done, M521.
@@ -422,4 +482,8 @@ Parity over the paired systems: **Color 456 → 66 differed**, and overall agree
 4. ~~Widening the parity harness~~ — done, M524; it is a whole-tree walk now.
 5. Binding the colour curve BY KEY instead of by the string-scan heuristic — the largest remaining
    disagreement, 456 differed against 1,036 agreed.
-6. Working through the field work-list above, measuring each mapping before writing it.
+6. ~~Working through the field work-list~~ — done, M526.
+7. The residue: `SpawnShape.emitOffset` has a second wire form (a PLAIN vec3 on the non-legacy shape
+   struct, 26 emitters); `primitive` needs the `*p-type` class table (1 -> ArbitraryQuad, 2 -> Ray,
+   3 -> Mesh, 4 -> CameraTrail, 7 -> PlanarProjection, measured 438/441); `textureMult` has a whole
+   family of `*-mult` sources; and `isLocalOrientation` needs its omission half explained.

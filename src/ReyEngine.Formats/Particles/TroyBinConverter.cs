@@ -190,6 +190,11 @@ public static class TroyBinConverter
                 : new Vector3(DefaultScale, DefaultScale, DefaultScale);
             props.Add(ValueVector3("birthScale0", scale, e.ScaleSpread));
 
+            // M526: every field whose legacy source was measured against Riot's own conversion. The
+            // table is declarative on purpose - each row carries its agreement figure, so what is
+            // supported and how well is visible where the rule lives.
+            TroyFieldMap.Apply(troy.Sections!, troy.StringAt, e.Name, props);
+
             // M522: the force fields this emitter pulls in. Look each reference up by name - the field
             // sections never appear in the group list, so this is the only route to them.
             if (e.FieldReferences is { Count: > 0 } refs)
