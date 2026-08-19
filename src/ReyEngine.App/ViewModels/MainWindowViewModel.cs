@@ -2891,6 +2891,33 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task SetAllMaterialsBaked() => await SetAllMaterialsNoBakedLighting(false);
 
+    /// <summary>
+    /// M530: set the map's lighting mode in one step.
+    ///
+    /// <para>The two halves already existed but sat as separate buttons inside the Lighting window, and
+    /// the one that matters most - baking - was a third place to go afterwards. This makes the choice
+    /// the thing you pick: dynamic lights, the lightmaps you already have, or lightmaps baked now.</para>
+    ///
+    /// <para>The per-material permutation guard is unchanged and still does the refusing; a mode only
+    /// says which direction to ask for.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task SetMapLightingMode(string? mode)
+    {
+        if (!Enum.TryParse<Formats.Materials.MapLightingMode>(mode, ignoreCase: true, out var chosen))
+        { _log.Warn("Materials", $"Unknown lighting mode '{mode}'."); return; }
+
+        var plan = Formats.Materials.MapLightingPlan.For(chosen);
+        _log.Info("Materials", $"Lighting mode: {plan.Label}. {plan.Explanation}");
+
+        await SetAllMaterialsNoBakedLighting(plan.NoBakedLighting);
+
+        // The bake is what turns "the materials want a lightmap" into "there is one". It opens its own
+        // window rather than running blind, because a bake has settings and takes real time - and for a
+        // map with no lightmap layout it offers to generate one first.
+        if (plan.RunBake) OpenLightBake();
+    }
+
     private async Task SetAllMaterialsNoBakedLighting(bool unlit)
     {
         if (_currentMapEntry is not { } entry)

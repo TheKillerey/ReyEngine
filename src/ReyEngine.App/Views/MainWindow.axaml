@@ -106,6 +106,17 @@
                   ToolTip.Tip="Edit the selected .bnk/.wpk directly: play, replace, add, rename, delete and copy/paste its embedded sounds" />
         <Separator />
         <MenuItem Header="Light">
+          <!-- M530: the mode is the thing you pick. NO_BAKED_LIGHTING reads backwards from its name -
+               ON is the dynamic mode - so these say what they do rather than what they set. -->
+          <MenuItem Header="Map Lighting">
+            <MenuItem Header="Dynamic lights" Command="{Binding SetMapLightingModeCommand}" CommandParameter="Dynamic"
+                      ToolTip.Tip="Stop every material sampling a baked lightmap, so the map is lit by the sun and its point lights at runtime. This is what a freshly ported legacy map wants." />
+            <MenuItem Header="Baked lightmaps (use existing)" Command="{Binding SetMapLightingModeCommand}" CommandParameter="Baked"
+                      ToolTip.Tip="Materials sample their baked lightmap again. Nothing is baked, so this is for a map whose atlases already exist." />
+            <MenuItem Header="Baked lightmaps (bake now)" Command="{Binding SetMapLightingModeCommand}" CommandParameter="BakeNow"
+                      ToolTip.Tip="Materials sample their baked lightmap, then the bake window opens so there is one to sample." />
+          </MenuItem>
+          <Separator />
           <MenuItem Header="Lighting…" Command="{Binding OpenLightingCommand}"
                     ToolTip.Tip="Sun, sky, lightmap brightness, point-light placement and the light table — everything that drives how the map is lit in the viewport, and what a bake reproduces" />
           <MenuItem Header="Bake Lighting…" Command="{Binding OpenLightBakeCommand}"
