@@ -90,7 +90,23 @@ public sealed record LegacyMapPortResult(
 /// </summary>
 public static class LegacyMapPorter
 {
+    /// <summary>Ordinary surfaces whose diffuse alpha is a genuine CUTOUT mask. See
+    /// <see cref="SolidShader"/> for everything else and why the distinction matters.</summary>
     public const string NormalShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest";
+
+    /// <summary>
+    /// M528: ordinary surfaces whose alpha is NOT a cutout mask.
+    ///
+    /// <para>M338 gave every normal surface the alpha-tested shader with a 0.35 cutoff. That is right
+    /// for a cutout and destructive for anything else, because legacy League art routinely packs
+    /// SPECULAR/GLOSS into the diffuse alpha channel - the test then discards the surface. Measured on
+    /// a real ported map: 86 textures, only 14 genuine cutouts, and an 0.35 cutoff eats 40-72% of the
+    /// 20 gradient ones. That is ground with holes punched through it.</para>
+    ///
+    /// <para>Riot's own shipped Map453 splits the same way round: 57 DefaultEnv_Flat against 31
+    /// DefaultEnv_Flat_AlphaTest.</para>
+    /// </summary>
+    public const string SolidShader = "Shaders/StaticMesh/DefaultEnv_Flat";
     public const string DecalShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest";
     public const string GrassShader = "Shaders/StaticMesh/VertexDeform";
     public const string TerrainShader = "Shaders/StaticMesh/4TextureBlend_WorldProjected";
@@ -229,32 +245,51 @@ public static class LegacyMapPorter
     /// <param name="note">Receives one line per macro the porter declined to author, and why.</param>
     public static LegacyMapPortResult ApplyShaderOptions(LegacyMapPortResult result,
         LegacyPortShaderOptions options,
-        Func<string, string, MacroSupport>? macroSupport = null, Action<string>? note = null)
+        Func<string, string, MacroSupport>? macroSupport = null, Action<string>? note = null,
+        Func<string, LegacyAlphaKind>? alphaKind = null)
     {
-        string ShaderFor(LegacyMaterialRole role) => role switch
-        {
-            LegacyMaterialRole.Decal => options.DecalShader,
-            LegacyMaterialRole.Grass => options.GrassShader,
-            LegacyMaterialRole.FourBlendTerrain => options.TerrainShader,
-            _ => options.NormalShader,
-        };
-
-        // Report each declined macro ONCE per role rather than once per material: a port generates dozens
-        // of materials per role and the same sentence eighty times is noise, not information.
+        // Report each declined change ONCE per role rather than once per material: a port generates
+        // dozens of materials per role and the same sentence eighty times is noise, not information.
         var reported = new HashSet<string>(StringComparer.Ordinal);
+
+        // M528: an ordinary surface is only alpha-tested when its diffuse alpha is a genuine cutout
+        // mask. Without the classifier this keeps the pre-M528 behaviour, so a caller with no way to
+        // read the textures is no worse off than before.
+        string ShaderFor(LegacyMaterialPlan material)
+        {
+            switch (material.Role)
+            {
+                case LegacyMaterialRole.Decal: return options.DecalShader;
+                case LegacyMaterialRole.Grass: return options.GrassShader;
+                case LegacyMaterialRole.FourBlendTerrain: return options.TerrainShader;
+            }
+
+            if (alphaKind is null || options.NormalShader != NormalShader) return options.NormalShader;
+            if (!material.Samplers.TryGetValue("DiffuseTexture", out var texture)) return options.NormalShader;
+
+            var kind = alphaKind(texture);
+            if (kind == LegacyAlphaKind.Cutout) return options.NormalShader;
+
+            if (reported.Add("alpha|" + kind))
+                note?.Invoke(kind == LegacyAlphaKind.Gradient
+                    ? $"Alpha test dropped on {kind} surfaces: their diffuse alpha is a gradient, which in "
+                      + "legacy art is gloss rather than transparency - testing it would discard the surface."
+                    : $"Alpha test dropped on {kind} surfaces: nothing in their alpha to test against.");
+            return SolidShader;
+        }
 
         return result with
         {
             Materials = result.Materials.Select(material =>
             {
-                string shader = ShaderFor(material.Role);
+                string shader = ShaderFor(material);
                 bool noBake = ShouldAuthorNoBakedLighting(material.Role, shader, macroSupport, out var why);
                 if (why is not null && reported.Add(material.Role + "|" + shader)) note?.Invoke(why);
 
                 return material with
                 {
                     Shader = shader,
-                    Parameters = MaterialParameters(material.Role, material.Parameters),
+                    Parameters = MaterialParameters(material.Role, material.Parameters, shader),
                     Macros = noBake
                         ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["NO_BAKED_LIGHTING"] = true }
                         : new Dictionary<string, bool>(),
@@ -287,7 +322,8 @@ public static class LegacyMapPorter
     /// is left at 1 and is inert either way.</para>
     /// </summary>
     private static IReadOnlyDictionary<string, Vector4> MaterialParameters(
-        LegacyMaterialRole role, IReadOnlyDictionary<string, Vector4>? existing = null)
+        LegacyMaterialRole role, IReadOnlyDictionary<string, Vector4>? existing = null,
+        string? shader = null)
     {
         var parameters = existing is null
             ? new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase)
@@ -296,7 +332,9 @@ public static class LegacyMapPorter
         parameters["Tint"] = new Vector4(NeutralTint, NeutralTint, NeutralTint, 1f);
         if (role == LegacyMaterialRole.FourBlendTerrain)
             parameters["WS_Multiplier"] = new Vector4(0.01f, 0, 0, 0);
-        else
+        else if (shader is null || shader.Contains("AlphaTest", StringComparison.OrdinalIgnoreCase))
+            // M528: a cutoff on a shader that does not test is inert, but it also lies to anyone reading
+            // the material about what the surface does.
             parameters["AlphaTestValue"] = new Vector4(
                 role == LegacyMaterialRole.Decal ? 0.005f : 0.35f, 0, 0, 0);
         return parameters;

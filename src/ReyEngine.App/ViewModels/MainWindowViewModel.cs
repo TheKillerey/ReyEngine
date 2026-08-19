@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using Avalonia.Platform.Storage;
@@ -9436,9 +9436,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 ? (shader, macro) => MacroSupportFor(portPerms, catalog, shader, macro)
                 : null;
 
+        // M528: let the porter see each texture's ALPHA before it decides to alpha-test the surface.
+        // The bytes are already in hand - the port carries every texture it is about to copy - so this
+        // costs one decode per distinct texture and nothing on disk.
+        var alphaCache = new Dictionary<string, LegacyAlphaKind>(StringComparer.OrdinalIgnoreCase);
+        var portedBytes = result.Textures.ToDictionary(t => t.TargetPath, t => t.Bytes,
+            StringComparer.OrdinalIgnoreCase);
+        LegacyAlphaKind ClassifyPortedAlpha(string texture)
+        {
+            if (alphaCache.TryGetValue(texture, out var cached)) return cached;
+            var kind = LegacyAlphaKind.Cutout;   // fail towards the previous behaviour
+            if (portedBytes.TryGetValue(texture, out var bytes))
+            {
+                try { kind = LegacyAlphaClassifier.Classify(TextureDecoder.Decode(bytes).Rgba); }
+                catch (Exception ex) { _log.Warn("Port", $"Could not read the alpha of {texture}: {ex.Message}"); }
+            }
+            alphaCache[texture] = kind;
+            return kind;
+        }
+
         result = LegacyMapPorter.ApplyShaderOptions(result,
             selection?.RoleShaders ?? LegacyPortShaderOptions.Defaults,
-            macroSupport, m => _log.Info("Port", m));
+            macroSupport, m => _log.Info("Port", m), ClassifyPortedAlpha);
         if (selection is not null)
             result = result with
             {
