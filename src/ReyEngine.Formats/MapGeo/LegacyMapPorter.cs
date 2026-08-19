@@ -109,6 +109,11 @@ public static class LegacyMapPorter
     public const string SolidShader = "Shaders/StaticMesh/DefaultEnv_Flat";
     public const string DecalShader = "Shaders/StaticMesh/DefaultEnv_Flat_AlphaTest";
     public const string GrassShader = "Shaders/StaticMesh/VertexDeform";
+
+    /// <summary>M529: the NVR material record's declared type. 1 is a decal and 2 is grass; 0 is an
+    /// ordinary surface. These are read from the file rather than inferred from the material name.</summary>
+    public const int NvrDecalType = 1;
+    public const int NvrGrassType = 2;
     public const string TerrainShader = "Shaders/StaticMesh/4TextureBlend_WorldProjected";
 
     /// <summary>
@@ -598,8 +603,18 @@ public static class LegacyMapPorter
 
                     bool fourBlend = raw is { Blend.Length: > 0, Color1.Length: > 0, Color2.Length: > 0, Color3.Length: > 0 }
                                      && uv7 is not null && DecodeTexture(raw.Blend) is not null;
+                    // M529: the NVR record DECLARES what the material is, so ask it before guessing.
+                    // The name heuristics below are the fallback for a material the table does not
+                    // carry - and they were badly wrong on their own: LooksLikeDecal matches the
+                    // substring "decal", which catches 3 of Map2's 18 declared decals. The other 15 -
+                    // base_chasm1/2/3, order_seam, new_stone_road, turret_stoneBase, the tile-floor
+                    // marks - came through as ordinary surfaces and were rendered as opaque geometry
+                    // over the ground instead of as decals on it.
                     bool cutout = !fourBlend && HasCutoutAlpha(DecodeTexture(baseRef));
-                    LegacyMaterialRole role = fourBlend ? LegacyMaterialRole.FourBlendTerrain
+                    LegacyMaterialRole role =
+                        fourBlend ? LegacyMaterialRole.FourBlendTerrain
+                        : raw?.Type == NvrDecalType ? LegacyMaterialRole.Decal
+                        : raw?.Type == NvrGrassType ? LegacyMaterialRole.Grass
                         : cutout && LooksLikeGrass(materialName, baseRef) ? LegacyMaterialRole.Grass
                         : cutout && LooksLikeDecal(materialName, baseRef) ? LegacyMaterialRole.Decal
                         : LegacyMaterialRole.Normal;
@@ -911,7 +926,32 @@ public static class LegacyMapPorter
         // missing resource for another. The atlas comes from baking.
     }
 
-    private sealed record NvrMaterial(string Base, string Blend, string Color1, string Color2, string Color3);
+    /// <summary>
+    /// One NVR material record. <paramref name="Type"/> and <paramref name="IsGround"/> are the two
+    /// integers that sit between the name and the texture list, and they are the file SAYING what the
+    /// material is (M529).
+    /// </summary>
+    /// <param name="Type">0 = ordinary surface, 1 = DECAL, 2 = grass. Measured over Map2's 148
+    /// materials: 120 type 0, 18 type 1, 1 type 2, and the type-1 set is exactly the decal art -
+    /// base_chasm1/2/3, order_seam, new_stone_road, turret_stoneBase, the tile-floor marks.</param>
+    /// <param name="IsGround">The terrain flag: every one of the 9 materials carrying it is named
+    /// <c>ground_*</c> or <c>*_ground_*</c>.</param>
+    private sealed record NvrMaterial(string Base, string Blend, string Color1, string Color2, string Color3,
+        int Type = 0, bool IsGround = false);
+
+    /// <summary>
+    /// M529: the type each NVR material DECLARES, keyed by material name - 0 ordinary, 1 decal,
+    /// 2 grass - plus the ground flag. Public so the rule can be checked against a real file rather
+    /// than asserted about a fixture.
+    /// </summary>
+    public static IReadOnlyDictionary<string, (int Type, bool IsGround)> NvrMaterialTypes(byte[] nvr)
+    {
+        ArgumentNullException.ThrowIfNull(nvr);
+        var result = new Dictionary<string, (int, bool)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, material) in ParseNvrMaterials(nvr))
+            result[name] = (material.Type, material.IsGround);
+        return result;
+    }
 
     private static Dictionary<string, NvrMaterial> ParseNvrMaterials(byte[] data)
     {
@@ -927,7 +967,11 @@ public static class LegacyMapPorter
             if (record + stride > data.Length) break;
             string name = ReadCString(data, record, nameLength);
             string Channel(int c) => ReadCString(data, record + textureOffset + c * channelStride, 256);
-            if (name.Length > 0) result[name] = new(Channel(0), Channel(1), Channel(2), Channel(4), Channel(6));
+            // The two ints immediately after the 260-byte name: the declared type and the ground flag.
+            int type = BitConverter.ToInt32(data, record + nameLength);
+            bool ground = BitConverter.ToInt32(data, record + nameLength + 4) != 0;
+            if (name.Length > 0)
+                result[name] = new(Channel(0), Channel(1), Channel(2), Channel(4), Channel(6), type, ground);
         }
         return result;
     }
