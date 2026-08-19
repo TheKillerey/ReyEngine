@@ -221,7 +221,7 @@ public static class TroyBinConverter
             // so an "arbitrary quad" is locked to a fixed WORLD orientation instead of facing the
             // camera. Every converted particle was therefore a plane pinned to one direction, which is
             // why orbiting the preview turned an effect edge-on while modern systems stayed correct.
-            if (e.MeshPath is { } mesh) props.Add(MeshPrimitive(mesh, troy.SkeletonPath));
+            if (Primitive(e, troy) is { } primitive) props.Add(primitive);
 
             if (!string.IsNullOrWhiteSpace(e.TexturePath))
                 props.Add(new BinTreeString(H("texture"), ToTargetPath(e.TexturePath!)));
@@ -438,6 +438,85 @@ public static class TroyBinConverter
     /// EMBEDDED <c>VfxMeshDefinitionData</c>. A simple mesh names <c>mSimpleMeshName</c> (.scb/.sco); a
     /// skinned one names <c>mMeshName</c> (.skn) plus <c>mMeshSkeletonName</c> (.skl).
     /// </summary>
+    /// <summary>
+    /// The primitive, chosen by <c>*p-type</c> (M527).
+    ///
+    /// <para><b>This is the field that decides what an emitter IS</b> - a camera-facing billboard, a
+    /// world-oriented quad, a ray, a mesh, a trail - and it was being ignored: every non-mesh emitter
+    /// got no primitive at all, which is the billboard, so 75 of the 441 paired emitters rendered as
+    /// the wrong kind of thing.</para>
+    ///
+    /// <para>The table is measured against Riot's own conversion, 438 of 441 exact:</para>
+    /// <list type="table">
+    ///   <item>1 -&gt; VfxPrimitiveArbitraryQuad (27/27)</item>
+    ///   <item>2 -&gt; VfxPrimitiveRay (37/37)</item>
+    ///   <item>3 -&gt; VfxPrimitiveMesh (209/209)</item>
+    ///   <item>4 -&gt; VfxPrimitiveCameraTrail (6/6)</item>
+    ///   <item>7 -&gt; VfxPrimitivePlanarProjection (5/5)</item>
+    ///   <item>0 or absent -&gt; no primitive property, which IS the camera-facing billboard (157/160)</item>
+    /// </list>
+    /// The 3 that miss are Riot writing an ArbitraryQuad where its own source says 0 or nothing - its
+    /// choice, not derivable from the legacy file, so not copied.
+    ///
+    /// <para><b>Writing ArbitraryQuad used to be a bug, and this is not a regression of it.</b> The old
+    /// code wrote that class for EVERY emitter, and the renderer branches on it as
+    /// <c>right = uArbitraryQuad != 0 ? placedRight : uCamRight</c> - so every converted particle became
+    /// a plane pinned to one world direction and went edge-on as the camera moved. Gated on
+    /// <c>*p-type == 1</c> it is right 27 times out of 27, and those 27 are world-oriented in Riot's
+    /// own output too. The lesson held was "do not write it unconditionally", not "never write it".</para>
+    ///
+    /// <para>The empty forms are shipped forms: ArbitraryQuad and Ray carry no properties at all in any
+    /// of the 42,382 shipped instances, and Riot ships bare CameraTrail (46) and PlanarProjection (6)
+    /// too - so a class written without its sub-struct is a shape the client already sees.</para>
+    /// </summary>
+    private static BinTreeProperty? Primitive(TroyEmitter e, TroyBinFile troy)
+    {
+        int? type = null;
+        if (troy.Sections is { } sections
+            && sections.TryGetScalar(TroyHash.FieldKey(e.Name, TroyFields.ParticleType), troy.StringAt,
+                out float raw))
+            type = (int)raw;
+
+        // A mesh path is its own evidence: p-type 3 and a named mesh agree on 207 of 209 paired
+        // emitters, so either signal alone is enough to make this a mesh particle.
+        if (type == 3 || e.MeshPath is not null)
+            return e.MeshPath is { } mesh ? MeshPrimitive(mesh, troy.SkeletonPath) : Bare("VfxPrimitiveMesh");
+
+        return type switch
+        {
+            1 => Bare("VfxPrimitiveArbitraryQuad"),
+            2 => Bare("VfxPrimitiveRay"),
+            4 => Trail(e, troy),
+            7 => Bare("VfxPrimitivePlanarProjection"),
+            // 0 and absent both mean the camera-facing billboard, which is the ABSENCE of the property
+            _ => null,
+        };
+    }
+
+    private static BinTreeProperty Bare(string cls) =>
+        new BinTreeStruct(H("primitive"), H(cls), Array.Empty<BinTreeProperty>());
+
+    /// <summary>A camera trail. <c>mBirthTilingSize</c> comes from <c>*e-tilesize</c> (6/6); without it
+    /// the bare class is written, which Riot also ships.</summary>
+    private static BinTreeProperty Trail(TroyEmitter e, TroyBinFile troy)
+    {
+        if (troy.Sections is not { } sections
+            || !sections.TryGetScalar(TroyHash.FieldKey(e.Name, TroyFields.TileSize), troy.StringAt,
+                out float tile))
+            return Bare("VfxPrimitiveCameraTrail");
+
+        return new BinTreeStruct(H("primitive"), H("VfxPrimitiveCameraTrail"), new BinTreeProperty[]
+        {
+            new BinTreeEmbedded(H("mTrail"), H("VfxTrailDefinitionData"), new BinTreeProperty[]
+            {
+                new BinTreeEmbedded(H("mBirthTilingSize"), H("ValueFloat"), new BinTreeProperty[]
+                {
+                    new BinTreeF32(H("constantValue"), tile),
+                }),
+            }),
+        });
+    }
+
     private static BinTreeProperty MeshPrimitive(string meshPath, string? skeletonPath)
     {
         bool skinned = meshPath.EndsWith(".skn", StringComparison.OrdinalIgnoreCase);

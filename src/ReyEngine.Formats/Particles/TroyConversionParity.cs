@@ -158,6 +158,17 @@ public static class TroyConversionParity
         // leaf into "the whole struct differs", which says nothing about where to look.
         if (a is BinTreeStruct sa && b is BinTreeStruct sb)
         {
+            // M527: compare the CLASS as a value of its own. Without this a struct is only ever
+            // compared through its leaves, so choosing the wrong class is invisible whenever the class
+            // carries none - and two of the five primitive classes (ArbitraryQuad, Ray) are empty in
+            // all 42,382 shipped instances. A converted emitter could be the wrong KIND of thing
+            // entirely and the report would show a perfect score.
+            Record(acc, Join(path, "@class"),
+                sa.ClassHash == sb.ClassHash ? TroyParityVerdict.Agreed : TroyParityVerdict.Differed,
+                system, emitter,
+                resolveName?.Invoke(sa.ClassHash) ?? $"0x{sa.ClassHash:x8}",
+                resolveName?.Invoke(sb.ClassHash) ?? $"0x{sb.ClassHash:x8}");
+
             foreach (uint key in sa.Properties.Keys.Union(sb.Properties.Keys))
                 Walk(system, emitter, Join(path, resolveName?.Invoke(key) ?? $"0x{key:x8}"),
                     sa.Properties.GetValueOrDefault(key), sb.Properties.GetValueOrDefault(key), acc, resolveName);

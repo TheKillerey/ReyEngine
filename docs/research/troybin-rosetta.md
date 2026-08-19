@@ -473,6 +473,53 @@ great deal and invented nothing.
 Riot's own defaults stayed uncopied, as before: `isUniformScale` is written by Riot on 57 paired
 emitters whose legacy file has no `*uniformscale` at all, and those 57 are still left alone.
 
+## `*p-type` chooses the primitive (M527)
+
+This is the field that decides what an emitter IS - a camera-facing billboard, a world-oriented quad,
+a ray, a mesh, a trail - and it was being ignored. Every non-mesh emitter got no primitive at all, so
+75 of the 441 paired emitters were converted as the wrong kind of thing.
+
+| `*p-type` | Riot's class | paired |
+|---|---|---|
+| 3 | `VfxPrimitiveMesh` | 209 |
+| 2 | `VfxPrimitiveRay` | 37 |
+| 1 | `VfxPrimitiveArbitraryQuad` | 27 |
+| 4 | `VfxPrimitiveCameraTrail` | 6 |
+| 7 | `VfxPrimitivePlanarProjection` | 5 |
+| 0 or absent | *no primitive property* - which IS the billboard | 157 |
+
+Stored value-adaptively like everything else: section 4 for the numbered types, a single BIT in
+section 5 for type 1, and the text `"0"` in section 12 for zero.
+
+Result: **441 of 444 classes correct**. The 3 misses are Riot writing an `ArbitraryQuad` where its own
+source says 0 or nothing - its choice, not derivable, so not copied.
+
+### This is not a regression of the old ArbitraryQuad bug
+
+Writing that class used to break every converted effect: the renderer branches on it as
+`right = uArbitraryQuad != 0 ? placedRight : uCamRight`, so an "arbitrary quad" is pinned to a fixed
+world direction and goes edge-on as the camera moves. The old code wrote it for **every** emitter. The
+lesson was *do not write it unconditionally*, not *never write it* - gated on `*p-type == 1` it agrees
+with Riot 27 times out of 27, and those 27 are world-oriented in Riot's output too.
+
+The empty forms are shipped forms: `ArbitraryQuad` and `Ray` carry no properties in any of the 42,382
+shipped instances, and Riot ships bare `CameraTrail` (46) and `PlanarProjection` (6) as well.
+
+### A hole in the harness, found by using it
+
+The class change moved parity not at all - because **the harness could not see it**. It walked
+properties, and a struct whose class is wrong but whose contents are empty produces no comparisons at
+all. Two of the five primitive classes are empty, so a converted emitter could have been the wrong
+kind of thing entirely and the report would have shown a perfect score.
+
+`TroyConversionParity` now compares the struct CLASS as a value of its own, at `path.@class`. That
+added **5,803 comparisons** on the paired corpus that nothing had ever checked.
+
+| | before | after |
+|---|---|---|
+| properties compared | 11,570 | **17,373** |
+| agreement | 98.0% | **98.2%** |
+
 ## What this sets up
 
 1. ~~Probability tables → `VfxAnimatedFloatVariableData.probabilityTables`~~ — done, M521.
@@ -483,7 +530,8 @@ emitters whose legacy file has no `*uniformscale` at all, and those 57 are still
 5. Binding the colour curve BY KEY instead of by the string-scan heuristic — the largest remaining
    disagreement, 456 differed against 1,036 agreed.
 6. ~~Working through the field work-list~~ — done, M526.
-7. The residue: `SpawnShape.emitOffset` has a second wire form (a PLAIN vec3 on the non-legacy shape
-   struct, 26 emitters); `primitive` needs the `*p-type` class table (1 -> ArbitraryQuad, 2 -> Ray,
-   3 -> Mesh, 4 -> CameraTrail, 7 -> PlanarProjection, measured 438/441); `textureMult` has a whole
-   family of `*-mult` sources; and `isLocalOrientation` needs its omission half explained.
+7. ~~`primitive` from the `*p-type` class table~~ — done, M527.
+8. The residue: `SpawnShape.emitOffset` has a second wire form (a PLAIN vec3 on the non-legacy shape
+   struct, 26 emitters); `textureMult` has a whole family of `*-mult` sources; `isLocalOrientation`
+   needs its omission half explained; and the batch of algebraically-recovered names whose
+   verification pass was cut short is still unverified and unused.

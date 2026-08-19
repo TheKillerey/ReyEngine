@@ -400,6 +400,9 @@ public static class TroyFields
     /// frame, so numFrames alone animates nothing.</summary>
     public const string TexDiv = "*p-texdiv";
     public const string ParticleType = "*p-type";
+    /// <summary>M527: the camera trail's tiling size, becoming
+    /// <c>primitive.mTrail.mBirthTilingSize</c> (6/6 against Riot's conversion).</summary>
+    public const string TileSize = "*e-tilesize";
     public const string QuadRotation = "*p-quadrot";
     public const string RotationVelocity = "*p-rotvel";
     // measured: "*p-bindweight" resolves 0 keys in 0 files; the real name is *p-bindtoemitter
