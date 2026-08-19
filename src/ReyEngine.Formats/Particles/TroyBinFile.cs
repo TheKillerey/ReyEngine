@@ -406,10 +406,18 @@ public sealed class TroyBinFile
 
         var emitters = new List<TroyEmitter>();
         var groupParts = new List<TroyGroupPart>();
+        // M531: skip gaps, do not stop at them. GroupPart numbering is NOT dense - FireTorch_Med has
+        // 1,2,3,5,6,7 - and stopping at the first missing index silently drops every emitter after the
+        // hole. Measured over the legacy corpus: 707 of 5,851 files have a gap, costing 2,520 of 23,089
+        // emitters. FireTorch_Med produced 3 of its 6 (losing FlameDark, HeatHaze, Glow) and SmallTorch
+        // 2 of 3. That these are real is not an assumption: Riot's own conversion Jade_FireTorch_Med in
+        // Map12's jade.materials.bin ships exactly the 6 emitters the scan was truncating.
+        //
+        // The scan stays bounded at 64, so walking past a hole costs 64 dictionary probes, not a search.
         for (int i = 1; i <= 64; i++)
         {
-            if (!sections.TryGetStringOffset(TroyHash.EmitterNameKey(i), out int nameOffset)) break;
-            if (StringAt(nameOffset) is not { } name) break;
+            if (!sections.TryGetStringOffset(TroyHash.EmitterNameKey(i), out int nameOffset)) continue;
+            if (StringAt(nameOffset) is not { } name) continue;
             groupParts.Add(new TroyGroupPart(i, name,
                 SystemStr(TroyFields.GroupPartType(i)), SystemStr(TroyFields.GroupPartImportance(i))));
             emitters.Add(new TroyEmitter(

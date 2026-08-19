@@ -506,7 +506,7 @@ public static class LegacyMapPorter
         if (target.Version < 17)
             throw new InvalidDataException("The legacy porter currently requires a mapgeo v17 or v18 destination.");
 
-        var textureIndex = new LegacyTextureIndex(Path.GetDirectoryName(source)!);
+        var textureIndex = new LegacyAssetIndex(Path.GetDirectoryName(source)!);
         var nvrMaterials = isNvr ? ParseNvrMaterials(sourceBytes) : new(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
         using var stream = new MemoryStream(sourceBytes, writable: false);
@@ -1041,30 +1041,6 @@ public static class LegacyMapPorter
     private static bool Reasonable(Vector3 value) =>
         float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z)
         && MathF.Abs(value.X) < 10_000_000f && MathF.Abs(value.Y) < 10_000_000f && MathF.Abs(value.Z) < 10_000_000f;
-
-    private sealed class LegacyTextureIndex
-    {
-        private readonly Dictionary<string, string> _files = new(StringComparer.OrdinalIgnoreCase);
-        public LegacyTextureIndex(string sceneFolder)
-        {
-            foreach (string file in Directory.EnumerateFiles(sceneFolder, "*", SearchOption.AllDirectories)
-                         .Where(p => p.EndsWith(".dds", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".tga", StringComparison.OrdinalIgnoreCase)
-                                  || p.EndsWith(".tex", StringComparison.OrdinalIgnoreCase)))
-            {
-                _files.TryAdd(Path.GetFileName(file), file);
-                _files.TryAdd(Path.GetFileNameWithoutExtension(file), file);
-            }
-        }
-        public bool TryResolve(string reference, out string file)
-        {
-            string name = Path.GetFileName(reference.Replace('\\', '/'));
-            if (_files.TryGetValue(name, out file!)) return true;
-            if (_files.TryGetValue(Path.GetFileNameWithoutExtension(name), out file!)) return true;
-            string stem = Path.GetFileNameWithoutExtension(name);
-            foreach (string ext in new[] { ".dds", ".tga", ".tex" }) if (_files.TryGetValue(stem + ext, out file!)) return true;
-            file = ""; return false;
-        }
-    }
 
     private readonly record struct SurfaceKey(LegacyMaterialRole Role, string TextureSet, bool DoubleSided);
     private readonly record struct MaterialKey(LegacyMaterialRole Role, string TextureSet);

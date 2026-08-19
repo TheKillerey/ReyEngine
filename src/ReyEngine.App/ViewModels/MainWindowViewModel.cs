@@ -1863,6 +1863,147 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// 2,381,029 times against 70 <c>.dds</c>, so the converted system points at a .tex and the DDS is
     /// wrapped (or re-encoded when it cannot be wrapped) here.
     /// </summary>
+    /// <summary>
+    /// M531: import a legacy map's particles - the systems AND where they stood.
+    ///
+    /// <para>The placement list is <c>Particles.dat</c>, a plain-text file beside the source room. Each
+    /// distinct <c>.troybin</c> it names is converted once and imported as a VfxSystemDefinitionData;
+    /// each line becomes a MapParticle placement linked to it. Positions get the SAME translation the
+    /// geometry got and nothing else - legacy particle coordinates were measured to share the NVR's
+    /// space (541 of Map2's 554 sit within 25 units of an NVR vertex in XZ).</para>
+    ///
+    /// <para>Assets come off the legacy folder tree, NOT the installed patch: these systems reference 49
+    /// textures by bare .tga name, none of which exist as .tga and none of which ship in the patch at
+    /// all - they are .dds split across DATA/Particles and DATA/Shared/Particles.</para>
+    ///
+    /// <para>Returns the edited bin, or null with the reason logged. A failure leaves the caller's bytes
+    /// untouched, because a half-imported particle set is worse than none: a placement whose system link
+    /// dangles is a hard error at map load.</para>
+    /// </summary>
+    private byte[]? ImportLegacyParticles(byte[] binBytes, string sourceFile,
+        System.Numerics.Vector3 translation, WadAssetEntry destinationMap, out string summary)
+    {
+        summary = "";
+        if (!TryFindLegacyParticleSources(sourceFile, out string dat, out var folders))
+        { _log.Info("Legacy Port", "No Particles.dat beside the source room - nothing to import."); return binBytes; }
+
+        Formats.MapGeo.LegacyParticlePortPlan plan;
+        try { plan = Formats.MapGeo.LegacyParticlePorter.PlanFromDisk(dat, folders, translation); }
+        catch (Exception ex) { _log.Error("Legacy Port", $"Particles.dat could not be read: {ex.Message}"); return null; }
+
+        foreach (string warning in plan.Warnings.Take(8)) _log.Warn("Legacy Port", warning);
+        if (plan.Warnings.Count > 8)
+            _log.Warn("Legacy Port", $"{plan.Warnings.Count - 8:n0} additional particle warning(s) omitted.");
+        if (plan.Placements.Count == 0)
+        { _log.Warn("Legacy Port", "Particles.dat named no importable systems."); return binBytes; }
+
+        // One import for every system at once, so the graph importer resolves shared dependencies once.
+        var graph = BinObjectGraphImporter.Import(binBytes,
+            plan.Systems.Select(system => system.Conversion.BinBytes).ToArray(),
+            plan.Systems.Select(system => system.SystemHash).ToArray(), out var graphError);
+        if (graph is null)
+        { _log.Error("Legacy Port", $"Particle systems could not be imported: {graphError}"); return null; }
+
+        // Keys must be reserved as a batch. NewParticleId reads the keys the tree holds RIGHT NOW, so
+        // calling it per placement hands back the same key and the write keeps only the first.
+        var tree = SafeBinTree.Parse(graph.Bytes);
+        var ids = MapPlaceableWriter.NewParticleIds(tree,
+            plan.Placements.Select(placement => HashAlgorithms.Fnv1a(placement.Name)));
+        if (ids.Count != plan.Placements.Count)
+        { _log.Error("Legacy Port", "This map has no MapPlaceableContainer, so it cannot hold particle placements."); return null; }
+
+        var edits = plan.Placements.Select((placement, i) => new MapPlacementEdit(ids[i])
+        {
+            CreateParticle = true,
+            Name = placement.Name,
+            Transform = placement.Transform,
+            SystemLink = placement.SystemHash,
+        }).ToList();
+
+        byte[]? placed = MapPlaceableWriter.WriteEdits(graph.Bytes, edits, out var placeError);
+        if (placed is null)
+        { _log.Error("Legacy Port", $"Particle placements could not be written: {placeError}"); return null; }
+        if (!string.IsNullOrWhiteSpace(placeError)) _log.Warn("Legacy Port", placeError);
+
+        var staged = StageLegacyParticleAssets(plan.Assets, folders, destinationMap);
+        if (staged.Missing.Count > 0)
+            _log.Warn("Legacy Port", $"{staged.Missing.Count:n0} particle asset(s) were not found and will render "
+                + "untextured: " + string.Join(", ", staged.Missing.Take(4))
+                + (staged.Missing.Count > 4 ? "..." : ""));
+
+        summary = $"{plan.Placements.Count:n0} particle placement(s) from {plan.Systems.Count:n0} system(s), "
+            + $"{staged.Written:n0} asset(s)";
+        return placed;
+    }
+
+    /// <summary>The legacy folder layout: <c>LEVELS/&lt;Map&gt;/Particles.dat</c> beside the room, and the
+    /// .troybin corpus under <c>DATA/Particles</c> at the client root. Both are found by walking up from
+    /// the source room rather than being asked for, since the port already knows where the room is.</summary>
+    private static bool TryFindLegacyParticleSources(string sourceFile, out string dat, out string[] folders)
+    {
+        dat = ""; folders = Array.Empty<string>();
+        var dir = new DirectoryInfo(Path.GetDirectoryName(sourceFile) ?? ".");
+
+        for (int up = 0; up < 4 && dir is not null; up++, dir = dir.Parent)
+        {
+            string candidate = Path.Combine(dir.FullName, "Particles.dat");
+            if (!File.Exists(candidate)) continue;
+            dat = candidate;
+
+            for (var root = dir.Parent; root is not null; root = root.Parent)
+            {
+                string data = Path.Combine(root.FullName, "DATA");
+                if (!Directory.Exists(data)) continue;
+                folders = new[]
+                {
+                    Path.Combine(data, "Particles"),
+                    Path.Combine(data, "Shared", "Particles"),
+                }.Where(Directory.Exists).ToArray();
+                break;
+            }
+            return folders.Length > 0;
+        }
+        return false;
+    }
+
+    /// <summary>Stage particle art out of the LEGACY folder tree. The Workshop path cannot serve this -
+    /// it resolves by WAD path-hash into the installed patch, where none of these assets exist.</summary>
+    private (int Written, IReadOnlyList<string> Missing) StageLegacyParticleAssets(
+        IReadOnlyList<Formats.Particles.TroyAssetMapping> assets, string[] folders, WadAssetEntry destinationMap)
+    {
+        var index = new Formats.MapGeo.LegacyAssetIndex(folders, Formats.MapGeo.LegacyAssetIndex.ParticleExtensions);
+        var missing = new List<string>();
+        var sources = new List<(string Path, byte[] Bytes)>();
+
+        foreach (var asset in assets)
+        {
+            string target = asset.TargetPath.Trim().Replace('\\', '/').TrimStart('/');
+            if (target.Length == 0 || target.Split('/').Any(part => part == "..")) { missing.Add(asset.SourcePath); continue; }
+            if (!index.TryResolve(asset.SourcePath, out string file)) { missing.Add(asset.SourcePath); continue; }
+
+            byte[] bytes;
+            try { bytes = File.ReadAllBytes(file); }
+            catch (IOException) { missing.Add(asset.SourcePath); continue; }
+
+            if (asset.NeedsTexTranscode)
+            {
+                try
+                {
+                    if (!TexWriter.TryWrapDds(bytes, out var wrapped))
+                        wrapped = TexWriter.Write(TextureDecoder.Decode(bytes), TexFormat.Bc3, mipmaps: true);
+                    bytes = wrapped;
+                }
+                catch { missing.Add(asset.SourcePath); continue; }
+            }
+            sources.Add((target, bytes));
+        }
+
+        // Unlike the Workshop path this writes what it HAS: a missing texture makes one emitter render
+        // untextured, where refusing the whole batch would lose the entire particle set.
+        var written = WriteStagedAssets(sources, destinationMap, new List<string>());
+        return (written.Written, missing.Concat(written.Missing).ToArray());
+    }
+
     private (int Written, IReadOnlyList<string> Missing) StageLegacyTroyAssets(
         IReadOnlyList<Formats.Particles.TroyAssetMapping> assets, WadAssetEntry destinationMap)
     {
@@ -9611,6 +9752,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var texture in result.Textures)
                 WriteBakedAsset(texture.TargetPath, texture.Bytes, Path.GetExtension(texture.TargetPath));
 
+            // M531: the source map's own particles. Placed with the SAME translation the geometry got -
+            // legacy particle coordinates share the NVR's space, so that shift is the whole correction.
+            string particleSummary = "";
+            if (selection?.ImportLegacyParticles == true)
+            {
+                var withParticles = ImportLegacyParticles(binBytes, result.SourceFile,
+                    correctedLegacyPosition ? legacyCorrection : System.Numerics.Vector3.Zero,
+                    binEntry, out particleSummary);
+                if (withParticles is null)
+                    _log.Warn("Legacy Port", "Particles were not imported; the rest of the port is unaffected.");
+                else binBytes = withParticles;
+            }
+
             if (!await SaveMapBinBytesAsync(binEntry, binBytes))
                 throw new InvalidDataException("The companion materials bin could not be saved.");
 
@@ -9643,7 +9797,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // M473: report the correction that was ACTUALLY used, not the default constant - they are
                 // no longer the same thing now that the port window can override it.
                 (correctedLegacyPosition ? $"; imported geometry moved by ({legacyCorrection.X:0.###}, " +
-                    $"{legacyCorrection.Y:0.###}, {legacyCorrection.Z:0.###})." : "."));
+                    $"{legacyCorrection.Y:0.###}, {legacyCorrection.Z:0.###})." : ".")
+                + (particleSummary.Length > 0 ? $" Imported {particleSummary}." : ""));
             // M474: stated explicitly because the number is legitimately small and looks like a failure.
             // Measured on two real rooms, only 0.3% (Map10) and 2% (Map8) of source geometry declares a
             // second UV at all - it is the four-blend terrain's mask UV, not a map-wide lightmap unwrap.

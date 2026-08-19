@@ -45,6 +45,9 @@
               <CheckBox Grid.Row="2" Grid.Column="0" Content="{Binding PropCleanupText}" IsChecked="{Binding RemoveOriginalProps}" FontSize="10" />
               <CheckBox Grid.Row="2" Grid.Column="1" Content="{Binding SoundCleanupText}" IsChecked="{Binding RemoveOriginalSounds}" FontSize="10" />
               <CheckBox Grid.Row="3" Grid.Column="0" Content="{Binding ProbeCleanupText}" IsChecked="{Binding RemoveOriginalProbes}" FontSize="10" />
+              <!-- M531: the only IMPORT switch in a grid of removals, so it says so. -->
+              <CheckBox Grid.Row="3" Grid.Column="1" Content="Import source particles" IsChecked="{Binding ImportLegacyParticles}" FontSize="10"
+                        ToolTip.Tip="Bring the source map's own particles across: its Particles.dat placement list and each .troybin it names. Placed with the same position correction the geometry gets." />
             </Grid>
             <Border Background="#261F12" BorderBrush="#80601D" BorderThickness="1" CornerRadius="4" Padding="8,6">
               <TextBlock Text="{Binding CleanupOutcome}" FontSize="10" FontWeight="SemiBold" TextWrapping="Wrap"

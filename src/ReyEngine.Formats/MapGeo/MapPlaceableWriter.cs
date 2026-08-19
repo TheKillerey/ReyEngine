@@ -163,6 +163,39 @@ public static class MapPlaceableWriter
         return new MapPlacementId(container.PathHash, candidate);
     }
 
+    /// <summary>
+    /// M531: allocate MANY placement identities at once.
+    ///
+    /// <para><see cref="NewParticleId"/> derives its key from the keys the tree holds RIGHT NOW, so
+    /// calling it in a loop before applying anything hands out the same key repeatedly - and a batch
+    /// write then silently drops all but the first, because TryApply refuses a key that is taken. A bulk
+    /// import (Map2 ports 554 placements in one pass) has to reserve as it goes.</para>
+    ///
+    /// <para>Returns as many ids as there are seeds, in order, or an empty list when the map has no
+    /// placeable container to put them in.</para>
+    /// </summary>
+    public static IReadOnlyList<MapPlacementId> NewParticleIds(BinTree tree, IEnumerable<uint> seeds)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(seeds);
+
+        var container = tree.Objects.Values.FirstOrDefault(o => o.ClassHash == ContainerClass
+            && o.Properties.GetValueOrDefault(F_items) is BinTreeMap);
+        if (container is null) return Array.Empty<MapPlacementId>();
+
+        var items = (BinTreeMap)container.Properties[F_items];
+        var used = items.Where(e => e.Key is BinTreeHash).Select(e => ((BinTreeHash)e.Key).Value).ToHashSet();
+
+        var ids = new List<MapPlacementId>();
+        foreach (uint seed in seeds)
+        {
+            uint candidate = seed * 2654435761u + 0x9E3779B9u;
+            while (candidate == 0 || !used.Add(candidate)) candidate++;
+            ids.Add(new MapPlacementId(container.PathHash, candidate));
+        }
+        return ids;
+    }
+
     private static bool TryApply(BinTree tree, MapPlacementEdit edit)
     {
         if (!edit.Id.IsValid) return false;

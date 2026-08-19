@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -35,7 +35,9 @@ public sealed record LegacyMapPortShaderSelection(
     LegacyPortCleanupOptions Cleanup,
     bool FixImportedMapPosition,
     // M473: the correction is no longer a constant only a rebuild could change.
-    System.Numerics.Vector3 PositionCorrection);
+    System.Numerics.Vector3 PositionCorrection,
+    // M531: import the source map's own particles - Particles.dat plus the .troybin it names.
+    bool ImportLegacyParticles = true);
 
 public sealed record LegacyDestinationContentSummary(
     int OrdinaryMeshes,
@@ -136,6 +138,10 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     partial void OnRemoveOriginalMeshesChanged(bool value) => UpdateCleanupOutcome();
     partial void OnRemoveOriginalBushesChanged(bool value) => UpdateCleanupOutcome();
     partial void OnRemoveUnusedOriginalMaterialsChanged(bool value) => UpdateCleanupOutcome();
+    /// <summary>M531: bring the source map's particles across - its Particles.dat placement list and
+    /// each .troybin it names. Off means the ported map keeps whatever particles the destination had.</summary>
+    [ObservableProperty] private bool _importLegacyParticles = true;
+
     partial void OnRemoveOriginalParticlesChanged(bool value) => UpdateCleanupOutcome();
     partial void OnRemoveOriginalPropsChanged(bool value) => UpdateCleanupOutcome();
     partial void OnRemoveOriginalSoundsChanged(bool value) => UpdateCleanupOutcome();
@@ -239,7 +245,7 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
             RemoveOriginalSounds, RemoveOriginalProbes);
         Confirmed?.Invoke(new LegacyMapPortShaderSelection(options,
             Materials.ToDictionary(material => material.Name, material => material.SelectedShader!, StringComparer.OrdinalIgnoreCase),
-            cleanup, FixImportedMapPosition, ParsedCorrection));
+            cleanup, FixImportedMapPosition, ParsedCorrection, ImportLegacyParticles));
     }
 
     [RelayCommand]
