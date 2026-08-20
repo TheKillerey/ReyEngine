@@ -40,6 +40,32 @@ public sealed record TroyProbability(
     /// empty table rather than none: the container is read by INDEX, so a missing element would shift
     /// Y into X.</para>
     /// </summary>
+    /// <summary>
+    /// M535: the same table, but with the unlettered draw moved onto <paramref name="axis"/>.
+    ///
+    /// <para>An unlettered table normally means X, and for scale and velocity that is right - birthScale0
+    /// agrees with Riot 155/155 and birthVelocity 85/85. It is wrong for the rotation of a quad that
+    /// <c>*p-simpleorient</c> laid FLAT: there the constant is (-90, spin, 0), the -90 is a fixed pitch,
+    /// and the random draw belongs on the yaw. Left on X it multiplies the pitch instead - the client
+    /// computes X = -90 * U(0,360) - and the quad tumbles rather than spinning flat.</para>
+    ///
+    /// <para>Measured on Riot's own conversions: with a constant of (1,0,0) the table is in slot 0 in 21
+    /// of 21 emitters; with (-90, s, 0) it is in slot 1 in 7 of 7, and 1,560 of 2,030 shipped emitters
+    /// with that constant agree.</para>
+    /// </summary>
+    public TroyProbability WithUniformOnAxis(int axis)
+    {
+        if (Uniform.Count == 0) return this;
+        var empty = Array.Empty<(float, float)>();
+        return axis switch
+        {
+            0 => this,
+            1 => new TroyProbability(empty, X, Uniform, Z),
+            2 => new TroyProbability(empty, X, Y, Uniform),
+            _ => this,
+        };
+    }
+
     public IReadOnlyList<(float Probability, float Multiplier)> ForAxis(int axis) => axis switch
     {
         0 => X.Count > 0 ? X : Uniform,

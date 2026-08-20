@@ -470,6 +470,9 @@ public sealed class TroyBinFile
                 Str(name, TroyFields.NormalMap),
                 Num(name, TroyFields.DistortionMode),
                 Num(name, TroyFields.DistortionPower),
+                // M535: the emitter DUTY CYCLE - emit for N seconds in every M. *e-period had no caller
+                // at all, so env_fall_leaves streamed continuously instead of gusting for 3s in every 10.
+                Num(name, TroyFields.EmitterPeriod),
                 // M534: the rotation spreads. Without them every particle is born at one angle and spins
                 // at one rate - which is why env_fall_leaves' leaves all travelled the same way.
                 Spread(name, TroyFields.QuadRotation),

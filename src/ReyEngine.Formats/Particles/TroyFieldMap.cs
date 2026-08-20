@@ -25,6 +25,9 @@ public enum TroyWrite
     /// <summary>An embedded ValueVector3 whose scalar promotes by BROADCAST (x,x,x) rather than by
     /// zero-padding - used where the legacy value is a uniform magnitude.</summary>
     ValueVector3Broadcast,
+    /// <summary>M535: a BARE Vector2 leaf, not wrapped in any Value* struct. Riot uses this for the
+    /// colour-lookup pair and no ValueVector3 form of it exists in 49,936 shipped emitters.</summary>
+    Vector2,
 }
 
 /// <summary>One measured legacy-to-modern field rule.</summary>
@@ -34,6 +37,11 @@ public enum TroyWrite
 /// "agree/total" - so a reader can see how well supported each row is without leaving the file.</param>
 public sealed record TroyMapping(string Legacy, string Modern, TroyWrite Write, string Evidence)
 {
+    /// <summary>M535: the value Riot omits rather than writes. Only meaningful for
+    /// <see cref="TroyWrite.Vector2"/>, where the identity is (1,1) for a scale and (0,0) for an offset -
+    /// so "write when non-zero" is the wrong test for one of them.</summary>
+    public System.Numerics.Vector2 OmitAt { get; init; }
+
     /// <summary>Write a legacy zero rather than omitting it. Nothing in the table sets this today;
     /// it exists because "omit the zero" is a measured rule per field, not a global one.</summary>
     public bool WriteZero { get; init; }
@@ -87,6 +95,9 @@ public static class TroyFieldMap
         // None of these carries a *p-/*e- prefix, which is why every guess missed them.
         new TroyMapping("*single-particle", "isSingleParticle", TroyWrite.BitBool, "122/122"),
         new TroyMapping("*uniformscale", "isUniformScale", TroyWrite.BitBool, "111/111"),
+        // M535: every particle entered its flipbook on frame 0, so a 16-frame torch flame marched through
+        // the sheet in lockstep and visibly pulsed instead of churning. 12 of Map2's 43 emitters carry it.
+        new TroyMapping("*p-randomstartframe", "isRandomStartFrame", TroyWrite.BitBool, "6/6"),
         new TroyMapping("*p-xquadrot-on", "isRotationEnabled", TroyWrite.BitBool, "27/27"),
 
         // ---- motion ------------------------------------------------------------------------------
@@ -103,8 +114,13 @@ public static class TroyFieldMap
         new TroyMapping("*e-uvoffset", "birthUVOffset", TroyWrite.ValueVector3, "43/44"),
 
         // ---- colour lookup -------------------------------------------------------------------------
-        new TroyMapping("*p-colorscale", "colorLookUpScales", TroyWrite.ValueVector3Broadcast, "23/23"),
-        new TroyMapping("*p-coloroffset", "colorLookUpOffsets", TroyWrite.ValueVector3Broadcast, "7/7"),
+        // M535: a BARE Vector2, and read through TryGetVector2 - these are authored in section 8, which
+        // neither TryGetVector3 nor TryGetScalar accepts, so the rule fired on 0.76% of the field and the
+        // old "23/23" evidence could not be reproduced (measured 0 hits over 3,724 paired systems).
+        new TroyMapping("*p-colorscale", "colorLookUpScales", TroyWrite.Vector2, "222/222")
+            { OmitAt = System.Numerics.Vector2.One },
+        new TroyMapping("*p-coloroffset", "colorLookUpOffsets", TroyWrite.Vector2, "7/7")
+            { OmitAt = System.Numerics.Vector2.Zero },
 
         // ---- timing and render state ---------------------------------------------------------------
         new TroyMapping("*e-timeoffset", "timeBeforeFirstEmission", TroyWrite.F32, "50/51"),
@@ -119,12 +135,14 @@ public static class TroyFieldMap
     /// there would differ from every shipped file.</para>
     /// </summary>
     /// <param name="buildVector">M534: how to turn a modern field name and a constant into the property.
+    /// The third argument is which axis an UNLETTERED probability table belongs on - 0 everywhere except
+    /// the simpleorient-2 rotation, where the random draw is the yaw and not the fixed pitch (M535).
     /// The converter passes one that attaches the field's probability tables, which this table has no way
     /// to know about - without it birthRotation0 and birthRotationalVelocity0 are bare constants and every
     /// particle is born at the same angle with the same spin. Null keeps the plain constant.</param>
     public static void Apply(TroySections sections, Func<int, string?> resolveString, string emitter,
         ICollection<BinTreeProperty> into,
-        Func<string, Vector3, BinTreeProperty>? buildVector = null)
+        Func<string, Vector3, int, BinTreeProperty>? buildVector = null)
     {
         ArgumentNullException.ThrowIfNull(sections);
         ArgumentNullException.ThrowIfNull(resolveString);
@@ -156,13 +174,34 @@ public static class TroyFieldMap
             {
                 float spin = sections.TryGetScalar(quadKey, resolveString, out float q) ? q : 0f;
                 var rotation = orient == 2f ? new Vector3(-90f, spin, 0f) : new Vector3(0f, 180f, 90f);
-                into.Add(buildVector?.Invoke("birthRotation0", rotation)
+                // M535: with the quad laid flat, the -90 is a FIXED pitch and the random draw is the
+                // yaw - so an unlettered table belongs on Y. Left on X it multiplies the pitch and the
+                // quad tumbles, which is the same symptom M534 set out to fix, one axis over. Riot puts
+                // it in slot 1 on 7 of 7 twins with this constant. The simpleorient-3 form is left on
+                // axis 0 because no twin measures it.
+                int spreadAxis = orient == 2f ? 1 : 0;
+                into.Add(buildVector?.Invoke("birthRotation0", rotation, spreadAxis)
                     ?? new BinTreeEmbedded(H("birthRotation0"), H("ValueVector3"), new BinTreeProperty[]
                     {
                         new BinTreeVector3(H("constantValue"), rotation),
                     }));
                 orientationHandled = true;
             }
+        }
+
+        // M535: *p-colortype chooses WHICH per-particle quantity indexes the colour-ramp texture we
+        // already write as particleColorTexture. Nothing has ever read it - the constant has no caller -
+        // so 21 of Map2's 43 emitters sample their ramp along the wrong axis and animate through the
+        // wrong colours. It is one legacy key producing TWO bare U8 leaves, so it cannot be a Rules row.
+        //
+        // Riot omits each half at its default (X=1, Y=0), measured 763/764 and 740/764 over 3,724 paired
+        // systems, and writes them unwrapped - never inside a Value* struct.
+        uint colorTypeKey = TroyHash.FieldKey(emitter, TroyFields.ColorType);
+        if (sections.ByKey.ContainsKey(colorTypeKey)
+            && sections.TryGetVector2(colorTypeKey, resolveString, out float typeX, out float typeY))
+        {
+            if (typeX != 1f) into.Add(new BinTreeU8(H("colorLookUpTypeX"), (byte)Math.Clamp(typeX, 0f, 255f)));
+            if (typeY != 0f) into.Add(new BinTreeU8(H("colorLookUpTypeY"), (byte)Math.Clamp(typeY, 0f, 255f)));
         }
 
         foreach (var rule in Rules)
@@ -172,11 +211,20 @@ public static class TroyFieldMap
             // the block above already authored it; writing the row too would emit birthRotation0 twice
             if (orientationHandled && rule.Modern == "birthRotation0") continue;
 
+            if (rule.Write is TroyWrite.Vector2)
+            {
+                if (!sections.TryGetVector2(key, resolveString, out float vx, out float vy)) continue;
+                var pair = new System.Numerics.Vector2(vx, vy);
+                if (pair == rule.OmitAt) continue;
+                into.Add(new BinTreeVector2(H(rule.Modern), pair));
+                continue;
+            }
+
             if (rule.Write is TroyWrite.ValueVector3 or TroyWrite.ValueVector3Broadcast)
             {
                 if (ReadVector(sections, resolveString, key, rule.Write) is not { } v) continue;
                 if (v == Vector3.Zero && !rule.WriteZero) continue;
-                into.Add(buildVector?.Invoke(rule.Modern, v)
+                into.Add(buildVector?.Invoke(rule.Modern, v, 0)
                     ?? new BinTreeEmbedded(H(rule.Modern), H("ValueVector3"), new BinTreeProperty[]
                     {
                         new BinTreeVector3(H("constantValue"), v),
@@ -184,7 +232,11 @@ public static class TroyFieldMap
                 continue;
             }
 
-            if (!sections.TryGetScalar(key, resolveString, out float n)) continue;
+            // M535: sections 8 and 9 hold a PAIR, which TryGetScalar rejects outright - so *p-bindtoemitter
+            // was invisible on 75% of the emitters that carry it (11,339 of 17,123). The first component is
+            // the value; the second is a separate quantity and must not be broadcast over it.
+            if (!sections.TryGetScalar(key, resolveString, out float n)
+                && !sections.TryGetVector2(key, resolveString, out n, out _)) continue;
             if (n == 0f && !rule.WriteZero) continue;
 
             into.Add(rule.Write switch
@@ -224,7 +276,13 @@ public static class TroyFieldMap
             && sections.ByKey.TryGetValue(key, out var e)
             && (e.Section is 6 or 7 || (e.Section == 12 && !sections.TryGetScalar(key, resolve, out _))))
             return v;
-        if (!sections.TryGetScalar(key, resolve, out float n)) return null;
+        if (!sections.TryGetScalar(key, resolve, out float n))
+        {
+            // M535: a two-component section is a real authored value, not a miss. *p-uvscroll-rgb writes
+            // (0, 0.3) here, and rejecting it dropped the scroll entirely.
+            if (sections.TryGetVector2(key, resolve, out float a, out float b)) return new Vector3(a, b, 0f);
+            return null;
+        }
         return write == TroyWrite.ValueVector3Broadcast ? new Vector3(n, n, n) : new Vector3(n, 0f, 0f);
     }
 }

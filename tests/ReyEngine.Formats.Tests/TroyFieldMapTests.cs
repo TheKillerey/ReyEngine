@@ -138,8 +138,15 @@ public sealed class TroyFieldMapTests
         // wrong way round is silent - both produce a valid vec3.
         Assert.Equal(TroyWrite.ValueVector3,
             TroyFieldMap.Rules.Single(r => r.Modern == "birthRotation0").Write);
-        Assert.Equal(TroyWrite.ValueVector3Broadcast,
-            TroyFieldMap.Rules.Single(r => r.Modern == "colorLookUpScales").Write);
+
+        // M535: colorLookUpScales used to be the Broadcast example here, and that was wrong twice over.
+        // Riot writes a BARE Vector2 - 49,936 of 49,936 shipped emitters, with no ValueVector3 form of the
+        // property existing at all - and the legacy value lives in section 8, which neither TryGetVector3
+        // nor TryGetScalar accepts, so the rule fired on 0.76% of the field and its "23/23" evidence
+        // string could not be reproduced (0 hits over 3,724 paired systems).
+        var scales = TroyFieldMap.Rules.Single(r => r.Modern == "colorLookUpScales");
+        Assert.Equal(TroyWrite.Vector2, scales.Write);
+        Assert.Equal(System.Numerics.Vector2.One, scales.OmitAt);   // (1,1) is the identity, not (0,0)
 
         var t = Load("DestroyedBuilding_idle");
         if (t is null) return;

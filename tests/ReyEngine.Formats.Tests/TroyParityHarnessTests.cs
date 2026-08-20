@@ -199,6 +199,16 @@ public sealed class TroyParityHarnessTests
         // up; corpus-wide 830/953 -> 924/953. 0x5932ff9c is FNV-1a("birthrotation0").
         Assert.Equal(1.0, report.Field("0x5932ff9c.0xb4b427aa")?.Agreement ?? 1.0);
 
+        // M535: worldAcceleration is an IntegratedValueVector3 in 244,208 of 244,208 shipped emitters.
+        // Writing it as a ValueVector3 made the client read the property as MALFORMED and drop the value -
+        // it accounted for 7 of the 33 disagreements on this pair set. 0xeb9a4e0f is FNV-1a of the name.
+        Assert.Equal(1.0, report.Field("0xeb9a4e0f.@class")?.Agreement ?? 1.0);
+        // M535: the fields this milestone started writing, each exact against Riot on this pair set -
+        // isRandomStartFrame 6/6, startFrame 7/7, colorLookUpTypeY 8/8, colorLookUpScales 11/11, with no
+        // reference-only or ours-only on any of them.
+        foreach (string field in new[] { "0xe09d5ebb", "0x76f8ad24", "0x2574b022", "0x2674b1b5", "0xf02bd44d" })
+            Assert.Equal(1.0, report.Field(field)?.Agreement ?? 1.0);
+
         // The rules pinned by name, because a silent drift in any one of them is the failure this is for.
         Assert.Equal(1.0, report.Field("blendMode")?.Agreement ?? 1.0);
         Assert.Equal(1.0, report.Field("particleLifetime.constantValue")?.Agreement ?? 1.0);

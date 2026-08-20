@@ -642,3 +642,69 @@ converter now passes it a builder that can attach a spread the rule table has no
 
 Map12 harness: **98.85% over 2,878 comparisons**, up from 98.79% over 2,482. The comparison count rose
 16% because we now write properties we used to omit — and 390 of those 396 new comparisons agree.
+
+
+## M535 — the Map2 audit
+
+An exhaustive audit of all 16 Map2 systems / 43 emitters against Riot's own conversions found **33 gaps**.
+Ten were high impact. This milestone closes eight of them; the rest are recorded below.
+
+### The one I caused
+
+M534 correctly made `*p-simpleorient == 2` write `birthRotation0 = (-90, spin, 0)` so ground quads lie
+flat — but `TroyProbability.ForAxis` can only put an unlettered table on axis 0, so the 0–360 random draw
+multiplied the **pitch** instead of the yaw. Nine emitters tumbled through random pitches, including
+`env_fog_green/fog` — the exact system behind the original "like a mesh going in the height" report.
+Riot puts that table in slot 1 on 7 of 7 twins with this constant, and 1,560 of 2,030 shipped emitters
+agree. Fixed with `WithUniformOnAxis`.
+
+### The systemic one: sections 8 and 9 were unreadable from the field map
+
+`TroyFieldMap` reads through `TryGetScalar` and `TryGetVector3`. Neither accepts the **two-component**
+sections 8 and 9 — and `TryGetVector2` already existed, decoded them correctly, and had no caller outside
+the probability-table reader. Four rules were therefore being queried and silently producing nothing:
+
+| Field | Legacy census | Read before | Read after |
+|---|---|---|---|
+| `bindWeight` (`*p-bindtoemitter`) | 17,123 emitters | 4,272 | 17,032 |
+| `colorLookUpScales` (`*p-colorscale`) | 9,871 | 75 | 9,868 |
+| `colorLookUpOffsets` (`*p-coloroffset`) | — | — | — |
+| `birthUvScrollRate` (`*p-uvscroll-rgb`) | — | — | — |
+
+`colorLookUpScales` was **also the wrong wire type**: Riot writes a bare `Vector2`, with no
+`ValueVector3` form existing in 49,936 shipped emitters. Its `23/22` evidence string could not be
+reproduced — the rule fired 0 times over 3,724 paired systems. Now `222/222`.
+
+### The rest of this milestone
+
+- **`*p-colortype`** → `colorLookUpTypeX`/`colorLookUpTypeY`, two bare U8 leaves omitted at their
+  defaults (X=1, Y=0). Present on 41 of 43 Map2 emitters, non-default on 21, and read by nothing.
+- **`*p-randomstartframe`** → `isRandomStartFrame`. Without it every particle enters its flipbook on
+  frame 0, so a 16-frame torch flame marches through the sheet in lockstep and visibly pulses. **6/6**.
+- **`startFrame` was gated behind `IsFlipbook`** and should not be. An emitter with `numFrames` 1 and a
+  `texDiv` grid is picking ONE still cell out of an atlas — `FireTorch_Med/Flat` takes cell 5 of a 2×3
+  sheet — and the pick was thrown away. **7/7**.
+- **`*e-period` + `*e-active`** → `period` / `timeActiveDuringPeriod`, both `option[f32]`. These are a
+  DUTY CYCLE: `env_fall_leaves` emits for 3 seconds in every 10, so dropping them turned gusts into an
+  even continuous stream. Measured 19/19 each.
+- **`worldAcceleration` had the wrong embedded class** — `IntegratedValueVector3` in **244,208 of
+  244,208** shipped emitters, zero exceptions. A class that does not match the schema reads as MALFORMED,
+  so the value was dropped entirely: the same failure mode M524 found on `lifetime`. It accounted for 7
+  of the 33 disagreements on the harness pair set.
+
+### Result
+
+Harness: **98.92% over 2,953 comparisons, 32 differing** — from 98.85% over 2,878 with 33 differing. Both
+the rate and the absolute count improved, over 75 more compared properties.
+
+### Still open, deliberately
+
+- **`isUniformScale`** — two auditors proposed different predicates (35 of 43 emitters vs a narrower set).
+  Not shipped until one is measured; guessing here scales particles wrongly on 35 emitters.
+- **`*particle-acceleration` over-life curves** — 2 emitters (Bugs_env/bugs, FireTorch_Med/Embers), 12
+  authored keys each, none read.
+- **`*p-orbitvel{XYZ}P{n}`** — the sign-flip table that makes half a torch's embers orbit each way.
+- **`visibilityRadius`** (`*group-vis`, system level), **`directionVelocityScale`** (unnamed key
+  `0x4110B90E`), **`*p-meshtex`** on PumpkinCandle/InsideGlow.
+- **`*p-shadow`** (2,115 emitters) — the obvious modern candidates were tested and all failed. Unidentified.
+- **`*e-rot`** is REFUTED as a gap: Riot's own conversion of the near-twin WaterBugs_env drops it too.

@@ -97,6 +97,10 @@ public sealed record TroyEmitter(
     /// <summary><c>*p-distortion-power</c>, Riot's <c>distortion</c>. Small: 0.02 to 0.1 in the torches
     /// and the cauldron.</summary>
     float? DistortionPower = null,
+    /// <summary>M535: <c>*e-period</c>. With <c>*e-active</c> this is a DUTY CYCLE - emit for
+    /// <c>EmitterActive</c> seconds in every <c>EmitterPeriod</c>. env_fall_leaves is 3 in every 10, so
+    /// dropping it turned gusts of leaves into an even continuous stream.</summary>
+    float? EmitterPeriod = null,
     /// <summary>M534: the probability table on <c>*p-quadrot</c>. Birth rotation is a RANGE, not a value -
     /// env_fall_leaves says "uniform 0..360" - and collapsing it to the constant gave every particle the
     /// same orientation, which reads as the whole effect moving in one direction.</summary>

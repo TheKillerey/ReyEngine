@@ -204,9 +204,12 @@ public static class TroyBinConverter
             // declarative and have no access to them, so birthRotation0 and birthRotationalVelocity0 came
             // out as bare constants - every particle born at one angle, spinning at one rate. For
             // env_fall_leaves the file says birth rotation is uniform 0..360 and spin is -180..+180.
-            TroyFieldMap.Apply(troy.Sections!, troy.StringAt, e.Name, props, (field, value) => field switch
+            TroyFieldMap.Apply(troy.Sections!, troy.StringAt, e.Name, props, (field, value, axis) => field switch
             {
-                "birthRotation0" => ValueVector3(field, value, e.QuadRotationSpread),
+                // M535: `axis` is where an unlettered table belongs. Everywhere but the flat-laid quad's
+                // rotation that is X, which is what birthScale0 (155/155) and birthVelocity (85/85) agree
+                // with; on that rotation the draw is the yaw, so leaving it on X multiplies the -90 pitch.
+                "birthRotation0" => ValueVector3(field, value, e.QuadRotationSpread?.WithUniformOnAxis(axis)),
                 "birthRotationalVelocity0" => ValueVector3(field, value, e.RotationVelocitySpread),
                 "EmitterPosition" => ValueVector3(field, value, e.PostOffsetSpread),
                 _ => ValueVector3(field, value, null),
@@ -230,6 +233,15 @@ public static class TroyBinConverter
             // particleLinger is an OPTION in the modern format, not a plain float
             if (e.ParticleLinger is { } linger && linger > 0f)
                 props.Add(new BinTreeOptional(H("particleLinger"), new BinTreeF32(0, linger)));
+
+            // M535: the emitter DUTY CYCLE. Both are option[f32], the same wire shape as particleLinger
+            // above. env_fall_leaves is authored to emit for 3 seconds in every 10; without these the
+            // leaves fall as an even continuous stream instead of arriving in gusts. Measured 19/19 each
+            // against Riot's paired conversions.
+            if (e.EmitterPeriod is { } period && period > 0f)
+                props.Add(new BinTreeOptional(H("period"), new BinTreeF32(0, period)));
+            if (e.EmitterActive is { } active && active > 0f)
+                props.Add(new BinTreeOptional(H("timeActiveDuringPeriod"), new BinTreeF32(0, active)));
 
             // PRIMITIVE. A mesh emitter names its geometry; everything else gets NO primitive property
             // at all, which is the camera-facing billboard. Writing VfxPrimitiveArbitraryQuad here was
@@ -277,8 +289,13 @@ public static class TroyBinConverter
             {
                 props.Add(new BinTreeU16(H("numFrames"), (ushort)e.FrameCount!.Value));
                 if (e.FrameRate is { } fps && fps > 0f) props.Add(new BinTreeF32(H("frameRate"), fps));
-                if (e.StartFrame is { } sf && sf > 0) props.Add(new BinTreeU16(H("startFrame"), (ushort)sf));
             }
+
+            // M535: startFrame is NOT conditional on being a flipbook. An emitter with numFrames 1 and a
+            // texDiv grid is picking ONE still cell out of an atlas - FireTorch_Med/Flat takes cell 5 of a
+            // 2x3 sheet, LavaCauldron/Surface cell 6 of a 3x3 - and gating it behind IsFlipbook threw that
+            // pick away, so 8 of Map2's 43 emitters drew the wrong cell. Riot writes it either way.
+            if (e.StartFrame is { } sf && sf > 0) props.Add(new BinTreeU16(H("startFrame"), (ushort)sf));
 
             // ---- M423: motion and spawn volume ---------------------------------------------------
             // Without these every particle spawns at one point with zero velocity, which is what made
@@ -291,7 +308,14 @@ public static class TroyBinConverter
 
             Vec3("birthVelocity", e.Velocity, e.VelocitySpread);
             Vec3("birthAcceleration", e.Acceleration);
-            Vec3("worldAcceleration", e.WorldAcceleration);
+            // M535: worldAcceleration is an IntegratedValueVector3, never a ValueVector3 - 244,208 of
+            // 244,208 shipped emitters, zero exceptions. A property whose embedded class does not match
+            // the schema reads as MALFORMED, so the value was being dropped entirely and the ember sparks
+            // on three torches had no world-space acceleration at all. Same failure mode M524 found on
+            // `lifetime`. Everything inside the struct already matched Riot.
+            if (e.WorldAcceleration is { } worldAccel && worldAccel != Vector3.Zero)
+                props.Add(new BinTreeEmbedded(H("worldAcceleration"), H("IntegratedValueVector3"),
+                    new BinTreeProperty[] { new BinTreeVector3(H("constantValue"), worldAccel) }));
             Vec3("birthDrag", e.Drag);
             Vec3("birthOrbitalVelocity", e.OrbitalVelocity);
 
