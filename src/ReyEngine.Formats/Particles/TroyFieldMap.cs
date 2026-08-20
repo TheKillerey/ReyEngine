@@ -171,8 +171,15 @@ public static class TroyFieldMap
     private static Vector3? ReadVector(TroySections sections, Func<int, string?> resolve, uint key,
         TroyWrite write)
     {
+        // M532: a section-12 value counts as an AUTHORED vec3 only when it spells three numbers.
+        // TryGetVector3 now promotes a lone token to (v,v,v), which is what *p-scale needs and what
+        // Riot's own conversions confirm - but 8 of the rules below are measured ZERO-PADDED
+        // (birthRotation0 at 220/227, EmitterPosition at 104/105), so letting the promotion through
+        // here would quietly turn their scalar into a broadcast. TryGetScalar succeeds on a section-12
+        // entry exactly when it is one token, which is what separates the two cases.
         if (sections.TryGetVector3(key, resolve, out var v)
-            && sections.ByKey.TryGetValue(key, out var e) && e.Section is 6 or 7 or 12)
+            && sections.ByKey.TryGetValue(key, out var e)
+            && (e.Section is 6 or 7 || (e.Section == 12 && !sections.TryGetScalar(key, resolve, out _))))
             return v;
         if (!sections.TryGetScalar(key, resolve, out float n)) return null;
         return write == TroyWrite.ValueVector3Broadcast ? new Vector3(n, n, n) : new Vector3(n, 0f, 0f);

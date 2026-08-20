@@ -191,9 +191,31 @@ public sealed class TroySections
             string? s = resolveString(e.Raw[0] | (e.Raw[1] << 8));
             if (s is null) return false;
             var parts = s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length != 3) return false;
             // invariant on purpose: the development locale is German, where "0.4" would parse as 4
             var c = System.Globalization.CultureInfo.InvariantCulture;
+
+            // M532: a section-12 value can be a SINGLE numeric token standing in for a uniform vector,
+            // and refusing it here was the largest silent loss in the reader. *p-scale is authored this
+            // way on 7,081 of 22,180 emitters that have one - the string "20", "100" and so on - and
+            // TryGetScalar reads them all correctly. Only TryGetVector3 refused, so ScaleVector came back
+            // null and the converter substituted an invented 50.
+            //
+            // Riot's own conversions confirm the promotion is uniform: LavaCauldron/Smoke's "20" is
+            // (20,20,20) in Jade_LavaCauldron, GemGlow/glow's "100" is (100,100,100) in Jade_GemGlow.
+            //
+            // Sections 1-5 already promote a scalar this way just below; this is the same rule reaching
+            // the one encoding that spells the number instead of packing it. Blast radius measured over
+            // the whole corpus: *p-scale +7,081 and *p-xscale +923 newly read, and every other vec3 field
+            // the reader asks for gains 0 or 2.
+            if (parts.Length == 1)
+            {
+                if (!float.TryParse(parts[0], System.Globalization.NumberStyles.Float, c, out float uniform))
+                    return false;
+                value = new System.Numerics.Vector3(uniform, uniform, uniform);
+                return true;
+            }
+
+            if (parts.Length != 3) return false;
             if (!float.TryParse(parts[0], System.Globalization.NumberStyles.Float, c, out float x)
                 || !float.TryParse(parts[1], System.Globalization.NumberStyles.Float, c, out float y)
                 || !float.TryParse(parts[2], System.Globalization.NumberStyles.Float, c, out float z))

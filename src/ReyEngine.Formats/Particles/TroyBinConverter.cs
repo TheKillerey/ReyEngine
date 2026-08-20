@@ -88,7 +88,6 @@ public static class TroyBinConverter
     /// converted system is visible at all when it is dropped into a map.</summary>
     private const float DefaultRate = 10f;
     private const float DefaultLifetime = 1f;
-    private const float DefaultScale = 50f;
 
     public static TroyConversionResult Convert(TroyBinFile troy, string systemName, string particlePath)
     {
@@ -185,10 +184,17 @@ public static class TroyBinConverter
             // Legacy and modern both work in League world units, so the decoded scale is used AS IS.
             // The old path multiplied by 50 because it had no real value to work from; doing that to a
             // measured scale of 100 would emit 5,000.
-            Vector3 scale = e.ScaleVector is { } sv && sv != Vector3.Zero
-                ? sv
-                : new Vector3(DefaultScale, DefaultScale, DefaultScale);
-            props.Add(ValueVector3("birthScale0", scale, e.ScaleSpread));
+            // M532: write birthScale0 only when the file actually says one. When *p-scale is genuinely
+            // absent Riot writes NO birthScale0 either - 144 of 154 such emitters across 452 paired
+            // systems (93.5%) - and letting the client apply its own default beats inventing a 50 that
+            // is above the 60th percentile of every scale the artists did author (corpus median 25).
+            //
+            // This used to fire on 372 emitters. 216 of those turned out to HAVE a scale the reader
+            // could not see (see TroySections' section-12 promotion), leaving only the genuinely absent
+            // ones here. Measured over 1,300 paired emitters, birthScale0 agreement goes 82.8% -> 95.6%
+            // and the count of properties we write that Riot does not falls from 240 to 20.
+            if (e.ScaleVector is { } sv && sv != Vector3.Zero)
+                props.Add(ValueVector3("birthScale0", sv, e.ScaleSpread));
 
             // M526: every field whose legacy source was measured against Riot's own conversion. The
             // table is declarative on purpose - each row carries its agreement figure, so what is
@@ -556,6 +562,11 @@ public static class TroyBinConverter
     {
         var props = new List<BinTreeProperty>
         {
+            // M532: NO birthScale0 here. This path runs when the body did not decode at all (110 of
+            // 5,851 legacy files), so there is no scale to carry across - and the measured rule for
+            // "no source value" is that Riot writes the property out entirely rather than inventing
+            // one. The old (50,50,0) was invented twice over: a size above the 60th percentile of
+            // every scale the artists authored, and a zero Z on top of it.
             new BinTreeString(H("emitterName"), note.EmitterName),
             ValueFloat("rate", DefaultRate),
             ValueFloat("particleLifetime", DefaultLifetime),
@@ -564,10 +575,6 @@ public static class TroyBinConverter
             // the undecoded body. Written explicitly so the result does not depend on whatever the game
             // defaults an absent blendMode to.
             new BinTreeU8(H("blendMode"), 1),
-            new BinTreeEmbedded(H("birthScale0"), H("ValueVector3"), new BinTreeProperty[]
-            {
-                new BinTreeVector3(H("constantValue"), new Vector3(DefaultScale, DefaultScale, 0f)),
-            }),
         };
 
         // See ConvertDecoded: NO primitive is the camera-facing billboard, which is what a legacy sprite

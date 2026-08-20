@@ -535,3 +535,56 @@ added **5,803 comparisons** on the paired corpus that nothing had ever checked.
    struct, 26 emitters); `textureMult` has a whole family of `*-mult` sources; `isLocalOrientation`
    needs its omission half explained; and the batch of algebraically-recovered names whose
    verification pass was cut short is still unverified and unused.
+
+
+## M532 — birthScale0 was never a default problem
+
+The largest single disagreement with Riot's own conversions was `birthScale0`, where the converter wrote
+an invented `(50,50,50)`. The value was in the file the whole time.
+
+`*p-scale` is frequently authored in **section 12 as a single numeric token** — the string `"20"`,
+`"100"` — and `TroySections.TryGetVector3` refused that shape twice over: its scalar-promotion branch
+was gated to sections 1–5, and its section-12 branch required exactly three tokens. `TryGetScalar` read
+the same key correctly, so `TroyEmitter.Scale` already held the right number while `ScaleVector` came
+back null and the converter substituted a default.
+
+**Census.** Of 22,180 emitters carrying a `*p-scale`, `TryGetVector3` read 15,086, failed-but-scalar-
+succeeded on **7,081**, and both failed on 13. Every recoverable loss was section 12.
+
+**Blast radius**, measured over the whole corpus before applying it: `*p-scale` +7,081 and `*p-xscale`
++923 newly read; every other vec3 field the reader asks for gained 0 or 2.
+
+Two things the promotion must NOT do:
+
+- **Never promote a zero third component.** `FireTorch_Med/Embers` is `(2,2,0)` in the file and `(2,2,0)`
+  in `Jade_FireTorch_Med`; `GemGlow/littleray` is `(20,60,0)` both sides. Only a lone token promotes.
+- **Never let the promotion reach `TroyFieldMap.ReadVector`.** Eight rules there are measured
+  ZERO-PADDED (`birthRotation0` 220/227, `EmitterPosition` 104/105), so a broadcast would silently
+  change them. The gate now treats a section-12 entry as an authored vec3 only when it spells three
+  numbers — `TryGetScalar` succeeding is exactly the test for "one token".
+
+### The other half: absence is a value
+
+When `*p-scale` is genuinely absent, **Riot writes no `birthScale0` at all** — 144 of 154 such emitters
+across 452 paired systems (93.5%). The converter now does the same rather than inventing a size. 50 was
+a poor invention independently: the corpus median authored scale is **25**, p25 is **8**, and only 454
+of 15,034 emitters that carry one use exactly 50.
+
+### Result
+
+Same harness, same Map12 pair set, before and after:
+
+| | overall | `birthScale0.constantValue` |
+|---|---|---|
+| before | 97.86% | 27/42 — 64.3% |
+| after promotion | 98.65% | 42/42 — 100% |
+| after omission rule | **98.79%** | 42/42, ours-only 240 → 2 |
+
+Over the wider 452-system / 1,300-emitter pairing the rule takes `birthScale0` from 82.8% to 95.6%.
+
+On the 16 systems Map2 uses, **all 43 emitters now read a real scale — 0 defaults, down from 19.**
+Corpus-wide 21,178 of 23,089 emitters (91.7%) read a real scale, up from 65.3%.
+
+One case is a genuine Riot re-tune rather than a decode gap and is left alone: `WaterRipples/ripples` is
+`(20,20,0)` in the file and `(20,20,20)` in `Jade_WaterRipples`, and no key in that 30-key file carries a
+third component of 20 under any reading.

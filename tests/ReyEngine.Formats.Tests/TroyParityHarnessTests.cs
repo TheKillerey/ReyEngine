@@ -181,11 +181,19 @@ public sealed class TroyParityHarnessTests
         if (pairs == 0) return;
         var report = acc.Build();
 
-        // Measured at 93.9% over all 199 paired systems when this was written. The floor is set below
-        // that on purpose: it is a regression alarm, not a target, and Riot re-tuned some of these
-        // effects in the decade since the legacy snapshot so 100% is not the goal.
+        // Measured at 93.9% over all 199 paired systems when this was written, and 98.79% over this
+        // Map12 pair set after M532. The floor is set below that on purpose: it is a regression alarm,
+        // not a target, and Riot re-tuned some of these effects in the decade since the legacy snapshot
+        // so 100% is not the goal.
         Assert.True(report.Agreement >= 0.85,
             $"parity fell to {report.Agreement:P1} over {report.Compared} comparisons");
+        // M532: birthScale0 was the single largest disagreement until the reader learned to promote a
+        // section-12 one-token scalar. On this same pair set it went 27/42 (64.3%) -> 42/42, and the
+        // overall figure 97.86% -> 98.65%. Pinned at 1.0 because the fix is exact: the value was in the
+        // file all along, so anything less than every one means the promotion stopped working.
+        // The path is hashed because this harness runs without a name resolver: 0xf0eb7084 is
+        // FNV-1a("birthscale0") and 0xb4b427aa is FNV-1a("constantvalue").
+        Assert.Equal(1.0, report.Field("0xf0eb7084.0xb4b427aa")?.Agreement ?? 1.0);
 
         // The rules pinned by name, because a silent drift in any one of them is the failure this is for.
         Assert.Equal(1.0, report.Field("blendMode")?.Agreement ?? 1.0);
