@@ -662,7 +662,16 @@ public sealed class D3D11MapParticles
         if (!changed) { ActivePlacements = _active.Count; return; }
 
         foreach (var sim in _wanted)
-            if (!_activeSet.Contains(sim)) sim.Reset();
+            if (!_activeSet.Contains(sim))
+            {
+                sim.Reset();
+                // M536: and then run it up to steady state. Resetting alone showed a placement PART-FILLED
+                // - env_bats needs a full 10-second particle lifetime to reach its authored 150, so a
+                // glance showed about 30 and the map read as far sparser than the game renders it. The
+                // conversion was right; this preview was under-reporting it, which is worse than an
+                // obviously wrong preview because it invites tuning against a number that is not real.
+                sim.PreWarm(sim.NaturalDuration);
+            }
 
         _active.Clear();
         _activeSet.Clear();

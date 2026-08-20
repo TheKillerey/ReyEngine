@@ -210,7 +210,7 @@ public static class TroyBinConverter
                 // rotation that is X, which is what birthScale0 (155/155) and birthVelocity (85/85) agree
                 // with; on that rotation the draw is the yaw, so leaving it on X multiplies the -90 pitch.
                 "birthRotation0" => ValueVector3(field, value, e.QuadRotationSpread?.WithUniformOnAxis(axis)),
-                "birthRotationalVelocity0" => ValueVector3(field, value, e.RotationVelocitySpread),
+                "birthRotationalVelocity0" => ValueVector3(field, value, e.RotationVelocitySpread?.WithUniformOnAxis(axis)),
                 "EmitterPosition" => ValueVector3(field, value, e.PostOffsetSpread),
                 _ => ValueVector3(field, value, null),
             });

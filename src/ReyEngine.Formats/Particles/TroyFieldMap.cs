@@ -158,7 +158,7 @@ public static class TroyFieldMap
         // a baseline of 21/107) and simpleorient 3 means (0,180,90) (14/14). Values 0 and 1 occur on 237
         // corpus emitters but on ZERO paired ones, so there is no measurement behind them and they are
         // left writing nothing rather than guessed at.
-        bool orientationHandled = false;
+        bool orientationHandled = false, spinHandled = false;
         uint orientKey = TroyHash.FieldKey(emitter, TroyFields.SimpleOrient);
         uint quadKey = TroyHash.FieldKey(emitter, TroyFields.QuadRotation);
         if (sections.ByKey.ContainsKey(orientKey)
@@ -186,6 +186,29 @@ public static class TroyFieldMap
                         new BinTreeVector3(H("constantValue"), rotation),
                     }));
                 orientationHandled = true;
+
+                // M536: the SPIN has to follow the same axis, and M535 only moved the rotation. Left on X
+                // it drives the -90 PITCH, so a flat card rotates out of the ground plane for its whole
+                // life - env_fog_green's cards turn up to +/-240 degrees over 8-24s, rolling from flat
+                // through edge-on past vertical. That is the reported "planes floating as smoking".
+                //
+                // Riot's near-twin of this very file - Jade_WormFog/fogflat in Map453, same LoFog01
+                // sprite, same simpleorient, same tables - writes (0, 1, 0) with the table in slot 1.
+                // Across the paired corpus 0 of 31 simpleorient-2 emitters put the spin on axis 0.
+                // Strictly gated on this branch: the 1,631 emitters WITHOUT simpleorient keep axis 0,
+                // where their tables measure 148 to 23 in favour.
+                if (orient == 2f)
+                {
+                    uint spinKey = TroyHash.FieldKey(emitter, TroyFields.RotationVelocity);
+                    if (sections.ByKey.ContainsKey(spinKey))
+                    {
+                        float rate = sections.TryGetScalar(spinKey, resolveString, out float r) ? r : 0f;
+                        into.Add(buildVector?.Invoke("birthRotationalVelocity0", new Vector3(0f, rate, 0f), 1)
+                            ?? new BinTreeEmbedded(H("birthRotationalVelocity0"), H("ValueVector3"),
+                                new BinTreeProperty[] { new BinTreeVector3(H("constantValue"), new Vector3(0f, rate, 0f)) }));
+                        spinHandled = true;
+                    }
+                }
             }
         }
 
@@ -208,8 +231,9 @@ public static class TroyFieldMap
         {
             uint key = TroyHash.FieldKey(emitter, rule.Legacy);
             if (!sections.ByKey.ContainsKey(key)) continue;
-            // the block above already authored it; writing the row too would emit birthRotation0 twice
+            // the block above already authored these; writing the rows too would emit them twice
             if (orientationHandled && rule.Modern == "birthRotation0") continue;
+            if (spinHandled && rule.Modern == "birthRotationalVelocity0") continue;
 
             if (rule.Write is TroyWrite.Vector2)
             {

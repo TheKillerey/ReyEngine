@@ -203,6 +203,11 @@ public sealed class TroyParityHarnessTests
         // Writing it as a ValueVector3 made the client read the property as MALFORMED and drop the value -
         // it accounted for 7 of the 33 disagreements on this pair set. 0xeb9a4e0f is FNV-1a of the name.
         Assert.Equal(1.0, report.Field("0xeb9a4e0f.@class")?.Agreement ?? 1.0);
+
+        // M536: the SPIN follows the same axis as the rotation when *p-simpleorient laid the quad flat.
+        // Left on X it drove the -90 pitch, so a fog card rotated out of the ground plane for its whole
+        // life. 9/9 with zero differences after; 2 differed before. 0x1d779e6a is FNV-1a of the name.
+        Assert.Equal(1.0, report.Field("0x1d779e6a.0xb4b427aa")?.Agreement ?? 1.0);
         // M535: the fields this milestone started writing, each exact against Riot on this pair set -
         // isRandomStartFrame 6/6, startFrame 7/7, colorLookUpTypeY 8/8, colorLookUpScales 11/11, with no
         // reference-only or ours-only on any of them.

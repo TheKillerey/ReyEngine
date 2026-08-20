@@ -354,6 +354,28 @@ public sealed class VfxParticleSimulator
         _stopped = false;   // M185: replaying a stopped system starts it running again
     }
 
+    /// <summary>
+    /// M536: run the system forward to its steady state, so what you see is what the game will show.
+    ///
+    /// <para>A looping ambient emitter takes a full particle lifetime to fill up. The map viewport resets
+    /// a placement to t=0 when it enters the camera set, so anything with a long-lived particle is shown
+    /// part-filled unless you hold the camera still for that long - env_bats needs TEN SECONDS to reach
+    /// its authored 150, and a glance shows 30. That made the editor quietly optimistic about density:
+    /// the conversion was right and the preview was under-reporting it.</para>
+    ///
+    /// <para>Deliberately coarse and bounded. This runs on camera entry, so it is paid per placement per
+    /// activation; a fine step would make panning across a map expensive for accuracy nobody can see in a
+    /// warm-up frame.</para>
+    /// </summary>
+    public void PreWarm(float seconds)
+    {
+        const float step = 1f / 15f;
+        const int maxSteps = 150;                       // 10 s of fill, which covers every Map2 system
+
+        int steps = Math.Min(maxSteps, (int)MathF.Ceiling(MathF.Max(seconds, 0f) / step));
+        for (int i = 0; i < steps; i++) Update(step);
+    }
+
     /// <summary>Advance the whole system by <paramref name="dt"/> seconds and rebuild render instances.</summary>
     // M91: frame-accurate clip events — the sim exists from clip start but stays dormant until its
     // event's StartFrame time. Keeps playback rebuilds atomic (no mid-clip sim resets).

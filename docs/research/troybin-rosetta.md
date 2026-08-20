@@ -708,3 +708,66 @@ the rate and the absolute count improved, over 75 more compared properties.
   `0x4110B90E`), **`*p-meshtex`** on PumpkinCandle/InsideGlow.
 - **`*p-shadow`** (2,115 emitters) — the obvious modern candidates were tested and all failed. Unidentified.
 - **`*e-rot`** is REFUTED as a gap: Riot's own conversion of the near-twin WaterBugs_env drops it too.
+
+
+## M536 — the fog tumbled, and the bats were never wrong
+
+### The fog: the spin was on the pitch
+
+M535 moved `birthRotation0`'s probability table onto the yaw when `*p-simpleorient` lays a quad flat. It
+did **not** move `birthRotationalVelocity0`, which goes through the generic declarative row and stayed on
+axis 0 — the same axis carrying the `-90` pitch. So each fog card rotated *out of the ground plane* at up
+to +/-10 deg/s for its whole 8-24 second life: up to +/-240 degrees, rolling from flat through edge-on
+past vertical. That is "planes floating as smoking, you can see the plane".
+
+Riot has a near-exact twin of this file that had not turned up before: **`Jade_WormFog/fogflat`** in
+`Map453.wad.client`. Same `LoFog01` sprite, same `*p-simpleorient=2`, same `*p-type=1`, same `*p-scale=60`
+with the same 0.5-1.5 spread, same drag field, same `*rendermode`. Every field our converter writes
+matched it **except** this one:
+
+| | ours (before) | Riot |
+|---|---|---|
+| `birthRotation0` | `(-90, 1, 0)`, table slot 1 | same |
+| `birthRotationalVelocity0` | `(1, 0, 0)`, table slot **0** | `(0, 1, 0)`, table slot **1** |
+
+Across the paired corpus, **0 of 31** simpleorient-2 emitters put the spin on axis 0. The rule is strictly
+gated on that branch: the 1,631 emitters *without* simpleorient measure 148 to 23 in favour of axis 0 and
+must keep it.
+
+`birthRotationalVelocity0.constantValue` went 2 differing to **9/9**; overall parity **98.92% -> 99.06%**
+with 32 -> 28 differing.
+
+**Known limitation.** Our own simulator integrates only `rotVel.X` into the channel that carries the
+pitch (`VfxParticleSimulator.cs:743-744`) and packs the yaw statically. After this fix the cards stop
+tumbling and sit flat with a static random yaw — visually correct — but the slow authored yaw drift is
+not shown *in our preview*. The game will do it. Making the preview match needs `Particle.Rot`/`RotVel`
+to become per-axis, which is a separate change with a much wider blast radius.
+
+**Ruled out, with evidence:** soft particles. `softParticleParams` is real and on 6.61% of shipped
+emitters, enriched exactly where you would expect (fog-named 21.3%, smoke 20.7%) — and **the legacy format
+has no source for it**. A 70-name sweep found nothing. Both our renderers already implement it; there is
+simply nothing to convert from.
+
+### The bats: the conversion was right and the preview was lying
+
+`*e-rate` and `*p-life` are read correctly, written correctly, and in Riot's own units. Measured over
+**3,341 paired emitters**, `riotRate / legacyRate` is exactly 1.0 in 92.1% — and for section 4
+specifically, where the bats' rate lives, **630 of 690 at exactly 1.0 and zero at 0.1**. There is also no
+cap to fail to write: a census of all 98 distinct property names over **1,886,803 shipped emitters** found
+nothing that limits particle count.
+
+The file asks for rate 5 x lifetime 10 = 50 per emitter, 3 emitters = **150 per placement**, and Map2
+places `env_bats` 15 times: **2,250 bats**. For scale, Map2's whole implied steady state is 61,214
+particles and the bats are 3.7% of it — `firetorch_med` alone is 21,567.
+
+So why did the editor look fine? Not a clamp — `MaxParticlesPerEmitter` (4000) and `DefaultMaxQuads`
+(30,000) are both far away. The map viewport **resets a placement to t=0 when it enters the camera set**,
+and a 10-second particle lifetime needs ten seconds to fill: a glance shows about 30 of the 150. The
+preview was under-reporting density, which is worse than an obviously wrong preview because it invites
+tuning against a number that is not real. `PreWarm` now runs a newly activated placement up to its steady
+state.
+
+One piece of context worth keeping: when Riot re-tuned these legacy map effects for the modern engine they
+**only ever lowered rates** — 22 lowered and 0 raised across Map12's 163 paired emitters; corpus-wide 170
+lowered, 94 raised, 3,077 identical. A faithful port of a 2009 ambience is not automatically the density
+Riot would ship today.
