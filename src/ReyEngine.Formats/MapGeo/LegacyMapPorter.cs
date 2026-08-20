@@ -251,7 +251,8 @@ public static class LegacyMapPorter
     public static LegacyMapPortResult ApplyShaderOptions(LegacyMapPortResult result,
         LegacyPortShaderOptions options,
         Func<string, string, MacroSupport>? macroSupport = null, Action<string>? note = null,
-        Func<string, LegacyAlphaKind>? alphaKind = null)
+        Func<string, LegacyAlphaKind>? alphaKind = null,
+        IReadOnlyDictionary<string, string>? explicitShaders = null)
     {
         // Report each declined change ONCE per role rather than once per material: a port generates
         // dozens of materials per role and the same sentence eighty times is noise, not information.
@@ -262,6 +263,19 @@ public static class LegacyMapPorter
         // read the textures is no worse off than before.
         string ShaderFor(LegacyMaterialPlan material)
         {
+            // M534: a shader the USER picked outrank everything below, including the alpha classifier.
+            // Without this there was no way to say "I want the default everywhere": the classifier only
+            // stands aside when the chosen Normal shader DIFFERS from the default, so re-affirming the
+            // default was indistinguishable from not choosing at all.
+            //
+            // Routed through here rather than patched on afterwards, because the old overlay replaced only
+            // the shader string and left Parameters and Macros derived from the shader it replaced - a
+            // material moved onto AlphaTest never got its AlphaTestValue.
+            if (explicitShaders is not null
+                && explicitShaders.TryGetValue(material.Name, out string? forced)
+                && !string.IsNullOrWhiteSpace(forced))
+                return forced;
+
             switch (material.Role)
             {
                 case LegacyMaterialRole.Decal: return options.DecalShader;

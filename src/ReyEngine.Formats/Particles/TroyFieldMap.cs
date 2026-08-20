@@ -118,26 +118,69 @@ public static class TroyFieldMap
     /// non-zero. Absence means the author left the default and Riot writes nothing - copying a zero
     /// there would differ from every shipped file.</para>
     /// </summary>
+    /// <param name="buildVector">M534: how to turn a modern field name and a constant into the property.
+    /// The converter passes one that attaches the field's probability tables, which this table has no way
+    /// to know about - without it birthRotation0 and birthRotationalVelocity0 are bare constants and every
+    /// particle is born at the same angle with the same spin. Null keeps the plain constant.</param>
     public static void Apply(TroySections sections, Func<int, string?> resolveString, string emitter,
-        ICollection<BinTreeProperty> into)
+        ICollection<BinTreeProperty> into,
+        Func<string, Vector3, BinTreeProperty>? buildVector = null)
     {
         ArgumentNullException.ThrowIfNull(sections);
         ArgumentNullException.ThrowIfNull(resolveString);
         ArgumentNullException.ThrowIfNull(into);
 
+        // M534: *p-simpleorient decides birthRotation0, and nothing has ever read it. The constant has
+        // existed since M520 with no caller, so a quad the artist laid FLAT ON THE GROUND came out
+        // standing up - the reported "env_fog_green is like a mesh going in the height", and the same on
+        // LavaCauldron's Surface.
+        //
+        // The rule, scored against Riot's own conversions over 1,561 paired emitters: an authored vec3
+        // *p-quadrot always wins; failing that, simpleorient 2 means a -90 pitch about X (101/107, from
+        // a baseline of 21/107) and simpleorient 3 means (0,180,90) (14/14). Values 0 and 1 occur on 237
+        // corpus emitters but on ZERO paired ones, so there is no measurement behind them and they are
+        // left writing nothing rather than guessed at.
+        bool orientationHandled = false;
+        uint orientKey = TroyHash.FieldKey(emitter, TroyFields.SimpleOrient);
+        uint quadKey = TroyHash.FieldKey(emitter, TroyFields.QuadRotation);
+        if (sections.ByKey.ContainsKey(orientKey)
+            && sections.TryGetScalar(orientKey, resolveString, out float orient))
+        {
+            // An authored vec3 outranks it. ReadVector only calls something a vec3 when the file really
+            // spells one, so a lone scalar in *p-quadrot does not qualify and falls through to the pitch.
+            bool authoredVector = sections.ByKey.TryGetValue(quadKey, out var quadEntry)
+                && (quadEntry.Section is 6 or 7
+                    || (quadEntry.Section == 12 && !sections.TryGetScalar(quadKey, resolveString, out _)));
+
+            if (!authoredVector && orient is 2f or 3f)
+            {
+                float spin = sections.TryGetScalar(quadKey, resolveString, out float q) ? q : 0f;
+                var rotation = orient == 2f ? new Vector3(-90f, spin, 0f) : new Vector3(0f, 180f, 90f);
+                into.Add(buildVector?.Invoke("birthRotation0", rotation)
+                    ?? new BinTreeEmbedded(H("birthRotation0"), H("ValueVector3"), new BinTreeProperty[]
+                    {
+                        new BinTreeVector3(H("constantValue"), rotation),
+                    }));
+                orientationHandled = true;
+            }
+        }
+
         foreach (var rule in Rules)
         {
             uint key = TroyHash.FieldKey(emitter, rule.Legacy);
             if (!sections.ByKey.ContainsKey(key)) continue;
+            // the block above already authored it; writing the row too would emit birthRotation0 twice
+            if (orientationHandled && rule.Modern == "birthRotation0") continue;
 
             if (rule.Write is TroyWrite.ValueVector3 or TroyWrite.ValueVector3Broadcast)
             {
                 if (ReadVector(sections, resolveString, key, rule.Write) is not { } v) continue;
                 if (v == Vector3.Zero && !rule.WriteZero) continue;
-                into.Add(new BinTreeEmbedded(H(rule.Modern), H("ValueVector3"), new BinTreeProperty[]
-                {
-                    new BinTreeVector3(H("constantValue"), v),
-                }));
+                into.Add(buildVector?.Invoke(rule.Modern, v)
+                    ?? new BinTreeEmbedded(H(rule.Modern), H("ValueVector3"), new BinTreeProperty[]
+                    {
+                        new BinTreeVector3(H("constantValue"), v),
+                    }));
                 continue;
             }
 

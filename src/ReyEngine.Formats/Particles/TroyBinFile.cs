@@ -280,7 +280,13 @@ public sealed class TroyBinFile
             var keys = new List<(float, float)>();
             for (int i = 1; i <= 8; i++)
             {
-                uint k = TroyHash.FieldKey(emitter, field + axis + "P" + i.ToString(CultureInfo.InvariantCulture));
+                string n = i.ToString(CultureInfo.InvariantCulture);
+                uint k = TroyHash.FieldKey(emitter, field + axis + "P" + n);
+                // M534: some files number the table WITHOUT the P - "*p-quadrot1" rather than
+                // "*p-quadrotP1". Only tried on the axis-free form, and only when the P-form is absent,
+                // so a file using both spellings keeps the one this has always read.
+                if (!sections.ByKey.ContainsKey(k) && axis.Length == 0)
+                    k = TroyHash.FieldKey(emitter, field + n);
                 if (!sections.TryGetVector2(k, Resolve,
                         out float probability, out float multiplier))
                     break;
@@ -458,7 +464,17 @@ public sealed class TroyBinFile
                 Vec(name, TroyFields.XScale),
                 ColorCurve(name),
                 sections.TryGetVector4(TroyHash.FieldKey(name, TroyFields.ColorOverLife), Resolve, out var cm)
-                    ? cm : null));
+                    ? cm : null,
+                // M534: the distortion trio. All three constants have existed since M520 with no caller,
+                // so a heat haze converted as an ordinary billboard showing its white placeholder sprite.
+                Str(name, TroyFields.NormalMap),
+                Num(name, TroyFields.DistortionMode),
+                Num(name, TroyFields.DistortionPower),
+                // M534: the rotation spreads. Without them every particle is born at one angle and spins
+                // at one rate - which is why env_fall_leaves' leaves all travelled the same way.
+                Spread(name, TroyFields.QuadRotation),
+                Spread(name, TroyFields.RotationVelocity),
+                Spread(name, TroyFields.PostOffset)));
         }
         Emitters = emitters;
         ForceFields = forceFields;

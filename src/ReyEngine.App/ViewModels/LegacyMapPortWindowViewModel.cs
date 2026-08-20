@@ -222,9 +222,29 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
             Hint = hint,
             MaterialCount = result.Materials.Count(m => m.Role == role),
             ShaderChoices = choices,
-            SelectedShader = choices.FirstOrDefault(s => s.Equals(preferred, StringComparison.OrdinalIgnoreCase))
+            // M534: open on what the porter ACTUALLY chose for this role, not on the role's nominal
+            // default. The alpha classifier now runs before this dialog, so on a gradient-heavy map most
+            // Normal materials arrive on DefaultEnv_Flat - and a dropdown that still displayed
+            // DefaultEnv_Flat_AlphaTest made picking it a no-op, which is how "I asked for AlphaTest
+            // everywhere and got Flat" happened. Showing the real value makes choosing the other one a
+            // change, which is what carries it through.
+            SelectedShader = Common(result, role, choices)
+                             ?? choices.FirstOrDefault(s => s.Equals(preferred, StringComparison.OrdinalIgnoreCase))
                              ?? choices.FirstOrDefault(),
         });
+    }
+
+    /// <summary>The shader the most materials of this role actually carry, when the choice list offers
+    /// it. Null when the role has no materials, so the caller keeps its nominal default.</summary>
+    private static string? Common(LegacyMapPortResult result, LegacyMaterialRole role, IReadOnlyList<string> choices)
+    {
+        string? common = result.Materials.Where(m => m.Role == role)
+            .GroupBy(m => m.Shader, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(g => g.Count())
+            .Select(g => g.Key)
+            .FirstOrDefault();
+        return common is null ? null
+            : choices.FirstOrDefault(s => s.Equals(common, StringComparison.OrdinalIgnoreCase));
     }
 
     [RelayCommand]

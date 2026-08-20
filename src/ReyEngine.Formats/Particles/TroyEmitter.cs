@@ -86,7 +86,25 @@ public sealed record TroyEmitter(
     /// emitter by construction rather than by the positional guess the converter used to make.</summary>
     IReadOnlyList<(float Time, System.Numerics.Vector4 Color)>? ColorOverLife = null,
     /// <summary>M525: <c>*p-xrgba</c>, the vec4 multiplier for <see cref="ColorOverLife"/>.</summary>
-    System.Numerics.Vector4? ColorMultiplier = null)
+    System.Numerics.Vector4? ColorMultiplier = null,
+    /// <summary>M534: <c>*p-normal-map</c>. A heat haze is a REFRACTION, not a coloured sprite - it
+    /// perturbs what is behind it using this normal map. Without it the emitter falls onto the ordinary
+    /// billboard path and draws its sprite, which for these effects is <c>color-hold</c>: a deliberate
+    /// 8x8 all-white card. That is the reported "HeatHaze is white".</summary>
+    string? NormalMapPath = null,
+    /// <summary><c>*p-distortion-mode</c>, Riot's <c>distortionMode</c>.</summary>
+    float? DistortionMode = null,
+    /// <summary><c>*p-distortion-power</c>, Riot's <c>distortion</c>. Small: 0.02 to 0.1 in the torches
+    /// and the cauldron.</summary>
+    float? DistortionPower = null,
+    /// <summary>M534: the probability table on <c>*p-quadrot</c>. Birth rotation is a RANGE, not a value -
+    /// env_fall_leaves says "uniform 0..360" - and collapsing it to the constant gave every particle the
+    /// same orientation, which reads as the whole effect moving in one direction.</summary>
+    TroyProbability? QuadRotationSpread = null,
+    /// <summary>M534: the probability table on <c>*p-rotvel</c>, the per-particle spin rate.</summary>
+    TroyProbability? RotationVelocitySpread = null,
+    /// <summary>M534: the probability table on <c>*p-postoffset</c>.</summary>
+    TroyProbability? PostOffsetSpread = null)
 {
     /// <summary>An <c>*e-life</c> of -1 means the emitter runs forever.
     /// Torches, auras and buff loops all use it.</summary>

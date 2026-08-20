@@ -588,3 +588,57 @@ Corpus-wide 21,178 of 23,089 emitters (91.7%) read a real scale, up from 65.3%.
 One case is a genuine Riot re-tune rather than a decode gap and is left alone: `WaterRipples/ripples` is
 `(20,20,0)` in the file and `(20,20,20)` in `Jade_WaterRipples`, and no key in that 30-key file carries a
 third component of 20 under any reading.
+
+
+## M534 — three named fields that nothing read
+
+Each had a constant in `TroyFields` and no caller, and each produced a visible defect in a ported map.
+
+### `*p-simpleorient` — the ground-flat pitch
+
+Present on 3,603 of 20,569 emitter sections and read by nothing. It decides `birthRotation0`. Scored
+against Riot's own conversions over 1,561 paired emitters:
+
+```
+*p-quadrot authored as a real vec3  ->  birthRotation0 = that vec3, verbatim
+else *p-simpleorient == 2          ->  (-90, quadrot_scalar, 0)      101/107, from 21/107
+else *p-simpleorient == 3          ->  (0, 180, 90)                   14/14, from 0/14
+else                               ->  (quadrot_scalar, 0, 0)         unchanged
+```
+
+Values **0 and 1 are left writing nothing**: they occur on 237 corpus emitters and on **zero** paired
+ones, so there is no measurement behind them. Guessing would repeat the `isLocalOrientation` mistake M526
+threw out.
+
+Corpus-wide `birthRotation0` agreement 830/953 (87.1%) → 924/953 (97.0%). On the Map12 harness 27/30 →
+30/30. The 832 paired rows without the field score 809/832 either way, so the rule cannot regress them.
+
+The primitive was never the problem — our `VfxPrimitiveArbitraryQuad` already matched Riot on every
+paired emitter.
+
+### `*p-normal-map` / `*p-distortion-mode` / `*p-distortion-power` — the white heat haze
+
+A heat haze REFRACTS what is behind it. Riot expresses that as a `VfxDistortionDefinitionData`. We wrote
+nothing, so the emitter fell onto the ordinary billboard path and drew its own sprite — which for these
+effects is `color-hold`, a deliberate 8×8 all-white card. **The white quad was the correct rendering of
+the wrong pipeline**, not a missing texture: `texture` and `particleColorTexture` already matched
+Jade_LavaCauldron exactly.
+
+The normal map (`distort-heat`) also has to be added to the staging list, which is built only from the
+texture/mesh paths — otherwise the struct points at a file that never arrives.
+
+### The rotation probability tables — "they go in just one direction"
+
+`*p-quadrot` and `*p-rotvel` were written as bare `ValueVector3 { constantValue }`, so every particle was
+born at one angle and spun at one rate. `env_fall_leaves` says birth rotation is uniform 0–360 and spin is
+−180…+180. Reading the tables reaches **9,715** emitters for birth rotation, **4,781** for spin and 355
+for `EmitterPosition`.
+
+Two details: some files number the table without the `P` (`*p-quadrot1`, not `*p-quadrotP1`), tried only
+on the axis-free form and only when the P-form is absent; and `TroyFieldMap` is declarative, so the
+converter now passes it a builder that can attach a spread the rule table has no way to know about.
+
+### Result
+
+Map12 harness: **98.85% over 2,878 comparisons**, up from 98.79% over 2,482. The comparison count rose
+16% because we now write properties we used to omit — and 390 of those 396 new comparisons agree.

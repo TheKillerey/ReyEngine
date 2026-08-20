@@ -195,6 +195,10 @@ public sealed class TroyParityHarnessTests
         // FNV-1a("birthscale0") and 0xb4b427aa is FNV-1a("constantvalue").
         Assert.Equal(1.0, report.Field("0xf0eb7084.0xb4b427aa")?.Agreement ?? 1.0);
 
+        // M534: *p-simpleorient drives birthRotation0. 27/30 -> 30/30 on this pair set when it was wired
+        // up; corpus-wide 830/953 -> 924/953. 0x5932ff9c is FNV-1a("birthrotation0").
+        Assert.Equal(1.0, report.Field("0x5932ff9c.0xb4b427aa")?.Agreement ?? 1.0);
+
         // The rules pinned by name, because a silent drift in any one of them is the failure this is for.
         Assert.Equal(1.0, report.Field("blendMode")?.Agreement ?? 1.0);
         Assert.Equal(1.0, report.Field("particleLifetime.constantValue")?.Agreement ?? 1.0);

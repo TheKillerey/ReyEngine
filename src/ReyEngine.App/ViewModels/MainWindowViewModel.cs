@@ -9640,17 +9640,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .Select(shader => shader.Name)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        LegacyMapPortShaderSelection? selection = null;
-        if (PromptOwner is not null)
-        {
-            selection = await Views.LegacyMapPortWindow.ShowAsync(PromptOwner, result, shaderChoices, destinationSummary);
-            if (selection is null) { Status = "Legacy map port cancelled."; return; }
-        }
-        var cleanup = selection?.Cleanup ?? LegacyPortCleanupOptions.FullReplacement;
-        // M502: let the porter ask the real shader cache before authoring NO_BAKED_LIGHTING, instead of
-        // trusting a hardcoded role list. Measured: 4TextureBlend_WorldProjected does not declare the axis
-        // at all (macro ignored by the client, so writing it only misleads later readers), while
-        // DefaultEnv_Flat_AlphaTest declares it and never cooked it (writing it is the M486 crash).
         var portPerms = ShaderPerms();
         Func<string, string, LegacyMapPorter.MacroSupport>? macroSupport =
             portPerms is { IsAvailable: true }
@@ -9676,16 +9665,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return kind;
         }
 
+        // M534: decide the shaders BEFORE the dialog opens, so its rows show what the porter actually
+        // chose rather than what it proposed before the alpha classifier ran. That is what makes a row
+        // the user re-affirms a real choice instead of an untouched default - the M533 "only changed
+        // rows" filter had no way to tell those apart, so wanting the default everywhere was unsayable.
+        result = LegacyMapPorter.ApplyShaderOptions(result,
+            LegacyPortShaderOptions.Defaults, macroSupport, note: null, ClassifyPortedAlpha);
+
+        LegacyMapPortShaderSelection? selection = null;
+        if (PromptOwner is not null)
+        {
+            selection = await Views.LegacyMapPortWindow.ShowAsync(PromptOwner, result, shaderChoices, destinationSummary);
+            if (selection is null) { Status = "Legacy map port cancelled."; return; }
+        }
+        var cleanup = selection?.Cleanup ?? LegacyPortCleanupOptions.FullReplacement;
+        // M502: let the porter ask the real shader cache before authoring NO_BAKED_LIGHTING, instead of
+        // trusting a hardcoded role list. Measured: 4TextureBlend_WorldProjected does not declare the axis
+        // at all (macro ignored by the client, so writing it only misleads later readers), while
+        // DefaultEnv_Flat_AlphaTest declares it and never cooked it (writing it is the M486 crash).
+
         result = LegacyMapPorter.ApplyShaderOptions(result,
             selection?.RoleShaders ?? LegacyPortShaderOptions.Defaults,
-            macroSupport, m => _log.Info("Port", m), ClassifyPortedAlpha);
-        if (selection is not null)
-            result = result with
-            {
-                Materials = result.Materials.Select(material => selection.MaterialShaders.TryGetValue(material.Name, out string? shader)
-                    ? material with { Shader = shader }
-                    : material).ToList(),
-            };
+            macroSupport, m => _log.Info("Port", m), ClassifyPortedAlpha,
+            selection?.MaterialShaders);
         bool correctedLegacyPosition = selection?.FixImportedMapPosition == true;
         // M473: the correction the USER typed in the port window, not the constant.
         var legacyCorrection = selection?.PositionCorrection ?? LegacyMapPorter.LegacyPositionCorrection;

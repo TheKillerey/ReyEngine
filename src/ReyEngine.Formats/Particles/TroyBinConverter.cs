@@ -153,7 +153,8 @@ public static class TroyBinConverter
         {
             var e = troy.Emitters[i];
             notes.Add(new TroyEmitterNote(e.Name, e.TexturePath, TroyTextureSource.KeyBound, e.MeshPath));
-            foreach (string? p in new[] { e.TexturePath, e.ColorTexturePath, e.TextureMultPath, e.MeshPath })
+            foreach (string? p in new[] { e.TexturePath, e.ColorTexturePath, e.TextureMultPath, e.MeshPath,
+                                          e.NormalMapPath })
                 if (!string.IsNullOrWhiteSpace(p)) used.Add(p!);
 
             var props = new List<BinTreeProperty>
@@ -199,7 +200,17 @@ public static class TroyBinConverter
             // M526: every field whose legacy source was measured against Riot's own conversion. The
             // table is declarative on purpose - each row carries its agreement figure, so what is
             // supported and how well is visible where the rule lives.
-            TroyFieldMap.Apply(troy.Sections!, troy.StringAt, e.Name, props);
+            // M534: hand the table a builder that knows this emitter's probability spreads. The rules are
+            // declarative and have no access to them, so birthRotation0 and birthRotationalVelocity0 came
+            // out as bare constants - every particle born at one angle, spinning at one rate. For
+            // env_fall_leaves the file says birth rotation is uniform 0..360 and spin is -180..+180.
+            TroyFieldMap.Apply(troy.Sections!, troy.StringAt, e.Name, props, (field, value) => field switch
+            {
+                "birthRotation0" => ValueVector3(field, value, e.QuadRotationSpread),
+                "birthRotationalVelocity0" => ValueVector3(field, value, e.RotationVelocitySpread),
+                "EmitterPosition" => ValueVector3(field, value, e.PostOffsetSpread),
+                _ => ValueVector3(field, value, null),
+            });
 
             // M522: the force fields this emitter pulls in. Look each reference up by name - the field
             // sections never appear in the group list, so this is the only route to them.
@@ -233,6 +244,24 @@ public static class TroyBinConverter
                 props.Add(new BinTreeString(H("texture"), ToTargetPath(e.TexturePath!)));
             if (!string.IsNullOrWhiteSpace(e.ColorTexturePath))
                 props.Add(new BinTreeString(H("particleColorTexture"), ToTargetPath(e.ColorTexturePath!)));
+
+            // M534: a heat haze REFRACTS what is behind it - it is not a coloured sprite. Riot expresses
+            // that as a VfxDistortionDefinitionData carrying the normal map; without it the emitter falls
+            // onto the ordinary billboard path and draws its own texture, which for these effects is
+            // color-hold, a deliberate all-white 8x8 card. That is exactly what "HeatHaze is white" is.
+            // Measured against Jade_LavaCauldron: texture and particleColorTexture already matched; this
+            // struct was the only thing missing.
+            if (!string.IsNullOrWhiteSpace(e.NormalMapPath))
+            {
+                var distortion = new List<BinTreeProperty>
+                {
+                    new BinTreeString(H("normalMapTexture"), ToTargetPath(e.NormalMapPath!)),
+                };
+                if (e.DistortionPower is { } power) distortion.Add(new BinTreeF32(H("distortion"), power));
+                if (e.DistortionMode is { } distortMode)
+                    distortion.Add(new BinTreeU8(H("distortionMode"), (byte)Math.Clamp(distortMode, 0f, 255f)));
+                props.Add(new BinTreeStruct(H("distortionDefinition"), H("VfxDistortionDefinitionData"), distortion));
+            }
 
             // a flipbook sheet drawn as one sprite is what made converted effects look like blobs.
             // frameRate is a PLAIN F32 in the modern format (the resolver reads it with GetF32), not a
