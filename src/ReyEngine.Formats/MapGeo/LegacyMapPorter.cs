@@ -270,7 +270,13 @@ public static class LegacyMapPorter
             }
 
             if (alphaKind is null || options.NormalShader != NormalShader) return options.NormalShader;
-            if (!material.Samplers.TryGetValue("DiffuseTexture", out var texture)) return options.NormalShader;
+            // M533: the plan's diffuse is keyed "__diffuse__", not by its sampler name - BuildMaterialPlans
+            // only spells real sampler names for four-blend terrain. Asking for "DiffuseTexture" therefore
+            // MISSED on every ordinary material, so M528's alpha classifier never ran once: every Normal
+            // material took the alpha-tested shader regardless of what its alpha actually held. Both keys
+            // are tried because terrain plans really do use the sampler names.
+            if (!material.Samplers.TryGetValue("__diffuse__", out var texture)
+                && !material.Samplers.TryGetValue("DiffuseTexture", out texture)) return options.NormalShader;
 
             var kind = alphaKind(texture);
             if (kind == LegacyAlphaKind.Cutout) return options.NormalShader;

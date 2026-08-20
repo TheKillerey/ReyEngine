@@ -1897,6 +1897,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (plan.Placements.Count == 0)
         { _log.Warn("Legacy Port", "Particles.dat named no importable systems."); return binBytes; }
 
+        // M533: a RE-PORT must REPLACE the systems its own earlier run wrote.
+        //
+        // BinObjectGraphImporter refuses an object whose hash already exists with DIFFERENT data, so any
+        // improvement to the troybin converter turns the second port of a map into a silent particle
+        // WIPE: the cleanup pass above has already removed the old placements by the time the import is
+        // refused, leaving the systems in the bin and nothing pointing at them. M532 is the measured
+        // case - it changed birthScale0, so systems written by an M531 build no longer compare equal.
+        //
+        // Removing them first is safe because the hash is Fnv1a("Particles/<Name>"), a path only this
+        // porter authors. It is the same thing the port already does for its own materials with
+        // RemoveGeneratedMaterials("LegacyPort/").
+        var priorSystems = SafeBinTree.Parse(binBytes);
+        int replaced = plan.Systems.Count(system => priorSystems.Objects.Remove(system.SystemHash));
+        if (replaced > 0)
+        {
+            using var resetStream = new MemoryStream();
+            priorSystems.Write(resetStream);
+            binBytes = resetStream.ToArray();
+            _log.Info("Legacy Port", $"Replacing {replaced:n0} particle system(s) from an earlier port.");
+        }
+
         // One import for every system at once, so the graph importer resolves shared dependencies once.
         var graph = BinObjectGraphImporter.Import(binBytes,
             plan.Systems.Select(system => system.Conversion.BinBytes).ToArray(),
@@ -2002,6 +2023,36 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // untextured, where refusing the whole batch would lose the entire particle set.
         var written = WriteStagedAssets(sources, destinationMap, new List<string>());
         return (written.Written, missing.Concat(written.Missing).ToArray());
+    }
+
+    /// <summary>
+    /// M533: what would have to change for <paramref name="macro"/> to be legal on this material.
+    ///
+    /// <para>ShaderPermutationIndex.SuggestFixes judges a material AS IT STANDS, and this material is
+    /// currently cooked - it renders - so asking it directly returns nothing. The question is about the
+    /// material WITH the macro, which means probing.</para>
+    ///
+    /// <para>The probe runs on a THROWAWAY copy, re-parsed from the editor's own bytes. Setting the macro
+    /// on the live model and undoing it afterwards would work most of the time, and "most of the time" is
+    /// not a good enough guarantee for a document the user is about to save.</para>
+    /// </summary>
+    private IReadOnlyList<string> SuggestMacroFixes(Formats.Materials.MaterialBinding material, string macro)
+    {
+        if (ShaderPerms() is not { IsAvailable: true } perms) return Array.Empty<string>();
+        try
+        {
+            if (MaterialEditor.Serialize() is not { } bytes) return Array.Empty<string>();
+            var copy = Formats.Materials.MaterialDocument.Parse(bytes, ResolveBinName);
+            var probe = copy?.Materials.FirstOrDefault(m =>
+                string.Equals(m.Name, material.Name, StringComparison.OrdinalIgnoreCase));
+            if (probe is null || probe.SetMacro(macro, true) is null) return Array.Empty<string>();
+            return perms.SuggestFixes(probe);
+        }
+        catch (Exception ex)
+        {
+            _log.Info("Material", $"Could not work out what {macro} would need: {ex.Message}");
+            return Array.Empty<string>();
+        }
     }
 
     private (int Written, IReadOnlyList<string> Missing) StageLegacyTroyAssets(
@@ -5559,6 +5610,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
         MaterialEditor.Edited = ScheduleAutoSave;   // M505: arm auto-save on the EDIT, not on the preview
         MaterialEditor.AskMacroSupport = CachedMacroSupport;   // M506: inline permutation verdicts
+        MaterialEditor.Warn = m => _log.Warn("Material", m);                 // M533
+        MaterialEditor.AskMacroFixes = SuggestMacroFixes;                    // M533
         MaterialEditor.SaveOverride = SaveMaterialOverride;
         MaterialEditor.RequestCatalog = LoadShaderCatalogAsync;   // M103
         MaterialEditor.RequestCommonShaderSetup = LoadCommonShaderSetupAsync;
@@ -9761,12 +9814,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     correctedLegacyPosition ? legacyCorrection : System.Numerics.Vector3.Zero,
                     binEntry, out particleSummary);
                 if (withParticles is null)
-                    _log.Warn("Legacy Port", "Particles were not imported; the rest of the port is unaffected.");
+                    _log.Error("Legacy Port", "Particles were not imported. If this map had particles from "
+                        + "an earlier port, the cleanup pass has already removed their placements - re-run "
+                        + "the port to restore them.");
                 else binBytes = withParticles;
             }
 
             if (!await SaveMapBinBytesAsync(binEntry, binBytes))
                 throw new InvalidDataException("The companion materials bin could not be saved.");
+
+            // M533: the material editor is still holding the document it parsed when the map was OPENED.
+            // Nothing above replaced it, and three things read it: the Inspector's material panel shows
+            // its rows, BuildDx11SceneAsync prefers its serialized bytes over disk while it is dirty
+            // (M501), and the autosave tick would write that pre-port document straight back over the
+            // port. So a re-port left the viewport and the Inspector showing the PREVIOUS port's
+            // materials while the file on disk held the new ones.
+            //
+            // Reloaded BEFORE LoadMapGeoAsync below, because that is what bumps MapGeneration and
+            // rebuilds the D3D11 scene - refreshing afterwards would rebuild from the stale document.
+            if (MaterialEditor.Kind == MaterialSourceKind.MapMaterials
+                && MaterialEditor.BinEntry is { } editing && editing.PathHash == binEntry.PathHash
+                && TryResolveEntry(binEntry.PathHash, out var reloadedBin))
+                await LoadMaterialBinAsync(reloadedBin, alsoRawBin: false);
 
             if (TryWriteToProjectFile(mapEntry, result.MapGeoBytes, out var mapFile))
                 _log.Success("Legacy Port", $"Saved converted mapgeo to {mapFile}.");

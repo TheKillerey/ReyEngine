@@ -523,12 +523,14 @@
                                       <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                                       <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                          <!-- A define the game never cooked for this shader is offered as a
-                                               DISABLED chip that explains itself, not as a working button that
-                                               breaks the map (M486). The name lives in a TextBlock because
-                                               Button.Content eats the first underscore as an access key. -->
+                                          <!-- A define the game never cooked for this shader is never
+                                               APPLIED (M486), but the chip stays clickable: M533 made
+                                               clicking it explain the refusal and name the remedy in the
+                                               console, because a disabled chip reads as "nothing happened"
+                                               and sent the user looking for a broken save instead. The name
+                                               lives in a TextBlock because Button.Content eats the first
+                                               underscore as an access key. -->
                                           <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
-                                                  IsEnabled="{Binding CanAdd}"
                                                   ToolTip.Tip="{Binding Tip}"
                                                   Command="{Binding $parent[ItemsControl].DataContext.AddMacroCommand}"
                                                   CommandParameter="{Binding}">

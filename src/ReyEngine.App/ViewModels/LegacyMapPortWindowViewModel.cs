@@ -25,6 +25,9 @@ public sealed partial class LegacyPortMaterialRowViewModel : ObservableObject
     public required LegacyMaterialRole Role { get; init; }
     public required string TextureName { get; init; }
     public required IReadOnlyList<string> ShaderChoices { get; init; }
+    /// <summary>M533: what the row was seeded with, so confirming the dialog can tell a shader the USER
+    /// picked from one it merely displayed. Sending back every row overrode the porter's own decisions.</summary>
+    public string? InitialShader { get; init; }
     [ObservableProperty] private string? _selectedShader;
     public string RoleText => Role.ToString();
 }
@@ -130,6 +133,7 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
                 TextureName = Path.GetFileName(material.Samplers.Values.FirstOrDefault() ?? "(shader default)"),
                 ShaderChoices = shaderChoices,
                 SelectedShader = material.Shader,
+                InitialShader = material.Shader,
             });
         foreach (var row in ShaderRows) row.SelectionChanged = ApplyRoleShader;
         UpdateCleanupOutcome();
@@ -244,7 +248,12 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
             RemoveUnusedOriginalMaterials, RemoveOriginalParticles, RemoveOriginalProps,
             RemoveOriginalSounds, RemoveOriginalProbes);
         Confirmed?.Invoke(new LegacyMapPortShaderSelection(options,
-            Materials.ToDictionary(material => material.Name, material => material.SelectedShader!, StringComparer.OrdinalIgnoreCase),
+            // M533: only the rows the user actually CHANGED. Every row is seeded with the shader the
+            // porter proposed BEFORE ApplyShaderOptions runs, so sending them all back re-applied those
+            // stale values on top of the porter's decisions - which is why the alpha classifier's result
+            // never survived even once its own lookup was fixed.
+            Materials.Where(material => !string.Equals(material.SelectedShader, material.InitialShader, StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(material => material.Name, material => material.SelectedShader!, StringComparer.OrdinalIgnoreCase),
             cleanup, FixImportedMapPosition, ParsedCorrection, ImportLegacyParticles));
     }
 

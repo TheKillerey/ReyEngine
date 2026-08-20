@@ -578,7 +578,21 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     [RelayCommand]
     private void AddMacro(MacroCandidateViewModel? candidate)
     {
-        if (candidate is null || !candidate.CanAdd) return;
+        if (candidate is null) return;
+
+        // M533: a refused define now SAYS SO. The chip stays clickable on purpose - a disabled control
+        // that silently does nothing is what made this look like a broken save rather than a guard
+        // working as designed. The macro is still never written: this is the M486 crash otherwise.
+        if (!candidate.CanAdd)
+        {
+            var fixes = Owner?.AskMacroFixes?.Invoke(Model, candidate.Name) ?? Array.Empty<string>();
+            Owner?.Warn?.Invoke($"{Model.Name}: the game ships no cooked shader for "
+                + $"{Model.RenderShader} with {candidate.Name}, so it was NOT added - writing it would "
+                + "make the map fail to load."
+                + (fixes.Count > 0 ? " To make it legal: " + string.Join(", ", fixes) + "." : ""));
+            return;
+        }
+
         var macro = Model.SetMacro(candidate.Name, true);
         if (macro is null) return;
         var vm = new MaterialMacroViewModel(macro, this);
@@ -1297,6 +1311,15 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     /// narrower checks answer confidently and wrongly.</para>
     /// </summary>
     public Func<string, IReadOnlyDictionary<string, bool>, string, string, MacroSupport>? AskMacroSupport { get; set; }
+
+    /// <summary>M533: somewhere for this editor to SAY something. It had no logger at all, so a refused
+    /// define was reported only by an 8px chip badge - the user reasonably read "nothing happened" as
+    /// "it was added and the save is broken".</summary>
+    public Action<string>? Warn { get; set; }
+
+    /// <summary>M533: what would have to change for a refused define to become legal on this material.
+    /// The permutation index already knows; nothing was asking it on this path.</summary>
+    public Func<MaterialBinding, string, IReadOnlyList<string>>? AskMacroFixes { get; set; }
 
     partial void OnSelectedShaderEnvironmentChanged(string? value)
     {
