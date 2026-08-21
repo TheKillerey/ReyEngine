@@ -391,6 +391,45 @@ public sealed class ViewportControl : OpenGlControlBase
     private bool _particlePlaybackDirty;
     private uint _softDotTex;
     private readonly System.Diagnostics.Stopwatch _particleClock = new();
+
+    /// <summary>
+    /// M537: ask for the next ANIMATION frame, no faster than <see cref="AnimationFrameSeconds"/>.
+    ///
+    /// <para>The three continuous re-request sites in the render pass - prop idles, flowmap water and live
+    /// particles - each asked for another frame the instant one finished, so an animating viewport ran as
+    /// fast as the GPU allowed. The D3D11 map path had the same shape and measured 2.07 ms per frame
+    /// (~480 fps) with the GPU at 80%.</para>
+    ///
+    /// <para>This DEFERS the request rather than dropping it, so no frame is ever skipped and nothing can
+    /// go stale - the animation simply advances at a sane rate. An ordinary invalidation (a property
+    /// change, a camera move) still calls RequestNextFrameRendering directly and is never delayed.</para>
+    /// </summary>
+    private const double AnimationFrameSeconds = 1.0 / 60.0;
+    private readonly System.Diagnostics.Stopwatch _animFrameClock = System.Diagnostics.Stopwatch.StartNew();
+    private double _lastAnimFrame = double.NegativeInfinity;
+    private bool _animFrameDeferred;
+
+    private void RequestAnimationFrame()
+    {
+        double now = _animFrameClock.Elapsed.TotalSeconds;
+        double due = _lastAnimFrame + AnimationFrameSeconds;
+        if (now >= due) { _lastAnimFrame = now; RequestNextFrameRendering(); return; }
+        if (_animFrameDeferred) return;
+
+        _animFrameDeferred = true;
+        var timer = new Avalonia.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(Math.Max(0.001, due - now)),
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            _animFrameDeferred = false;
+            _lastAnimFrame = _animFrameClock.Elapsed.TotalSeconds;
+            RequestNextFrameRendering();
+        };
+        timer.Start();
+    }
     private SkyboxRenderer? _skyboxRenderer;   // M122
     private bool _skyboxDirty;
     private bool SetSkyboxDirty() { _skyboxDirty = true; return true; }
@@ -1008,7 +1047,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 var frame = SkinnedMeshAnimator.Skin(pm.SknMesh!, pm.Skeleton!, pm.IdleClip, t % dur);
                 _meshRenderer.UpdatePropGeometryVertices(geo, frame.Positions, frame.Normals);
             }
-            RequestNextFrameRendering();
+            RequestAnimationFrame();
         }
         else if (_propAnimClock.IsRunning) _propAnimClock.Reset();
         // M88: draw the NVR map backdrop first (static, lit by the same point lights + sun, never culled
@@ -1049,7 +1088,7 @@ public sealed class ViewportControl : OpenGlControlBase
         // M90: uniform preview-model scale (identity at 1.0 — the main map viewport never changes it).
         _meshRenderer.SetWorldTransform(Matrix4x4.CreateScale((float)ModelScale));
         _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones, CullBackfaces);
-        if (AnimateWater) RequestNextFrameRendering(); // keep frames coming so the water animates
+        if (AnimateWater) RequestAnimationFrame(); // keep frames coming so the water animates, at 60fps
 
         // M36/M60: for Play All, only keep placements near and inside the camera frustum active.
         if (ParticlePlayback is { } playback)
@@ -1150,7 +1189,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 csim.Update(dt);
                 prend.Render(csim, viewProj, view, _camera.EffectiveNear, _camera.Far);
             }
-            RequestNextFrameRendering();
+            RequestAnimationFrame();
         }
 
         // Resolve our offscreen color into Avalonia's framebuffer.

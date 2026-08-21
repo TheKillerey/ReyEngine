@@ -125,8 +125,25 @@ public partial class MainWindow : Window
         _dx11.NotifySceneRebuilt();
     }
 
-    /// <summary>Compositor-driven, like the shader preview window - a DispatcherTimer caps the rate and
-    /// measured 20 fps there. Only runs while the toggle is on.</summary>
+    /// <summary>Target frame interval for the D3D11 map viewport, in seconds.</summary>
+    /// <remarks>
+    /// M537: this loop had NO cap. The doc comment used to claim "a DispatcherTimer caps the rate and
+    /// measured 20 fps" - that describes the shader preview window; nothing capped THIS path. It asked the
+    /// compositor for a frame, rendered, and immediately asked for another, so an idle map with nothing
+    /// moving was re-rendered as fast as the GPU could manage: the in-app frame counter read 2.07 ms, or
+    /// roughly 480 fps, and the GPU sat at 80%.
+    ///
+    /// <para>Capping is deliberately all this does. Rendering only on change would be better still, but it
+    /// can go STALE - roughly twenty live-editable properties are pushed here every frame precisely so no
+    /// one has to remember to invalidate - and a viewport that silently stops updating is a worse bug than
+    /// one that costs too much. Deferring a frame can never go stale: the work still happens, just not
+    /// hundreds of times a second.</para>
+    /// </remarks>
+    private const double Dx11FrameSeconds = 1.0 / 60.0;
+    private readonly System.Diagnostics.Stopwatch _dx11FrameClock = System.Diagnostics.Stopwatch.StartNew();
+    private double _dx11LastFrame = double.NegativeInfinity;
+
+    /// <summary>Compositor-driven and rate-capped. Only runs while the D3D11 toggle is on.</summary>
     private void QueueDx11Frame()
     {
         if (_closed || _dx11FrameQueued) return;
@@ -135,7 +152,15 @@ public partial class MainWindow : Window
         {
             _dx11FrameQueued = false;
             if (_closed || DataContext is not MainWindowViewModel vm || !vm.UseDx11Viewport) return;
-            RenderDx11Frame(vm);
+
+            // Re-queue without drawing when the last frame is still fresh. The loop keeps turning, so
+            // nothing can be missed - it just stops burning a 4090 on a map that is not moving.
+            double now = _dx11FrameClock.Elapsed.TotalSeconds;
+            if (now - _dx11LastFrame >= Dx11FrameSeconds)
+            {
+                _dx11LastFrame = now;
+                RenderDx11Frame(vm);
+            }
             QueueDx11Frame();
         });
     }

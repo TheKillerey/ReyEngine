@@ -771,3 +771,45 @@ One piece of context worth keeping: when Riot re-tuned these legacy map effects 
 **only ever lowered rates** — 22 lowered and 0 raised across Map12's 163 paired emitters; corpus-wide 170
 lowered, 94 raised, 3,077 identical. A faithful port of a 2009 ambience is not automatically the density
 Riot would ship today.
+
+## M537 — the river flow map, disassembled
+
+The `Flow_Map` channel meanings were the open question left by the river research: M44 recovered them by
+splitting a Riot texture by eye, which is the kind of evidence this project does not build on. Blob 20 of
+`assets/shaders/generated/shaders/staticmesh/flowmap_river.ps.dx11` (the `USE_DIFFUSE_TEXTURE=0` cooked
+permutation) settles it.
+
+The texture is sampled exactly once, into `r1.xyz`:
+
+```
+sample_indexable r1.xyz, v2.xyxx, t2.xyzw, s1      // t2 = Flow_Map__TX
+mad r0.zw, r1.xxxy, l(0,0,2,2), l(0,0,-1,-1)      // R and G BOTH sign-decoded
+mad r0.y,  r1.z, r0.y, cb0[3].y                   // B scales flow strength
+...
+mul r0.w,  r1.z, r1.y                             // B gates the colour blend
+mad r0.xy, r0.xyxx, r1.zzzz, r2.xzxx              // B scales the refraction offset
+mul o0.w,  r1.z, cb0[5].y                         // B IS the output alpha
+```
+
+| Channel | Meaning |
+|---|---|
+| **R** | flow direction **X**, signed (0.5 = none) |
+| **G** | flow direction **Y**, signed (0.5 = none) |
+| **B** | the water mask — output alpha, flow strength, tint gate, refraction scale |
+
+**M44 was right about B and wrong about R.** R is not a phase gradient; it is the other half of the flow
+vector, decoded in the same instruction as G. The travelling highlight it was credited with comes from a
+luminance dot of the blended normal (`dp3 r0.w, r0.xyz, l(0.3, 0.59, 0.11, 0)`) smoothstepped between
+`Distortion_Highlight_Contrast` and `Color_Highlight_Contrast`, floored by `Color_Baseline`.
+
+Naming the constants from the reflected `$Globals` layout (offsets 0-96):
+`FlowMap_Speed` multiplies TIME for the two-phase advection; `Flowmap_Strength.x` is the additive term on
+the B-scaled flow; the two `*_Highlight_Contrast` pairs are (min, max) smoothstep ranges, not scalars; and
+`TranslucentControl` is a plain multiplier on the mask alpha.
+
+**Authoring consequence:** a flow map for a river that scrolls uniformly - which is what Map2's
+`Water_Lake_VS` does, two layers at +1.0x and -1.2x TIME - is `B = the shape mask, R = G = 128`. Painting a
+ramp into R, as the pre-disassembly recipe suggested, would push the water sideways along U.
+
+Still open: what `SS_MASK` does. Its 0 and 1 blobs bind the same four textures, so it is not what enables
+depth sampling.
