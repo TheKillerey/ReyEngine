@@ -837,3 +837,46 @@ The only remaining difference between a decal and the ground it sits on is the m
 D3D11 viewport without being lifted, so the question "does the black reproduce in our own renderer" can
 finally be asked. If it does, it is reproducible locally and chaseable. If it does not, the difference is
 something the client does that neither of our renderers does, and the search moves to the frame pipeline.
+
+
+## M542 — the black decals, found
+
+The discriminator M541b asked for came back: the decals render **correctly in our D3D11 viewport and black
+only in the client**. That splits it cleanly - we are substituting something the game does not.
+
+**The port binds no lightmap atlas on any mesh.**
+
+| | meshes | `BakedLight.Texture` set |
+|---|---|---|
+| Riot's shipped Map453/jade_container | 448 | **447 (99.8%)** — `ASSETS/Maps/Lightmaps/.../1.tex` with real scale/bias |
+| the ported map | 92 | **0** |
+
+Every ported material therefore samples a lightmap that is not there. Our renderer binds a **white 1x1
+stand-in** for a missing texture, so multiplying by it changes nothing and the editor looks right. The
+client binds nothing, and the decals come out black. The ground survives it because it is opaque and lit
+by the sun and the point lights; a blended decal has nothing else to contribute colour.
+
+### Why it could not simply be turned off
+
+The fix is `NO_BAKED_LIGHTING`, and M530's Dynamic-lights mode already tries to set it. The permutation
+guard refuses, correctly - measured on this map's own materials:
+
+```
+authored (no macros)                  cooked
++ NO_BAKED_LIGHTING                   NOT cooked      <- M486's crash
++ MULTIPLY_ALPHA                      cooked
++ MULTIPLY_ALPHA + NO_BAKED_LIGHTING  cooked          <- the way through
+```
+
+`ShaderPermutationIndex.SuggestFixes` has been printing "add MULTIPLY_ALPHA=1" the whole time with nothing
+acting on it. It does now.
+
+**Only for BLENDED materials.** `MULTIPLY_ALPHA` makes the shader output premultiplied, which a blend can
+absorb by moving `srcColorBlendFactor` from `SourceAlpha` to `One`; an opaque or alpha-tested draw has no
+blend to compensate with and would darken by its own alpha. Blended is also exactly the affected set.
+
+Measured over the user's real bin: **20 of 20 decals fixed, 67 opaque materials correctly refused**, round
+trip clean (0 parse issues, 0 shape issues), and every fixed material verified cooked.
+
+The proper long-term fix is still to bake a lightmap - `M530`'s "Baked lightmaps (bake now)" mode - since
+that is what Riot ships. This makes the unlit path work on a map that has none.

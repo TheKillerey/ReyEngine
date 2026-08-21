@@ -3110,6 +3110,45 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (plan.RunBake) OpenLightBake();
     }
 
+    /// <summary>
+    /// M542: reach NO_BAKED_LIGHTING on a material whose shader will not cook it alone.
+    ///
+    /// <para>Returns false and leaves the material untouched unless the whole combination is verified
+    /// cooked - the point of the guard is that an uncooked define set is a map that will not load.</para>
+    /// </summary>
+    private static bool TryUnlitViaPremultipliedAlpha(
+        Formats.Materials.MaterialBinding material, Formats.Materials.ShaderPermutationIndex perms)
+    {
+        // Nothing to compensate the premultiply with on an opaque or alpha-tested pass.
+        if (!material.Profile.BlendEnabled) return false;
+        if (material.Profile.SourceColorBlend != Formats.Materials.MaterialBlendFactor.SourceAlpha) return false;
+
+        var existing = material.AllSwitches.FirstOrDefault(x =>
+            x.Name.Equals("MULTIPLY_ALPHA", StringComparison.OrdinalIgnoreCase));
+        bool wasOn = existing?.On ?? false;
+        var sw = existing ?? material.AddSwitch("MULTIPLY_ALPHA");
+        if (sw is null) return false;
+        sw.SetOn(true);
+
+        var macros = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Formats.Materials.MaterialBinding.MacroNoBakedLighting] = "1",
+        };
+        if (!perms.IsCooked(material, macros, out bool sawEvidence) || !sawEvidence)
+        {
+            sw.SetOn(wasOn);            // put it back exactly as found
+            return false;
+        }
+
+        if (material.SetMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting, true) is null)
+        { sw.SetOn(wasOn); return false; }
+
+        // Premultiplied source: One, not SrcAlpha. src*a*a would darken every soft edge twice over.
+        material.SetPassU32("srcColorBlendFactor", (uint)Formats.Materials.MaterialBlendFactor.One);
+        material.SetPassU32("srcAlphaBlendFactor", (uint)Formats.Materials.MaterialBlendFactor.One);
+        return true;
+    }
+
     private async Task SetAllMaterialsNoBakedLighting(bool unlit)
     {
         if (_currentMapEntry is not { } entry)
@@ -3139,7 +3178,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     // 78 DefaultEnv_Flat_AlphaTest materials and League answered "Unable to find correct hash
                     // for shader ... in wad" + "Failed to compile shader" - a map that renders nothing.
                     if (canValidate && !perms!.CanSetMacro(m, Formats.Materials.MaterialBinding.MacroNoBakedLighting, "1"))
-                    { refused++; continue; }
+                    {
+                        // M542: take the remedy the permutation index itself names instead of just giving
+                        // up. On DefaultEnv_Flat_AlphaTest - 86 of this map's 87 materials - the macro is
+                        // uncooked ALONE but cooked together with MULTIPLY_ALPHA, and SuggestFixes has been
+                        // saying exactly that all along with nothing acting on it.
+                        //
+                        // Only for a BLENDED material. MULTIPLY_ALPHA makes the shader output premultiplied,
+                        // which a blend can compensate for by moving SrcAlpha -> One; an opaque or
+                        // alpha-tested draw has no blend to compensate with, so the same switch would darken
+                        // it by its own alpha. Blended is also exactly the set that shows the problem: a
+                        // ported map binds no lightmap atlas on ANY mesh (0 of 92, against 447 of 448 in
+                        // Riot's shipped Map453), our renderer stands in white for the missing texture and
+                        // looks right, and the client has nothing to bind - which is why the decals came out
+                        // black in game and correct in the editor.
+                        if (!TryUnlitViaPremultipliedAlpha(m, perms!)) { refused++; continue; }
+                        changed++;
+                        continue;
+                    }
                     if (m.SetMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting, true) is not null) changed++;
                 }
                 else if (!perms!.CanRemoveMacro(m, Formats.Materials.MaterialBinding.MacroNoBakedLighting)) refused++;
