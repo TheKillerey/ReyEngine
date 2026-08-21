@@ -813,3 +813,27 @@ ramp into R, as the pre-disassembly recipe suggested, would push the water sidew
 
 Still open: what `SS_MASK` does. Its 0 and 1 blobs bind the same four textures, so it is not what enables
 depth sampling.
+
+## M541b — the black decals: what it is NOT
+
+The ported decals render black in the live client. Every property that can be compared against Riot's own
+shipped data was compared, and **all of them match**. Recording the dead ends so they are not re-walked.
+
+| Hypothesis | Verdict | Evidence |
+|---|---|---|
+| Wrong shader / blend state | **matches Riot** | 3,359 `DefaultEnv_Flat_AlphaTest` materials across 8 map WADs: 99.6% alpha-blended, same `SrcAlpha`/`InvSrcAlpha` |
+| Missing `MULTIPLY_ALPHA` | **would be wrong to add** | **0 of 3,359** shipped materials set it |
+| Wrong `TintColor` | **matches Riot** | 92.1% ship `0.5,0.5,0.5`; another 4% ship exactly the `0.5,0.5,0.5,1` these use |
+| Texture is premultiplied | **no, straight alpha** | luminance 103 where alpha is 0 against 99 where opaque — RGB survives under transparency, so `SrcAlpha` is right |
+| Vertex colour darkening it | **impossible** | the cooked VS input signature is `POSITION, NORMAL, TEXCOORD0` — there is no `COLOR` element |
+| Baked lightmap sampling black | **cannot single out decals** | decal and ground meshes are structurally IDENTICAL: both carry Texcoord7, both have an empty `BakedLight.Texture`, same QualityFilter/RenderFlags/Visibility. No mesh in the map has an atlas |
+| `AlphaTestValue 0.005` too low | **a real Riot value** | 175 of 3,359 shipped materials use exactly 0.005 (92.1% use 0.3) |
+| Sampler wrapping (the M490 bug) | **already correct** | all 20 decals are Clamp/Clamp |
+
+The only remaining difference between a decal and the ground it sits on is the material's
+`blendEnable = true` and `DepthWrite = false`. Both are what Riot ships.
+
+**Next discriminator, and it needs the game rather than the files:** with M541 the decals now draw in the
+D3D11 viewport without being lifted, so the question "does the black reproduce in our own renderer" can
+finally be asked. If it does, it is reproducible locally and chaseable. If it does not, the difference is
+something the client does that neither of our renderers does, and the search moves to the frame pipeline.
