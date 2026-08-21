@@ -4279,10 +4279,16 @@ float4 psmain(VOut i) : SV_Target
             // M354: per-material back-face culling, matching GL's M34 rule. The global toggle still wins:
             // turning CullBackFaces off forces everything two-sided, which is what that toggle is for.
             //
+            // M540: that is what the sentence above always SAID, and the operator was OR, which does the
+            // opposite - a global "off" could never force anything two-sided because the material's own
+            // flag still turned culling on. GL's rule is `cullBackfaces && !s.DoubleSided`, an AND, and
+            // this now matches it. Decals are single-sided by material, so under OR they were culled no
+            // matter what the toggle said and were simply absent from the D3D11 image.
+            //
             // Set unconditionally rather than tracked. The distortion and mesh-particle branches inside
             // this same loop bind rasterizer state of their own, so any "what did I last bind" flag here
             // would go stale behind them and silently cull the wrong draws. RSSetState is a pointer swap.
-            _ctx.RSSetState(s.CullBackFaces || mat.CullBackFaces ? _rasterCull : _raster);
+            _ctx.RSSetState(s.CullBackFaces && mat.CullBackFaces ? _rasterCull : _raster);
 
             // M363: snapshot the depth on the FIRST soft-particle material, lazily and once per frame, for
             // the same reason the colour copy is lazy - most frames contain no soft particle at all, and a

@@ -124,6 +124,15 @@ public sealed class Dx11ViewportSurface : IDisposable
 
     /// <summary>M263: wireframe, from the toolbar's Wire toggle. The renderer has always supported it;
     /// nothing was passing it.</summary>
+    /// <summary>M540: the viewport's "Cull" toggle, which never reached this surface at all.
+    ///
+    /// <para>The map host hardcoded CullBackFaces = false and pushed no per-frame value, so the toggle
+    /// did nothing under D3D11 while GL honoured it (<c>cullBackfaces &amp;&amp; !s.DoubleSided</c>).
+    /// Decals are single-sided by material, so they were culled here whatever the user asked for and
+    /// simply were not on screen - which is also why D3D11 could not be used to look at the in-game
+    /// transparency problem.</para></summary>
+    public bool CullBackFaces { get; set; } = true;
+
     public bool Wireframe { get; set; }
 
     /// <summary>M460: bind Riot's glow buffer as RT1, blur it with their own mip chain and composite it
@@ -337,7 +346,7 @@ public sealed class Dx11ViewportSurface : IDisposable
             // as a rendering bug rather than a convention difference.
             AlphaBlend = true,
             DepthTest = true,
-            CullBackFaces = false,
+            CullBackFaces = CullBackFaces,   // M540: the viewport toggle, not a pinned false
             MirrorX = true,
             TransposeMatrices = true,
 
