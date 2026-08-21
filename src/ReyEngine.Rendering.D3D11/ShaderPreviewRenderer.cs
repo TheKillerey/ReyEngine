@@ -3440,11 +3440,21 @@ float4 psmain(VOut i) : SV_Target
         _device.CreateBlendState(in abd, ref abs);
         _blendAdditive = abs;
 
+        // M541: LessEqual, not Less - the same function GL has always used for the scene
+        // (ViewportMeshRenderer sets DepthFunction.Lequal). A DECAL is coplanar with the ground it sits
+        // on by construction, so under Less its fragments compare equal and FAIL, and the decal is not
+        // drawn at all. That is exactly the reported "decals are invisible in DX11 but fine in OpenGL,
+        // and I have to move them up to see them" - raising a decal is a way of turning equal into less.
+        //
+        // The game itself evidently draws these decals over coplanar ground, so LessEqual is also what
+        // the target renders with. The cost is that coincident OPAQUE surfaces now resolve by draw order
+        // rather than by rejection; GL has carried that trade since the beginning and the two viewports
+        // disagreeing about whether geometry exists is the worse of the two problems.
         var dsd = new DepthStencilDesc
         {
             DepthEnable = s.DepthTest,
             DepthWriteMask = DepthWriteMask.All,
-            DepthFunc = ComparisonFunc.Less,
+            DepthFunc = ComparisonFunc.LessEqual,
             StencilEnable = 0,
         };
         ComPtr<ID3D11DepthStencilState> ds = default;
