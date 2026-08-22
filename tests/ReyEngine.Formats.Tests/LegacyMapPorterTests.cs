@@ -120,7 +120,16 @@ public sealed class LegacyMapPorterTests
         }
         Assert.Equal(0.35f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Normal)
             .Parameters["AlphaTestValue"].X);
-        Assert.Equal(0.005f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Decal)
+        // M543: 0.3, not the near-zero floor this used to pin. DefaultEnv_Flat_AlphaTest is an alpha-TEST
+        // shader and the client runs it in the OPAQUE pass, where it writes depth. At 0.3 a transparent
+        // texel is DISCARDED and the ground composites through; at 0.005 nothing is discarded, so every
+        // transparent texel is still shaded AND still stamps depth, rejecting the ground the decal sits on.
+        // Neither of our viewports shows it - both force WritesDepth off for a transparent material (M279)
+        // while the client derives it from the shader class.
+        //
+        // 0.3 is Riot's own value on 3,091 of the 3,347 shipped materials that are DefaultEnv_Flat_AlphaTest
+        // AND blended - the directly comparable set - against 170 still on 0.005.
+        Assert.Equal(0.3f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.Decal)
             .Parameters["AlphaTestValue"].X);
         Assert.Equal(0.01f, mapped.Materials.Single(m => m.Role == LegacyMaterialRole.FourBlendTerrain)
             .Parameters["WS_Multiplier"].X);

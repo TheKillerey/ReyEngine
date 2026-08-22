@@ -880,3 +880,34 @@ trip clean (0 parse issues, 0 shape issues), and every fixed material verified c
 
 The proper long-term fix is still to bake a lightmap - `M530`'s "Baked lightmaps (bake now)" mode - since
 that is what Riot ships. This makes the unlit path work on a map that has none.
+
+
+## M543 — the black decals, actually found
+
+**M542 was wrong.** The lightmap gap it measured is real (0 of 92 ported meshes bind an atlas against 447
+of 448 in Riot's shipped Map453) but it is NOT this bug: applying it made the decals worse, and the user's
+description ruled it out - *"the black is just the transparency, it has to be something with the ground and
+the decal"*.
+
+That description is the whole answer. The decal's TRANSPARENT texels were being drawn.
+
+`DefaultEnv_Flat_AlphaTest` is an alpha-**TEST** shader. The client runs it in the **opaque pass**, where
+it **writes depth**. The porter authored decals with `AlphaTestValue = 0.005`:
+
+| cutoff | what happens to a transparent texel |
+|---|---|
+| **0.3** (Riot) | **discarded** — never shaded, never writes depth, the ground composites through |
+| **0.005** (ours) | kept — shaded (black, over whatever has drawn) **and stamps depth, rejecting the ground** |
+
+Riot's own value on the directly comparable set - `DefaultEnv_Flat_AlphaTest` **and** blended - is 0.3 on
+**3,091 of 3,347**, against 170 still on 0.005.
+
+**Why neither viewport showed it.** Both derive `WritesDepth` from the render mode and force it OFF for a
+transparent material (M279), so the depth stamp never happens in the editor. The client derives it from the
+shader class instead. That divergence is exactly why this read as correct in DX11 and wrong in game — and
+it is worth remembering as a class of bug: *our renderers being more forgiving than the client hides real
+authoring errors.*
+
+This is also why the M541b census found every material property matching Riot. It did match. The wrong
+value was one of the few that varies legitimately, so a distribution check alone could not condemn it -
+only the mechanism could.

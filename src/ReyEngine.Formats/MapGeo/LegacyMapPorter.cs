@@ -360,8 +360,24 @@ public static class LegacyMapPorter
         else if (shader is null || shader.Contains("AlphaTest", StringComparison.OrdinalIgnoreCase))
             // M528: a cutoff on a shader that does not test is inert, but it also lies to anyone reading
             // the material about what the surface does.
+            //
+            // M543: a decal takes 0.3, NOT a near-zero floor. DefaultEnv_Flat_AlphaTest is an alpha-TEST
+            // shader: the client runs it in the OPAQUE pass, where it writes depth. At 0.3 a transparent
+            // texel is DISCARDED - never shaded, never writes depth - and the ground composites through.
+            // At 0.005 nothing is discarded, so every transparent texel is still shaded (black, over
+            // whatever has drawn so far) AND still stamps depth, which then rejects the very ground the
+            // decal was meant to sit on. That is the reported "the black is just the transparency, and it
+            // is something between the ground and the decal".
+            //
+            // Neither of our own viewports shows it: both derive WritesDepth from the render mode and
+            // force it off for a transparent material (M279), so the depth stamp never happens here. The
+            // client derives it from the shader class instead. That divergence is exactly why this looked
+            // correct in the editor and wrong in game.
+            //
+            // 0.3 is Riot's own value on 3,091 of the 3,347 shipped materials that are
+            // DefaultEnv_Flat_AlphaTest AND blended - the directly comparable set - against 170 on 0.005.
             parameters["AlphaTestValue"] = new Vector4(
-                role == LegacyMaterialRole.Decal ? 0.005f : 0.35f, 0, 0, 0);
+                role == LegacyMaterialRole.Decal ? 0.3f : 0.35f, 0, 0, 0);
         return parameters;
     }
 
