@@ -27,18 +27,33 @@ Measured on the Map2 port into Map453:
 Riot **does** batch decals — but only within roughly a 900-unit box. We batched by texture across
 the whole map.
 
-Two cuts are needed, because each alone leaves the other case standing:
+### The split unit: source mesh, and nothing finer
 
-* **Connected component alone** took the widest mesh only from 96.3% to 72.8%, with 107 still over
-  10% of the map. The long seam decals are ONE connected strip, so connectivity never separates them.
-* **Locality cell alone** would leave two unrelated decals that merely share a cell batched together.
+Two finer units were tried first and **both broke decals apart**. The reporter caught it:
+*"I have a splitted mesh that halfs or have a splitted texture not the full texture ... they are
+messed up and useless."*
 
-Keying each triangle on `(connected component, floor(centroid / 1000))` does both in one pass. The
-cell is 1,000 units: the same size as the bucket grid the port regenerates, and the scale of Riot's
-observed clusters.
+| unit | decal meshes | meshes carrying < half a texture tile |
+|---|---|---|
+| 1,000-unit locality cell x component | 2,166 | ~1,000 |
+| connected component | 1,130 | 6 |
+| **source mesh** | **1,036** | **0** |
 
-Result: 20 → 2,166 decal meshes, widest 96.3% → 48.2%. **All 86 meshes still over 10% of the map hold
-exactly one triangle** — the floor of what splitting can reach without retessellating.
+* **Locality cell.** Cells are assigned per TRIANGLE by centroid, so a quad straddling a boundary put
+  its two triangles in different meshes — half the texture in each, and neither movable as a plane.
+* **Connected component.** Much better, but still wrong where the artist authored a decal as several
+  quads with DUPLICATED vertices at the seams. Unwelded, those are separate components, so the decal
+  still came apart.
+* **Source mesh.** The legacy file's own authoring unit — the artist placed each decal as an object.
+  Zero partial decals (the p10 mesh carries 1.35 tiles, so every one holds at least a whole texture),
+  in *fewer* meshes than the component split, with identical world extents (p50 6.3% of the map,
+  p90 8.3%). This is also what makes a decal selectable and movable as the plane it is meant to be.
+
+Result: 20 → **1,036** decal meshes, widest 96.3% → 48.2%.
+
+What remains is honest rather than fixed: **86 source meshes are themselves map-wide** — the long
+seams, authored as one object. Separating those needs retessellation, not repartitioning, and cutting
+them is exactly the damage above.
 
 ## 2. The legacy source carries non-finite UVs, and the port copied them through
 

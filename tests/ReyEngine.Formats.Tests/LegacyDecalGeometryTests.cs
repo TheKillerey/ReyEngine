@@ -74,40 +74,58 @@ public sealed class LegacyDecalGeometryTests
         var a = Asset.Value!;
         var decals = Decals(a).ToList();
 
-        Assert.True(decals.Count > 1000,
+        Assert.True(decals.Count > 900,
             $"expected the decals split into their own meshes, saw {decals.Count}");
         Assert.Contains(result.Warnings, w => w.Contains("Split", StringComparison.Ordinal)
                                            && w.Contains("decal", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void EveryDecalMeshHoldingMoreThanOneTriangleStaysInsideItsNeighbourhood()
+    public void NoDecalMeshCarriesOnlyPartOfItsTexture()
     {
-        // The real bound. A mesh that is one triangle cannot be split further without retessellating, so
-        // those are excluded - 86 of them remain and that is the floor. Everything else must sit inside a
-        // locality cell, which is what makes its sort position meaningful.
-        if (Ported() is not { } result) return;
+        // The reporter's second finding, and the one that matters most: "I have a splitted mesh that halfs
+        // or have a splitted texture not the full texture ... they are messed up and useless."
+        //
+        // Two finer units were tried and both broke decals apart. A 1,000-unit locality cell assigns cells
+        // per TRIANGLE by centroid, so a quad on a boundary lost half its texture to another mesh. The
+        // connected component came apart wherever the artist left seam vertices unwelded, leaving 6 meshes
+        // under half a tile. Grouping by SOURCE MESH leaves none: the p10 mesh carries 1.35 tiles.
+        if (Ported() is null) return;
         var a = Asset.Value!;
 
-        var offenders = new List<string>();
+        var partial = new List<string>();
         foreach (var g in Decals(a))
         {
-            if (g.IndexCount <= 3) continue;
-            var lo = new Vector3(float.MaxValue);
-            var hi = new Vector3(float.MinValue);
+            var lo = new Vector2(float.MaxValue);
+            var hi = new Vector2(float.MinValue);
             for (int i = g.StartIndex; i < g.StartIndex + g.IndexCount; i++)
             {
                 uint v = a.Indices[i];
-                var p = new Vector3(a.Positions[v * 3], a.Positions[v * 3 + 1], a.Positions[v * 3 + 2]);
-                lo = Vector3.Min(lo, p); hi = Vector3.Max(hi, p);
+                var uv = new Vector2(a.Uvs[v * 2], a.Uvs[v * 2 + 1]);
+                lo = Vector2.Min(lo, uv); hi = Vector2.Max(hi, uv);
             }
-            // One cell plus the largest triangle that can straddle its boundary. Cell assignment is by
-            // CENTROID, so a triangle may overhang by up to its own extent.
-            float extent = Math.Max(hi.X - lo.X, hi.Z - lo.Z);
-            if (extent > 6000f) offenders.Add($"{g.Material.Split('/').Last()} spans {extent:n0}");
+            if (Math.Max(hi.X - lo.X, hi.Y - lo.Y) < 0.5f)
+                partial.Add($"{g.Material.Split('/').Last()} covers {Math.Max(hi.X - lo.X, hi.Y - lo.Y):n2} of a tile");
         }
-        Assert.True(offenders.Count == 0,
-            "multi-triangle decal meshes still spanning the map: " + string.Join(", ", offenders.Take(5)));
+        Assert.True(partial.Count == 0,
+            "decal meshes carrying less than half a texture: " + string.Join(", ", partial.Take(5)));
+    }
+
+    [Fact]
+    public void ADecalMeshIsOneObjectTheUserCanSelectAndMove()
+    {
+        // One ported mesh per SOURCE mesh. The legacy artist placed each decal as an object, so this is
+        // what makes a decal selectable and movable as the plane it is - rather than one map-spanning mesh
+        // holding hundreds of them, which is what the port produced before.
+        if (Ported() is null) return;
+        var a = Asset.Value!;
+        var decals = Decals(a).ToList();
+
+        Assert.InRange(decals.Count, 900, 1_200);       // 1,036 measured; 20 before the split
+        Assert.True(decals.All(g => g.IndexCount >= 3), "a decal mesh with no triangle is a bug");
+        // p50 is 4 triangles - two quads. A mesh holding hundreds means the merge came back.
+        Assert.True(decals.Max(g => g.IndexCount / 3) < 200,
+            $"largest decal mesh holds {decals.Max(g => g.IndexCount / 3)} triangles");
     }
 
     [Fact]

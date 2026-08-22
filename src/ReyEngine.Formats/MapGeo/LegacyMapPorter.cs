@@ -162,9 +162,6 @@ public static class LegacyMapPorter
     /// <summary>The pre-M473 value, kept so a map ported by an older build can be reconciled: the
     /// difference between the two is exactly what such a map is out by.</summary>
     public static readonly Vector3 LegacyPositionCorrectionPreM473 = new(600.406f, -66.972f, 293.744f);
-    /// <summary>M547: edge of the locality cell decal meshes are cut into, in world units. Matches the
-    /// 1,000-unit bucket grid this port regenerates, and Riot's observed ~900-unit decal clusters.</summary>
-    private const float DecalLocalityCell = 1000f;
     private const int MaxVertices = 65535;
 
     /// <summary>What the shader cache says about authoring a macro on a given shader.</summary>
@@ -794,10 +791,11 @@ public static class LegacyMapPorter
         // box. Our Map2 port produced 20 decal meshes of which EVERY one spanned 55-96% of the map, the
         // largest holding 452 disconnected islands across 96.3% of it.
         //
-        // Split on (connected component, locality cell): a decal becomes its own mesh, and a decal that is
-        // itself one long connected strip is cut at cell boundaries so no mesh outgrows its neighbourhood.
+        // Split back into the SOURCE MESHES, the unit the legacy file authored each decal in. Never finer:
+        // a locality cell cuts a quad in half, and a connected component comes apart wherever the artist
+        // left the seam vertices unwelded. Both were tried and both broke decals (see SplitIntoSourceMeshes).
         // It costs draw calls and nothing else - the vertex and index data are identical, only the mesh
-        // boundaries move, and every piece stays far below the 65,535-vertex ceiling.
+        // boundaries move, and every piece stays below the 65,535-vertex ceiling.
         int decalsBefore = built.Count(x => x.Key.Role == LegacyMaterialRole.Decal);
         if (decalsBefore > 0)
         {
@@ -805,7 +803,7 @@ public static class LegacyMapPorter
             foreach (var acc in built)
             {
                 if (acc.Key.Role != LegacyMaterialRole.Decal) { split.Add(acc); continue; }
-                split.AddRange(acc.SplitIntoIslands(DecalLocalityCell));
+                split.AddRange(acc.SplitIntoSourceMeshes());
             }
             int decalsAfter = split.Count(x => x.Key.Role == LegacyMaterialRole.Decal);
             if (decalsAfter != decalsBefore)
@@ -1193,6 +1191,9 @@ public static class LegacyMapPorter
         public SurfaceKey Key { get; }
         public IReadOnlyDictionary<string, string> Samplers { get; }
         public List<LegacyVertex> Vertices { get; } = new();
+        /// <summary>M547: the source mesh each vertex came from - the legacy file's own authoring unit,
+        /// parallel to <see cref="Vertices"/>.</summary>
+        public List<int> VertexSourceMesh { get; } = new();
         public List<ushort> Indices { get; } = new();
         public int VertexCount => Vertices.Count;
         public int IndexCount => Indices.Count;
@@ -1219,7 +1220,7 @@ public static class LegacyMapPorter
                 if (!_vertices.TryGetValue(id, out ushort index))
                 {
                     index = checked((ushort)Vertices.Count); var vertex = make(source);
-                    _vertices[id] = index; Vertices.Add(vertex);
+                    _vertices[id] = index; Vertices.Add(vertex); VertexSourceMesh.Add(mesh);
                     BoundsMin = Vector3.Min(BoundsMin, vertex.Position); BoundsMax = Vector3.Max(BoundsMax, vertex.Position);
                 }
                 Indices.Add(index);
@@ -1243,75 +1244,71 @@ public static class LegacyMapPorter
         }
 
         /// <summary>
-        /// M547: partition this accumulator so each destination mesh is one decal in one place.
+        /// M547: partition this accumulator back into the objects the legacy file authored - one
+        /// destination mesh per SOURCE mesh.
         ///
         /// <para>Accumulation groups every triangle sharing a (role, texture set) into ONE mesh, split only
-        /// at the 65,535-vertex ceiling. For opaque ground that is exactly right. For DECALS it is not: a
-        /// blended mesh gets a single sort position, and a mesh spanning the map has no position that is
-        /// correct everywhere.</para>
+        /// at the 65,535-vertex ceiling. For opaque ground that is right. For DECALS it is not: a decal is
+        /// blended, a blended mesh gets a single sort position, and a mesh spanning the map has no position
+        /// that is correct everywhere. Riot's Map11 base_srx ships 45 decal groups whose widest covers 4.1%
+        /// of the map; our 20 Map2 decal meshes each spanned 55-96% of it.</para>
         ///
-        /// <para>Measured against Riot the divergence is not subtle. Map11's base_srx.mapgeo ships 45 decal
-        /// groups whose widest covers 4.1% of the map and whose typical one covers 2.0% - about 14 quads
-        /// inside a ~900-unit box. Riot batches decals by LOCALITY. Our Map2 port produced 20 decal meshes
-        /// of which EVERY one spanned 55-96% of the map.</para>
+        /// <para><b>The unit has to be the source mesh, and nothing finer.</b> Two finer cuts were tried and
+        /// both broke decals apart:</para>
+        /// <list type="bullet">
+        /// <item>A 1,000-unit locality cell, to bound how far a mesh could reach. Cells are assigned per
+        /// TRIANGLE by centroid, so a quad straddling a boundary put its two triangles in different meshes -
+        /// half the texture in each. It cut roughly a thousand of the 1,165 pieces.</item>
+        /// <item>The connected component. Better, but still wrong where the artist authored a decal as
+        /// several quads with DUPLICATED vertices at the seams: unwelded, those are separate components, so
+        /// the decal still came apart. Measured, that left 6 meshes carrying under half a texture tile.</item>
+        /// </list>
         ///
-        /// <para>Two cuts are needed, because each alone leaves the other case standing. Splitting by
-        /// connected component alone took the widest mesh only from 96.3% to 72.8% with 107 still over 10%:
-        /// the long seam decals are ONE connected strip, so connectivity never separates them. Splitting by
-        /// cell alone would leave two decals that merely share a cell batched together. Keying triangles on
-        /// (component, cell) does both in one pass.</para>
+        /// <para>Grouping by source mesh leaves ZERO partial decals - the p10 mesh carries 1.35 tiles, so
+        /// every one holds at least a whole texture - in 1,036 meshes against the component split's 1,130,
+        /// with identical world extents (p50 6.3% of the map, p90 8.3%). Fewer meshes AND no broken ones,
+        /// because it is the unit the source actually authored in.</para>
+        ///
+        /// <para>What remains is honest rather than fixed: 86 source meshes are themselves map-wide - the
+        /// long seams, authored as one object. Separating those needs retessellation, not repartitioning,
+        /// and cutting them is exactly the damage described above.</para>
         /// </summary>
-        /// <param name="cellSize">Edge of the locality cell, in world units. 1,000 matches both the bucket
-        /// grid the port regenerates and Riot's observed ~900-unit decal clusters.</param>
-        public List<MeshAccumulator> SplitIntoIslands(float cellSize)
+        public List<MeshAccumulator> SplitIntoSourceMeshes()
         {
-            var parent = new int[Vertices.Count];
-            for (int i = 0; i < parent.Length; i++) parent[i] = i;
-            int Find(int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
-            void Union(int a, int b) { int ra = Find(a), rb = Find(b); if (ra != rb) parent[ra] = rb; }
-            for (int i = 0; i + 2 < Indices.Count; i += 3)
-            { Union(Indices[i], Indices[i + 1]); Union(Indices[i + 1], Indices[i + 2]); }
-
-            // Whether the SOURCE carried a second UV set is a property of the material, not of one island.
-            // Islands must not disagree about their vertex declaration, so the parent's answer wins for all
-            // of them - a mesh whose neighbours have the channel still has to be padded (see LegacyVertex).
+            // Every vertex of a triangle comes from one source mesh: AddTriangle is called per source mesh,
+            // and the dedup key is (source mesh, source vertex), so an index never crosses that boundary.
             bool requiresUv2 = RequiresUv2 || Vertices.Any(v => v.HasUv2);
 
-            var byKey = new Dictionary<(int Root, int X, int Z), MeshAccumulator>();
-            var remap = new Dictionary<((int, int, int) Key, int Source), ushort>();
+            var byMesh = new Dictionary<int, MeshAccumulator>();
+            var remap = new Dictionary<(int Mesh, int Source), ushort>();
             var order = new List<MeshAccumulator>();
             for (int i = 0; i + 2 < Indices.Count; i += 3)
             {
-                // The CENTROID picks the cell, so a triangle is never duplicated and never dropped.
-                Vector3 centre = (Vertices[Indices[i]].Position
-                                + Vertices[Indices[i + 1]].Position
-                                + Vertices[Indices[i + 2]].Position) / 3f;
-                var key = (Find(Indices[i]),
-                           (int)MathF.Floor(centre.X / cellSize),
-                           (int)MathF.Floor(centre.Z / cellSize));
-                if (!byKey.TryGetValue(key, out var island))
+                int mesh = VertexSourceMesh[Indices[i]];
+                if (!byMesh.TryGetValue(mesh, out var piece))
                 {
-                    byKey[key] = island = new MeshAccumulator(Key, Samplers) { RequiresUv2 = requiresUv2 };
-                    order.Add(island);
+                    byMesh[mesh] = piece = new MeshAccumulator(Key, Samplers) { RequiresUv2 = requiresUv2 };
+                    order.Add(piece);
                 }
                 for (int k = 0; k < 3; k++)
                 {
                     int source = Indices[i + k];
-                    if (!remap.TryGetValue((key, source), out ushort local))
+                    if (!remap.TryGetValue((mesh, source), out ushort local))
                     {
-                        local = checked((ushort)island.Vertices.Count);
-                        remap[(key, source)] = local;
-                        island.AppendVertex(Vertices[source]);
+                        local = checked((ushort)piece.Vertices.Count);
+                        remap[(mesh, source)] = local;
+                        piece.AppendVertex(Vertices[source], VertexSourceMesh[source]);
                     }
-                    island.Indices.Add(local);
+                    piece.Indices.Add(local);
                 }
             }
             return order;
         }
 
-        private void AppendVertex(LegacyVertex vertex)
+        private void AppendVertex(LegacyVertex vertex, int sourceMesh)
         {
             Vertices.Add(vertex);
+            VertexSourceMesh.Add(sourceMesh);
             BoundsMin = Vector3.Min(BoundsMin, vertex.Position);
             BoundsMax = Vector3.Max(BoundsMax, vertex.Position);
         }
