@@ -97,6 +97,42 @@ public sealed class LegacyDecalQuadTests
         Assert.Equal(4f, LegacyPortDecalOptions.Defaults.Lift);
     }
 
+    [Fact]
+    public void TwoDistantPatchesSharingATileAveragedIntoOneIsTheCallersBugToAvoid()
+    {
+        // M551, pinned as a CONTRACT rather than a defect: UV tile indices are not unique across a map,
+        // so two patches far apart can both sit in tile (0,0). Handed both at once the generator fits one
+        // plane through their average - which is correct behaviour for "fit this geometry" and wrong for
+        // "rebuild these decals". The porter must therefore scope each call to a single patch.
+        var near = FlatTile(size: 100f);
+        var far = FlatTile(size: 100f).Select(t => new DecalSourceTriangle(
+            t.P0 + new Vector3(5000, 0, 0), t.P1 + new Vector3(5000, 0, 0), t.P2 + new Vector3(5000, 0, 0),
+            t.T0, t.T1, t.T2)).ToList();
+
+        var together = LegacyDecalQuadGenerator.Generate(near.Concat(far).ToList(), 0f, out _);
+        Assert.Empty(together);   // 5,000 units of extrapolation trips the size-ratio guard
+
+        // Scoped per patch, each lands on its own geometry.
+        var a = Assert.Single(LegacyDecalQuadGenerator.Generate(near, 0f, out _));
+        var b = Assert.Single(LegacyDecalQuadGenerator.Generate(far, 0f, out _));
+        Assert.Equal(0f, a.A.X, 3);
+        Assert.Equal(5000f, b.A.X, 3);
+    }
+
+    [Fact]
+    public void ATileTheSourceBarelyEntersGetsNoPlane()
+    {
+        // A patch's UV runs past its own edges, clipping the corner of tiles it never really covers. A
+        // full plane there floats over ground the decal does not touch. 349 such tiles on the Map2 port.
+        var sliver = new List<DecalSourceTriangle>
+        {
+            new(new(0,0,0), new(0,0,4), new(4,0,4),
+                new(0.01f,0.01f), new(0.01f,0.05f), new(0.05f,0.05f)),
+        };
+        Assert.Empty(LegacyDecalQuadGenerator.Generate(sliver, 0f, out int skipped));
+        Assert.Equal(1, skipped);
+    }
+
     /// <summary>
     /// M550: Avalonia bindings here are RESOLVED AT RUNTIME even with x:DataType set - a binding to a
     /// property that does not exist compiles cleanly and fails only when the window is shown. Proven by

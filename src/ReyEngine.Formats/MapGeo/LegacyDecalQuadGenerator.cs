@@ -59,6 +59,15 @@ public static class LegacyDecalQuadGenerator
     private const double MaxSizeRatio = 3.0;
 
     /// <summary>
+    /// How much of a tile the source must actually cover before a plane is generated for it.
+    ///
+    /// <para>A patch's UV runs past its own edges, so it clips the corner of tiles it barely enters. A
+    /// full-size plane there floats over ground the decal never touched. Comparing the source triangle
+    /// area inside the tile against the tile's own area drops those.</para>
+    /// </summary>
+    private const double MinTileCoverage = 0.15;
+
+    /// <summary>
     /// One quad per occupied UV tile. Tiles whose UV-to-world mapping is degenerate are skipped rather
     /// than guessed at, and reported through <paramref name="skippedTiles"/>.
     /// </summary>
@@ -101,9 +110,16 @@ public static class LegacyDecalQuadGenerator
             if (Vector3.Dot(normal, sourceNormal) < 0f)
             { (b, d) = (d, b); normal = -normal; }
 
-            // Reject a fit that extrapolated far past the geometry it came from.
+            // Reject a fit whose quad and source are wildly different sizes, in either direction.
             double diagonal = Vector3.Distance(a, c);
-            if (diagonal <= 1e-3 || diagonal > SourceDiagonal(group) * MaxSizeRatio)
+            double source = SourceDiagonal(group);
+            if (diagonal <= 1e-3 || source <= 1e-3) { skippedTiles++; continue; }
+            if (diagonal > source * MaxSizeRatio || source > diagonal * MaxSizeRatio)
+            { skippedTiles++; continue; }
+
+            // Reject a tile the source barely enters, which would be a plane floating over bare ground.
+            double tileArea = Vector3.Cross(b - a, d - a).Length();
+            if (tileArea <= 1e-6 || SourceArea(group) / tileArea < MinTileCoverage)
             { skippedTiles++; continue; }
 
             Vector3 offset = normal * lift;
@@ -111,6 +127,14 @@ public static class LegacyDecalQuadGenerator
                 tile.U, tile.V, group.Count));
         }
         return result;
+    }
+
+    /// <summary>Total world area of the triangles a tile was fitted from.</summary>
+    private static double SourceArea(List<DecalSourceTriangle> group)
+    {
+        double sum = 0;
+        foreach (var t in group) sum += 0.5 * Vector3.Cross(t.P1 - t.P0, t.P2 - t.P0).Length();
+        return sum;
     }
 
     /// <summary>Diagonal of the world bounding box of the triangles a tile was fitted from.</summary>

@@ -151,12 +151,37 @@ Given §4 — the geometry has no boundary where one texture ends — discrete d
 repeats once per integer UV tile, so **the tile is the unit**.
 
 For each occupied UV tile, the generator fits `world = origin + du*u + dv*v` by least squares over that
-tile's vertices, then places a quad at the tile's UV square, giving it a clean 0..1 of its own. Measured
-on the Map2 port: **241 planes** in place of 1,036 patches, every one exactly 2 triangles, **241 of 241
-carrying the whole texture**, 241 of 241 facing up, p50 1,028 world units across.
+tile's vertices, then places a quad at the tile's UV square, giving it a clean 0..1 of its own.
 
-Fitted **per tile rather than per material**, so each plane takes its own patch's height and slope
-instead of averaging the whole map into one plane.
+### Scope the fit to ONE PATCH (M551)
+
+M550 first ran the generator over a whole material at once. That is wrong, and the reporter saw it
+immediately: *"it works sometimes on a few meshes. Also the position is not more correct."*
+
+UV tile indices are not unique across the map. Patches in completely different places share tile (0,0),
+so grouping by tile globally put them all in one group — 403 patches of `order_base_circle` collapsed
+into 30 tiles — and least squares placed the plane at their **average**. The few tiles that happened to
+hold a single patch came out right, which is exactly "works sometimes".
+
+| fit scope | planes | distance to the nearest real patch |
+|---|---|---|
+| per material (M550) | 241 | p50 **1,241** units, max 6,956 |
+| **per patch (M551)** | 2,630 | p50 **277** units, max 1,220 |
+
+Fitted per patch, a plane can only land on the geometry it came from, because that is the only geometry
+in the fit. The residual 277 is a tile's offset inside its own ~1,300-unit patch, not misplacement.
+
+All 2,630 carry the whole texture, all are exactly 2 triangles, all face up.
+
+The size guard is now **two-sided**, and the second direction is the one that matters: a source far
+larger than the quad it produced means the samples never belonged to one tile. Given two patches 5,000
+units apart sharing tile (0,0), least squares returns a perfectly ordinary 100-unit plane at their
+average, 2,500 units from either — nothing about it looks wrong except where it is. A mis-scoped call
+now returns nothing rather than something plausible and misplaced.
+
+A **coverage gate** goes with it: a patch's UV runs past its own edges and clips the corner of tiles it
+barely enters, and a full plane there floats over ground the decal never touched. Tiles whose source
+covers under 15% of the tile area are dropped (349 of them on Map2), and the two-sided size guard drops a further 83.
 
 ### Two guards, and one that did not work
 

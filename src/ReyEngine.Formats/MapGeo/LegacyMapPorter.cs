@@ -817,16 +817,27 @@ public static class LegacyMapPorter
             foreach (var acc in built)
             {
                 if (acc.Key.Role != LegacyMaterialRole.Decal) { split.Add(acc); continue; }
+                var patches = acc.SplitIntoSourceMeshes();
                 if (decals.GenerateQuads)
                 {
-                    var planes = acc.ToDecalQuads(decals.Lift, out int skipped);
-                    skippedTiles += skipped;
+                    // M551: fit each PATCH on its own. Fitting a whole material at once put every patch
+                    // that happened to share a UV tile into one group - 403 patches of order_base_circle
+                    // collapsed into 30 tiles - and least squares then placed the plane at their average.
+                    // Measured, those planes landed a median of 1,241 world units from the nearest real
+                    // patch and up to 6,956. Per patch the plane can only land on the geometry it came
+                    // from, because that is the only geometry in the fit.
+                    var planes = new List<MeshAccumulator>();
+                    foreach (var patch in patches)
+                    {
+                        planes.AddRange(patch.ToDecalQuads(decals.Lift, out int skipped));
+                        skippedTiles += skipped;
+                    }
                     if (planes.Count > 0) { quads += planes.Count; split.AddRange(planes); continue; }
-                    // No tile survived the fit - keep the patch rather than lose the decal entirely.
+                    // No tile survived the fit - keep the patches rather than lose the decal entirely.
                     warnings.Add($"Decal '{acc.Key.TextureSet}' could not be rebuilt as planes; " +
                         "its original terrain patches were kept.");
                 }
-                split.AddRange(acc.SplitIntoSourceMeshes());
+                split.AddRange(patches);
             }
             int decalsAfter = split.Count(x => x.Key.Role == LegacyMaterialRole.Decal);
             if (decals.GenerateQuads && quads > 0)
