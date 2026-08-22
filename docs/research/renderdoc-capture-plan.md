@@ -142,6 +142,54 @@ or corrects it and covers 2/3/4.
 
 ---
 
+## Question 6 — why a ported decal draws black (M540-M543)
+
+**Status: eleven hypotheses eliminated, mechanism unknown. This is now the highest-value question, and
+unlike Q1 and Q5 it is a live bug in a real project rather than a fidelity gap.**
+
+A ported legacy map's decals render correctly in BOTH ReyEngine viewports and black in the client - the
+transparent part of the decal shows black instead of the ground under it. The user's own words:
+*"the black is just the transparency, it has to be something with the ground and the decal."*
+
+Everything comparable has been compared and matches Riot's shipped data: shader, blend enable and
+destination factors, `MULTIPLY_ALPHA` absence, `TintColor` (measured INERT - absent from every cooked PS
+constant buffer), texture premultiplication (straight alpha), vertex colour (no `COLOR` element in the VS
+signature), lightmap channels (decal and ground meshes structurally identical), `AlphaTestValue` (now 0.3,
+Riot's value on 3,091 of 3,347), and sampler addressing. See `troybin-rosetta.md` M541b/M543/M543b.
+
+**Why the files cannot settle it:** both our renderers force `WritesDepth` off for a transparent material
+(M279) while the client derives it from the shader class, so our renderers are deliberately MORE FORGIVING
+than the client and physically cannot reproduce the bug. That is also why every static comparison came back
+clean.
+
+**Capture this on the USER'S OWN ported map**, not Map12 - the bug does not exist in Riot's maps. A frame
+with a black decal plainly visible on the ground.
+
+**Extract, in priority order:**
+
+1. **Step to the decal's draw and look at the colour target BEFORE it executes.** Is the ground already
+   drawn there? This one observation splits the whole problem:
+   - ground absent -> the decal is drawing too early, blending against an empty target. The question
+     becomes what puts it in that pass.
+   - ground present -> the decal is overwriting it, and the blend or the shader output is wrong.
+2. The **output-merger blend state** on that draw: `BlendEnable`, `SrcBlend`, `DestBlend`, `BlendOp` and
+   the alpha trio. Specifically whether `SrcBlend` is `SRC_ALPHA` or `ONE` - Riot authors NEITHER source
+   factor on these materials and we author both as `SourceAlpha`, which is the single remaining
+   unexplained difference.
+3. The **depth-stencil state**: `DepthEnable`, `DepthWriteMask`, `DepthFunc`. If the decal writes depth,
+   the M543 mechanism was right in kind even though raising the cutoff did not fix it.
+4. The **draw order** of the decal relative to the ground mesh under it, by event index.
+5. The bound **pixel shader blob** - confirm it is the permutation the material's define set predicts, and
+   not a different one the client resolved.
+
+Find the draw by its bound texture: `order_base_circle_tx_dm_*.tex` or `order_seam_*.tex`.
+
+**If the capture is refused or blocked, this question is stuck.** The alternative is a shot in the dark -
+stripping the two source blend factors so the material matches Riot byte-for-byte - which is worth trying
+precisely because it is cheap, but it is not a diagnosis and should not be recorded as one.
+
+---
+
 ## Capture-free alternatives — do these first
 
 Three of the five need no capture and no risk:
