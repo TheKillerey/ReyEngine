@@ -34,6 +34,40 @@ public sealed class LegacyDecalQuadTests
     }
 
     [Fact]
+    public void ThePlaneKeepsItsSourcesTextureScaleRatherThanStretchingToFit()
+    {
+        // M554: "the decals are good placed yeah but somehow they are stretched now so scaled to match
+        // the space." M552 rewrote every plane to a clean 0..1, which stretches a patch's texture across
+        // its whole footprint - a median 1.92 x 1.78 tiles worth of image squeezed into one.
+        //
+        // The plane carries the patch's OWN uv values instead, so the texture lands at exactly the size
+        // and density it had. Measured over the Map2 port, texture size against the original is p50 1.07.
+        var source = new List<DecalSourceTriangle>();
+        source.AddRange(FlatTile(tileU: 0));
+        source.AddRange(FlatTile(tileU: 1));   // two tiles wide: the texture repeated twice here
+
+        var quad = LegacyDecalQuadGenerator.GeneratePlane(source, lift: 0f)!.Value;
+        Assert.Equal(0f, quad.UvA.X, 3);
+        Assert.Equal(2f, quad.UvC.X, 3);      // u still runs 0..2, so it still repeats twice
+        Assert.Equal(200f, quad.C.X - quad.A.X, 3);
+    }
+
+    [Fact]
+    public void SingleImageTradesCoverageForOneWholeTexture()
+    {
+        // The opt-in. One image at authored scale, which for a patch spanning two tiles means the plane
+        // shows half as much texture over the same ground - the decal reads larger and covers less.
+        var source = new List<DecalSourceTriangle>();
+        source.AddRange(FlatTile(tileU: 0));
+        source.AddRange(FlatTile(tileU: 1));
+
+        var quad = LegacyDecalQuadGenerator.GeneratePlane(source, lift: 0f, singleImage: true)!.Value;
+        Assert.Equal(0f, quad.UvA.X, 3);
+        Assert.Equal(1f, quad.UvC.X, 3);
+        Assert.False(LegacyPortDecalOptions.Defaults.SingleImage);
+    }
+
+    [Fact]
     public void APatchSpanningSeveralTilesIsStillOnePlane()
     {
         // M552, the reporter's second finding: "I get often double pasted meshes or more for decals ...
@@ -48,7 +82,7 @@ public sealed class LegacyDecalQuadTests
 
         var quad = LegacyDecalQuadGenerator.GeneratePlane(source, lift: 0f);
         Assert.NotNull(quad);
-        // One plane over all three tiles, and its own UV is 0..1 - so the texture appears ONCE.
+        // ONE plane over all three tiles - not three planes stacked on the same decal.
         Assert.Equal(0f, quad!.Value.A.X, 3);
         Assert.Equal(300f, quad.Value.C.X, 3);
     }

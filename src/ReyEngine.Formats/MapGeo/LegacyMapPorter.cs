@@ -29,7 +29,12 @@ public sealed record LegacyPortShaderOptions(
 /// texture each - one per occupied UV tile. Off by default: the legacy patches follow the terrain and
 /// the quads do not, so this is a deliberate trade, not an improvement.</param>
 /// <param name="Lift">World units to raise a generated quad along its normal, clear of the ground.</param>
-public sealed record LegacyPortDecalOptions(bool GenerateQuads = false, float Lift = 4f)
+/// <param name="SingleImage">Give each plane a clean 0..1 so its texture appears exactly once, instead
+/// of the patch's own UV range. Off by default - a legacy patch spans a median 1.92 x 1.78 tiles, so its
+/// texture was authored to repeat across it, and forcing one image shrinks the decal to a median 30% of
+/// the area it covered.</param>
+public sealed record LegacyPortDecalOptions(bool GenerateQuads = false, float Lift = 4f,
+    bool SingleImage = false)
 {
     public static LegacyPortDecalOptions Defaults { get; } = new();
 }
@@ -832,7 +837,7 @@ public static class LegacyMapPorter
                     int unfitted = 0;
                     foreach (var patch in patches)
                     {
-                        if (patch.ToDecalPlane(decals.Lift) is { } plane) planes.Add(plane);
+                        if (patch.ToDecalPlane(decals.Lift, decals.SingleImage) is { } plane) planes.Add(plane);
                         else { unfitted++; planes.Add(patch); }   // keep the patch rather than lose the decal
                     }
                     skippedTiles += unfitted;
@@ -1319,7 +1324,7 @@ public static class LegacyMapPorter
         /// M550: rebuild this decal patch as ONE flat plane carrying its whole texture.
         /// See <see cref="LegacyDecalQuadGenerator"/>; call this per patch, never per material.
         /// </summary>
-        public MeshAccumulator? ToDecalPlane(float lift)
+        public MeshAccumulator? ToDecalPlane(float lift, bool singleImage)
         {
             var source = new List<DecalSourceTriangle>(Indices.Count / 3);
             for (int i = 0; i + 2 < Indices.Count; i += 3)
@@ -1327,15 +1332,14 @@ public static class LegacyMapPorter
                 LegacyVertex a = Vertices[Indices[i]], b = Vertices[Indices[i + 1]], c = Vertices[Indices[i + 2]];
                 source.Add(new DecalSourceTriangle(a.Position, b.Position, c.Position, a.Uv, b.Uv, c.Uv));
             }
-            if (LegacyDecalQuadGenerator.GeneratePlane(source, lift) is not { } quad) return null;
+            if (LegacyDecalQuadGenerator.GeneratePlane(source, lift, singleImage) is not { } quad) return null;
 
             // A generated plane has no second UV set: it is new geometry, not carried-through geometry,
             // and Texcoord7 on a decal would be a fabricated lightmap coordinate (see LegacyVertex).
             var piece = new MeshAccumulator(Key, Samplers);
             foreach (var (position, uv) in new[]
             {
-                (quad.A, new Vector2(0, 0)), (quad.B, new Vector2(1, 0)),
-                (quad.C, new Vector2(1, 1)), (quad.D, new Vector2(0, 1)),
+                (quad.A, quad.UvA), (quad.B, quad.UvB), (quad.C, quad.UvC), (quad.D, quad.UvD),
             })
                 piece.AppendVertex(new LegacyVertex(position, quad.Normal, uv, Vector4.One, position, true), -1);
             piece.Indices.AddRange(new ushort[] { 0, 1, 2, 0, 2, 3 });

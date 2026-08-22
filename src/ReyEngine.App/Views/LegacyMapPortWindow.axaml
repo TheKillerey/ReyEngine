@@ -87,6 +87,10 @@
               <TextBlock Grid.Column="2" Text="world units above the ground" FontSize="9" VerticalAlignment="Center"
                          Margin="6,0,0,0" Foreground="{DynamicResource ReyTextDimBrush}" />
             </Grid>
+            <CheckBox Content="One image per plane (authored scale)" IsChecked="{Binding DecalSingleImage}"
+                      IsEnabled="{Binding GenerateDecalQuads}" FontSize="10" />
+            <TextBlock Text="Off (recommended): the plane keeps the patch&apos;s own UV range, so the texture stays exactly the size it was and repeats across the plane as it did on the terrain. On: the plane gets a clean 0..1 so its image appears once at authored scale - but a legacy patch spans a median 1.92 x 1.78 texture tiles, so the decal then covers only about 30% of the ground it used to."
+                       FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
             <TextBlock Text="A legacy decal is not a stamp: it is an irregular patch of TERRAIN carrying a UV field that repeats, and every decal of one texture is welded into a single sheet. Rebuilding replaces those patches with one flat plane per texture tile, each carrying the whole image and each selectable and movable on its own. Measured on Map2 that is 241 planes in place of 1,036 patches. The trade is real: a plane no longer follows the ground, so over uneven terrain it will clip. Leave this off to keep the original terrain-conforming patches."
                        FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
           </StackPanel>

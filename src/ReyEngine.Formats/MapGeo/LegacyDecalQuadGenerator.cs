@@ -11,7 +11,8 @@ public readonly record struct DecalSourceTriangle(
 /// </summary>
 /// <param name="TileU">The UV tile this quad reproduces, kept so the caller can name the mesh.</param>
 public readonly record struct DecalQuad(
-    Vector3 A, Vector3 B, Vector3 C, Vector3 D, Vector3 Normal, int TileU, int TileV, int SourceTriangles);
+    Vector3 A, Vector3 B, Vector3 C, Vector3 D, Vector3 Normal, int TileU, int TileV, int SourceTriangles,
+    Vector2 UvA, Vector2 UvB, Vector2 UvC, Vector2 UvD);
 
 /// <summary>
 /// M550: rebuild legacy decals as flat planes carrying one whole texture each.
@@ -66,7 +67,18 @@ public static class LegacyDecalQuadGenerator
     /// nothing rather than a plausible plane in the wrong place.</para>
     /// </summary>
     /// <param name="lift">World units to raise the plane along its normal, clear of the ground it sits on.</param>
-    public static DecalQuad? GeneratePlane(IReadOnlyList<DecalSourceTriangle> triangles, float lift)
+    /// <param name="singleImage">
+    /// Give the plane a clean 0..1 so its texture appears exactly ONCE, instead of the patch's own UV range.
+    ///
+    /// <para>Off by default, and the trade is not subtle. A legacy patch spans a median of 1.92 x 1.78 UV
+    /// tiles - only 30 of 1,036 already fit inside one - so its texture was authored to REPEAT across it.
+    /// Reproducing that range keeps the decal at the size and density it had. Forcing 0..1 gives one image
+    /// at the authored texel scale, but the plane then covers a median of just 30% of the patch, so the
+    /// decal shrinks. Mapping the full range ONTO 0..1 is the third option and the wrong one - that is
+    /// stretching, which is what the reporter saw in M552.</para>
+    /// </param>
+    public static DecalQuad? GeneratePlane(IReadOnlyList<DecalSourceTriangle> triangles, float lift,
+        bool singleImage = false)
     {
         var group = new List<DecalSourceTriangle>(triangles.Count);
         var uvLo = new Vector2(float.MaxValue);
@@ -86,10 +98,16 @@ public static class LegacyDecalQuadGenerator
 
         // The patch's OWN UV extent, mapped back through the fit. Not the integer tile grid: a patch
         // typically spans about 2.2 tiles, so one plane per tile drew the image two or three times over
-        // the same decal - "double pasted meshes ... repeated images". Its whole extent becomes one 0..1.
+        // the same decal - "double pasted meshes ... repeated images".
         Vector3 At(float u, float v) => origin + du * u + dv * v;
         Vector3 a = At(uvLo.X, uvLo.Y), b = At(uvHi.X, uvLo.Y);
         Vector3 c = At(uvHi.X, uvHi.Y), d = At(uvLo.X, uvHi.Y);
+
+        // The plane keeps the patch's own UV values, so the texture lands at exactly the size and density
+        // it had. Rewriting them to 0..1 would stretch the image across the whole patch - M552's bug.
+        Vector2 ta = uvLo, tb = new Vector2(uvHi.X, uvLo.Y), tc = uvHi, td = new Vector2(uvLo.X, uvHi.Y);
+        if (singleImage)
+        { ta = new Vector2(0, 0); tb = new Vector2(1, 0); tc = new Vector2(1, 1); td = new Vector2(0, 1); }
 
         Vector3 normal = Vector3.Cross(b - a, d - a);
         if (normal.LengthSquared() <= 1e-12f) return null;
@@ -99,7 +117,8 @@ public static class LegacyDecalQuadGenerator
         // out inverted would make the plane invisible under backface culling.
         Vector3 sourceNormal = Vector3.Zero;
         foreach (var t in group) sourceNormal += Vector3.Cross(t.P1 - t.P0, t.P2 - t.P0);
-        if (Vector3.Dot(normal, sourceNormal) < 0f) { (b, d) = (d, b); normal = -normal; }
+        // The UVs travel with their corners, or a flipped plane would show a mirrored texture.
+        if (Vector3.Dot(normal, sourceNormal) < 0f) { (b, d) = (d, b); (tb, td) = (td, tb); normal = -normal; }
 
         // Reject a fit whose plane and source are wildly different sizes, in either direction.
         double diagonal = Vector3.Distance(a, c);
@@ -109,7 +128,7 @@ public static class LegacyDecalQuadGenerator
 
         Vector3 offset = normal * lift;
         return new DecalQuad(a + offset, b + offset, c + offset, d + offset, normal,
-            (int)MathF.Floor(uvLo.X), (int)MathF.Floor(uvLo.Y), group.Count);
+            (int)MathF.Floor(uvLo.X), (int)MathF.Floor(uvLo.Y), group.Count, ta, tb, tc, td);
     }
 
     /// <summary>Diagonal of the world bounding box of the triangles a tile was fitted from.</summary>

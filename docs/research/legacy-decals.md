@@ -219,3 +219,28 @@ The port dialog sets `x:DataType` but bindings still resolve at RUNTIME — veri
 nonexistent property and watching the build succeed. `LegacyDecalQuadTests` walks the axaml's binding
 paths against the view models by reflection instead, which is what catches a typo before the window is
 ever shown.
+
+### Keep the source texture scale (M554)
+
+M552 gave every plane a clean 0..1. That is stretching, and the reporter saw it: *"the decals are good
+placed yeah but somehow they are stretched now so scaled to match the space."*
+
+A legacy patch spans a median of **1.92 x 1.78 UV tiles** - only 30 of 1,036 already fit inside one - so
+its texture was authored to REPEAT across it. Squeezing that whole range into 0..1 enlarges the image by
+that factor.
+
+The plane now carries the patch's **own UV values**, so the texture lands at the size and density it
+had. Measured over the Map2 port, texture size against the original is **p50 1.07** (p10 1.00, p90 1.37),
+plane world size against the patch p50 1.07, position error p50 33 units.
+
+The three options are not interchangeable, and only one is right:
+
+| | texture size | coverage |
+|---|---|---|
+| patch UV range (default) | **unchanged** | full patch |
+| clean 0..1 (`SingleImage`) | authored scale, one image | **median 30% of the patch** |
+| full range mapped onto 0..1 (M552) | **stretched ~1.9x** | full patch |
+
+`SingleImage` is exposed in the dialog for the cases where one whole image matters more than coverage,
+but it is off by default: shrinking a decal to a third of the ground it covered is a bigger change than
+letting its texture repeat the way it always did.

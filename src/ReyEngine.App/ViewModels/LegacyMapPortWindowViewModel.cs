@@ -69,6 +69,10 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     // deliberate trade the user opts into, not a correction.
     [ObservableProperty] private bool _generateDecalQuads;
     [ObservableProperty] private string _decalLift = "4";
+    // M554: off keeps the patch's own UV range, so the texture stays the size it was and repeats as it
+    // did. On gives one image per plane at authored scale, which shrinks the decal to a median 30% of the
+    // area it covered.
+    [ObservableProperty] private bool _decalSingleImage;
 
     // M473: the alignment correction, seeded from the measured default but editable. It was a hardcoded
     // constant, so a port that landed a few hundred units out could not be fixed without a rebuild.
@@ -288,7 +292,7 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
             Materials.Where(material => !string.Equals(material.SelectedShader, material.InitialShader, StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(material => material.Name, material => material.SelectedShader!, StringComparer.OrdinalIgnoreCase),
             cleanup, FixImportedMapPosition, ParsedCorrection, ImportLegacyParticles,
-            new LegacyPortDecalOptions(GenerateDecalQuads, ParsedDecalLift)));
+            new LegacyPortDecalOptions(GenerateDecalQuads, ParsedDecalLift, DecalSingleImage)));
     }
 
     [RelayCommand]
