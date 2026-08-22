@@ -22,6 +22,18 @@ public sealed record LegacyPortShaderOptions(
         LegacyMapPorter.TerrainShader);
 }
 
+/// <summary>
+/// M550: how the port builds decal GEOMETRY, as opposed to which shader it puts on it.
+/// </summary>
+/// <param name="GenerateQuads">Replace each legacy decal patch with flat planes carrying one whole
+/// texture each - one per occupied UV tile. Off by default: the legacy patches follow the terrain and
+/// the quads do not, so this is a deliberate trade, not an improvement.</param>
+/// <param name="Lift">World units to raise a generated quad along its normal, clear of the ground.</param>
+public sealed record LegacyPortDecalOptions(bool GenerateQuads = false, float Lift = 4f)
+{
+    public static LegacyPortDecalOptions Defaults { get; } = new();
+}
+
 /// <summary>Controls which content from the modern destination container is retained underneath a
 /// legacy NVR/WGEO import. Render-region meshes are structural and are always retained.</summary>
 public sealed record LegacyPortCleanupOptions(
@@ -529,8 +541,9 @@ public static class LegacyMapPorter
     }
 
     public static LegacyMapPortResult Port(string sourceRoot, byte[] destinationMapGeo,
-        string? destinationMapGeoPath = null)
+        string? destinationMapGeoPath = null, LegacyPortDecalOptions? decals = null)
     {
+        decals ??= LegacyPortDecalOptions.Defaults;
         string source = FindSingleSource(sourceRoot);
         byte[] sourceBytes = File.ReadAllBytes(source);
         bool isWgeo = sourceBytes.AsSpan().StartsWith("WGEO"u8);
@@ -800,13 +813,27 @@ public static class LegacyMapPorter
         if (decalsBefore > 0)
         {
             var split = new List<MeshAccumulator>(built.Count);
+            int quads = 0, skippedTiles = 0;
             foreach (var acc in built)
             {
                 if (acc.Key.Role != LegacyMaterialRole.Decal) { split.Add(acc); continue; }
+                if (decals.GenerateQuads)
+                {
+                    var planes = acc.ToDecalQuads(decals.Lift, out int skipped);
+                    skippedTiles += skipped;
+                    if (planes.Count > 0) { quads += planes.Count; split.AddRange(planes); continue; }
+                    // No tile survived the fit - keep the patch rather than lose the decal entirely.
+                    warnings.Add($"Decal '{acc.Key.TextureSet}' could not be rebuilt as planes; " +
+                        "its original terrain patches were kept.");
+                }
                 split.AddRange(acc.SplitIntoSourceMeshes());
             }
             int decalsAfter = split.Count(x => x.Key.Role == LegacyMaterialRole.Decal);
-            if (decalsAfter != decalsBefore)
+            if (decals.GenerateQuads && quads > 0)
+                warnings.Add($"Rebuilt the decals as {quads:n0} flat plane(s), one per texture tile, " +
+                    $"lifted {decals.Lift:0.#} unit(s) off the ground. They no longer follow the terrain."
+                    + (skippedTiles > 0 ? $" {skippedTiles:n0} tile(s) had no usable UV mapping and were dropped." : ""));
+            else if (decalsAfter != decalsBefore)
                 warnings.Add($"Split {decalsBefore:n0} combined decal mesh(es) into {decalsAfter:n0} " +
                     "so each sorts against the ground on its own.");
             built = split;
@@ -1273,6 +1300,38 @@ public static class LegacyMapPorter
         /// long seams, authored as one object. Separating those needs retessellation, not repartitioning,
         /// and cutting them is exactly the damage described above.</para>
         /// </summary>
+        /// <summary>
+        /// M550: rebuild this decal as flat planes, one per occupied UV tile, each carrying a whole
+        /// texture. See <see cref="LegacyDecalQuadGenerator"/> for why the tile is the unit.
+        /// </summary>
+        public List<MeshAccumulator> ToDecalQuads(float lift, out int skippedTiles)
+        {
+            var source = new List<DecalSourceTriangle>(Indices.Count / 3);
+            for (int i = 0; i + 2 < Indices.Count; i += 3)
+            {
+                LegacyVertex a = Vertices[Indices[i]], b = Vertices[Indices[i + 1]], c = Vertices[Indices[i + 2]];
+                source.Add(new DecalSourceTriangle(a.Position, b.Position, c.Position, a.Uv, b.Uv, c.Uv));
+            }
+
+            var result = new List<MeshAccumulator>();
+            foreach (var quad in LegacyDecalQuadGenerator.Generate(source, lift, out skippedTiles))
+            {
+                // A generated plane has no second UV set: it is new geometry, not carried-through geometry,
+                // and Texcoord7 on a decal would be a fabricated lightmap coordinate (see LegacyVertex).
+                var piece = new MeshAccumulator(Key, Samplers);
+                foreach (var (position, uv) in new[]
+                {
+                    (quad.A, new Vector2(0, 0)), (quad.B, new Vector2(1, 0)),
+                    (quad.C, new Vector2(1, 1)), (quad.D, new Vector2(0, 1)),
+                })
+                    piece.AppendVertex(
+                        new LegacyVertex(position, quad.Normal, uv, Vector4.One, position, true), -1);
+                piece.Indices.AddRange(new ushort[] { 0, 1, 2, 0, 2, 3 });
+                result.Add(piece);
+            }
+            return result;
+        }
+
         public List<MeshAccumulator> SplitIntoSourceMeshes()
         {
             // Every vertex of a triangle comes from one source mesh: AddTriangle is called per source mesh,

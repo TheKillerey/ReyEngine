@@ -40,7 +40,9 @@ public sealed record LegacyMapPortShaderSelection(
     // M473: the correction is no longer a constant only a rebuild could change.
     System.Numerics.Vector3 PositionCorrection,
     // M531: import the source map's own particles - Particles.dat plus the .troybin it names.
-    bool ImportLegacyParticles = true);
+    bool ImportLegacyParticles = true,
+    // M550: rebuild decals as flat planes instead of terrain-following patches.
+    LegacyPortDecalOptions? Decals = null);
 
 public sealed record LegacyDestinationContentSummary(
     int OrdinaryMeshes,
@@ -63,6 +65,10 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     [ObservableProperty] private bool _removeOriginalSounds = true;
     [ObservableProperty] private bool _removeOriginalProbes = true;
     [ObservableProperty] private bool _fixImportedMapPosition;
+    // M550: off by default. The legacy patches follow the terrain and the planes do not, so this is a
+    // deliberate trade the user opts into, not a correction.
+    [ObservableProperty] private bool _generateDecalQuads;
+    [ObservableProperty] private string _decalLift = "4";
 
     // M473: the alignment correction, seeded from the measured default but editable. It was a hardcoded
     // constant, so a port that landed a few hundred units out could not be fixed without a rebuild.
@@ -76,6 +82,13 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     /// <summary>The typed correction, falling back to the measured default on anything unparseable — a
     /// half-typed number must not silently port the map to the origin. InvariantCulture because this is a
     /// German-locale machine and "1000,834" and "1000.834" both have to mean the same thing.</summary>
+    /// <summary>M550: German locale ships a comma decimal separator, so the parse is invariant.</summary>
+    public float ParsedDecalLift =>
+        float.TryParse(DecalLift, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out float value) && float.IsFinite(value)
+            ? Math.Clamp(value, 0f, 100f)
+            : 4f;
+
     private System.Numerics.Vector3 ParsedCorrection
     {
         get
@@ -274,7 +287,8 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
             // never survived even once its own lookup was fixed.
             Materials.Where(material => !string.Equals(material.SelectedShader, material.InitialShader, StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(material => material.Name, material => material.SelectedShader!, StringComparer.OrdinalIgnoreCase),
-            cleanup, FixImportedMapPosition, ParsedCorrection, ImportLegacyParticles));
+            cleanup, FixImportedMapPosition, ParsedCorrection, ImportLegacyParticles,
+            new LegacyPortDecalOptions(GenerateDecalQuads, ParsedDecalLift)));
     }
 
     [RelayCommand]

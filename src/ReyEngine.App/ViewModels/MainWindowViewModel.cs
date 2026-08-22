@@ -9677,6 +9677,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             selection = await Views.LegacyMapPortWindow.ShowAsync(PromptOwner, result, shaderChoices, destinationSummary);
             if (selection is null) { Status = "Legacy map port cancelled."; return; }
         }
+        // M550: rebuilding the decals as planes changes the GEOMETRY, and the port that produced `result`
+        // ran before the dialog existed to ask. Re-run it with the option rather than trying to rebuild
+        // meshes after the fact - the quad fit needs the per-vertex UVs the accumulator holds, and only
+        // the porter has those. Costs a second port, and only when the user opted in.
+        if (selection?.Decals is { GenerateQuads: true } decalOptions)
+        {
+            try
+            {
+                result = await Task.Run(() => LegacyMapPorter.Port(folder, originalMapBytes, mapEntry.Path, decalOptions));
+                result = LegacyMapPorter.ApplyShaderOptions(result,
+                    selection.RoleShaders, macroSupport, note: null, ClassifyPortedAlpha);
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Legacy Port", $"Rebuilding the decals as planes failed: {ex.Message}");
+                Status = "Legacy map conversion failed."; return;
+            }
+        }
+
         var cleanup = selection?.Cleanup ?? LegacyPortCleanupOptions.FullReplacement;
         // M502: let the porter ask the real shader cache before authoring NO_BAKED_LIGHTING, instead of
         // trusting a hardcoded role list. Measured: 4TextureBlend_WorldProjected does not declare the axis

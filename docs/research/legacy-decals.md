@@ -143,3 +143,44 @@ repeating texture, drawn after the terrain with blending. Consequences:
 If discrete, movable decal planes are wanted, they have to be **authored**, not recovered — generate a
 quad per decal at a chosen position with UV 0..1 and drop the legacy patch. That is a different
 feature from porting, and it trades away the terrain conformance the legacy patches have.
+
+## 5. The quad generator (M550)
+
+Given §4 — the geometry has no boundary where one texture ends — discrete decal planes have to be
+**authored**, not recovered. The UV field is the thing that does carry the information: the texture
+repeats once per integer UV tile, so **the tile is the unit**.
+
+For each occupied UV tile, the generator fits `world = origin + du*u + dv*v` by least squares over that
+tile's vertices, then places a quad at the tile's UV square, giving it a clean 0..1 of its own. Measured
+on the Map2 port: **241 planes** in place of 1,036 patches, every one exactly 2 triangles, **241 of 241
+carrying the whole texture**, 241 of 241 facing up, p50 1,028 world units across.
+
+Fitted **per tile rather than per material**, so each plane takes its own patch's height and slope
+instead of averaging the whole map into one plane.
+
+### Two guards, and one that did not work
+
+* **Winding.** The quad is flipped to match the average normal of its source triangles. An inverted
+  decal is invisible under backface culling, and least squares has no opinion about facing.
+* **Size ratio.** A tile whose UVs do not describe a consistent mapping still gets an answer out of
+  least squares, and it is a plane at an angle through the ground. A quad more than 3x its source's
+  bounding diagonal is dropped. **On Map2 this fires zero times** — the largest quad (12,422 units
+  against a p50 of 1,028) is *not* an artifact; its source triangles span the same distance, being a
+  seam whose UV stays in one tile while the strip runs across the map.
+* **Fit residual — tried and removed.** Rejecting tiles whose vertices sit far from the fitted plane
+  sounds right and is not: these patches follow the TERRAIN, so their vertices genuinely do not lie on
+  any plane. The residual measures ground unevenness, which is exactly what flattening is meant to
+  discard. At a 15% tolerance it rejected 182 of the 241 tiles.
+
+### The trade
+
+A plane does not follow the ground. Over uneven terrain it will clip, which is why the option is **off
+by default** and the dialog says so. The lift (default 4 units) keeps them clear of a flat surface;
+nothing keeps them clear of a slope.
+
+### Note on Avalonia bindings
+
+The port dialog sets `x:DataType` but bindings still resolve at RUNTIME — verified by pointing one at a
+nonexistent property and watching the build succeed. `LegacyDecalQuadTests` walks the axaml's binding
+paths against the view models by reflection instead, which is what catches a typo before the window is
+ever shown.

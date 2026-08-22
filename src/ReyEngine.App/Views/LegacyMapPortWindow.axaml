@@ -76,6 +76,21 @@
                        FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
           </StackPanel>
         </Border>
+        <Border Classes="card" BorderBrush="#C98A4B" BorderThickness="1">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="cardTitle" Text="DECAL GEOMETRY" Foreground="#FFB973" />
+            <CheckBox Content="Rebuild decals as flat planes" IsChecked="{Binding GenerateDecalQuads}"
+                      FontSize="11" FontWeight="SemiBold" />
+            <Grid ColumnDefinitions="Auto,80,*" IsEnabled="{Binding GenerateDecalQuads}">
+              <TextBlock Grid.Column="0" Text="Lift" FontSize="10" VerticalAlignment="Center" Margin="0,0,5,0" />
+              <TextBox Grid.Column="1" Text="{Binding DecalLift}" FontSize="10" Padding="3,1" />
+              <TextBlock Grid.Column="2" Text="world units above the ground" FontSize="9" VerticalAlignment="Center"
+                         Margin="6,0,0,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+            </Grid>
+            <TextBlock Text="A legacy decal is not a stamp: it is an irregular patch of TERRAIN carrying a UV field that repeats, and every decal of one texture is welded into a single sheet. Rebuilding replaces those patches with one flat plane per texture tile, each carrying the whole image and each selectable and movable on its own. Measured on Map2 that is 241 planes in place of 1,036 patches. The trade is real: a plane no longer follows the ground, so over uneven terrain it will clip. Leave this off to keep the original terrain-conforming patches."
+                       FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+          </StackPanel>
+        </Border>
         <Border Classes="card">
           <StackPanel Spacing="6">
             <TextBlock Classes="cardTitle" Text="SHADER ASSIGNMENT" />
