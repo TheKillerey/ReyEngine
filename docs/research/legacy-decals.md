@@ -105,3 +105,41 @@ so M490's fix still holds for the case M490 actually measured.
 All three are measured and fixed in the porter, verified by re-porting Map2 into a pristine Map453
 extracted from the shipped WAD. **Whether this resolves the in-game black is not yet confirmed** —
 that needs the reporter to re-port and look.
+
+## 4. These "decals" are not stamps — they are a tiled ground overlay (M549)
+
+The reporter asked for the obvious next thing: *"The mesh should contain the full texture when its
+clamped."* It cannot, and the reason is worth recording, because it invalidates the mental model
+everything above was built on.
+
+Measured on the M548 port, a ported decal piece is:
+
+* an **irregular terrain patch**, not a quad — triangle counts are odd (21, 19, 13), so these follow
+  the ground rather than being planes laid on it;
+* about **1,300 world units** across;
+* UV-mapped roughly **−0.5 … +1.7**, i.e. the texture **tiles about twice** across each patch,
+  touching 5–9 distinct UV tile cells;
+* **95.2%** of all decal triangles straddle a 0..1 tile boundary and **0%** sit entirely outside one.
+
+And they are not separate objects. Welding vertices by position and taking connected components
+collapses 1,036 pieces into **90 continuous sheets**, some covering 82% of the map. Every decal of a
+material is welded into one continuous surface.
+
+So the legacy source has no notion of "one decal instance" here. It is a second ground layer with a
+repeating texture, drawn after the terrain with blending. Consequences:
+
+1. **No split can make a mesh hold exactly one full texture.** The UV mapping is continuous and
+   tiling across a welded sheet; there is no boundary where one "full texture" ends. Splitting units
+   measured, by share of pieces covering a whole 0..1 tile: source mesh 45%, index component 40%,
+   position-welded component 100% *but only 90 pieces spanning up to 82% of the map*, world-AABB
+   overlap 100% *but only 84 pieces, chaining across the map*. There is no unit that is both whole
+   and local, because the geometry is not made of whole local things.
+2. **Clamp is the wrong address mode for them, and wrap is right** — which is what §3 already
+   concluded from the UV ranges, now confirmed structurally.
+3. Clamp would not smear a visible border anyway: measured, the border alpha of these textures is
+   4–18 of 255 against an alpha cutoff of 0.3 (76/255), so it is discarded. The black was never a
+   clamped border.
+
+If discrete, movable decal planes are wanted, they have to be **authored**, not recovered — generate a
+quad per decal at a chosen position with UV 0..1 and drop the legacy patch. That is a different
+feature from porting, and it trades away the terrain conformance the legacy patches have.
