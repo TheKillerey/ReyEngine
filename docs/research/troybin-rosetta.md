@@ -974,3 +974,32 @@ together.
 factor authored** - it defaults to `One`, which is what the premultiplied output needs.
 
 Verified on the real bin: 20 of 20 decals, 0 uncooked, 0 shape issues.
+
+## M546 — `ShaderPermutationIndex` validates a PARTIAL key
+
+Removing `NO_BAKED_LIGHTING` from a `SRX_Blend_Chemtech_Decal` material made the client refuse the shader:
+
+```
+Unable to find correct hash for shader '...SRX_Blend_Chemtech_Decal.vs-dx11' in wad.
+Pass Defines:   DISABLE_DEPTH_FOG=1 DISABLE_FIRE_FX=0 ENV_TRANSITION=0 FEATURE_MASKED=1
+                FEATURE_WORLD_POSITION=1 MASK_FX_IN_MAP_CENTER=0 PREMULTIPLIED_ALPHA=1
+Global Defines: COLORPALETTE_COLORBLIND=1 MRT_SUPPORTED=1 USE_DYNAMIC_LIGHTING=1
+```
+
+**Our index called that set COOKED.** It is a false positive, and the log says why: the client's key also
+carries globals and features the index does not model - `COLORPALETTE_COLORBLIND`, `MRT_SUPPORTED`,
+`USE_DYNAMIC_LIGHTING`, `FEATURE_MASKED`, `FEATURE_WORLD_POSITION`. We validate the material's own macros
+and switches, which is a PARTIAL key.
+
+That cuts both ways and explains a contradiction that cost several milestones: the index refused
+`NO_BAKED_LIGHTING` on our `DefaultEnv_Flat_AlphaTest` decal (M542) while calling 400 of 400 shipped Riot
+materials with the same macro cooked. Partial keys produce both false negatives and false positives.
+
+**Treat the index as a filter, not an oracle.** The reliable evidence is what Riot SHIPS: if 16 of 16
+comparable materials carry a define, carry it.
+
+**And the name misleads.** `NO_BAKED_LIGHTING` does not mean "no lighting" and is not the opposite of
+dynamic lighting - `USE_DYNAMIC_LIGHTING=1` sits in the client's GLOBAL defines and is on regardless. It
+means "this material does not sample a baked lightmap texture", which is exactly true of a ported map that
+binds no atlas on any mesh. It belongs ON, and on this shader it is also mandatory: Riot cooked the variant
+with it and not the one without.
