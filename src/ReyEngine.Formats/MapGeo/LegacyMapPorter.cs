@@ -821,29 +821,33 @@ public static class LegacyMapPorter
                 if (decals.GenerateQuads)
                 {
                     // M551: fit each PATCH on its own. Fitting a whole material at once put every patch
-                    // that happened to share a UV tile into one group - 403 patches of order_base_circle
-                    // collapsed into 30 tiles - and least squares then placed the plane at their average.
-                    // Measured, those planes landed a median of 1,241 world units from the nearest real
-                    // patch and up to 6,956. Per patch the plane can only land on the geometry it came
+                    // sharing a UV tile into one group - 403 patches of order_base_circle collapsed into
+                    // 30 - and least squares placed the plane at their average, a median 1,241 world units
+                    // from the nearest real patch. Per patch a plane can only land on the geometry it came
                     // from, because that is the only geometry in the fit.
+                    //
+                    // M552: and ONE plane per patch, not one per UV tile. A patch spans about 2.2 tiles,
+                    // so per-tile drew the image two or three times over the same decal.
                     var planes = new List<MeshAccumulator>();
+                    int unfitted = 0;
                     foreach (var patch in patches)
                     {
-                        planes.AddRange(patch.ToDecalQuads(decals.Lift, out int skipped));
-                        skippedTiles += skipped;
+                        if (patch.ToDecalPlane(decals.Lift) is { } plane) planes.Add(plane);
+                        else { unfitted++; planes.Add(patch); }   // keep the patch rather than lose the decal
                     }
-                    if (planes.Count > 0) { quads += planes.Count; split.AddRange(planes); continue; }
-                    // No tile survived the fit - keep the patches rather than lose the decal entirely.
-                    warnings.Add($"Decal '{acc.Key.TextureSet}' could not be rebuilt as planes; " +
-                        "its original terrain patches were kept.");
+                    skippedTiles += unfitted;
+                    quads += planes.Count - unfitted;
+                    split.AddRange(planes);
+                    continue;
                 }
                 split.AddRange(patches);
             }
             int decalsAfter = split.Count(x => x.Key.Role == LegacyMaterialRole.Decal);
             if (decals.GenerateQuads && quads > 0)
-                warnings.Add($"Rebuilt the decals as {quads:n0} flat plane(s), one per texture tile, " +
-                    $"lifted {decals.Lift:0.#} unit(s) off the ground. They no longer follow the terrain."
-                    + (skippedTiles > 0 ? $" {skippedTiles:n0} tile(s) had no usable UV mapping and were dropped." : ""));
+                warnings.Add($"Rebuilt the decals as {quads:n0} flat plane(s), one per decal carrying its " +
+                    $"whole texture, lifted {decals.Lift:0.#} unit(s) off the ground. They no longer follow "
+                    + "the terrain."
+                    + (skippedTiles > 0 ? $" {skippedTiles:n0} had no usable UV mapping and kept their original patch." : ""));
             else if (decalsAfter != decalsBefore)
                 warnings.Add($"Split {decalsBefore:n0} combined decal mesh(es) into {decalsAfter:n0} " +
                     "so each sorts against the ground on its own.");
@@ -1312,10 +1316,10 @@ public static class LegacyMapPorter
         /// and cutting them is exactly the damage described above.</para>
         /// </summary>
         /// <summary>
-        /// M550: rebuild this decal as flat planes, one per occupied UV tile, each carrying a whole
-        /// texture. See <see cref="LegacyDecalQuadGenerator"/> for why the tile is the unit.
+        /// M550: rebuild this decal patch as ONE flat plane carrying its whole texture.
+        /// See <see cref="LegacyDecalQuadGenerator"/>; call this per patch, never per material.
         /// </summary>
-        public List<MeshAccumulator> ToDecalQuads(float lift, out int skippedTiles)
+        public MeshAccumulator? ToDecalPlane(float lift)
         {
             var source = new List<DecalSourceTriangle>(Indices.Count / 3);
             for (int i = 0; i + 2 < Indices.Count; i += 3)
@@ -1323,24 +1327,19 @@ public static class LegacyMapPorter
                 LegacyVertex a = Vertices[Indices[i]], b = Vertices[Indices[i + 1]], c = Vertices[Indices[i + 2]];
                 source.Add(new DecalSourceTriangle(a.Position, b.Position, c.Position, a.Uv, b.Uv, c.Uv));
             }
+            if (LegacyDecalQuadGenerator.GeneratePlane(source, lift) is not { } quad) return null;
 
-            var result = new List<MeshAccumulator>();
-            foreach (var quad in LegacyDecalQuadGenerator.Generate(source, lift, out skippedTiles))
+            // A generated plane has no second UV set: it is new geometry, not carried-through geometry,
+            // and Texcoord7 on a decal would be a fabricated lightmap coordinate (see LegacyVertex).
+            var piece = new MeshAccumulator(Key, Samplers);
+            foreach (var (position, uv) in new[]
             {
-                // A generated plane has no second UV set: it is new geometry, not carried-through geometry,
-                // and Texcoord7 on a decal would be a fabricated lightmap coordinate (see LegacyVertex).
-                var piece = new MeshAccumulator(Key, Samplers);
-                foreach (var (position, uv) in new[]
-                {
-                    (quad.A, new Vector2(0, 0)), (quad.B, new Vector2(1, 0)),
-                    (quad.C, new Vector2(1, 1)), (quad.D, new Vector2(0, 1)),
-                })
-                    piece.AppendVertex(
-                        new LegacyVertex(position, quad.Normal, uv, Vector4.One, position, true), -1);
-                piece.Indices.AddRange(new ushort[] { 0, 1, 2, 0, 2, 3 });
-                result.Add(piece);
-            }
-            return result;
+                (quad.A, new Vector2(0, 0)), (quad.B, new Vector2(1, 0)),
+                (quad.C, new Vector2(1, 1)), (quad.D, new Vector2(0, 1)),
+            })
+                piece.AppendVertex(new LegacyVertex(position, quad.Normal, uv, Vector4.One, position, true), -1);
+            piece.Indices.AddRange(new ushort[] { 0, 1, 2, 0, 2, 3 });
+            return piece;
         }
 
         public List<MeshAccumulator> SplitIntoSourceMeshes()

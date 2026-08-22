@@ -25,39 +25,41 @@ public sealed class LegacyDecalQuadTests
     }
 
     [Fact]
-    public void AFlatPatchBecomesOnePlaneCoveringItsWholeTexture()
+    public void APatchBecomesOnePlaneCoveringItsWholeTexture()
     {
-        var quads = LegacyDecalQuadGenerator.Generate(FlatTile(), lift: 0f, out int skipped);
-        Assert.Equal(0, skipped);
-        var quad = Assert.Single(quads);
-
-        // The quad reproduces the patch's own footprint, because the UV covered exactly one tile.
-        Assert.Equal(0f, quad.A.X, 3); Assert.Equal(0f, quad.A.Z, 3);
-        Assert.Equal(100f, quad.C.X, 3); Assert.Equal(100f, quad.C.Z, 3);
+        var quad = LegacyDecalQuadGenerator.GeneratePlane(FlatTile(), lift: 0f);
+        Assert.NotNull(quad);
+        Assert.Equal(0f, quad!.Value.A.X, 3); Assert.Equal(0f, quad.Value.A.Z, 3);
+        Assert.Equal(100f, quad.Value.C.X, 3); Assert.Equal(100f, quad.Value.C.Z, 3);
     }
 
     [Fact]
-    public void EachTileBecomesItsOwnPlane()
+    public void APatchSpanningSeveralTilesIsStillOnePlane()
     {
-        // The unit is the UV tile: the texture repeats once per tile, so a patch spanning three tiles is
-        // three whole images and therefore three planes.
+        // M552, the reporter's second finding: "I get often double pasted meshes or more for decals ...
+        // It looks now as a not clamped version so repeated images."
+        //
+        // A legacy patch spans about 2.2 UV tiles, so emitting one plane per TILE drew the image two or
+        // three times over the same decal. The patch's whole UV extent becomes a single 0..1 instead.
         var source = new List<DecalSourceTriangle>();
         source.AddRange(FlatTile(tileU: 0));
         source.AddRange(FlatTile(tileU: 1));
         source.AddRange(FlatTile(tileU: 2));
 
-        var quads = LegacyDecalQuadGenerator.Generate(source, lift: 0f, out _);
-        Assert.Equal(3, quads.Count);
-        Assert.Equal(new[] { 0, 1, 2 }, quads.Select(q => q.TileU).OrderBy(x => x));
+        var quad = LegacyDecalQuadGenerator.GeneratePlane(source, lift: 0f);
+        Assert.NotNull(quad);
+        // One plane over all three tiles, and its own UV is 0..1 - so the texture appears ONCE.
+        Assert.Equal(0f, quad!.Value.A.X, 3);
+        Assert.Equal(300f, quad.Value.C.X, 3);
     }
 
     [Fact]
     public void ThePlaneIsLiftedAlongItsNormalNotBlindlyUpwards()
     {
-        var flat = LegacyDecalQuadGenerator.Generate(FlatTile(y: 50f), lift: 4f, out _);
-        var quad = Assert.Single(flat);
-        Assert.Equal(54f, quad.A.Y, 3);
-        Assert.True(quad.Normal.Y > 0.99f, $"a ground decal faces up, saw {quad.Normal}");
+        var quad = LegacyDecalQuadGenerator.GeneratePlane(FlatTile(y: 50f), lift: 4f);
+        Assert.NotNull(quad);
+        Assert.Equal(54f, quad!.Value.A.Y, 3);
+        Assert.True(quad.Value.Normal.Y > 0.99f, $"a ground decal faces up, saw {quad.Value.Normal}");
     }
 
     [Fact]
@@ -68,14 +70,14 @@ public sealed class LegacyDecalQuadTests
         var flipped = FlatTile().Select(t =>
             new DecalSourceTriangle(t.P0, t.P2, t.P1, t.T0, t.T2, t.T1)).ToList();
 
-        var upward = LegacyDecalQuadGenerator.Generate(FlatTile(), lift: 0f, out _).Single();
-        var downward = LegacyDecalQuadGenerator.Generate(flipped, lift: 0f, out _).Single();
-        Assert.True(Vector3.Dot(upward.Normal, downward.Normal) < -0.99f,
+        var up = LegacyDecalQuadGenerator.GeneratePlane(FlatTile(), lift: 0f)!.Value;
+        var down = LegacyDecalQuadGenerator.GeneratePlane(flipped, lift: 0f)!.Value;
+        Assert.True(Vector3.Dot(up.Normal, down.Normal) < -0.99f,
             "reversing the source winding must reverse the generated plane");
     }
 
     [Fact]
-    public void ATileWithNoUsableMappingIsSkippedRatherThanGuessedAt()
+    public void APatchWithNoUsableMappingIsRefusedRatherThanGuessedAt()
     {
         // All three vertices on one UV line: no plane is recoverable, and least squares would still
         // return one.
@@ -84,9 +86,7 @@ public sealed class LegacyDecalQuadTests
             new(new(0,0,0), new(10,0,0), new(20,0,0),
                 new(0.1f,0.5f), new(0.2f,0.5f), new(0.3f,0.5f)),
         };
-        var quads = LegacyDecalQuadGenerator.Generate(degenerate, lift: 0f, out int skipped);
-        Assert.Empty(quads);
-        Assert.Equal(1, skipped);
+        Assert.Null(LegacyDecalQuadGenerator.GeneratePlane(degenerate, lift: 0f));
     }
 
     [Fact]
@@ -98,39 +98,22 @@ public sealed class LegacyDecalQuadTests
     }
 
     [Fact]
-    public void TwoDistantPatchesSharingATileAveragedIntoOneIsTheCallersBugToAvoid()
+    public void TwoDistantPatchesHandedInTogetherAreRefused()
     {
-        // M551, pinned as a CONTRACT rather than a defect: UV tile indices are not unique across a map,
-        // so two patches far apart can both sit in tile (0,0). Handed both at once the generator fits one
-        // plane through their average - which is correct behaviour for "fit this geometry" and wrong for
-        // "rebuild these decals". The porter must therefore scope each call to a single patch.
+        // M551, pinned as a CONTRACT: UV tile indices are not unique across a map, so patches far apart
+        // can share one. Fitted together, least squares returns a perfectly ordinary plane at their
+        // AVERAGE - nothing about it looks wrong except where it is. The two-sided size guard is what
+        // turns that into a refusal, so a mis-scoped call gives nothing rather than something misplaced.
         var near = FlatTile(size: 100f);
         var far = FlatTile(size: 100f).Select(t => new DecalSourceTriangle(
             t.P0 + new Vector3(5000, 0, 0), t.P1 + new Vector3(5000, 0, 0), t.P2 + new Vector3(5000, 0, 0),
             t.T0, t.T1, t.T2)).ToList();
 
-        var together = LegacyDecalQuadGenerator.Generate(near.Concat(far).ToList(), 0f, out _);
-        Assert.Empty(together);   // 5,000 units of extrapolation trips the size-ratio guard
+        Assert.Null(LegacyDecalQuadGenerator.GeneratePlane(near.Concat(far).ToList(), lift: 0f));
 
         // Scoped per patch, each lands on its own geometry.
-        var a = Assert.Single(LegacyDecalQuadGenerator.Generate(near, 0f, out _));
-        var b = Assert.Single(LegacyDecalQuadGenerator.Generate(far, 0f, out _));
-        Assert.Equal(0f, a.A.X, 3);
-        Assert.Equal(5000f, b.A.X, 3);
-    }
-
-    [Fact]
-    public void ATileTheSourceBarelyEntersGetsNoPlane()
-    {
-        // A patch's UV runs past its own edges, clipping the corner of tiles it never really covers. A
-        // full plane there floats over ground the decal does not touch. 349 such tiles on the Map2 port.
-        var sliver = new List<DecalSourceTriangle>
-        {
-            new(new(0,0,0), new(0,0,4), new(4,0,4),
-                new(0.01f,0.01f), new(0.01f,0.05f), new(0.05f,0.05f)),
-        };
-        Assert.Empty(LegacyDecalQuadGenerator.Generate(sliver, 0f, out int skipped));
-        Assert.Equal(1, skipped);
+        Assert.Equal(0f, LegacyDecalQuadGenerator.GeneratePlane(near, 0f)!.Value.A.X, 3);
+        Assert.Equal(5000f, LegacyDecalQuadGenerator.GeneratePlane(far, 0f)!.Value.A.X, 3);
     }
 
     /// <summary>

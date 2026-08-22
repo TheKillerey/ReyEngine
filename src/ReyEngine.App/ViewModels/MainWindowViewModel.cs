@@ -7496,6 +7496,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasMapContentSelection));
         OnPropertyChanged(nameof(MapContentSelectionText));
         DeleteMapContentSelectionCommand.NotifyCanExecuteChanged();
+        CopyMapContentSelectionCommand.NotifyCanExecuteChanged();
+        CutMapContentSelectionCommand.NotifyCanExecuteChanged();
+        PasteMapContentCommand.NotifyCanExecuteChanged();
         DisableMapContentSelectionCommand.NotifyCanExecuteChanged();
         EnableMapContentSelectionCommand.NotifyCanExecuteChanged();
         HideMapContentSelectionCommand.NotifyCanExecuteChanged();
@@ -7573,6 +7576,159 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanEditMapContentSelection))]
     private void EnableMapContentSelection()
     { foreach (var item in _mapContentSelection.ToList()) item.IsDisabled = false; }
+
+    // ---------------------------------------------------------------- M553: viewport clipboard
+    /// <summary>
+    /// One copied mesh, held as plain geometry rather than as a reference.
+    ///
+    /// <para>Copying a MAP PIECE and copying an ADDED mesh have to produce the same thing, because paste
+    /// can only ever create an added mesh - the original map's meshes live in the mapgeo and are edited
+    /// by flagging, not by insertion. So the clipboard stores the geometry itself and both sources
+    /// normalise into it.</para>
+    /// </summary>
+    private sealed record CopiedMapMesh(
+        string Name, string Material, float[] Positions, float[] Normals, float[] Uvs, int[] Indices,
+        System.Numerics.Vector3 LocalCenter, System.Numerics.Vector3 Offset, System.Numerics.Vector3 RotationDegrees, System.Numerics.Vector3 Scale,
+        int VisibilityMask, int EnabledVisibilityMask);
+
+    private readonly List<CopiedMapMesh> _mapClipboard = new();
+
+    public bool HasMapClipboard => _mapClipboard.Count > 0;
+
+    /// <summary>Pull a selected outliner item into clipboard form, or null if it carries no geometry.</summary>
+    private CopiedMapMesh? ToCopiedMesh(MapOutlinerItemViewModel item)
+    {
+        if (item is AddedMapMeshViewModel added)
+            return new CopiedMapMesh(added.Name, added.Material,
+                (float[])added.Positions.Clone(), (float[])added.Normals.Clone(),
+                (float[])added.Uvs.Clone(), (int[])added.Indices.Clone(),
+                added.LocalCenter, added.Offset, added.RotationDegrees, added.Scale,
+                added.VisibilityMask, added.EnabledVisibilityMask);
+
+        // A map piece's geometry lives in the loaded asset, indexed by the piece's mesh index.
+        if (item is not MapPieceViewModel piece || piece.MeshIndex < 0) return null;
+        if (_currentMap is not { } map || piece.MeshIndex >= map.Meshes.Count) return null;
+        var group = map.Groups.FirstOrDefault(g => g.MeshIndex == piece.MeshIndex);
+        if (group is null || group.IndexCount <= 0) return null;
+
+        // One shared buffer holds every mesh, so the copy takes this group's index range and compacts the
+        // vertices it actually touches.
+        var remap = new Dictionary<uint, int>();
+        var indices = new List<int>(group.IndexCount);
+        for (int i = group.StartIndex; i < group.StartIndex + group.IndexCount; i++)
+        {
+            uint v = map.Indices[i];
+            if (!remap.TryGetValue(v, out int local)) remap[v] = local = remap.Count;
+            indices.Add(local);
+        }
+        var positions = new float[remap.Count * 3];
+        var normals = new float[remap.Count * 3];
+        var uvs = new float[remap.Count * 2];
+        var lo = new System.Numerics.Vector3(float.MaxValue);
+        var hi = new System.Numerics.Vector3(float.MinValue);
+        foreach (var (source, local) in remap)
+        {
+            var p = new System.Numerics.Vector3(map.Positions[source * 3], map.Positions[source * 3 + 1],
+                                map.Positions[source * 3 + 2]);
+            positions[local * 3] = p.X; positions[local * 3 + 1] = p.Y; positions[local * 3 + 2] = p.Z;
+            if (map.Normals.Length >= (source + 1) * 3)
+            {
+                normals[local * 3] = map.Normals[source * 3];
+                normals[local * 3 + 1] = map.Normals[source * 3 + 1];
+                normals[local * 3 + 2] = map.Normals[source * 3 + 2];
+            }
+            if (map.Uvs.Length >= (source + 1) * 2)
+            { uvs[local * 2] = map.Uvs[source * 2]; uvs[local * 2 + 1] = map.Uvs[source * 2 + 1]; }
+            lo = System.Numerics.Vector3.Min(lo, p); hi = System.Numerics.Vector3.Max(hi, p);
+        }
+        // Asset positions are already WORLD space, so the copy is recentred on its own bbox and carries
+        // the difference as its offset. Pasting then lands it exactly where the original sits.
+        var centre = (lo + hi) * 0.5f;
+        for (int i = 0; i < positions.Length; i += 3)
+        { positions[i] -= centre.X; positions[i + 1] -= centre.Y; positions[i + 2] -= centre.Z; }
+
+        int mask = map.Meshes[piece.MeshIndex].VisibilityFlags;
+        return new CopiedMapMesh(piece.Name, group.Material, positions, normals, uvs, indices.ToArray(),
+            System.Numerics.Vector3.Zero, centre, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One, mask, mask);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanEditMapContentSelection))]
+    private void CopyMapContentSelection()
+    {
+        var copied = _mapContentSelection.Select(ToCopiedMesh).OfType<CopiedMapMesh>().ToList();
+        if (copied.Count == 0)
+        { _log.Info("Map Content", "Nothing in the selection carries geometry that can be copied."); return; }
+
+        _mapClipboard.Clear();
+        _mapClipboard.AddRange(copied);
+        OnPropertyChanged(nameof(HasMapClipboard));
+        PasteMapContentCommand.NotifyCanExecuteChanged();
+        int skipped = _mapContentSelection.Count - copied.Count;
+        _log.Info("Map Content", $"Copied {copied.Count} mesh(es)."
+            + (skipped > 0 ? $" {skipped} selected item(s) carry no geometry and were left out." : ""));
+    }
+
+    [RelayCommand(CanExecute = nameof(CanEditMapContentSelection))]
+    private async Task CutMapContentSelection()
+    {
+        CopyMapContentSelection();
+        if (_mapClipboard.Count == 0) return;
+        await DeleteMapContentSelection();
+    }
+
+    private bool CanPasteMapContent() => _mapClipboard.Count > 0 && _currentMap is not null;
+
+    /// <summary>
+    /// M553: paste in place, as added meshes.
+    ///
+    /// <para>In place rather than nudged: a decal or a prop is copied in order to be moved deliberately,
+    /// and an arbitrary offset is just a second thing to undo. The paste lands selected, so the gizmo is
+    /// already on it.</para>
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanPasteMapContent))]
+    private void PasteMapContent()
+    {
+        if (_mapClipboard.Count == 0) return;
+        var pasted = new List<AddedMapMeshViewModel>(_mapClipboard.Count);
+        foreach (var mesh in _mapClipboard)
+            pasted.Add(new AddedMapMeshViewModel
+            {
+                Name = mesh.Name.EndsWith(" (copy)", StringComparison.Ordinal) ? mesh.Name : mesh.Name + " (copy)",
+                Positions = (float[])mesh.Positions.Clone(), Normals = (float[])mesh.Normals.Clone(),
+                Uvs = (float[])mesh.Uvs.Clone(), Indices = (int[])mesh.Indices.Clone(),
+                LocalCenter = mesh.LocalCenter, Material = mesh.Material,
+                Offset = mesh.Offset, RotationDegrees = mesh.RotationDegrees, Scale = mesh.Scale,
+                VisibilityMask = mesh.VisibilityMask, EnabledVisibilityMask = mesh.EnabledVisibilityMask,
+                StateChanged = OnMapContentItemStateChanged,
+            });
+
+        var command = new MapContentPasteCommand(pasted, MapContent.AddedMeshes, AfterMapContentDelete);
+        command.Execute();
+        UndoService.PushApplied(command);
+        OnPropertyChanged(nameof(HasAddedMeshes));
+        if (pasted.Count > 0) SelectedOutlinerItem = pasted[^1];
+        _log.Success("Map Content", $"Pasted {pasted.Count} mesh(es) in place - undo (Ctrl+Z) removes them. "
+                                  + "Save Map Content Edits to persist.");
+    }
+
+    /// <summary>Adding pasted meshes, and taking them back out again.</summary>
+    private sealed class MapContentPasteCommand : ReyEngine.Core.Undo.IEditorCommand
+    {
+        private readonly List<AddedMapMeshViewModel> _meshes;
+        private readonly ObservableCollection<AddedMapMeshViewModel> _target;
+        private readonly Action _after;
+
+        public MapContentPasteCommand(List<AddedMapMeshViewModel> meshes,
+            ObservableCollection<AddedMapMeshViewModel> target, Action after)
+        { _meshes = meshes; _target = target; _after = after; }
+
+        public string Name => "Paste Map Objects";
+        public object? Context => null;
+        public void Execute() { foreach (var m in _meshes) if (!_target.Contains(m)) _target.Add(m); _after(); }
+        public void Undo() { foreach (var m in _meshes) _target.Remove(m); _after(); }
+        public bool CanMergeWith(ReyEngine.Core.Undo.IEditorCommand next) => false;
+        public void MergeWith(ReyEngine.Core.Undo.IEditorCommand next) => throw new NotSupportedException();
+    }
 
     /// <summary>
     /// M513: put deleted objects back.

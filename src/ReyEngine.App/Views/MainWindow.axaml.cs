@@ -1200,17 +1200,40 @@ public partial class MainWindow : Window
         Viewport.RequestFrame();
     }
 
-    /// <summary>Global Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z). TextBoxes keep their own local undo:
-    /// when one has focus its unhandled shortcuts must not fire the global editor stack.</summary>
+    /// <summary>Global editor shortcuts. TextBoxes keep their own local undo and clipboard: when one has
+    /// focus its unhandled shortcuts must not fire the editor stack, or typing in a name field would
+    /// delete the map objects behind it.</summary>
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
         if (e.Handled || e.Source is TextBox) return;
-        if (!e.KeyModifiers.HasFlag(KeyModifiers.Control) || DataContext is not MainWindowViewModel vm) return;
+        if (DataContext is not MainWindowViewModel vm) return;
+
+        // M553: Delete needs no modifier, and shares the outliner's X so the two cannot diverge.
+        if (e.Key is Key.Delete && e.KeyModifiers == KeyModifiers.None)
+        {
+            if (vm.DeleteMapContentSelectionCommand.CanExecute(null))
+            { vm.DeleteMapContentSelectionCommand.Execute(null); e.Handled = true; }
+            return;
+        }
+        if (!e.KeyModifiers.HasFlag(KeyModifiers.Control)) return;
 
         bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         if (e.Key == Key.Z && !shift) { vm.UndoCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.Y || (e.Key == Key.Z && shift)) { vm.RedoCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.OemComma) { vm.OpenSettingsCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.C) { Run(vm.CopyMapContentSelectionCommand, e); }
+        else if (e.Key == Key.X) { Run(vm.CutMapContentSelectionCommand, e); }
+        else if (e.Key == Key.V) { Run(vm.PasteMapContentCommand, e); }
+        else if (e.Key == Key.D) { Run(vm.CopyMapContentSelectionCommand, e); Run(vm.PasteMapContentCommand, e); }
+
+        // Only mark the key handled when the command could actually run, so Ctrl+C over a list or a
+        // read-only field still reaches whatever else wants it.
+        static void Run(System.Windows.Input.ICommand command, KeyEventArgs e)
+        {
+            if (!command.CanExecute(null)) return;
+            command.Execute(null);
+            e.Handled = true;
+        }
     }
 }

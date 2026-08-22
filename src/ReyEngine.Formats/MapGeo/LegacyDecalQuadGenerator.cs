@@ -59,82 +59,57 @@ public static class LegacyDecalQuadGenerator
     private const double MaxSizeRatio = 3.0;
 
     /// <summary>
-    /// How much of a tile the source must actually cover before a plane is generated for it.
+    /// One plane for the patch handed in, carrying its texture exactly ONCE.
     ///
-    /// <para>A patch's UV runs past its own edges, so it clips the corner of tiles it barely enters. A
-    /// full-size plane there floats over ground the decal never touched. Comparing the source triangle
-    /// area inside the tile against the tile's own area drops those.</para>
+    /// <para>The caller must scope this to a single decal patch. Handed a whole material it averages
+    /// unrelated patches together - see <see cref="MaxSizeRatio"/>, which is what makes that return
+    /// nothing rather than a plausible plane in the wrong place.</para>
     /// </summary>
-    private const double MinTileCoverage = 0.15;
-
-    /// <summary>
-    /// One quad per occupied UV tile. Tiles whose UV-to-world mapping is degenerate are skipped rather
-    /// than guessed at, and reported through <paramref name="skippedTiles"/>.
-    /// </summary>
-    /// <param name="lift">World units to raise each quad along its normal, clear of the ground it sits on.</param>
-    public static IReadOnlyList<DecalQuad> Generate(
-        IReadOnlyList<DecalSourceTriangle> triangles, float lift, out int skippedTiles)
+    /// <param name="lift">World units to raise the plane along its normal, clear of the ground it sits on.</param>
+    public static DecalQuad? GeneratePlane(IReadOnlyList<DecalSourceTriangle> triangles, float lift)
     {
-        skippedTiles = 0;
-        var byTile = new Dictionary<(int U, int V), List<DecalSourceTriangle>>();
+        var group = new List<DecalSourceTriangle>(triangles.Count);
+        var uvLo = new Vector2(float.MaxValue);
+        var uvHi = new Vector2(float.MinValue);
         foreach (var t in triangles)
         {
-            // The CENTROID picks the tile, so a triangle contributes to exactly one and none is dropped.
-            Vector2 centre = (t.T0 + t.T1 + t.T2) / 3f;
-            if (!float.IsFinite(centre.X) || !float.IsFinite(centre.Y)) continue;
-            var key = ((int)MathF.Floor(centre.X), (int)MathF.Floor(centre.Y));
-            if (!byTile.TryGetValue(key, out var list)) byTile[key] = list = new();
-            list.Add(t);
+            if (!float.IsFinite(t.T0.X) || !float.IsFinite(t.T0.Y)
+                || !float.IsFinite(t.T1.X) || !float.IsFinite(t.T1.Y)
+                || !float.IsFinite(t.T2.X) || !float.IsFinite(t.T2.Y)) continue;
+            group.Add(t);
+            uvLo = Vector2.Min(uvLo, Vector2.Min(t.T0, Vector2.Min(t.T1, t.T2)));
+            uvHi = Vector2.Max(uvHi, Vector2.Max(t.T0, Vector2.Max(t.T1, t.T2)));
         }
+        if (group.Count * 3 < MinimumSamples) return null;
+        if (uvHi.X - uvLo.X <= 1e-4f || uvHi.Y - uvLo.Y <= 1e-4f) return null;
+        if (!TryFitAffine(group, out Vector3 origin, out Vector3 du, out Vector3 dv)) return null;
 
-        var result = new List<DecalQuad>(byTile.Count);
-        foreach (var (tile, group) in byTile.OrderBy(kv => kv.Key.U).ThenBy(kv => kv.Key.V))
-        {
-            if (group.Count * 3 < MinimumSamples) { skippedTiles++; continue; }
-            if (!TryFitAffine(group, out Vector3 origin, out Vector3 du, out Vector3 dv))
-            { skippedTiles++; continue; }
+        // The patch's OWN UV extent, mapped back through the fit. Not the integer tile grid: a patch
+        // typically spans about 2.2 tiles, so one plane per tile drew the image two or three times over
+        // the same decal - "double pasted meshes ... repeated images". Its whole extent becomes one 0..1.
+        Vector3 At(float u, float v) => origin + du * u + dv * v;
+        Vector3 a = At(uvLo.X, uvLo.Y), b = At(uvHi.X, uvLo.Y);
+        Vector3 c = At(uvHi.X, uvHi.Y), d = At(uvLo.X, uvHi.Y);
 
-            // The tile's own UV square, mapped back through the fit. Corner order follows UV so the quad's
-            // texture is upright: (0,0) (1,0) (1,1) (0,1).
-            Vector3 At(float u, float v) => origin + du * (tile.U + u) + dv * (tile.V + v);
-            Vector3 a = At(0, 0), b = At(1, 0), c = At(1, 1), d = At(0, 1);
+        Vector3 normal = Vector3.Cross(b - a, d - a);
+        if (normal.LengthSquared() <= 1e-12f) return null;
+        normal = Vector3.Normalize(normal);
 
-            Vector3 normal = Vector3.Cross(b - a, d - a);
-            if (normal.LengthSquared() <= 1e-12f) { skippedTiles++; continue; }
-            normal = Vector3.Normalize(normal);
+        // Match the source's facing. A decal lies on the ground, so its normal points up; a fit that came
+        // out inverted would make the plane invisible under backface culling.
+        Vector3 sourceNormal = Vector3.Zero;
+        foreach (var t in group) sourceNormal += Vector3.Cross(t.P1 - t.P0, t.P2 - t.P0);
+        if (Vector3.Dot(normal, sourceNormal) < 0f) { (b, d) = (d, b); normal = -normal; }
 
-            // Match the source's facing. A decal lies on the ground, so its normal points up; a fit that
-            // came out inverted would make the quad invisible under backface culling.
-            Vector3 sourceNormal = Vector3.Zero;
-            foreach (var t in group) sourceNormal += Vector3.Cross(t.P1 - t.P0, t.P2 - t.P0);
-            if (Vector3.Dot(normal, sourceNormal) < 0f)
-            { (b, d) = (d, b); normal = -normal; }
+        // Reject a fit whose plane and source are wildly different sizes, in either direction.
+        double diagonal = Vector3.Distance(a, c);
+        double source = SourceDiagonal(group);
+        if (diagonal <= 1e-3 || source <= 1e-3) return null;
+        if (diagonal > source * MaxSizeRatio || source > diagonal * MaxSizeRatio) return null;
 
-            // Reject a fit whose quad and source are wildly different sizes, in either direction.
-            double diagonal = Vector3.Distance(a, c);
-            double source = SourceDiagonal(group);
-            if (diagonal <= 1e-3 || source <= 1e-3) { skippedTiles++; continue; }
-            if (diagonal > source * MaxSizeRatio || source > diagonal * MaxSizeRatio)
-            { skippedTiles++; continue; }
-
-            // Reject a tile the source barely enters, which would be a plane floating over bare ground.
-            double tileArea = Vector3.Cross(b - a, d - a).Length();
-            if (tileArea <= 1e-6 || SourceArea(group) / tileArea < MinTileCoverage)
-            { skippedTiles++; continue; }
-
-            Vector3 offset = normal * lift;
-            result.Add(new DecalQuad(a + offset, b + offset, c + offset, d + offset, normal,
-                tile.U, tile.V, group.Count));
-        }
-        return result;
-    }
-
-    /// <summary>Total world area of the triangles a tile was fitted from.</summary>
-    private static double SourceArea(List<DecalSourceTriangle> group)
-    {
-        double sum = 0;
-        foreach (var t in group) sum += 0.5 * Vector3.Cross(t.P1 - t.P0, t.P2 - t.P0).Length();
-        return sum;
+        Vector3 offset = normal * lift;
+        return new DecalQuad(a + offset, b + offset, c + offset, d + offset, normal,
+            (int)MathF.Floor(uvLo.X), (int)MathF.Floor(uvLo.Y), group.Count);
     }
 
     /// <summary>Diagonal of the world bounding box of the triangles a tile was fitted from.</summary>

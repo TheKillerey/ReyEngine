@@ -166,12 +166,23 @@ hold a single patch came out right, which is exactly "works sometimes".
 | fit scope | planes | distance to the nearest real patch |
 |---|---|---|
 | per material (M550) | 241 | p50 **1,241** units, max 6,956 |
-| **per patch (M551)** | 2,630 | p50 **277** units, max 1,220 |
+| per patch, one plane per UV tile (M551) | 2,630 | p50 277 units, max 1,220 |
+| **per patch, ONE plane (M552)** | **1,036** | p50 **33** units, max 471 |
 
 Fitted per patch, a plane can only land on the geometry it came from, because that is the only geometry
 in the fit. The residual 277 is a tile's offset inside its own ~1,300-unit patch, not misplacement.
 
-All 2,630 carry the whole texture, all are exactly 2 triangles, all face up.
+### One plane per patch, not one per tile (M552)
+
+M551 still emitted one plane per UV TILE inside each patch. A patch spans about 2.2 tiles, so the same
+decal was drawn two or three times over itself - the reporter again: *"I get often double pasted meshes
+or more for decals ... It looks now as a not clamped version so repeated images."*
+
+The patch's whole UV extent becomes a single 0..1 instead. That is exactly one plane per decal - 1,036
+planes for 1,036 patches - each carrying its image once, with **zero** planes whose UV passes 1.0. The
+plane now sits a median of **33 world units** from its patch centre.
+
+All 1,036 are exactly 2 triangles and face up.
 
 The size guard is now **two-sided**, and the second direction is the one that matters: a source far
 larger than the quad it produced means the samples never belonged to one tile. Given two patches 5,000
@@ -179,9 +190,8 @@ units apart sharing tile (0,0), least squares returns a perfectly ordinary 100-u
 average, 2,500 units from either — nothing about it looks wrong except where it is. A mis-scoped call
 now returns nothing rather than something plausible and misplaced.
 
-A **coverage gate** goes with it: a patch's UV runs past its own edges and clips the corner of tiles it
-barely enters, and a full plane there floats over ground the decal never touched. Tiles whose source
-covers under 15% of the tile area are dropped (349 of them on Map2), and the two-sided size guard drops a further 83.
+The per-tile coverage gate went with it: with one plane per patch there are no partly-entered tiles
+left to reject.
 
 ### Two guards, and one that did not work
 
