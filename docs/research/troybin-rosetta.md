@@ -934,3 +934,43 @@ M279), so they cannot reproduce it, and the client cannot be inspected from here
 **The decisive step is a frame capture of the real client** on one of these decals - which draw call, in
 which pass, against what depth state. Everything short of that is inference, and inference has now been
 wrong three times running.
+
+## M545 — `MULTIPLY_ALPHA` and `PREMULTIPLIED_ALPHA` are the same axis under two names
+
+The decal hunt ended on a naming alias that had defeated every census.
+
+Riot's comparable materials - `DefaultEnv_Flat_AlphaTest` **and** blended, 3,347 of them - carry a
+**`shaderMacros`** map (field `0xe6d67ded`), which the porter never writes at all:
+
+| macro | share |
+|---|---|
+| `NO_BAKED_LIGHTING = 1` | **97%** |
+| `DISABLE_DEPTH_FOG = 1` | **96.8%** |
+| `PREMULTIPLIED_ALPHA = 1` | **95.3%** |
+
+**Why the earlier census said "0 of 3,359 set MULTIPLY_ALPHA" and was not wrong.** It read the `switches`
+list. Riot expresses that axis as the MACRO `PREMULTIPLIED_ALPHA` in `shaderMacros`; the shader declares it
+as the SWITCH `MULTIPLY_ALPHA`. Same permutation axis, two spellings, two different fields - so a census of
+either one alone reports the other as absent.
+
+That also resolves the contradiction that stalled M542: `ShaderPermutationIndex` refused
+`NO_BAKED_LIGHTING` on our material while calling **400 of 400** shipped Riot materials with the same macro
+cooked. The Riot ones carry the premultiply axis; ours did not. `NBL` alone is genuinely uncooked;
+`MULTIPLY_ALPHA + NBL` is cooked, and always was - `SuggestFixes` said so from the start.
+
+**The two symptoms, and why fixing one at a time never worked:**
+
+| symptom | cause |
+|---|---|
+| decals BLACK | no `NO_BAKED_LIGHTING` -> sampling a lightmap the ported map does not bind (0 of 92 meshes, against 447 of 448 in Riot's Map453) |
+| decals "not blended in" | premultiplied BLEND (`src` absent -> `One`) against a shader still emitting straight RGB |
+
+M542 set the premultiply axis but kept the old 0.005 cutoff, so it looked worse and was reverted. M543
+fixed the cutoff but had just removed the premultiply axis. Each half was right; they were never applied
+together.
+
+**The complete decal material:** `AlphaTestValue = 0.3`, `MULTIPLY_ALPHA` switch on, `NO_BAKED_LIGHTING = 1`,
+`DISABLE_DEPTH_FOG = 1`, `blendEnable` true, destination `OneMinusSourceAlpha`, and **no source blend
+factor authored** - it defaults to `One`, which is what the premultiplied output needs.
+
+Verified on the real bin: 20 of 20 decals, 0 uncooked, 0 shape issues.
