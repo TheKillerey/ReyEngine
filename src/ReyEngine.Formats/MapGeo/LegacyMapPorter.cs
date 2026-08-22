@@ -162,6 +162,9 @@ public static class LegacyMapPorter
     /// <summary>The pre-M473 value, kept so a map ported by an older build can be reconciled: the
     /// difference between the two is exactly what such a map is out by.</summary>
     public static readonly Vector3 LegacyPositionCorrectionPreM473 = new(600.406f, -66.972f, 293.744f);
+    /// <summary>M547: edge of the locality cell decal meshes are cut into, in world units. Matches the
+    /// 1,000-unit bucket grid this port regenerates, and Riot's observed ~900-unit decal clusters.</summary>
+    private const float DecalLocalityCell = 1000f;
     private const int MaxVertices = 65535;
 
     /// <summary>What the shader cache says about authoring a macro on a given shader.</summary>
@@ -600,6 +603,7 @@ public static class LegacyMapPorter
         var accumulators = new Dictionary<SurfaceKey, List<MeshAccumulator>>();
         int sourceMaterialCount = 0;
         int rejectedTriangles = 0;
+        int rejectedUvTriangles = 0;
         var sourceMaterials = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var terrainBlendReferences = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int meshIndex = 0;
@@ -690,6 +694,20 @@ public static class LegacyMapPorter
                         Vector3 p1 = Vector3.Transform(pos[i1], transform);
                         Vector3 p2 = Vector3.Transform(pos[i2], transform);
                         if (!Reasonable(p0) || !Reasonable(p1) || !Reasonable(p2)) { rejectedTriangles++; continue; }
+                        // M547: the same guard for UVs, which the position check never covered.
+                        //
+                        // room.nvr carries 38 non-finite UVs across 5 of its 4,373 meshes and the port
+                        // copied them straight through. Interpolation across a NaN corner is NaN over the
+                        // WHOLE triangle, so the sample coordinate is undefined and so is the alpha it
+                        // returns - on a blended decal that is a triangle that composites to garbage.
+                        // Every one of them landed on ONE ported material, order_base_circle, which is one
+                        // of the two the reporter named as showing black.
+                        //
+                        // Dropped rather than zeroed: a NaN UV cannot be textured correctly by any
+                        // substitute, so keeping the triangle only chooses which wrong texel it samples.
+                        if (!Finite(uv0, i0) || !Finite(uv0, i1) || !Finite(uv0, i2)
+                            || !Finite(uv7, i0) || !Finite(uv7, i1) || !Finite(uv7, i2))
+                        { rejectedUvTriangles++; continue; }
                         var chunk = chunks[^1];
                         int needed = chunk.NewVertexCount(meshIndex, i0, i1, i2);
                         if (chunk.VertexCount + needed > MaxVertices)
@@ -737,6 +755,9 @@ public static class LegacyMapPorter
         }
         if (rejectedTriangles > 0)
             warnings.Add($"Skipped {rejectedTriangles:n0} triangle(s) containing invalid legacy sentinel coordinates.");
+        if (rejectedUvTriangles > 0)
+            warnings.Add($"Skipped {rejectedUvTriangles:n0} triangle(s) whose legacy UVs were not finite; " +
+                "they would have sampled an undefined texel and drawn as garbage.");
         sourceMaterialCount = sourceMaterials.Count;
 
         // The modern world-projected terrain shader receives its RGB paint canvas from the engine rather
@@ -760,6 +781,38 @@ public static class LegacyMapPorter
 
         var built = accumulators.Values.SelectMany(x => x).Where(x => x.IndexCount > 0).ToList();
         if (built.Count == 0) throw new InvalidDataException("The legacy environment contained no importable textured triangles.");
+
+        // M547: decals are batched by LOCALITY, not by texture.
+        //
+        // Accumulation above groups every triangle sharing a (role, texture set) into one mesh. A decal is
+        // BLENDED, and a blended mesh gets exactly one sort position - so a mesh spanning the map has no
+        // position that sorts correctly against the ground everywhere, and the losing decals composite
+        // against whatever is behind the ground. That reads in game as decals going black.
+        //
+        // Riot does not author them this way. Map11's base_srx.mapgeo ships 45 decal groups whose widest
+        // covers 4.1% of the map and whose typical one covers 2.0% - roughly 14 quads inside a 900-unit
+        // box. Our Map2 port produced 20 decal meshes of which EVERY one spanned 55-96% of the map, the
+        // largest holding 452 disconnected islands across 96.3% of it.
+        //
+        // Split on (connected component, locality cell): a decal becomes its own mesh, and a decal that is
+        // itself one long connected strip is cut at cell boundaries so no mesh outgrows its neighbourhood.
+        // It costs draw calls and nothing else - the vertex and index data are identical, only the mesh
+        // boundaries move, and every piece stays far below the 65,535-vertex ceiling.
+        int decalsBefore = built.Count(x => x.Key.Role == LegacyMaterialRole.Decal);
+        if (decalsBefore > 0)
+        {
+            var split = new List<MeshAccumulator>(built.Count);
+            foreach (var acc in built)
+            {
+                if (acc.Key.Role != LegacyMaterialRole.Decal) { split.Add(acc); continue; }
+                split.AddRange(acc.SplitIntoIslands(DecalLocalityCell));
+            }
+            int decalsAfter = split.Count(x => x.Key.Role == LegacyMaterialRole.Decal);
+            if (decalsAfter != decalsBefore)
+                warnings.Add($"Split {decalsBefore:n0} combined decal mesh(es) into {decalsAfter:n0} " +
+                    "so each sorts against the ground on its own.");
+            built = split;
+        }
 
         // Keep the complete destination for the review stage. ApplyMeshCleanup removes only the categories
         // selected by the user after conversion, and protects render-region meshes unconditionally.
@@ -837,6 +890,20 @@ public static class LegacyMapPorter
                 ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["USE_TOP"] = true, ["USE_EXTRAS"] = true }
                 : new Dictionary<string, bool>();
             bool decal = key.Role == LegacyMaterialRole.Decal;
+            // M547: clamp only a decal that actually stays inside one tile.
+            //
+            // M490 gave the whole decal role Clamp to stop a stamp repeating across the surface it sits on,
+            // and its own note says that "would be the wrong one for a decal authored to tile". Measured
+            // across the Map2 port, that is every one of them: all 20 ported decal materials contain
+            // triangles whose uv0 leaves the unit square, from 19% of them up to 100%, reaching 13 tiles on
+            // chaos_root_base_decal_mid. Clamping a surface whose UV runs 0..13 smears its edge texel over
+            // the entire thing. Both textures the reporter named - order_base_circle (45% tiling) and
+            // order_seam (34%) - were being clamped.
+            //
+            // So ask the geometry instead of the role. A material is authored to tile when a real share of
+            // its triangles leave the square; one stray triangle is not a tiling intent, and 10% is the gap
+            // in the measured distribution (order_ground_moss_patch1 sits at 1%, the next lowest at 12%).
+            bool tiles = decal && IsAuthoredToTile(meshes, key);
             // League 16.15 has no cooked DefaultEnv_Flat_AlphaTest permutation carrying
             // NO_BAKED_LIGHTING=1. Both ordinary imported surfaces and decals use that shader by default,
             // so only the grass and terrain roles may author the macro.
@@ -846,9 +913,33 @@ public static class LegacyMapPorter
             result.Add(new LegacyMaterialPlan(name, key.Role, shader, samplerPlan, parameters, switches,
                 macros,
                 BlendEnabled: decal, SourceBlendFactor: decal ? 6 : null, DestinationBlendFactor: decal ? 7 : null,
-                SamplerAddressMode: decal ? ClampAddressMode : null));
+                SamplerAddressMode: decal && !tiles ? ClampAddressMode : null));
         }
         return result;
+    }
+
+    /// <summary>
+    /// M547: does this material's geometry leave the unit UV square often enough to mean it tiles?
+    /// </summary>
+    private static bool IsAuthoredToTile(IReadOnlyList<MeshAccumulator> meshes, MaterialKey key)
+    {
+        const float Slack = 1.05f;      // a hair over one tile absorbs edge-vertex rounding
+        const double Share = 0.10;      // below this it is a stray triangle, not an authoring intent
+        int total = 0, outside = 0;
+        foreach (var mesh in meshes)
+        {
+            if (mesh.Key.Role != key.Role || mesh.Key.TextureSet != key.TextureSet) continue;
+            for (int i = 0; i + 2 < mesh.Indices.Count; i += 3)
+            {
+                Vector2 a = mesh.Vertices[mesh.Indices[i]].Uv;
+                Vector2 b = mesh.Vertices[mesh.Indices[i + 1]].Uv;
+                Vector2 c = mesh.Vertices[mesh.Indices[i + 2]].Uv;
+                total++;
+                Vector2 lo = Vector2.Min(a, Vector2.Min(b, c)), hi = Vector2.Max(a, Vector2.Max(b, c));
+                if (hi.X - lo.X > Slack || hi.Y - lo.Y > Slack) outside++;
+            }
+        }
+        return total > 0 && (double)outside / total > Share;
     }
 
     private static void AddMesh(MapGeoBinary target, MeshAccumulator source, string material)
@@ -866,7 +957,7 @@ public static class LegacyMapPorter
         // A terrain mesh without that element hands the shader an incomplete input layout, which is what
         // rendered white. Terrain always HAS the data — the four-blend role is only chosen when the source
         // mesh carries a second UV (see the `fourBlend` test) — so this is a guarantee, not a synthesis.
-        bool hasUv2 = source.Vertices.Any(v => v.HasUv2);
+        bool hasUv2 = source.RequiresUv2 || source.Vertices.Any(v => v.HasUv2);
         bool needsUv2 = source.Key.Role == LegacyMaterialRole.FourBlendTerrain;
         var decl = new MapGeoBinary.VertexDeclaration { Usage = 0 };
         // M476: ELEMENT ORDER IS THE BYTE LAYOUT, and it must be Riot's.
@@ -1074,6 +1165,10 @@ public static class LegacyMapPorter
         return clean.Trim('_');
     }
 
+    /// <summary>M547: a UV a shader can actually sample. Absent channels are vacuously fine.</summary>
+    private static bool Finite(Vector2[]? channel, int index) =>
+        channel is null || (float.IsFinite(channel[index].X) && float.IsFinite(channel[index].Y));
+
     private static bool Reasonable(Vector3 value) =>
         float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z)
         && MathF.Abs(value.X) < 10_000_000f && MathF.Abs(value.Y) < 10_000_000f && MathF.Abs(value.Z) < 10_000_000f;
@@ -1103,6 +1198,8 @@ public static class LegacyMapPorter
         public int IndexCount => Indices.Count;
         public Vector3 BoundsMin { get; private set; } = new(float.MaxValue);
         public Vector3 BoundsMax { get; private set; } = new(float.MinValue);
+        /// <summary>M547: forced on for every island of a split mesh, so they share one declaration.</summary>
+        public bool RequiresUv2 { get; init; }
         public MeshAccumulator(SurfaceKey key, IReadOnlyDictionary<string, string> samplers) { Key = key; Samplers = new Dictionary<string, string>(samplers); }
         private static long Id(int mesh, int vertex) => ((long)mesh << 32) | (uint)vertex;
         public int NewVertexCount(int mesh, int a, int b, int c)
@@ -1144,7 +1241,82 @@ public static class LegacyMapPorter
                 Vertices[i] = Vertices[i] with { Normal = n, HasNormal = true };
             }
         }
+
+        /// <summary>
+        /// M547: partition this accumulator so each destination mesh is one decal in one place.
+        ///
+        /// <para>Accumulation groups every triangle sharing a (role, texture set) into ONE mesh, split only
+        /// at the 65,535-vertex ceiling. For opaque ground that is exactly right. For DECALS it is not: a
+        /// blended mesh gets a single sort position, and a mesh spanning the map has no position that is
+        /// correct everywhere.</para>
+        ///
+        /// <para>Measured against Riot the divergence is not subtle. Map11's base_srx.mapgeo ships 45 decal
+        /// groups whose widest covers 4.1% of the map and whose typical one covers 2.0% - about 14 quads
+        /// inside a ~900-unit box. Riot batches decals by LOCALITY. Our Map2 port produced 20 decal meshes
+        /// of which EVERY one spanned 55-96% of the map.</para>
+        ///
+        /// <para>Two cuts are needed, because each alone leaves the other case standing. Splitting by
+        /// connected component alone took the widest mesh only from 96.3% to 72.8% with 107 still over 10%:
+        /// the long seam decals are ONE connected strip, so connectivity never separates them. Splitting by
+        /// cell alone would leave two decals that merely share a cell batched together. Keying triangles on
+        /// (component, cell) does both in one pass.</para>
+        /// </summary>
+        /// <param name="cellSize">Edge of the locality cell, in world units. 1,000 matches both the bucket
+        /// grid the port regenerates and Riot's observed ~900-unit decal clusters.</param>
+        public List<MeshAccumulator> SplitIntoIslands(float cellSize)
+        {
+            var parent = new int[Vertices.Count];
+            for (int i = 0; i < parent.Length; i++) parent[i] = i;
+            int Find(int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+            void Union(int a, int b) { int ra = Find(a), rb = Find(b); if (ra != rb) parent[ra] = rb; }
+            for (int i = 0; i + 2 < Indices.Count; i += 3)
+            { Union(Indices[i], Indices[i + 1]); Union(Indices[i + 1], Indices[i + 2]); }
+
+            // Whether the SOURCE carried a second UV set is a property of the material, not of one island.
+            // Islands must not disagree about their vertex declaration, so the parent's answer wins for all
+            // of them - a mesh whose neighbours have the channel still has to be padded (see LegacyVertex).
+            bool requiresUv2 = RequiresUv2 || Vertices.Any(v => v.HasUv2);
+
+            var byKey = new Dictionary<(int Root, int X, int Z), MeshAccumulator>();
+            var remap = new Dictionary<((int, int, int) Key, int Source), ushort>();
+            var order = new List<MeshAccumulator>();
+            for (int i = 0; i + 2 < Indices.Count; i += 3)
+            {
+                // The CENTROID picks the cell, so a triangle is never duplicated and never dropped.
+                Vector3 centre = (Vertices[Indices[i]].Position
+                                + Vertices[Indices[i + 1]].Position
+                                + Vertices[Indices[i + 2]].Position) / 3f;
+                var key = (Find(Indices[i]),
+                           (int)MathF.Floor(centre.X / cellSize),
+                           (int)MathF.Floor(centre.Z / cellSize));
+                if (!byKey.TryGetValue(key, out var island))
+                {
+                    byKey[key] = island = new MeshAccumulator(Key, Samplers) { RequiresUv2 = requiresUv2 };
+                    order.Add(island);
+                }
+                for (int k = 0; k < 3; k++)
+                {
+                    int source = Indices[i + k];
+                    if (!remap.TryGetValue((key, source), out ushort local))
+                    {
+                        local = checked((ushort)island.Vertices.Count);
+                        remap[(key, source)] = local;
+                        island.AppendVertex(Vertices[source]);
+                    }
+                    island.Indices.Add(local);
+                }
+            }
+            return order;
+        }
+
+        private void AppendVertex(LegacyVertex vertex)
+        {
+            Vertices.Add(vertex);
+            BoundsMin = Vector3.Min(BoundsMin, vertex.Position);
+            BoundsMax = Vector3.Max(BoundsMax, vertex.Position);
+        }
     }
+
 
     private static Vector3[] ReadVector3(VertexElementAccessor accessor, int count)
     {
