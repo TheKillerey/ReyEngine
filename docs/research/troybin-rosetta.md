@@ -911,3 +911,26 @@ authoring errors.*
 This is also why the M541b census found every material property matching Riot. It did match. The wrong
 value was one of the few that varies legitimately, so a distribution check alone could not condemn it -
 only the mechanism could.
+
+### M543 did not fix it either
+
+Raising the decal cutoff to Riot's 0.3 was correct on its own terms - it is what 3,091 of 3,347 comparable
+shipped materials use - but the black is still there. Two more eliminations from the same pass:
+
+- **`TintColor` is inert on this shader.** It appears in NO cooked pixel-shader constant buffer for
+  `DefaultEnv_Flat_AlphaTest` (blobs 1-8 all bind only `DiffuseTexture`), so Riot's `W=0` against our `W=1`
+  cannot matter.
+- **Riot does not author `srcColorBlendFactor`/`srcAlphaBlendFactor` at all** on these materials; we author
+  both as `SourceAlpha`. A full flattened diff against
+  `Maps/KitPieces/SRS/Base/Materials/Default/Periph_Bot_A_MAT` - `DefaultEnv_Flat_AlphaTest`, blended,
+  cutoff 0.3, the directly comparable material - leaves only that, the inert tint, the sampler address
+  fields, and a `shaderMacros` map. **This is the one difference not yet ruled out.**
+
+**Where this stands.** Eleven hypotheses tested against Riot's shipped data. The materials match on every
+axis that can be compared statically, and the mechanism cannot be settled from the files: our own renderers
+are deliberately MORE FORGIVING than the client (they force `WritesDepth` off for transparent materials,
+M279), so they cannot reproduce it, and the client cannot be inspected from here.
+
+**The decisive step is a frame capture of the real client** on one of these decals - which draw call, in
+which pass, against what depth state. Everything short of that is inference, and inference has now been
+wrong three times running.
