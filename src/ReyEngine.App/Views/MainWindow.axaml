@@ -418,6 +418,7 @@
                 ProbeMarkers="{Binding ProbeMarkers}"
                 SoundMarkers="{Binding SoundMarkers}"
                 BucketGridLines="{Binding BucketGridLines}"
+                BushCellLines="{Binding BushCellLines}"
                 BakeBox="{Binding BakeBox}"
                 PropMeshes="{Binding CurrentPropMeshes}"
                 ParticlePlayback="{Binding CurrentParticlePlayback}"
@@ -588,6 +589,8 @@
               <ToggleButton Classes="vp" Content="◈ Game Depth" IsChecked="{Binding ClientDepthRules}"
                             IsVisible="{Binding UseDx11Viewport}"
                             ToolTip.Tip="Render transparents with the GAME's depth rules: they keep the depth mask and sort with solid geometry. The editor normally drops the depth mask on transparents and draws them last, which is why a decal can look right here and go black in game - it stamps depth at its own plane, depth-rejects the ground under it, and composites over nothing. Turn this on to see what the client will actually draw." />
+              <ToggleButton Classes="vp" Content="🌿 Bush" IsChecked="{Binding ShowBushAreas}"
+                            ToolTip.Tip="Show where the GAME blocks vision, read from the map&apos;s navgrid (assets/maps/navgrid/&lt;map&gt;/aipath.aimesh_ngrid) on its 50-unit lattice. This is not the swaying bush art - that is ordinary geometry on a VertexDeform material and does not decide where a champion is hidden. Maps with no brush (Howling Abyss, TFT) correctly show nothing." />
               <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" ToolTip.Tip="Show skeleton bones" />
               <ToggleButton Classes="vp" Content="▣ Bounds" IsChecked="{Binding ShowBounds}" ToolTip.Tip="Show bounding boxes" />
               <ToggleButton Classes="vp" Content="⬓ Regions" IsChecked="{Binding RenderRegionsEnabled}"

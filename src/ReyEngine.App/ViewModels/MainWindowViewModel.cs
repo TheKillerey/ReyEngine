@@ -345,6 +345,83 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showBucketGrid;
     [ObservableProperty] private float[]? _bucketGridLines;
 
+    /// <summary>M562: gameplay bush cells from the map's navgrid, as a pos3+bary3 soup.</summary>
+    [ObservableProperty] private float[]? _bushCellLines;
+
+    /// <summary>
+    /// M562: show where the game blocks vision, as opposed to where the foliage is.
+    ///
+    /// <para>These are two unrelated things and only the first is gameplay. The swaying bush art is
+    /// ordinary geometry on a VertexDeform material; the volume that actually hides a champion lives in
+    /// <c>assets/maps/navgrid/&lt;map&gt;/aipath.aimesh_ngrid</c>, on a 50-unit lattice.</para>
+    /// </summary>
+    [ObservableProperty] private bool _showBushAreas;
+
+    /// <summary>The navgrid beside the open map, or null when the map ships none.</summary>
+    private ReyEngine.Formats.MapGeo.NavGrid? _navGrid;
+
+    partial void OnShowBushAreasChanged(bool value) => RebuildBushCellLines();
+
+    /// <summary>
+    /// Reads the navgrid that sits beside the open mapgeo. Opportunistic: a map without one simply has no
+    /// overlay, and nothing about loading a map should fail because of it.
+    /// </summary>
+    private void LoadNavGridForCurrentMap(string? mapGeoPath)
+    {
+        _navGrid = null;
+        BushCellLines = null;
+        if (string.IsNullOrWhiteSpace(mapGeoPath)) return;
+
+        // .../mapgeometry/<map>/<file>.mapgeo -> the folder name IS the map key the navgrid path uses.
+        var parts = mapGeoPath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        int at = Array.FindIndex(parts, x => x.Equals("mapgeometry", StringComparison.OrdinalIgnoreCase));
+        if (at < 0 || at + 1 >= parts.Length) return;
+        string map = parts[at + 1];
+
+        try
+        {
+            ulong hash = HashAlgorithms.WadPath(ReyEngine.Formats.MapGeo.NavGrid.PathFor(map));
+            if (!TryResolveEntry(hash, out _)) return;
+            if (!ReyEngine.Formats.MapGeo.NavGrid.TryParse(ReadAsset(hash), out var grid, out string? why) || grid is null)
+            { if (why is not null) _log.Info("NavGrid", $"{map}: {why}"); return; }
+
+            _navGrid = grid;
+            int bush = grid.CountWith(ReyEngine.Formats.MapGeo.NavGrid.BushFlag);
+            _log.Info("NavGrid", $"{map}: v{grid.VersionMajor}.{grid.VersionMinor}, {grid.CountX}x{grid.CountZ} "
+                + $"cells of {grid.CellSize:n0} units, {bush:n0} bush cell(s).");
+            if (ShowBushAreas) RebuildBushCellLines();
+        }
+        catch (Exception ex) { _log.Info("NavGrid", "Could not read the navgrid: " + ex.Message); }
+    }
+
+    private void RebuildBushCellLines()
+    {
+        if (!ShowBushAreas || _navGrid is not { } grid) { BushCellLines = null; return; }
+        var cells = grid.CellsWith(ReyEngine.Formats.MapGeo.NavGrid.BushFlag).ToList();
+        if (cells.Count == 0)
+        {
+            BushCellLines = null;
+            _log.Info("NavGrid", "This map's navgrid marks no bush cells — Howling Abyss and TFT have none at all.");
+            return;
+        }
+
+        // Two triangles per cell in the pos3+bary3 form the wireframe program already draws, laid flat at
+        // the grid's own floor and lifted clear of the ground so the overlay is not z-fought by it.
+        const float Lift = 12f;
+        var verts = new float[cells.Count * 6 * 6];
+        int w = 0;
+        foreach (var (lo, hi) in cells)
+        {
+            float y = lo.Y + Lift;
+            void V(float x, float z, float b0, float b1, float b2)
+            { verts[w++] = x; verts[w++] = y; verts[w++] = z; verts[w++] = b0; verts[w++] = b1; verts[w++] = b2; }
+            V(lo.X, lo.Z, 1, 0, 0); V(hi.X, lo.Z, 0, 1, 0); V(hi.X, hi.Z, 0, 0, 1);
+            V(lo.X, lo.Z, 1, 0, 0); V(hi.X, hi.Z, 0, 1, 0); V(lo.X, hi.Z, 0, 0, 1);
+        }
+        BushCellLines = verts;
+        _log.Info("NavGrid", $"Showing {cells.Count:n0} bush cell(s).");
+    }
+
     partial void OnCurrentModelSoundsChanged(IReadOnlyList<MapSoundPlacement>? value)
     { MapContent.SetSounds(value ?? Array.Empty<MapSoundPlacement>()); UpdatePlaceableMarkers(); }
 
@@ -6015,6 +6092,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MapContent.SetBucketGrids(s.Map.BucketGrids);  // M55
         HasBucketGrids = s.Map.BucketGrids.Count > 0;  // M77
         RebuildBucketGridLines();
+        LoadNavGridForCurrentMap(s.Entry.Path);        // M562: the gameplay bush lives beside the mapgeo
         SelectedParticleTreeItem = null;
         MapGeoInspector.Show(s.Map, s.Entry.Path);
         MapContent.SetLayerGroups(s.LayerGroups);

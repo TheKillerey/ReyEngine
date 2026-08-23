@@ -1066,6 +1066,11 @@ void main() { FragColor = uColor; }";
         _bucketMeshProgram = ShaderUtil.CreateProgram(gl, gles, BucketWireVert, BucketWireFrag);
         _bwMvp = gl.GetUniformLocation(_bucketMeshProgram, "uMvp");
         _bwColor = gl.GetUniformLocation(_bucketMeshProgram, "uColor");
+        // M562: gameplay bush cells from the navgrid. Its own VAO/VBO because it is a second soup that
+        // has to coexist with the bucket grid, but it reuses the barycentric wireframe program - the
+        // vertex format is identical and only the colour differs.
+        _bushMeshVao = gl.GenVertexArray();
+        _bushMeshVbo = gl.GenBuffer();
 
         // M53: Unity-style placement ICONS — instanced camera-facing billboards (sparkle/person/ring
         // sprites, tinted per type) instead of "+" line crosses.
@@ -1100,6 +1105,8 @@ void main() { FragColor = uColor; }";
     private uint _markerProgram, _markerQuadVbo, _icoSparkle, _icoPerson, _icoRing, _icoSpeaker, _icoLight;
     private uint _soundVao, _soundVbo, _bucketVao, _bucketVbo;   // M55: sounds + bucket-grid overlay
     private uint _bucketMeshVao, _bucketMeshVbo, _bucketMeshProgram;   // M77b: baked-mesh wireframe
+    private uint _bushMeshVao, _bushMeshVbo;                           // M562: navgrid bush cells
+    private int _bushMeshVerts;
     private int _bucketMeshVerts, _bwMvp, _bwColor;
     private uint _lightMkVao, _lightMkVbo;                       // M71: dynamic-light position icons
     private int _soundVerts, _bucketVerts, _lightMkVerts;
@@ -2228,6 +2235,29 @@ void main(){
         _bucketMeshVerts = interleavedPosBary.Length / 6;
     }
 
+    /// <summary>
+    /// M562: upload the gameplay bush cells as a pos3+bary3 triangle soup, same format as the bucket-grid
+    /// mesh above. These come from the navgrid, not from any geometry in the map - the swaying foliage is
+    /// unrelated art and does not say where vision is blocked.
+    /// </summary>
+    public unsafe void SetBushCellMesh(float[]? interleavedPosBary)
+    {
+        if (!_ready) return;
+        if (interleavedPosBary is null || interleavedPosBary.Length < 18) { _bushMeshVerts = 0; return; }
+        _gl.BindVertexArray(_bushMeshVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _bushMeshVbo);
+        fixed (float* p = interleavedPosBary)
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(interleavedPosBary.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+        uint bushStride = 6 * sizeof(float);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, bushStride, (void*)0);
+        _gl.EnableVertexAttribArray(1);
+        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, bushStride, (void*)(3 * sizeof(float)));
+        _gl.BindVertexArray(0);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        _bushMeshVerts = interleavedPosBary.Length / 6;
+    }
+
     /// <summary>Upload marker instance centers (xyz per marker) for the icon billboards (M53).</summary>
     private unsafe void SetIconMarkers(uint instVbo, IReadOnlyList<Vector3> positions, out int count)
     {
@@ -2262,6 +2292,7 @@ void main(){
         _soundVerts = 0;
         _bucketVerts = 0;
         _bucketMeshVerts = 0;   // M77b
+        _bushMeshVerts = 0;     // M562
         _hasGizmo = false;
     }
 
@@ -2752,6 +2783,24 @@ void main(){
             _gl.Disable(EnableCap.CullFace);
             _gl.BindVertexArray(_bucketMeshVao);
             _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_bucketMeshVerts);
+            _gl.BindVertexArray(0);
+            _gl.DepthMask(true);
+            _gl.Disable(EnableCap.Blend);
+        }
+
+        // M562: gameplay bush cells. Same wireframe program as the bucket mesh, drawn green so it reads as
+        // vegetation rather than as another grid, and after it so a bush inside a bucket cell still shows.
+        if (_bushMeshVerts > 0)
+        {
+            _gl.UseProgram(_bucketMeshProgram);
+            _gl.UniformMatrix4(_bwMvp, 1, false, in m.M11);
+            _gl.Uniform4(_bwColor, 0.26f, 0.85f, 0.36f, 0.80f);
+            _gl.Enable(EnableCap.Blend);
+            _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            _gl.DepthMask(false);
+            _gl.Disable(EnableCap.CullFace);
+            _gl.BindVertexArray(_bushMeshVao);
+            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_bushMeshVerts);
             _gl.BindVertexArray(0);
             _gl.DepthMask(true);
             _gl.Disable(EnableCap.Blend);
