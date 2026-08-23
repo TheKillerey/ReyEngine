@@ -1193,6 +1193,20 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 {
     private MaterialDocument? _doc;
 
+    /// <summary>
+    /// M555: the bytes <see cref="_doc"/> was parsed from, kept for the whole time it is open.
+    ///
+    /// <para>This editor serialises a WHOLE FILE from a document parsed once when the map was opened, so
+    /// without a record of what it started from there is no way to tell an edit apart from a stale value.
+    /// Saving then wrote the entire bin from that snapshot and discarded everything else written to the
+    /// same file since - the reporter's sun settings, which live in the same materials.bin.</para>
+    ///
+    /// <para>Deliberately NOT refreshed on save. Three-way merge needs the base the edits were made
+    /// against; moving it forward to the merge result would make the next save look like it had DELETED
+    /// whatever the merge just brought in.</para>
+    /// </summary>
+    public byte[]? BaseBytes { get; private set; }
+
     public WadAssetEntry? BinEntry { get; private set; }
     public MaterialSourceKind Kind { get; private set; }
     public ObservableCollection<MaterialBindingViewModel> Materials { get; } = new();
@@ -1641,8 +1655,9 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     public UndoRedoService? UndoService { get; set; }
     public object? DocContext => _doc;
 
-    public void Load(MaterialDocument doc, WadAssetEntry binEntry)
+    public void Load(MaterialDocument doc, WadAssetEntry binEntry, byte[]? sourceBytes = null)
     {
+        BaseBytes = sourceBytes;
         if (_doc is not null) UndoService?.PurgeContext(_doc); // stale commands must never mutate a replaced doc
         _doc = doc;
         BinEntry = binEntry;

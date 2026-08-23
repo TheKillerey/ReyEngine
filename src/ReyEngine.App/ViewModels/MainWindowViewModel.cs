@@ -6703,10 +6703,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            if (alsoRawBin && binDoc is not null) BinEditor.Load(binDoc, binEntry);
+            if (alsoRawBin && binDoc is not null) BinEditor.Load(binDoc, binEntry, bytes);
             if (matDoc is not null && matDoc.Materials.Count > 0)
             {
-                MaterialEditor.Load(matDoc, binEntry);
+                MaterialEditor.Load(matDoc, binEntry, bytes);
                 HasMaterialData = true;
                 // M50: the materials list lives in the Inspector's Materials tab now (the Content
                 // Browser quick-list was removed) — jump straight to it for materials.bin selections.
@@ -6762,6 +6762,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var bytes = MaterialEditor.Serialize();
         if (bytes is null) return;
+        bytes = RebaseOntoCurrent(binEntry, bytes, MaterialEditor.BaseBytes, "Material");
         try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
         catch (Exception ex) { _log.Error("Material", $"Edited material .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
 
@@ -9627,13 +9628,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!ContentLoaded) return;
         try
         {
+            byte[] sourceBytes = ReadAsset(entry.PathHash);
             var doc = await Task.Run(() =>
-                BinEditorDocument.Parse(ReadAsset(entry.PathHash),
+                BinEditorDocument.Parse(sourceBytes,
                     h => _resolver.Database.TryGetBinName(h, out var n) ? n : null));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                BinEditor.Load(doc, entry);
+                BinEditor.Load(doc, entry, sourceBytes);
                 _log.Info("Bin", $"{entry.DisplayName}: {doc.Roots.Count} object(s)" +
                                  (doc.Dependencies.Count > 0 ? $", {doc.Dependencies.Count} dependencies" : "") +
                                  " — primitive fields are editable.");
@@ -9655,6 +9657,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var bytes = BinEditor.Serialize();
         if (bytes is null) return;
+        bytes = RebaseOntoCurrent(entry, bytes, BinEditor.BaseBytes, "Bin");
 
         // Validate the edited .bin re-parses before committing it to the override layer.
         try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
@@ -12017,6 +12020,52 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M98: save Map Bin Editor output through the same guarded override path as the raw editor
     /// (re-parse check, override store, status + dirty bookkeeping).</summary>
+    /// <summary>
+    /// M555: rebase an editor's whole-file snapshot onto whatever the file holds NOW.
+    ///
+    /// <para>The editors that own a parsed document - materials and the raw bin - serialise the ENTIRE
+    /// file from a document parsed once when the map was opened. Writing that straight out discards every
+    /// change made to the same file since, by any other surface. That is the reported bug exactly: the sun
+    /// lives in the map's materials.bin, so saving a material rewound it. Autosave made it worse by firing
+    /// the same stale write on a timer.</para>
+    ///
+    /// <para>So a save is a three-way merge, not an overwrite: <c>diff(base -> mine)</c> re-applied onto
+    /// the current file, through the same engine M97 already uses to carry a mod across a patch. Untouched
+    /// objects keep whatever the file has; only what the editor actually changed is carried over.</para>
+    ///
+    /// <para>Returns <paramref name="edited"/> unchanged when there is no base to compare against, or when
+    /// the file has not moved underneath - the overwhelmingly common case, and one that must stay free.</para>
+    /// </summary>
+    private byte[] RebaseOntoCurrent(WadAssetEntry entry, byte[] edited, byte[]? baseBytes, string channel)
+    {
+        if (baseBytes is null || baseBytes.Length == 0) return edited;
+
+        byte[] current;
+        try { current = ReadAsset(entry.PathHash); }
+        catch (Exception ex) { _log.Warn(channel, $"Could not re-read {entry.DisplayName} to merge onto: {ex.Message}"); return edited; }
+        if (current.AsSpan().SequenceEqual(baseBytes)) return edited;   // nothing landed underneath us
+
+        try
+        {
+            var (merged, report) = Formats.Meta.BinThreeWayMerge.Merge(baseBytes, edited, current, ResolveBinName);
+            if (report.Conflicts > 0)
+                foreach (string detail in report.ConflictDetails.Take(3))
+                    _log.Warn(channel, $"Merge conflict, this editor's value kept: {detail}");
+            _log.Info(channel, $"{entry.DisplayName} changed underneath this editor - merged "
+                + $"{report.ModAdded + report.ModModified + report.ModRemoved} local edit(s) onto it "
+                + "instead of overwriting.");
+            return merged;
+        }
+        catch (Exception ex)
+        {
+            // Refusing is not an option here - it would lose the user's edit - but overwriting silently is
+            // how the sun disappeared, so say so.
+            _log.Warn(channel, $"{entry.DisplayName} changed underneath this editor and could not be merged "
+                + $"({ex.Message}). Saving this editor's version; other changes to that file may be lost.");
+            return edited;
+        }
+    }
+
     private async Task<bool> SaveMapBinBytesAsync(WadAssetEntry entry, byte[] bytes)
     {
         try { _ = Formats.Meta.SafeBinTree.Parse(bytes); }

@@ -124,10 +124,11 @@ public sealed partial class BinEditorViewModel : ViewModelBase
     public UndoRedoService? UndoService { get; set; }
     public object? DocContext => _doc;
 
-    public void Load(BinEditorDocument doc, WadAssetEntry entry)
+    public void Load(BinEditorDocument doc, WadAssetEntry entry, byte[]? sourceBytes = null)
     {
         if (_doc is not null) UndoService?.PurgeContext(_doc); // stale commands must never mutate a replaced doc
         _doc = doc;
+        BaseBytes = sourceBytes;
         Entry = entry;
         Roots.Clear();
         foreach (var r in doc.Roots) Roots.Add(new EditableBinFieldViewModel(r, this));
@@ -146,6 +147,10 @@ public sealed partial class BinEditorViewModel : ViewModelBase
     }
 
     public byte[]? Serialize() => _doc?.Serialize();
+
+    /// <summary>M555: the bytes <see cref="_doc"/> was parsed from - the base a save rebases onto.
+    /// See <c>MaterialEditorViewModel.BaseBytes</c> for why it is never refreshed on save.</summary>
+    public byte[]? BaseBytes { get; private set; }
 
     public void NotifyChanged() => IsDirty = Roots.Any(r => r.AnyDirty());
 
