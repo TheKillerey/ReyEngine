@@ -233,7 +233,13 @@ public sealed class BnkFile
                     }
                     case 4:   // Event
                     {
-                        uint n = Version == 58 ? r.ReadUInt32() : r.ReadByte();
+                        // M574: the action-count width is version-dependent, and getting it wrong is
+                        // silent - the count reads as 1, the id is then assembled from the wrong four
+                        // bytes, and the event simply resolves to nothing. MEASURED: u32 at v88
+                        // (League 2016 client, ENV_Map1_SFX_events.bnk) and u8 at v134/v145 (current
+                        // League). The exact changeover is wwiser's <=122, which nothing here exercises.
+                        uint n = Version <= 122 ? r.ReadUInt32() : r.ReadByte();
+                        if (n > 4096) break;   // a mis-read width reads as an absurd count; do not trust it
                         var ids = new uint[n];
                         for (int k = 0; k < n; k++) ids[k] = r.ReadUInt32();
                         _events[id] = ids;
