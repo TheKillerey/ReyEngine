@@ -154,12 +154,44 @@ MapAudioDataProperties {
 `list2` must be written as an UnorderedContainer and its elements as Embedded — see
 `docs/research/*` on bin wire forms; both mistakes load fine and then misbehave in game.
 
+## Getting the audio somewhere the game loads it (M575)
+
+A `.bnk` in the WAD does nothing on its own. The port therefore does **not** ship a new bank — it appends
+to a pair the map already declares, so the mod overrides two audio files and nothing else. Shipping our
+own bank would mean also shipping a modified `map<N>.bin` and keeping it in step with every patch.
+
+`MapAudioDeclaration` reads the bank units and picks the host: map-specific banks beat shared ones
+(`*global*`, `*gameplay*`, `Init` — extending one of those would leak this map's ambience into whatever
+else the mod is loaded alongside), then most media wins, and stub `_audio.bnk` files with no DATA section
+are skipped. What that picks:
+
+| map | host |
+|---|---|
+| Map453 | `MODE_Jade_SFX` (601 media) |
+| Map11 | `ENV_Map11_Ambience_SFX` (68) |
+| Map12 | `MODE_Kiwi_SFX` (1,021) |
+
+Measured on the real `mode_jade` pair with the 31 legacy Map2 clips: 97,869 B + 13,836,201 B →
+101,330 B + 18,289,669 B; **all 446 shipped events still resolve to the same media, 979 media byte-identical,
+0 changed, 0 lost**, and all 31 new events resolve to their own bytes. Re-running is refused rather than
+stacking a second copy.
+
+## Placement
+
+`MapAudio` is exactly three fields — measured on Map453's eight water emitters:
+
+```
+MapAudio { transform: mtx44, name: string, EventName: string }
+```
+
+Since the source client records no positions, the port places only the **ambience bed** (the longest
+multi-channel clip) at the map centre. Every other clip goes into the bank as a named event and is
+reported in the log, unplaced, for the user to place. Inventing positions would be worse than saying so.
+
 ## Status
 
-`WwiseBankWriter` + `LegacyAudioPorter` produce a v145 pair from the legacy Map2 set:
-31 clips → `ENV_LegacyPort_Map2_SFX_events.bnk` (3,521 B) + `_audio.bnk` (4,453,525 B).
-Read back with this repo's own reader: 31/31 events resolve, 31/31 media byte-identical, 31/31 decode
-through vgmstream, every DIDX offset 16-aligned.
+End to end on the legacy Map2 set: 31 clips → the map's own bank pair, 31/31 events resolve, 31/31 media
+byte-identical, 31/31 decode through vgmstream, DIDX 16-aligned, Riot's 446 events unaffected.
 
 **Not yet verified in game.** The structures are cloned from shipped banks and every id rule is measured,
-but no generated bank has been loaded by the client yet.
+but no rewritten bank has been loaded by the client yet.

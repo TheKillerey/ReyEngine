@@ -37,6 +37,15 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     /// <summary>Create a minimal MapParticle instead of cloning an existing placement. Used when the
     /// Workshop adds the first particle to a map.</summary>
     public bool CreateParticle { get; init; }
+
+    /// <summary>M575: create a MapAudio placement - a Wwise event at a world position. Riot's own are
+    /// exactly three fields (transform, name, EventName), so there is nothing to clone from.
+    /// Requires <see cref="Transform"/> and <see cref="EventName"/>.</summary>
+    public bool CreateSound { get; init; }
+
+    /// <summary>The Wwise event a MapAudio placement plays. The bin stores the NAME; the bank stores only
+    /// its FNV-1 hash, so a typo here is a placement that loads and stays silent.</summary>
+    public string? EventName { get; init; }
 }
 
 /// <summary>
@@ -164,7 +173,7 @@ public static class MapPlaceableWriter
     }
 
     /// <summary>
-    /// M531: allocate MANY placement identities at once.
+    /// M531: allocate MANY placement identities at once (any placement type - M575 sounds included).
     ///
     /// <para><see cref="NewParticleId"/> derives its key from the keys the tree holds RIGHT NOW, so
     /// calling it in a loop before applying anything hands out the same key repeatedly - and a batch
@@ -174,7 +183,7 @@ public static class MapPlaceableWriter
     /// <para>Returns as many ids as there are seeds, in order, or an empty list when the map has no
     /// placeable container to put them in.</para>
     /// </summary>
-    public static IReadOnlyList<MapPlacementId> NewParticleIds(BinTree tree, IEnumerable<uint> seeds)
+    public static IReadOnlyList<MapPlacementId> NewPlacementIds(BinTree tree, IEnumerable<uint> seeds)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(seeds);
@@ -195,6 +204,9 @@ public static class MapPlaceableWriter
         }
         return ids;
     }
+
+    private static readonly uint MapAudioClass = HashAlgorithms.Fnv1a("MapAudio");
+    private static readonly uint F_eventName = HashAlgorithms.Fnv1a("eventName");
 
     private static bool TryApply(BinTree tree, MapPlacementEdit edit)
     {
@@ -241,6 +253,23 @@ public static class MapPlaceableWriter
                     .Append(new(new BinTreeHash(0, edit.Id.ItemKey), particle)));
             container.Properties[F_items] = items;
         }
+        else if (edit.CreateSound)
+        {
+            if (items.Any(e => e.Key is BinTreeHash k && k.Value == edit.Id.ItemKey)
+                || edit.Transform is null || string.IsNullOrWhiteSpace(edit.EventName)) return false;
+            // Field for field what Riot ships: Map453's eight water emitters carry transform, name and
+            // EventName and nothing else. No visibility flag - absent is the authored default.
+            var sound = new BinTreeStruct(0, MapAudioClass, new BinTreeProperty[]
+            {
+                new BinTreeMatrix44(F_transform, edit.Transform.Value),
+                new BinTreeString(F_name, edit.Name ?? "LegacyPortAudio"),
+                new BinTreeString(F_eventName, edit.EventName!),
+            });
+            items = new BinTreeMap(F_items, items.KeyType, items.ValueType,
+                items.Select(e => new KeyValuePair<BinTreeProperty, BinTreeProperty>(e.Key, e.Value))
+                    .Append(new(new BinTreeHash(0, edit.Id.ItemKey), sound)));
+            container.Properties[F_items] = items;
+        }
 
         BinTreeProperty? key = null, value = null;
         foreach (var e in items)
@@ -260,6 +289,7 @@ public static class MapPlaceableWriter
         if (edit.ColorModulate is { } c) s.Properties[F_colorModulate] = new BinTreeVector4(F_colorModulate, c);
         if (edit.SystemLink is { } link) s.Properties[F_system] = new BinTreeObjectLink(F_system, link);
         if (edit.Name is { } n) s.Properties[F_name] = new BinTreeString(F_name, n);
+        if (edit.EventName is { } ev && !edit.CreateSound) s.Properties[F_eventName] = new BinTreeString(F_eventName, ev);
         if (edit.VisibilityFlags is { } visibility)
         {
             int maskValue = Math.Clamp(visibility, 0, 255);
@@ -288,7 +318,8 @@ public static class MapPlaceableWriter
         var editedByContainer = edits.GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
         // M206: a clone's key is absent from `before` on purpose, so it must not read as an intruder.
-        var addedByContainer = edits.Where(e => e.CloneOf is not null || e.CreateParticle).GroupBy(e => e.Id.ContainerHash)
+        var addedByContainer = edits.Where(e => e.CloneOf is not null || e.CreateParticle || e.CreateSound)
+            .GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
 
         if (before.Objects.Count != after.Objects.Count)

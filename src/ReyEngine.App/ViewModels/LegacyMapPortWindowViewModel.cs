@@ -42,7 +42,9 @@ public sealed record LegacyMapPortShaderSelection(
     // M531: import the source map's own particles - Particles.dat plus the .troybin it names.
     bool ImportLegacyParticles = true,
     // M550: rebuild decals as flat planes instead of terrain-following patches.
-    LegacyPortDecalOptions? Decals = null);
+    LegacyPortDecalOptions? Decals = null,
+    // M575: re-host the source client's Wwise audio in a bank this map already loads.
+    bool ImportLegacySounds = true);
 
 public sealed record LegacyDestinationContentSummary(
     int OrdinaryMeshes,
@@ -162,6 +164,11 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     /// <summary>M531: bring the source map's particles across - its Particles.dat placement list and
     /// each .troybin it names. Off means the ported map keeps whatever particles the destination had.</summary>
     [ObservableProperty] private bool _importLegacyParticles = true;
+
+    /// <summary>M575: bring the source client's map audio across. Off by default is tempting because it
+    /// rewrites two shipped banks, but the ambience is the most-missed half of a legacy map and the
+    /// rewrite is additive - everything already in those banks is preserved byte for byte.</summary>
+    [ObservableProperty] private bool _importLegacySounds = true;
 
     partial void OnRemoveOriginalParticlesChanged(bool value) => UpdateCleanupOutcome();
     partial void OnRemoveOriginalPropsChanged(bool value) => UpdateCleanupOutcome();
@@ -292,7 +299,8 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
             Materials.Where(material => !string.Equals(material.SelectedShader, material.InitialShader, StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(material => material.Name, material => material.SelectedShader!, StringComparer.OrdinalIgnoreCase),
             cleanup, FixImportedMapPosition, ParsedCorrection, ImportLegacyParticles,
-            new LegacyPortDecalOptions(GenerateDecalQuads, ParsedDecalLift, DecalSingleImage)));
+            new LegacyPortDecalOptions(GenerateDecalQuads, ParsedDecalLift, DecalSingleImage),
+            ImportLegacySounds));
     }
 
     [RelayCommand]

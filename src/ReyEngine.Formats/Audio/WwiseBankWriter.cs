@@ -77,7 +77,8 @@ public static class WwiseBankWriter
     private const int ActionTargetOffset = 2;
     private const int ActionBankOffset = 10;
 
-    private const byte HircSound = 2, HircAction = 3, HircEvent = 4, HircActorMixer = 7;
+    /// <summary>HIRC object types. Public because they are format facts, not an implementation detail.</summary>
+    public const byte HircSound = 2, HircAction = 3, HircEvent = 4, HircActorMixer = 7;
 
     /// <summary>
     /// Build the bank pair for <paramref name="bankName"/> (e.g. "ENV_LegacyPort_Map2_SFX"), hosting one
@@ -204,7 +205,7 @@ public static class WwiseBankWriter
     }
 
     /// <summary>A HIRC record: type, size (the id counts toward it), id, payload.</summary>
-    private static void WriteObject(BinaryWriter w, byte type, uint id, byte[] payload)
+    internal static void WriteObject(BinaryWriter w, byte type, uint id, byte[] payload)
     {
         w.Write(type);
         w.Write((uint)(payload.Length + 4));
@@ -212,7 +213,7 @@ public static class WwiseBankWriter
         w.Write(payload);
     }
 
-    private static byte[] Sound(uint wemId, int mediaSize, uint parentId)
+    internal static byte[] Sound(uint wemId, int mediaSize, uint parentId)
     {
         var p = Convert.FromHexString(SoundTemplateHex);
         p[4] = 0;                                                          // in-memory, not streamed
@@ -222,7 +223,7 @@ public static class WwiseBankWriter
         return p;
     }
 
-    private static byte[] Mixer(IReadOnlyList<uint> childIds)
+    internal static byte[] Mixer(IReadOnlyList<uint> childIds)
     {
         var t = Convert.FromHexString(MixerTemplateHex);
         var p = new byte[t.Length - MixerChildTailBytes + 4 + childIds.Count * 4];
@@ -235,7 +236,7 @@ public static class WwiseBankWriter
         return p;
     }
 
-    private static byte[] Action(uint targetId, uint bankId)
+    internal static byte[] Action(uint targetId, uint bankId)
     {
         var p = Convert.FromHexString(ActionTemplateHex);
         BitConverter.GetBytes(targetId).CopyTo(p, ActionTargetOffset);
@@ -244,7 +245,7 @@ public static class WwiseBankWriter
     }
 
     /// <summary>An event with a single action. At v145 the action count is a u8 (it is a u32 at v88).</summary>
-    private static byte[] Event(uint actionId)
+    internal static byte[] Event(uint actionId)
     {
         var p = new byte[5];
         p[0] = 1;

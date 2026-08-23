@@ -118,7 +118,7 @@ public sealed class LegacyParticlePortTests
         // time and a batch write keeps only the first placement.
         var tree = ContainerTree();
 
-        var ids = MapPlaceableWriter.NewParticleIds(tree, Enumerable.Repeat(7u, 500));
+        var ids = MapPlaceableWriter.NewPlacementIds(tree, Enumerable.Repeat(7u, 500));
 
         Assert.Equal(500, ids.Count);
         Assert.Equal(500, ids.Select(i => i.ItemKey).Distinct().Count());
@@ -131,7 +131,7 @@ public sealed class LegacyParticlePortTests
     {
         using var ms = new MemoryStream();
         new BinTree(Array.Empty<BinTreeObject>(), Array.Empty<string>()).Write(ms);
-        Assert.Empty(MapPlaceableWriter.NewParticleIds(SafeBinTree.Parse(ms.ToArray()), new[] { 1u }));
+        Assert.Empty(MapPlaceableWriter.NewPlacementIds(SafeBinTree.Parse(ms.ToArray()), new[] { 1u }));
     }
 
     [Fact]

@@ -2101,7 +2101,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // Keys must be reserved as a batch. NewParticleId reads the keys the tree holds RIGHT NOW, so
         // calling it per placement hands back the same key and the write keeps only the first.
         var tree = SafeBinTree.Parse(graph.Bytes);
-        var ids = MapPlaceableWriter.NewParticleIds(tree,
+        var ids = MapPlaceableWriter.NewPlacementIds(tree,
             plan.Placements.Select(placement => HashAlgorithms.Fnv1a(placement.Name)));
         if (ids.Count != plan.Placements.Count)
         { _log.Error("Legacy Port", "This map has no MapPlaceableContainer, so it cannot hold particle placements."); return null; }
@@ -2128,6 +2128,154 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         summary = $"{plan.Placements.Count:n0} particle placement(s) from {plan.Systems.Count:n0} system(s), "
             + $"{staged.Written:n0} asset(s)";
         return placed;
+    }
+
+
+    /// <summary>
+    /// M575: re-host the source client's map audio in a bank this map already loads, and place the
+    /// ambience bed.
+    ///
+    /// <para>Two things make this different from the particle import. The legacy banks are BKHD 88 and the
+    /// current client reads 145, so the audio has to be repacked rather than copied. And the legacy client
+    /// stores no sound POSITIONS at all - there is no Particles.dat equivalent - so only the ambience bed
+    /// can be placed automatically. Everything else arrives as a named event for the user to place.</para>
+    /// </summary>
+    private byte[]? ImportLegacyAudio(byte[] binBytes, string sourceFile, System.Numerics.Vector3 translation,
+        WadAssetEntry mapEntry, out string summary)
+    {
+        summary = "";
+        // LEVELS/<Map>/Scene/room.nvr - the level folder is what names the bank family.
+        string levelFolder = Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(sourceFile)) ?? "");
+        if (string.IsNullOrWhiteSpace(levelFolder))
+        { _log.Warn("Legacy Port", "The source room's level folder could not be identified - no audio imported."); return binBytes; }
+        string slug = Formats.MapGeo.LegacyMapPorter.SlugFor(levelFolder);
+
+        // Which banks does this map load? Only those are worth extending, and only their media counts as
+        // "the game already ships this".
+        string? mapBinPath = MapBinPathFor(mapEntry.Path);
+        if (mapBinPath is null || !TryResolveEntry(HashAlgorithms.WadPath(mapBinPath), out var mapBinEntry))
+        {
+            _log.Warn("Legacy Port", $"No map bin at '{mapBinPath ?? "?"}' - cannot tell which banks this map "
+                + "loads, so no audio was imported.");
+            return binBytes;
+        }
+
+        IReadOnlyList<Formats.Audio.MapBankUnit> units;
+        try { units = Formats.Audio.MapAudioDeclaration.Read(GetAssetBytes(mapBinEntry)); }
+        catch (Exception ex)
+        { _log.Warn("Legacy Port", $"The map bin's audio block could not be read: {ex.Message}"); return binBytes; }
+        if (units.Count == 0)
+        { _log.Warn("Legacy Port", "This map declares no Wwise banks, so there is nothing to extend."); return binBytes; }
+
+        var bankCache = new Dictionary<string, byte[]?>(StringComparer.OrdinalIgnoreCase);
+        byte[]? BankBytes(string assetPath)
+        {
+            string key = assetPath.Replace('\\', '/').ToLowerInvariant();
+            if (bankCache.TryGetValue(key, out var cached)) return cached;
+            byte[]? bytes = null;
+            if (TryResolveEntry(HashAlgorithms.WadPath(key), out var entry))
+                try { bytes = GetAssetBytes(entry); } catch { bytes = null; }
+            return bankCache[key] = bytes;
+        }
+
+        var declaredMedia = new HashSet<uint>();
+        foreach (string path in units.SelectMany(u => u.BankPaths).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (BankBytes(path) is not { } bytes) continue;
+            if (path.EndsWith(".wpk", StringComparison.OrdinalIgnoreCase))
+            {
+                if (Formats.Audio.WpkFile.Parse(bytes) is { } pack)
+                    foreach (uint id in pack.Wems.Keys) declaredMedia.Add(id);
+            }
+            else if (Formats.Audio.BnkFile.Parse(bytes) is { } bank)
+                foreach (uint id in bank.Wems.Keys) declaredMedia.Add(id);
+        }
+
+        var set = Formats.Audio.LegacyAudioPorter.Read(sourceFile, levelFolder, slug, declaredMedia);
+        foreach (string note in set.Notes) _log.Info("Legacy Port", note);
+        if (set.IsEmpty)
+        {
+            _log.Info("Legacy Port", "The source client has no map audio left to port - this map already ships all of it.");
+            return binBytes;
+        }
+
+        int MediaCount(string assetPath)
+        {
+            if (BankBytes(assetPath) is not { } bytes) return -1;
+            try { return Formats.Audio.BnkFile.Parse(bytes)?.Wems.Count ?? -1; } catch { return -1; }
+        }
+        var host = Formats.Audio.MapAudioDeclaration.HostCandidates(units, MediaCount).FirstOrDefault();
+        if (host.Events is null || BankBytes(host.Events) is not { } hostEvents || BankBytes(host.Audio) is not { } hostAudio)
+        {
+            _log.Warn("Legacy Port", "This map declares no readable bank pair with room for media, so the audio "
+                + "was not imported.");
+            return binBytes;
+        }
+
+        var sounds = set.Clips.Select(c => new Formats.Audio.WwiseBankSound(c.EventName, c.WemId, c.Wem)).ToList();
+        var injected = Formats.Audio.WwiseBankInjector.Append(
+            hostEvents, hostAudio, $"reyengine/{slug}", sounds, out var audioError);
+        if (injected is null)
+        {
+            _log.Warn("Legacy Port", $"The audio was not added to '{Path.GetFileName(host.Events)}': {audioError}");
+            return binBytes;
+        }
+
+        WriteBakedAsset(host.Events.Replace('\\', '/').ToLowerInvariant(), injected.EventsBank, ".bnk");
+        WriteBakedAsset(host.Audio.Replace('\\', '/').ToLowerInvariant(), injected.AudioBank, ".bnk");
+
+        // The one placement that can be made without position data. The bed is the longest MULTI-CHANNEL
+        // clip: mono one-shots are emitters that belonged somewhere specific, and the source does not
+        // record where. Everything else is listed below so the user can place it.
+        var bed = set.Clips.Where(c => c.Info.Channels >= 2).OrderByDescending(c => c.Bytes).FirstOrDefault()
+               ?? set.Clips.OrderByDescending(c => c.Bytes).First();
+        string placementSummary = "";
+        var ids = MapPlaceableWriter.NewPlacementIds(SafeBinTree.Parse(binBytes),
+            new[] { HashAlgorithms.Fnv1a(bed.EventName) });
+        if (ids.Count == 0)
+            _log.Warn("Legacy Port", "This map has no MapPlaceableContainer, so the ambience could not be placed. "
+                + $"Its event is '{bed.EventName}'.");
+        else
+        {
+            var transform = System.Numerics.Matrix4x4.Identity;
+            transform.Translation = (_currentMap?.Center ?? System.Numerics.Vector3.Zero) + translation;
+            var edit = new MapPlacementEdit(ids[0])
+            {
+                CreateSound = true,
+                Name = $"LegacyPort_{slug}_Ambience",
+                EventName = bed.EventName,
+                Transform = transform,
+            };
+            byte[]? placed = MapPlaceableWriter.WriteEdits(binBytes, new[] { edit }, out var placeError);
+            if (placed is null) _log.Warn("Legacy Port", $"The ambience placement was not written: {placeError}");
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(placeError)) _log.Warn("Legacy Port", placeError);
+                binBytes = placed;
+                placementSummary = $", placed '{bed.EventName}' at the map centre";
+            }
+        }
+
+        // Said at the moment the user can act on it: these are in the bank and playable, but nothing in
+        // the source says where they belonged, so they stay unplaced until someone places them.
+        var unplaced = injected.AddedEvents.Where(n => n != bed.EventName).ToList();
+        if (unplaced.Count > 0)
+            _log.Info("Legacy Port", $"{unplaced.Count:n0} further sound(s) are in the bank but NOT placed - the "
+                + "legacy client stores no sound positions. Place them from the map content panel: "
+                + string.Join(", ", unplaced.Take(6)) + (unplaced.Count > 6 ? ", ..." : ""));
+
+        summary = $"{injected.AddedEvents.Count:n0} sound(s) into {Path.GetFileName(host.Audio)} "
+            + $"(bank family {set.BankMapId}){placementSummary}";
+        return binBytes;
+    }
+
+    /// <summary>A map's own bin - <c>data/maps/shipping/map453/map453.bin</c> for a map453 mapgeo. That is
+    /// where <c>MapAudioDataProperties</c> lives; the companion materials bin has no audio block.</summary>
+    private static string? MapBinPathFor(string mapGeoPath)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(mapGeoPath, @"map(\d+)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return m.Success ? $"data/maps/shipping/map{m.Groups[1].Value}/map{m.Groups[1].Value}.bin" : null;
     }
 
     /// <summary>The legacy folder layout: <c>LEVELS/&lt;Map&gt;/Particles.dat</c> beside the room, and the
@@ -10259,6 +10407,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 else binBytes = withParticles;
             }
 
+            // M575: the source client's map audio. Repacked rather than copied - the legacy banks are a
+            // bank version the current client will not read - and added to a bank this map already loads,
+            // so the mod does not have to carry a modified map bin as well.
+            string audioSummary = "";
+            if (selection?.ImportLegacySounds == true)
+            {
+                var withAudio = ImportLegacyAudio(binBytes, result.SourceFile,
+                    correctedLegacyPosition ? legacyCorrection : System.Numerics.Vector3.Zero,
+                    mapEntry, out audioSummary);
+                if (withAudio is not null) binBytes = withAudio;
+            }
+
             if (!await SaveMapBinBytesAsync(binEntry, binBytes))
                 throw new InvalidDataException("The companion materials bin could not be saved.");
 
@@ -10306,7 +10466,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // no longer the same thing now that the port window can override it.
                 (correctedLegacyPosition ? $"; imported geometry moved by ({legacyCorrection.X:0.###}, " +
                     $"{legacyCorrection.Y:0.###}, {legacyCorrection.Z:0.###})." : ".")
-                + (particleSummary.Length > 0 ? $" Imported {particleSummary}." : ""));
+                + (particleSummary.Length > 0 ? $" Imported {particleSummary}." : "")
+                + (audioSummary.Length > 0 ? $" Imported {audioSummary}." : ""));
             // M474: stated explicitly because the number is legitimately small and looks like a failure.
             // Measured on two real rooms, only 0.3% (Map10) and 2% (Map8) of source geometry declares a
             // second UV at all - it is the four-blend terrain's mask UV, not a map-wide lightmap unwrap.

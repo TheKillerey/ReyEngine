@@ -37,7 +37,7 @@
             </DockPanel>
             <TextBlock Text="Choose what ReyEngine removes from the modern map used as the destination container. Render-region meshes are always protected. Full replacement is the safest starting point when retained map-specific objects crash the game; disable bush deletion when the old map has no bushes of its own."
                        FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
-            <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="3">
+            <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="3">
               <CheckBox Grid.Row="0" Grid.Column="0" Content="{Binding MeshCleanupText}" IsChecked="{Binding RemoveOriginalMeshes}" FontSize="10" />
               <CheckBox Grid.Row="0" Grid.Column="1" Content="{Binding BushCleanupText}" IsChecked="{Binding RemoveOriginalBushes}" FontSize="10" />
               <CheckBox Grid.Row="1" Grid.Column="0" Content="{Binding MaterialCleanupText}" IsChecked="{Binding RemoveUnusedOriginalMaterials}" FontSize="10" />
@@ -48,6 +48,8 @@
               <!-- M531: the only IMPORT switch in a grid of removals, so it says so. -->
               <CheckBox Grid.Row="3" Grid.Column="1" Content="Import source particles" IsChecked="{Binding ImportLegacyParticles}" FontSize="10"
                         ToolTip.Tip="Bring the source map's own particles across: its Particles.dat placement list and each .troybin it names. Placed with the same position correction the geometry gets." />
+              <CheckBox Grid.Row="4" Grid.Column="0" Content="Import source sounds" IsChecked="{Binding ImportLegacySounds}" FontSize="10"
+                        ToolTip.Tip="Re-host the source client's map audio in a bank this map already loads. The legacy banks are too old for the current client to read, so the original audio is repacked at the current bank version; media the game still ships is skipped. The legacy client stores no sound positions, so only the ambience bed is placed - the rest arrive as named events you can place yourself." />
             </Grid>
             <Border Background="#261F12" BorderBrush="#80601D" BorderThickness="1" CornerRadius="4" Padding="8,6">
               <TextBlock Text="{Binding CleanupOutcome}" FontSize="10" FontWeight="SemiBold" TextWrapping="Wrap"

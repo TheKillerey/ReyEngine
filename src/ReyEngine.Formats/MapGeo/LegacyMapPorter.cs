@@ -1260,6 +1260,10 @@ public static class LegacyMapPorter
         return new(image.Rgba[o] / 255f, image.Rgba[o + 1] / 255f, image.Rgba[o + 2] / 255f, image.Rgba[o + 3] / 255f);
     }
 
+    /// <summary>M575: the same slug the port uses for its asset paths, so the audio import names its
+    /// events after the same level the materials and textures are named after.</summary>
+    public static string SlugFor(string value) => Slug(value);
+
     private static string Slug(string value)
     {
         string clean = new(value.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
