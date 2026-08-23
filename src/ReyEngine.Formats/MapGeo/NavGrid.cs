@@ -12,7 +12,7 @@ namespace ReyEngine.Formats.MapGeo;
 public sealed class NavGrid
 {
     /// <summary>u8 major + u16 minor + 6 floats of bounds + f32 cell size + 2 u32 counts.</summary>
-    internal const int HeaderBytes = 39;
+    public const int HeaderBytes = 39;
 
     /// <summary>
     /// Size of one entry in the cell section that precedes the flag plane.
@@ -22,7 +22,7 @@ public sealed class NavGrid
     /// then lands on a valid plane in every other shipped map, so the section really is a fixed 48 bytes
     /// per cell and the offset does not have to be searched for at load.</para>
     /// </summary>
-    internal const int CellRecordBytes = 48;
+    public const int CellRecordBytes = 48;
 
     public byte VersionMajor { get; private init; }
     public ushort VersionMinor { get; private init; }
@@ -35,6 +35,22 @@ public sealed class NavGrid
 
     /// <summary>One bitmask per cell, row-major with X fastest. Empty when the file carried no plane.</summary>
     public ushort[] Flags { get; private init; } = Array.Empty<ushort>();
+
+    /// <summary>
+    /// Per-cell ground height — the FIRST float of each 48-byte cell record.
+    ///
+    /// <para>Measured rather than documented: on Summoner's Rift it runs -71.2 to 184.3 across 26,545
+    /// distinct values, and the grid's own Y bounds are -71.2 to 184.5. An exact match to the header is
+    /// what identifies it.</para>
+    ///
+    /// <para>Not every map fills it. Map453's grid is a STUB — flat Y bounds, every height zero — so
+    /// <see cref="HasHeights"/> is how a caller tells "the bush is at sea level" from "this grid does not
+    /// know where the ground is".</para>
+    /// </summary>
+    public float[] Heights { get; private init; } = Array.Empty<float>();
+
+    /// <summary>False when the grid carries no usable ground height, which several maps do not.</summary>
+    public bool HasHeights { get; private init; }
 
     public int CellCount => CountX * CountZ;
     public bool HasFlags => Flags.Length == CellCount && CellCount > 0;
@@ -59,11 +75,17 @@ public sealed class NavGrid
         return (Flags[z * CountX + x] & mask) != 0;
     }
 
-    /// <summary>World-space XZ box of one cell, at the grid's own minimum height.</summary>
+    /// <summary>
+    /// World-space box of one cell. Y comes from the cell's own recorded ground height where the grid has
+    /// one, and falls back to the grid's floor where it does not.
+    /// </summary>
     public (Vector3 Min, Vector3 Max) CellBounds(int x, int z)
     {
-        var lo = new Vector3(Min.X + x * CellSize, Min.Y, Min.Z + z * CellSize);
-        return (lo, new Vector3(lo.X + CellSize, Max.Y, lo.Z + CellSize));
+        float y = HasHeights && (uint)x < (uint)CountX && (uint)z < (uint)CountZ
+            ? Heights[z * CountX + x]
+            : Min.Y;
+        var lo = new Vector3(Min.X + x * CellSize, y, Min.Z + z * CellSize);
+        return (lo, new Vector3(lo.X + CellSize, Math.Max(y, Max.Y), lo.Z + CellSize));
     }
 
     /// <summary>Every cell carrying <paramref name="mask"/>, as world-space XZ boxes.</summary>
@@ -128,11 +150,33 @@ public sealed class NavGrid
             // A grid whose plane runs past the end still parses - the header alone is useful - but it
             // reports no flags rather than pretending.
 
+            // The first float of each 48-byte cell record is the ground height (see Heights). Read only
+            // when the section is fully present, and only trusted when it actually varies - a grid of
+            // identical zeroes is a stub, not a flat map.
+            var heights = Array.Empty<float>();
+            bool hasHeights = false;
+            if (HeaderBytes + cells * CellRecordBytes <= data.Length)
+            {
+                heights = new float[cells];
+                float first = 0f;
+                bool varies = false, finite = true;
+                for (long i = 0; i < cells; i++)
+                {
+                    float h = BitConverter.ToSingle(data, (int)(HeaderBytes + i * CellRecordBytes));
+                    heights[i] = h;
+                    if (!float.IsFinite(h)) { finite = false; break; }
+                    if (i == 0) first = h; else if (h != first) varies = true;
+                }
+                hasHeights = finite && varies;
+                if (!hasHeights) heights = Array.Empty<float>();
+            }
+
             grid = new NavGrid
             {
                 VersionMajor = major, VersionMinor = minor,
                 Min = min, Max = max, CellSize = cellSize,
                 CountX = countX, CountZ = countZ, Flags = flags,
+                Heights = heights, HasHeights = hasHeights,
             };
             return true;
         }

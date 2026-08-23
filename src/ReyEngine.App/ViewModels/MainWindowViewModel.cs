@@ -375,20 +375,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // .../mapgeometry/<map>/<file>.mapgeo -> the folder name IS the map key the navgrid path uses.
         var parts = mapGeoPath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         int at = Array.FindIndex(parts, x => x.Equals("mapgeometry", StringComparison.OrdinalIgnoreCase));
-        if (at < 0 || at + 1 >= parts.Length) return;
+        if (at < 0 || at + 1 >= parts.Length)
+        { _log.Info("NavGrid", $"No map folder in '{mapGeoPath}', so no navgrid to look for."); return; }
         string map = parts[at + 1];
 
         try
         {
-            ulong hash = HashAlgorithms.WadPath(ReyEngine.Formats.MapGeo.NavGrid.PathFor(map));
-            if (!TryResolveEntry(hash, out _)) return;
+            string navPath = ReyEngine.Formats.MapGeo.NavGrid.PathFor(map);
+            ulong hash = HashAlgorithms.WadPath(navPath);
+            if (!TryResolveEntry(hash, out _))
+            { _log.Info("NavGrid", $"This map ships no navgrid ({navPath}), so there is nothing to show."); return; }
             if (!ReyEngine.Formats.MapGeo.NavGrid.TryParse(ReadAsset(hash), out var grid, out string? why) || grid is null)
             { if (why is not null) _log.Info("NavGrid", $"{map}: {why}"); return; }
 
             _navGrid = grid;
             int bush = grid.CountWith(ReyEngine.Formats.MapGeo.NavGrid.BushFlag);
             _log.Info("NavGrid", $"{map}: v{grid.VersionMajor}.{grid.VersionMinor}, {grid.CountX}x{grid.CountZ} "
-                + $"cells of {grid.CellSize:n0} units, {bush:n0} bush cell(s).");
+                + $"cells of {grid.CellSize:n0} units, {bush:n0} bush cell(s)"
+                + (grid.HasHeights ? "." : ", and NO ground heights - its cells sit at the grid floor."));
+            if (bush == 0)
+                _log.Warn("NavGrid", $"{map}'s navgrid marks no bush at all. Howling Abyss and TFT are "
+                    + "genuinely like this; a ported map is like this because the navgrid still belongs to "
+                    + "the map underneath it, and porting geometry does not port the gameplay grid.");
             if (ShowBushAreas) RebuildBushCellLines();
         }
         catch (Exception ex) { _log.Info("NavGrid", "Could not read the navgrid: " + ex.Message); }
@@ -396,17 +404,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private void RebuildBushCellLines()
     {
-        if (!ShowBushAreas || _navGrid is not { } grid) { BushCellLines = null; return; }
+        if (!ShowBushAreas) { BushCellLines = null; return; }
+        if (_navGrid is not { } grid)
+        {
+            BushCellLines = null;
+            _log.Info("NavGrid", "No navgrid is loaded for this map, so there is no bush to show.");
+            return;
+        }
         var cells = grid.CellsWith(ReyEngine.Formats.MapGeo.NavGrid.BushFlag).ToList();
         if (cells.Count == 0)
         {
             BushCellLines = null;
-            _log.Info("NavGrid", "This map's navgrid marks no bush cells — Howling Abyss and TFT have none at all.");
+            _log.Info("NavGrid", "This map's navgrid marks no bush cells - Howling Abyss and TFT have none at all.");
             return;
         }
 
         // Two triangles per cell in the pos3+bary3 form the wireframe program already draws, laid flat at
         // the grid's own floor and lifted clear of the ground so the overlay is not z-fought by it.
+        // Enough to clear a cell's own recorded ground without floating. Depth testing is off for this
+        // pass anyway (M563), so the lift is cosmetic rather than what makes the overlay visible.
         const float Lift = 12f;
         var verts = new float[cells.Count * 6 * 6];
         int w = 0;
@@ -419,7 +435,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             V(lo.X, lo.Z, 1, 0, 0); V(hi.X, hi.Z, 0, 1, 0); V(lo.X, hi.Z, 0, 0, 1);
         }
         BushCellLines = verts;
-        _log.Info("NavGrid", $"Showing {cells.Count:n0} bush cell(s).");
+        // Where, not just how many: 63 cells in one corner of a 20,000-unit map is easy to mistake for
+        // nothing at all, which is how this was first reported.
+        var blo = cells[0].Min; var bhi = cells[0].Max;
+        foreach (var (cl, ch) in cells)
+        { blo = System.Numerics.Vector3.Min(blo, cl); bhi = System.Numerics.Vector3.Max(bhi, ch); }
+        _log.Info("NavGrid", $"Showing {cells.Count:n0} bush cell(s), spanning X {blo.X:n0}..{bhi.X:n0} "
+            + $"Z {blo.Z:n0}..{bhi.Z:n0}, drawn over the terrain."
+            + (grid.HasHeights ? "" : " The grid carries no heights, so they sit at its floor."));
     }
 
     partial void OnCurrentModelSoundsChanged(IReadOnlyList<MapSoundPlacement>? value)

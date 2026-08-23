@@ -2798,10 +2798,17 @@ void main(){
             _gl.Enable(EnableCap.Blend);
             _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
             _gl.DepthMask(false);
+            // M563: depth TEST off as well, not just the write. This is a diagnostic, and it has to be
+            // findable: several maps ship a navgrid with no ground height at all (Map453's is a stub -
+            // flat bounds, every height zero), so its cells land at the grid floor and end up buried
+            // inside the terrain. An overlay you cannot see is indistinguishable from one that is broken,
+            // which is exactly how this was first reported.
+            _gl.Disable(EnableCap.DepthTest);
             _gl.Disable(EnableCap.CullFace);
             _gl.BindVertexArray(_bushMeshVao);
             _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_bushMeshVerts);
             _gl.BindVertexArray(0);
+            _gl.Enable(EnableCap.DepthTest);
             _gl.DepthMask(true);
             _gl.Disable(EnableCap.Blend);
         }

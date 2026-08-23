@@ -149,6 +149,37 @@ public sealed class NavGridTests
     }
 
     [Fact]
+    public void CellHeightsComeFromTheCellRecordWhereTheGridHasThem()
+    {
+        // The first float of each 48-byte record is the ground height. Identified by it matching the
+        // header: on Summoner's Rift it runs -71.2 to 184.3 across 26,545 distinct values and the grid's
+        // own Y bounds are -71.2 to 184.5.
+        if (Load("map11") is not { } grid) return;
+        Assert.True(grid.HasHeights);
+
+        float lo = float.MaxValue, hi = float.MinValue;
+        foreach (float h in grid.Heights) { lo = Math.Min(lo, h); hi = Math.Max(hi, h); }
+        Assert.InRange(lo, grid.Min.Y - 1f, grid.Min.Y + 1f);
+        Assert.InRange(hi, grid.Max.Y - 5f, grid.Max.Y + 5f);
+
+        // and a bush cell is then placed at its own ground rather than at the grid floor
+        var (bl, _) = grid.CellsWith(NavGrid.BushFlag).First();
+        Assert.InRange(bl.Y, grid.Min.Y, grid.Max.Y);
+    }
+
+    [Fact]
+    public void AStubGridReportsThatItHasNoHeights()
+    {
+        // Map453 ships a navgrid with flat Y bounds and every height zero. Saying so is the difference
+        // between "the bush is at sea level" and "this grid does not know where the ground is" - and the
+        // overlay looked broken until that was distinguishable.
+        if (Load("map453") is not { } grid) return;
+        Assert.False(grid.HasHeights);
+        Assert.Empty(grid.Heights);
+        Assert.Equal(grid.Min.Y, grid.CellBounds(0, 0).Min.Y, 3);
+    }
+
+    [Fact]
     public void RubbishIsRefusedQuietly()
     {
         // Opened opportunistically alongside a map, so a miss must not throw.
