@@ -145,7 +145,9 @@ public sealed class LegacyDecalGeometryTests
                             .Select(Tex).ToList();
 
         Assert.Contains(tiling, t => t.StartsWith("order_base_circle", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(tiling, t => t.StartsWith("order_seam_", StringComparison.OrdinalIgnoreCase));
+        // M573 dropped the content digest from texture names, so this is "order_seam.tex" now rather
+        // than "order_seam_61b2b328ae42.tex" - and order_seam2 must not satisfy it.
+        Assert.Contains(tiling, t => t.Equals("order_seam.tex", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(clamped, t => t.StartsWith("order_ground_moss_patch1", StringComparison.OrdinalIgnoreCase));
     }
 

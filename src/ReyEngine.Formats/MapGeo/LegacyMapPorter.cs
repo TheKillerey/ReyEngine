@@ -596,11 +596,19 @@ public static class LegacyMapPorter
                 bytes = TexWriter.Write(TextureDecoder.Decode(bytes), TexFormat.Bc3, mipmaps: true);
                 ext = ".tex";
             }
+            // M573: the CONTENT hash still decides whether two source files are the same texture, but it
+            // no longer ends up in the name. It was there to guarantee uniqueness and it made every path
+            // unreadable - "order_base_circle_tx_dm_d150d919beb1.tex" - for a collision that almost never
+            // happens. The stem is used as-is, and a numeric suffix appears only when two DIFFERENT
+            // textures genuinely want the same one.
             string digest = Convert.ToHexString(SHA256.HashData(bytes).AsSpan(0, 6)).ToLowerInvariant();
             if (!textureTargetsByContent.TryGetValue(digest, out string? targetPath))
             {
                 string stem = Slug(Path.GetFileNameWithoutExtension(file));
-                targetPath = $"assets/maps/legacyimport/{slug}/textures/{stem}_{digest}{ext}";
+                string folder = $"assets/maps/legacyimport/{slug}/textures/";
+                targetPath = folder + stem + ext;
+                for (int n = 2; textureCopies.ContainsKey(targetPath); n++)
+                    targetPath = $"{folder}{stem}_{n}{ext}";
                 textureTargetsByContent[digest] = targetPath;
                 textureCopies[targetPath] = new LegacyTextureCopy(file, targetPath, bytes);
             }
@@ -920,14 +928,46 @@ public static class LegacyMapPorter
         };
     }
 
-    private static Dictionary<MaterialKey, string> BuildMaterialNames(string slug, IEnumerable<MaterialKey> keys) =>
-        keys.Distinct().ToDictionary(k => k, k =>
+    /// <summary>
+    /// M573: name a generated material after the texture it draws, not after a hash of its inputs.
+    ///
+    /// <para>"LegacyPort/map2/Decal_518d8b774d3e" told nobody anything. The digest existed to keep names
+    /// unique across roles and texture sets, which a role plus the diffuse texture's own stem already
+    /// does in every real map - so that is the name, and a numeric suffix is added only where two
+    /// materials genuinely collide.</para>
+    /// </summary>
+    private static Dictionary<MaterialKey, string> BuildMaterialNames(string slug, IEnumerable<MaterialKey> keys)
+    {
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var names = new Dictionary<MaterialKey, string>();
+        // Ordered, so the same map always produces the same names: an unordered walk would hand the
+        // suffix to a different one of two colliding materials each run.
+        foreach (var key in keys.Distinct().OrderBy(k => k.Role).ThenBy(k => k.TextureSet, StringComparer.Ordinal))
         {
-            string source = k.Role + "|" + k.TextureSet;
-            string digest = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(source)).AsSpan(0, 6))
-                .ToLowerInvariant();
-            return $"LegacyPort/{slug}/{k.Role}_{digest}";
-        });
+            string stem = Slug(TextureStemOf(key.TextureSet));
+            string baseName = stem.Length > 0 ? $"{key.Role}_{stem}" : key.Role.ToString();
+            string name = baseName;
+            for (int n = 2; !used.Add(name); n++) name = $"{baseName}_{n}";
+            names[key] = $"LegacyPort/{slug}/{name}";
+        }
+        return names;
+    }
+
+    /// <summary>The diffuse texture's file stem out of a "Sampler=path|Sampler=path" set.</summary>
+    private static string TextureStemOf(string textureSet)
+    {
+        if (string.IsNullOrWhiteSpace(textureSet)) return "";
+        foreach (string part in textureSet.Split('|'))
+        {
+            int eq = part.IndexOf('=');
+            if (eq < 0 || eq + 1 >= part.Length) continue;
+            string path = part[(eq + 1)..];
+            // The four-blend roles list several layers; the first is the bottom one, which is the layer a
+            // person would name the ground after.
+            return Path.GetFileNameWithoutExtension(path);
+        }
+        return "";
+    }
 
     private static IReadOnlyList<LegacyMaterialPlan> BuildMaterialPlans(
         IReadOnlyDictionary<MaterialKey, string> names, IReadOnlyList<MeshAccumulator> meshes,
