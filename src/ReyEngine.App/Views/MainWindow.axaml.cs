@@ -263,6 +263,13 @@ public partial class MainWindow : Window
         _dx11.AnimateTime = vm.AnimationsPlaying;
         _dx11.Wireframe = vm.ShowWireframe;
         _dx11.CullBackFaces = vm.CullBackfaces;   // M540: the toggle GL has always honoured
+        // M559: Game Depth has to stop the REORDERING too, not just restore the depth mask. The client
+        // draws map geometry in its own submission order; we group by pipeline to collapse state changes,
+        // which is invisible for depth-writing geometry and is exactly what M279 caught putting a decal at
+        // draw position 395 while its ground drew at 407-414. With the emulation on, submission order is
+        // preserved, so changing the order in the mapgeo actually changes what the viewport draws - which
+        // is what makes the ordering fix testable here instead of only in game.
+        _dx11.SortByPipeline = !vm.ClientDepthRules;
         _dx11.Bloom = vm.ShowBloom;   // M460
         _dx11.Shadows = vm.ShowSunShadows;   // M465
         // M452: the dynamic point lights, from the SAME view-model properties the GL viewport is bound to

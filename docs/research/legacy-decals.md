@@ -339,3 +339,53 @@ Untested as a fix. It is the only measured difference, the editor can now judge 
 thing to try - along with draw ORDER, which is what M279 actually measured going wrong: *"base_chasm1's
 decal sorted to draw position 395 of 426 while the ground under it drew at 407-414."* A decal that writes
 depth is harmless if it draws after the ground; the damage needs both.
+
+## 9. RULED OUT: MULTIPLY_ALPHA (M559)
+
+Tested by the reporter, both ways:
+
+| | editor | in game |
+|---|---|---|
+| `MULTIPLY_ALPHA = 1` | black GONE | still black |
+| `MULTIPLY_ALPHA = 0` | black | still black |
+
+So matching Riot's 36/36 authoring does not fix it. Worth authoring anyway on census grounds, but it is
+not the cause.
+
+The editor reacting to the switch at all is worth recording: neither renderer reads `MULTIPLY_ALPHA`
+directly (checked - no references in either), but the DX11 path selects a compiled DXBC **permutation**
+from the define set, so flipping the switch runs a different shader. That is why it changes the editor
+image and tells us nothing about the blend.
+
+## 10. Decals go last (M559)
+
+M558 confirmed the depth mask. But the depth mask alone is not enough to do damage: a decal that writes
+depth is harmless **if it draws after the ground**, because the ground is already in the framebuffer and
+the decal simply composites over it. The pairing is what hurts - and that is precisely what M279
+measured in our own renderer:
+
+> *base_chasm1's decal sorted to draw position 395 of 426 while the ground under it drew at 407-414.*
+
+Accumulation order follows whatever order the source meshes arrived in, which interleaves decals with the
+ground they sit on. The porter now emits every blended decal after every opaque surface. Measured on the
+Map2 port:
+
+```
+destination   599 groups   index    0 .. 598
+Normal         67 groups   index  599 .. 668
+Grass           3 groups   index  629 .. 651
+Decal       1,036 groups   index  669 .. 1704     <- every one after every opaque surface
+```
+
+Geometry is untouched: same 1,036 decal meshes, same triangle count, same world span. Only each mesh's
+position in the file moves.
+
+### Game Depth had to stop reordering too
+
+Emulating the client's depth mask without emulating its ORDER reproduces half of what the client does -
+and the ordering half is the one a mapgeo change can fix. The renderer groups draws by pipeline to
+collapse state changes, so without this the reorder above is invisible in the editor and the fix could
+not be judged here. `Game Depth` now also sets `SortByPipeline = false`, preserving submission order.
+
+**Untested in game.** The editor is the instrument now; whether the client honours mapgeo submission
+order the way this assumes is the thing the next test settles.

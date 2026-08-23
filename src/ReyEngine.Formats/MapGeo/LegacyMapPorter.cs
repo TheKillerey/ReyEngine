@@ -864,6 +864,23 @@ public static class LegacyMapPorter
         int destinationMeshCount = target.Meshes.Count;
         int preservedCount = target.Meshes.Count(m => m.HasRegionHash && m.RegionHash != 0);
 
+        // M559: DECALS GO LAST.
+        //
+        // A decal that writes depth is harmless if it draws AFTER the ground - the ground is already in
+        // the framebuffer, the decal composites over it, and its depth write changes nothing. The damage
+        // needs both halves, and M279 measured exactly that pairing going wrong in our own renderer:
+        // "base_chasm1's decal sorted to draw position 395 of 426 while the ground under it drew at
+        // 407-414". The client gives these the depth mask (confirmed in M558: the editor reproduces the
+        // black the moment it does the same), so the surviving lever is the order.
+        //
+        // Accumulation order follows whatever order the source meshes happened to arrive in, which
+        // interleaves decals with the ground they sit on. Emitting every blended decal after every opaque
+        // surface costs nothing - the mesh data is identical, only its position in the file moves - and it
+        // is the order the destination map's own content already uses.
+        built = built.Where(x => x.Key.Role != LegacyMaterialRole.Decal)
+            .Concat(built.Where(x => x.Key.Role == LegacyMaterialRole.Decal))
+            .ToList();
+
         var materialNames = BuildMaterialNames(slug, built.Select(x => new MaterialKey(x.Key.Role, x.Key.TextureSet)));
         // M474: counted here rather than inside AddMesh so the number reported is the number of meshes
         // that actually got the channel, not the number that were offered it.

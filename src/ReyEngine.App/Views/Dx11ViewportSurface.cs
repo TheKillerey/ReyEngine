@@ -133,6 +133,12 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// transparency problem.</para></summary>
     public bool CullBackFaces { get; set; } = true;
 
+    /// <summary>M559: false makes the renderer keep SUBMISSION order instead of grouping draws by
+    /// pipeline. Driven by the Game Depth toggle, because emulating the client's depth mask without also
+    /// emulating its ordering reproduces only half of what the client does - and the ordering half is the
+    /// one a mapgeo change can actually fix.</summary>
+    public bool SortByPipeline { get; set; } = true;
+
     public bool Wireframe { get; set; }
 
     /// <summary>M460: bind Riot's glow buffer as RT1, blur it with their own mip chain and composite it
@@ -347,6 +353,7 @@ public sealed class Dx11ViewportSurface : IDisposable
             AlphaBlend = true,
             DepthTest = true,
             CullBackFaces = CullBackFaces,   // M540: the viewport toggle, not a pinned false
+            SortByPipeline = SortByPipeline,  // M559: off under Game Depth, so submission order stands
             MirrorX = true,
             TransposeMatrices = true,
 
