@@ -1,4 +1,4 @@
-# Where the gameplay bush lives (M561 research)
+# The navigation grid, and what its flags are not (M561-M565)
 
 The question: a viewport toggle showing where the **bush areas** are. Bush *foliage* and bush *gameplay
 volume* are different data, and the editor only knew about the first.
@@ -114,3 +114,48 @@ uses - identical vertex format, different colour.
 
 Still not cross-checked against a single measured bush coordinate in world space. The two empty maps, the
 diagonal symmetry and the 1.2% coverage all agree; one known position would close it completely.
+
+## RETRACTED: 0x0004 is not the bush (M565)
+
+The reporter switched the overlay on and looked at what it drew:
+
+> *"It display something but not the bushes. ... It displayed the areas where only the blue team can
+> walk."*
+
+So bit 2 is a **team-restricted walk area**, not brush. The M562 argument for it looked strong and was
+wrong on every count that mattered:
+
+* ~25 clusters with the diagonal symmetry Summoner's Rift's brush has — team-restricted zones are also
+  diagonally symmetric on a symmetric map. The shape did not distinguish them.
+* Howling Abyss and TFT scoring exactly zero — read as "no brush there", and both also have no
+  team-restricted walking. Same coincidence.
+* 1.2% coverage — an argument that a small thing is small.
+
+**The distribution is still true; the label was invented.** A direct look at where the cells land beat
+every inference drawn from their shape, and it took one screenshot.
+
+## Every flag is a layer now
+
+The bits are not named anywhere in the code. `NavGrid.PresentFlags()` reports which single-bit flags a
+grid contains and how many cells carry each, commonest first, and the editor turns each into its own
+toggleable layer with its own colour — a `NavGrid` split button whose flyout lists them as
+`0x0004 · bit 2` with a cell count and a percentage.
+
+Naming them is left to whoever is looking at the map, because that is the only method here that has
+actually worked. What Summoner's Rift contains:
+
+| mask | bit | cells | share |
+|---|---|---|---|
+| 0x0002 | 1 | 34,079 | 39.0% |
+| 0x0080 | 7 | 26,725 | 30.6% |
+| 0x0040 | 6 | 2,670 | 3.1% |
+| 0x0001 | 0 | 2,015 | 2.3% |
+| 0x0004 | 2 | 1,085 | 1.2% |
+| 0x0400 / 0x0800 / 0x1000 | 10/11/12 | 66–76 each | 0.1% |
+
+Only two keep a name in code, and only because they are load-bearing rather than interesting:
+`BlockedFlag` (0x0002, which fills the border and is how the plane's alignment is checked) and
+`TeamRestrictedFlag` (0x0004, named for what the reporter observed).
+
+**Which bit is the bush is still unknown.** It is one of the ones above, and the way to find out is to
+switch layers on over a map whose brush you can see.

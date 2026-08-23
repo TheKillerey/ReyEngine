@@ -345,8 +345,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showBucketGrid;
     [ObservableProperty] private float[]? _bucketGridLines;
 
-    /// <summary>M562: gameplay bush cells from the map's navgrid, as a pos3+bary3 soup.</summary>
+    /// <summary>M562: navgrid flag cells, as a pos3+bary3 soup.</summary>
     [ObservableProperty] private float[]? _bushCellLines;
+
+    /// <summary>M565: where each visible layer sits in that soup, and its colour.</summary>
+    [ObservableProperty] private (int Start, int Count, System.Numerics.Vector4 Color)[]? _bushCellLayers;
+
+    /// <summary>One toggleable layer per flag the loaded grid actually contains.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<NavGridLayerViewModel> NavGridLayers { get; } = new();
+
+    public bool HasNavGrid => NavGridLayers.Count > 0;
 
     /// <summary>
     /// M562: show where the game blocks vision, as opposed to where the foliage is.
@@ -362,6 +370,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     partial void OnShowBushAreasChanged(bool value) => RebuildBushCellLines();
 
+    /// <summary>M565: the button switches the overlay on and turns on the biggest layer, so a first click
+    /// draws something rather than nothing. The flyout is where the rest are chosen.</summary>
+    [RelayCommand]
+    private void ToggleNavGridOverlay()
+    {
+        ShowBushAreas = !ShowBushAreas;
+        if (ShowBushAreas && NavGridLayers.Count > 0 && !NavGridLayers.Any(l => l.IsVisible))
+            NavGridLayers[0].IsVisible = true;
+        else RebuildBushCellLines();
+    }
+
     /// <summary>
     /// Reads the navgrid that sits beside the open mapgeo. Opportunistic: a map without one simply has no
     /// overlay, and nothing about loading a map should fail because of it.
@@ -370,6 +389,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         _navGrid = null;
         BushCellLines = null;
+        BushCellLayers = null;
+        NavGridLayers.Clear();
+        OnPropertyChanged(nameof(HasNavGrid));
         if (string.IsNullOrWhiteSpace(mapGeoPath)) return;
 
         // .../mapgeometry/<map>/<file>.mapgeo -> the folder name IS the map key the navgrid path uses.
@@ -389,59 +411,110 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             { if (why is not null) _log.Info("NavGrid", $"{map}: {why}"); return; }
 
             _navGrid = grid;
-            int bush = grid.CountWith(ReyEngine.Formats.MapGeo.NavGrid.BushFlag);
+            var present = grid.PresentFlags();
             _log.Info("NavGrid", $"{map}: v{grid.VersionMajor}.{grid.VersionMinor}, {grid.CountX}x{grid.CountZ} "
-                + $"cells of {grid.CellSize:n0} units, {bush:n0} bush cell(s)"
+                + $"cells of {grid.CellSize:n0} units, {present.Count} distinct flag(s)"
                 + (grid.HasHeights ? "." : ", and NO ground heights - its cells sit at the grid floor."));
-            if (bush == 0)
-                _log.Warn("NavGrid", $"{map}'s navgrid marks no bush at all. Howling Abyss and TFT are "
-                    + "genuinely like this; a ported map is like this because the navgrid still belongs to "
-                    + "the map underneath it, and porting geometry does not port the gameplay grid.");
+
+            // M565: the bits are NOT named. M562 called 0x0004 the bush and the reporter, looking at the
+            // cells on their own map, identified them as the area only one team may walk. So every flag
+            // present becomes its own toggleable layer and whoever is looking at the map does the naming -
+            // which is the only way any of these get identified honestly.
+            for (int i = 0; i < present.Count; i++)
+            {
+                var (mask, cells) = present[i];
+                NavGridLayers.Add(new NavGridLayerViewModel
+                {
+                    Mask = mask,
+                    Cells = cells,
+                    Share = grid.CellCount > 0 ? cells / (double)grid.CellCount : 0,
+                    Color = LayerColor(i),
+                    Changed = RebuildBushCellLines,
+                });
+                _log.Info("NavGrid", $"  0x{mask:x4} (bit {System.Numerics.BitOperations.TrailingZeroCount(mask)}): "
+                    + $"{cells:n0} cell(s), {(grid.CellCount > 0 ? 100.0 * cells / grid.CellCount : 0):n1}%");
+            }
+            OnPropertyChanged(nameof(HasNavGrid));
             if (ShowBushAreas) RebuildBushCellLines();
         }
         catch (Exception ex) { _log.Info("NavGrid", "Could not read the navgrid: " + ex.Message); }
     }
 
+    /// <summary>Distinct, readable against terrain, and stable per slot so a layer keeps its colour.</summary>
+    private static System.Numerics.Vector4 LayerColor(int index)
+    {
+        System.Numerics.Vector4[] palette =
+        {
+            new(0.26f, 0.85f, 0.36f, 0.80f),   // green
+            new(0.95f, 0.35f, 0.35f, 0.80f),   // red
+            new(0.35f, 0.62f, 0.98f, 0.80f),   // blue
+            new(0.98f, 0.78f, 0.28f, 0.80f),   // amber
+            new(0.78f, 0.45f, 0.95f, 0.80f),   // violet
+            new(0.30f, 0.88f, 0.85f, 0.80f),   // cyan
+            new(0.98f, 0.55f, 0.80f, 0.80f),   // pink
+            new(0.70f, 0.70f, 0.72f, 0.80f),   // grey
+        };
+        return palette[index % palette.Length];
+    }
+
     private void RebuildBushCellLines()
     {
-        if (!ShowBushAreas) { BushCellLines = null; return; }
+        if (!ShowBushAreas) { BushCellLines = null; BushCellLayers = null; return; }
         if (_navGrid is not { } grid)
         {
-            BushCellLines = null;
-            _log.Info("NavGrid", "No navgrid is loaded for this map, so there is no bush to show.");
+            BushCellLines = null; BushCellLayers = null;
+            _log.Info("NavGrid", "No navgrid is loaded for this map, so there is nothing to show.");
             return;
         }
-        var cells = grid.CellsWith(ReyEngine.Formats.MapGeo.NavGrid.BushFlag).ToList();
-        if (cells.Count == 0)
+        var visible = NavGridLayers.Where(l => l.IsVisible).ToList();
+        if (visible.Count == 0)
         {
-            BushCellLines = null;
-            _log.Info("NavGrid", "This map's navgrid marks no bush cells - Howling Abyss and TFT have none at all.");
+            BushCellLines = null; BushCellLayers = null;
+            _log.Info("NavGrid", "No navgrid layer is switched on.");
             return;
         }
 
-        // Two triangles per cell in the pos3+bary3 form the wireframe program already draws, laid flat at
-        // the grid's own floor and lifted clear of the ground so the overlay is not z-fought by it.
-        // Enough to clear a cell's own recorded ground without floating. Depth testing is off for this
-        // pass anyway (M563), so the lift is cosmetic rather than what makes the overlay visible.
+        // One shared buffer, laid out layer by layer, with a (start, count, colour) range per layer. That
+        // keeps a single VBO and one draw per layer, rather than a colour attribute the shared wireframe
+        // shader would have to grow.
+        //
+        // Enough lift to clear a cell's own recorded ground without floating. Depth testing is off for
+        // this pass (M563), so the lift is cosmetic rather than what makes the overlay visible.
         const float Lift = 12f;
-        var verts = new float[cells.Count * 6 * 6];
-        int w = 0;
-        foreach (var (lo, hi) in cells)
+        var verts = new List<float>();
+        var ranges = new List<(int Start, int Count, System.Numerics.Vector4 Color)>();
+        var lo = new System.Numerics.Vector3(float.MaxValue);
+        var hi = new System.Numerics.Vector3(float.MinValue);
+        int total = 0;
+
+        foreach (var layer in visible)
         {
-            float y = lo.Y + Lift;
-            void V(float x, float z, float b0, float b1, float b2)
-            { verts[w++] = x; verts[w++] = y; verts[w++] = z; verts[w++] = b0; verts[w++] = b1; verts[w++] = b2; }
-            V(lo.X, lo.Z, 1, 0, 0); V(hi.X, lo.Z, 0, 1, 0); V(hi.X, hi.Z, 0, 0, 1);
-            V(lo.X, lo.Z, 1, 0, 0); V(hi.X, hi.Z, 0, 1, 0); V(lo.X, hi.Z, 0, 0, 1);
+            int startVert = verts.Count / 6;
+            foreach (var (cl, ch) in grid.CellsWith(layer.Mask))
+            {
+                float y = cl.Y + Lift;
+                void V(float x, float z, float b0, float b1, float b2)
+                { verts.Add(x); verts.Add(y); verts.Add(z); verts.Add(b0); verts.Add(b1); verts.Add(b2); }
+                V(cl.X, cl.Z, 1, 0, 0); V(ch.X, cl.Z, 0, 1, 0); V(ch.X, ch.Z, 0, 0, 1);
+                V(cl.X, cl.Z, 1, 0, 0); V(ch.X, ch.Z, 0, 1, 0); V(cl.X, ch.Z, 0, 0, 1);
+                lo = System.Numerics.Vector3.Min(lo, cl); hi = System.Numerics.Vector3.Max(hi, ch);
+                total++;
+            }
+            int count = verts.Count / 6 - startVert;
+            if (count > 0) ranges.Add((startVert, count, layer.Color));
         }
-        BushCellLines = verts;
-        // Where, not just how many: 63 cells in one corner of a 20,000-unit map is easy to mistake for
-        // nothing at all, which is how this was first reported.
-        var blo = cells[0].Min; var bhi = cells[0].Max;
-        foreach (var (cl, ch) in cells)
-        { blo = System.Numerics.Vector3.Min(blo, cl); bhi = System.Numerics.Vector3.Max(bhi, ch); }
-        _log.Info("NavGrid", $"Showing {cells.Count:n0} bush cell(s), spanning X {blo.X:n0}..{bhi.X:n0} "
-            + $"Z {blo.Z:n0}..{bhi.Z:n0}, drawn over the terrain."
+
+        if (total == 0)
+        {
+            BushCellLines = null; BushCellLayers = null;
+            _log.Info("NavGrid", "The selected layer(s) mark no cells on this map.");
+            return;
+        }
+
+        BushCellLines = verts.ToArray();
+        BushCellLayers = ranges.ToArray();
+        _log.Info("NavGrid", $"Showing {total:n0} cell(s) across {ranges.Count} layer(s), spanning "
+            + $"X {lo.X:n0}..{hi.X:n0} Z {lo.Z:n0}..{hi.Z:n0}."
             + (grid.HasHeights ? "" : " The grid carries no heights, so they sit at its floor."));
     }
 

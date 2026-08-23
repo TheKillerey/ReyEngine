@@ -83,9 +83,12 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, (Vector3 Min, Vector3 Max)?>(nameof(BakeBox));
     public static readonly StyledProperty<float[]?> BucketGridLinesProperty =
         AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(BucketGridLines));                  // M55
-    /// <summary>M562: gameplay bush cells from the navgrid, as a pos3+bary3 soup like the bucket grid.</summary>
+    /// <summary>M562: navgrid flag cells, as a pos3+bary3 soup like the bucket grid.</summary>
     public static readonly StyledProperty<float[]?> BushCellLinesProperty =
         AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(BushCellLines));
+    /// <summary>M565: where each visible flag's cells sit in that soup, and what colour to draw them.</summary>
+    public static readonly StyledProperty<(int Start, int Count, System.Numerics.Vector4 Color)[]?> BushCellLayersProperty =
+        AvaloniaProperty.Register<ViewportControl, (int Start, int Count, System.Numerics.Vector4 Color)[]?>(nameof(BushCellLayers));
     public static readonly StyledProperty<PropRenderSet?> PropMeshesProperty =
         AvaloniaProperty.Register<ViewportControl, PropRenderSet?>(nameof(PropMeshes));
     public static readonly StyledProperty<VfxPlayback?> ParticlePlaybackProperty =
@@ -312,6 +315,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public (Vector3 Min, Vector3 Max)? BakeBox { get => GetValue(BakeBoxProperty); set => SetValue(BakeBoxProperty, value); }
     public float[]? BucketGridLines { get => GetValue(BucketGridLinesProperty); set => SetValue(BucketGridLinesProperty, value); }
     public float[]? BushCellLines { get => GetValue(BushCellLinesProperty); set => SetValue(BushCellLinesProperty, value); }
+    public (int Start, int Count, System.Numerics.Vector4 Color)[]? BushCellLayers
+    { get => GetValue(BushCellLayersProperty); set => SetValue(BushCellLayersProperty, value); }
     /// <summary>Decoded placed prop meshes to render at their transforms (M41); null clears them.</summary>
     public PropRenderSet? PropMeshes { get => GetValue(PropMeshesProperty); set => SetValue(PropMeshesProperty, value); }
     /// <summary>Set to a world point to recentre the camera on it (M35 focus); cleared after applying.</summary>
@@ -358,7 +363,8 @@ public sealed class ViewportControl : OpenGlControlBase
     private bool _dynamicLightsDirty;   // M70: re-upload the Light.dat table on the GL thread when it changes
     private bool _lightMarkersDirty;    // M71: recompute the transformed light-position icons
     private float[]? _lastBucketGridLines;   // M77: skip redundant multi-MB line uploads
-    private float[]? _lastBushCellLines;     // M562: same, for the navgrid bush overlay
+    private float[]? _lastBushCellLines;     // M562: same, for the navgrid overlay
+    private (int Start, int Count, System.Numerics.Vector4 Color)[]? _lastBushCellLayers;   // M565
     private (Vector3 Min, Vector3 Max)? _lastBakeBox;   // M412
     private bool _grassTintDirty;            // M78: upload the grass-tint texture on the GL thread
     private bool _particlesDirty;
@@ -852,10 +858,12 @@ public sealed class ViewportControl : OpenGlControlBase
             // M77 perf: the bucket-grid overlay can be megabytes of data — re-upload ONLY when the array
             // instance actually changed, not on every marker refresh (gizmo drags dirty markers per frame).
             // M77b: the array is pos3+bary3 triangle soup for the barycentric wireframe path.
-            if (!ReferenceEquals(_lastBushCellLines, BushCellLines))
+            if (!ReferenceEquals(_lastBushCellLines, BushCellLines)
+                || !ReferenceEquals(_lastBushCellLayers, BushCellLayers))
             {
-                _meshRenderer.SetBushCellMesh(BushCellLines);
+                _meshRenderer.SetBushCellMesh(BushCellLines, BushCellLayers);
                 _lastBushCellLines = BushCellLines;
+                _lastBushCellLayers = BushCellLayers;
             }
             if (!ReferenceEquals(_lastBucketGridLines, BucketGridLines))
             {
@@ -1705,7 +1713,7 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == ParticleMarkersProperty || change.Property == SelectedParticlePositionProperty
                  || change.Property == PropMarkersProperty || change.Property == ProbeMarkersProperty
                  || change.Property == SoundMarkersProperty || change.Property == BucketGridLinesProperty
-                 || change.Property == BushCellLinesProperty
+                 || change.Property == BushCellLinesProperty || change.Property == BushCellLayersProperty
                  || change.Property == BakeBoxProperty)
         { _particlesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticlePlaybackProperty)

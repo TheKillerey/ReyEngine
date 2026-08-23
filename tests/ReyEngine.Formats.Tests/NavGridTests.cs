@@ -4,12 +4,13 @@ using ReyEngine.Formats.MapGeo;
 namespace ReyEngine.Formats.Tests;
 
 /// <summary>
-/// M562: the navigation grid, and the bush bit inside it.
+/// M562/M565: the navigation grid and the flag plane inside it.
 ///
-/// <para>The bush bit is not documented anywhere — it was identified by scanning for a plane that behaves
-/// like one enum per cell, then confirmed against the maps themselves. These tests keep that confirmation
-/// executable, because the strongest evidence for it is a fact about League rather than about the file:
-/// Howling Abyss and TFT have no brush, and they score exactly zero.</para>
+/// <para>The flags are NOT named, and that is the point. M562 called 0x0004 the bush bit from the shape
+/// of its clusters and from Howling Abyss and TFT scoring zero, which looked convincing; the reporter
+/// then looked at those cells drawn on their own map and identified them as the area only one team may
+/// walk. So these tests assert what is MEASURED - which bits exist, how many cells carry them, that the
+/// plane is aligned to the grid - and leave the meaning to whoever is looking at the map.</para>
 /// </summary>
 public sealed class NavGridTests
 {
@@ -58,27 +59,40 @@ public sealed class NavGridTests
     }
 
     [Fact]
-    public void SummonersRiftHasBrushAndHowlingAbyssDoesNot()
+    public void Flag0x0004IsPresentOnSummonersRiftAndAbsentOnHowlingAbyssAndTft()
     {
-        // THE control for the bush bit, and it is a fact about the game rather than about the format:
-        // Howling Abyss has no brush at all. If bit 2 meant anything else, it would not be empty there.
+        // Stated as a MEASUREMENT, not an interpretation. This distribution is what made 0x0004 look like
+        // the bush in M562 and it is still true - it just does not mean what it was taken to mean, since
+        // the reporter identified the same cells on their map as a team-restricted walk area. Pinned
+        // because the numbers are real and the next person deserves them without the wrong label.
         var sr = Load("map11");
         var abyss = Load("map12");
-        if (sr is null || abyss is null) return;
+        var tft = Load("map22");
+        if (sr is null) return;
 
-        int srBush = sr.CountWith(NavGrid.BushFlag);
-        int abyssBush = abyss.CountWith(NavGrid.BushFlag);
-
-        Assert.True(srBush > 500, $"Summoner's Rift should be full of brush, saw {srBush} cells");
-        Assert.InRange(srBush / (double)sr.CellCount, 0.005, 0.05);   // measured 1.2%
-        Assert.Equal(0, abyssBush);
+        int srCells = sr.CountWith(NavGrid.TeamRestrictedFlag);
+        Assert.True(srCells > 500, $"expected 0x0004 on Summoner's Rift, saw {srCells} cells");
+        Assert.InRange(srCells / (double)sr.CellCount, 0.005, 0.05);   // measured 1.2%
+        if (abyss is not null) Assert.Equal(0, abyss.CountWith(NavGrid.TeamRestrictedFlag));
+        if (tft is not null) Assert.Equal(0, tft.CountWith(NavGrid.TeamRestrictedFlag));
     }
 
     [Fact]
-    public void TftHasNoBrushEither()
+    public void EveryFlagInTheGridIsReportedSoTheUserCanLabelIt()
     {
-        if (Load("map22") is not { } tft) return;
-        Assert.Equal(0, tft.CountWith(NavGrid.BushFlag));
+        // The editor draws one toggleable layer per flag rather than picking which one matters, because
+        // picking is exactly what went wrong in M562.
+        if (Load("map11") is not { } grid) return;
+        var present = grid.PresentFlags();
+
+        Assert.NotEmpty(present);
+        Assert.All(present, f => Assert.True(System.Numerics.BitOperations.PopCount(f.Mask) == 1,
+            $"0x{f.Mask:x4} is not a single bit"));
+        Assert.All(present, f => Assert.True(f.Cells > 0));
+        // commonest first, so the default layer is the one most likely to show something
+        Assert.True(present[0].Cells >= present[^1].Cells);
+        Assert.Contains(present, f => f.Mask == NavGrid.BlockedFlag);
+        Assert.Contains(present, f => f.Mask == NavGrid.TeamRestrictedFlag);
     }
 
     [Fact]
@@ -112,10 +126,10 @@ public sealed class NavGridTests
     }
 
     [Fact]
-    public void TheBushCellsComeBackAsWorldBoxes()
+    public void FlaggedCellsComeBackAsWorldBoxes()
     {
         if (Load("map11") is not { } grid) return;
-        var boxes = grid.CellsWith(NavGrid.BushFlag).Take(50).ToList();
+        var boxes = grid.CellsWith(NavGrid.TeamRestrictedFlag).Take(50).ToList();
         Assert.NotEmpty(boxes);
         foreach (var (lo, hi) in boxes)
         {
@@ -136,13 +150,17 @@ public sealed class NavGridTests
         string Read(params string[] parts) =>
             File.ReadAllText(Path.Combine(new[] { dir.FullName }.Concat(parts).ToArray()));
 
-        Assert.NotNull(typeof(ReyEngine.App.ViewModels.MainWindowViewModel).GetProperty("ShowBushAreas"));
-        Assert.NotNull(typeof(ReyEngine.App.ViewModels.MainWindowViewModel).GetProperty("BushCellLines"));
-        Assert.Contains("BushCellLines=\"{Binding BushCellLines}\"",
-            Read("src", "ReyEngine.App", "Views", "MainWindow.axaml"));
-        Assert.Contains("IsChecked=\"{Binding ShowBushAreas}\"",
-            Read("src", "ReyEngine.App", "Views", "MainWindow.axaml"));
-        Assert.Contains("SetBushCellMesh(BushCellLines)",
+        var vm = typeof(ReyEngine.App.ViewModels.MainWindowViewModel);
+        Assert.NotNull(vm.GetProperty("ShowBushAreas"));
+        Assert.NotNull(vm.GetProperty("BushCellLines"));
+        Assert.NotNull(vm.GetProperty("BushCellLayers"));
+        Assert.NotNull(vm.GetProperty("NavGridLayers"));
+        Assert.NotNull(vm.GetProperty("ToggleNavGridOverlayCommand"));
+        string axaml = Read("src", "ReyEngine.App", "Views", "MainWindow.axaml");
+        Assert.Contains("BushCellLines=\"{Binding BushCellLines}\"", axaml);
+        Assert.Contains("BushCellLayers=\"{Binding BushCellLayers}\"", axaml);
+        Assert.Contains("{Binding NavGridLayers}", axaml);
+        Assert.Contains("SetBushCellMesh(BushCellLines, BushCellLayers)",
             Read("src", "ReyEngine.App", "Views", "ViewportControl.cs"));
         Assert.Contains("public unsafe void SetBushCellMesh",
             Read("src", "ReyEngine.Rendering", "ViewportMeshRenderer.cs"));
@@ -162,8 +180,8 @@ public sealed class NavGridTests
         Assert.InRange(lo, grid.Min.Y - 1f, grid.Min.Y + 1f);
         Assert.InRange(hi, grid.Max.Y - 5f, grid.Max.Y + 5f);
 
-        // and a bush cell is then placed at its own ground rather than at the grid floor
-        var (bl, _) = grid.CellsWith(NavGrid.BushFlag).First();
+        // and a flagged cell is then placed at its own ground rather than at the grid floor
+        var (bl, _) = grid.CellsWith(NavGrid.TeamRestrictedFlag).First();
         Assert.InRange(bl.Y, grid.Min.Y, grid.Max.Y);
     }
 

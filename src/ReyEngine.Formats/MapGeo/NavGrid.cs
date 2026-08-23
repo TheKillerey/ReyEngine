@@ -56,18 +56,39 @@ public sealed class NavGrid
     public bool HasFlags => Flags.Length == CellCount && CellCount > 0;
 
     /// <summary>
-    /// The bush bit.
+    /// M565: 0x0004 was labelled the bush bit in M562 and that was WRONG.
     ///
-    /// <para>Strongly supported rather than documented, and the maps are their own control: on Summoner's
-    /// Rift it marks 1,085 cells (1.2%) in about 25 small clusters laid out with the diagonal symmetry SR's
-    /// brush has, while Howling Abyss and TFT — which have no brush at all — score exactly ZERO.</para>
+    /// <para>The inference looked good - on Summoner's Rift it marks 1,085 cells in about 25 clusters with
+    /// the diagonal symmetry brush has, and Howling Abyss and TFT score zero. The reporter then looked at
+    /// the cells drawn on their own map and identified them as the area only the blue team may walk. A
+    /// direct observation of the thing beats a shape argument about it.</para>
+    ///
+    /// <para>So the bits are no longer named here. <see cref="PresentFlags"/> reports what a grid actually
+    /// contains and the editor draws each one separately, which lets whoever is looking at the map do the
+    /// labelling - that is the only way any of these get identified honestly.</para>
     /// </summary>
-    public const ushort BushFlag = 0x0004;
+    public const ushort TeamRestrictedFlag = 0x0004;
 
     /// <summary>Fills the map border and covers 39% of Summoner's Rift, so: not walkable.</summary>
     public const ushort BlockedFlag = 0x0002;
 
-    public bool IsBush(int x, int z) => Has(x, z, BushFlag);
+    /// <summary>
+    /// Every single-bit flag that appears anywhere in this grid, with how many cells carry it, commonest
+    /// first. This is what the editor turns into toggleable layers.
+    /// </summary>
+    public IReadOnlyList<(ushort Mask, int Cells)> PresentFlags()
+    {
+        var found = new List<(ushort, int)>();
+        if (!HasFlags) return found;
+        for (int bit = 0; bit < 16; bit++)
+        {
+            ushort mask = (ushort)(1 << bit);
+            int n = CountWith(mask);
+            if (n > 0) found.Add((mask, n));
+        }
+        found.Sort((a, b) => b.Item2.CompareTo(a.Item2));
+        return found;
+    }
 
     public bool Has(int x, int z, ushort mask)
     {
@@ -88,7 +109,7 @@ public sealed class NavGrid
         return (lo, new Vector3(lo.X + CellSize, Math.Max(y, Max.Y), lo.Z + CellSize));
     }
 
-    /// <summary>Every cell carrying <paramref name="mask"/>, as world-space XZ boxes.</summary>
+    /// <summary>Every cell carrying <paramref name="mask"/>, as world-space boxes.</summary>
     public IEnumerable<(Vector3 Min, Vector3 Max)> CellsWith(ushort mask)
     {
         if (!HasFlags) yield break;

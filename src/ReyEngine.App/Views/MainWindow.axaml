@@ -419,6 +419,7 @@
                 SoundMarkers="{Binding SoundMarkers}"
                 BucketGridLines="{Binding BucketGridLines}"
                 BushCellLines="{Binding BushCellLines}"
+                BushCellLayers="{Binding BushCellLayers}"
                 BakeBox="{Binding BakeBox}"
                 PropMeshes="{Binding CurrentPropMeshes}"
                 ParticlePlayback="{Binding CurrentParticlePlayback}"
@@ -589,8 +590,38 @@
               <ToggleButton Classes="vp" Content="◈ Game Depth" IsChecked="{Binding ClientDepthRules}"
                             IsVisible="{Binding UseDx11Viewport}"
                             ToolTip.Tip="Render transparents with the GAME's depth rules: they keep the depth mask and sort with solid geometry. The editor normally drops the depth mask on transparents and draws them last, which is why a decal can look right here and go black in game - it stamps depth at its own plane, depth-rejects the ground under it, and composites over nothing. Turn this on to see what the client will actually draw." />
-              <ToggleButton Classes="vp" Content="🌿 Bush" IsChecked="{Binding ShowBushAreas}"
-                            ToolTip.Tip="Show where the GAME blocks vision, read from the map&apos;s navgrid (assets/maps/navgrid/&lt;map&gt;/aipath.aimesh_ngrid) on its 50-unit lattice. This is not the swaying bush art - that is ordinary geometry on a VertexDeform material and does not decide where a champion is hidden. Maps with no brush (Howling Abyss, TFT) correctly show nothing." />
+              <SplitButton Classes="vp" Content="🌿 NavGrid"
+                           Command="{Binding ToggleNavGridOverlayCommand}"
+                           ToolTip.Tip="Show the map's navigation grid on its 50-unit lattice, read from assets/maps/navgrid/&lt;map&gt;/aipath.aimesh_ngrid. Click to switch the overlay on; use the arrow to choose which flags to draw. The flags are NOT named - the editor reports the mask and how many cells carry it, and you decide what each one is by looking at where it lands.">
+                <SplitButton.Flyout>
+                  <Flyout Placement="Bottom">
+                    <StackPanel MinWidth="240" Spacing="4">
+                      <TextBlock Text="NAVGRID LAYERS" FontSize="10" FontWeight="Bold" />
+                      <TextBlock Text="Every flag this grid contains. They are unlabelled on purpose - name them by what you see."
+                                 FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <ItemsControl ItemsSource="{Binding NavGridLayers}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <Grid ColumnDefinitions="Auto,14,*,Auto" Margin="0,2">
+                              <CheckBox Grid.Column="0" IsChecked="{Binding IsVisible}" Margin="0,0,4,0" />
+                              <Border Grid.Column="1" Width="10" Height="10" CornerRadius="2"
+                                      Background="{Binding Swatch}" VerticalAlignment="Center" />
+                              <TextBlock Grid.Column="2" Text="{Binding Label}" FontSize="10"
+                                         VerticalAlignment="Center" Margin="6,0,0,0" />
+                              <TextBlock Grid.Column="3" Text="{Binding Detail}" FontSize="9"
+                                         VerticalAlignment="Center"
+                                         Foreground="{DynamicResource ReyTextDimBrush}" />
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <TextBlock Text="This map ships no navgrid." FontSize="9"
+                                 IsVisible="{Binding !HasNavGrid}"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" />
+                    </StackPanel>
+                  </Flyout>
+                </SplitButton.Flyout>
+              </SplitButton>
               <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" ToolTip.Tip="Show skeleton bones" />
               <ToggleButton Classes="vp" Content="▣ Bounds" IsChecked="{Binding ShowBounds}" ToolTip.Tip="Show bounding boxes" />
               <ToggleButton Classes="vp" Content="⬓ Regions" IsChecked="{Binding RenderRegionsEnabled}"

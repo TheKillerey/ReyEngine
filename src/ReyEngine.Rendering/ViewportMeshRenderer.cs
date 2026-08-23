@@ -1105,8 +1105,13 @@ void main() { FragColor = uColor; }";
     private uint _markerProgram, _markerQuadVbo, _icoSparkle, _icoPerson, _icoRing, _icoSpeaker, _icoLight;
     private uint _soundVao, _soundVbo, _bucketVao, _bucketVbo;   // M55: sounds + bucket-grid overlay
     private uint _bucketMeshVao, _bucketMeshVbo, _bucketMeshProgram;   // M77b: baked-mesh wireframe
-    private uint _bushMeshVao, _bushMeshVbo;                           // M562: navgrid bush cells
+    private uint _bushMeshVao, _bushMeshVbo;                           // M562: navgrid flag cells
     private int _bushMeshVerts;
+    /// <summary>M565: one entry per visible navgrid flag - where its cells sit in the shared buffer, and
+    /// the colour to draw them. The bits are not named anywhere, so each is drawn separately and whoever
+    /// is looking at the map decides what it is.</summary>
+    private (int Start, int Count, System.Numerics.Vector4 Color)[] _bushLayers =
+        Array.Empty<(int, int, System.Numerics.Vector4)>();
     private int _bucketMeshVerts, _bwMvp, _bwColor;
     private uint _lightMkVao, _lightMkVbo;                       // M71: dynamic-light position icons
     private int _soundVerts, _bucketVerts, _lightMkVerts;
@@ -2240,9 +2245,11 @@ void main(){
     /// mesh above. These come from the navgrid, not from any geometry in the map - the swaying foliage is
     /// unrelated art and does not say where vision is blocked.
     /// </summary>
-    public unsafe void SetBushCellMesh(float[]? interleavedPosBary)
+    public unsafe void SetBushCellMesh(float[]? interleavedPosBary,
+        (int Start, int Count, System.Numerics.Vector4 Color)[]? layers = null)
     {
         if (!_ready) return;
+        _bushLayers = layers ?? Array.Empty<(int, int, System.Numerics.Vector4)>();
         if (interleavedPosBary is null || interleavedPosBary.Length < 18) { _bushMeshVerts = 0; return; }
         _gl.BindVertexArray(_bushMeshVao);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _bushMeshVbo);
@@ -2794,7 +2801,6 @@ void main(){
         {
             _gl.UseProgram(_bucketMeshProgram);
             _gl.UniformMatrix4(_bwMvp, 1, false, in m.M11);
-            _gl.Uniform4(_bwColor, 0.26f, 0.85f, 0.36f, 0.80f);
             _gl.Enable(EnableCap.Blend);
             _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
             _gl.DepthMask(false);
@@ -2806,7 +2812,18 @@ void main(){
             _gl.Disable(EnableCap.DepthTest);
             _gl.Disable(EnableCap.CullFace);
             _gl.BindVertexArray(_bushMeshVao);
-            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_bushMeshVerts);
+            if (_bushLayers.Length == 0)
+            {
+                _gl.Uniform4(_bwColor, 0.26f, 0.85f, 0.36f, 0.80f);
+                _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_bushMeshVerts);
+            }
+            else
+                foreach (var (start, count, colour) in _bushLayers)
+                {
+                    if (count <= 0 || start < 0 || start + count > _bushMeshVerts) continue;
+                    _gl.Uniform4(_bwColor, colour.X, colour.Y, colour.Z, colour.W);
+                    _gl.DrawArrays(PrimitiveType.Triangles, start, (uint)count);
+                }
             _gl.BindVertexArray(0);
             _gl.Enable(EnableCap.DepthTest);
             _gl.DepthMask(true);
