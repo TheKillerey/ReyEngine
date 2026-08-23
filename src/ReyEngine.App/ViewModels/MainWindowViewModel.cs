@@ -6129,7 +6129,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (Project.ProjectFilePath is null) return;
 
             bool savedAnything = false;
-            if (HasMapMoves || MapContent.AllMapPieces.Any(p => p.IsRemoved) || MapContent.AddedMeshes.Count > 0)
+            if (HasPendingMapGeoWork)
             {
                 await SaveMeshMoves();
                 savedAnything = true;
@@ -8003,10 +8003,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task SaveMapContentEdits()
     {
-        if (HasMapMoves || MapContent.AllMapPieces.Any(p => p.IsRemoved) || MapContent.AddedMeshes.Count > 0)
-            await SaveMeshMoves();
+        if (HasPendingMapGeoWork) await SaveMeshMoves();
         if (HasParticleMoves) await SaveParticleMoves();
     }
+
+    /// <summary>
+    /// M572: is there anything for <see cref="SaveMeshMoves"/> to do?
+    ///
+    /// <para>This exists because there were TWO of these conditions and they disagreed. The gate that
+    /// decides whether to call the save listed moves, deletions and added meshes; the guard inside it also
+    /// knew about face edits. So face work passed the inner check it never reached, and saving quietly did
+    /// nothing at all - which is precisely how it was reported.</para>
+    ///
+    /// <para>One property, used by the button and by auto-save, so the two cannot drift again.</para>
+    /// </summary>
+    public bool HasPendingMapGeoWork =>
+        HasMapMoves
+        || _faceEdits.Count > 0
+        || _faceGrows.Count > 0
+        || MapContent.AllMapPieces.Any(p => p.IsRemoved)
+        || MapContent.AddedMeshes.Count > 0;
 
     [ObservableProperty] private IReadOnlyList<(System.Numerics.Vector3 min, System.Numerics.Vector3 max)>? _selectionBoxes;
     [ObservableProperty] private System.Numerics.Vector3? _groupBoundsMin;

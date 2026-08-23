@@ -54,6 +54,8 @@ public sealed partial class MainWindowViewModel
         OnPropertyChanged(nameof(SelectedFaceCount));
         OnPropertyChanged(nameof(HasFaceSelection));
         OnPropertyChanged(nameof(HasFaceEdits));
+        OnPropertyChanged(nameof(HasFaceGrows));
+        OnPropertyChanged(nameof(HasPendingMapGeoWork));   // M572: the Save button reads this
         DeleteSelectedFacesCommand.NotifyCanExecuteChanged();
         FlipSelectedFacesCommand.NotifyCanExecuteChanged();
         ClearFaceSelectionCommand.NotifyCanExecuteChanged();

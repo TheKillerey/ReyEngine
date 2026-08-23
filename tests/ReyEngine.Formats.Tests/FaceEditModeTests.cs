@@ -290,6 +290,38 @@ public sealed class FaceEditModeTests
     }
 
     [Fact]
+    public void TheSaveGateIsNotNarrowerThanTheGuardInsideTheSave()
+    {
+        // How face edits came to be silently unsaveable. The condition deciding whether to CALL the save
+        // listed moves, deletions and added meshes; the guard INSIDE it also knew about face edits and
+        // grows. So face work passed a check it never reached and saving did nothing at all.
+        //
+        // Both now ask one property. This asserts the duplicate condition is gone rather than just that
+        // today's version is right - a second copy is what drifted.
+        if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs") is not { } file) return;
+        string source = File.ReadAllText(file);
+
+        Assert.NotNull(typeof(MainWindowViewModel).GetProperty("HasPendingMapGeoWork"));
+        Assert.Contains("if (HasPendingMapGeoWork) await SaveMeshMoves();", source);
+        Assert.Contains("if (HasPendingMapGeoWork)", source);
+
+        // the hand-written condition must not survive anywhere
+        Assert.DoesNotContain("HasMapMoves || MapContent.AllMapPieces.Any(p => p.IsRemoved)", source);
+
+        // and it has to cover everything the inner guard covers
+        int guard = source.IndexOf("if (!hasFaces && !hasGrows", StringComparison.Ordinal);
+        Assert.True(guard > 0, "the inner guard changed shape; check the gate still matches it");
+    }
+
+    [Fact]
+    public void APendingFaceEditIsEnoughToMakeTheSaveRun()
+    {
+        // The property itself, not the source text: with nothing pending there is nothing to save.
+        var vm = new MainWindowViewModel();
+        Assert.False(vm.HasPendingMapGeoWork);
+    }
+
+    [Fact]
     public void TheHighlightIsWiredThroughToTheRenderer()
     {
         if (RepoFile("src", "ReyEngine.App", "Views", "MainWindow.axaml") is not { } axaml) return;
