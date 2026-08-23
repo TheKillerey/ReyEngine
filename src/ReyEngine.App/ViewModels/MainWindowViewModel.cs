@@ -10491,6 +10491,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MapContent.SetBucketGrids(map.BucketGrids);   // M55: culling grid showcase
                 HasBucketGrids = map.BucketGrids.Count > 0;   // M77
                 RebuildBucketGridLines();
+                LoadNavGridForCurrentMap(entry.Path);         // M564: the OTHER map-open path
                 InvalidateMapMaterialNames();   // M516: a different map, a different materials.bin
                 MapContent.ShowMap(entry.DisplayName, map.Groups
                     .Select((g, i) => new MapPieceViewModel { Name = string.IsNullOrEmpty(g.Material) ? $"Mesh {i}" : g.Material, Info = $"{g.IndexCount / 3:n0} tris" })

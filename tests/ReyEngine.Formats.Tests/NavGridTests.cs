@@ -180,6 +180,33 @@ public sealed class NavGridTests
     }
 
     [Fact]
+    public void EveryMapOpenLoadsTheNavGrid()
+    {
+        // M564: there are TWO paths that open a map, and only one was hooked - so the overlay worked on
+        // one and reported "no navgrid loaded" on the other, which is how it was reported. The rule is
+        // simply that every place which adopts a map entry must also go looking for its grid.
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ReyEngine.slnx"))) dir = dir.Parent;
+        if (dir is null) return;
+        string file = Path.Combine(dir.FullName, "src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs");
+        if (!File.Exists(file)) return;
+        string source = File.ReadAllText(file);
+
+        // Capture what is assigned and filter, rather than a negative lookahead: \s* backtracks to
+        // zero width, so (?!null) happily matches at the space before it and the clearing assignment
+        // counts as a map open. The guard's first finding was its own bug.
+        int adopts = System.Text.RegularExpressions.Regex.Matches(source, @"_currentMapEntry\s*=\s*([A-Za-z_][\w.]*)")
+            .Count(m => m.Groups[1].Value != "null");
+        int loads = System.Text.RegularExpressions.Regex.Matches(
+            source, @"LoadNavGridForCurrentMap\(").Count - 1;   // minus the declaration
+
+        Assert.True(adopts > 0, "expected at least one place to adopt a map entry");
+        Assert.True(loads >= adopts,
+            $"{adopts} place(s) adopt a map entry but only {loads} load the navgrid - the overlay will "
+            + "report 'no navgrid loaded' on whichever path was missed");
+    }
+
+    [Fact]
     public void RubbishIsRefusedQuietly()
     {
         // Opened opportunistically alongside a map, so a miss must not throw.
