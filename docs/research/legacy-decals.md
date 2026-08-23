@@ -245,48 +245,68 @@ The three options are not interchangeable, and only one is right:
 but it is off by default: shrinking a decal to a third of the ground it covered is a bigger change than
 letting its texture repeat the way it always did.
 
-## 6. The black: a blend factor that reads the framebuffer's alpha (M556)
+## 6. RETRACTED: the blend factor was not the cause (M556, corrected in M557)
 
-The reporter found the reproduction that eleven-plus eliminated hypotheses had not: *"The black issue
-that happens on blending happens in our editor on 9 oneminusdstalpha."*
+M556 concluded that `dstColorBlendFactor = 9` (InvDstAlpha) was the black. **It was not.** The reporter
+had set 9 as a deliberate PROBE and I read it as the shipped state. Their actual finding:
 
-`dstColorBlendFactor = 9` is `InvDstAlpha`, making the blend
+| | editor | in game |
+|---|---|---|
+| **6/7** (the real, authored value) | clean | **BLACK** |
+| 6/9 (their test only) | BLACK | BLACK |
 
-```
-result = src * srcAlpha  +  dst * (1 - dstAlpha)
-```
+So 6/7 was always correct, and the real question is the one they asked: **why does the editor not
+reproduce the black at 6/7?**
 
-Wherever the framebuffer's alpha is 1, the destination term collapses to **zero** — so the surface
-composites over **black** instead of over the ground behind it. Nothing about the material looks wrong.
-It simply draws onto nothing.
+What M556 does leave standing: 9 really is a value Riot never ships (0 occurrences across 18 map WADs,
+against 164 of 165 decal materials at 6/7), the material has been put back to 7, and the validator now
+reports 8/9 as a shape issue. Useful, just not the bug.
 
-Contrast the factor the porter authors, `7` = `InvSrcAlpha`:
+## 7. The editor was kinder than the game (M557)
 
-```
-result = src * srcAlpha  +  dst * (1 - srcAlpha)
-```
+Eliminated first, each measured rather than argued:
 
-which is ordinary alpha blending and **cannot** produce this, whatever the framebuffer alpha holds. So
-the reporter's "it should happen on 7 too" does not hold, and that asymmetry is the diagnosis.
+* **Premultiplied alpha** - 0 of 20 ported decals carry `PREMULTIPLIED_ALPHA` or `MULTIPLY_ALPHA` (no
+  macros or switches at all), and Riot pairs that macro with 6/7 anyway, 272 times.
+* **Missing textures** - all 86 project-owned texture references resolve to real files.
+* **The lightmap** - ported decals and ported ground are IDENTICAL here: both declare
+  `Position+Normal+Texcoord0+Texcoord7`, both bind zero lightmap atlases. The ground renders correctly in
+  game with that exact setup, so it cannot be what separates them. This independently confirms what the
+  reporter said back in M542: *"The issue is not the lightmap stuff."*
 
-### Measured
+That leaves the one real difference between ported Normal (fine in game) and ported Decal (black):
+**the blending, and the depth state that goes with it.**
 
-| | |
-|---|---|
-| the reporter's project | 19 of 20 decals `6/7`; **exactly one** — `Decal_518d8b774d3e`, `order_base_circle` — was `6/9` |
-| Riot, 18 shipped map WADs | factors used are **1, 4, 6, 7**. `DstAlpha (8)` and `InvDstAlpha (9)`: **zero** occurrences on either side |
-| Riot's decal materials | **164 of 165** are exactly `6 SrcAlpha` / `7 InvSrcAlpha` |
+Our own code already describes the mechanism, in M279:
 
-`order_base_circle` is one of the two textures reported broken at the very start, and it is the same
-material that carried the NaN UVs (§2) and the stale Clamp (§3). Three independent defects on one
-material, which is why it outlived every earlier fix.
+> *A decal authored "transparent cutout - blend - no depth-write" was still given the depth mask, so it
+> stamped depth at its own plane and then DEPTH-REJECTED the paving it was supposed to composite over.*
 
-### Guard
+M279 measured that on `base_chasm1`, `new_stone_road` and `grasstuft` - **the same textures being reported
+now** - and fixed it by dropping the depth mask on transparents and sorting them into a tail after all
+solid geometry. That fixed the EDITOR. The client derives depth-write from the shader CLASS rather than
+from the material's blend state, so it still does the old thing, and the map still goes black there.
 
-`ModShapeValidator` now reports category `blend-factor` for any `srcColor/dstColor/srcAlpha/dstAlpha`
-factor of 8 or 9, recursing into techniques and passes because the factors sit two containers deep and a
-flat scan never reaches them. Tests pin that it fires on the real edit, stays silent on Riot's shipped
-bins, and that the corpus really does contain no 8 or 9.
+An editor kinder than its target is worse than one that is wrong in an obvious way: the decal reads
+correctly on screen, and there is nothing to explain why the game disagrees.
 
-**Not yet confirmed in game.** One material carried this, so it explains `order_base_circle`; whether the
-other decals were ever black for the same reason is untested.
+### The Game Depth toggle
+
+`Dx11SceneBuilder.EmulateClientDepthRules`, exposed as **Game Depth** in the DX11 viewport bar. On,
+transparents keep the depth mask and sort with everything else - pre-M279 behaviour, and the client's.
+
+Off by default: it is a diagnostic for "looks right here, wrong in game", not an authoring mode.
+
+One trap worth naming: `UsesAuthoredColorBlend` used to be keyed off `depthWrite`, which the mode forces
+true - reading it there would silently drop the authored blend, and a decal that stops compositing
+altogether hides the very thing the mode exists to show. It is keyed off the material's own blend state
+instead.
+
+**Inference, not measurement.** That the client writes depth here is deduced: the mechanism M279 measured
+in our own renderer produces exactly this symptom, our renderer stopped doing it and the symptom stopped
+with it, the game did not stop and neither did the symptom. It has NOT been confirmed against a frame
+capture of the client, and the toggle is the instrument for confirming it.
+
+If the toggle does reproduce the black, the fix is in the DATA rather than the renderer: the decal has to
+be authored so the client does not give it the depth mask, which means a shader whose class the client
+treats as transparent.

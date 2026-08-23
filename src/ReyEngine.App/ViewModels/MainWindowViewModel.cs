@@ -2525,6 +2525,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _showBounds;
     [ObservableProperty] private bool _cullBackfaces = true; // M34: respect per-material cullEnable by default (off = force all two-sided)
+
+    /// <summary>
+    /// M557: render map transparents with the CLIENT's depth rules instead of the editor's kinder ones.
+    ///
+    /// <para>Off by default. On, transparents keep the depth mask and sort with everything else - which is
+    /// what the game does, and what makes a decal stamp depth at its own plane, depth-reject the ground it
+    /// should composite over, and come out BLACK. A diagnostic for "looks right here, wrong in game", not
+    /// an authoring mode.</para>
+    /// </summary>
+    [ObservableProperty] private bool _clientDepthRules;
+
+    partial void OnClientDepthRulesChanged(bool value)
+    {
+        Services.Dx11SceneBuilder.EmulateClientDepthRules = value;
+        _log.Info("Viewport", value
+            ? "Client depth rules ON - transparents keep the depth mask and sort with solid geometry, as the "
+              + "game does. A decal that goes black in game should go black here too."
+            : "Client depth rules OFF - transparents draw after solid geometry without writing depth.");
+        NotifyMaterialsChanged();   // the DX11 scene bakes the depth state per material
+    }
+
     [ObservableProperty] private bool _showLightmaps = true; // M69: baked lightmaps on by default; off = sun/sky fallback lighting
     // M70: legacy Riot dynamic point lights (Light.dat)
     [ObservableProperty] private bool _showDynamicLights;

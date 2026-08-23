@@ -450,6 +450,32 @@ public static class Dx11SceneBuilder
 
     /// <summary>Must run on the UI thread - every call in here touches the device or the immediate
     /// context.</summary>
+    /// <summary>
+    /// M557: render map transparents the way the CLIENT does, instead of the way that looks right.
+    ///
+    /// <para>M279 made a transparent material stop writing depth and pushed it into an order-preserving
+    /// tail after all solid geometry, because a decal that stamps depth at its own plane then
+    /// depth-rejects the ground it was meant to composite over - and composites against nothing, which
+    /// reads as BLACK. That fixed the editor. It did not fix the game, which derives depth-write from the
+    /// shader CLASS rather than from the material's blend state, and therefore still does the old thing.
+    /// </para>
+    ///
+    /// <para>The result is an editor that is kinder than the target: a decal reads correctly here and goes
+    /// black in game, with nothing on screen to explain the difference. The reporter narrowed it to exactly
+    /// that - "6/7 editor: not showing the black issue, ingame: showing the black issue" - and asked for
+    /// the editor to show it.</para>
+    ///
+    /// <para>With this on, transparents keep the depth mask and sort with everything else, which is
+    /// pre-M279 behaviour and the client's. It is a DIAGNOSTIC: leave it off for authoring, turn it on to
+    /// see whether a change actually fixes the thing the game renders.</para>
+    ///
+    /// <para><b>Inference, not measurement.</b> That the client writes depth here is deduced - the
+    /// mechanism M279 measured in our own renderer produces exactly this symptom, our renderer stopped and
+    /// the symptom stopped with it, the game did not stop and neither did the symptom. It has not been
+    /// confirmed against a frame capture of the client.</para>
+    /// </summary>
+    public static bool EmulateClientDepthRules { get; set; }
+
     public static Result Commit(ShaderPreviewRenderer renderer, PreparedScene scene, string gameVersion)
     {
         var sb = new StringBuilder();
@@ -541,9 +567,16 @@ public static class Dx11SceneBuilder
             mat.CullBackFaces = s.Profile.CullEnabled;
 
             bool depthWrite = s.Profile.DepthWrite;
+            // M557: the client keeps the depth mask on transparents; see EmulateClientDepthRules. The
+            // blend state below is left alone deliberately - the point is to reproduce the client's DEPTH
+            // behaviour, not to stop compositing.
+            if (EmulateClientDepthRules) depthWrite = true;
             mat.WritesDepth = depthWrite;
             mat.SortableByPipeline = depthWrite;
-            mat.UsesAuthoredColorBlend = !depthWrite && s.Profile.BlendEnabled;
+            // Keyed off the material's own blend state, not off depthWrite: under EmulateClientDepthRules
+            // depthWrite is forced true, and reading it here would silently drop the authored blend and
+            // hide the very thing the mode exists to show.
+            mat.UsesAuthoredColorBlend = !s.Profile.DepthWrite && s.Profile.BlendEnabled;
             mat.SourceColorBlend = s.Profile.SourceColorBlend;
             mat.DestinationColorBlend = s.Profile.DestinationColorBlend;
             if (!depthWrite) transparent++;
