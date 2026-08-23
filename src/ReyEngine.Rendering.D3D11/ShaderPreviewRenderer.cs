@@ -476,6 +476,15 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11InputLayout> _gridLayout;
     private ComPtr<ID3D11Buffer> _gridVb;
     private int _gridVertexCount, _gridVbCapacity;
+
+    // M569: the navgrid flag layers and the face-edit selection. Both existed only in the GL viewport,
+    // so in DX11 mode - which is where the reporter works - neither drew anything at all. Same soup, same
+    // grid pipeline, their own buffers because all three can be on together.
+    private ComPtr<ID3D11Buffer> _navVb;
+    private int _navVertexCount, _navVbCapacity;
+    private (int Start, int Count, Vector4 Color)[] _navLayers = Array.Empty<(int, int, Vector4)>();
+    private ComPtr<ID3D11Buffer> _faceVb;
+    private int _faceVertexCount, _faceVbCapacity;
     private bool _gridTried;
 
     private ComPtr<ID3D11VertexShader> _meshVs;
@@ -2352,6 +2361,114 @@ float4 psmain(VOut i) : SV_Target
     }
 
     public int BucketGridVertexCount => _gridVertexCount;
+
+    /// <summary>M569: navgrid flag cells, with one colour range per visible layer.</summary>
+    public void SetNavGridCells(float[]? posBary, (int Start, int Count, Vector4 Color)[]? layers = null)
+    {
+        _navLayers = layers ?? Array.Empty<(int, int, Vector4)>();
+        _navVertexCount = UploadOverlaySoup(posBary, ref _navVb, ref _navVbCapacity, "navgrid");
+    }
+
+    /// <summary>M569: the faces currently selected for editing.</summary>
+    public void SetSelectedFaces(float[]? posBary) =>
+        _faceVertexCount = UploadOverlaySoup(posBary, ref _faceVb, ref _faceVbCapacity, "selected faces");
+
+    /// <summary>
+    /// Shared upload for the pos3+bary3 overlay soups. Repacks to the 5 floats the grid layout reads -
+    /// the third barycentric is 1 - x - y and the shader derives it.
+    /// </summary>
+    private int UploadOverlaySoup(float[]? posBary, ref ComPtr<ID3D11Buffer> vb, ref int capacity, string what)
+    {
+        if (posBary is null || posBary.Length < 18) return 0;
+        if (!EnsureGrid()) return 0;
+
+        int verts = posBary.Length / 6;
+        int bytes = verts * 5 * sizeof(float);
+        if (capacity < bytes || vb.Handle is null)
+        {
+            vb.Dispose();
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)bytes, Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> created = default;
+            if (_device.CreateBuffer(in desc, null, ref created) < 0)
+            { Log($"{what} vertex buffer failed"); return 0; }
+            vb = created; capacity = bytes;
+        }
+
+        var packed = new float[verts * 5];
+        for (int v = 0; v < verts; v++)
+        {
+            packed[v * 5 + 0] = posBary[v * 6 + 0];
+            packed[v * 5 + 1] = posBary[v * 6 + 1];
+            packed[v * 5 + 2] = posBary[v * 6 + 2];
+            packed[v * 5 + 3] = posBary[v * 6 + 3];
+            packed[v * 5 + 4] = posBary[v * 6 + 4];
+        }
+
+        var map = new MappedSubresource();
+        if (_ctx.Map(vb, 0, Map.WriteDiscard, 0, ref map) < 0) return 0;
+        fixed (float* p = packed)
+            System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
+        _ctx.Unmap(vb, 0);
+        return verts;
+    }
+
+    /// <summary>
+    /// M569: the navgrid layers, and then the face selection over them.
+    ///
+    /// <para>Both draw with depth testing OFF, matching the GL side. These are diagnostics: a bush cell
+    /// buried in terrain or a face picked behind a hill still has to be visible, and an overlay you cannot
+    /// see is indistinguishable from one that is broken.</para>
+    /// </summary>
+    private int DrawNavGridAndFaces(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_navVertexCount == 0 && _faceVertexCount == 0) return 0;
+        if (!EnsureGrid() || !EnsureOverlay()) return 0;
+
+        var mvp = Matrix4x4.Multiply(view, proj);
+        _ctx.IASetInputLayout(_gridLayout);
+        _ctx.VSSetShader(_gridVs, null, 0);
+        _ctx.PSSetShader(_gridPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+        _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        _ctx.OMSetDepthStencilState(_overlayDepthNoTest, 0);
+
+        uint stride = 5 * sizeof(float), offset = 0;
+        int draws = 0;
+
+        if (_navVertexCount > 0 && _navVb.Handle is not null)
+        {
+            _ctx.IASetVertexBuffers(0, 1, ref _navVb, in stride, in offset);
+            if (_navLayers.Length == 0)
+            {
+                SetOverlayCb(mvp, new Vector4(0.26f, 0.85f, 0.36f, 0.80f));
+                _ctx.Draw((uint)_navVertexCount, 0);
+                draws++;
+            }
+            else
+                foreach (var (start, count, colour) in _navLayers)
+                {
+                    if (count <= 0 || start < 0 || start + count > _navVertexCount) continue;
+                    SetOverlayCb(mvp, colour);
+                    _ctx.Draw((uint)count, (uint)start);
+                    draws++;
+                }
+        }
+
+        if (_faceVertexCount > 0 && _faceVb.Handle is not null)
+        {
+            SetOverlayCb(mvp, new Vector4(1.00f, 0.62f, 0.16f, 0.85f));
+            _ctx.IASetVertexBuffers(0, 1, ref _faceVb, in stride, in offset);
+            _ctx.Draw((uint)_faceVertexCount, 0);
+            draws++;
+        }
+        return draws;
+    }
 
     // M296: the transform gizmo. Position-only line segments per axis, so the overlay pipeline draws it
     // as-is; only the topology differs from the rest of the furniture.
@@ -4460,6 +4577,7 @@ float4 psmain(VOut i) : SV_Target
             HighlightDraws = DrawHighlight(view, proj);
             IconDraws = DrawIcons(view, proj);
             int gridDraws = DrawBucketGrid(view, proj);   // M293
+            gridDraws += DrawNavGridAndFaces(view, proj);   // M569
             int gizmoDraws = DrawGizmo(view, proj);
  DrawBrushRing(view, proj);   // M361: after the gizmo, same overlay pipeline      // M296, last so it is over everything
             DrawBakeBox(view, proj);     // M412: same overlay pipeline

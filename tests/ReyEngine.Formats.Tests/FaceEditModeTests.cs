@@ -192,6 +192,44 @@ public sealed class FaceEditModeTests
     }
 
     [Fact]
+    public void AnInPlaceEditDoesNotThrowAwayTheCamera()
+    {
+        // M568 routed the re-upload through _meshDirty, which rebuilds every buffer and then sets
+        // _needFrame - so the camera jumped back to framing the whole map every time a face moved. The
+        // light paths touch the vertex and index buffers and nothing else.
+        if (RepoFile("src", "ReyEngine.App", "Views", "ViewportControl.cs") is not { } file) return;
+        string source = File.ReadAllText(file);
+
+        int at = source.IndexOf("change.Property == GeometryRevisionProperty", StringComparison.Ordinal);
+        Assert.True(at > 0, "the revision has to invalidate something");
+        string branch = source.Substring(at, Math.Min(220, source.Length - at));
+        Assert.Contains("_verticesDirty = true", branch);
+        Assert.Contains("_indicesDirty = true", branch);
+        Assert.DoesNotContain("_meshDirty", branch);
+        Assert.Contains("_meshRenderer.UpdateIndices(", source);
+    }
+
+    [Fact]
+    public void BothOverlaysExistInTheD3D11ViewportToo()
+    {
+        // They were built for the GL renderer only, so in DX11 mode - which is where the reporter works -
+        // the navgrid and the face highlight drew nothing at all.
+        if (RepoFile("src", "ReyEngine.Rendering.D3D11", "ShaderPreviewRenderer.cs") is not { } renderer) return;
+        if (RepoFile("src", "ReyEngine.App", "Views", "MainWindow.axaml.cs") is not { } host) return;
+
+        string source = File.ReadAllText(renderer);
+        Assert.Contains("public void SetNavGridCells", source);
+        Assert.Contains("public void SetSelectedFaces", source);
+        Assert.Contains("DrawNavGridAndFaces(view, proj)", source);
+        // depth OFF, like the GL side - a cell buried in terrain still has to be visible
+        Assert.Contains("_ctx.OMSetDepthStencilState(_overlayDepthNoTest, 0);", source);
+
+        string feed = File.ReadAllText(host);
+        Assert.Contains("SetNavGridCells(vm.BushCellLines, vm.BushCellLayers)", feed);
+        Assert.Contains("SetSelectedFaces(vm.SelectedFaceLines)", feed);
+    }
+
+    [Fact]
     public void TheHighlightIsWiredThroughToTheRenderer()
     {
         if (RepoFile("src", "ReyEngine.App", "Views", "MainWindow.axaml") is not { } axaml) return;

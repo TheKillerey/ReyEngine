@@ -376,6 +376,7 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>Capture the next rendered frame. One shot; call again for another.</summary>
     public void RequestCapture() { _captureRequested = true; RequestNextFrameRendering(); }
     private bool _meshDirty, _bonesDirty, _needFrame, _texturesDirty, _skinDirty, _wasAnimating, _visibilityDirty, _verticesDirty, _materialsDirty;
+    private bool _indicesDirty;         // M569: an in-place index rewrite (face delete / flip)
     private bool _dynamicLightsDirty;   // M70: re-upload the Light.dat table on the GL thread when it changes
     private bool _lightMarkersDirty;    // M71: recompute the transformed light-position icons
     private float[]? _lastBucketGridLines;   // M77: skip redundant multi-MB line uploads
@@ -853,6 +854,14 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             if (Mesh is { } moved) _meshRenderer.UpdateVertices(moved.Positions, moved.Normals);
             _verticesDirty = false;
+        }
+        // M569: deleting or flipping a face rewires triangles without moving a vertex, so the index
+        // buffer needs its own re-upload. Neither this nor the vertex pass above disturbs the camera or
+        // the overlays.
+        if (_indicesDirty && _meshRenderer.HasMesh)
+        {
+            if (Mesh is { } rewired) _meshRenderer.UpdateIndices(rewired.Indices);
+            _indicesDirty = false;
         }
         if (_bonesDirty)
         {
@@ -1689,8 +1698,14 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         base.OnPropertyChanged(change);
         if (change.Property == MeshProperty) { _meshDirty = true; RequestNextFrameRendering(); }
-        // M568: same effect, for an edit that mutated the arrays without replacing the Mesh object.
-        if (change.Property == GeometryRevisionProperty) { _meshDirty = true; RequestNextFrameRendering(); }
+        // M569: an in-place edit re-uploads the VERTEX and INDEX buffers only.
+        //
+        // M568 set _meshDirty here, which was too big a hammer: that path rebuilds every buffer and then
+        // sets _needFrame, so the camera jumped back to framing the whole map every time a face moved.
+        // It also re-marked textures, skinning, visibility and materials dirty for an edit that touched
+        // none of them.
+        if (change.Property == GeometryRevisionProperty)
+        { _verticesDirty = true; _indicesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelTexturesProperty || change.Property == ModelMaskTexturesProperty
                  || change.Property == ModelGradientTexturesProperty || change.Property == ModelEmissiveTexturesProperty
                  || change.Property == ModelMatCapTexturesProperty || change.Property == ModelMatCapMaskTexturesProperty

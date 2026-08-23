@@ -334,6 +334,9 @@ public partial class MainWindow : Window
         {
             _lastDx11BucketGrid = vm.BucketGridLines;
             _dx11.Renderer.SetBucketGrid(vm.BucketGridLines);
+            // M569: the navgrid layers and the face selection, which existed only in the GL viewport.
+            _dx11.Renderer.SetNavGridCells(vm.BushCellLines, vm.BushCellLayers);
+            _dx11.Renderer.SetSelectedFaces(vm.SelectedFaceLines);
         }
         // M412: the bake-volume preview - 72 floats, value-compared, from the SAME BuildBoxLines the GL
         // side draws, so the two viewports show the identical box.

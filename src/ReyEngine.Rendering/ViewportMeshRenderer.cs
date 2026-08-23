@@ -2311,6 +2311,25 @@ void main(){
         count = positions.Count;
     }
 
+    /// <summary>
+    /// M569: re-upload the INDEX buffer alone, for an edit that rewired triangles without adding or
+    /// removing any.
+    ///
+    /// <para>The companion to UpdateVertices, and it exists for the same reason: a full SetMesh rebuilds
+    /// every buffer, re-frames the camera and marks textures, skinning, visibility and materials dirty.
+    /// Doing that because a face was deleted throws the user's viewpoint away mid-edit.</para>
+    /// </summary>
+    public unsafe void UpdateIndices(uint[] indices)
+    {
+        if (!_ready || !_hasMesh || _ebo == 0 || indices.Length == 0) return;
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
+        fixed (uint* p = indices)
+            _gl.BufferSubData(BufferTargetARB.ElementArrayBuffer, 0,
+                (nuint)(Math.Min(indices.Length, _indexCount) * sizeof(uint)), p);
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, 0);
+        _submeshBoundsDirty = true;
+    }
+
     public void ClearMesh()
     {
         DeleteMeshBuffers();
