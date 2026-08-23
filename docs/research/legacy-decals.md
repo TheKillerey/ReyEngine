@@ -387,5 +387,50 @@ and the ordering half is the one a mapgeo change can fix. The renderer groups dr
 collapse state changes, so without this the reorder above is invisible in the editor and the fix could
 not be judged here. `Game Depth` now also sets `SortByPipeline = false`, preserving submission order.
 
-**Untested in game.** The editor is the instrument now; whether the client honours mapgeo submission
-order the way this assumes is the thing the next test settles.
+**CONFIRMED IN GAME.** *"tested it, decals are not black anymore ingame."* The client does honour
+mapgeo submission order, and this is the fix.
+
+## 11. RESOLVED - the whole chain
+
+The black needed BOTH halves, which is why every single-cause hypothesis failed:
+
+1. the client gives a blended decal the **depth mask** (it derives depth-write from the shader class, not
+   from the material's blend state), and
+2. the decal **drew before the ground** it sits on, because accumulation order followed the order the
+   source meshes happened to arrive in.
+
+Together: the decal stamps depth at its own plane, the ground beneath is depth-rejected, and the decal
+composites over nothing. Fix either half and the symptom goes. The porter fixes the second - every
+blended decal is emitted after every opaque surface - because it is the half that belongs to the data.
+
+### What it was NOT, each eliminated by measurement
+
+| hypothesis | how it died |
+|---|---|
+| the lightmap | ported decals and ported ground are identical: both `Texcoord7`, both bind zero atlases, and the ground renders fine |
+| premultiplied alpha | 0 of 20 ported decals carry the macro or switch; Riot pairs it with 6/7 anyway, 272 times |
+| `MULTIPLY_ALPHA` | tested both ways in game: still black |
+| the blend factor `InvDstAlpha` | that was the reporter's PROBE, not the shipped state (M556, retracted) |
+| clamped samplers | the border alpha is 4-18 of 255 against a 0.3 cutoff, so it is discarded |
+| missing textures | all 86 project-owned references resolve |
+| the alpha cutoff | 0.005 -> 0.3 changed nothing |
+| a map-spanning merged mesh | real, and worth splitting, but not this |
+| NaN UVs | real, and on this exact material, but not this |
+
+Several of those were real defects worth fixing on their own - the NaN UVs, the map-spanning merge, the
+clamp on tiling decals. None of them was the black. A bug can have several true things wrong with it and
+still only one cause.
+
+### The lesson that generalises
+
+**The editor was kinder than the game, and that is what cost the milestones.** A decal read correctly on
+screen and went black in the client, with nothing to explain the difference - so every hypothesis had to
+be tested by building a package and looking at the game, one guess per round trip.
+
+The moment `Game Depth` reproduced the black in the editor (M558), the next candidate was measured and
+confirmed in a single round. Not because the reasoning got better, but because the feedback loop stopped
+going through the client.
+
+M279 is the cautionary half of that: it *fixed* this in our renderer by making transparents behave
+correctly, which was right for the viewport and hid a real authoring bug for as long as it stood. When a
+renderer is deliberately more forgiving than its target, that forgiveness needs a switch.
