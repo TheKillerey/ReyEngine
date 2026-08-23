@@ -302,11 +302,40 @@ true - reading it there would silently drop the authored blend, and a decal that
 altogether hides the very thing the mode exists to show. It is keyed off the material's own blend state
 instead.
 
-**Inference, not measurement.** That the client writes depth here is deduced: the mechanism M279 measured
-in our own renderer produces exactly this symptom, our renderer stopped doing it and the symptom stopped
-with it, the game did not stop and neither did the symptom. It has NOT been confirmed against a frame
-capture of the client, and the toggle is the instrument for confirming it.
+**CONFIRMED (M558).** The reporter turned the toggle on: *"tested it, decals are black now with game
+depth on."* The editor reproduces the game for the first time in this whole investigation, which settles
+the mechanism:
 
-If the toggle does reproduce the black, the fix is in the DATA rather than the renderer: the decal has to
-be authored so the client does not give it the depth mask, which means a shader whose class the client
-treats as transparent.
+> the client gives the decal the depth mask -> it stamps depth at its own plane -> the ground beneath is
+> depth-rejected -> the decal composites over nothing -> BLACK.
+
+That also retires the guessing phase. Any candidate fix can now be judged in the editor with Game Depth
+on, instead of by building a package and looking at the game.
+
+## 8. What Riot's decals carry that ours do not (M558)
+
+Riot's decal materials across 18 shipped map WADs, by shader:
+
+| shader | count |
+|---|---|
+| `SRX_DynamicEffect` | 110 |
+| `DefaultEnv_Flat_AlphaTest` (what the porter authors) | 36 |
+| `SRX_Blend_Chemtech_Decal` | 16 |
+| `DefaultEnv_Flat` | 7 |
+
+So the shader is not disqualifying - Riot ships 36 decals on the same one. Comparing those 36 against our
+20, field by field, they agree on everything except one thing:
+
+```
+ours   blend=6/7  switches=[]                  macros=[]  params=[TintColor,AlphaTestValue]
+Riot   blend=6/7  switches=[MULTIPLY_ALPHA=0]  macros=[]  params=[AlphaTestValue,TintColor]
+```
+
+**All 36 author `MULTIPLY_ALPHA` explicitly** - 32 with it off, 4 with it on. We author no switches at
+all, and an absent switch takes whatever the client defaults to, which is not necessarily off (M103
+recorded the related trap that an absent `on` field reads as ENABLED).
+
+Untested as a fix. It is the only measured difference, the editor can now judge it, and that is the next
+thing to try - along with draw ORDER, which is what M279 actually measured going wrong: *"base_chasm1's
+decal sorted to draw position 395 of 426 while the ground under it drew at 407-414."* A decal that writes
+depth is harmless if it draws after the ground; the damage needs both.

@@ -469,10 +469,11 @@ public static class Dx11SceneBuilder
     /// pre-M279 behaviour and the client's. It is a DIAGNOSTIC: leave it off for authoring, turn it on to
     /// see whether a change actually fixes the thing the game renders.</para>
     ///
-    /// <para><b>Inference, not measurement.</b> That the client writes depth here is deduced - the
-    /// mechanism M279 measured in our own renderer produces exactly this symptom, our renderer stopped and
-    /// the symptom stopped with it, the game did not stop and neither did the symptom. It has not been
-    /// confirmed against a frame capture of the client.</para>
+    /// <para><b>CONFIRMED in M558.</b> Deduced first - the mechanism M279 measured in our own renderer
+    /// produces exactly this symptom, our renderer stopped and the symptom stopped with it, the game did
+    /// not stop and neither did the symptom - and then verified: with this on, the reporter's decals go
+    /// black in the editor exactly as they do in game. It is the first time the editor has reproduced that
+    /// bug, so a candidate fix can now be judged here instead of by building a package.</para>
     /// </summary>
     public static bool EmulateClientDepthRules { get; set; }
 
