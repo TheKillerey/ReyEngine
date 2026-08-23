@@ -56,7 +56,7 @@ public sealed class FaceEditModeTests
         if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs") is not { } file) return;
         string source = File.ReadAllText(file);
 
-        int route = source.IndexOf("if (FaceEditMode) { SelectFaceFromViewport(", StringComparison.Ordinal);
+        int route = source.IndexOf("if (FaceEditMode)", StringComparison.Ordinal);
         int mesh = source.IndexOf("SelectMeshFromViewport(rayOrigin, rayDir, additive, clickScreenPx);", StringComparison.Ordinal);
         Assert.True(route > 0, "face mode must route the pick");
         Assert.True(route < mesh, "the face branch has to run before the mesh pick, and return");
@@ -141,6 +141,54 @@ public sealed class FaceEditModeTests
         var vm = new MainWindowViewModel { FaceEditMode = true };
         Assert.False(vm.HasFaceGizmoTarget);
         Assert.Null(vm.FaceGizmoPivot);
+    }
+
+    [Fact]
+    public void AnInPlaceEditTellsBothViewportsToReupload()
+    {
+        // The bug behind "I move a face and it changed nothing". The GL viewport re-uploads only when its
+        // Mesh PROPERTY changes, and a face edit rewrites the arrays behind the same object - so without
+        // an explicit revision the screen keeps showing whatever was uploaded at load. The D3D11 side
+        // rebuilds from a materials bump. Both are needed; either one alone leaves a viewport stale.
+        if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.FaceEdit.cs") is not { } vmFile) return;
+        if (RepoFile("src", "ReyEngine.App", "Views", "ViewportControl.cs") is not { } control) return;
+        if (RepoFile("src", "ReyEngine.App", "Views", "MainWindow.axaml") is not { } axaml) return;
+
+        string vmSource = File.ReadAllText(vmFile);
+        Assert.Contains("GeometryRevision++;", vmSource);
+        Assert.Contains("NotifyMaterialsChanged();", vmSource);
+        Assert.NotNull(typeof(MainWindowViewModel).GetProperty("GeometryRevision"));
+        Assert.Contains("GeometryRevision=\"{Binding GeometryRevision}\"", File.ReadAllText(axaml));
+        Assert.Contains("change.Property == GeometryRevisionProperty", File.ReadAllText(control));
+        Assert.Contains("_meshDirty = true", File.ReadAllText(control));
+    }
+
+    [Fact]
+    public void DoubleClickTakesTheWholeConnectedPiece()
+    {
+        // A quad is two triangles, so a single click on a flat surface selects half of it and moving that
+        // tears the quad apart. The count comes from the PRESS because the release event does not carry
+        // it, while the pick has to happen on release so a camera drag is not read as a click.
+        if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs") is not { } vm) return;
+        if (RepoFile("src", "ReyEngine.App", "Views", "MainWindow.axaml.cs") is not { } window) return;
+
+        Assert.Contains("if (doubleClick) SelectLinkedFacesFromViewport", File.ReadAllText(vm));
+        string source = File.ReadAllText(window);
+        Assert.Contains("_pressClickCount = e.ClickCount;", source);
+        Assert.Contains("doubleClick: _pressClickCount >= 2", source);
+    }
+
+    [Fact]
+    public void ALinkedSelectionIsBoundedAndSaysSoWhenItStops()
+    {
+        // A map's ground is one connected sheet of several hundred thousand triangles. Selecting all of it
+        // from a double-click is not a useful outcome, and stopping silently is worse than stopping loudly.
+        Assert.InRange(MainWindowViewModel.LinkedFaceLimit, 1_000, 100_000);
+        if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.FaceEdit.cs") is not { } file) return;
+        string source = File.ReadAllText(file);
+        Assert.Contains("stopped at the", source);
+        // and the flood stays inside the clicked group rather than crossing the whole map
+        Assert.Contains("int firstTriangle = owner.StartIndex / 3;", source);
     }
 
     [Fact]

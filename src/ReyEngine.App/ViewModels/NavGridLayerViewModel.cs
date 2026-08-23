@@ -26,7 +26,11 @@ public sealed partial class NavGridLayerViewModel : ObservableObject
     partial void OnIsVisibleChanged(bool value) => Changed?.Invoke();
 
     public int Bit => System.Numerics.BitOperations.TrailingZeroCount(Mask);
-    public string Label => $"0x{Mask:x4}  ·  bit {Bit}";
+    /// <summary>M568: the name comes from LOOKING at the layer on a map, not from its distribution.
+    /// A flag nobody has identified shows its mask alone rather than a guess.</summary>
+    public string Label => ReyEngine.Formats.MapGeo.NavGrid.LabelFor(Mask) is { } named
+        ? $"{named}   (bit {Bit})"
+        : $"0x{Mask:x4}  ·  bit {Bit}  ·  unidentified";
     public string Detail => $"{Cells:n0} cells · {Share:P1}";
 
     /// <summary>The layer's colour as a brush, so the list can show which is which in the viewport.</summary>

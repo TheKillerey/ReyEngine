@@ -26,6 +26,9 @@ public sealed partial class MainWindowViewModel
 
     [ObservableProperty] private float[]? _selectedFaceLines;
 
+    /// <summary>M568: incremented on every in-place geometry edit, so the viewports re-upload.</summary>
+    [ObservableProperty] private int _geometryRevision;
+
     public int SelectedFaceCount => _selectedFaces.Count;
     public bool HasFaceSelection => _selectedFaces.Count > 0;
 
@@ -84,6 +87,78 @@ public sealed partial class MainWindowViewModel
         RebuildFaceSelectionLines();
         _log.Info("Faces", $"{_selectedFaces.Count} face(s) selected.");
     }
+
+    /// <summary>
+    /// M568: double-click - take the whole connected piece, not the one triangle under the cursor.
+    ///
+    /// <para>A quad is two triangles, so clicking one selects half of a flat surface and moving it tears
+    /// the quad in two. Flooding across shared vertices from the clicked face gives the piece a person
+    /// actually sees.</para>
+    ///
+    /// <para>Bounded to the clicked SUBMESH and to <see cref="LinkedFaceLimit"/> faces. A map's ground is
+    /// one connected sheet of several hundred thousand triangles, and "select the whole terrain because
+    /// you double-clicked it" is not a useful outcome - so the limit is reported rather than silent.</para>
+    /// </summary>
+    public void SelectLinkedFacesFromViewport(Vector3 rayOrigin, Vector3 rayDir, bool additive)
+    {
+        if (_currentMap is not { } map) return;
+        var hits = RayIndex?.AllHits(rayOrigin, rayDir, CurrentModelSubmeshVisible);
+        if (hits is null || hits.Count == 0) return;
+
+        int seed = hits.OrderBy(h => h.Distance).First().Triangle;
+        if (seed < 0 || seed * 3 + 2 >= map.Indices.Length) return;
+
+        // The group that owns it bounds the search.
+        MapGeoGroup? owner = null;
+        foreach (var g in map.Groups)
+            if (seed * 3 >= g.StartIndex && seed * 3 < g.StartIndex + g.IndexCount) { owner = g; break; }
+        if (owner is null) { SelectFaceFromViewport(rayOrigin, rayDir, additive); return; }
+
+        int firstTriangle = owner.StartIndex / 3;
+        int triangleCount = owner.IndexCount / 3;
+
+        // vertex -> the triangles in this group that use it
+        var byVertex = new Dictionary<uint, List<int>>(triangleCount * 2);
+        for (int i = 0; i < triangleCount; i++)
+        {
+            int t = firstTriangle + i;
+            for (int k = 0; k < 3; k++)
+            {
+                uint v = map.Indices[t * 3 + k];
+                if (!byVertex.TryGetValue(v, out var list)) byVertex[v] = list = new List<int>(4);
+                list.Add(t);
+            }
+        }
+
+        var found = new HashSet<int> { seed };
+        var queue = new Queue<int>();
+        queue.Enqueue(seed);
+        bool capped = false;
+        while (queue.Count > 0)
+        {
+            int t = queue.Dequeue();
+            for (int k = 0; k < 3; k++)
+                foreach (int neighbour in byVertex[map.Indices[t * 3 + k]])
+                {
+                    if (!found.Add(neighbour)) continue;
+                    if (found.Count >= LinkedFaceLimit) { capped = true; queue.Clear(); break; }
+                    queue.Enqueue(neighbour);
+                }
+            if (capped) break;
+        }
+
+        if (!additive) _selectedFaces.Clear();
+        foreach (int t in found) _selectedFaces.Add(t);
+        RebuildFaceSelectionLines();
+        _log.Info("Faces", $"Selected {found.Count:n0} linked face(s)"
+            + (capped ? $" - stopped at the {LinkedFaceLimit:n0} limit, so this piece is larger than that."
+                      : ".")
+            + $" {_selectedFaces.Count:n0} selected in total.");
+    }
+
+    /// <summary>Where a linked selection stops. A map's ground is one sheet of several hundred thousand
+    /// triangles, and selecting all of it from a double-click helps nobody.</summary>
+    public const int LinkedFaceLimit = 20_000;
 
     [RelayCommand(CanExecute = nameof(HasFaceSelection))]
     private void ClearFaceSelection()
@@ -278,7 +353,12 @@ public sealed partial class MainWindowViewModel
                 break;
         }
         RebuildFaceSelectionLines();
-        NotifyMaterialsChanged();   // the DX11 scene is built from these buffers
+        // M568: BOTH viewports have to be told, and for different reasons. The GL one re-uploads only
+        // when its Mesh property changes, which an in-place edit never does; the D3D11 one rebuilds its
+        // scene from the same arrays on a materials bump. Miss either and the edit is invisible in that
+        // viewport while being perfectly real in the file.
+        GeometryRevision++;
+        NotifyMaterialsChanged();
     }
 
     /// <summary>What a deleted face looked like, so undo can put it back.</summary>

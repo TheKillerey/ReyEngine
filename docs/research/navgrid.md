@@ -157,5 +157,29 @@ Only two keep a name in code, and only because they are load-bearing rather than
 `BlockedFlag` (0x0002, which fills the border and is how the plane's alignment is checked) and
 `TeamRestrictedFlag` (0x0004, named for what the reporter observed).
 
-**Which bit is the bush is still unknown.** It is one of the ones above, and the way to find out is to
-switch layers on over a map whose brush you can see.
+## The bits, identified (M568)
+
+Drawn one at a time over a map and read off. **The bush is bit 0**, not bit 2:
+
+| mask | bit | what it is | SR cells |
+|---|---|---|---|
+| 0x0001 | 0 | **bush** — the vision blocker | 2,015 |
+| 0x0002 | 1 | not walkable | 34,079 |
+| 0x0004 | 2 | blue side only | 1,085 |
+| 0x0008 | 3 | both teams' restricted areas | — |
+| 0x0040 | 6 | the outline of the not-walkable area | 2,670 |
+| 0x0200 | 9 | another not-walkable region, one area; purpose unclear | — |
+| 0x0400 | 10 | blue side only | 70 |
+| 0x0800 | 11 | red side only | 66 |
+| 0x1000 | 12 | much the same as bit 3 | 76 |
+| 0x0080 | 7 | **unidentified** — 31% of SR, nobody has looked | 26,725 |
+
+Look how crowded that is: **2, 3, 10, 11 and 12 are all team restrictions** of one kind or another. That
+is why picking the bush from a distribution was never going to work — several bits share the shape, the
+symmetry and the rough size, and only one of them is the brush.
+
+Bit 7 keeps no name. It covers 31% of the map and nobody has looked at it, and inventing a label for it
+is precisely the mistake this page exists to record.
+
+`NavGrid.LabelFor` carries these, and the layer list shows the name where there is one and
+`0x0080 · bit 7 · unidentified` where there is not.

@@ -8146,7 +8146,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public void SelectAnyFromViewport(System.Numerics.Vector3 rayOrigin, System.Numerics.Vector3 rayDir, bool additive = false,
         Func<System.Numerics.Vector3, System.Numerics.Vector2?>? projectToScreen = null,
-        System.Numerics.Vector2? clickScreenPx = null)
+        System.Numerics.Vector2? clickScreenPx = null,
+        bool doubleClick = false)
     {
         // M76 UE-style picking: placeable icons hit in SCREEN space first (within a pixel radius of the
         // drawn icon), so they're easy to click at ANY zoom — a distant marker no longer needs a
@@ -8232,7 +8233,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M500: pass the click pixel through so repeated clicks at the same spot can cycle deeper.
         // M566: in face mode a click picks a TRIANGLE of the map, not a mesh. Routed here rather than in
         // the window so both viewports and any future input path get it from one place.
-        if (FaceEditMode) { SelectFaceFromViewport(rayOrigin, rayDir, additive); return; }
+        if (FaceEditMode)
+        {
+            // M568: a double click takes the whole connected piece. A quad is two triangles, so a single
+            // click on a flat surface selects half of it.
+            if (doubleClick) SelectLinkedFacesFromViewport(rayOrigin, rayDir, additive);
+            else SelectFaceFromViewport(rayOrigin, rayDir, additive);
+            return;
+        }
         SelectMeshFromViewport(rayOrigin, rayDir, additive, clickScreenPx);
     }
 

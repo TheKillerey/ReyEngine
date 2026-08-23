@@ -55,22 +55,53 @@ public sealed class NavGrid
     public int CellCount => CountX * CountZ;
     public bool HasFlags => Flags.Length == CellCount && CellCount > 0;
 
+    // ---------------------------------------------------------------- M568: what the bits are
+    //
+    // Identified by DRAWING each one over a map and looking, after M562 got it wrong by reasoning from
+    // cluster shapes. The layer overlay exists precisely so this could be done by observation:
+    //
+    //   bit 0  0x0001  BUSH - the vision blocker. 2,015 cells on Summoner's Rift.
+    //   bit 1  0x0002  not walkable. Fills the border, 39% of SR.
+    //   bit 2  0x0004  blue side only.
+    //   bit 3  0x0008  both teams' restricted areas.
+    //   bit 6  0x0040  the outline of the not-walkable area.
+    //   bit 9  0x0200  another not-walkable region, covering one area; purpose unclear.
+    //   bit 10 0x0400  blue side only.
+    //   bit 11 0x0800  red side only.
+    //   bit 12 0x1000  much the same as bit 3.
+    //
+    // Note how close together 2, 3, 10, 11 and 12 are - several overlapping team restrictions - which is
+    // why picking one from its distribution was never going to work. Bit 7 (31% of SR) is unlabelled: it
+    // was not reported on, and guessing it is exactly the mistake this comment exists to record.
+
     /// <summary>
-    /// M565: 0x0004 was labelled the bush bit in M562 and that was WRONG.
+    /// The bush - the volume that actually blocks vision.
     ///
-    /// <para>The inference looked good - on Summoner's Rift it marks 1,085 cells in about 25 clusters with
-    /// the diagonal symmetry brush has, and Howling Abyss and TFT score zero. The reporter then looked at
-    /// the cells drawn on their own map and identified them as the area only the blue team may walk. A
-    /// direct observation of the thing beats a shape argument about it.</para>
-    ///
-    /// <para>So the bits are no longer named here. <see cref="PresentFlags"/> reports what a grid actually
-    /// contains and the editor draws each one separately, which lets whoever is looking at the map do the
-    /// labelling - that is the only way any of these get identified honestly.</para>
+    /// <para>M562 guessed 0x0004 from the shape of its clusters and was wrong; it is blue-side-only
+    /// walking. This one was identified by drawing the layer over a map and looking at it.</para>
     /// </summary>
+    public const ushort BushFlag = 0x0001;
+
+    /// <summary>Blue side only. What M562 mistook for the bush.</summary>
     public const ushort TeamRestrictedFlag = 0x0004;
 
     /// <summary>Fills the map border and covers 39% of Summoner's Rift, so: not walkable.</summary>
     public const ushort BlockedFlag = 0x0002;
+
+    /// <summary>A human label for a flag, or null when nobody has identified it yet.</summary>
+    public static string? LabelFor(ushort mask) => mask switch
+    {
+        0x0001 => "bush",
+        0x0002 => "not walkable",
+        0x0004 => "blue side only",
+        0x0008 => "team restricted (both)",
+        0x0040 => "not-walkable outline",
+        0x0200 => "not walkable (one area)",
+        0x0400 => "blue side only",
+        0x0800 => "red side only",
+        0x1000 => "team restricted (both)",
+        _ => null,
+    };
 
     /// <summary>
     /// Every single-bit flag that appears anywhere in this grid, with how many cells carry it, commonest

@@ -86,6 +86,17 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>M562: navgrid flag cells, as a pos3+bary3 soup like the bucket grid.</summary>
     public static readonly StyledProperty<float[]?> BushCellLinesProperty =
         AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(BushCellLines));
+    /// <summary>
+    /// M568: bumped whenever the map's vertex or index arrays are mutated IN PLACE.
+    ///
+    /// <para><c>_meshDirty</c> is set from the Mesh property CHANGING, which a face edit never does - it
+    /// rewrites the arrays behind the same object. Without this the geometry on screen is whatever was
+    /// uploaded when the map loaded, and editing a face appears to do nothing at all, which is exactly how
+    /// it was reported.</para>
+    /// </summary>
+    public static readonly StyledProperty<int> GeometryRevisionProperty =
+        AvaloniaProperty.Register<ViewportControl, int>(nameof(GeometryRevision));
+
     /// <summary>M566: the faces currently selected for editing, as a pos3+bary3 soup.</summary>
     public static readonly StyledProperty<float[]?> SelectedFaceLinesProperty =
         AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(SelectedFaceLines));
@@ -319,6 +330,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public float[]? BucketGridLines { get => GetValue(BucketGridLinesProperty); set => SetValue(BucketGridLinesProperty, value); }
     public float[]? BushCellLines { get => GetValue(BushCellLinesProperty); set => SetValue(BushCellLinesProperty, value); }
     public float[]? SelectedFaceLines { get => GetValue(SelectedFaceLinesProperty); set => SetValue(SelectedFaceLinesProperty, value); }
+    public int GeometryRevision { get => GetValue(GeometryRevisionProperty); set => SetValue(GeometryRevisionProperty, value); }
     public (int Start, int Count, System.Numerics.Vector4 Color)[]? BushCellLayers
     { get => GetValue(BushCellLayersProperty); set => SetValue(BushCellLayersProperty, value); }
     /// <summary>Decoded placed prop meshes to render at their transforms (M41); null clears them.</summary>
@@ -1677,6 +1689,8 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         base.OnPropertyChanged(change);
         if (change.Property == MeshProperty) { _meshDirty = true; RequestNextFrameRendering(); }
+        // M568: same effect, for an edit that mutated the arrays without replacing the Mesh object.
+        if (change.Property == GeometryRevisionProperty) { _meshDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelTexturesProperty || change.Property == ModelMaskTexturesProperty
                  || change.Property == ModelGradientTexturesProperty || change.Property == ModelEmissiveTexturesProperty
                  || change.Property == ModelMatCapTexturesProperty || change.Property == ModelMatCapMaskTexturesProperty

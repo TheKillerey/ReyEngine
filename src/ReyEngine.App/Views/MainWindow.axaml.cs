@@ -24,6 +24,8 @@ public partial class MainWindow : Window
     private ViewportControl.GizmoAxis? _gizmoDragAxis;
     /// <summary>M567: this drag is moving FACES, not a mesh or a placement.</summary>
     private bool _gizmoTargetIsFaces;
+    /// <summary>M568: click count from the press, for double-click linked selection.</summary>
+    private int _pressClickCount;
     private float _gizmoDragStartT;
     private Vector3 _gizmoDragStartOffset;
     private Vector3 _gizmoDragOrigin;   // pivot at drag start — the axis line must NOT re-anchor mid-drag
@@ -991,6 +993,7 @@ public partial class MainWindow : Window
         _lastPointer = pt.Position;
         _pressPos = pt.Position;
         _pressMoved = false;
+        _pressClickCount = e.ClickCount;   // M568: only the PRESS carries it; the pick happens on release
         e.Pointer.Capture(ViewportInput);
         ViewportInput.Focus(); // so WASD/F reach the viewport
 
@@ -1173,7 +1176,10 @@ public partial class MainWindow : Window
             var clickPos = e.GetPosition(ViewportInput);
             vm.SelectAnyFromViewport(origin, dir, additive,
                 world => Viewport.TryProjectToScreen(world, out var s) ? s : null,
-                new System.Numerics.Vector2((float)clickPos.X, (float)clickPos.Y));
+                new System.Numerics.Vector2((float)clickPos.X, (float)clickPos.Y),
+                // M568: the count is captured on PRESS - the release event does not carry it - and the
+                // selection happens on release so a camera drag is not mistaken for a click.
+                doubleClick: _pressClickCount >= 2);
         }
     }
 
