@@ -126,6 +126,26 @@ public static class ModShapeValidator
                 + "form (class hash 0 followed by a size and field count). The format omits those six bytes; the game "
                 + "misreads everything after the first one and crashes at map load. Saving this bin from ReyEngine repairs it."));
 
+        // M556: blend factors that read the DESTINATION ALPHA.
+        //
+        // A decal that went black in game turned out to carry dstColorBlendFactor = 9 (InvDstAlpha). That
+        // factor makes the result src*srcAlpha + dst*(1 - dstAlpha), so wherever the framebuffer alpha is
+        // 1 the destination collapses to ZERO and the surface composites over black instead of over what
+        // is behind it. Nothing about the material looks wrong; it just draws onto nothing.
+        //
+        // Censused over 18 shipped map WADs: of every blended map material, the factors Riot uses are
+        // 1, 4, 6 and 7. DstAlpha (8) and InvDstAlpha (9) appear ZERO times on either side, and 164 of
+        // Riot's 165 decal materials are exactly 6/7. A map's framebuffer alpha is not a channel the map
+        // pipeline guarantees, which is presumably why.
+        uint[] destinationAlphaFields =
+        {
+            HashAlgorithms.Fnv1a("srcColorBlendFactor"), HashAlgorithms.Fnv1a("dstColorBlendFactor"),
+            HashAlgorithms.Fnv1a("srcAlphaBlendFactor"), HashAlgorithms.Fnv1a("dstAlphaBlendFactor"),
+        };
+        foreach (var (hash, o) in tree.Objects)
+            foreach (var (ph, prop) in o.Properties)
+                CheckBlendFactors(issues, Name(hash, o), hash, o, ph, prop, destinationAlphaFields, resolveName);
+
         foreach (var (hash, o) in tree.Objects)
         {
             // ---- 2. empty containers and maps ----------------------------------------------------
@@ -348,6 +368,41 @@ public static class ModShapeValidator
             if (!technique.Properties.TryGetValue(F_passes, out var pp) || pp is not BinTreeContainer pc) continue;
             foreach (var p in pc.Elements)
                 if (p is BinTreeStruct pass) yield return pass;
+        }
+    }
+
+    /// <summary>
+    /// M556: walk a property tree for a blend factor of 8 (DstAlpha) or 9 (InvDstAlpha).
+    ///
+    /// <para>Recursive because the factors live on a pass, which lives in a container inside a technique,
+    /// which lives in a container on the material - so a flat scan of the object's own properties never
+    /// reaches them.</para>
+    /// </summary>
+    private static void CheckBlendFactors(List<BinIssue> issues, string objectName, uint hash,
+        BinTreeObject owner, uint propertyHash, BinTreeProperty property, uint[] fields,
+        Func<uint, string?>? resolveName)
+    {
+        switch (property)
+        {
+            case BinTreeU32 u when fields.Contains(propertyHash) && u.Value is 8 or 9:
+                issues.Add(new BinIssue("blend-factor", objectName,
+                    $"'{resolveName?.Invoke(propertyHash) ?? $"0x{propertyHash:x8}"}' is "
+                    + $"{(u.Value == 9 ? "9 (InvDstAlpha)" : "8 (DstAlpha)")}, a factor that reads the "
+                    + "framebuffer's ALPHA. Where that alpha is 1, InvDstAlpha makes the destination "
+                    + "contribute nothing and the surface draws over BLACK instead of over what is behind "
+                    + "it. Censused over 18 shipped map WADs, Riot uses 1, 4, 6 and 7 and neither 8 nor 9 "
+                    + "even once; 164 of its 165 decal materials are 6 (SrcAlpha) / 7 (InvSrcAlpha).",
+                    hash, owner.ClassHash));
+                break;
+            // BinTreeEmbedded derives from BinTreeStruct, so this one case covers both forms.
+            case BinTreeStruct st:
+                foreach (var (h, child) in st.Properties)
+                    CheckBlendFactors(issues, objectName, hash, owner, h, child, fields, resolveName);
+                break;
+            case BinTreeContainer c:
+                foreach (var child in c.Elements)
+                    CheckBlendFactors(issues, objectName, hash, owner, propertyHash, child, fields, resolveName);
+                break;
         }
     }
 }

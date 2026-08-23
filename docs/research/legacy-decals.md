@@ -244,3 +244,49 @@ The three options are not interchangeable, and only one is right:
 `SingleImage` is exposed in the dialog for the cases where one whole image matters more than coverage,
 but it is off by default: shrinking a decal to a third of the ground it covered is a bigger change than
 letting its texture repeat the way it always did.
+
+## 6. The black: a blend factor that reads the framebuffer's alpha (M556)
+
+The reporter found the reproduction that eleven-plus eliminated hypotheses had not: *"The black issue
+that happens on blending happens in our editor on 9 oneminusdstalpha."*
+
+`dstColorBlendFactor = 9` is `InvDstAlpha`, making the blend
+
+```
+result = src * srcAlpha  +  dst * (1 - dstAlpha)
+```
+
+Wherever the framebuffer's alpha is 1, the destination term collapses to **zero** — so the surface
+composites over **black** instead of over the ground behind it. Nothing about the material looks wrong.
+It simply draws onto nothing.
+
+Contrast the factor the porter authors, `7` = `InvSrcAlpha`:
+
+```
+result = src * srcAlpha  +  dst * (1 - srcAlpha)
+```
+
+which is ordinary alpha blending and **cannot** produce this, whatever the framebuffer alpha holds. So
+the reporter's "it should happen on 7 too" does not hold, and that asymmetry is the diagnosis.
+
+### Measured
+
+| | |
+|---|---|
+| the reporter's project | 19 of 20 decals `6/7`; **exactly one** — `Decal_518d8b774d3e`, `order_base_circle` — was `6/9` |
+| Riot, 18 shipped map WADs | factors used are **1, 4, 6, 7**. `DstAlpha (8)` and `InvDstAlpha (9)`: **zero** occurrences on either side |
+| Riot's decal materials | **164 of 165** are exactly `6 SrcAlpha` / `7 InvSrcAlpha` |
+
+`order_base_circle` is one of the two textures reported broken at the very start, and it is the same
+material that carried the NaN UVs (§2) and the stale Clamp (§3). Three independent defects on one
+material, which is why it outlived every earlier fix.
+
+### Guard
+
+`ModShapeValidator` now reports category `blend-factor` for any `srcColor/dstColor/srcAlpha/dstAlpha`
+factor of 8 or 9, recursing into techniques and passes because the factors sit two containers deep and a
+flat scan never reaches them. Tests pin that it fires on the real edit, stays silent on Riot's shipped
+bins, and that the corpus really does contain no 8 or 9.
+
+**Not yet confirmed in game.** One material carried this, so it explains `order_base_circle`; whether the
+other decals were ever black for the same reason is untested.
