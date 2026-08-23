@@ -752,6 +752,16 @@
                         IsVisible="{Binding FaceEditMode}" ToolTip.Tip="Collapse the selected faces to zero area (Delete)" />
                 <Button Classes="vp" Content="↻ Flip" Command="{Binding FlipSelectedFacesCommand}"
                         IsVisible="{Binding FaceEditMode}" ToolTip.Tip="Reverse the winding of the selected faces (F)" />
+                <Button Classes="vp" Content="⬆ Extrude" Command="{Binding ExtrudeSelectedFacesCommand}"
+                        IsVisible="{Binding FaceEditMode}"
+                        ToolTip.Tip="Push the selected faces out along their normals, building walls behind them. This ADDS geometry, so unlike delete/flip/move the viewport cannot preview it - save and reload the map to see it." />
+                <TextBox Text="{Binding ExtrudeAmount}" Width="52" FontSize="10" Padding="3,1"
+                         IsVisible="{Binding FaceEditMode}" ToolTip.Tip="Extrude distance in world units" />
+                <Button Classes="vp" Content="◻ Inset" Command="{Binding InsetSelectedFacesCommand}"
+                        IsVisible="{Binding FaceEditMode}"
+                        ToolTip.Tip="Shrink the selected faces toward their own centres, ringed by new geometry. Adds geometry, so it also needs a save and reload to show." />
+                <TextBox Text="{Binding InsetAmount}" Width="52" FontSize="10" Padding="3,1"
+                         IsVisible="{Binding FaceEditMode}" ToolTip.Tip="Inset amount, 0..1 of the way to the face centre" />
               </StackPanel>
             </Border>
           </Grid>

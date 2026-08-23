@@ -60,6 +60,8 @@ public sealed partial class MainWindowViewModel
         DeleteSelectedFacesCommand.NotifyCanExecuteChanged();
         FlipSelectedFacesCommand.NotifyCanExecuteChanged();
         ClearFaceSelectionCommand.NotifyCanExecuteChanged();
+        ExtrudeSelectedFacesCommand.NotifyCanExecuteChanged();
+        InsetSelectedFacesCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>Picks the face under the ray. Ctrl toggles, a plain click replaces, a miss clears.</summary>
@@ -203,6 +205,54 @@ public sealed partial class MainWindowViewModel
 
     [RelayCommand(CanExecute = nameof(HasFaceSelection))]
     private void FlipSelectedFaces() => ApplyFaceOp(FaceOp.Flip, default, "Flipped");
+
+    // ---------------------------------------------------------------- M570: extrude and inset
+    /// <summary>How far an extrude pushes, in world units. Editable, because the right amount depends
+    /// entirely on the scale of what is being edited.</summary>
+    [ObservableProperty] private string _extrudeAmount = "50";
+
+    /// <summary>How far an inset pulls toward the face centre, 0..1.</summary>
+    [ObservableProperty] private string _insetAmount = "0.25";
+
+    /// <summary>German locale ships a comma decimal separator, so the parse is invariant.</summary>
+    private static float Parse(string text, float fallback, float lo, float hi) =>
+        float.TryParse(text, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out float value) && float.IsFinite(value)
+            ? Math.Clamp(value, lo, hi)
+            : fallback;
+
+    /// <summary>Pending extrudes and insets, replayed onto the file when the map is saved.</summary>
+    private readonly List<FaceGrow> _faceGrows = new();
+
+    public bool HasFaceGrows => _faceGrows.Count > 0;
+
+    [RelayCommand(CanExecute = nameof(HasFaceSelection))]
+    private void ExtrudeSelectedFaces() =>
+        Grow(FaceGrowOp.Extrude, Parse(ExtrudeAmount, 50f, -10_000f, 10_000f), "Extruded");
+
+    [RelayCommand(CanExecute = nameof(HasFaceSelection))]
+    private void InsetSelectedFaces() =>
+        Grow(FaceGrowOp.Inset, Parse(InsetAmount, 0.25f, 0.01f, 0.95f), "Inset");
+
+    /// <summary>
+    /// Records the operation for the save.
+    ///
+    /// <para>Unlike delete, flip and move, this one is NOT previewed in the viewport. Those three rewrite
+    /// the arrays the viewport already holds; extrude and inset add vertices and triangles, so previewing
+    /// them means rebuilding the decoded asset - which is what reloading the map after a save already
+    /// does. Saying so is better than a tool that looks broken until you work out why.</para>
+    /// </summary>
+    private void Grow(FaceGrowOp op, float amount, string verb)
+    {
+        if (_currentMap is null || _selectedFaces.Count == 0) return;
+        var faces = _selectedFaces.ToList();
+        foreach (int t in faces) _faceGrows.Add(new FaceGrow(t, op, amount));
+        OnPropertyChanged(nameof(HasFaceGrows));
+        NotifyFaceState();
+        _log.Info("Faces", $"{verb} {faces.Count} face(s) by {amount:0.###}. This one adds geometry, so the "
+            + "viewport cannot show it until the map is saved and reloaded - Save Map Content Edits, then "
+            + "Reload Map.");
+    }
 
     /// <summary>Moves the selection by a delta, as one undo step. For a one-shot nudge, not a drag.</summary>
     public void MoveSelectedFaces(Vector3 delta)

@@ -230,6 +230,46 @@ public sealed class FaceEditModeTests
     }
 
     [Fact]
+    public void ExtrudeAndInsetAreWrittenBeforeAnythingThatUsesAByteOffset()
+    {
+        // They GROW the index buffer, so every submesh offset after the insertion moves. Anything that
+        // located a byte offset earlier would then be reading the wrong place - and the length-preserving
+        // face edits address triangles by their ORIGINAL index, which only holds while nothing has been
+        // inserted yet. So: face edits, then grows, then the offset-based passes.
+        if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs") is not { } file) return;
+        string source = File.ReadAllText(file);
+
+        int faces = source.IndexOf("MapGeoFaceWriter.TryApply(bytes, map, _faceEdits", StringComparison.Ordinal);
+        int grows = source.IndexOf("MapGeoFaceGrower.TryApply(bytes, map, _faceGrows", StringComparison.Ordinal);
+        int layers = source.IndexOf("// 0) M105: layer/controller/backface edits FIRST", StringComparison.Ordinal);
+        Assert.True(grows > 0, "extrude/inset are never written");
+        Assert.True(faces < grows, "length-preserving edits must run before anything is inserted");
+        Assert.True(grows < layers, "grows must run before the offset-based passes");
+        Assert.Contains("_faceGrows.Clear();", source);
+    }
+
+    [Fact]
+    public void TheGrowCommandsExistAndRefuseWithNothingSelected()
+    {
+        var vm = new MainWindowViewModel { FaceEditMode = true };
+        Assert.False(vm.ExtrudeSelectedFacesCommand.CanExecute(null));
+        Assert.False(vm.InsetSelectedFacesCommand.CanExecute(null));
+        Assert.False(vm.HasFaceGrows);
+    }
+
+    [Fact]
+    public void TheAmountsParseInvariantlySoAGermanLocaleDoesNotBreakThem()
+    {
+        // The machine this runs on uses a comma decimal separator, so a culture-sensitive parse would read
+        // "0.25" as 25 and inset the face into nothing.
+        var vm = new MainWindowViewModel { ExtrudeAmount = "12.5", InsetAmount = "0.25" };
+        Assert.Equal("12.5", vm.ExtrudeAmount);
+        Assert.Equal("0.25", vm.InsetAmount);
+        if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.FaceEdit.cs") is not { } file) return;
+        Assert.Contains("CultureInfo.InvariantCulture", File.ReadAllText(file));
+    }
+
+    [Fact]
     public void TheHighlightIsWiredThroughToTheRenderer()
     {
         if (RepoFile("src", "ReyEngine.App", "Views", "MainWindow.axaml") is not { } axaml) return;

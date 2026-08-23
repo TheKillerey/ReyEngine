@@ -9574,12 +9574,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M566: face edits ride the same save. They are length-preserving patches into the index and
         // vertex buffers, so they compose with the transform moves below rather than fighting them.
         bool hasFaces = _faceEdits.Count > 0;
+        bool hasGrows = _faceGrows.Count > 0;   // M570: extrude / inset, which ADD geometry
         bool hasMoves = MapGeoWriter.HasMoves(map.Meshes);
         bool hasLayers = MapGeoLayerWriter.HasEdits(map.Meshes);
         bool hasMaterials = MapGeoMaterialWriter.HasEdits(map.Meshes);   // M517
         var added = MapContent.AddedMeshes.ToList();
         var removedIndices = MapContent.AllMapPieces.Where(p => p.IsRemoved).Select(p => p.MeshIndex).Distinct().ToList();
-        if (!hasFaces && !hasMoves && !hasLayers && !hasMaterials && added.Count == 0 && removedIndices.Count == 0)
+        if (!hasFaces && !hasGrows && !hasMoves && !hasLayers && !hasMaterials && added.Count == 0 && removedIndices.Count == 0)
         { _log.Info("MapGeo", "No map edits to save."); return; }
         if (!GuardEditable(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
@@ -9612,6 +9613,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (withFaces is null) { _log.Error("MapGeo", faceError ?? "Face edits could not be written."); return; }
                 bytes = withFaces;
                 _log.Success("MapGeo", $"Wrote {_faceEdits.Count:n0} face edit(s).");
+            }
+
+            // M570: extrude and inset AFTER the length-preserving face edits and before everything
+            // else. They grow the index buffer and move every submesh offset after the insertion, so
+            // anything that located a byte offset earlier would be reading the wrong place - and the
+            // length-preserving edits above address triangles by their ORIGINAL index, which only holds
+            // while nothing has been inserted yet.
+            if (hasGrows)
+            {
+                var withGrows = MapGeoFaceGrower.TryApply(bytes, map, _faceGrows, out string? growError);
+                if (withGrows is null) { _log.Error("MapGeo", growError ?? "Extrude/inset could not be written."); return; }
+                bytes = withGrows;
+                _log.Success("MapGeo", $"Wrote {_faceGrows.Count:n0} extrude/inset operation(s).");
             }
 
             // 0) M105: layer/controller/backface edits FIRST — they don't touch the [bbox][transform]
@@ -9701,8 +9715,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M566: the face edits are IN the file now. Replaying them on the next save would apply each
             // one twice - a second flip is the identity and a second move travels double - so the pending
             // list is emptied exactly here, where the bytes are known to have been written.
-            int faceEdits = _faceEdits.Count;
+            int faceEdits = _faceEdits.Count + _faceGrows.Count;
             _faceEdits.Clear();
+            _faceGrows.Clear();
+            OnPropertyChanged(nameof(HasFaceGrows));
             _faceUndoIndices.Clear();
             NotifyFaceState();
             _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {layers} layer edit(s) + {faceEdits} face edit(s) + {added.Count} added + {removedIndices.Count} deleted mesh(es) to {savedTo} ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the resulting native geometry.");
