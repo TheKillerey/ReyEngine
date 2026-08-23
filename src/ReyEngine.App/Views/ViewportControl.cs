@@ -86,17 +86,6 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>M562: navgrid flag cells, as a pos3+bary3 soup like the bucket grid.</summary>
     public static readonly StyledProperty<float[]?> BushCellLinesProperty =
         AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(BushCellLines));
-    /// <summary>
-    /// M568: bumped whenever the map's vertex or index arrays are mutated IN PLACE.
-    ///
-    /// <para><c>_meshDirty</c> is set from the Mesh property CHANGING, which a face edit never does - it
-    /// rewrites the arrays behind the same object. Without this the geometry on screen is whatever was
-    /// uploaded when the map loaded, and editing a face appears to do nothing at all, which is exactly how
-    /// it was reported.</para>
-    /// </summary>
-    public static readonly StyledProperty<int> GeometryRevisionProperty =
-        AvaloniaProperty.Register<ViewportControl, int>(nameof(GeometryRevision));
-
     /// <summary>M566: the faces currently selected for editing, as a pos3+bary3 soup.</summary>
     public static readonly StyledProperty<float[]?> SelectedFaceLinesProperty =
         AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(SelectedFaceLines));
@@ -330,7 +319,6 @@ public sealed class ViewportControl : OpenGlControlBase
     public float[]? BucketGridLines { get => GetValue(BucketGridLinesProperty); set => SetValue(BucketGridLinesProperty, value); }
     public float[]? BushCellLines { get => GetValue(BushCellLinesProperty); set => SetValue(BushCellLinesProperty, value); }
     public float[]? SelectedFaceLines { get => GetValue(SelectedFaceLinesProperty); set => SetValue(SelectedFaceLinesProperty, value); }
-    public int GeometryRevision { get => GetValue(GeometryRevisionProperty); set => SetValue(GeometryRevisionProperty, value); }
     public (int Start, int Count, System.Numerics.Vector4 Color)[]? BushCellLayers
     { get => GetValue(BushCellLayersProperty); set => SetValue(BushCellLayersProperty, value); }
     /// <summary>Decoded placed prop meshes to render at their transforms (M41); null clears them.</summary>
@@ -1698,14 +1686,6 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         base.OnPropertyChanged(change);
         if (change.Property == MeshProperty) { _meshDirty = true; RequestNextFrameRendering(); }
-        // M569: an in-place edit re-uploads the VERTEX and INDEX buffers only.
-        //
-        // M568 set _meshDirty here, which was too big a hammer: that path rebuilds every buffer and then
-        // sets _needFrame, so the camera jumped back to framing the whole map every time a face moved.
-        // It also re-marked textures, skinning, visibility and materials dirty for an edit that touched
-        // none of them.
-        if (change.Property == GeometryRevisionProperty)
-        { _verticesDirty = true; _indicesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ModelTexturesProperty || change.Property == ModelMaskTexturesProperty
                  || change.Property == ModelGradientTexturesProperty || change.Property == ModelEmissiveTexturesProperty
                  || change.Property == ModelMatCapTexturesProperty || change.Property == ModelMatCapMaskTexturesProperty
@@ -1735,6 +1715,10 @@ public sealed class ViewportControl : OpenGlControlBase
             // GL buffer uploads need the GL context current — only true inside OnOpenGlRender, never
             // here on the UI thread. Flag it and do the actual UpdateVertices in the render loop.
             _verticesDirty = true;
+            // M571: and the INDEX buffer, for an edit that rewires triangles without moving a vertex -
+            // deleting or flipping a face. Vertices alone were enough while the only in-place edit was a
+            // transform.
+            _indicesDirty = true;
             RequestNextFrameRendering();
         }
         else if (change.Property == SelectionBoxesProperty || change.Property == GroupBoundsMinProperty

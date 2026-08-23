@@ -26,9 +26,6 @@ public sealed partial class MainWindowViewModel
 
     [ObservableProperty] private float[]? _selectedFaceLines;
 
-    /// <summary>M568: incremented on every in-place geometry edit, so the viewports re-upload.</summary>
-    [ObservableProperty] private int _geometryRevision;
-
     public int SelectedFaceCount => _selectedFaces.Count;
     public bool HasFaceSelection => _selectedFaces.Count > 0;
 
@@ -403,12 +400,15 @@ public sealed partial class MainWindowViewModel
                 break;
         }
         RebuildFaceSelectionLines();
-        // M568: BOTH viewports have to be told, and for different reasons. The GL one re-uploads only
-        // when its Mesh property changes, which an in-place edit never does; the D3D11 one rebuilds its
-        // scene from the same arrays on a materials bump. Miss either and the edit is invisible in that
-        // viewport while being perfectly real in the file.
-        GeometryRevision++;
-        NotifyMaterialsChanged();
+        // M571: MeshVerticesRevision, not a revision of our own.
+        //
+        // M568 invented GeometryRevision for this and it did half the job: it re-uploaded the buffers and
+        // left the ray-pick BVH built from the OLD positions. So a moved face still rendered in its new
+        // place and still picked in its old one - clicking the thing you just moved selected nothing, and
+        // clicking where it used to be selected it. This counter already drives the vertex re-upload AND
+        // invalidates that index, which is exactly the set of things an in-place geometry edit affects.
+        MeshVerticesRevision++;
+        NotifyMaterialsChanged();   // the D3D11 scene rebuilds from the same arrays
     }
 
     /// <summary>What a deleted face looked like, so undo can put it back.</summary>

@@ -155,12 +155,10 @@ public sealed class FaceEditModeTests
         if (RepoFile("src", "ReyEngine.App", "Views", "MainWindow.axaml") is not { } axaml) return;
 
         string vmSource = File.ReadAllText(vmFile);
-        Assert.Contains("GeometryRevision++;", vmSource);
+        Assert.Contains("MeshVerticesRevision++;", vmSource);
         Assert.Contains("NotifyMaterialsChanged();", vmSource);
-        Assert.NotNull(typeof(MainWindowViewModel).GetProperty("GeometryRevision"));
-        Assert.Contains("GeometryRevision=\"{Binding GeometryRevision}\"", File.ReadAllText(axaml));
-        Assert.Contains("change.Property == GeometryRevisionProperty", File.ReadAllText(control));
-        Assert.Contains("_meshDirty = true", File.ReadAllText(control));
+        Assert.Contains("MeshVerticesRevision=\"{Binding MeshVerticesRevision}\"", File.ReadAllText(axaml));
+        Assert.Contains("else if (change.Property == MeshVerticesRevisionProperty)", File.ReadAllText(control));
     }
 
     [Fact]
@@ -192,6 +190,27 @@ public sealed class FaceEditModeTests
     }
 
     [Fact]
+    public void AnInPlaceEditAlsoInvalidatesThePickIndex()
+    {
+        // The reported bug: a moved face rendered in its new place and still PICKED in its old one, so
+        // clicking the thing you just moved selected nothing and clicking where it used to be selected it.
+        //
+        // M568 invented a GeometryRevision that re-uploaded the buffers and left the ray BVH built from
+        // the old positions. MeshVerticesRevision already drove both the vertex upload and that index, so
+        // the second counter was half a duplicate of it. There is one now.
+        if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.FaceEdit.cs") is not { } vmFile) return;
+        if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs") is not { } mainFile) return;
+
+        string vmSource = File.ReadAllText(vmFile);
+        Assert.Contains("MeshVerticesRevision++;", vmSource);
+        Assert.DoesNotContain("GeometryRevision++", vmSource);   // the comment still names it; the code must not
+        Assert.Null(typeof(MainWindowViewModel).GetProperty("GeometryRevision"));
+
+        // and that counter is what the ray index checks itself against
+        Assert.Contains("_rayIndexRevision == MeshVerticesRevision", File.ReadAllText(mainFile));
+    }
+
+    [Fact]
     public void AnInPlaceEditDoesNotThrowAwayTheCamera()
     {
         // M568 routed the re-upload through _meshDirty, which rebuilds every buffer and then sets
@@ -200,9 +219,10 @@ public sealed class FaceEditModeTests
         if (RepoFile("src", "ReyEngine.App", "Views", "ViewportControl.cs") is not { } file) return;
         string source = File.ReadAllText(file);
 
-        int at = source.IndexOf("change.Property == GeometryRevisionProperty", StringComparison.Ordinal);
+        // the change HANDLER, not the styled-property declaration that shares the name
+        int at = source.IndexOf("else if (change.Property == MeshVerticesRevisionProperty)", StringComparison.Ordinal);
         Assert.True(at > 0, "the revision has to invalidate something");
-        string branch = source.Substring(at, Math.Min(220, source.Length - at));
+        string branch = source.Substring(at, Math.Min(900, source.Length - at));
         Assert.Contains("_verticesDirty = true", branch);
         Assert.Contains("_indicesDirty = true", branch);
         Assert.DoesNotContain("_meshDirty", branch);

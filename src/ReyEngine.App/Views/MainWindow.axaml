@@ -421,7 +421,6 @@
                 BushCellLines="{Binding BushCellLines}"
                 BushCellLayers="{Binding BushCellLayers}"
                 SelectedFaceLines="{Binding SelectedFaceLines}"
-                GeometryRevision="{Binding GeometryRevision}"
                 BakeBox="{Binding BakeBox}"
                 PropMeshes="{Binding CurrentPropMeshes}"
                 ParticlePlayback="{Binding CurrentParticlePlayback}"
