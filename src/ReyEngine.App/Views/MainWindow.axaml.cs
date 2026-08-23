@@ -1216,6 +1216,18 @@ public partial class MainWindow : Window
         if (e.Handled || e.Source is TextBox) return;
         if (DataContext is not MainWindowViewModel vm) return;
 
+        // M566: in face mode the face keys win. Delete means "delete what is selected", and what is
+        // selected is a set of faces - falling through to the mesh delete would remove the whole object.
+        if (vm.FaceEditMode && e.KeyModifiers == KeyModifiers.None)
+        {
+            if (e.Key == Key.Delete && vm.DeleteSelectedFacesCommand.CanExecute(null))
+            { vm.DeleteSelectedFacesCommand.Execute(null); e.Handled = true; return; }
+            if (e.Key == Key.F && vm.FlipSelectedFacesCommand.CanExecute(null))
+            { vm.FlipSelectedFacesCommand.Execute(null); e.Handled = true; return; }
+            if (e.Key == Key.Escape && vm.ClearFaceSelectionCommand.CanExecute(null))
+            { vm.ClearFaceSelectionCommand.Execute(null); e.Handled = true; return; }
+        }
+
         // M553: Delete needs no modifier, and shares the outliner's X so the two cannot diverge.
         if (e.Key is Key.Delete && e.KeyModifiers == KeyModifiers.None)
         {

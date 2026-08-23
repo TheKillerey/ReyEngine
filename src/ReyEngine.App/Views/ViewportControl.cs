@@ -86,6 +86,9 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>M562: navgrid flag cells, as a pos3+bary3 soup like the bucket grid.</summary>
     public static readonly StyledProperty<float[]?> BushCellLinesProperty =
         AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(BushCellLines));
+    /// <summary>M566: the faces currently selected for editing, as a pos3+bary3 soup.</summary>
+    public static readonly StyledProperty<float[]?> SelectedFaceLinesProperty =
+        AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(SelectedFaceLines));
     /// <summary>M565: where each visible flag's cells sit in that soup, and what colour to draw them.</summary>
     public static readonly StyledProperty<(int Start, int Count, System.Numerics.Vector4 Color)[]?> BushCellLayersProperty =
         AvaloniaProperty.Register<ViewportControl, (int Start, int Count, System.Numerics.Vector4 Color)[]?>(nameof(BushCellLayers));
@@ -315,6 +318,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public (Vector3 Min, Vector3 Max)? BakeBox { get => GetValue(BakeBoxProperty); set => SetValue(BakeBoxProperty, value); }
     public float[]? BucketGridLines { get => GetValue(BucketGridLinesProperty); set => SetValue(BucketGridLinesProperty, value); }
     public float[]? BushCellLines { get => GetValue(BushCellLinesProperty); set => SetValue(BushCellLinesProperty, value); }
+    public float[]? SelectedFaceLines { get => GetValue(SelectedFaceLinesProperty); set => SetValue(SelectedFaceLinesProperty, value); }
     public (int Start, int Count, System.Numerics.Vector4 Color)[]? BushCellLayers
     { get => GetValue(BushCellLayersProperty); set => SetValue(BushCellLayersProperty, value); }
     /// <summary>Decoded placed prop meshes to render at their transforms (M41); null clears them.</summary>
@@ -365,6 +369,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private float[]? _lastBucketGridLines;   // M77: skip redundant multi-MB line uploads
     private float[]? _lastBushCellLines;     // M562: same, for the navgrid overlay
     private (int Start, int Count, System.Numerics.Vector4 Color)[]? _lastBushCellLayers;   // M565
+    private float[]? _lastSelectedFaceLines;   // M566
     private (Vector3 Min, Vector3 Max)? _lastBakeBox;   // M412
     private bool _grassTintDirty;            // M78: upload the grass-tint texture on the GL thread
     private bool _particlesDirty;
@@ -858,6 +863,11 @@ public sealed class ViewportControl : OpenGlControlBase
             // M77 perf: the bucket-grid overlay can be megabytes of data — re-upload ONLY when the array
             // instance actually changed, not on every marker refresh (gizmo drags dirty markers per frame).
             // M77b: the array is pos3+bary3 triangle soup for the barycentric wireframe path.
+            if (!ReferenceEquals(_lastSelectedFaceLines, SelectedFaceLines))
+            {
+                _meshRenderer.SetSelectedFaceMesh(SelectedFaceLines);
+                _lastSelectedFaceLines = SelectedFaceLines;
+            }
             if (!ReferenceEquals(_lastBushCellLines, BushCellLines)
                 || !ReferenceEquals(_lastBushCellLayers, BushCellLayers))
             {
@@ -1714,6 +1724,7 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == PropMarkersProperty || change.Property == ProbeMarkersProperty
                  || change.Property == SoundMarkersProperty || change.Property == BucketGridLinesProperty
                  || change.Property == BushCellLinesProperty || change.Property == BushCellLayersProperty
+                 || change.Property == SelectedFaceLinesProperty
                  || change.Property == BakeBoxProperty)
         { _particlesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticlePlaybackProperty)

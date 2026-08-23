@@ -8230,6 +8230,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return;
         }
         // M500: pass the click pixel through so repeated clicks at the same spot can cycle deeper.
+        // M566: in face mode a click picks a TRIANGLE of the map, not a mesh. Routed here rather than in
+        // the window so both viewports and any future input path get it from one place.
+        if (FaceEditMode) { SelectFaceFromViewport(rayOrigin, rayDir, additive); return; }
         SelectMeshFromViewport(rayOrigin, rayDir, additive, clickScreenPx);
     }
 
@@ -9560,12 +9563,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 $"bytes={(_currentMapBytes is null ? "none" : "ok")}, entry={(_currentMapEntry is null ? "none" : "ok")}. Reload the map and try again.");
             return;
         }
+        // M566: face edits ride the same save. They are length-preserving patches into the index and
+        // vertex buffers, so they compose with the transform moves below rather than fighting them.
+        bool hasFaces = _faceEdits.Count > 0;
         bool hasMoves = MapGeoWriter.HasMoves(map.Meshes);
         bool hasLayers = MapGeoLayerWriter.HasEdits(map.Meshes);
         bool hasMaterials = MapGeoMaterialWriter.HasEdits(map.Meshes);   // M517
         var added = MapContent.AddedMeshes.ToList();
         var removedIndices = MapContent.AllMapPieces.Where(p => p.IsRemoved).Select(p => p.MeshIndex).Distinct().ToList();
-        if (!hasMoves && !hasLayers && !hasMaterials && added.Count == 0 && removedIndices.Count == 0)
+        if (!hasFaces && !hasMoves && !hasLayers && !hasMaterials && added.Count == 0 && removedIndices.Count == 0)
         { _log.Info("MapGeo", "No map edits to save."); return; }
         if (!GuardEditable(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
@@ -9586,6 +9592,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 bytes = swapped;
                 int changed = map.Meshes.Count(m => m.HasMaterialEdit);
                 _log.Success("MapGeo", $"Changed the material on {changed:n0} mesh(es).");
+            }
+
+            // M566: face edits next, before anything that patches by byte offset. Every one is
+            // length-preserving - a deleted face is degenerated rather than removed - so the offsets the
+            // later passes compute are still valid, but they DO rewrite index and vertex bytes, so doing
+            // them first keeps that rewriting away from freshly patched transforms.
+            if (hasFaces)
+            {
+                var withFaces = MapGeoFaceWriter.TryApply(bytes, map, _faceEdits, out string? faceError);
+                if (withFaces is null) { _log.Error("MapGeo", faceError ?? "Face edits could not be written."); return; }
+                bytes = withFaces;
+                _log.Success("MapGeo", $"Wrote {_faceEdits.Count:n0} face edit(s).");
             }
 
             // 0) M105: layer/controller/backface edits FIRST — they don't touch the [bbox][transform]
@@ -9672,7 +9690,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             UndoService.MarkSaved();
             int moves = map.Meshes.Count(x => x.IsMoved);
             int layers = map.Meshes.Count(x => x.HasLayerEdit);
-            _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {layers} layer edit(s) + {added.Count} added + {removedIndices.Count} deleted mesh(es) to {savedTo} ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the resulting native geometry.");
+            // M566: the face edits are IN the file now. Replaying them on the next save would apply each
+            // one twice - a second flip is the identity and a second move travels double - so the pending
+            // list is emptied exactly here, where the bytes are known to have been written.
+            int faceEdits = _faceEdits.Count;
+            _faceEdits.Clear();
+            _faceUndoIndices.Clear();
+            NotifyFaceState();
+            _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {layers} layer edit(s) + {faceEdits} face edit(s) + {added.Count} added + {removedIndices.Count} deleted mesh(es) to {savedTo} ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the resulting native geometry.");
         }
         catch (Exception ex) { _log.Error("MapGeo", ex.Message); }
     }

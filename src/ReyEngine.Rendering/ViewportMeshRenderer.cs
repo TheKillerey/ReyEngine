@@ -1071,6 +1071,10 @@ void main() { FragColor = uColor; }";
         // vertex format is identical and only the colour differs.
         _bushMeshVao = gl.GenVertexArray();
         _bushMeshVbo = gl.GenBuffer();
+        // M566: the face-edit selection. Same wireframe program again - the format is the same soup and
+        // only the colour and the draw order differ.
+        _faceSelVao = gl.GenVertexArray();
+        _faceSelVbo = gl.GenBuffer();
 
         // M53: Unity-style placement ICONS — instanced camera-facing billboards (sparkle/person/ring
         // sprites, tinted per type) instead of "+" line crosses.
@@ -1112,6 +1116,8 @@ void main() { FragColor = uColor; }";
     /// is looking at the map decides what it is.</summary>
     private (int Start, int Count, System.Numerics.Vector4 Color)[] _bushLayers =
         Array.Empty<(int, int, System.Numerics.Vector4)>();
+    private uint _faceSelVao, _faceSelVbo;                             // M566: selected faces
+    private int _faceSelVerts;
     private int _bucketMeshVerts, _bwMvp, _bwColor;
     private uint _lightMkVao, _lightMkVbo;                       // M71: dynamic-light position icons
     private int _soundVerts, _bucketVerts, _lightMkVerts;
@@ -2265,6 +2271,28 @@ void main(){
         _bushMeshVerts = interleavedPosBary.Length / 6;
     }
 
+    /// <summary>
+    /// M566: upload the faces currently selected for editing, as the same pos3+bary3 soup. Drawn on top
+    /// of everything so a face picked on the far side of a hill is still visible while you work on it.
+    /// </summary>
+    public unsafe void SetSelectedFaceMesh(float[]? interleavedPosBary)
+    {
+        if (!_ready) return;
+        if (interleavedPosBary is null || interleavedPosBary.Length < 18) { _faceSelVerts = 0; return; }
+        _gl.BindVertexArray(_faceSelVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _faceSelVbo);
+        fixed (float* p = interleavedPosBary)
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(interleavedPosBary.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+        uint faceStride = 6 * sizeof(float);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, faceStride, (void*)0);
+        _gl.EnableVertexAttribArray(1);
+        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, faceStride, (void*)(3 * sizeof(float)));
+        _gl.BindVertexArray(0);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        _faceSelVerts = interleavedPosBary.Length / 6;
+    }
+
     /// <summary>Upload marker instance centers (xyz per marker) for the icon billboards (M53).</summary>
     private unsafe void SetIconMarkers(uint instVbo, IReadOnlyList<Vector3> positions, out int count)
     {
@@ -2300,6 +2328,7 @@ void main(){
         _bucketVerts = 0;
         _bucketMeshVerts = 0;   // M77b
         _bushMeshVerts = 0;     // M562
+        _faceSelVerts = 0;      // M566
         _hasGizmo = false;
     }
 
@@ -2824,6 +2853,26 @@ void main(){
                     _gl.Uniform4(_bwColor, colour.X, colour.Y, colour.Z, colour.W);
                     _gl.DrawArrays(PrimitiveType.Triangles, start, (uint)count);
                 }
+            _gl.BindVertexArray(0);
+            _gl.Enable(EnableCap.DepthTest);
+            _gl.DepthMask(true);
+            _gl.Disable(EnableCap.Blend);
+        }
+
+        // M566: selected faces, amber, over everything. Depth off for the same reason the navgrid overlay
+        // has it off - a selection you cannot see behind the geometry you are editing is not a selection.
+        if (_faceSelVerts > 0)
+        {
+            _gl.UseProgram(_bucketMeshProgram);
+            _gl.UniformMatrix4(_bwMvp, 1, false, in m.M11);
+            _gl.Uniform4(_bwColor, 1.00f, 0.62f, 0.16f, 0.85f);
+            _gl.Enable(EnableCap.Blend);
+            _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            _gl.DepthMask(false);
+            _gl.Disable(EnableCap.DepthTest);
+            _gl.Disable(EnableCap.CullFace);
+            _gl.BindVertexArray(_faceSelVao);
+            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_faceSelVerts);
             _gl.BindVertexArray(0);
             _gl.Enable(EnableCap.DepthTest);
             _gl.DepthMask(true);

@@ -420,6 +420,7 @@
                 BucketGridLines="{Binding BucketGridLines}"
                 BushCellLines="{Binding BushCellLines}"
                 BushCellLayers="{Binding BushCellLayers}"
+                SelectedFaceLines="{Binding SelectedFaceLines}"
                 BakeBox="{Binding BakeBox}"
                 PropMeshes="{Binding CurrentPropMeshes}"
                 ParticlePlayback="{Binding CurrentParticlePlayback}"
@@ -740,6 +741,16 @@
                               MinWidth="52" ToolTip.Tip="Gizmo axes: World or the mesh's Local space" />
                 <ToggleButton Classes="vp" Content="⊞ Snap" IsChecked="{Binding SnapEnabled}"
                               ToolTip.Tip="Snap to increments — 100u move · 15° rotate · 0.25× scale" />
+                <Border Width="1" Margin="4,2" Background="{DynamicResource ReyBorderBrush}" />
+                <ToggleButton Classes="vp" Content="◩ Faces" IsChecked="{Binding FaceEditMode}"
+                              ToolTip.Tip="Face mode: click a face of the map to select it, Ctrl+click to add or remove, Esc to clear. Delete removes the selected faces, F flips them, and the gizmo moves them. Nothing reaches the file until Save Map Content Edits - a deleted face is collapsed to zero area rather than cut out, so the mapgeo keeps its layout." />
+                <TextBlock Text="{Binding SelectedFaceCount, StringFormat='{}{0} face(s)'}"
+                           IsVisible="{Binding FaceEditMode}" FontSize="10" VerticalAlignment="Center"
+                           Margin="4,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <Button Classes="vp" Content="✖ Delete" Command="{Binding DeleteSelectedFacesCommand}"
+                        IsVisible="{Binding FaceEditMode}" ToolTip.Tip="Collapse the selected faces to zero area (Delete)" />
+                <Button Classes="vp" Content="↻ Flip" Command="{Binding FlipSelectedFacesCommand}"
+                        IsVisible="{Binding FaceEditMode}" ToolTip.Tip="Reverse the winding of the selected faces (F)" />
               </StackPanel>
             </Border>
           </Grid>
