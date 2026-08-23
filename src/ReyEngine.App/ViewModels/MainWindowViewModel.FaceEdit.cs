@@ -37,6 +37,9 @@ public sealed partial class MainWindowViewModel
     partial void OnFaceEditModeChanged(bool value)
     {
         if (!value) ClearFaceSelection();
+        // Leaving the mode hands the gizmo back to whatever mesh is selected; entering it parks the gizmo
+        // until a face is picked, so the arms never point at a target the mode cannot move.
+        GizmoPivot = value ? FaceGizmoPivot : _selection.Primary is { } m ? m.Pivot + m.Offset : null;
         _log.Info("Faces", value
             ? "Face mode ON - click a face to select it, Ctrl+click to add or remove. Delete removes, "
               + "F flips, and the gizmo moves the selection."
@@ -46,6 +49,8 @@ public sealed partial class MainWindowViewModel
 
     private void NotifyFaceState()
     {
+        OnPropertyChanged(nameof(HasFaceGizmoTarget));
+        OnPropertyChanged(nameof(FaceGizmoPivot));
         OnPropertyChanged(nameof(SelectedFaceCount));
         OnPropertyChanged(nameof(HasFaceSelection));
         OnPropertyChanged(nameof(HasFaceEdits));
@@ -111,6 +116,10 @@ public sealed partial class MainWindowViewModel
             }
         }
         SelectedFaceLines = verts.Count >= 18 ? verts.ToArray() : null;
+        // M567: the gizmo follows the face selection while the mode is on, so the same arms that move a
+        // mesh move a set of faces. Leaving it on the mesh would put the handle somewhere unrelated to
+        // what a drag is about to affect.
+        if (FaceEditMode) GizmoPivot = FaceGizmoPivot;
         NotifyFaceState();
     }
 
@@ -120,11 +129,85 @@ public sealed partial class MainWindowViewModel
     [RelayCommand(CanExecute = nameof(HasFaceSelection))]
     private void FlipSelectedFaces() => ApplyFaceOp(FaceOp.Flip, default, "Flipped");
 
-    /// <summary>Moves the selection. Driven by the gizmo, which hands over a world-space delta.</summary>
+    /// <summary>Moves the selection by a delta, as one undo step. For a one-shot nudge, not a drag.</summary>
     public void MoveSelectedFaces(Vector3 delta)
     {
         if (delta == Vector3.Zero) return;
         ApplyFaceOp(FaceOp.Move, delta, "Moved");
+    }
+
+    // ---------------------------------------------------------------- M567: gizmo drag
+    /// <summary>How far the live drag has moved the faces so far, so each frame can apply the difference.</summary>
+    private Vector3 _faceDragApplied;
+    private bool _faceDragging;
+
+    /// <summary>Where the face gizmo sits: the centre of the selection's own vertices.</summary>
+    public Vector3? FaceGizmoPivot
+    {
+        get
+        {
+            if (!FaceEditMode || _currentMap is not { } map || _selectedFaces.Count == 0) return null;
+            var lo = new Vector3(float.MaxValue);
+            var hi = new Vector3(float.MinValue);
+            bool any = false;
+            foreach (int t in _selectedFaces)
+            {
+                if (t < 0 || t * 3 + 2 >= map.Indices.Length) continue;
+                for (int k = 0; k < 3; k++)
+                {
+                    uint v = map.Indices[t * 3 + k];
+                    if (v * 3 + 2 >= map.Positions.Length) continue;
+                    var pos = new Vector3(map.Positions[v * 3], map.Positions[v * 3 + 1], map.Positions[v * 3 + 2]);
+                    lo = Vector3.Min(lo, pos); hi = Vector3.Max(hi, pos); any = true;
+                }
+            }
+            return any ? (lo + hi) * 0.5f : null;
+        }
+    }
+
+    public bool HasFaceGizmoTarget => FaceGizmoPivot is not null;
+
+    /// <summary>
+    /// Starts a face drag. Mirrors the mesh gizmo: the pointer-move frames mutate silently and the WHOLE
+    /// drag becomes one undo step at the end, rather than one step per frame.
+    /// </summary>
+    public void BeginFaceDrag()
+    {
+        _faceDragging = true;
+        _faceDragApplied = Vector3.Zero;
+    }
+
+    /// <summary>
+    /// Live-drag to an absolute offset from where the drag started. Absolute rather than incremental for
+    /// the same reason the mesh gizmo is: repeated frames would otherwise accumulate, and a frame the
+    /// viewport happens to repeat would move the faces twice.
+    /// </summary>
+    public void DragSelectedFacesTo(Vector3 absoluteOffset)
+    {
+        if (!_faceDragging || _selectedFaces.Count == 0) return;
+        var step = absoluteOffset - _faceDragApplied;
+        if (step == Vector3.Zero) return;
+        ApplyFaceOpToAsset(_selectedFaces.ToList(), FaceOp.Move, step, forward: true);
+        _faceDragApplied = absoluteOffset;
+    }
+
+    /// <summary>Closes the drag: one undo step, and one pending edit per face for the save.</summary>
+    public void EndFaceDrag()
+    {
+        if (!_faceDragging) { return; }
+        _faceDragging = false;
+        if (_faceDragApplied == Vector3.Zero || _selectedFaces.Count == 0) return;
+
+        // The asset already carries the movement - the drag applied it frame by frame - so the command is
+        // pushed as ALREADY APPLIED and only records how to undo it.
+        var faces = _selectedFaces.ToList();
+        var total = _faceDragApplied;
+        _faceDragApplied = Vector3.Zero;
+        foreach (int t in faces) _faceEdits.Add(new FaceEdit(t, FaceOp.Move, total));
+        UndoService.PushApplied(new FaceEditCommand(this, faces, FaceOp.Move, total, alreadyApplied: true));
+        NotifyFaceState();
+        _log.Info("Faces", $"Moved {faces.Count} face(s) by ({total.X:0.#}, {total.Y:0.#}, {total.Z:0.#}) "
+            + "via the gizmo. Save Map Content Edits writes it into the mapgeo.");
     }
 
     /// <summary>
@@ -207,9 +290,13 @@ public sealed partial class MainWindowViewModel
         private readonly List<int> _faces;
         private readonly FaceOp _op;
         private readonly Vector3 _offset;
+        /// <summary>A gizmo drag has already moved the geometry frame by frame, and already recorded its
+        /// pending edits. Executing again would move it twice.</summary>
+        private bool _skipNextExecute;
 
-        public FaceEditCommand(MainWindowViewModel vm, List<int> faces, FaceOp op, Vector3 offset)
-        { _vm = vm; _faces = faces; _op = op; _offset = offset; }
+        public FaceEditCommand(MainWindowViewModel vm, List<int> faces, FaceOp op, Vector3 offset,
+            bool alreadyApplied = false)
+        { _vm = vm; _faces = faces; _op = op; _offset = offset; _skipNextExecute = alreadyApplied; }
 
         public string Name => _op switch
         {
@@ -221,6 +308,8 @@ public sealed partial class MainWindowViewModel
 
         public void Execute()
         {
+            // Redo after an undo must run in full; only the first call from a finished drag is skipped.
+            if (_skipNextExecute) { _skipNextExecute = false; return; }
             _vm.ApplyFaceOpToAsset(_faces, _op, _offset, forward: true);
             foreach (int t in _faces) _vm._faceEdits.Add(new FaceEdit(t, _op, _offset));
             _vm.NotifyFaceState();

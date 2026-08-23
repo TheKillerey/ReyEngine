@@ -22,6 +22,8 @@ public partial class MainWindow : Window
 
     // Translate-gizmo drag state (mutually exclusive with camera fly for the same LMB stroke).
     private ViewportControl.GizmoAxis? _gizmoDragAxis;
+    /// <summary>M567: this drag is moving FACES, not a mesh or a placement.</summary>
+    private bool _gizmoTargetIsFaces;
     private float _gizmoDragStartT;
     private Vector3 _gizmoDragStartOffset;
     private Vector3 _gizmoDragOrigin;   // pivot at drag start — the axis line must NOT re-anchor mid-drag
@@ -1009,6 +1011,19 @@ public partial class MainWindow : Window
                 && Viewport.GizmoPivot is { } pivot
                 && Viewport.TryGetAxisParameter(a, pt.Position, pivot, out var t0))
             {
+                // M567: faces first. In face mode the gizmo belongs to the face selection, and a mesh may
+                // well still be selected underneath - falling through would drag the whole object.
+                if (vm.FaceEditMode && vm.HasFaceGizmoTarget)
+                {
+                    _gizmoDragAxis = a;
+                    _gizmoDragOrigin = pivot;
+                    _gizmoDragStartT = t0;
+                    _gizmoDragStartOffset = System.Numerics.Vector3.Zero;   // faces drag from zero, not from a stored offset
+                    _gizmoTargetIsPlacement = false;
+                    _gizmoTargetIsFaces = true;
+                    vm.BeginFaceDrag();
+                    return;
+                }
                 if (vm.SelectedMapMesh is { } mesh)
                 {
                     _gizmoDragAxis = a;
@@ -1016,6 +1031,7 @@ public partial class MainWindow : Window
                     _gizmoDragStartT = t0;
                     _gizmoDragStartOffset = mesh.Offset;
                     _gizmoTargetIsPlacement = false;
+                    _gizmoTargetIsFaces = false;
                     var (rot, scale) = vm.SelectedMeshRotScale;
                     _gizmoStartRotation = rot;
                     _gizmoStartScale = scale;
@@ -1088,7 +1104,8 @@ public partial class MainWindow : Window
                     {
                         float dist = gvm.ApplyMoveSnap(t - _gizmoDragStartT);
                         var target = _gizmoDragStartOffset + axisDir * dist;
-                        if (_gizmoTargetIsPlacement) gvm.DragSelectedPlacementTo(target);   // M75
+                        if (_gizmoTargetIsFaces) gvm.DragSelectedFacesTo(target);           // M567
+                        else if (_gizmoTargetIsPlacement) gvm.DragSelectedPlacementTo(target);   // M75
                         else gvm.DragSelectedMeshTo(target);
                     }
                     break;
@@ -1124,9 +1141,11 @@ public partial class MainWindow : Window
         if (wasGizmoDrag)
         {
             _gizmoDragAxis = null;
-            if (_gizmoTargetIsPlacement) (DataContext as MainWindowViewModel)?.EndPlacementDrag();   // M75
+            if (_gizmoTargetIsFaces) (DataContext as MainWindowViewModel)?.EndFaceDrag();          // M567
+            else if (_gizmoTargetIsPlacement) (DataContext as MainWindowViewModel)?.EndPlacementDrag();   // M75
             else (DataContext as MainWindowViewModel)?.EndMeshDrag();
             _gizmoTargetIsPlacement = false;
+            _gizmoTargetIsFaces = false;
         }
 
         bool wasLmb = _lmb;

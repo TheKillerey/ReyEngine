@@ -95,6 +95,55 @@ public sealed class FaceEditModeTests
     }
 
     [Fact]
+    public void TheGizmoDragsFacesBeforeMeshesAndPlacements()
+    {
+        // In face mode a mesh is usually still selected underneath, so the face branch has to come first
+        // or the gizmo drags the whole object instead of the faces the user picked.
+        if (RepoFile("src", "ReyEngine.App", "Views", "MainWindow.axaml.cs") is not { } file) return;
+        string source = File.ReadAllText(file);
+
+        int faceStart = source.IndexOf("vm.FaceEditMode && vm.HasFaceGizmoTarget", StringComparison.Ordinal);
+        int meshStart = source.IndexOf("if (vm.SelectedMapMesh is { } mesh)", StringComparison.Ordinal);
+        Assert.True(faceStart > 0 && faceStart < meshStart, "the face drag branch must precede the mesh one");
+
+        Assert.Contains("gvm.DragSelectedFacesTo(target)", source);
+        Assert.Contains("EndFaceDrag()", source);
+        int faceMove = source.IndexOf("gvm.DragSelectedFacesTo(target)", StringComparison.Ordinal);
+        int meshMove = source.IndexOf("gvm.DragSelectedMeshTo(target)", StringComparison.Ordinal);
+        Assert.True(faceMove < meshMove, "the face branch must be checked before the mesh one on move too");
+    }
+
+    [Fact]
+    public void ADragIsOneUndoStepAndIsNotAppliedTwice()
+    {
+        // Two traps in one place. The pointer-move frames already moved the geometry, so the command is
+        // pushed ALREADY APPLIED and must skip its first Execute - otherwise finishing a drag moves the
+        // faces a second time. But a REDO after an undo has to run in full.
+        if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.FaceEdit.cs") is not { } file) return;
+        string source = File.ReadAllText(file);
+
+        Assert.Contains("alreadyApplied: true", source);
+        Assert.Contains("if (_skipNextExecute) { _skipNextExecute = false; return; }", source);
+        // and the live drag applies the DIFFERENCE, so a repeated frame cannot accumulate
+        Assert.Contains("var step = absoluteOffset - _faceDragApplied;", source);
+    }
+
+    [Fact]
+    public void TheGizmoFollowsTheFaceSelection()
+    {
+        if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.FaceEdit.cs") is not { } file) return;
+        string source = File.ReadAllText(file);
+        Assert.Contains("if (FaceEditMode) GizmoPivot = FaceGizmoPivot;", source);
+        Assert.NotNull(typeof(MainWindowViewModel).GetProperty("HasFaceGizmoTarget"));
+        Assert.NotNull(typeof(MainWindowViewModel).GetProperty("FaceGizmoPivot"));
+
+        // with nothing selected there is no target, so the arms never point at something unmovable
+        var vm = new MainWindowViewModel { FaceEditMode = true };
+        Assert.False(vm.HasFaceGizmoTarget);
+        Assert.Null(vm.FaceGizmoPivot);
+    }
+
+    [Fact]
     public void TheHighlightIsWiredThroughToTheRenderer()
     {
         if (RepoFile("src", "ReyEngine.App", "Views", "MainWindow.axaml") is not { } axaml) return;
