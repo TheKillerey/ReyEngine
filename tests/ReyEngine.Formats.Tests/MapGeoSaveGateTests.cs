@@ -67,6 +67,49 @@ public sealed class MapGeoSaveGateTests
     }
 
     [Fact]
+    public void TheReshapeQueueIsClearedOnlyWhereTheBytesAreWritten()
+    {
+        // M584: the auto-apply reads this queue to tell "written" from "refused", and a later pass can
+        // still return early. Clearing it where the reshape is applied rather than where the file is
+        // written would drop the edit AND report success.
+        if (ViewModelSource() is not { } source) return;
+
+        int clears = Regex.Matches(source, @"ClearBlenderReshapes\(\);").Count;
+        Assert.True(clears == 1, $"ClearBlenderReshapes is called {clears} times; it belongs only at the write");
+
+        int applied = source.IndexOf("MapGeoMeshReshaper.TryApply(bytes, PendingBlenderReshapes", StringComparison.Ordinal);
+        Assert.True(applied > 0, "the save no longer applies reshapes");
+        // Searched FORWARD from the apply: other save methods in this file declare savedTo too, and the
+        // first match belongs to the lightgrid bake.
+        int written = source.IndexOf("string savedTo;", applied, StringComparison.Ordinal);
+        int cleared = source.IndexOf("ClearBlenderReshapes();", applied, StringComparison.Ordinal);
+        Assert.True(written > applied, "the reshape is applied after the file is written");
+        Assert.True(cleared > written, "the queue is cleared before the bytes are written");
+    }
+
+    [Fact]
+    public void APushWritesAndReloadsWithoutBeingAsked()
+    {
+        // The complaint this answers: a reshape only exists in the FILE, so leaving it queued meant the
+        // user saw nothing happen and had to know to press Save.
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ReyEngine.slnx"))) dir = dir.Parent;
+        if (dir is null) return;
+        string bridge = Path.Combine(dir.FullName, "src", "ReyEngine.App", "ViewModels",
+            "MainWindowViewModel.BlenderBridge.cs");
+        if (!File.Exists(bridge)) return;
+        string source = File.ReadAllText(bridge);
+
+        Assert.Contains("AutoApplyBlenderReshapes", source, StringComparison.Ordinal);
+        Assert.Contains("SaveMeshMovesCommand.ExecuteAsync", source, StringComparison.Ordinal);
+        Assert.Contains("LoadMapGeoAsync", source, StringComparison.Ordinal);
+        // and it must not reload over an edit the save refused
+        Assert.Contains("if (_blenderReshapes.Count > 0)", source, StringComparison.Ordinal);
+        Assert.NotNull(typeof(MainWindowViewModel).GetProperty("BlenderAutoApply"));
+        Assert.True(new MainWindowViewModel().BlenderAutoApply, "auto-apply should be on by default");
+    }
+
+    [Fact]
     public void TheGateAndTheWriterUseTheSameFlag()
     {
         // The gate deciding there IS work and the block that does it must not test different things.

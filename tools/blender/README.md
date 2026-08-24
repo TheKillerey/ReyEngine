@@ -45,7 +45,7 @@ The wire is **League space** (Y up, the numbers the `.mapgeo` holds). The add-on
 Z-up on its side, as a change of basis:
 
 ```
-League (x, y, z)  ->  Blender (x, -z, y)
+League (x, y, z)  ->  Blender (x, z, y)      (swap the ground axes; height stays height)
 ```
 
 Transforms convert as `B = C @ L @ C⁻¹` rather than by swapping euler components — component swapping is

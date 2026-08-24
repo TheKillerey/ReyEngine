@@ -11,10 +11,19 @@ Coordinates
 The wire is League space: Y up, the same numbers the .mapgeo holds. This file owns the conversion, in
 one place, as a change of basis:
 
-    League (x, y, z)  ->  Blender (x, -z, y)
+    League (x, y, z)  ->  Blender (x, z, y)      (swap the two ground axes; height stays height)
+
+League reads +X to the right and +Z up the minimap - checked against the river emitters Riot ships in
+Map453, which run the anti-diagonal from high-X/low-Z to low-X/high-Z. So League +Z has to become Blender
++Y, or the map arrives upside down in the top view.
+
+That swap MIRRORS (its determinant is -1), which is unavoidable when the two conventions disagree about
+which way the ground plane runs. Triangle winding is therefore reversed in both directions to compensate:
+a mirror flips a face's normal and reversing its winding flips it back, so surfaces still face outward.
 
 Transforms are converted as B = C @ L @ C^-1 rather than by swapping euler components, because swapping
-components is only correct for axis-aligned rotations and silently wrong for everything else.
+components is only correct for axis-aligned rotations and silently wrong for everything else. The
+similarity form cancels the two determinants, so the object transform never picks up a mirror of its own.
 
 Each object's origin sits on the ReyEngine mesh's PIVOT, which is what makes rotation and scale round
 trip exactly: ReyEngine rotates a mesh about that pivot, and Blender rotates about the object origin, so
@@ -43,10 +52,23 @@ PROTOCOL = 2
 COLLECTION = "ReyEngine Map"
 INDEX_KEY = "rey_index"
 
-# League -> Blender basis. Orthonormal with determinant +1, so the inverse is the transpose and the
-# conversion never introduces a mirror (which would flip winding and read as inside-out geometry).
-L2B = Matrix(((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0))).to_4x4()
-B2L = L2B.inverted()
+# League -> Blender basis: swap the two ground axes and leave height alone. Determinant -1, so it is a
+# mirror; winding is reversed alongside it (see _reverse_winding). The matrix is its own inverse, which
+# is why the same one serves both directions.
+L2B = Matrix(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))).to_4x4()
+B2L = L2B
+
+
+def _reverse_winding(indices):
+    """Flip every triangle, so a mirrored mesh still faces outward.
+
+    The basis swap negates a face's normal; reversing its winding negates it back. Doing one without the
+    other is the classic way to end up with a map that looks right and is inside out.
+    """
+    flipped = list(indices)
+    for at in range(0, len(flipped) - 2, 3):
+        flipped[at + 1], flipped[at + 2] = flipped[at + 2], flipped[at + 1]
+    return flipped
 
 
 # ---------------------------------------------------------------- transport
@@ -228,9 +250,13 @@ def _build_object(collection, entry):
     vertex_count = len(positions) // 3
     face_count = len(indices) // 3
 
+    # Reversed once, and used for BOTH the faces and the UV gather below - a UV layer is per loop, and
+    # from_pydata lays the loops out in the order it is given.
+    wound = _reverse_winding(indices)
+
     mesh = bpy.data.meshes.new(entry["name"])
     mesh.from_pydata([(0.0, 0.0, 0.0)] * vertex_count, [],
-                     [(indices[i], indices[i + 1], indices[i + 2]) for i in range(0, len(indices), 3)])
+                     [(wound[i], wound[i + 1], wound[i + 2]) for i in range(0, len(wound), 3)])
 
     # Coordinates go in as a flat buffer, then the basis change happens ONCE for the whole mesh instead
     # of once per vertex. Vertices arrive pivot-relative in League axes; the object matrix below carries
@@ -246,7 +272,7 @@ def _build_object(collection, entry):
     uvs = entry.get("uvs") or ()
     if len(uvs) == vertex_count * 2 and face_count:
         layer = mesh.uv_layers.new(name="UVMap")
-        layer.data.foreach_set("uv", _uv_per_loop(uvs, indices))
+        layer.data.foreach_set("uv", _uv_per_loop(uvs, wound))
 
     mesh.update()
 
@@ -339,12 +365,12 @@ def _encode_meshes(entries):
 
 
 def _to_league_axes(flat):
-    """Blender (x, y, z) -> League (x, z, -y) over a flat xyz buffer.
+    """Blender (x, y, z) -> League (x, z, y) over a flat xyz buffer.
 
-    Arithmetic on slices rather than a Matrix per vertex. Same reason the pull stopped freezing: at a
-    map's size, per-element work through Blender's RNA layer is what turns seconds into minutes.
+    The same swap as L2B, which is its own inverse. Arithmetic on slices rather than a Matrix per vertex:
+    at a map's size, per-element work through Blender's RNA layer is what turns seconds into minutes.
     """
-    return flat[0::3], flat[2::3], [-v for v in flat[1::3]]
+    return flat[0::3], flat[2::3], flat[1::3]
 
 
 def _mesh_to_league(obj):
@@ -388,7 +414,7 @@ def _mesh_to_league(obj):
         # vertex, and collapsing them would smear the seam across the texture.
         unique = {}
         positions, normals, uvs, indices = [], [], [], []
-        for loop_index in tri_loops:
+        for loop_index in _reverse_winding(tri_loops):
             vertex_index = loop_vertex[loop_index]
             u = loop_uv[loop_index * 2]
             v = loop_uv[loop_index * 2 + 1]

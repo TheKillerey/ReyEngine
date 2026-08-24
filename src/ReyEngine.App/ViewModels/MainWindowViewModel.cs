@@ -9820,7 +9820,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 { _log.Error("MapGeo", reshapeError ?? "Blender reshapes could not be written."); return; }
                 bytes = reshaped;
                 _log.Success("MapGeo", $"Wrote {PendingBlenderReshapes.Count:n0} reshaped mesh(es) from Blender.");
-                ClearBlenderReshapes();
             }
 
             // M566: face edits next, before anything that patches by byte offset. Every one is
@@ -9938,6 +9937,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             int faceEdits = _faceEdits.Count + _faceGrows.Count;
             _faceEdits.Clear();
             _faceGrows.Clear();
+            // M584: reshapes are cleared HERE too, not where they were applied. Clearing them earlier
+            // would drop them if a later pass refused and returned, and the auto-apply reads this list
+            // to tell "written" from "refused".
+            ClearBlenderReshapes();
             OnPropertyChanged(nameof(HasFaceGrows));
             _faceUndoIndices.Clear();
             NotifyFaceState();

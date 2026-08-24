@@ -114,10 +114,40 @@ public sealed partial class MainWindowViewModel
         {
             OnPropertyChanged(nameof(HasBlenderReshapes));
             OnPropertyChanged(nameof(HasPendingMapGeoWork));   // the Save button reads this
-            _log.Success("Blender", $"{accepted:n0} reshaped mesh(es) queued. Save Map Content Edits to write "
-                + "them; the viewport keeps the old shape until the map is reloaded.");
+            _log.Success("Blender", $"{accepted:n0} reshaped mesh(es) received.");
+
+            // M584: write and reload without being asked. A reshape only exists in the FILE - it changes
+            // the vertex and index buffers, not the decoded scene - so leaving it queued meant the user
+            // saw nothing and had to know to press Save. Posted rather than awaited here because this
+            // runs inside the request the add-on is still blocked on.
+            if (BlenderAutoApply)
+                Avalonia.Threading.Dispatcher.UIThread.Post(async () => await AutoApplyBlenderReshapes());
         }
         return $"{accepted} queued, {problems.Count} refused";
+    }
+
+    /// <summary>
+    /// Write pending reshapes and reload, so a push from Blender shows up on its own.
+    ///
+    /// <para>Off is worth having: each run rewrites the mapgeo and re-decodes it, which on a big map is a
+    /// second or two, and someone nudging a shape repeatedly would rather do that once at the end.</para>
+    /// </summary>
+    [ObservableProperty] private bool _blenderAutoApply = true;
+
+    private async Task AutoApplyBlenderReshapes()
+    {
+        if (_blenderReshapes.Count == 0) return;
+        await SaveMeshMovesCommand.ExecuteAsync(null);
+
+        // The save clears the queue only when the bytes were actually written. Still pending means it
+        // refused - it has already said why - and reloading now would throw the edit away.
+        if (_blenderReshapes.Count > 0)
+        {
+            _log.Warn("Blender", "The reshape was not written, so the map was left as it is.");
+            return;
+        }
+        if (_currentMapEntry is { } entry && TryResolveEntry(entry.PathHash, out var reloaded))
+            await LoadMapGeoAsync(reloaded);
     }
 
     /// <summary>Everything the open map has to offer Blender.</summary>

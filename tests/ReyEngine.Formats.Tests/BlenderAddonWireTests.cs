@@ -126,11 +126,15 @@ open(r"{{output}}", "w").write(",".join(str(v) for v in ns["_uv_per_loop"](uvs, 
     }
 
     [Fact]
-    public void TheAddOnsAxisSwapIsTheInverseOfTheBasisItReplaces()
+    public void TheAddOnsAxisSwapMatchesTheBasisAndIsItsOwnInverse()
     {
         // M583: pushing a reshaped mesh did a Matrix multiply per vertex and took minutes. The swap is
         // arithmetic on slices now, which is only correct if it equals B2L exactly - and a wrong axis
         // does not throw, it lands the mesh rotated or mirrored in the map.
+        //
+        // M584: that basis changed. League reads +X right and +Z up the minimap, so League +Z has to
+        // become Blender +Y; the old mapping sent it to -Y and the map arrived upside down. The swap is
+        // now its own inverse, which is what lets one matrix serve both directions.
         if (RepoRoot() is not { } root) return;
         string addon = Path.Combine(root, "tools", "blender", "reyengine_bridge.py");
         if (!File.Exists(addon)) return;
@@ -161,8 +165,8 @@ open(r"{{output}}", "w").write(",".join(str(v) for v in list(x) + list(y) + list
         var actual = File.ReadAllText(output).Split(',')
             .Select(v => float.Parse(v, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
 
-        // Blender (x, y, z) -> League (x, z, -y), for both input vertices.
-        Assert.Equal(new float[] { 1, -4,   3, -6,   -2, -5 }, actual);
+        // Blender (x, y, z) -> League (x, z, y), for both input vertices: xs, then ys, then zs.
+        Assert.Equal(new float[] { 1, -4,   3, -6,   2, 5 }, actual);
     }
 
     [Fact]
