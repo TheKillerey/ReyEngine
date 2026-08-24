@@ -103,6 +103,11 @@
         <MenuItem Header="Port Legacy NVR / WGEO into Open Map..." Command="{Binding PortLegacyMapCommand}"
                   ToolTip.Tip="Replace the open mapgeo's ordinary geometry from an old room.nvr or room.wgeo, port unique textures and shared editable materials, and retain the destination render regions" />
         <Separator />
+        <!-- M580: the Blender link. Geometry out, placements back. -->
+        <MenuItem Header="{Binding BlenderLinkMenuHeader}" Command="{Binding ToggleBlenderLinkCommand}"
+                  ToolTip.Tip="Serve the open map's meshes to Blender on 127.0.0.1 so they can be edited there and their placements pushed back. Install tools/blender/reyengine_bridge.py in Blender, then use the ReyEngine tab in its 3D-view sidebar. Geometry only - materials stay here." />
+        <MenuItem Header="{Binding BlenderLinkStatus}" IsEnabled="False" />
+        <Separator />
         <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"
                   ToolTip.Tip="Open the active document's .bin in the Particle Editor (works for skin bins and map materials.bin that contain VFX systems)" />
         <MenuItem Header="Open in HUD Editor" Command="{Binding OpenInHudEditorCommand}"

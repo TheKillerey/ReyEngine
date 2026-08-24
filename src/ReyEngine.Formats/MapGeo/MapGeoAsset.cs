@@ -34,6 +34,29 @@ public sealed class MapGeoAsset
     private float[]? _originalPositions;
     private float[]? _originalNormals;
 
+    /// <summary>
+    /// M580: a mesh's PRISTINE baked vertices — the geometry before any transform edit this session.
+    ///
+    /// <para>What the Blender bridge has to send. <see cref="Positions"/> already has the mesh's own
+    /// offset/rotation/scale baked in, so handing those to Blender alongside the same transform would
+    /// apply it twice. Before the first edit the pristine copy does not exist yet, and the live buffer
+    /// IS the original, which is why this reads from whichever is current rather than forcing a clone.</para>
+    /// </summary>
+    public ReadOnlySpan<float> OriginalPositionsOf(MapGeoMesh mesh)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        var source = _originalPositions ?? Positions;
+        return source.AsSpan(mesh.VertexStart * 3, mesh.VertexCount * 3);
+    }
+
+    /// <inheritdoc cref="OriginalPositionsOf"/>
+    public ReadOnlySpan<float> OriginalNormalsOf(MapGeoMesh mesh)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        var source = _originalNormals ?? Normals;
+        return source.AsSpan(mesh.VertexStart * 3, mesh.VertexCount * 3);
+    }
+
     /// <summary>Move a mesh to an absolute world-space translation delta (relative to its original position).</summary>
     public void TranslateMesh(MapGeoMesh mesh, Vector3 delta)
     {
