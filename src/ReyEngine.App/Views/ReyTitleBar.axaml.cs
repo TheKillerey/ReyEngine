@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media.Imaging;
@@ -66,6 +67,16 @@ public partial class ReyTitleBar : UserControl
     private void OnDrag(object? sender, PointerPressedEventArgs e)
     {
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed || VisualRoot is not Window w) return;
+
+        // M578: a press on a Button is that button's, not the start of a window move.
+        //
+        // PointerPressed bubbles up here from the caption buttons, and BeginMoveDrag captures the pointer
+        // and enters the platform's modal move loop - so the release never reaches the button and Click
+        // never fires. The buttons drew perfectly and did nothing, including Close. MainWindow's title bar
+        // has always had this guard; this one was written before it had any buttons of its own to protect.
+        if (e.Source is Visual source)
+            foreach (var ancestor in Avalonia.VisualTree.VisualExtensions.GetSelfAndVisualAncestors(source))
+                if (ancestor is Button) return;
 
         // M290: double-click toggles maximise, the way every title bar does. The native caption buttons
         // are overlaid on the extended client area and still work, but this bar swallowed the double-click
