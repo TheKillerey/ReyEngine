@@ -1,4 +1,7 @@
 using Avalonia.Controls;
+// M576 (Avalonia 12): SetTextAsync is now an extension on IClipboard rather than a member of it -
+// the interface itself only speaks IAsyncDataTransfer. Same call, different namespace.
+using Avalonia.Input.Platform;
 using Avalonia.Platform.Storage;
 
 namespace ReyEngine.App.Services;

@@ -12,13 +12,24 @@ public sealed class ConsoleViewModel : ViewModelBase, ILogSink
     /// warning or error arrives while the browser is in front.</summary>
     public event Action<LogEntry>? EntryWritten;
 
+    /// <summary>
+    /// Log a line from anywhere. Entries is bound to the UI, so a background caller is marshalled.
+    /// </summary>
     public void Write(LogEntry entry)
     {
-        if (Dispatcher.UIThread.CheckAccess()) Add(entry);
-        else Dispatcher.UIThread.Post(() => Add(entry));
+        if (Dispatcher.UIThread.CheckAccess()) Append(entry);
+        else Dispatcher.UIThread.Post(() => Append(entry));
     }
 
-    private void Add(LogEntry entry)
+    /// <summary>
+    /// Add an entry on the CALLING thread — the work <see cref="Write"/> marshals.
+    ///
+    /// <para>M576: separated out because the two halves are genuinely different jobs, and because tests of
+    /// the badge bookkeeping cannot use Write. Under Avalonia 12, whether Write runs inline depends on
+    /// which test in the run touched the dispatcher first: the loser posts to a queue nobody pumps, and
+    /// the entry never arrives. This is the half those tests are actually about.</para>
+    /// </summary>
+    public void Append(LogEntry entry)
     {
         Entries.Add(entry);
         if (Entries.Count > 2000) Entries.RemoveAt(0);

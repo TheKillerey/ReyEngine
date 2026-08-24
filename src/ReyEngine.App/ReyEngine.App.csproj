@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- M576: NAudio 3 ships its Windows output devices (WaveOutEvent) only for a
+         windows TFM. This app is Windows-only already - D3D11, win-x64 publish - so the
+         target now says so. Core/Formats/Rendering stay plain net10.0. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
     <OutputType>WinExe</OutputType>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -11,18 +15,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="11.3.18" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.18" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.18" />
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
     <!-- M155: ColorPicker lives in its own assembly with its own control themes; FluentTheme does NOT
          merge them, so without this (and the StyleInclude in App.axaml) the control renders as nothing. -->
-    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.18" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.18" />
-    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.18">
-      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
-    </PackageReference>
+    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-    <PackageReference Include="NAudio" Version="2.3.0" />
+    <!-- M576: NAudio 3 split the Windows output devices (WaveOutEvent) and Media Foundation out of
+         the metapackage, which now carries only Core + Midi. Both halves are needed here. -->
+    <PackageReference Include="NAudio" Version="3.0.1" />
+    <PackageReference Include="NAudio.WinMM" Version="3.0.1" />
     <PackageReference Include="Silk.NET.OpenGL" Version="2.23.0" />
   </ItemGroup>
 

@@ -15,6 +15,14 @@ namespace ReyEngine.App.Views;
 
 public partial class MainWindow : Window
 {
+    /// <summary>
+    /// M576 (Avalonia 12): a drag payload is now a typed <see cref="DataFormat"/> rather than a string key
+    /// on an untyped DataObject. In-process is the right kind for this one - the node is a live view model
+    /// that only means anything inside this app, and asking the platform to serialise it would be wrong.
+    /// </summary>
+    private static readonly DataFormat<AssetNodeViewModel> AssetDragFormat =
+        DataFormat.CreateInProcessFormat<AssetNodeViewModel>("rey/asset");
+
     private Point _lastPointer;
     private bool _lmb, _rmb, _mmb, _alt;
     private readonly HashSet<Key> _heldKeys = new();
@@ -606,6 +614,10 @@ public partial class MainWindow : Window
     private AssetNodeViewModel? _dragCandidate;
     private Point _dragStartPos;
 
+    /// <summary>M576 (Avalonia 12): DoDragDropAsync starts from the PRESS, not from the move that crossed
+    /// the click slop, so the press args have to be kept until the drag actually begins.</summary>
+    private PointerPressedEventArgs? _dragPress;
+
     private void WireBrowserDragDrop()
     {
         // Internal drag sources: tunnel handlers on the tile grid + list (buttons swallow bubbled events).
@@ -655,6 +667,7 @@ public partial class MainWindow : Window
         else _collapseOnRelease = node;
 
         _dragCandidate = node;
+        _dragPress = e;
         _dragStartPos = e.GetPosition(this);
     }
 
@@ -669,6 +682,7 @@ public partial class MainWindow : Window
             vm.ContentBrowser.SelectOnly(node);
         _collapseOnRelease = null;
         _dragCandidate = null;
+        _dragPress = null;
     }
 
     private void OnBrowserItemDoubleTapped(object? sender, TappedEventArgs e)
@@ -684,19 +698,21 @@ public partial class MainWindow : Window
     private async void OnBrowserItemPointerMoved(object? sender, PointerEventArgs e)
     {
         if (_dragCandidate is not { IsFolder: false, Entry: not null } node) return;
+        if (_dragPress is not { } press) return;
         var p = e.GetPosition(this);
         if (Math.Abs(p.X - _dragStartPos.X) + Math.Abs(p.Y - _dragStartPos.Y) < 6) return;   // click slop
         _dragCandidate = null;
+        _dragPress = null;
         _collapseOnRelease = null;
-        var data = new DataObject();
-        data.Set("rey/asset", node);
-        await DragDrop.DoDragDrop(e, data, DragDropEffects.Move);
+        var data = new DataTransfer();
+        data.Add(DataTransferItem.Create(AssetDragFormat, node));
+        await DragDrop.DoDragDropAsync(press, data, DragDropEffects.Move);
     }
 
     private void OnBrowserDragOver(object? sender, DragEventArgs e)
     {
-        bool internalAsset = e.Data.Contains("rey/asset");
-        bool externalFiles = e.Data.Contains(DataFormats.Files);
+        bool internalAsset = e.DataTransfer.Contains(AssetDragFormat);
+        bool externalFiles = e.DataTransfer.Contains(DataFormat.File);
         e.DragEffects = internalAsset ? DragDropEffects.Move
             : externalFiles ? DragDropEffects.Copy
             : DragDropEffects.None;
@@ -710,7 +726,7 @@ public partial class MainWindow : Window
         var target = FindNodeFromEvent(e.Source) is { IsFolder: true } folder ? folder : vm.ContentBrowser.CurrentFolder;
         if (target is null) return;
 
-        if (e.Data.Get("rey/asset") is AssetNodeViewModel item)
+        if (e.DataTransfer.TryGetValue(AssetDragFormat) is { } item)
         {
             // M100: dragging one item of a multi-selection moves the whole selection.
             var batch = vm.ContentBrowser.SelectedItems.Contains(item)
@@ -719,7 +735,7 @@ public partial class MainWindow : Window
             foreach (var n in batch) vm.MoveAssetToFolder(n, target);
             e.Handled = true;
         }
-        else if (e.Data.GetFiles() is { } storageItems)
+        else if (e.DataTransfer.TryGetFiles() is { } storageItems)
         {
             var paths = new List<string>();
             foreach (var si in storageItems)

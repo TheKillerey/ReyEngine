@@ -133,12 +133,13 @@ public sealed class SoundPlaybackService : IDisposable
         private readonly AudioFileReader _reader;
         public LoopingSampleProvider(AudioFileReader reader) => _reader = reader;
         public NAudio.Wave.WaveFormat WaveFormat => _reader.WaveFormat;
-        public int Read(float[] buffer, int offset, int count)
+        // M576: NAudio 3 reads into a Span<float> rather than (buffer, offset, count).
+        public int Read(Span<float> buffer)
         {
             int total = 0;
-            while (total < count)
+            while (total < buffer.Length)
             {
-                int n = _reader.Read(buffer, offset + total, count - total);
+                int n = _reader.Read(buffer[total..]);
                 if (n == 0)
                 {
                     _reader.Position = 0;   // loop

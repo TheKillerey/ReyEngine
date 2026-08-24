@@ -1,5 +1,6 @@
 using System.Numerics;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using ReyEngine.Core.Decoding;
@@ -920,7 +921,9 @@ public sealed class ViewportControl : OpenGlControlBase
         if (_needFrame) { FrameCamera(); _needFrame = false; }
         if (_pendingFocus is { } fp) { FocusOnPoint(fp); _pendingFocus = null; }
 
-        float scale = (float)(VisualRoot?.RenderScaling ?? 1.0);
+        // M576 (Avalonia 12): Visual.VisualRoot is typed Visual now, not the old IRenderRoot, so it no
+        // longer carries RenderScaling. The TopLevel does.
+        float scale = (float)(TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0);
         uint w = (uint)Math.Max(1, Bounds.Width * scale);
         uint h = (uint)Math.Max(1, Bounds.Height * scale);
 

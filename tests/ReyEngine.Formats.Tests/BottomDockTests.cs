@@ -16,10 +16,17 @@ public sealed class BottomDockTests
     private const int ContentBrowser = 0;
     private const int ConsoleTab = 1;
 
-    /// <summary>ConsoleViewModel.Write hops to the UI thread; in a plain test there is no one to run that
-    /// queue, so drive the sink the same way the dispatcher eventually would.</summary>
+    /// <summary>
+    /// ConsoleViewModel.Write hops to the UI thread, and in a test there is no one running that queue.
+    ///
+    /// <para>M576: this used to call Write and rely on CheckAccess() being true, which held only when this
+    /// class happened to be the first thing in the run to touch the dispatcher. Under Avalonia 12 that
+    /// stopped being the case in a full suite - another test claims the UI thread first, Write posts to a
+    /// queue nobody pumps, and four tests here failed while still passing in isolation. Append is the half
+    /// that does the work, and it does not care which thread is calling.</para>
+    /// </summary>
     private static void Log(MainWindowViewModel vm, LogLevel level) =>
-        vm.Console.Write(new LogEntry(DateTime.Now, level, "test", "message"));
+        vm.Console.Append(new LogEntry(DateTime.Now, level, "test", "message"));
 
     [Fact]
     public void TheDockStartsOnTheContentBrowserWithNothingUnseen()
