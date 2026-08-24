@@ -16,6 +16,8 @@ Edit a League map's meshes in Blender and push the result back into the editor.
 | **Pull Map From ReyEngine** | Fills a `ReyEngine Map` collection with one object per map mesh |
 | **Push All** | Sends every pulled object's position, rotation and scale back |
 | **Selected** | The same, for the current Blender selection only |
+| **Push Shapes** | Sends the selected objects' edited GEOMETRY back |
+| **All** (next to it) | The same, for every pulled mesh |
 
 Pushed placements land in the editor immediately — the viewport updates as they arrive. They are **not**
 written to the file until you use **Save Map Content Edits**, exactly like a gizmo move.
@@ -29,9 +31,13 @@ back.
 and to shader state Blender has no way to represent. A round trip through an `.blend` would lose them.
 Assign materials in ReyEngine.
 
-**Editing a mesh's shape in Blender does not come back yet.** This version syncs placement only. Change
-a vertex in Blender and the push will move the object correctly but leave its shape as it was in the
-editor. Reshaping is the next piece of work — see *Limits* below.
+**Shape edits come back too.** Push Shapes sends the mesh's evaluated geometry — modifiers included, so
+a subdivision surface you added is part of what arrives. UV0 travels both ways, so a reshaped mesh keeps
+its texturing.
+
+Reshapes are **queued, not live**: they rewrite the mesh's vertex and index buffers, which is a change to
+the file rather than to the scene in memory. The viewport keeps showing the old shape until you **Save Map
+Content Edits** and reload. Placements, by contrast, appear immediately.
 
 ## How it lines up
 
@@ -54,7 +60,16 @@ anything twice.
 
 ## Limits
 
-- **Shape edits do not return.** Placement only, this version.
+- **A mesh with more than one material is refused for reshaping.** Blender does not send materials, so a
+  new triangle cannot be attributed to one of several. Measured on shipped maps, 87%–100% of meshes have
+  a single material, so this bites rarely — and guessing would be worse.
+- **A mesh whose buffers are shared with another mesh is refused.** Resizing one would redefine the other.
+- **65,536 vertices per mesh**, because mapgeo index buffers are 16-bit. Split the mesh and send the parts.
+- **Reshaping loses the mesh's baked lightmap UVs.** They belong to vertices that may no longer exist, and
+  a changed shape invalidates the bake anyway. Re-bake after reshaping.
+- **Do not mix a reshape and face edits in one save.** A reshape replaces a mesh's triangles, so pending
+  face edits no longer refer to the same ones; the editor refuses the save rather than applying them to
+  whatever now holds those indices.
 - **A mesh with a batch transform is skipped**, with a note. A multi-select move applies a second matrix
   after the mesh's own, and the bridge has nowhere to put it. Save the map and reload it, and those
   meshes send normally.

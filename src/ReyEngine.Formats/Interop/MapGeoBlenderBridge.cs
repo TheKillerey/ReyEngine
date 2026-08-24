@@ -53,8 +53,14 @@ public static class MapGeoBlenderBridge
             var pristineNormals = map.OriginalNormalsOf(mesh);
             var normals = pristineNormals.Length == pristine.Length ? pristineNormals.ToArray() : null;
 
+            // UV0 travels because a reshaped mesh without it would come back untextured. The lightmap
+            // channel deliberately does not: a changed shape invalidates a bake anyway.
+            float[]? uvs = null;
+            if (map.Uvs is { Length: > 0 } source && (mesh.VertexStart + mesh.VertexCount) * 2 <= source.Length)
+                uvs = source.AsSpan(mesh.VertexStart * 2, mesh.VertexCount * 2).ToArray();
+
             var placement = CurrentTransform(mesh);
-            meshes.Add(new BridgeMesh(mesh.Index, mesh.Name, mesh.Pivot, positions, normals,
+            meshes.Add(new BridgeMesh(mesh.Index, mesh.Name, mesh.Pivot, positions, normals, uvs,
                 IndicesOf(map, mesh), placement.Location, placement.RotationDegrees, placement.Scale));
         }
 
@@ -131,6 +137,59 @@ public static class MapGeoBlenderBridge
 
         notes = problems;
         return changed;
+    }
+
+    /// <summary>
+    /// Turn geometry that came back from Blender into something the reshaper can write.
+    /// </summary>
+    /// <remarks>
+    /// The spaces differ and it matters. Blender holds the mesh PIVOT-RELATIVE in world space, because
+    /// that is what makes its object transform mean the same thing as ReyEngine's. A vertex buffer holds
+    /// mesh-LOCAL coordinates, which the file's own per-mesh transform then places. So the round trip is
+    /// pivot-relative -> world -> local, and skipping the last step writes geometry that is correct only
+    /// for the meshes whose transform happens to be identity.
+    /// </remarks>
+    public static MeshReshape? ToReshape(MapGeoAsset map, BridgeMesh sent, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(sent);
+        error = null;
+
+        var mesh = map.Meshes.FirstOrDefault(m => m.Index == sent.Index);
+        if (mesh is null) { error = $"mesh {sent.Index} is not in the open map"; return null; }
+        if (sent.Positions.Length == 0 || sent.Positions.Length % 3 != 0)
+        { error = $"'{mesh.Name}' sent {sent.Positions.Length} position floats"; return null; }
+        if (!Matrix4x4.Invert(mesh.Transform, out var toLocal))
+        { error = $"'{mesh.Name}' has a transform that cannot be inverted, so its geometry has no local form"; return null; }
+
+        int vertices = sent.Positions.Length / 3;
+        var positions = new float[sent.Positions.Length];
+        for (int i = 0; i < vertices; i++)
+        {
+            var world = new Vector3(sent.Positions[i * 3], sent.Positions[i * 3 + 1], sent.Positions[i * 3 + 2])
+                        + mesh.Pivot;
+            var local = Vector3.Transform(world, toLocal);
+            positions[i * 3] = local.X; positions[i * 3 + 1] = local.Y; positions[i * 3 + 2] = local.Z;
+        }
+
+        float[]? normals = null;
+        if (sent.Normals is { } sentNormals && sentNormals.Length == sent.Positions.Length)
+        {
+            // Normals do not transform like positions: the inverse TRANSPOSE is what survives a non-uniform
+            // scale, and a mesh scaled unevenly would otherwise light as though it were not.
+            var normalMatrix = Matrix4x4.Transpose(toLocal);
+            normals = new float[sentNormals.Length];
+            for (int i = 0; i < vertices; i++)
+            {
+                var n = Vector3.TransformNormal(
+                    new Vector3(sentNormals[i * 3], sentNormals[i * 3 + 1], sentNormals[i * 3 + 2]), normalMatrix);
+                if (n.LengthSquared() > 1e-12f) n = Vector3.Normalize(n);
+                normals[i * 3] = n.X; normals[i * 3 + 1] = n.Y; normals[i * 3 + 2] = n.Z;
+            }
+        }
+
+        float[]? uvs = sent.Uvs is { } sentUvs && sentUvs.Length == vertices * 2 ? sentUvs : null;
+        return new MeshReshape(mesh.Index, positions, normals, uvs, sent.Indices);
     }
 
     /// <summary>Where a mesh's Blender object should sit, and how it should be oriented, right now.</summary>

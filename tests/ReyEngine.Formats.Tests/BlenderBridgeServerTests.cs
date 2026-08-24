@@ -20,7 +20,7 @@ public sealed class BlenderBridgeServerTests : IDisposable
     public BlenderBridgeServerTests()
     {
         var mesh = new BridgeMesh(4, "sru_rock", new Vector3(1, 2, 3),
-            new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 }, null, new uint[] { 0, 1, 2 },
+            new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 }, null, null, new uint[] { 0, 1, 2 },
             new Vector3(1, 2, 3), Vector3.Zero, Vector3.One);
 
         // Handlers run inline: there is no dispatcher in a test, and the point here is the wire.
@@ -29,7 +29,8 @@ public sealed class BlenderBridgeServerTests : IDisposable
             Handlers = new BlenderBridgeHandlers(
                 MapName: () => "jade_container.mapgeo",
                 Pull: () => new BridgeSnapshot(new[] { mesh }, new[] { "a note" }),
-                PushTransforms: t => $"{t.Count} applied, 0 refused"),
+                PushTransforms: t => $"{t.Count} applied, 0 refused",
+                PushGeometry: m => $"{m.Count} queued, 0 refused"),
         };
     }
 

@@ -39,7 +39,7 @@ import bpy
 from bpy.props import IntProperty, StringProperty, BoolProperty
 from mathutils import Euler, Matrix, Vector
 
-PROTOCOL = 1
+PROTOCOL = 2
 COLLECTION = "ReyEngine Map"
 INDEX_KEY = "rey_index"
 
@@ -84,7 +84,7 @@ def _read_exactly(sock, count):
     return bytes(chunks)
 
 
-def _request(context, payload, want_body=False):
+def _request(context, payload, want_body=False, body=None):
     """One short-lived connection per action.
 
     A persistent socket would have to be pumped from Blender's single UI thread, and a dropped link
@@ -102,6 +102,8 @@ def _request(context, payload, want_body=False):
             raise BridgeError("protocol %s vs %s - update the older half" % (hello.get("protocol"), PROTOCOL))
 
         sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+        if body:
+            sock.sendall(body)
         header = _read_header(sock)
         if header.get("op") == "error":
             raise BridgeError(header.get("message", "refused"))
@@ -144,13 +146,14 @@ def _decode_meshes(body):
         scale = floats(3)
         positions = floats(u32())
         normals = floats(u32())
+        uvs = floats(u32())
         index_count = u32()
         indices = struct.unpack_from("<%dI" % index_count, body, at)
         at += 4 * index_count
         meshes.append({
             "name": name, "index": index, "pivot": pivot,
             "location": location, "rotation": rotation, "scale": scale,
-            "positions": positions, "normals": normals, "indices": indices,
+            "positions": positions, "normals": normals, "uvs": uvs, "indices": indices,
         })
     return meshes
 
@@ -202,6 +205,14 @@ def _build_object(collection, entry):
     faces = [(indices[i], indices[i + 1], indices[i + 2]) for i in range(0, len(indices), 3)]
     mesh.from_pydata(verts, [], faces)
     mesh.validate(verbose=False)
+
+    # UV0 comes across so a reshaped mesh keeps its texturing. The lightmap channel deliberately does
+    # not - a changed shape invalidates a bake anyway, and it would only survive as stale data.
+    uvs = entry.get("uvs") or ()
+    if len(uvs) == len(verts) * 2:
+        layer = mesh.uv_layers.new(name="UVMap")
+        for loop in mesh.loops:
+            layer.data[loop.index].uv = (uvs[loop.vertex_index * 2], uvs[loop.vertex_index * 2 + 1])
     mesh.update()
 
     obj = bpy.data.objects.new(entry["name"], mesh)
@@ -275,6 +286,106 @@ class REYENGINE_OT_push(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _encode_meshes(entries):
+    """Pack meshes into the same block a pull sends, so the two directions cannot drift apart."""
+    out = bytearray()
+    out += struct.pack("<i", len(entries))
+    for e in entries:
+        name = e["name"].encode("utf-8")
+        out += struct.pack("<i", len(name)) + name
+        out += struct.pack("<i", e["index"])
+        for key in ("pivot", "location", "rotation", "scale"):
+            out += struct.pack("<3f", *e[key])
+        out += struct.pack("<i", len(e["positions"])) + struct.pack("<%df" % len(e["positions"]), *e["positions"])
+        out += struct.pack("<i", len(e["normals"])) + struct.pack("<%df" % len(e["normals"]), *e["normals"])
+        out += struct.pack("<i", len(e["uvs"])) + struct.pack("<%df" % len(e["uvs"]), *e["uvs"])
+        out += struct.pack("<i", len(e["indices"])) + struct.pack("<%dI" % len(e["indices"]), *e["indices"])
+    return bytes(out)
+
+
+def _mesh_to_league(obj):
+    """Evaluated, triangulated geometry in League axes, relative to the object origin (== the pivot).
+
+    Evaluated so modifiers count: a subdivision surface the user added is part of the shape they see,
+    and sending the base cage instead would silently discard their work.
+    """
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated = obj.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh()
+    try:
+        mesh.calc_loop_triangles()
+
+        # A vertex with two different UVs has to become two vertices - a vertex buffer holds one UV per
+        # vertex, and collapsing them would smear the seam across the texture.
+        uv_layer = mesh.uv_layers.active
+        unique = {}
+        positions, normals, uvs, indices = [], [], [], []
+        for tri in mesh.loop_triangles:
+            for loop_index in tri.loops:
+                vertex_index = mesh.loops[loop_index].vertex_index
+                uv = tuple(uv_layer.data[loop_index].uv) if uv_layer else (0.0, 0.0)
+                key = (vertex_index, round(uv[0], 6), round(uv[1], 6))
+                at = unique.get(key)
+                if at is None:
+                    at = len(positions) // 3
+                    unique[key] = at
+                    v = mesh.vertices[vertex_index]
+                    p = B2L @ v.co
+                    n = B2L @ v.normal
+                    positions += [p.x, p.y, p.z]
+                    normals += [n.x, n.y, n.z]
+                    uvs += [uv[0], uv[1]]
+                indices.append(at)
+        return positions, normals, uvs, indices
+    finally:
+        evaluated.to_mesh_clear()
+
+
+class REYENGINE_OT_push_geometry(bpy.types.Operator):
+    bl_idname = "reyengine.push_geometry"
+    bl_label = "Push Shapes To ReyEngine"
+    bl_description = "Send the edited geometry of the selected meshes back to the editor"
+    bl_options = {"REGISTER"}
+
+    selected_only: BoolProperty(name="Selected only", default=True)
+
+    def execute(self, context):
+        collection = bpy.data.collections.get(COLLECTION)
+        if collection is None:
+            self.report({"ERROR"}, "ReyEngine: nothing pulled yet")
+            return {"CANCELLED"}
+
+        entries = []
+        for obj in collection.objects:
+            if INDEX_KEY not in obj or obj.type != "MESH":
+                continue
+            if self.selected_only and not obj.select_get():
+                continue
+            positions, normals, uvs, indices = _mesh_to_league(obj)
+            if not positions or not indices:
+                continue
+            entries.append({
+                "name": obj.name, "index": int(obj[INDEX_KEY]),
+                "pivot": (0.0, 0.0, 0.0), "location": (0.0, 0.0, 0.0),
+                "rotation": (0.0, 0.0, 0.0), "scale": (1.0, 1.0, 1.0),
+                "positions": positions, "normals": normals, "uvs": uvs, "indices": indices,
+            })
+
+        if not entries:
+            self.report({"WARNING"}, "ReyEngine: nothing selected to push")
+            return {"CANCELLED"}
+
+        body = _encode_meshes(entries)
+        try:
+            header, _ = _request(context, {"op": "push_geometry", "bytes": len(body)}, body=body)
+        except (BridgeError, OSError, ValueError) as ex:
+            self.report({"ERROR"}, "ReyEngine: %s" % ex)
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, "ReyEngine: sent %d shape(s) (%s)" % (len(entries), header.get("detail", "")))
+        return {"FINISHED"}
+
+
 def _deg(radians):
     return radians * 57.29577951308232
 
@@ -312,12 +423,18 @@ class REYENGINE_PT_panel(bpy.types.Panel):
         row.operator("reyengine.push", icon="EXPORT", text="Push All").selected_only = False
         row.operator("reyengine.push", text="Selected").selected_only = True
 
+        layout.separator()
+        row = layout.row(align=True)
+        row.operator("reyengine.push_geometry", icon="MESH_DATA", text="Push Shapes").selected_only = True
+        row.operator("reyengine.push_geometry", text="All").selected_only = False
+
         collection = bpy.data.collections.get(COLLECTION)
         layout.label(text="%d mesh(es) linked" % (len(collection.objects) if collection else 0))
         layout.label(text="Materials stay in ReyEngine.", icon="INFO")
 
 
-CLASSES = (REYENGINE_PG_settings, REYENGINE_OT_pull, REYENGINE_OT_push, REYENGINE_PT_panel)
+CLASSES = (REYENGINE_PG_settings, REYENGINE_OT_pull, REYENGINE_OT_push,
+           REYENGINE_OT_push_geometry, REYENGINE_PT_panel)
 
 
 def register():

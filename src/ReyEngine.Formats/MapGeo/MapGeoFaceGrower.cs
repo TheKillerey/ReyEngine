@@ -70,6 +70,17 @@ public static class MapGeoFaceGrower
         if (declaration.Elements.Count == 0 || declaration.Elements[0].Name != MapGeoBinary.ElemPosition)
         { error = "this mesh does not lead with a POSITION element"; return false; }
         if (mesh.VertexBufferIds.Count == 0) { error = "this mesh has no vertex buffer"; return false; }
+        // M581: a mapgeo mesh can split its channels across several streams - measured on shipped maps,
+        // 32%-68% of meshes are [Position+Normal] plus [Texcoord0(+Texcoord7)]. This writer appends to
+        // stream 0 only, so on one of those it would leave the other streams describing the OLD vertex
+        // count. The file still loads and the client reads past the end of them, which looks like corrupt
+        // geometry rather than a rejected edit. Refused until this grows every stream.
+        if (mesh.VertexBufferIds.Count > 1)
+        {
+            error = $"this mesh keeps its vertices in {mesh.VertexBufferIds.Count} streams, and extrude/inset "
+                  + "can only grow one. Reshape it in Blender instead.";
+            return false;
+        }
 
         int newVertices = edits.Count * 3;
         if (mesh.VertexCount + newVertices > MaxVerticesPerMesh)

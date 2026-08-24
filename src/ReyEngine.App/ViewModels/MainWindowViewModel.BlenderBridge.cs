@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.App.Services;
 using ReyEngine.Formats.Interop;
+using ReyEngine.Formats.MapGeo;
 
 namespace ReyEngine.App.ViewModels;
 
@@ -62,7 +63,8 @@ public sealed partial class MainWindowViewModel
         _blenderBridge.Handlers = new BlenderBridgeHandlers(
             MapName: () => _currentMapEntry?.DisplayName ?? "(no map)",
             Pull: SnapshotForBlender,
-            PushTransforms: ApplyBlenderTransforms);
+            PushTransforms: ApplyBlenderTransforms,
+            PushGeometry: ApplyBlenderGeometry);
         _blenderBridge.MapChanged += () => Avalonia.Threading.Dispatcher.UIThread.Post(() => Project.IsDirty = true);
 
         if (!_blenderBridge.Start(BlenderLinkPort, out var error))
@@ -73,6 +75,49 @@ public sealed partial class MainWindowViewModel
         }
         BlenderLinkActive = true;
         BlenderLinkStatus = $"Listening on 127.0.0.1:{_blenderBridge.Port}.";
+    }
+
+    /// <summary>
+    /// Reshaped meshes from Blender, held until the map is saved.
+    ///
+    /// <para>Not applied immediately, unlike a placement. A reshape rewrites the mesh's vertex and index
+    /// BUFFERS, which is a change to the file's bytes rather than to the decoded scene - the same reason
+    /// extrude and inset are deferred. The viewport keeps showing the old shape until a save and reload,
+    /// which is stated rather than left to be discovered.</para>
+    /// </summary>
+    private readonly Dictionary<int, MeshReshape> _blenderReshapes = new();
+
+    public bool HasBlenderReshapes => _blenderReshapes.Count > 0;
+
+    /// <summary>Reshapes waiting to be written, applied to the mapgeo bytes at save time.</summary>
+    internal IReadOnlyList<MeshReshape> PendingBlenderReshapes => _blenderReshapes.Values.ToList();
+
+    internal void ClearBlenderReshapes() => _blenderReshapes.Clear();
+
+    private string ApplyBlenderGeometry(IReadOnlyList<BridgeMesh> meshes)
+    {
+        if (_currentMap is not { } map) return "No map is open.";
+
+        int accepted = 0;
+        var problems = new List<string>();
+        foreach (var sent in meshes)
+        {
+            var reshape = MapGeoBlenderBridge.ToReshape(map, sent, out var reason);
+            if (reshape is null) { problems.Add(reason ?? "unusable geometry"); continue; }
+            _blenderReshapes[reshape.MeshIndex] = reshape;
+            accepted++;
+        }
+
+        foreach (string problem in problems.Take(6)) _log.Warn("Blender", problem);
+        if (problems.Count > 6) _log.Warn("Blender", $"{problems.Count - 6:n0} further problem(s) omitted.");
+        if (accepted > 0)
+        {
+            OnPropertyChanged(nameof(HasBlenderReshapes));
+            OnPropertyChanged(nameof(HasPendingMapGeoWork));   // the Save button reads this
+            _log.Success("Blender", $"{accepted:n0} reshaped mesh(es) queued. Save Map Content Edits to write "
+                + "them; the viewport keeps the old shape until the map is reloaded.");
+        }
+        return $"{accepted} queued, {problems.Count} refused";
     }
 
     /// <summary>Everything the open map has to offer Blender.</summary>

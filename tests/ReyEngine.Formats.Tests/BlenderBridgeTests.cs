@@ -73,6 +73,7 @@ public sealed class BlenderBridgeTests
         var sent = new BridgeMesh(7, "sru_wall", new Vector3(1, 2, 3),
             new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 },
             new float[] { 0, 1, 0, 0, 1, 0, 0, 1, 0 },
+            new float[] { 0, 0, 1, 0, 0, 1 },
             new uint[] { 0, 1, 2 },
             new Vector3(10, 20, 30), new Vector3(0, 90, 0), new Vector3(2, 2, 2));
 
@@ -94,7 +95,7 @@ public sealed class BlenderBridgeTests
     public void AMeshWithNoNormalsStaysAMeshWithNoNormals()
     {
         var sent = new BridgeMesh(1, "flat", Vector3.Zero,
-            new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 }, null, new uint[] { 0, 1, 2 },
+            new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 }, null, null, new uint[] { 0, 1, 2 },
             Vector3.Zero, Vector3.Zero, Vector3.One);
         Assert.Null(Assert.Single(BlenderBridgeProtocol.DecodeMeshes(
             BlenderBridgeProtocol.EncodeMeshes(new[] { sent }))).Normals);
@@ -106,7 +107,7 @@ public sealed class BlenderBridgeTests
         // Half a map decoded without complaint reads as "the user deleted geometry".
         var payload = BlenderBridgeProtocol.EncodeMeshes(new[]
         {
-            new BridgeMesh(1, "m", Vector3.Zero, new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 }, null,
+            new BridgeMesh(1, "m", Vector3.Zero, new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 }, null, null,
                 new uint[] { 0, 1, 2 }, Vector3.Zero, Vector3.Zero, Vector3.One),
         });
         Assert.ThrowsAny<Exception>(() => BlenderBridgeProtocol.DecodeMeshes(payload[..(payload.Length / 2)]));
@@ -116,7 +117,7 @@ public sealed class BlenderBridgeTests
     public void AnIndexPastTheEndOfTheVertexBufferIsRefused()
     {
         // Blender would take it and render scrambled geometry; better to say so at the boundary.
-        var good = new BridgeMesh(1, "m", Vector3.Zero, new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 }, null,
+        var good = new BridgeMesh(1, "m", Vector3.Zero, new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 }, null, null,
             new uint[] { 0, 1, 9 }, Vector3.Zero, Vector3.Zero, Vector3.One);
         Assert.ThrowsAny<Exception>(() =>
             BlenderBridgeProtocol.DecodeMeshes(BlenderBridgeProtocol.EncodeMeshes(new[] { good })));

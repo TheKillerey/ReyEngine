@@ -19,6 +19,7 @@ public sealed record BridgeMesh(
     Vector3 Pivot,
     float[] Positions,
     float[]? Normals,
+    float[]? Uvs,
     uint[] Indices,
     /// <summary>Where the mesh sits RIGHT NOW: pivot plus any offset already applied in the editor.</summary>
     Vector3 Location,
@@ -48,7 +49,7 @@ public static class BlenderBridgeProtocol
 {
     /// <summary>Bumped whenever the framing or the mesh block changes shape. The add-on refuses a mismatch
     /// rather than misreading a payload — a silently wrong decode looks like corrupt geometry.</summary>
-    public const int Version = 1;
+    public const int Version = 2;
 
     /// <summary>Loopback only. This link hands out a map's whole geometry and accepts edits to it; it has no
     /// business being reachable from anywhere but this machine.</summary>
@@ -89,6 +90,10 @@ public static class BlenderBridgeProtocol
             w.Write(normals);
             if (m.Normals is not null) foreach (float f in m.Normals) w.Write(f);
 
+            int uvs = m.Uvs?.Length ?? 0;
+            w.Write(uvs);
+            if (m.Uvs is not null) foreach (float f in m.Uvs) w.Write(f);
+
             w.Write(m.Indices.Length);
             foreach (uint i in m.Indices) w.Write(i);
         }
@@ -122,6 +127,9 @@ public static class BlenderBridgeProtocol
             float[] normals = ReadFloats(r, "normals");
             if (normals.Length != 0 && normals.Length != positions.Length)
                 throw new InvalidDataException($"'{name}' has {normals.Length} normal floats for {positions.Length} position floats");
+            float[] uvs = ReadFloats(r, "uvs");
+            if (uvs.Length != 0 && uvs.Length != positions.Length / 3 * 2)
+                throw new InvalidDataException($"'{name}' has {uvs.Length} uv floats for {positions.Length / 3} vertices");
 
             int indexCount = r.ReadInt32();
             if (indexCount < 0 || indexCount > 200_000_000) throw new InvalidDataException("index count is not plausible");
@@ -134,7 +142,8 @@ public static class BlenderBridgeProtocol
                     throw new InvalidDataException($"'{name}' indexes vertex {index2} of {vertices}");
 
             meshes.Add(new BridgeMesh(index, name, pivot, positions,
-                normals.Length == 0 ? null : normals, indices, location, rotation, scale));
+                normals.Length == 0 ? null : normals, uvs.Length == 0 ? null : uvs,
+                indices, location, rotation, scale));
         }
         return meshes;
     }

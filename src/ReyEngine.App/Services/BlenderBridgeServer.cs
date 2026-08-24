@@ -16,7 +16,8 @@ namespace ReyEngine.App.Services;
 public sealed record BlenderBridgeHandlers(
     Func<string> MapName,
     Func<BridgeSnapshot> Pull,
-    Func<IReadOnlyList<BridgeTransform>, string> PushTransforms);
+    Func<IReadOnlyList<BridgeTransform>, string> PushTransforms,
+    Func<IReadOnlyList<BridgeMesh>, string> PushGeometry);
 
 /// <summary>
 /// M580: the editor half of the Blender link.
@@ -132,6 +133,7 @@ public sealed class BlenderBridgeServer : IDisposable
                 case "hello": Hello(stream, request); break;
                 case "pull": PullMeshes(stream); break;
                 case "push": PushTransforms(stream, request); break;
+                case "push_geometry": PushGeometry(stream, request); break;
                 default: Fail(stream, $"unknown op '{op}'"); break;
             }
         }
@@ -194,6 +196,25 @@ public sealed class BlenderBridgeServer : IDisposable
         string summary = Run(() => Handlers!.PushTransforms(transforms), "no map is open");
         MapChanged?.Invoke();
         Respond(stream, new Dictionary<string, object?> { ["op"] = "ok", ["applied"] = transforms.Count, ["detail"] = summary });
+    }
+
+    /// <summary>
+    /// Reshaped meshes coming back. The body is the same mesh block a pull sends, so the two directions
+    /// cannot drift apart; the placement fields it carries are ignored here because a shape push and a
+    /// placement push are separate operations.
+    /// </summary>
+    private void PushGeometry(System.IO.Stream stream, JsonElement request)
+    {
+        int bytes = request.TryGetProperty("bytes", out var b) && b.TryGetInt32(out int n) ? n : 0;
+        if (bytes <= 0) { Fail(stream, "push_geometry with no body"); return; }
+
+        IReadOnlyList<BridgeMesh> meshes;
+        try { meshes = BlenderBridgeProtocol.DecodeMeshes(BlenderBridgeProtocol.ReadExactly(stream, bytes)); }
+        catch (Exception ex) { Fail(stream, "unreadable geometry: " + ex.Message); return; }
+
+        string summary = Run(() => Handlers!.PushGeometry(meshes), "no map is open");
+        MapChanged?.Invoke();
+        Respond(stream, new Dictionary<string, object?> { ["op"] = "ok", ["applied"] = meshes.Count, ["detail"] = summary });
     }
 
     private static Vector3 Vec(JsonElement item, string name, Vector3 fallback)

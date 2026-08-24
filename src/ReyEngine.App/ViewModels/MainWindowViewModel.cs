@@ -8196,6 +8196,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasMapMoves
         || _faceEdits.Count > 0
         || _faceGrows.Count > 0
+        || _blenderReshapes.Count > 0
         || MapContent.AllMapPieces.Any(p => p.IsRemoved)
         || MapContent.AddedMeshes.Count > 0;
 
@@ -9792,6 +9793,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 bytes = swapped;
                 int changed = map.Meshes.Count(m => m.HasMaterialEdit);
                 _log.Success("MapGeo", $"Changed the material on {changed:n0} mesh(es).");
+            }
+
+            // M581: reshapes from Blender FIRST, and never alongside anything that addresses geometry by
+            // index. A reshape replaces a mesh's vertex and index buffers outright, so every triangle
+            // number a face edit or a grow was computed from stops meaning what it meant. Mixing them
+            // would not fail - it would write edits onto whatever triangles now happen to hold those
+            // indices, so the two are separated rather than ordered.
+            if (PendingBlenderReshapes.Count > 0)
+            {
+                if (hasFaces || hasGrows)
+                {
+                    _log.Error("MapGeo", "There are reshaped meshes from Blender AND face edits pending. A "
+                        + "reshape replaces a mesh's triangles, so the face edits no longer refer to the same "
+                        + "ones. Save them separately: clear or save the face edits first, then reload.");
+                    return;
+                }
+                var reshaped = MapGeoMeshReshaper.TryApply(bytes, PendingBlenderReshapes, out string? reshapeError);
+                if (reshaped is null)
+                { _log.Error("MapGeo", reshapeError ?? "Blender reshapes could not be written."); return; }
+                bytes = reshaped;
+                _log.Success("MapGeo", $"Wrote {PendingBlenderReshapes.Count:n0} reshaped mesh(es) from Blender.");
+                ClearBlenderReshapes();
             }
 
             // M566: face edits next, before anything that patches by byte offset. Every one is
