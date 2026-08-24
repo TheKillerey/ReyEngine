@@ -24,3 +24,7 @@ publish/
 
 ## Codex scratch probes (1.5 GB of build output) - never part of the repo
 .codex_tmp/
+
+# Python bytecode from the Blender add-on
+__pycache__/
+*.pyc
