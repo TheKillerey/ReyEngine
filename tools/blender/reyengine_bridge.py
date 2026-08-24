@@ -338,39 +338,69 @@ def _encode_meshes(entries):
     return bytes(out)
 
 
+def _to_league_axes(flat):
+    """Blender (x, y, z) -> League (x, z, -y) over a flat xyz buffer.
+
+    Arithmetic on slices rather than a Matrix per vertex. Same reason the pull stopped freezing: at a
+    map's size, per-element work through Blender's RNA layer is what turns seconds into minutes.
+    """
+    return flat[0::3], flat[2::3], [-v for v in flat[1::3]]
+
+
 def _mesh_to_league(obj):
     """Evaluated, triangulated geometry in League axes, relative to the object origin (== the pivot).
 
     Evaluated so modifiers count: a subdivision surface the user added is part of the shape they see,
     and sending the base cage instead would silently discard their work.
+
+    Everything is read in bulk with foreach_get. The first version walked loop_triangles in Python and
+    did a Matrix multiply per vertex, which made pushing a reshaped mesh take minutes.
     """
     depsgraph = bpy.context.evaluated_depsgraph_get()
     evaluated = obj.evaluated_get(depsgraph)
     mesh = evaluated.to_mesh()
     try:
         mesh.calc_loop_triangles()
+        vertex_count = len(mesh.vertices)
+        loop_count = len(mesh.loops)
+        tri_count = len(mesh.loop_triangles)
+        if not vertex_count or not tri_count:
+            return [], [], [], []
+
+        co = [0.0] * (vertex_count * 3)
+        mesh.vertices.foreach_get("co", co)
+        no = [0.0] * (vertex_count * 3)
+        mesh.vertices.foreach_get("normal", no)
+        loop_vertex = [0] * loop_count
+        mesh.loops.foreach_get("vertex_index", loop_vertex)
+        tri_loops = [0] * (tri_count * 3)
+        mesh.loop_triangles.foreach_get("loops", tri_loops)
+
+        uv_layer = mesh.uv_layers.active
+        loop_uv = [0.0] * (loop_count * 2)
+        if uv_layer:
+            uv_layer.data.foreach_get("uv", loop_uv)
+
+        cx, cy, cz = _to_league_axes(co)
+        nx, ny, nz = _to_league_axes(no)
 
         # A vertex with two different UVs has to become two vertices - a vertex buffer holds one UV per
         # vertex, and collapsing them would smear the seam across the texture.
-        uv_layer = mesh.uv_layers.active
         unique = {}
         positions, normals, uvs, indices = [], [], [], []
-        for tri in mesh.loop_triangles:
-            for loop_index in tri.loops:
-                vertex_index = mesh.loops[loop_index].vertex_index
-                uv = tuple(uv_layer.data[loop_index].uv) if uv_layer else (0.0, 0.0)
-                key = (vertex_index, round(uv[0], 6), round(uv[1], 6))
-                at = unique.get(key)
-                if at is None:
-                    at = len(positions) // 3
-                    unique[key] = at
-                    v = mesh.vertices[vertex_index]
-                    p = B2L @ v.co
-                    n = B2L @ v.normal
-                    positions += [p.x, p.y, p.z]
-                    normals += [n.x, n.y, n.z]
-                    uvs += [uv[0], uv[1]]
-                indices.append(at)
+        for loop_index in tri_loops:
+            vertex_index = loop_vertex[loop_index]
+            u = loop_uv[loop_index * 2]
+            v = loop_uv[loop_index * 2 + 1]
+            key = (vertex_index, round(u, 6), round(v, 6))
+            at = unique.get(key)
+            if at is None:
+                at = len(positions) // 3
+                unique[key] = at
+                positions += (cx[vertex_index], cy[vertex_index], cz[vertex_index])
+                normals += (nx[vertex_index], ny[vertex_index], nz[vertex_index])
+                uvs += (u, v)
+            indices.append(at)
         return positions, normals, uvs, indices
     finally:
         evaluated.to_mesh_clear()

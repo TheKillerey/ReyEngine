@@ -9767,12 +9767,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // vertex buffers, so they compose with the transform moves below rather than fighting them.
         bool hasFaces = _faceEdits.Count > 0;
         bool hasGrows = _faceGrows.Count > 0;   // M570: extrude / inset, which ADD geometry
+        // M583: reshapes from Blender. Absent from this gate until now, so a push with nothing else
+        // pending fell straight out of the early return below with "No map edits to save" and the
+        // reshape was silently dropped - the M572 bug again, in the one place that decides whether the
+        // save runs at all rather than in the property the button reads.
+        bool hasReshapes = _blenderReshapes.Count > 0;
         bool hasMoves = MapGeoWriter.HasMoves(map.Meshes);
         bool hasLayers = MapGeoLayerWriter.HasEdits(map.Meshes);
         bool hasMaterials = MapGeoMaterialWriter.HasEdits(map.Meshes);   // M517
         var added = MapContent.AddedMeshes.ToList();
         var removedIndices = MapContent.AllMapPieces.Where(p => p.IsRemoved).Select(p => p.MeshIndex).Distinct().ToList();
-        if (!hasFaces && !hasGrows && !hasMoves && !hasLayers && !hasMaterials && added.Count == 0 && removedIndices.Count == 0)
+        if (!hasFaces && !hasGrows && !hasReshapes && !hasMoves && !hasLayers && !hasMaterials
+            && added.Count == 0 && removedIndices.Count == 0)
         { _log.Info("MapGeo", "No map edits to save."); return; }
         if (!GuardEditable(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
@@ -9800,7 +9806,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // number a face edit or a grow was computed from stops meaning what it meant. Mixing them
             // would not fail - it would write edits onto whatever triangles now happen to hold those
             // indices, so the two are separated rather than ordered.
-            if (PendingBlenderReshapes.Count > 0)
+            if (hasReshapes)
             {
                 if (hasFaces || hasGrows)
                 {

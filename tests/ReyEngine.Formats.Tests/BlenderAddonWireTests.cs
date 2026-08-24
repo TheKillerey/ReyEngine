@@ -126,6 +126,46 @@ open(r"{{output}}", "w").write(",".join(str(v) for v in ns["_uv_per_loop"](uvs, 
     }
 
     [Fact]
+    public void TheAddOnsAxisSwapIsTheInverseOfTheBasisItReplaces()
+    {
+        // M583: pushing a reshaped mesh did a Matrix multiply per vertex and took minutes. The swap is
+        // arithmetic on slices now, which is only correct if it equals B2L exactly - and a wrong axis
+        // does not throw, it lands the mesh rotated or mirrored in the map.
+        if (RepoRoot() is not { } root) return;
+        string addon = Path.Combine(root, "tools", "blender", "reyengine_bridge.py");
+        if (!File.Exists(addon)) return;
+
+        string script = Path.Combine(Path.GetTempPath(), "rey_axis_swap.py");
+        string output = Path.Combine(Path.GetTempPath(), "rey_axis_swap.txt");
+        File.WriteAllText(script, $$"""
+src = open(r"{{addon}}", encoding="utf-8").read()
+ns = {}
+exec(src[src.index("def _to_league_axes("):src.index("def _mesh_to_league(")], ns)
+x, y, z = ns["_to_league_axes"]([1.0, 2.0, 3.0, -4.0, 5.0, -6.0])
+open(r"{{output}}", "w").write(",".join(str(v) for v in list(x) + list(y) + list(z)))
+""");
+
+        var psi = new ProcessStartInfo("python", $"\"{script}\"")
+        { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        try
+        {
+            using var process = Process.Start(psi);
+            if (process is null) return;
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit(60_000);
+        }
+        catch { return; }
+        if (!File.Exists(output)) return;
+
+        var actual = File.ReadAllText(output).Split(',')
+            .Select(v => float.Parse(v, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+
+        // Blender (x, y, z) -> League (x, z, -y), for both input vertices.
+        Assert.Equal(new float[] { 1, -4,   3, -6,   -2, -5 }, actual);
+    }
+
+    [Fact]
     public void TheAddOnAndThisSideAgreeOnTheProtocolVersion()
     {
         if (RepoRoot() is not { } root) return;
