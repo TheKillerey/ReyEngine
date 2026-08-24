@@ -6,7 +6,7 @@
         x:DataType="vm:WorkshopViewModel"
         Title="ReyEngine - Workshop" Width="1280" Height="820" MinWidth="980" MinHeight="640"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

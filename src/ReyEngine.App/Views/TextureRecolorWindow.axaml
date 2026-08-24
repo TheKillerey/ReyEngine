@@ -7,7 +7,7 @@
         Title="ReyEngine — Recolor Textures" Width="1120" Height="630"
         MinWidth="940" MinHeight="560"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

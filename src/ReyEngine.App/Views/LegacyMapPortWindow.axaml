@@ -5,7 +5,7 @@
         x:Class="ReyEngine.App.Views.LegacyMapPortWindow"
         x:DataType="vm:LegacyMapPortWindowViewModel"
         Title="ReyEngine - Port Legacy Map" Width="860" Height="760" MinWidth="680" MinHeight="520"
-        WindowStartupLocation="CenterOwner" ExtendClientAreaToDecorationsHint="True"
+        WindowStartupLocation="CenterOwner" WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

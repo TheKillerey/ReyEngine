@@ -265,6 +265,33 @@
     <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyAccentBrush}" />
   </Style>
 
+  <!-- M578: window caption buttons.
+       The app draws its own now. Avalonia 12 paints a title bar of its own into the extended client
+       area, which put the window title on top of the brand and its buttons underneath the settings
+       gear; there is no "buttons but no title" setting, so the whole thing is ours. Sized 44x32 to
+       match what Windows uses, so the muscle memory for the corner still works. -->
+  <Style Selector="Button.caption">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="0" />
+    <Setter Property="Width" Value="44" />
+    <Setter Property="Height" Value="32" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextDimBrush}" />
+  </Style>
+  <Style Selector="Button.caption:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyHoverBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyTextBrightBrush}" />
+  </Style>
+  <!-- Close goes red on hover, as it does everywhere else in Windows. -->
+  <Style Selector="Button.caption.close:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#C42B1C" />
+    <Setter Property="TextElement.Foreground" Value="White" />
+  </Style>
+
   <!-- ── toggle buttons (viewport pills, Show/Play toggles) ─────────────────── -->
 
   <Style Selector="ToggleButton">

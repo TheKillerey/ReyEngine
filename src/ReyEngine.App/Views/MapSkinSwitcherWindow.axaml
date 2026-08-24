@@ -6,7 +6,7 @@
         x:DataType="vm:MapSkinSwitcherViewModel"
         Title="ReyEngine - Map Skin Switcher" Width="700" Height="640"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

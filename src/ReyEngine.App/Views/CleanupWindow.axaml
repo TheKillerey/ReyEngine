@@ -6,7 +6,7 @@
         x:DataType="vm:CleanupWindowViewModel"
         Title="ReyEngine — Cleanup Project" Width="1000" Height="740"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

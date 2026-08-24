@@ -7,7 +7,7 @@
         Title="ReyEngine — Lighting" Width="1040" Height="760"
         MinWidth="760" MinHeight="420"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

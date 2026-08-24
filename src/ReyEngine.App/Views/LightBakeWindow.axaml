@@ -6,7 +6,7 @@
         x:DataType="vm:LightBakeViewModel"
         Title="ReyEngine — Bake Lighting" Width="560" Height="720"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

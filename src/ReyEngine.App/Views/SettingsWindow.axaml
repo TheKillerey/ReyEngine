@@ -6,7 +6,7 @@
         Title="ReyEngine — Settings"
         Width="880" Height="640"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}"
         Foreground="{DynamicResource ReyTextBrush}"
         FontFamily="Inter, Segoe UI, sans-serif">

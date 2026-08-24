@@ -6,7 +6,7 @@
         x:DataType="vm:AddMeshWindowViewModel"
         Title="ReyEngine — Add Mesh" Width="760" Height="680"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

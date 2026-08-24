@@ -8,7 +8,7 @@
         Title="ReyEngine — Materials" Width="1420" Height="760"
         MinWidth="1000" MinHeight="500"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

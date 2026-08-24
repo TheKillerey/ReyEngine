@@ -6,7 +6,7 @@
         x:DataType="vm:OverlayFootprintWindowViewModel"
         Title="ReyEngine — Overlay Footprint" Width="700" Height="600"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

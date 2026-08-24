@@ -6,7 +6,7 @@
         x:DataType="vm:HudEditorViewModel"
         Title="ReyEngine — HUD Editor" Width="1180" Height="760"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

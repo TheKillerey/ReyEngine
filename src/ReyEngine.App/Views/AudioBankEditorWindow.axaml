@@ -6,7 +6,7 @@
         x:DataType="vm:AudioBankEditorViewModel"
         Title="ReyEngine — Audio Bank Editor" Width="820" Height="620"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

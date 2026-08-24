@@ -6,7 +6,7 @@
         Title="ReyEngine — Map Bin Editor"
         Width="1150" Height="760"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}"
         Foreground="{DynamicResource ReyTextBrush}"
         FontFamily="Inter, Segoe UI, sans-serif">

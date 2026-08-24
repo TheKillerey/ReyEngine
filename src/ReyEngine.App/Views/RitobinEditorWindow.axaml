@@ -7,7 +7,7 @@
         Title="ReyEngine — Bin as ritobin text" Width="1080" Height="740"
         MinWidth="820" MinHeight="520"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

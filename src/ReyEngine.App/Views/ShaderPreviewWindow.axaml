@@ -7,7 +7,7 @@
         Title="ReyEngine — DX11 Shader Preview (experimental)" Width="1180" Height="740"
         MinWidth="760" MinHeight="440"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

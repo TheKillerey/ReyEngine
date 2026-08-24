@@ -485,6 +485,37 @@ public partial class MainWindow : Window
         BeginMoveDrag(e);
     }
 
+    /// <summary>
+    /// M578: the window's own caption buttons.
+    ///
+    /// <para>Avalonia 12 paints a title bar of its own into the extended client area - window title at the
+    /// left, buttons at the right - which landed on top of the brand and under the settings gear. There is
+    /// no "buttons but no title" setting, so WindowDecorations is None and these are ours. The glyph on the
+    /// middle one follows the state, which is the whole reason it is not a static bit of markup.</para>
+    /// </summary>
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == WindowStateProperty) SyncCaptionButtons();
+    }
+
+    private void OnMinimiseClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => WindowState = WindowState.Minimized;
+
+    private void OnMaximiseClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void OnCloseClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Close();
+
+    /// <summary>Keep the maximise glyph and its tip honest about what the click will do.</summary>
+    private void SyncCaptionButtons()
+    {
+        if (MaximiseButton is null) return;
+        bool max = WindowState == WindowState.Maximized;
+        MaximiseButton.Content = max ? "❐" : "☐";   // overlapping squares = restore, single = maximise
+        ToolTip.SetTip(MaximiseButton, max ? "Restore" : "Maximise");
+    }
+
     /// <summary>Load the logo (copied next to the exe) for the titlebar icon + the menu-bar wordmark.</summary>
     private void LoadBranding()
     {
@@ -505,6 +536,7 @@ public partial class MainWindow : Window
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
+        SyncCaptionButtons();
         if (DataContext is MainWindowViewModel vm)
         {
             vm.Dialogs.Owner = this;

@@ -6,7 +6,7 @@
         x:DataType="vm:BinIssuesWindowViewModel"
         Title="ReyEngine — Bin Issues" Width="660" Height="540"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

@@ -17,7 +17,18 @@ public partial class ReyTitleBar : UserControl
         InitializeComponent();
         AttachedToVisualTree += (_, _) =>
         {
-            if (VisualRoot is Window w) TitleText.Text = w.Title;
+            if (VisualRoot is Window w)
+            {
+                TitleText.Text = w.Title;
+                // M578: only a resizable window gets a maximise button, and the glyph has to follow the
+                // state or it tells you the wrong thing about what the click will do.
+                MaximiseButton.IsVisible = w.CanResize;
+                SyncMaximiseGlyph(w);
+                w.PropertyChanged += (_, e) =>
+                {
+                    if (e.Property == Window.WindowStateProperty) SyncMaximiseGlyph(w);
+                };
+            }
             try
             {
                 _logo ??= File.Exists(Path.Combine(AppContext.BaseDirectory, "Assets", "reyengine_logo.png"))
@@ -26,6 +37,30 @@ public partial class ReyTitleBar : UserControl
             }
             catch { /* cosmetic */ }
         };
+    }
+
+    private void SyncMaximiseGlyph(Window w)
+    {
+        bool max = w.WindowState == WindowState.Maximized;
+        MaximiseButton.Content = max ? "❐" : "☐";
+        ToolTip.SetTip(MaximiseButton, max ? "Restore" : "Maximise");
+    }
+
+    /// <summary>M578: these are the window's only caption buttons now — the host has no native ones.</summary>
+    private void OnMinimise(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (VisualRoot is Window w) w.WindowState = WindowState.Minimized;
+    }
+
+    private void OnMaximise(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (VisualRoot is Window { CanResize: true } w)
+            w.WindowState = w.WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+    }
+
+    private void OnClose(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (VisualRoot is Window w) w.Close();
     }
 
     private void OnDrag(object? sender, PointerPressedEventArgs e)

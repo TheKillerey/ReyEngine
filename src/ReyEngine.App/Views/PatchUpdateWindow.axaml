@@ -6,7 +6,7 @@
         x:DataType="vm:PatchUpdateWindowViewModel"
         Title="ReyEngine — Patch Update Wizard" Width="720" Height="610"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
   <DockPanel>
     <views:ReyTitleBar DockPanel.Dock="Top" />

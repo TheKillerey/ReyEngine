@@ -5,7 +5,7 @@
         Title="Project Settings"
         Width="540" Height="740"
         WindowStartupLocation="CenterOwner"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}"
         Foreground="{DynamicResource ReyTextBrush}"
         FontFamily="Inter, Segoe UI, sans-serif">

@@ -5,7 +5,7 @@
         Width="440" SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}"
         Foreground="{DynamicResource ReyTextBrush}"
         FontFamily="Inter, Segoe UI, sans-serif">

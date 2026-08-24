@@ -10,8 +10,7 @@
         Background="{DynamicResource ReyBgBrush}"
         Foreground="{DynamicResource ReyTextBrush}"
         FontFamily="Inter, Segoe UI, sans-serif"
-        ExtendClientAreaToDecorationsHint="True"
-        ExtendClientAreaTitleBarHeightHint="-1">
+        WindowDecorations="BorderOnly">
 
   <Window.Resources>
     <conv:LogLevelToBrushConverter x:Key="LevelToBrush" />
@@ -36,13 +35,20 @@
         <TextBlock x:Name="TitleVersionText" FontSize="9" FontWeight="SemiBold"
                    Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" />
       </StackPanel>
-      <!-- right margin clears the native caption buttons overlaid on the extended client area -->
-      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" Margin="10,0,150,0" VerticalAlignment="Center">
-        <TextBlock Text="{Binding Title}" FontSize="11"
+      <!-- M578: the 150px reserve for native caption buttons is gone - these ARE the caption buttons
+           now, so nothing else is competing for the corner. -->
+      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+        <TextBlock Text="{Binding Title}" FontSize="11" Margin="10,0,0,0"
                    Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center"
                    TextTrimming="CharacterEllipsis" MaxWidth="380" ToolTip.Tip="Active project (* = unsaved changes)" />
         <Button Classes="icon" Content="⚙" FontSize="14" Command="{Binding OpenSettingsCommand}"
                 ToolTip.Tip="Preferences — keybinds &amp; camera (Ctrl+,)" />
+        <Border Width="1" Height="14" Background="{DynamicResource ReyBorderAccentBrush}"
+                Margin="6,0,2,0" VerticalAlignment="Center" />
+        <Button Classes="caption" Content="&#x2500;" Click="OnMinimiseClick" ToolTip.Tip="Minimise" />
+        <Button Classes="caption" x:Name="MaximiseButton" Content="&#x2610;" Click="OnMaximiseClick"
+                ToolTip.Tip="Maximise" />
+        <Button Classes="caption close" Content="&#x2715;" Click="OnCloseClick" ToolTip.Tip="Close" />
       </StackPanel>
     <Menu Grid.Column="2" Background="Transparent">
       <MenuItem Header="_File">
