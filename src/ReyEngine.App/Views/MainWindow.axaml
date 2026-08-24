@@ -531,14 +531,20 @@
               </StackPanel>
             </Border>
 
-            <!-- M104: view toggles in TWO rows (one row overflowed the viewport width).
-                 Row 1 = history + shading/display · Row 2 = map lighting + tools. -->
-            <StackPanel Spacing="4" Margin="10" HorizontalAlignment="Right" VerticalAlignment="Top">
-            <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+            <!-- M577: one grouped row, not two overflowing ones.
+                 This bar had reached 28 controls and still ran off the viewport. Most of them are toggles
+                 that get set once and left, so they live in Display / Overlays / Tools now, and only what
+                 gets clicked while working stays on the bar. A WrapPanel rather than a StackPanel so a
+                 narrow window wraps instead of clipping the right-hand end off. -->
+            <WrapPanel Orientation="Horizontal" ItemSpacing="4" LineSpacing="4"
+                       Margin="10" HorizontalAlignment="Right" VerticalAlignment="Top">
+
               <Button Classes="tool" Content="↶" FontSize="13" Padding="7,2" Command="{Binding UndoCommand}"
                       IsEnabled="{Binding CanUndo}" ToolTip.Tip="{Binding UndoLabel}" />
               <Button Classes="tool" Content="↷" FontSize="13" Padding="7,2" Command="{Binding RedoCommand}"
                       IsEnabled="{Binding CanRedo}" ToolTip.Tip="{Binding RedoLabel}" />
+
+              <!-- Shading stays on the bar: it is a picker, and it is the thing you change most. -->
               <ComboBox SelectedIndex="{Binding PreviewMode}" FontSize="11" MinWidth="120" VerticalAlignment="Center"
                         ToolTip.Tip="Preview shading mode">
                 <ComboBoxItem>Basic</ComboBoxItem>
@@ -557,39 +563,122 @@
                 <ComboBoxItem>Debug · Two-Sided</ComboBoxItem>
                 <ComboBoxItem>Debug · Mirrored</ComboBoxItem>
               </ComboBox>
-              <ToggleButton Classes="vp" Content="◫ Wire" IsChecked="{Binding ShowWireframe}" ToolTip.Tip="Wireframe overlay" />
-              <!-- M248 (phase 6, step 1): OpenGL <-> Direct3D 11. Swaps which of two sibling surfaces is
-                   visible. M263 removed the A/B compare button - it had served its purpose, and the
-                   FrameDiff machinery behind it stays for the harness. -->
-              <ToggleButton Classes="vp" Content="DX11" IsChecked="{Binding UseDx11Viewport}"
-                            ToolTip.Tip="Render this viewport with Direct3D 11 instead of OpenGL." />
-              <!-- M263: pause freezes the animation clock where it is rather than resetting it.
-                   M266: the same clock now drives the particles, so pausing freezes them too. That is a
-                   stated difference from the OpenGL viewport, which never pauses its map particles - the
-                   tooltip says so rather than leaving it to be discovered. -->
-              <ToggleButton Classes="vp" Content="▶" IsChecked="{Binding AnimationsPlaying}"
-                            IsVisible="{Binding UseDx11Viewport}"
-                            ToolTip.Tip="Play or pause shader animation (scrolling UVs, flipbooks, flow) and particle simulation. Pausing holds the current moment; the camera still orbits it. OpenGL has no equivalent button, so its particles keep running." />
-              <!-- M460: the glow buffer and Riot's bloom chain. DX11 only - it needs a second render
-                   target and three full-screen passes, and the OpenGL path has neither. -->
-              <ToggleButton Classes="vp" Content="✷ Bloom" IsChecked="{Binding ShowBloom}"
-                            IsVisible="{Binding UseDx11Viewport}"
-                            ToolTip.Tip="Collect Riot's glow output (SV_Target1) into a second render target, blur it with their own mip chain and composite it back with their screen blend. Riot's shaders compute this every frame regardless; with this off it is discarded, which is what the viewport did before M460. Only emissive materials - lanterns, glowsigns, holograms - write a glow at all, so on a map without them there is nothing to see either way." />
-              <!-- M465: the sun shadow map. DX11 only - it needs a depth-only pass from the sun and a
-                   comparison sampler, and the OpenGL path has neither. -->
-              <ToggleButton Classes="vp" Content="☀ Shadows" IsChecked="{Binding ShowSunShadows}"
-                            IsVisible="{Binding UseDx11Viewport}"
-                            ToolTip.Tip="Render the map from the sun into a 2048x2048 depth map and let Riot's own five-tap PCF sample it. Those taps already run in every environment shader; with this off they sample a 1x1 white stand-in and nothing is ever shadowed, which is what the viewport did before M465. On a baked map the shader takes min(pcf, lightmap alpha), so this cannot darken what the bake already shadows - it mostly adds props and fixes maps whose bake is stale or missing." />
-              <TextBlock Text="{Binding Dx11ViewportStatus}" VerticalAlignment="Center" Margin="8,0,0,0"
-                         FontFamily="Consolas" FontSize="10" Opacity="0.7"
-                         Foreground="{DynamicResource ReyTextBrush}"
-                         IsVisible="{Binding UseDx11Viewport}"
-                         ToolTip.Tip="{Binding Dx11ViewportDetail}" />
-              <ToggleButton Classes="vp" Content="◪ Cull" IsChecked="{Binding CullBackfaces}"
-                            ToolTip.Tip="Respect each material's cullEnable (single-sided materials cull backfaces; cullEnable=false renders two-sided with flipped-normal lighting). Off = force everything two-sided." />
-              <ToggleButton Classes="vp" Content="◈ Game Depth" IsChecked="{Binding ClientDepthRules}"
-                            IsVisible="{Binding UseDx11Viewport}"
-                            ToolTip.Tip="Render transparents with the GAME's depth rules: they keep the depth mask and sort with solid geometry. The editor normally drops the depth mask on transparents and draws them last, which is why a decal can look right here and go black in game - it stamps depth at its own plane, depth-rejects the ground under it, and composites over nothing. Turn this on to see what the client will actually draw." />
+
+              <!-- ============================ DISPLAY ============================
+                   How the viewport draws: renderer, culling, post, and the sky. -->
+              <Button Classes="tool" Content="👁 Display ▾" FontSize="11" Padding="8,3"
+                      ToolTip.Tip="How the viewport draws — renderer, culling, post-processing and the sky.">
+                <Button.Flyout>
+                  <Flyout Placement="Bottom">
+                    <StackPanel MinWidth="330" Spacing="5">
+                      <TextBlock Text="DISPLAY" FontSize="10" FontWeight="Bold" LetterSpacing="1.2"
+                                 Foreground="{DynamicResource ReyAccentBrush}" />
+
+                      <CheckBox IsChecked="{Binding ShowWireframe}" Content="◫ Wireframe overlay" FontSize="11"
+                                ToolTip.Tip="Wireframe overlay" />
+                      <CheckBox IsChecked="{Binding CullBackfaces}" Content="◪ Respect material culling" FontSize="11"
+                                ToolTip.Tip="Respect each material's cullEnable (single-sided materials cull backfaces; cullEnable=false renders two-sided with flipped-normal lighting). Off = force everything two-sided." />
+
+                      <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,3" />
+                      <!-- M248 (phase 6, step 1): OpenGL <-> Direct3D 11. Swaps which of two sibling surfaces
+                           is visible. M263 removed the A/B compare button - it had served its purpose, and
+                           the FrameDiff machinery behind it stays for the harness. -->
+                      <CheckBox IsChecked="{Binding UseDx11Viewport}" Content="Direct3D 11 renderer" FontSize="11"
+                                ToolTip.Tip="Render this viewport with Direct3D 11 instead of OpenGL." />
+                      <TextBlock Text="The four below need the D3D11 renderer." FontSize="9" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource ReyTextDimBrush}"
+                                 IsVisible="{Binding !UseDx11Viewport}" />
+
+                      <!-- M263: pause freezes the animation clock where it is rather than resetting it.
+                           M266: the same clock now drives the particles, so pausing freezes them too. That
+                           is a stated difference from the OpenGL viewport, which never pauses its map
+                           particles - the tooltip says so rather than leaving it to be discovered. -->
+                      <CheckBox IsChecked="{Binding AnimationsPlaying}" Content="▶ Play shader + particle animation"
+                                FontSize="11" IsVisible="{Binding UseDx11Viewport}"
+                                ToolTip.Tip="Play or pause shader animation (scrolling UVs, flipbooks, flow) and particle simulation. Pausing holds the current moment; the camera still orbits it. OpenGL has no equivalent button, so its particles keep running." />
+                      <!-- M460: the glow buffer and Riot's bloom chain. DX11 only - it needs a second render
+                           target and three full-screen passes, and the OpenGL path has neither. -->
+                      <CheckBox IsChecked="{Binding ShowBloom}" Content="✷ Bloom" FontSize="11"
+                                IsVisible="{Binding UseDx11Viewport}"
+                                ToolTip.Tip="Collect Riot's glow output (SV_Target1) into a second render target, blur it with their own mip chain and composite it back with their screen blend. Riot's shaders compute this every frame regardless; with this off it is discarded, which is what the viewport did before M460. Only emissive materials - lanterns, glowsigns, holograms - write a glow at all, so on a map without them there is nothing to see either way." />
+                      <!-- M465: the sun shadow map. DX11 only - it needs a depth-only pass from the sun and a
+                           comparison sampler, and the OpenGL path has neither. -->
+                      <CheckBox IsChecked="{Binding ShowSunShadows}" Content="☀ Sun shadows" FontSize="11"
+                                IsVisible="{Binding UseDx11Viewport}"
+                                ToolTip.Tip="Render the map from the sun into a 2048x2048 depth map and let Riot's own five-tap PCF sample it. Those taps already run in every environment shader; with this off they sample a 1x1 white stand-in and nothing is ever shadowed, which is what the viewport did before M465. On a baked map the shader takes min(pcf, lightmap alpha), so this cannot darken what the bake already shadows - it mostly adds props and fixes maps whose bake is stale or missing." />
+                      <CheckBox IsChecked="{Binding ClientDepthRules}" Content="◈ Game depth rules" FontSize="11"
+                                IsVisible="{Binding UseDx11Viewport}"
+                                ToolTip.Tip="Render transparents with the GAME's depth rules: they keep the depth mask and sort with solid geometry. The editor normally drops the depth mask on transparents and draws them last, which is why a decal can look right here and go black in game - it stamps depth at its own plane, depth-rejects the ground under it, and composites over nothing. Turn this on to see what the client will actually draw." />
+                      <TextBlock Text="{Binding Dx11ViewportStatus}" FontFamily="Consolas" FontSize="10" Opacity="0.7"
+                                 Foreground="{DynamicResource ReyTextBrush}" TextWrapping="Wrap"
+                                 IsVisible="{Binding UseDx11Viewport}"
+                                 ToolTip.Tip="{Binding Dx11ViewportDetail}" />
+
+                      <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,3" />
+                      <CheckBox IsChecked="{Binding RenderRegionsEnabled}" Content="⬓ Render-region meshes"
+                                FontSize="11" IsVisible="{Binding HasRenderRegions}"
+                                ToolTip.Tip="Render meshes that belong to a render region (mapgeo v18 renderRegionHash). Off = hide every region-assigned mesh, leaving only the region-independent base geometry." />
+                      <!-- M122: skybox picker (cubemaps, authored domes, sky textures, custom image) -->
+                      <TextBlock Text="Skybox" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <ComboBox ItemsSource="{Binding SkyboxOptions}" SelectedIndex="{Binding SelectedSkyboxIndex}"
+                                FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="420"
+                                ToolTip.Tip="League ships hundreds of skyboxes; pick one or use a custom image" />
+                    </StackPanel>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
+
+              <!-- ============================ OVERLAYS ============================
+                   Editor decoration drawn over the map. The count on the button is what keeps this
+                   readable while the menu is shut - it is exactly this menu's toggles and nothing else. -->
+              <Button Classes="tool" FontSize="11" Padding="8,3"
+                      ToolTip.Tip="Editor decoration drawn over the map: placement icons, light markers, bounds, bones and the grids. The number is how many are on.">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <TextBlock Text="◉ Overlays ▾" VerticalAlignment="Center" />
+                  <Border Background="{DynamicResource ReyAccentBrush}" CornerRadius="7" Padding="5,0"
+                          MinWidth="16" VerticalAlignment="Center" IsVisible="{Binding HasActiveOverlays}">
+                    <TextBlock Text="{Binding OverlayBadge}" FontSize="9" FontWeight="Bold"
+                               Foreground="#0B0F14" HorizontalAlignment="Center" />
+                  </Border>
+                </StackPanel>
+                <Button.Flyout>
+                  <Flyout Placement="Bottom">
+                    <StackPanel MinWidth="300" Spacing="5">
+                      <TextBlock Text="OVERLAYS" FontSize="10" FontWeight="Bold" LetterSpacing="1.2"
+                                 Foreground="{DynamicResource ReyAccentBrush}" />
+
+                      <CheckBox IsChecked="{Binding ShowSoundIcons}" Content="🔊 Audio placements" FontSize="11"
+                                ToolTip.Tip="Show an icon at each MapAudio placement" />
+                      <CheckBox IsChecked="{Binding ShowPropIcons}" Content="🧍 Mobs and animated props" FontSize="11"
+                                ToolTip.Tip="Show mob / animated-prop icons" />
+                      <CheckBox IsChecked="{Binding ShowParticles}" Content="✧ Particle systems" FontSize="11"
+                                IsVisible="{Binding HasParticles}"
+                                ToolTip.Tip="Show placed particle-system markers (MapParticle)" />
+                      <!-- M577: the one that was missing. It existed as a checkbox buried in the Lighting
+                           window, which is not where you look when the map is covered in light icons. -->
+                      <CheckBox IsChecked="{Binding ShowLightMarkers}" Content="💡 Point-light markers" FontSize="11"
+                                ToolTip.Tip="Show a glow icon at each dynamic point light. Turning this off also stops the icons being clickable, so the gizmo stops picking lights - the lights themselves keep lighting the map either way." />
+                      <CheckBox IsChecked="{Binding ShowPlaceables}" Content="◈ Probes and placeables" FontSize="11"
+                                ToolTip.Tip="Show markers for cubemap probes and placed characters" />
+
+                      <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,3" />
+                      <CheckBox IsChecked="{Binding ShowBounds}" Content="▣ Bounding boxes" FontSize="11"
+                                ToolTip.Tip="Show bounding boxes" />
+                      <CheckBox IsChecked="{Binding ShowBones}" Content="🦴 Skeleton bones" FontSize="11"
+                                ToolTip.Tip="Show skeleton bones" />
+                      <CheckBox IsChecked="{Binding ShowBucketGrid}" Content="⊞ Culling bucket grid" FontSize="11"
+                                IsVisible="{Binding HasBucketGrids}"
+                                ToolTip.Tip="Show the map's culling bucket grid: the baked scene mesh as 3D wireframe + the flat cell boundaries." />
+                      <CheckBox IsChecked="{Binding ShowBakeBox}" Content="▦ Bake volume" FontSize="11"
+                                IsVisible="{Binding HasBucketGrids}"
+                                ToolTip.Tip="Show the volume the next bucket-grid rebuild will cover. Its numbers live under Tools ▸ Bucket grid settings." />
+                    </StackPanel>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
+
+              <!-- NavGrid keeps its own control: it carries a layer list, which does not fold into a
+                   checkbox, and it is read constantly while judging bush and wall placement. -->
               <SplitButton Classes="vp" Content="🌿 NavGrid"
                            Command="{Binding ToggleNavGridOverlayCommand}"
                            ToolTip.Tip="Show the map's navigation grid on its 50-unit lattice, read from assets/maps/navgrid/&lt;map&gt;/aipath.aimesh_ngrid. Click to switch the overlay on; use the arrow to choose which flags to draw. The flags are NOT named - the editor reports the mask and how many cells carry it, and you decide what each one is by looking at where it lands.">
@@ -622,23 +711,7 @@
                   </Flyout>
                 </SplitButton.Flyout>
               </SplitButton>
-              <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" ToolTip.Tip="Show skeleton bones" />
-              <ToggleButton Classes="vp" Content="▣ Bounds" IsChecked="{Binding ShowBounds}" ToolTip.Tip="Show bounding boxes" />
-              <ToggleButton Classes="vp" Content="⬓ Regions" IsChecked="{Binding RenderRegionsEnabled}"
-                            IsVisible="{Binding HasRenderRegions}"
-                            ToolTip.Tip="Render meshes that belong to a render region (mapgeo v18 renderRegionHash). Off = hide every region-assigned mesh, leaving only the region-independent base geometry." />
-              <ToggleButton Classes="vp" Content="🔊" IsChecked="{Binding ShowSoundIcons}"
-                            ToolTip.Tip="Show audio placement icons" />
-              <ToggleButton Classes="vp" Content="🧍" IsChecked="{Binding ShowPropIcons}"
-                            ToolTip.Tip="Show mob / animated-prop icons" />
-              <!-- M122: skybox picker (cubemaps, authored domes, sky textures, custom image) -->
-              <ComboBox ItemsSource="{Binding SkyboxOptions}" SelectedIndex="{Binding SelectedSkyboxIndex}"
-                        FontSize="10" MaxWidth="170" MaxDropDownHeight="420" VerticalAlignment="Center"
-                        ToolTip.Tip="Skybox - League ships hundreds; pick one or use a custom image" />
-            </StackPanel>
 
-            <!-- row 2: map lighting + tools -->
-            <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
               <!-- M169: the lighting-mode segment stays in the viewport — it is the control you click
                    constantly while comparing a bake, and the rest of the lighting panel moved to
                    Tools ▸ Light ▸ Lighting…, which is what shortened this row. -->
@@ -653,66 +726,71 @@
                                 ToolTip.Tip="Baked lightmap AND dynamic lights together — a debug overlay to compare the two." />
                 </StackPanel>
               </Border>
+
               <!-- M462: one switch for "show me what the game shows". Decoration only - lighting, fog
                    and bloom are deliberately untouched, since turning those off would make the viewport
                    match the game LESS. -->
               <ToggleButton Classes="vp" Content="🎮 Game Mode" IsChecked="{Binding GameMode}"
                             IsVisible="{Binding HasMapGeo}"
                             ToolTip.Tip="Hide every editor overlay at once - placement icons (audio, mobs, particles), light markers, the bucket grid, the bake box, bounds, bones, wireframe and the selection outline - so the viewport shows only what the game draws. Lighting, fog and bloom are left exactly as you set them. Turning it off restores every toggle to what it was, and your selection is never cleared." />
-              <ToggleButton Classes="vp" Content="✧ Particles" IsChecked="{Binding ShowParticles}"
-                            IsVisible="{Binding HasParticles}"
-                            ToolTip.Tip="Show placed particle-system markers (MapParticle)" />
+
               <ToggleButton Classes="vp" Content="🖌 Paint" IsChecked="{Binding IsPaintMode}"
                             IsVisible="{Binding HasMapGeo}"
                             ToolTip.Tip="Paint colour straight onto the map with a brush. Left-drag paints; the camera keeps Alt-drag and right-drag." />
-              <ToggleButton Classes="vp" Content="⊞ Buckets" IsChecked="{Binding ShowBucketGrid}"
-                            IsVisible="{Binding HasBucketGrids}"
-                            ToolTip.Tip="Show the map's culling bucket grid: the baked scene mesh as 3D wireframe + the flat cell boundaries." />
-              <Button Classes="tool" Content="⟳ Reload Map" Command="{Binding ReloadMapCommand}"
-                      ToolTip.Tip="Re-decode the open map from its current bytes — after Save Map Edits or a materials change. Confirms if unsaved edits would be lost." />
-              <Button Classes="tool" Content="⟳ Rebuild Grids" Command="{Binding RebuildBucketGridsCommand}"
-                      IsVisible="{Binding HasBucketGrids}" FontSize="11" Padding="8,3" Margin="0"
-                      ToolTip.Tip="Regenerate every bucket grid from the map's CURRENT geometry (after moving/scaling meshes). Preview updates immediately; saving the map writes the new grids into the mapgeo." />
-              <!-- M412: bake settings + the preview volume. A Flyout so the three numbers live next to
-                   the button that uses them; Flyout takes ONE child (the StackPanel). -->
-              <Button Classes="tool" Content="▦" FontSize="11" Padding="8,3" Margin="0"
-                      IsVisible="{Binding HasBucketGrids}"
-                      ToolTip.Tip="Bucket-grid bake settings: the height filter and target bucket size, with a live preview of the volume the next rebuild covers.">
+
+              <!-- ============================== TOOLS ==============================
+                   Actions rather than view state: everything here changes the project. -->
+              <Button Classes="tool" Content="🛠 Tools ▾" FontSize="11" Padding="8,3"
+                      IsVisible="{Binding HasMapGeo}"
+                      ToolTip.Tip="Actions on the open map — add content, reload it, rebuild its grids.">
                 <Button.Flyout>
                   <Flyout Placement="Bottom">
-                    <StackPanel Width="280" Spacing="6">
-                      <CheckBox IsChecked="{Binding ShowBakeBox}" Content="Show bake volume in viewport"
-                                FontSize="11" />
-                      <TextBlock Text="Height filter (world Y). The grid itself is flat - this decides which triangles get baked, not how tall anything is."
-                                 FontSize="9" Opacity="0.6" TextWrapping="Wrap" />
-                      <Grid ColumnDefinitions="Auto,*,Auto,*" >
-                        <TextBlock Grid.Column="0" Text="Min" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0" />
-                        <TextBox Grid.Column="1" Text="{Binding BakeHeightMinText, Mode=TwoWay}" FontSize="10" Padding="4,1" />
-                        <TextBlock Grid.Column="2" Text="Max" FontSize="10" VerticalAlignment="Center" Margin="8,0,4,0" />
-                        <TextBox Grid.Column="3" Text="{Binding BakeHeightMaxText, Mode=TwoWay}" FontSize="10" Padding="4,1" />
-                      </Grid>
-                      <Grid ColumnDefinitions="Auto,*">
-                        <TextBlock Grid.Column="0" Text="Bucket size" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0" />
-                        <TextBox Grid.Column="1" Text="{Binding BakeBucketSizeText, Mode=TwoWay}" FontSize="10" Padding="4,1" />
-                      </Grid>
-                      <TextBlock Text="{Binding BakeBoxInfo}" FontSize="9" Opacity="0.75" TextWrapping="Wrap"
-                                 FontFamily="Consolas" />
-                      <Button Classes="tool" Content="⟳ Rebuild with these settings"
-                              Command="{Binding RebuildBucketGridsCommand}" HorizontalAlignment="Stretch" />
+                    <StackPanel MinWidth="290" Spacing="5">
+                      <TextBlock Text="MAP TOOLS" FontSize="10" FontWeight="Bold" LetterSpacing="1.2"
+                                 Foreground="{DynamicResource ReyAccentBrush}" />
+                      <Button Classes="tool" Content="➕ Add Mesh…" Command="{Binding AddMeshToMapCommand}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" FontSize="11"
+                              ToolTip.Tip="Import a mesh (.obj / .scb / .sco) and append it to this map. Place it with the gizmo, pick its material in the inspector, then Save to Mod." />
+                      <Button Classes="tool" Content="🧰 Workshop…" Command="{Binding OpenWorkshopCommand}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" FontSize="11"
+                              ToolTip.Tip="Add a complete Riot material or particle template directly to this map" />
+                      <Button Classes="tool" Content="⟳ Reload Map" Command="{Binding ReloadMapCommand}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" FontSize="11"
+                              ToolTip.Tip="Re-decode the open map from its current bytes — after Save Map Edits or a materials change. Confirms if unsaved edits would be lost." />
+
+                      <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,3"
+                              IsVisible="{Binding HasBucketGrids}" />
+                      <Button Classes="tool" Content="⟳ Rebuild Bucket Grids"
+                              Command="{Binding RebuildBucketGridsCommand}"
+                              IsVisible="{Binding HasBucketGrids}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" FontSize="11"
+                              ToolTip.Tip="Regenerate every bucket grid from the map's CURRENT geometry (after moving/scaling meshes). Preview updates immediately; saving the map writes the new grids into the mapgeo." />
+                      <!-- M412: bake settings + the preview volume, now inline rather than behind a second
+                           flyout - a flyout inside a flyout is a click too many for three numbers. -->
+                      <StackPanel Spacing="5" IsVisible="{Binding HasBucketGrids}">
+                        <TextBlock Text="Height filter (world Y). The grid itself is flat - this decides which triangles get baked, not how tall anything is."
+                                   FontSize="9" Opacity="0.6" TextWrapping="Wrap" />
+                        <Grid ColumnDefinitions="Auto,*,Auto,*">
+                          <TextBlock Grid.Column="0" Text="Min" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0" />
+                          <TextBox Grid.Column="1" Text="{Binding BakeHeightMinText, Mode=TwoWay}" FontSize="10" Padding="4,1" />
+                          <TextBlock Grid.Column="2" Text="Max" FontSize="10" VerticalAlignment="Center" Margin="8,0,4,0" />
+                          <TextBox Grid.Column="3" Text="{Binding BakeHeightMaxText, Mode=TwoWay}" FontSize="10" Padding="4,1" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,*">
+                          <TextBlock Grid.Column="0" Text="Bucket size" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0" />
+                          <TextBox Grid.Column="1" Text="{Binding BakeBucketSizeText, Mode=TwoWay}" FontSize="10" Padding="4,1" />
+                        </Grid>
+                        <TextBlock Text="{Binding BakeBoxInfo}" FontSize="9" Opacity="0.75" TextWrapping="Wrap"
+                                   FontFamily="Consolas" />
+                      </StackPanel>
                     </StackPanel>
                   </Flyout>
                 </Button.Flyout>
               </Button>
-              <Button Classes="tool" Content="➕ Add Mesh" Command="{Binding AddMeshToMapCommand}"
-                      IsVisible="{Binding HasMapGeo}" FontSize="11" Padding="8,3" Margin="0"
-                      ToolTip.Tip="Import a mesh (.obj / .scb / .sco) and append it to this map. Place it with the gizmo, pick its material in the inspector, then Save to Mod." />
-              <Button Classes="tool" Content="Workshop" Command="{Binding OpenWorkshopCommand}"
-                      IsVisible="{Binding HasMapGeo}" FontSize="11" Padding="8,3" Margin="0"
-                      ToolTip.Tip="Add a complete Riot material or particle template directly to this map" />
-              <Button Classes="tool" Content="⛶ Frame" Click="OnFrameClick" FontSize="11" Padding="8,3" Margin="0"
+
+              <Button Classes="tool" Content="⛶ Frame" Click="OnFrameClick" FontSize="11" Padding="8,3"
                       ToolTip.Tip="Frame the camera on the loaded content" />
-            </StackPanel>
-            </StackPanel>
+            </WrapPanel>
 
             <Border Classes="glass" Padding="9,4"
                     HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10" IsHitTestVisible="False">

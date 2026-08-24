@@ -186,6 +186,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // M35: placed particle systems (MapParticle) on the current map.
     [ObservableProperty] private IReadOnlyList<MapParticlePlacement>? _currentModelParticles;
+    [NotifyPropertyChangedFor(nameof(ActiveOverlayCount))]
+    [NotifyPropertyChangedFor(nameof(HasActiveOverlays))]
+    [NotifyPropertyChangedFor(nameof(OverlayBadge))]
     [ObservableProperty] private bool _showParticles = true;
     [ObservableProperty] private object? _selectedParticleTreeItem;                               // TreeView selection (group or leaf)
     [ObservableProperty] private ParticlePlacementViewModel? _selectedParticleNode;               // the selected placement (leaf)
@@ -336,12 +339,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<MapAnimatedProp>? _currentModelProps;
     [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _propMarkers;
     [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _probeMarkers;
+    [NotifyPropertyChangedFor(nameof(ActiveOverlayCount))]
+    [NotifyPropertyChangedFor(nameof(HasActiveOverlays))]
+    [NotifyPropertyChangedFor(nameof(OverlayBadge))]
     [ObservableProperty] private bool _showPlaceables = true;
     [ObservableProperty] private bool _playPropAnimations;   // M54: play prop idle animations in the viewport
 
     // ---- M55: sound placements (MapAudio) + bucket-grid overlay ----
     [ObservableProperty] private IReadOnlyList<MapSoundPlacement>? _currentModelSounds;
     [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _soundMarkers;
+    [NotifyPropertyChangedFor(nameof(ActiveOverlayCount))]
+    [NotifyPropertyChangedFor(nameof(HasActiveOverlays))]
+    [NotifyPropertyChangedFor(nameof(OverlayBadge))]
     [ObservableProperty] private bool _showBucketGrid;
     [ObservableProperty] private float[]? _bucketGridLines;
 
@@ -805,6 +814,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // FILTER the bake applies (M410). The preview volume is the DERIVED X/Z extent extruded through that
     // slab, computed by the bake's own derivation so it cannot disagree with a real rebuild.
 
+    [NotifyPropertyChangedFor(nameof(ActiveOverlayCount))]
+    [NotifyPropertyChangedFor(nameof(HasActiveOverlays))]
+    [NotifyPropertyChangedFor(nameof(OverlayBadge))]
     [ObservableProperty] private bool _showBakeBox;
     [ObservableProperty] private string _bakeHeightMinText = "-120";
     [ObservableProperty] private string _bakeHeightMaxText = "5000";
@@ -1114,7 +1126,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnShowPlaceablesChanged(bool value) => UpdatePlaceableMarkers();
 
     // ---- M123: independent icon toggles - audio + mob icons no longer all-or-nothing ----
+    [NotifyPropertyChangedFor(nameof(ActiveOverlayCount))]
+    [NotifyPropertyChangedFor(nameof(HasActiveOverlays))]
+    [NotifyPropertyChangedFor(nameof(OverlayBadge))]
     [ObservableProperty] private bool _showSoundIcons = true;
+    [NotifyPropertyChangedFor(nameof(ActiveOverlayCount))]
+    [NotifyPropertyChangedFor(nameof(HasActiveOverlays))]
+    [NotifyPropertyChangedFor(nameof(OverlayBadge))]
     [ObservableProperty] private bool _showPropIcons = true;
     partial void OnShowSoundIconsChanged(bool value) => UpdatePlaceableMarkers();
     partial void OnShowPropIconsChanged(bool value) => UpdatePlaceableMarkers();
@@ -2843,7 +2861,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(HighlightSubmeshesForViewport));
 
     [ObservableProperty] private bool _showWireframe;
+    [NotifyPropertyChangedFor(nameof(ActiveOverlayCount))]
+    [NotifyPropertyChangedFor(nameof(HasActiveOverlays))]
+    [NotifyPropertyChangedFor(nameof(OverlayBadge))]
     [ObservableProperty] private bool _showBones;
+    [NotifyPropertyChangedFor(nameof(ActiveOverlayCount))]
+    [NotifyPropertyChangedFor(nameof(HasActiveOverlays))]
+    [NotifyPropertyChangedFor(nameof(OverlayBadge))]
     [ObservableProperty] private bool _showBounds;
     [ObservableProperty] private bool _cullBackfaces = true; // M34: respect per-material cullEnable by default (off = force all two-sided)
 
@@ -5649,6 +5673,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // Re-read the map so the viewport paints with the new textures rather than the ones it cached.
         if (_currentMapEntry is { } e) _ = LoadMapGeoAsync(e);
     }
+    [NotifyPropertyChangedFor(nameof(ActiveOverlayCount))]
+    [NotifyPropertyChangedFor(nameof(HasActiveOverlays))]
+    [NotifyPropertyChangedFor(nameof(OverlayBadge))]
     [ObservableProperty] private bool _showLightMarkers = true;   // M71: show a glow icon at each light position
     // M71: manual lighting controls. Sun + sky feed the fallback lighting term (visible with lightmaps off or
     // on geometry without baked light); lightmap brightness scales the baked atlas. All initialise from the
