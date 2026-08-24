@@ -185,34 +185,69 @@ class REYENGINE_OT_pull(bpy.types.Operator):
             for obj in list(collection.objects):
                 bpy.data.objects.remove(obj, do_unlink=True)
 
-        for entry in meshes:
-            _build_object(collection, entry)
+        window = context.window_manager
+        window.progress_begin(0, max(1, len(meshes)))
+        try:
+            for at, entry in enumerate(meshes):
+                _build_object(collection, entry)
+                if at % 64 == 0:
+                    window.progress_update(at)
+        finally:
+            window.progress_end()
 
         _widen_clipping(context)
         self.report({"INFO"}, "ReyEngine: pulled %d mesh(es)" % len(meshes))
         return {"FINISHED"}
 
 
+def _uv_per_loop(uvs, indices):
+    """Expand per-VERTEX UVs into the per-LOOP order a UV layer wants.
+
+    from_pydata lays the loops out in exactly the order of `indices`, so this is a straight gather rather
+    than a query against the mesh. Pure arithmetic on lists, kept out of _build_object so it can be tested
+    without Blender - getting it wrong would not fail, it would smear the texture across the mesh.
+    """
+    per_loop = [0.0] * (len(indices) * 2)
+    for loop_index, vertex_index in enumerate(indices):
+        per_loop[loop_index * 2] = uvs[vertex_index * 2]
+        per_loop[loop_index * 2 + 1] = uvs[vertex_index * 2 + 1]
+    return per_loop
+
+
 def _build_object(collection, entry):
+    """Build one Blender mesh.
+
+    Everything here is bulk. A map is ~900,000 vertices and ~2,700,000 loops across ~1,400 objects, and
+    at that size anything done per element in Python stops being slow and starts looking like a hang:
+    the first version multiplied every vertex by a Matrix and assigned every loop's UV individually,
+    which froze Blender for minutes. The same work through foreach_set and one mesh.transform is a
+    handful of C calls per mesh.
+    """
     positions = entry["positions"]
     indices = entry["indices"]
+    vertex_count = len(positions) // 3
+    face_count = len(indices) // 3
 
     mesh = bpy.data.meshes.new(entry["name"])
-    verts = [(positions[i], positions[i + 1], positions[i + 2]) for i in range(0, len(positions), 3)]
-    # Vertices arrive pivot-relative in League axes; the basis change is the object's job below, so
-    # rotate them here and leave the object matrix free to carry the placement.
-    verts = [tuple(L2B @ Vector(v)) for v in verts]
-    faces = [(indices[i], indices[i + 1], indices[i + 2]) for i in range(0, len(indices), 3)]
-    mesh.from_pydata(verts, [], faces)
-    mesh.validate(verbose=False)
+    mesh.from_pydata([(0.0, 0.0, 0.0)] * vertex_count, [],
+                     [(indices[i], indices[i + 1], indices[i + 2]) for i in range(0, len(indices), 3)])
+
+    # Coordinates go in as a flat buffer, then the basis change happens ONCE for the whole mesh instead
+    # of once per vertex. Vertices arrive pivot-relative in League axes; the object matrix below carries
+    # the placement.
+    mesh.vertices.foreach_set("co", positions)
+    mesh.transform(L2B)
+    # No mesh.validate() here. It is per-element work on every mesh, and what it would catch is already
+    # caught earlier: the decoder rejects an index past the end of the vertex buffer, and the editor
+    # filters the degenerate faces its own face-delete leaves behind.
 
     # UV0 comes across so a reshaped mesh keeps its texturing. The lightmap channel deliberately does
     # not - a changed shape invalidates a bake anyway, and it would only survive as stale data.
     uvs = entry.get("uvs") or ()
-    if len(uvs) == len(verts) * 2:
+    if len(uvs) == vertex_count * 2 and face_count:
         layer = mesh.uv_layers.new(name="UVMap")
-        for loop in mesh.loops:
-            layer.data[loop.index].uv = (uvs[loop.vertex_index * 2], uvs[loop.vertex_index * 2 + 1])
+        layer.data.foreach_set("uv", _uv_per_loop(uvs, indices))
+
     mesh.update()
 
     obj = bpy.data.objects.new(entry["name"], mesh)

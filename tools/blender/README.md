@@ -75,5 +75,8 @@ anything twice.
   meshes send normally.
 - **The link is loopback only** and has no authentication. It hands out a map's whole geometry and
   accepts edits to it, so it is bound to `127.0.0.1` deliberately — do not make it reachable.
+- **A full pull of a big map takes a while.** ~1,400 objects and ~900,000 vertices is real work for
+  Blender; the progress bar moves while it runs. If you only need part of the map, it is far quicker to
+  pull once and keep the .blend than to re-pull.
 - **Blender's viewport clips at 1,000 units** by default and a League map is ~15,000 across. Pull raises
   the clip distance on the open 3D views for you; a view opened afterwards may need it set by hand.
