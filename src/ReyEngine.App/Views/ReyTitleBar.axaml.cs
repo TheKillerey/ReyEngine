@@ -13,12 +13,24 @@ public partial class ReyTitleBar : UserControl
 {
     private static Bitmap? _logo;
 
+    /// <summary>
+    /// The window this bar belongs to.
+    ///
+    /// <para>M579: this used to be <c>VisualRoot is Window</c>, which stopped matching under Avalonia 12 -
+    /// <c>Visual.VisualRoot</c> is typed <c>Visual</c> now and is no longer the Window itself. Every one of
+    /// this class's guards was written that way, so a secondary window silently lost its title text, its
+    /// drag, and all three caption buttons at once: nothing threw, the checks just never passed.
+    /// <c>TopLevel.GetTopLevel</c> is the supported way to ask, and it is the same break that took
+    /// RenderScaling out of ViewportControl in M576.</para>
+    /// </summary>
+    private Window? Host => TopLevel.GetTopLevel(this) as Window;
+
     public ReyTitleBar()
     {
         InitializeComponent();
         AttachedToVisualTree += (_, _) =>
         {
-            if (VisualRoot is Window w)
+            if (Host is { } w)
             {
                 TitleText.Text = w.Title;
                 // M578: only a resizable window gets a maximise button, and the glyph has to follow the
@@ -50,23 +62,23 @@ public partial class ReyTitleBar : UserControl
     /// <summary>M578: these are the window's only caption buttons now — the host has no native ones.</summary>
     private void OnMinimise(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (VisualRoot is Window w) w.WindowState = WindowState.Minimized;
+        if (Host is { } w) w.WindowState = WindowState.Minimized;
     }
 
     private void OnMaximise(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (VisualRoot is Window { CanResize: true } w)
+        if (Host is { CanResize: true } w)
             w.WindowState = w.WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     }
 
     private void OnClose(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (VisualRoot is Window w) w.Close();
+        if (Host is { } w) w.Close();
     }
 
     private void OnDrag(object? sender, PointerPressedEventArgs e)
     {
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed || VisualRoot is not Window w) return;
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed || Host is not { } w) return;
 
         // M578: a press on a Button is that button's, not the start of a window move.
         //

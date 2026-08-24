@@ -79,6 +79,26 @@ public sealed class WindowChromeTests
     }
 
     [Fact]
+    public void NoViewReachesForItsWindowThroughVisualRoot()
+    {
+        // M579: Visual.VisualRoot is typed Visual under Avalonia 12 and is no longer the Window, so
+        // "VisualRoot is Window w" silently stops matching. Nothing throws - the guarded code just never
+        // runs. That took the title text, the drag and all three caption buttons off every secondary
+        // window at once, and looked like dead buttons rather than a failed cast.
+        var offenders = new List<string>();
+        foreach (string f in ViewFiles("*.cs"))
+        {
+            // Comments are allowed to NAME the old pattern - this one's own docs explain why it went.
+            string code = string.Join(" ", File.ReadAllLines(f)
+                .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+            if (Regex.IsMatch(code, @"VisualRoot\s+is\s+(not\s+)?Window"))
+                offenders.Add(Path.GetFileName(f)!);
+        }
+        Assert.True(offenders.Count == 0,
+            "use TopLevel.GetTopLevel(this) as Window instead: " + string.Join(", ", offenders));
+    }
+
+    [Fact]
     public void TheSharedTitleBarCarriesAllThreeCaptionButtons()
     {
         string? path = ViewFiles("ReyTitleBar.axaml").FirstOrDefault();
