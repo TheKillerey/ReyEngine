@@ -17,7 +17,7 @@ Edit a League map's meshes in Blender and push the result back into the editor.
 | **Push All** | Sends every pulled object's position, rotation and scale back |
 | **Selected** | The same, for the current Blender selection only |
 | **Push Shapes** | Sends the selected objects' edited GEOMETRY back |
-| **All** (next to it) | The same, for every pulled mesh |
+| **All Changed** | The same, for every mesh whose shape actually differs |
 
 Pushed placements land in the editor immediately — the viewport updates as they arrive. They are **not**
 written to the file until you use **Save Map Content Edits**, exactly like a gizmo move.
@@ -66,7 +66,13 @@ anything twice.
 - **A mesh whose buffers are shared with another mesh is refused.** Resizing one would redefine the other.
 - **65,536 vertices per mesh**, because mapgeo index buffers are 16-bit. Split the mesh and send the parts.
 - **Reshaping loses the mesh's baked lightmap UVs.** They belong to vertices that may no longer exist, and
-  a changed shape invalidates the bake anyway. Re-bake after reshaping.
+  a changed shape invalidates the bake anyway. Re-bake after reshaping. This is why **All Changed** sends
+  only what differs — replacing an untouched mesh would re-number its vertices and drop its lightmap UVs
+  for nothing. A mesh carrying a modifier always counts as changed, since its result only exists once
+  evaluated.
+- **Saving a reshape rebuilds the map's bucket grids.** The grid holds its own baked copy of the map and
+  the game culls against that copy, so a changed shape with a stale grid makes meshes and decals blink out
+  as the camera turns. The rebuild is automatic; it is why a save after reshaping takes a moment.
 - **Do not mix a reshape and face edits in one save.** A reshape replaces a mesh's triangles, so pending
   face edits no longer refer to the same ones; the editor refuses the save rather than applying them to
   whatever now holds those indices.

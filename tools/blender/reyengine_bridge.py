@@ -43,6 +43,7 @@ bl_info = {
 import json
 import socket
 import struct
+import zlib
 
 import bpy
 from bpy.props import IntProperty, StringProperty, BoolProperty
@@ -51,12 +52,42 @@ from mathutils import Euler, Matrix, Vector
 PROTOCOL = 2
 COLLECTION = "ReyEngine Map"
 INDEX_KEY = "rey_index"
+FINGERPRINT_KEY = "rey_shape"
 
 # League -> Blender basis: swap the two ground axes and leave height alone. Determinant -1, so it is a
 # mirror; winding is reversed alongside it (see _reverse_winding). The matrix is its own inverse, which
 # is why the same one serves both directions.
 L2B = Matrix(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))).to_4x4()
 B2L = L2B
+
+
+def _fingerprint(mesh):
+    """A cheap signature of a mesh's shape: its coordinates and its topology.
+
+    Used to send only what actually changed. Pushing every mesh REPLACES every mesh - each one is
+    re-triangulated, its vertices are re-numbered, and its baked lightmap UVs are dropped because they
+    belong to vertices that no longer exist. Doing that to meshes the user never touched is destructive,
+    so an untouched mesh has to be recognisable rather than assumed.
+    """
+    co = [0.0] * (len(mesh.vertices) * 3)
+    mesh.vertices.foreach_get("co", co)
+    loops = [0] * len(mesh.loops)
+    mesh.loops.foreach_get("vertex_index", loops)
+    digest = zlib.crc32(struct.pack("<%df" % len(co), *co))
+    return zlib.crc32(struct.pack("<%dI" % len(loops), *loops), digest)
+
+
+def _has_changed(obj):
+    """Whether this object's shape differs from what ReyEngine sent.
+
+    A modifier is treated as a change without further checking: its result only exists once evaluated,
+    and evaluating every mesh to find out would cost more than sending it.
+    """
+    if FINGERPRINT_KEY not in obj:
+        return True
+    if len(obj.modifiers) > 0:
+        return True
+    return _fingerprint(obj.data) != obj[FINGERPRINT_KEY]
 
 
 def _reverse_winding(indices):
@@ -278,6 +309,7 @@ def _build_object(collection, entry):
 
     obj = bpy.data.objects.new(entry["name"], mesh)
     obj[INDEX_KEY] = entry["index"]
+    obj[FINGERPRINT_KEY] = _fingerprint(mesh)
     obj.rotation_mode = "XYZ"
 
     # Rebuild ReyEngine's own transform, then change basis around it. ReyEngine composes scale, then X,
@@ -447,10 +479,17 @@ class REYENGINE_OT_push_geometry(bpy.types.Operator):
             return {"CANCELLED"}
 
         entries = []
+        pushed = []
+        unchanged = 0
         for obj in collection.objects:
             if INDEX_KEY not in obj or obj.type != "MESH":
                 continue
             if self.selected_only and not obj.select_get():
+                continue
+            # "All" means every mesh you CHANGED, not every mesh. Replacing an untouched mesh would
+            # re-number its vertices and drop its baked lightmap UVs for nothing.
+            if not _has_changed(obj):
+                unchanged += 1
                 continue
             positions, normals, uvs, indices = _mesh_to_league(obj)
             if not positions or not indices:
@@ -461,9 +500,10 @@ class REYENGINE_OT_push_geometry(bpy.types.Operator):
                 "rotation": (0.0, 0.0, 0.0), "scale": (1.0, 1.0, 1.0),
                 "positions": positions, "normals": normals, "uvs": uvs, "indices": indices,
             })
+            pushed.append(obj)
 
         if not entries:
-            self.report({"WARNING"}, "ReyEngine: nothing selected to push")
+            self.report({"INFO"}, "ReyEngine: no shape changes to push (%d unchanged)" % unchanged)
             return {"CANCELLED"}
 
         body = _encode_meshes(entries)
@@ -473,7 +513,12 @@ class REYENGINE_OT_push_geometry(bpy.types.Operator):
             self.report({"ERROR"}, "ReyEngine: %s" % ex)
             return {"CANCELLED"}
 
-        self.report({"INFO"}, "ReyEngine: sent %d shape(s) (%s)" % (len(entries), header.get("detail", "")))
+        # Re-baselined only after ReyEngine has taken them, so a failed push stays pending.
+        for obj in pushed:
+            obj[FINGERPRINT_KEY] = _fingerprint(obj.data)
+
+        self.report({"INFO"}, "ReyEngine: sent %d changed shape(s), skipped %d unchanged (%s)"
+                    % (len(entries), unchanged, header.get("detail", "")))
         return {"FINISHED"}
 
 
@@ -517,7 +562,7 @@ class REYENGINE_PT_panel(bpy.types.Panel):
         layout.separator()
         row = layout.row(align=True)
         row.operator("reyengine.push_geometry", icon="MESH_DATA", text="Push Shapes").selected_only = True
-        row.operator("reyengine.push_geometry", text="All").selected_only = False
+        row.operator("reyengine.push_geometry", text="All Changed").selected_only = False
 
         collection = bpy.data.collections.get(COLLECTION)
         layout.label(text="%d mesh(es) linked" % (len(collection.objects) if collection else 0))

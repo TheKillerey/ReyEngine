@@ -9892,7 +9892,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             // 2b) M105: bucket grids bake per-face visibility masks from the mesh flags, so layer-only
             //     saves must regenerate them too (moves/appends above already did).
-            if (hasLayers && !hasMoves && added.Count == 0)
+            //
+            //     M585: and so must anything that changes GEOMETRY. A bucket grid carries its own baked
+            //     copy of the map, and the game culls against that copy - so a reshape, an extrude or a
+            //     face edit that is not followed by a rebuild leaves the game hiding meshes that have
+            //     moved out from under the old cells. Measured on a real edited map: the grid claimed
+            //     945,676 baked vertices where the geometry had 843,339, and the symptom was decals and
+            //     meshes blinking out as the camera turned.
+            if ((hasLayers || hasReshapes || hasFaces || hasGrows) && !hasMoves && added.Count == 0)
             {
                 var reMap2 = await Task.Run(() => MapGeoDecoder.Decode(bytes));
                 bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2, SaveBakeSize(), SaveBakeMin(), SaveBakeMax());
