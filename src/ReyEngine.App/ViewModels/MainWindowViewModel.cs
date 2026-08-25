@@ -3495,7 +3495,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             { _log.Error("Materials", "No shader cache found (set the game folder) — refusing to clear "
                                     + "NO_BAKED_LIGHTING blindly, it can ask for a permutation Riot never cooked."); return; }
 
-            int changed = 0, refused = 0;
+            int changed = 0, refused = 0, companion = 0, opaque = 0;
             foreach (var m in doc.Materials)
             {
                 if (unlit)
@@ -3504,16 +3504,37 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     // does, and this direction had no check at all. M486 authored NO_BAKED_LIGHTING=1 across
                     // 78 DefaultEnv_Flat_AlphaTest materials and League answered "Unable to find correct hash
                     // for shader ... in wad" + "Failed to compile shader" - a map that renders nothing.
-                    if (canValidate && !perms!.CanSetMacro(m, Formats.Materials.MaterialBinding.MacroNoBakedLighting, "1"))
-                    { refused++; continue; }                    if (m.SetMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting, true) is not null) changed++;
+                    if (!canValidate)
+                    {
+                        if (m.SetMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting, true) is not null) changed++;
+                        continue;
+                    }
+
+                    // M588: refusing was all this ever did, and on a ported map it refused EVERYTHING -
+                    // all 88 materials of the Halloween Map453, because NO_BAKED_LIGHTING alone is not a
+                    // cooked permutation on DefaultEnv_Flat_AlphaTest. SuggestFixes has been printing the
+                    // way through ("add MULTIPLY_ALPHA=1") the whole time with no caller acting on it.
+                    var outcome = Formats.Materials.NoBakedLightingFix.Apply(m, perms!);
+                    if (outcome.Changed()) changed++;
+                    else if (!outcome.Succeeded()) refused++;
+                    if (outcome == Formats.Materials.NoBakedLightingOutcome.SetWithCompanion) companion++;
+                    if (outcome == Formats.Materials.NoBakedLightingOutcome.RefusedOpaque) opaque++;
                 }
                 else if (!perms!.CanRemoveMacro(m, Formats.Materials.MaterialBinding.MacroNoBakedLighting)) refused++;
                 else if (m.RemoveMacro(Formats.Materials.MaterialBinding.MacroNoBakedLighting)) changed++;
             }
             // The refusal reads in opposite directions: clearing leaves the macro ON, setting leaves it OFF.
             string refusedNote = refused == 0 ? "" : unlit
-                ? $" {refused:n0} were left baked (the game ships no cooked permutation for them WITH the macro)."
+                ? $" {refused:n0} were left baked (the game ships no cooked permutation for them WITH the macro"
+                  + (opaque > 0 ? $"; {opaque:n0} of those are opaque, where the companion switch would darken them" : "")
+                  + ")."
                 : $" {refused:n0} kept the macro (no cooked permutation without it).";
+            // Said out loud because it changes render state, not just a define: the companion makes the
+            // shader output premultiplied and the pass's source blend factor moves to One to absorb it.
+            if (companion > 0)
+                refusedNote += $" {companion:n0} needed MULTIPLY_ALPHA to have a cooked shader at all, and had "
+                             + "their source blend factor moved to One so the premultiplied output composites "
+                             + "the same as before.";
             if (unlit && !canValidate)
                 _log.Warn("Materials", "No shader cache found (set the game folder) — writing NO_BAKED_LIGHTING "
                                      + "without checking that the game cooked a shader for it.");
@@ -3554,6 +3575,47 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 + refusedNote + $" Saved to {savedTo}.");
         }
         catch (Exception ex) { _log.Error("Materials", "Material lighting mode could not be set: " + ex.Message); }
+    }
+
+    /// <summary>
+    /// M588: an imported mesh renders here and is INVISIBLE in game, and say so at the moment it is added.
+    ///
+    /// <para><see cref="MapGeoMeshAppender"/> writes Position/Normal/Texcoord0 and no Texcoord7, which is
+    /// the honest thing to do — a fabricated lightmap coordinate would be worse than none. But the shaders
+    /// the porter assigns sample the baked lightmap unless <c>NO_BAKED_LIGHTING</c> is set, and the two
+    /// families want DIFFERENT vertex layouts: measured across all 224 cooked vertex permutations of
+    /// DefaultEnv_Flat_AlphaTest, 128 read <c>POSITION NORMAL TEXCOORD0 TEXCOORD7</c> and 96 read
+    /// <c>POSITION NORMAL TEXCOORD0</c>. The client cannot complete the first layout from a mesh with no
+    /// Texcoord7 and skips the draw; our renderer builds its layout from what the mesh HAS, so the same
+    /// mesh looks perfect here. Nothing said so, and a whole map's river went missing over it.</para>
+    ///
+    /// <para>Reports rather than fixes: the material may be shared with meshes that DO have the UV, and
+    /// marking it unlit would unlight those. The fix is one click away in Lighting ▸ Dynamic lights.</para>
+    /// </summary>
+    private void WarnIfAddedMeshesWillNotDrawInGame(IEnumerable<string> materials)
+    {
+        var names = materials.Where(m => !string.IsNullOrWhiteSpace(m))
+                             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (names.Count == 0 || _currentMapEntry is not { } entry) return;
+        if (!TryResolveMaterialsBin(entry.Path, out var binEntry)) return;
+
+        try
+        {
+            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName);
+            foreach (string name in names)
+            {
+                var m = doc.Materials.FirstOrDefault(x =>
+                    x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (m is null) continue;
+                if (m.MacroOn(Formats.Materials.MaterialBinding.MacroNoBakedLighting)) continue;
+
+                _log.Warn("MapGeo", $"'{name}' samples the baked lightmap, and an imported mesh carries no "
+                    + "Texcoord7 to sample it with — the client will skip the draw and the mesh will be "
+                    + "INVISIBLE in game, while rendering normally here. Fix it with Lighting ▸ Dynamic "
+                    + "lights, or set NO_BAKED_LIGHTING on that material.");
+            }
+        }
+        catch (Exception ex) { _log.Info("MapGeo", "Could not check the added meshes' lighting: " + ex.Message); }
     }
 
     /// <summary>
@@ -9875,6 +9937,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (appended is null) { _log.Error("MapGeo", $"Could not append meshes: {aErr}"); return; }
 
                 var reMap = await Task.Run(() => MapGeoDecoder.Decode(appended));
+                WarnIfAddedMeshesWillNotDrawInGame(added.Select(a => a.Material));
 
                 // M123: the appended meshes are the LAST N — give them their chosen layer masks
                 // before the grids bake per-face visibility from the mesh flags.

@@ -1131,6 +1131,15 @@ public sealed class MaterialSwitch
         Element = element;
     }
 
+    /// <summary>
+    /// M588: turn the switch on or off, the way Riot writes it.
+    ///
+    /// <para>ON is expressed by REMOVING the field, not by writing <c>on: bool = true</c>. Measured over
+    /// every shipped map WAD: of <b>23,338</b> StaticMaterialSwitchDef entries in 12,722 bins, <b>0</b>
+    /// write an explicit true and 9,385 leave the field out — MULTIPLY_ALPHA alone is 0 true / 55 false /
+    /// 3,527 absent. This used to write the field either way to make the value survive a round trip, but
+    /// the reader above already resolves an absent 'on' to enabled, so nothing was being protected.</para>
+    /// </summary>
     public void SetOn(bool on)
     {
         On = on;
@@ -1138,17 +1147,21 @@ public sealed class MaterialSwitch
         foreach (var h in new[] { HashAlgorithms.Fnv1aRaw("on"), HashAlgorithms.Fnv1a("on") })
             if (Element.Properties.ContainsKey(h)) { hash = h; break; }
 
-        if (hash != 0)
+        if (on)
         {
+            if (hash != 0) Element.Properties.Remove(hash);
+            return;
+        }
+
+        if (hash != 0)
             switch (Element.Properties[hash])
             {
-                case BinTreeBool b: b.Value = on; return;
-                case BinTreeBitBool bb: bb.Value = on; return;
+                case BinTreeBool b: b.Value = false; return;
+                case BinTreeBitBool bb: bb.Value = false; return;
             }
-        }
-        // No 'on' field yet — write one explicitly so the value survives a round-trip either way.
+        // Turning one OFF is the case that needs the field written.
         hash = HashAlgorithms.Fnv1aRaw("on");
-        Element.Properties[hash] = new BinTreeBool(hash, on);
+        Element.Properties[hash] = new BinTreeBool(hash, false);
     }
 
     public void Revert() => SetOn(_originalOn);

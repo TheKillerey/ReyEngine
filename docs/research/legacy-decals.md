@@ -434,3 +434,81 @@ going through the client.
 M279 is the cautionary half of that: it *fixed* this in our renderer by making transparents behave
 correctly, which was right for the viewport and hid a real authoring bug for as long as it stood. When a
 renderer is deliberately more forgiving than its target, that forgiveness needs a switch.
+
+## 12. M588 — the missing river: the same lesson, one layer lower
+
+A ported Halloween Map453 rendered its river correctly in the editor and drew **nothing at all** in the
+client. Not black this time — absent.
+
+### What it was
+
+The river mesh was added through **Import mesh** (.scb/.sco), and `MapGeoMeshAppender.WriteDeclaration`
+writes exactly three elements:
+
+```
+POSITION  XYZ_FLOAT32
+NORMAL    XYZ_FLOAT32
+TEXCOORD0 XY_FLOAT32
+```
+
+No `Texcoord7`. That is the honest choice — a fabricated lightmap coordinate is worse than none, and the
+porter already refuses to invent one for decals. On this map it made the river **1 of only 2 meshes in
+1,108** with no lightmap UV.
+
+Its material was on `DefaultEnv_Flat_AlphaTest` with no macros, so it resolved to the baked-lighting
+vertex permutation. Reading the compiled DXBC input signatures of all **224** cooked vertex permutations
+of that shader:
+
+| permutations | input signature |
+|---|---|
+| 128 | `POSITION0 NORMAL0 TEXCOORD0 `**`TEXCOORD7`** |
+| 96 | `POSITION0 NORMAL0 TEXCOORD0` |
+
+The 96 are the `NO_BAKED_LIGHTING` ones. The exact keys, resolved through `ShaderPermutationIndex`:
+
+```
+[]                     -> blob 19 : POSITION NORMAL TEXCOORD0 TEXCOORD7    <- what the river asked for
+[NO_BAKED_LIGHTING=1]  -> blob 16 : POSITION NORMAL TEXCOORD0              <- what the river can supply
+```
+
+The client cannot complete the first layout from a mesh with no Texcoord7, so it skips the draw. Our
+renderer builds its layout from what the mesh **has**, so the same mesh looks perfect in the viewport.
+Same shape as M542's white 4TextureBlend terrain (M477), and the same shape as the black decals: the
+editor was kinder than the game.
+
+### Why it could not simply be turned off — again
+
+`NO_BAKED_LIGHTING=1` alone is not a cooked permutation on this shader (M486's crash). It becomes cooked
+with `MULTIPLY_ALPHA` on, which `SuggestFixes` has been printing all along:
+
+```
+authored (no macros)                  cooked
++ NO_BAKED_LIGHTING                   NOT cooked
++ MULTIPLY_ALPHA                      cooked
++ MULTIPLY_ALPHA + NO_BAKED_LIGHTING  cooked          <- the way through
+```
+
+`NoBakedLightingFix` (M588) is that path, applied once and guarded: blended materials only, because the
+companion premultiplies the output and an opaque draw has no blend to absorb it; the pass's source factor
+moves from `SourceAlpha` to One to compensate; anything that does not come back cooked is reverted to the
+bytes it had. On the reporter's map, "set every material unlit" went from **88 refused, 0 changed** to
+**21 fixed, 66 correctly refused as opaque, 1 already set**.
+
+### Corpus notes gathered on the way
+
+Measured over every shipped map WAD, and each one contradicted a plausible guess:
+
+| question | answer |
+|---|---|
+| Does `AlphaTestValue` default to 0.3? | Only in the **premultiplied** family (`src` absent / `dst` 7): 3,096 of 3,271. In the straight-alpha family (`src` 6 / `dst` 7) it is **0.005**, 266 of 285. This is what M541b's "0.005 → 0.3 changed nothing" was circling. |
+| Is an explicit `srcColorBlendFactor = 1` fine? | Riot writes it **0 times in 9,800** shipped passes. One is expressed by ABSENCE (8,545). |
+| How is an enabled switch written? | By **omitting** `on`. Of **23,338** `StaticMaterialSwitchDef` entries in 12,722 bins, **0** write `on: bool = true` and 9,385 leave the field out. `MULTIPLY_ALPHA` alone: 0 true / 55 false / 3,527 absent. `MaterialSwitch.SetOn` wrote the explicit true until M588. |
+| Do materials on this shader carry a switches container? | **3,581 of 3,581**. The ported map carried it on **0 of 88**. |
+
+### What now says so
+
+The audit's `MissingLightmapUv` finding (M509) already described this exactly — *"the glitchy meshes
+nobody can point at a material for, because every value IN the material is correct"* — and was on screen
+the whole time. What was missing was a way to **act** on it: every caller of `CanSetMacro` only ever
+refused. Import now also warns at the moment a mesh is added, naming the fix, because a silent failure
+that only appears in the client is the expensive kind.
