@@ -68,13 +68,16 @@ def _fingerprint(mesh):
     re-triangulated, its vertices are re-numbered, and its baked lightmap UVs are dropped because they
     belong to vertices that no longer exist. Doing that to meshes the user never touched is destructive,
     so an untouched mesh has to be recognisable rather than assumed.
+
+    Returned as a STRING. crc32 is unsigned 32-bit and a Blender custom property is a signed C int, so
+    any digest above 2^31-1 - about half of them - raises OverflowError on assignment.
     """
     co = [0.0] * (len(mesh.vertices) * 3)
     mesh.vertices.foreach_get("co", co)
     loops = [0] * len(mesh.loops)
     mesh.loops.foreach_get("vertex_index", loops)
     digest = zlib.crc32(struct.pack("<%df" % len(co), *co))
-    return zlib.crc32(struct.pack("<%dI" % len(loops), *loops), digest)
+    return "%d" % zlib.crc32(struct.pack("<%dI" % len(loops), *loops), digest)
 
 
 def _has_changed(obj):
@@ -87,7 +90,8 @@ def _has_changed(obj):
         return True
     if len(obj.modifiers) > 0:
         return True
-    return _fingerprint(obj.data) != obj[FINGERPRINT_KEY]
+    # str() on the stored side too: a .blend saved by an older build may hold the int form.
+    return _fingerprint(obj.data) != str(obj[FINGERPRINT_KEY])
 
 
 def _reverse_winding(indices):

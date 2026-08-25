@@ -170,6 +170,60 @@ open(r"{{output}}", "w").write(",".join(str(v) for v in list(x) + list(y) + list
     }
 
     [Fact]
+    public void TheChangeFingerprintFitsInABlenderCustomProperty()
+    {
+        // M586: the fingerprint is a crc32, which is UNSIGNED 32-bit; a Blender custom property is a
+        // signed C int. Roughly half of all digests are past 2^31-1 and raise OverflowError on
+        // assignment - the very first mesh of a pull hit it. Stored as text, it cannot.
+        if (RepoRoot() is not { } root) return;
+        string addon = Path.Combine(root, "tools", "blender", "reyengine_bridge.py");
+        if (!File.Exists(addon)) return;
+
+        string script = Path.Combine(Path.GetTempPath(), "rey_fingerprint.py");
+        string output = Path.Combine(Path.GetTempPath(), "rey_fingerprint.txt");
+        File.WriteAllText(script, $$"""
+import struct, zlib
+src = open(r"{{addon}}", encoding="utf-8").read()
+ns = {"struct": struct, "zlib": zlib}
+exec(src[src.index("def _fingerprint("):src.index("def _has_changed(")], ns)
+
+class Arr(list):
+    def foreach_get(self, a, out): out[:] = self._flat
+class M:
+    def __init__(self, co, loops):
+        self.vertices = Arr([None] * (len(co) // 3)); self.vertices._flat = co
+        self.loops = Arr([None] * len(loops)); self.loops._flat = loops
+
+fp = ns["_fingerprint"]
+same = fp(M([0.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 1])) == fp(M([0.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 1]))
+moved = fp(M([0.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 1])) != fp(M([0.0, 0.0, 0.5, 1.0, 0.0, 0.0], [0, 1]))
+biggest = max(int(fp(M([float(i), 0.0, 0.0], [0]))) for i in range(400))
+kind = type(fp(M([0.0, 0.0, 0.0], [0]))).__name__
+open(r"{{output}}", "w").write("%s;%s;%s;%d" % (kind, same, moved, biggest))
+""");
+
+        var psi = new ProcessStartInfo("python", $"\"{script}\"")
+        { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        try
+        {
+            using var process = Process.Start(psi);
+            if (process is null) return;
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit(60_000);
+        }
+        catch { return; }
+        if (!File.Exists(output)) return;
+
+        var parts = File.ReadAllText(output).Split(';');
+        Assert.Equal("str", parts[0]);                 // not an int Blender would have to narrow
+        Assert.Equal("True", parts[1]);                // an untouched mesh is recognised
+        Assert.Equal("True", parts[2]);                // a moved vertex is not
+        Assert.True(long.Parse(parts[3]) > int.MaxValue,
+            "no digest exceeded a signed int, so this test is not exercising the overflow it exists for");
+    }
+
+    [Fact]
     public void TheAddOnAndThisSideAgreeOnTheProtocolVersion()
     {
         if (RepoRoot() is not { } root) return;
