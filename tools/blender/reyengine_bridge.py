@@ -53,6 +53,9 @@ PROTOCOL = 2
 COLLECTION = "ReyEngine Map"
 INDEX_KEY = "rey_index"
 FINGERPRINT_KEY = "rey_shape"
+# The pivot ReyEngine sent with this mesh, echoed back on every push. Without it a placement
+# re-bases itself whenever the geometry changes - see BridgeTransform.Anchor.
+ANCHOR_KEY = "rey_pivot"
 
 # League -> Blender basis: swap the two ground axes and leave height alone. Determinant -1, so it is a
 # mirror; winding is reversed alongside it (see _reverse_winding). The matrix is its own inverse, which
@@ -314,6 +317,7 @@ def _build_object(collection, entry):
     obj = bpy.data.objects.new(entry["name"], mesh)
     obj[INDEX_KEY] = entry["index"]
     obj[FINGERPRINT_KEY] = _fingerprint(mesh)
+    obj[ANCHOR_KEY] = list(entry["pivot"])
     obj.rotation_mode = "XYZ"
 
     # Rebuild ReyEngine's own transform, then change basis around it. ReyEngine composes scale, then X,
@@ -363,12 +367,15 @@ class REYENGINE_OT_push(bpy.types.Operator):
             league = B2L @ obj.matrix_world @ L2B
             location, rotation, scale = league.decompose()
             euler = rotation.to_euler("XYZ")
-            transforms.append({
+            entry = {
                 "i": int(obj[INDEX_KEY]),
                 "loc": [location.x, location.y, location.z],
                 "rot": [_deg(euler.x), _deg(euler.y), _deg(euler.z)],
                 "scl": [scale.x, scale.y, scale.z],
-            })
+            }
+            if ANCHOR_KEY in obj:
+                entry["anc"] = [float(v) for v in obj[ANCHOR_KEY]]
+            transforms.append(entry)
 
         if not transforms:
             self.report({"WARNING"}, "ReyEngine: nothing to push")

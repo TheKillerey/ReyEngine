@@ -124,7 +124,11 @@ public static class MapGeoBlenderBridge
             if (t.Scale.X == 0f || t.Scale.Y == 0f || t.Scale.Z == 0f)
             { problems.Add($"'{mesh.Name}' sent a zero scale, which would collapse it"); continue; }
 
-            var offset = t.Location - mesh.Pivot;
+            // Against the pivot BLENDER had, not the one the mesh has now. A face edit moves the bbox
+            // centre, and measuring from the new one turns an untouched object into a jump of exactly
+            // the pivot's own displacement - down after one edit, back up after the next.
+            var anchor = t.Anchor ?? mesh.Pivot;
+            var offset = t.Location - anchor;
             if (Same(mesh.Offset, offset) && Same(mesh.RotationDegrees, t.RotationDegrees) && Same(mesh.Scale, t.Scale))
                 continue;
 
@@ -196,7 +200,8 @@ public static class MapGeoBlenderBridge
     public static BridgeTransform CurrentTransform(MapGeoMesh mesh)
     {
         ArgumentNullException.ThrowIfNull(mesh);
-        return new BridgeTransform(mesh.Index, mesh.Pivot + mesh.Offset, mesh.RotationDegrees, mesh.Scale);
+        return new BridgeTransform(mesh.Index, mesh.Pivot + mesh.Offset, mesh.RotationDegrees, mesh.Scale,
+            mesh.Pivot);
     }
 
     private static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);

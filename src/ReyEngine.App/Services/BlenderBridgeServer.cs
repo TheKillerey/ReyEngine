@@ -187,8 +187,12 @@ public sealed class BlenderBridgeServer : IDisposable
             foreach (var item in list.EnumerateArray())
             {
                 if (!item.TryGetProperty("i", out var indexValue) || !indexValue.TryGetInt32(out int index)) continue;
+                // "anc" is the pivot the add-on was given. Absent means an older add-on, and the
+                // handler falls back to the mesh's current pivot.
+                Vector3? anchor = item.TryGetProperty("anc", out _) ? Vec(item, "anc", Vector3.Zero) : null;
                 transforms.Add(new BridgeTransform(index,
-                    Vec(item, "loc", Vector3.Zero), Vec(item, "rot", Vector3.Zero), Vec(item, "scl", Vector3.One)));
+                    Vec(item, "loc", Vector3.Zero), Vec(item, "rot", Vector3.Zero), Vec(item, "scl", Vector3.One),
+                    anchor));
             }
         }
         if (transforms.Count == 0) { Respond(stream, new Dictionary<string, object?> { ["op"] = "ok", ["applied"] = 0 }); return; }

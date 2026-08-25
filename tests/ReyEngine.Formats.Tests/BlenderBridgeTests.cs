@@ -244,6 +244,88 @@ public sealed class BlenderBridgeTests
         Assert.Equal(after, map.Positions[1], 3);
     }
 
+    /// <summary>A one-mesh map whose first vertex can be lifted, so its bbox centre moves with it.</summary>
+    private static MapGeoAsset LiftableMap(float lift)
+    {
+        var positions = new float[] { 0, 0 + lift, 0, 10, 0, 0, 0, 0, 10 };
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        for (int i = 0; i < 9; i += 3)
+        {
+            var p = new Vector3(positions[i], positions[i + 1], positions[i + 2]);
+            min = Vector3.Min(min, p);
+            max = Vector3.Max(max, p);
+        }
+        return new MapGeoAsset
+        {
+            Positions = positions,
+            Normals = new float[] { 0, 1, 0, 0, 1, 0, 0, 1, 0 },
+            Uvs = new float[6],
+            Indices = new uint[] { 0, 1, 2 },
+            Groups = new[] { new MapGeoGroup("m", 0, 3, "g", MeshIndex: 0) },
+            Meshes = new[] { new MapGeoMesh { Index = 0, Name = "m", VertexStart = 0, VertexCount = 3,
+                Transform = Matrix4x4.Identity, Pivot = (min + max) * 0.5f, IndexCount = 3 } },
+        };
+    }
+
+    [Fact]
+    public void EditingFacesDoesNotMakeAnUntouchedObjectJump()
+    {
+        // M587, and the bug this exists for: a placement was anchored on the mesh's PIVOT, which is the
+        // bbox centre of its geometry. Editing faces moves that centre, so pushing back an object nobody
+        // touched decoded to an offset of exactly the pivot's displacement - the mesh dropped, and the
+        // next edit sent it back up the other way. Echoing the pivot Blender was given makes the
+        // arithmetic independent of what the pivot has since become.
+        var before = LiftableMap(0f);
+        var sent = MapGeoBlenderBridge.Snapshot(before).Meshes.Single();
+
+        var after = LiftableMap(-90f);                       // a face edit: bbox centre drops 45
+        Assert.NotEqual(sent.Pivot.Y, after.Meshes[0].Pivot.Y);
+
+        var untouched = new[] { new BridgeTransform(0, sent.Location, sent.RotationDegrees, sent.Scale, sent.Pivot) };
+        Assert.Empty(MapGeoBlenderBridge.ApplyTransforms(after, untouched, out var notes));
+        Assert.Empty(notes);
+        Assert.Equal(Vector3.Zero, after.Meshes[0].Offset);
+    }
+
+    [Fact]
+    public void AMovedObjectStillMovesByExactlyWhatTheUserDragged()
+    {
+        // The anchor must not turn into "ignore the user". A real move still lands, measured from the
+        // pivot the object was given.
+        var before = LiftableMap(0f);
+        var sent = MapGeoBlenderBridge.Snapshot(before).Meshes.Single();
+        var after = LiftableMap(-90f);
+
+        var dragged = new[]
+        {
+            new BridgeTransform(0, sent.Location + new Vector3(0, 200, 0), Vector3.Zero, Vector3.One, sent.Pivot),
+        };
+        Assert.Single(MapGeoBlenderBridge.ApplyTransforms(after, dragged, out _));
+        Assert.Equal(new Vector3(0, 200, 0), after.Meshes[0].Offset);
+    }
+
+    [Fact]
+    public void AnAddOnThatSendsNoAnchorStillWorks()
+    {
+        // Older add-on: fall back to the mesh's own pivot rather than refusing the push.
+        var map = LiftableMap(0f);
+        var mesh = map.Meshes[0];
+        var noAnchor = new[] { new BridgeTransform(0, mesh.Pivot + new Vector3(0, 25, 0), Vector3.Zero, Vector3.One) };
+        Assert.Single(MapGeoBlenderBridge.ApplyTransforms(map, noAnchor, out _));
+        Assert.Equal(new Vector3(0, 25, 0), mesh.Offset);
+    }
+
+    [Fact]
+    public void TheAnchorTravelsWithEveryMeshTheEditorSends()
+    {
+        // If the pull stopped sending it, the add-on would have nothing to echo and the drift returns.
+        var sent = MapGeoBlenderBridge.Snapshot(TwoMeshMap()).Meshes;
+        foreach (var mesh in sent)
+            Assert.Equal(mesh.Pivot, MapGeoBlenderBridge.CurrentTransform(
+                TwoMeshMap().Meshes.Single(m => m.Index == mesh.Index)).Anchor);
+    }
+
     [Fact]
     public void ATransformThatWouldDestroyTheMeshIsRefusedWithAReason()
     {

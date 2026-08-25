@@ -58,6 +58,11 @@ two are the same operation. Pushing back what you just pulled is a no-op, not a 
 Placements are **absolute**, never incremental, so pushing the same transform twice does not move
 anything twice.
 
+The pivot each object was given is **echoed back with every push**, and the offset is measured from that
+rather than from the mesh's current pivot. A pivot is the bbox centre of the geometry, so editing faces
+moves it — and measuring from the new one would turn an untouched object into a jump of exactly the
+pivot's displacement, down after one edit and back up after the next.
+
 ## Limits
 
 - **A mesh with more than one material is refused for reshaping.** Blender does not send materials, so a

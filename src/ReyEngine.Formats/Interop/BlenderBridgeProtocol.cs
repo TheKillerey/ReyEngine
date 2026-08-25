@@ -31,7 +31,17 @@ public sealed record BridgeMesh(
 }
 
 /// <summary>A mesh placement coming back from Blender, in League axes and ReyEngine's own edit terms.</summary>
-public sealed record BridgeTransform(int Index, Vector3 Location, Vector3 RotationDegrees, Vector3 Scale);
+/// <param name="Anchor">
+/// The pivot Blender was working from, echoed back.
+///
+/// <para>Without it a placement silently re-bases itself whenever the geometry changes. A pivot is the
+/// bbox centre of the mesh, so editing faces MOVES it - and an untouched Blender object then decodes to
+/// a different offset, which is a mesh that jumps on its own and jumps back the other way next time.
+/// Anchoring on the pivot the object was given makes the arithmetic independent of what the pivot has
+/// since become. Null when an older add-on did not send one.</para>
+/// </param>
+public sealed record BridgeTransform(
+    int Index, Vector3 Location, Vector3 RotationDegrees, Vector3 Scale, Vector3? Anchor = null);
 
 /// <summary>
 /// M580: the wire format between ReyEngine and the Blender add-on.
