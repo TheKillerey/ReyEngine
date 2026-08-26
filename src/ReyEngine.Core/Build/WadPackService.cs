@@ -10,6 +10,8 @@ public sealed class WadPackReport
 {
     public string OutputPath { get; set; } = "";
     public int Chunks { get; set; }
+    /// <summary>M589: chunks that reuse another entry's data region instead of storing a second copy.</summary>
+    public int SharedChunks { get; set; }
     public int Skipped { get; set; }
     public long InputBytes { get; set; }
     public long OutputBytes { get; set; }
@@ -92,11 +94,36 @@ public static class WadPackService
 
         entries.Sort((a, b) => a.hash.CompareTo(b.hash));
 
+        // M589: STORE EACH DISTINCT BLOB ONCE. Two paths holding identical bytes get two TOC entries
+        // pointing at one data region - which is what Riot does and what the packer never did.
+        //
+        // Measured on a real 3,600-file map mod: 686 MB packed one-blob-per-entry against 419 MB for the
+        // author's own build of the same content, and the whole difference was this. Riot's shipped
+        // Map11.wad shares a region between 11,551 of its 28,858 entries, avoiding 8,786 redundant copies.
+        //
+        // isDuplicated is left FALSE, which is Riot's v3.4 convention rather than a guess: of those 11,551
+        // shared entries, ZERO carry the flag. (A v3.3 wad built by an older tool flags all of its 1,191 -
+        // the two conventions disagree, and we write v3.4.)
+        var offsetOfBlob = new Dictionary<BlobKey, long>();
+        var blobOrder = new List<byte[]>();
+        long dataStart = TocStart + (long)entries.Count * TocEntrySize;
+        long cursor = dataStart;
+        var entryOffset = new long[entries.Count];
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var key = new BlobKey(entries[i].data);
+            if (offsetOfBlob.TryGetValue(key, out long existing)) { entryOffset[i] = existing; continue; }
+            offsetOfBlob[key] = cursor;
+            entryOffset[i] = cursor;
+            blobOrder.Add(entries[i].data);
+            cursor += entries[i].data.Length;
+        }
+        int shared = entries.Count - blobOrder.Count;
+
         var dir = Path.GetDirectoryName(outputWad);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        long dataStart = TocStart + (long)entries.Count * TocEntrySize;
-        if (dataStart + entries.Sum(e => (long)e.data.Length) > uint.MaxValue)
+        if (cursor > uint.MaxValue)
         {
             report.Warnings.Add("Packed WAD would exceed the 4 GB offset limit — split the mod into smaller WADs.");
             return report;
@@ -110,24 +137,24 @@ public static class WadPackService
             BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(268), entries.Count);
             bw.Write(header);
 
-            long off = dataStart;
-            foreach (var e in entries)
+            for (int i = 0; i < entries.Count; i++)
             {
+                var e = entries[i];
                 bw.Write(e.hash);                          // pathHash       u64
-                bw.Write((uint)off);                       // dataOffset     u32
+                bw.Write((uint)entryOffset[i]);            // dataOffset     u32 (shared between identical blobs)
                 bw.Write(e.data.Length);                   // compressedSize i32
                 bw.Write(e.uncompressed);                  // uncompressed   i32
                 bw.Write(e.compression);                   // compression, 0 subchunks
-                bw.Write(false);                           // isDuplicated
+                bw.Write(false);                           // isDuplicated — 0 of Riot's 11,551 shared entries set it
                 bw.Write((ushort)0);                       // startSubChunk
                 bw.Write(XxHash3.HashToUInt64(e.data));    // checksum: XXH3-64 of stored data (NOT XxHash64 - the game validates this)
-                off += e.data.Length;
             }
-            foreach (var e in entries) bw.Write(e.data);
+            foreach (var blob in blobOrder) bw.Write(blob);
             report.OutputBytes = fs.Length;
         }
 
         report.Chunks = entries.Count;
+        report.SharedChunks = shared;
         try
         {
             using var wad = new WadFile(outputWad);
@@ -174,4 +201,29 @@ public static class WadPackService
             yield return (hash, file);
         }
     }
+}
+
+/// <summary>
+/// M589: identity of a stored blob, for the dedup map — hashed for lookup, compared BYTE FOR BYTE.
+///
+/// <para>Hashing alone would be a silent corruption waiting to happen: a 64-bit collision between two
+/// different assets would point one entry at the other's bytes, and the mod would ship the wrong file with
+/// nothing to show for it. The hash only narrows the candidates; equality is what decides.</para>
+/// </summary>
+internal readonly struct BlobKey : IEquatable<BlobKey>
+{
+    private readonly byte[] _data;
+    private readonly int _hash;
+
+    public BlobKey(byte[] data)
+    {
+        _data = data;
+        _hash = HashCode.Combine(data.Length, XxHash3.HashToUInt64(data));
+    }
+
+    public bool Equals(BlobKey other) =>
+        _hash == other._hash && _data.AsSpan().SequenceEqual(other._data);
+
+    public override bool Equals(object? obj) => obj is BlobKey other && Equals(other);
+    public override int GetHashCode() => _hash;
 }
