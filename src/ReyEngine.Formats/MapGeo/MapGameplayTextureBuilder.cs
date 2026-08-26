@@ -92,7 +92,8 @@ public static class MapGameplayTextureBuilder
         samplers.Add(new BinTreeEmbedded(0, SamplerClass, new BinTreeProperty[]
         {
             new BinTreeString(FieldSamplerName, name ?? ""),
-            new BinTreeString(FieldTexturePath, texturePath.Trim()),
+            // M590: WadChunkLink is the shipped form from 16.17 onward.
+            Meta.BinTexturePath.Create(FieldTexturePath, texturePath.Trim(), like: null),
         }));
 
         // M440: the schema declares this List2, and the retail client REGISTERS it as wire 0x81
@@ -166,7 +167,9 @@ public static class MapGameplayTextureBuilder
     }
 
     /// <summary>The texture paths the component currently declares.</summary>
-    public static IReadOnlyList<(string Name, string TexturePath)> Samplers(byte[] materialsBin)
+    /// <param name="resolveWadPath">M590: texturePath is a WadChunkLink from 16.17 onward.</param>
+    public static IReadOnlyList<(string Name, string TexturePath)> Samplers(byte[] materialsBin,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         var result = new List<(string, string)>();
         if (!TryOpen(materialsBin, out _, out var component, out _)) return result;
@@ -175,7 +178,7 @@ public static class MapGameplayTextureBuilder
         foreach (var el in c.Elements.OfType<BinTreeStruct>())
             result.Add((
                 el.Properties.TryGetValue(FieldSamplerName, out var n) && n is BinTreeString ns ? ns.Value : "",
-                el.Properties.TryGetValue(FieldTexturePath, out var t) && t is BinTreeString ts ? ts.Value : ""));
+                el.Properties.TryGetValue(FieldTexturePath, out var t) ? Meta.BinTexturePath.Read(t, resolveWadPath) : ""));
         return result;
     }
 

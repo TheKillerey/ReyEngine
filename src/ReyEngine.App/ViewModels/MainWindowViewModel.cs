@@ -1064,7 +1064,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var binBytes = ReadAssetByPath("data/" + skin.ToLowerInvariant() + ".bin");
             if (binBytes is null) return null;
-            var meshRef = SkinMeshExtractor.Extract(binBytes);
+            var meshRef = SkinMeshExtractor.Extract(binBytes, ResolveWadPath);
             if (meshRef?.SimpleSkin is not { } sknPath) return null;
             var sknBytes = ReadAssetByPath(sknPath);
             if (sknBytes is null) return null;
@@ -2381,7 +2381,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             if (MaterialEditor.Serialize() is not { } bytes) return Array.Empty<string>();
-            var copy = Formats.Materials.MaterialDocument.Parse(bytes, ResolveBinName);
+            var copy = Formats.Materials.MaterialDocument.Parse(bytes, ResolveBinName, ResolveWadPath);
             var probe = copy?.Materials.FirstOrDefault(m =>
                 string.Equals(m.Name, material.Name, StringComparison.OrdinalIgnoreCase));
             if (probe is null || probe.SetMacro(macro, true) is null) return Array.Empty<string>();
@@ -3488,7 +3488,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             byte[] source = ReadAsset(binEntry.PathHash);
-            var doc = Formats.Materials.MaterialDocument.Parse(source, ResolveBinName);
+            var doc = Formats.Materials.MaterialDocument.Parse(source, ResolveBinName, ResolveWadPath);
             var perms = ShaderPerms();
             bool canValidate = perms is not null && perms.IsAvailable;
             if (!unlit && !canValidate)
@@ -3601,7 +3601,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         try
         {
-            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName);
+            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName, ResolveWadPath);
             foreach (string name in names)
             {
                 var m = doc.Materials.FirstOrDefault(x =>
@@ -3915,7 +3915,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             try
             {
                 var layoutDocument = Formats.Materials.MaterialDocument.Parse(
-                    ReadAsset(layoutBinEntry.PathHash), ResolveBinName);
+                    ReadAsset(layoutBinEntry.PathHash), ResolveBinName, ResolveWadPath);
                 foreach (var material in layoutDocument.Materials)
                     if (string.Equals(material.RenderShader ?? material.ShaderName,
                             Services.ExperimentalDynamicEffectShaderService.RenderShader,
@@ -4068,7 +4068,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             originalBin = ReadAsset(binEntry.PathHash);
-            document = Formats.Materials.MaterialDocument.Parse(originalBin, ResolveBinName);
+            document = Formats.Materials.MaterialDocument.Parse(originalBin, ResolveBinName, ResolveWadPath);
         }
         catch (Exception ex) { return "Materials could not be read: " + ex.Message; }
 
@@ -4131,7 +4131,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             try
             {
                 changedBin = document.Serialize();
-                _ = Formats.Materials.MaterialDocument.Parse(changedBin, ResolveBinName);
+                _ = Formats.Materials.MaterialDocument.Parse(changedBin, ResolveBinName, ResolveWadPath);
             }
             catch (Exception ex) { return "The material rewrite did not validate: " + ex.Message; }
         }
@@ -4304,7 +4304,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             try
             {
-                var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName);
+                var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName, ResolveWadPath);
                 prepared = Services.Dx11SceneBuilder.Prepare(cache, perms, map, doc.Materials,
                     TryReadAssetBytes, mapEntry.Path, grassTintPath, hasDynamicLights);
             }
@@ -4371,7 +4371,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             var binBytes = ReadAsset(binEntry.PathHash);
-            var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName);
+            var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName, ResolveWadPath);
             var perms = ShaderPerms();
             bool canValidate = perms is not null && perms.IsAvailable;
             if (!canValidate)
@@ -4931,7 +4931,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         try
         {
-            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName);
+            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName, ResolveWadPath);
             var usage = Formats.Materials.MapMaterialAudit.UsageFrom(
                 map.Groups.Select(g => (g.Material, g.MeshIndex)));
 
@@ -5104,7 +5104,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         try
         {
-            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName);
+            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName, ResolveWadPath);
             var source = doc.Materials.FirstOrDefault(m =>
                 m.Name.Equals(materialName, StringComparison.OrdinalIgnoreCase));
             if (source is null)
@@ -5173,7 +5173,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         try
         {
-            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName);
+            var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName, ResolveWadPath);
             var wanted = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
             var targets = doc.Materials.Where(m => wanted.Contains(m.Name)).ToList();
             var context = BuildMaterialPresetContext();
@@ -5341,7 +5341,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 macros: new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { [macro] = true });
             if (made is null) return LegacyMapPorter.MacroSupport.Unknown;
 
-            var probe = Formats.Materials.MaterialDocument.Parse(made, ResolveBinName)
+            var probe = Formats.Materials.MaterialDocument.Parse(made, ResolveBinName, ResolveWadPath)
                 .Materials.FirstOrDefault(m => m.Name == "PortProbe/" + shader);
             if (probe is null) return LegacyMapPorter.MacroSupport.Unknown;
 
@@ -6639,7 +6639,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 && VfxSystemResolver.ExtractDependencies(GetAssetBytes(skinBinEntry))
                     .FirstOrDefault(d => d.Contains("/animations/", OIC)) is { } graphPath
                 && TryResolveEntry(HashAlgorithms.WadPath(graphPath), out var graphEntry))
-                foreach (var c in Formats.Skeletons.ChampionAnimationData.ParseClips(GetAssetBytes(graphEntry), ResolveBinName))
+                foreach (var c in Formats.Skeletons.ChampionAnimationData.ParseClips(GetAssetBytes(graphEntry), ResolveBinName, ResolveWadPath))
                 {
                     var file = Path.GetFileName(c.AnmPath.Replace('\\', '/'));
                     if (file.Length > 0 && !clips.ContainsKey(file)) clips[file] = c;
@@ -6651,7 +6651,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (!e.IsResolved || !e.Path.EndsWith(".bin", OIC)) continue;
                 if (e.Path.Contains(animDir, OIC))
                 {
-                    foreach (var c in Formats.Skeletons.ChampionAnimationData.ParseClips(GetAssetBytes(e), ResolveBinName))
+                    foreach (var c in Formats.Skeletons.ChampionAnimationData.ParseClips(GetAssetBytes(e), ResolveBinName, ResolveWadPath))
                     {
                         var file = Path.GetFileName(c.AnmPath.Replace('\\', '/'));
                         if (file.Length > 0 && !clips.ContainsKey(file)) clips[file] = c;
@@ -7096,6 +7096,50 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return Meta.TryGetName(h, out var m) ? m : null;
     }
 
+    /// <summary>
+    /// M590: hash to WAD PATH — the 64-bit counterpart of <see cref="ResolveBinName"/>.
+    ///
+    /// <para>Patch 16.17 changed every material's <c>texturePath</c> from a String to a WadChunkLink
+    /// (12,688 of 12,688 across the installed patch's 199 materials bins), so a texture reference is now
+    /// a hash and needs this to become a path again. Measured on base_srx.materials.bin: 277 of 277
+    /// resolve, so in practice nothing is lost — but an unknown hash stays as 0x…, which is honest and
+    /// still round-trips through an edit.</para>
+    /// </summary>
+    private string? ResolveWadPath(ulong h) => _resolver.Database.TryGetPath(h, out var p) ? p : null;
+
+    /// <summary>
+    /// M590: teach the path dictionary the project's OWN asset paths.
+    ///
+    /// <para>Riot's dictionary knows Riot's files. A mod's custom texture — <c>assets/mymod/river.tex</c> —
+    /// is in it nowhere, so once <c>texturePath</c> became a WadChunkLink the editor could only show the
+    /// author their own texture as <c>0x…</c>. The paths are right there in the project folder and the
+    /// hash is derived from them, so registering them costs one directory walk and makes a mod's own
+    /// assets name themselves.</para>
+    /// </summary>
+    private int RegisterProjectAssetPaths()
+    {
+        if (Project.RootPath is null) return 0;
+        int added = 0;
+        foreach (string folder in Project.ProjectFolders)
+        {
+            string root = Path.Combine(Project.RootPath, folder);
+            if (!Directory.Exists(root)) continue;
+            try
+            {
+                foreach (var (hash, path) in ReyEngine.Core.Build.WadPackService.EnumerateChunkFiles(root))
+                {
+                    string rel = Path.GetRelativePath(root, path).Replace('\\', '/');
+                    // A hash-named loose chunk has no path to teach - its name IS the hash.
+                    if (!rel.Contains('/') && Path.GetFileNameWithoutExtension(rel).Length == 16) continue;
+                    _resolver.Database.AddWad(hash, rel);
+                    added++;
+                }
+            }
+            catch (Exception ex) { _log.Info("Project", $"Could not index {folder} for path names: {ex.Message}"); }
+        }
+        return added;
+    }
+
     private WadAssetEntry? ResolveMaterialBin(WadAssetEntry entry)
     {
         if (!ContentLoaded) return null;
@@ -7129,8 +7173,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         BinEditorDocument? binDoc = null;
         await Task.Run(() =>
         {
-            try { matDoc = MaterialDocument.Parse(bytes, ResolveBinName); } catch { matDoc = null; }
-            if (alsoRawBin) { try { binDoc = BinEditorDocument.Parse(bytes, ResolveBinName); } catch { binDoc = null; } }
+            try { matDoc = MaterialDocument.Parse(bytes, ResolveBinName, ResolveWadPath); } catch { matDoc = null; }
+            if (alsoRawBin) { try { binDoc = BinEditorDocument.Parse(bytes, ResolveBinName, ResolveWadPath); } catch { binDoc = null; } }
         });
 
         await Dispatcher.UIThread.InvokeAsync(() =>
@@ -7172,7 +7216,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             else if (MaterialEditor.Kind == MaterialSourceKind.MapMaterials && _currentMap is { } map && CurrentMesh is not null)
             {
                 var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
-                var m2t = MapGeoMaterialResolver.Resolve(bytes, names);
+                var m2t = MapGeoMaterialResolver.Resolve(bytes, names, ResolveWadPath);
                 var profiles = MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName);
                 CurrentModelTextures = BuildMapTextures(map, m2t, profiles, names.Count, _currentMapEntry?.Path);
             }
@@ -9233,7 +9277,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             if (TryResolveMaterialsBin(entry.Path, out var binEntry))
             {
-                var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName);
+                var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName, ResolveWadPath);
                 foreach (var mat in doc.Materials.Where(m => extended.Contains(m.Name)))
                     samplers[mat.Name] = mat.Slots
                         .Where(s => !string.IsNullOrWhiteSpace(s.SamplerName) && !string.IsNullOrWhiteSpace(s.OriginalPath))
@@ -10314,7 +10358,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (LegacyMapPorter.MapSpecificBushMaterials(mapEntry.Path) is { } mapSpecificBushMaterials)
                 bushMaterials = mapSpecificBushMaterials.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var placements = MapPlaceableExtractor.Extract(originalBinBytes);
+            var placements = MapPlaceableExtractor.Extract(originalBinBytes, ResolveWadPath);
             var particles = MapParticleExtractor.Extract(originalBinBytes, ResolveLegacyName);
             int bushCount = LegacyMapPorter.CountBushMeshes(originalMapBytes, bushMaterials);
             int previousImportCount = LegacyMapPorter.CountPreviousImportedMeshes(originalMapBytes);
@@ -10463,7 +10507,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (cleanup.RemoveOriginalParticles)
                 placementEdits.AddRange(MapParticleExtractor.Extract(binBytes, ResolveBinName)
                     .Where(item => item.Id.IsValid).Select(item => new MapPlacementEdit(item.Id) { Remove = true }));
-            var originalPlacements = MapPlaceableExtractor.Extract(binBytes);
+            var originalPlacements = MapPlaceableExtractor.Extract(binBytes, ResolveWadPath);
             if (cleanup.RemoveOriginalProps)
                 placementEdits.AddRange(originalPlacements.Props.Where(item => item.Id.IsValid)
                     .Select(item => new MapPlacementEdit(item.Id) { Remove = true }));
@@ -10967,7 +11011,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             // M38: cubemap reflection probes + animated props (placed characters) from the same bin.
             // M55: + MapAudio sound placements (Wwise events at world positions).
-            var (probes, props, directSounds) = MapPlaceableExtractor.Extract(binBytes);
+            var (probes, props, directSounds) = MapPlaceableExtractor.Extract(binBytes, ResolveWadPath);
             var particleSounds = MapParticleAudioExtractor.Extract(particles, _vfxSystems);
             var sounds = directSounds.Concat(particleSounds).ToList();
             CurrentModelProbes = probes.Count > 0 ? probes : null;
@@ -10998,7 +11042,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             var bytes = GetAssetBytes(binEntry);
-            var r = MapGeoMaterialResolver.Resolve(bytes, names);
+            var r = MapGeoMaterialResolver.Resolve(bytes, names, ResolveWadPath);
             if (r.Count > 0)
             {
                 return (r, MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName),
@@ -11012,7 +11056,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             try
             {
-                var r = MapGeoMaterialResolver.Resolve(fb, names);
+                var r = MapGeoMaterialResolver.Resolve(fb, names, ResolveWadPath);
                 if (r.Count > 0)
                 {
                     _log.Info("MapGeo", "Used the original game materials.bin (the project's copy was broken/empty).");
@@ -13781,11 +13825,136 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private async Task CheckForAutomaticPatchUpdateAsync(ReyProject openedProject)
     {
+        // M590: index the project's own asset paths BEFORE anything reads its bins, so a mod's custom
+        // texture resolves from its WadChunkLink instead of showing the author a bare hash.
+        try
+        {
+            int learned = RegisterProjectAssetPaths();
+            if (learned > 0) _log.Info("Project", $"Indexed {learned:n0} project asset path(s) for hash lookup.");
+        }
+        catch (Exception ex) { _log.Info("Project", $"Project path indexing skipped: {ex.Message}"); }
+
         try { await CheckForAutomaticPatchUpdateCoreAsync(openedProject); }
         catch (Exception ex)
         {
             _log.Error("PatchUpdate", $"Automatic patch update stopped safely: {ex.Message}");
         }
+
+        // M590: and AFTER any rebase, align asset wire forms with the installed patch.
+        //
+        // A rebase handles this for a project that is behind, but one already ON the current patch never
+        // merges and so never gets it - which is most of them, since the flip happened mid-patch. Run
+        // separately, and always, or the projects that most need it are exactly the ones skipped.
+        try { await AlignProjectAssetWireFormsAsync(openedProject); }
+        catch (Exception ex) { _log.Error("Project", $"Wire-form alignment stopped safely: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// M590: rewrite a project's asset references onto the wire form the installed patch uses.
+    ///
+    /// <para>16.17 turned <c>texturePath</c> and friends from String into WadChunkLink. The client SKIPS a
+    /// property whose form disagrees with the schema rather than reporting it (M507), so a mod authored
+    /// before the flip loses its textures with nothing said — measured on real projects, 362 references in
+    /// one map mod, 653 in another, 188 in a third.</para>
+    ///
+    /// <para>Which fields to convert is read from the patch's OWN copy of each bin: a field it writes only
+    /// as a link gets converted, a field it writes both ways is left alone. Nothing is guessed, and the
+    /// rule keeps working when Riot flips the next field. Every changed file is backed up first, and a
+    /// result that fails shape validation is discarded rather than written.</para>
+    /// </summary>
+    /// <summary>M590: the shipped WAD a project folder shadows — the patch's own copy, and so the only
+    /// honest source for "which wire form does this patch use". Null when the folder shadows nothing.</summary>
+    private ReyEngine.Core.Wad.WadArchive? ReferenceWadFor(string folder)
+    {
+        string? game = Project.GameDirectory;
+        if (string.IsNullOrEmpty(game)) return null;
+        foreach (string sub in new[] { @"DATA\FINAL\Maps\Shipping", @"DATA\FINAL\Champions", @"DATA\FINAL" })
+        {
+            string path = Path.Combine(game, sub, folder + ".wad.client");
+            if (!File.Exists(path)) continue;
+            try { return ReyEngine.Core.Wad.WadArchive.Open(path, _resolver); } catch { return null; }
+        }
+        return null;
+    }
+
+    /// <summary>M590: the wad chunk hash a project file stands for — its relative path, or its own name
+    /// when the file IS a hash (the cslol convention for a chunk whose path is unknown).</summary>
+    private static ulong ChunkHashForProjectFile(string folderRoot, string file)
+    {
+        string rel = Path.GetRelativePath(folderRoot, file).Replace(Path.DirectorySeparatorChar, '/');
+        string stem = Path.GetFileNameWithoutExtension(rel);
+        if (!rel.Contains('/') && stem.Length == 16
+            && ulong.TryParse(stem, System.Globalization.NumberStyles.HexNumber, null, out ulong direct))
+            return direct;
+        return HashAlgorithms.WadPath(rel.ToLowerInvariant());
+    }
+
+    private async Task AlignProjectAssetWireFormsAsync(ReyProject project)
+    {
+        if (project.RootPath is null || project.ProjectFolders.Count == 0) return;
+        if (!ReferenceEquals(Project, project)) return;
+
+        string backupRoot = Path.Combine(project.RootPath, ".reyengine", "backups",
+            $"wire-form-{DateTime.Now:yyyyMMdd-HHmmss}");
+
+        var (changedFiles, references, refused) = await Task.Run(() =>
+        {
+            int files = 0, refs = 0, bad = 0;
+            foreach (string folder in project.ProjectFolders)
+            {
+                string dir = Path.Combine(project.RootPath, folder);
+                if (!Directory.Exists(dir)) continue;
+                using var reference = ReferenceWadFor(folder);
+                if (reference is null) continue;
+
+                foreach (string file in Directory.GetFiles(dir, "*.bin", SearchOption.AllDirectories))
+                {
+                    byte[] bytes;
+                    try { bytes = File.ReadAllBytes(file); } catch { continue; }
+                    if (bytes.Length < 4 || bytes[0] != 'P' || bytes[1] != 'R' || bytes[2] != 'O' || bytes[3] != 'P') continue;
+
+                    ulong hash = ChunkHashForProjectFile(dir, file);
+                    if (!reference.TryGetEntry(hash, out var entry)) continue;   // nothing to calibrate against
+
+                    int n;
+                    byte[] outBytes;
+                    try
+                    {
+                        var tree = Formats.Meta.SafeBinTree.Parse(bytes);
+                        var patchCopy = Formats.Meta.SafeBinTree.Parse(reference.Extract(entry));
+                        n = Formats.Meta.BinAssetLinkMigration.AlignWith(tree, patchCopy);
+                        if (n == 0) continue;
+                        using var ms = new MemoryStream();
+                        tree.Write(ms);
+                        outBytes = ms.ToArray();
+                    }
+                    catch { continue; }
+
+                    var issues = Formats.Meta.ModShapeValidator.ValidateBin(
+                        Formats.Meta.SafeBinTree.Parse(outBytes), outBytes, ResolveBinName);
+                    if (issues.Count > 0) { bad++; continue; }
+
+                    try
+                    {
+                        string dest = Path.Combine(backupRoot, Path.GetRelativePath(project.RootPath, file));
+                        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                        File.Copy(file, dest, overwrite: true);
+                        File.WriteAllBytes(file, outBytes);
+                        files++; refs += n;
+                    }
+                    catch { bad++; }
+                }
+            }
+            return (files, refs, bad);
+        });
+
+        if (changedFiles == 0 && refused == 0) return;
+        if (changedFiles > 0)
+            _log.Success("Project", $"Rewrote {references:n0} asset reference(s) in {changedFiles:n0} bin(s) onto the "
+                + $"wire form this patch uses (String -> WadChunkLink). The client silently ignores the old form, "
+                + $"so these would have lost their textures in game. Backup: {backupRoot}");
+        if (refused > 0)
+            _log.Warn("Project", $"{refused:n0} bin(s) were left alone - the rewritten form did not validate.");
     }
 
     private async Task CheckForAutomaticPatchUpdateCoreAsync(ReyProject openedProject)

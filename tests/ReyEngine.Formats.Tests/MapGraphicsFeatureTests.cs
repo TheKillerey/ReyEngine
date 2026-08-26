@@ -1,6 +1,7 @@
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
+using ReyEngine.Formats.Meta;
 using ReyEngine.Formats.MapGeo;
 
 namespace ReyEngine.Formats.Tests;
@@ -498,7 +499,13 @@ public class MapGraphicsFeatureTests
         var samplers = MapGameplayTextureBuilder.Samplers(updated!);
         Assert.Single(samplers);
         Assert.Equal("Base", samplers[0].Name);
-        Assert.Equal("ASSETS/Maps/Gameplay/Test.tex", samplers[0].TexturePath);
+        // M590: texturePath is a WadChunkLink now, so the path comes back only with a resolver; the
+        // chunk it names is the same either way.
+        Assert.Equal(BinTexturePath.Hex(HashAlgorithms.WadPath("ASSETS/Maps/Gameplay/Test.tex")),
+            samplers[0].TexturePath);
+        var named = MapGameplayTextureBuilder.Samplers(updated!,
+            h => h == HashAlgorithms.WadPath("ASSETS/Maps/Gameplay/Test.tex") ? "ASSETS/Maps/Gameplay/Test.tex" : null);
+        Assert.Equal("ASSETS/Maps/Gameplay/Test.tex", named[0].TexturePath);
     }
 
     [Fact]
@@ -511,7 +518,8 @@ public class MapGraphicsFeatureTests
 
         var samplers = MapGameplayTextureBuilder.Samplers(twice!);
         Assert.Single(samplers);
-        Assert.Equal("ASSETS/B.tex", samplers[0].TexturePath);
+        // M590: compare the chunk, since texturePath is a link and no resolver is supplied here.
+        Assert.Equal(BinTexturePath.Hex(HashAlgorithms.WadPath("ASSETS/B.tex")), samplers[0].TexturePath);
     }
 
     [Fact]

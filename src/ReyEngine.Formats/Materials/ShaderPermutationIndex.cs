@@ -40,6 +40,8 @@ public sealed class ShaderPermutationIndex
     private readonly Dictionary<string, Dictionary<string, string>> _textureDefaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly WadFile? _cache;
     private readonly Dictionary<ulong, string> _cachePaths = new();
+    /// <summary>M590: 64-bit wad-path lookup for defaultTexturePath, a WadChunkLink since 16.17.</summary>
+    private Func<ulong, string?>? _resolveWadPath;
 
     public bool IsAvailable => _cache is not null;
 
@@ -58,8 +60,10 @@ public sealed class ShaderPermutationIndex
     }
 
     /// <param name="gameDataFinalDir">…/Game/DATA/FINAL — holds ShaderCache.dx11.wad.client and Global.wad.client.</param>
-    public ShaderPermutationIndex(string gameDataFinalDir)
+    /// <param name="resolveWadPath">M590: names the shader's defaultTexturePath chunks.</param>
+    public ShaderPermutationIndex(string gameDataFinalDir, Func<ulong, string?>? resolveWadPath = null)
     {
+        _resolveWadPath = resolveWadPath;
         try
         {
             var cachePath = Path.Combine(gameDataFinalDir, "ShaderCache.dx11.wad.client");
@@ -90,7 +94,7 @@ public sealed class ShaderPermutationIndex
             {
                 string? shaderPath = obj.Properties.TryGetValue(pathHash, out var op) && op is BinTreeString ops ? ops.Value : null;
                 if (shaderPath is null) continue;
-                var defaults = ReadDefinitionDefaults(obj);
+                var defaults = ReadDefinitionDefaults(obj, _resolveWadPath);
                 _featureDefines[shaderPath] = defaults.FeatureDefines;
                 _switchDefaults[shaderPath] = defaults.Switches;
                 _paramDefaults[shaderPath] = defaults.Parameters;
@@ -601,7 +605,9 @@ public sealed class ShaderPermutationIndex
 
     /// <summary>All authored defaults from one <c>CustomShaderDef</c>. Public so the byte-level contract
     /// can be regression-tested without constructing a WAD.</summary>
-    public static ShaderDefinitionDefaults ReadDefinitionDefaults(BinTreeObject obj)
+    /// <param name="resolveWadPath">M590: names defaultTexturePath chunks (WadChunkLink since 16.17).</param>
+    public static ShaderDefinitionDefaults ReadDefinitionDefaults(BinTreeObject obj,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         uint fdHash = HashAlgorithms.Fnv1a("featureDefines");
         uint swHash = HashAlgorithms.Fnv1a("staticSwitches");
@@ -642,7 +648,9 @@ public sealed class ShaderPermutationIndex
             foreach (var el in texturesContainer.Elements.OfType<BinTreeStruct>())
             {
                 string? name = el.Properties.TryGetValue(nameHash, out var np) && np is BinTreeString ns ? ns.Value : null;
-                string? path = el.Properties.TryGetValue(texturePathHash, out var pp) && pp is BinTreeString ps ? ps.Value : null;
+                // M590: defaultTexturePath is a WadChunkLink on the current patch.
+                string? path = el.Properties.TryGetValue(texturePathHash, out var pp) && Meta.BinTexturePath.Is(pp)
+                    ? Meta.BinTexturePath.Read(pp, resolveWadPath) : null;
                 if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(path)) textures[name] = path;
             }
 

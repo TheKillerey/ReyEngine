@@ -21,7 +21,8 @@ public static class SkinMeshExtractor
     private static readonly uint F_texture = HashAlgorithms.Fnv1a("texture");          // 0x3c6468f4
     private static readonly uint F_hide = HashAlgorithms.Fnv1a("initialSubmeshToHide"); // 0x80b7f78f
 
-    public static SkinMeshRef? Extract(byte[] skinBin)
+    /// <param name="resolveWadPath">M590: simpleSkin/skeleton/texture became WadChunkLink in 16.17.</param>
+    public static SkinMeshRef? Extract(byte[] skinBin, Func<ulong, string?>? resolveWadPath = null)
     {
         BinTree tree;
         try { tree = SafeBinTree.Parse(skinBin); }
@@ -32,9 +33,9 @@ public static class SkinMeshExtractor
             if (Get(o.Properties, F_skinMeshProperties) is not BinTreeStruct smp) continue;
             var hidden = ParseHidden((Get(smp.Properties, F_hide) as BinTreeString)?.Value);
             return new SkinMeshRef(
-                (Get(smp.Properties, F_simpleSkin) as BinTreeString)?.Value,
-                (Get(smp.Properties, F_skeleton) as BinTreeString)?.Value,
-                (Get(smp.Properties, F_texture) as BinTreeString)?.Value,
+                Meta.BinTexturePath.Read(Get(smp.Properties, F_simpleSkin), resolveWadPath) is { Length: > 0 } sk ? sk : null,
+                Meta.BinTexturePath.Read(Get(smp.Properties, F_skeleton), resolveWadPath) is { Length: > 0 } sl ? sl : null,
+                Meta.BinTexturePath.Read(Get(smp.Properties, F_texture), resolveWadPath) is { Length: > 0 } tx ? tx : null,
                 hidden);
         }
         return null;

@@ -298,7 +298,9 @@ public static class MapMaterialFactory
                 var samplerProps = new List<BinTreeProperty>
                 {
                     new BinTreeString(F("TextureName"), t.Name),
-                    new BinTreeString(F("texturePath"), path),
+                    // M590: WadChunkLink, which is what every shipped material has carried since
+                    // 16.17 - 12,688 of 12,688 across 199 materials bins on the installed patch.
+                    Meta.BinTexturePath.Create(F("texturePath"), path, like: null),
                 };
                 if (samplerAddressMode is { } address)
                 {
@@ -314,7 +316,7 @@ public static class MapMaterialFactory
             {
                 // no obviously-diffuse sampler: repoint the first one
                 var first = (BinTreeStruct)samplers[0];
-                ((BinTreeString)first.Properties[F("texturePath")]).Value = diffuseOverride;
+                Meta.BinTexturePath.Write(first.Properties[F("texturePath")], diffuseOverride);
             }
 
             var parameters = shader.Parameters.Select(pd =>
@@ -421,21 +423,22 @@ public static class MapMaterialFactory
         if (material.Properties.Values.OfType<BinTreeContainer>()
                 .FirstOrDefault(c => IsField(material, c, "samplerValues", resolve)) is not { } samplers) return;
 
-        BinTreeString? best = null;
+        BinTreeProperty? best = null;   // M590: String or WadChunkLink
         foreach (var el in samplers.Elements.OfType<BinTreeStruct>())
         {
-            string? sampler = null; BinTreeString? path = null;
+            string? sampler = null; BinTreeProperty? path = null;
             foreach (var (ph, pr) in el.Properties)
             {
                 var n = resolve(ph);
                 if (n is "TextureName" && pr is BinTreeString sn) sampler = sn.Value;   // the real field name (surveyed)
-                if (n is "texturePath" or "textureName" && pr is BinTreeString tp) path = tp;
+                // M590: either form - String before 16.17, WadChunkLink from it on.
+                if (n is "texturePath" or "textureName" && Meta.BinTexturePath.Is(pr)) path = pr;
             }
             if (path is null) continue;
             best ??= path;
             if (sampler is not null && sampler.Contains("Diffuse", StringComparison.OrdinalIgnoreCase)) { best = path; break; }
         }
-        if (best is not null) best.Value = diffusePath;
+        if (best is not null) Meta.BinTexturePath.Write(best, diffusePath);
     }
 
     private static void RepointShader(BinTreeObject material, string shaderPath, Func<uint, string?> resolve)

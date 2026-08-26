@@ -136,7 +136,9 @@ public sealed class MapMaterialFactoryTests
         var material = SafeBinTree.Parse(result!).Objects[H("LegacyPort/map11/Cutout")];
         var samplers = Assert.IsType<BinTreeUnorderedContainer>(material.Properties[H("samplerValues")]);
         var sampler = Assert.Single(samplers.Elements.OfType<BinTreeStruct>());
-        Assert.Equal("assets/maps/legacy/test.dds", Assert.IsType<BinTreeString>(sampler.Properties[H("texturePath")]).Value);
+        // M590: WadChunkLink since 16.17 - assert the chunk it names.
+        Assert.Equal(HashAlgorithms.WadPath("assets/maps/legacy/test.dds"),
+            Assert.IsType<BinTreeWadChunkLink>(sampler.Properties[H("texturePath")]).Value);
 
         var parameters = Assert.IsType<BinTreeUnorderedContainer>(material.Properties[H("paramValues")]);
         var parameter = Assert.Single(parameters.Elements.OfType<BinTreeStruct>());
@@ -224,8 +226,9 @@ public sealed class MapMaterialFactoryTests
         foreach (string field in new[] { "addressU", "addressV", "addressW" })
             Assert.Equal(1u, Assert.IsType<BinTreeU32>(sampler.Properties[H(field)]).Value);
         // The texture path is what the porter is protecting; clamping must not disturb it.
-        Assert.Equal("assets/maps/legacy/decal.dds",
-            Assert.IsType<BinTreeString>(sampler.Properties[H("texturePath")]).Value);
+        // M590: authored as a WadChunkLink since 16.17 - the chunk it names is what must be preserved.
+        Assert.Equal(HashAlgorithms.WadPath("assets/maps/legacy/decal.dds"),
+            Assert.IsType<BinTreeWadChunkLink>(sampler.Properties[H("texturePath")]).Value);
 
         // Absent is the schema default (Wrap) and what 4,726 shipped samplers do, so the ordinary roles must
         // author NO address field rather than an explicit zero.

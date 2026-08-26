@@ -235,7 +235,10 @@ public class MaterialShaderConverterTests
         Assert.NotNull(material.SetMacro(MaterialBinding.MacroNoBakedLighting, true));
 
         var saved = MaterialDocument.Parse(doc.Serialize(), Resolve).Materials.Single();
-        Assert.Equal("ASSETS/Map/new_diffuse.tex", Slot(saved, "DiffuseTexture").Path);
+        // M590: a sampler authored into a sampler-less material takes the WadChunkLink form that
+        // every shipped material has used since 16.17, so identity is the chunk it names.
+        Assert.Equal(ReyEngine.Core.Hashing.HashAlgorithms.WadPath("ASSETS/Map/new_diffuse.tex"),
+            Slot(saved, "DiffuseTexture").ChunkHash);
         Assert.Equal(Vector4.One, VectorValue(Assert.Single(saved.Parameters)));
         Assert.True(saved.Switches["USE_VERTEX_COLOR"]);
         Assert.Equal("1", saved.Macros[MaterialBinding.MacroNoBakedLighting]);

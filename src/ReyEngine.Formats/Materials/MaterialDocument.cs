@@ -155,7 +155,11 @@ public sealed class MaterialDocument
         return map;
     }
 
-    public static MaterialDocument Parse(byte[] data, Func<uint, string?> resolve)
+    /// <param name="resolveWadPath">M590: 64-bit wad-path lookup, so a texturePath stored as a
+    /// WadChunkLink (every shipped material since 16.17) reports its PATH rather than a bare hash.
+    /// Null still works - such a slot then reads as 0x…, which round-trips.</param>
+    public static MaterialDocument Parse(byte[] data, Func<uint, string?> resolve,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         var tree = SafeBinTree.Parse(data, out var issues);
         bool champion = tree.Objects.Values.Any(o => Field(o.Properties, "skinMeshProperties") is not null);
@@ -174,10 +178,12 @@ public sealed class MaterialDocument
                 ReadSkinMeshProperties(smp, out var skinInfo);
                 pendingSkinMesh = skinInfo;
 
-                if (Field(smp.Properties, "texture") is BinTreeString defTex)
+                // M590: `texture` is String on older content and WadChunkLink on newer - measured
+                // across a champion wad it is genuinely BOTH, so neither form may be assumed.
+                if (Field(smp.Properties, "texture") is { } defTex && BinTexturePath.Is(defTex))
                     materials.Add(new MaterialBinding(
                         "(skin default texture)", "SkinMeshDataProperties", Array.Empty<string>(), isDefault: true,
-                        new List<TextureSlot> { new("texture", defTex) }, new List<MaterialParameter>()));
+                        new List<TextureSlot> { new("texture", defTex, null, resolveWadPath) }, new List<MaterialParameter>()));
 
                 // The default material applies to every submesh not covered by an override.
                 if (Field(smp.Properties, "material") is BinTreeObjectLink defMat) defaultMaterialHash = defMat.Value;
@@ -195,10 +201,10 @@ public sealed class MaterialDocument
                             if (!assignment.TryGetValue(ml.Value, out var list)) assignment[ml.Value] = list = new();
                             list.Add(submesh);
                         }
-                        if (Field(ov.Properties, "texture") is BinTreeString inlineTex)
+                        if (Field(ov.Properties, "texture") is { } inlineTex && BinTexturePath.Is(inlineTex))
                             materials.Add(new MaterialBinding(
                                 $"(inline override: {submesh})", "MaterialOverride", new[] { submesh }, isDefault: false,
-                                new List<TextureSlot> { new("texture", inlineTex) }, new List<MaterialParameter>()));
+                                new List<TextureSlot> { new("texture", inlineTex, null, resolveWadPath) }, new List<MaterialParameter>()));
                     }
                 }
                 break;
@@ -232,13 +238,18 @@ public sealed class MaterialDocument
                     if (pathFieldHash == 0) pathFieldHash = FieldHash(s.Properties, "texturePath", "textureName");
                     string sampler = (Field(s.Properties, "TextureName") as BinTreeString)?.Value
                                      ?? (Field(s.Properties, "samplerName") as BinTreeString)?.Value ?? "(sampler)";
-                    var pathProp = (Field(s.Properties, "texturePath") as BinTreeString)
-                                   ?? (Field(s.Properties, "textureName") as BinTreeString);
+                    // M590: 16.17 changed texturePath from String to WadChunkLink. This used to cast to
+                    // BinTreeString and `continue` on failure, so on the current patch EVERY material came
+                    // back with zero texture slots - no textures in the viewport, none in the browser, and
+                    // nothing saying why.
+                    var pathProp = Field(s.Properties, "texturePath") is { } tp && BinTexturePath.Is(tp) ? tp
+                                 : Field(s.Properties, "textureName") is { } tn && BinTexturePath.Is(tn) ? tn
+                                 : null;
                     if (pathProp is null) continue;
                     // Capture the diffuse sampler's addressU/V (else the first sampler) — decals use Clamp (1).
                     if (diffuseAddrU == 0 && (sampler.Contains("Diffuse", StringComparison.OrdinalIgnoreCase) || slots.Count == 0))
                     { diffuseAddrU = AsByte(Field(s.Properties, "addressU")); diffuseAddrV = AsByte(Field(s.Properties, "addressV")); }
-                    slots.Add(new TextureSlot(sampler, pathProp, el));
+                    slots.Add(new TextureSlot(sampler, pathProp, el, resolveWadPath));
                 }
 
             var parameters = new List<MaterialParameter>();
@@ -345,6 +356,7 @@ public sealed class MaterialDocument
                 SamplerContainer = samplers,
                 NameFieldHash = nameFieldHash,
                 PathFieldHash = pathFieldHash,
+                ResolveWadPath = resolveWadPath,   // M590
                 Switches = switches,
                 SwitchContainer = switchContainer,
                 SwitchEntries = switchList,
@@ -447,6 +459,8 @@ public sealed class MaterialBinding
     internal BinTreeContainer? SamplerContainer { get => _samplerContainer; init => _samplerContainer = value; }
     internal uint NameFieldHash { get; init; }
     internal uint PathFieldHash { get; init; }
+    /// <summary>M590: 64-bit wad-path lookup for WadChunkLink texture references.</summary>
+    internal Func<ulong, string?>? ResolveWadPath { get; init; }
     // M55: the live paramValues container — enables add/remove of parameters.
     private BinTreeContainer? _paramContainer;
     internal BinTreeContainer? ParamContainer { get => _paramContainer; init => _paramContainer = value; }
@@ -979,24 +993,26 @@ public sealed class MaterialBinding
 
         uint nameHash = NameFieldHash != 0 ? NameFieldHash : HashAlgorithms.Fnv1a("TextureName");
         uint pathHash = PathFieldHash != 0 ? PathFieldHash : HashAlgorithms.Fnv1a("texturePath");
+        // M590: clone an existing sampler when there is one, so the new slot inherits the FORM this bin
+        // uses for texturePath. With no sampler to copy, author the WadChunkLink form: that is what every
+        // shipped material has carried since 16.17 (12,688 of 12,688).
+        var proto = _samplerContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault();
         BinTreeStruct clone;
-        if (_samplerContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } proto)
+        if (proto is not null)
             clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
         else
             clone = NewElement(_samplerContainer, 0x0904b150, new BinTreeProperty[]
             {
                 new BinTreeString(nameHash, samplerName),
-                new BinTreeString(pathHash, path),
+                BinTexturePath.Create(pathHash, path, like: null),
             });
 
-        if (clone.Properties.TryGetValue(pathHash, out var p) && p is BinTreeString pathStr)
-            pathStr.Value = path;
-        else return null;
+        if (!clone.Properties.TryGetValue(pathHash, out var p) || !BinTexturePath.Write(p, path)) return null;
         if (clone.Properties.TryGetValue(nameHash, out var n) && n is BinTreeString nameStr)
             nameStr.Value = samplerName;
 
         _samplerContainer.Add(clone);
-        var slot = new TextureSlot(samplerName, (BinTreeString)clone.Properties[pathHash], clone);
+        var slot = new TextureSlot(samplerName, clone.Properties[pathHash], clone, ResolveWadPath);
         _slots.Add(slot);
         _structurallyEdited = true;
         return slot;
@@ -1196,7 +1212,8 @@ public sealed class MaterialMacro
 public sealed class TextureSlot
 {
     private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
-    private readonly BinTreeString _prop;
+    private readonly BinTreeProperty _prop;
+    private readonly Func<ulong, string?>? _resolveWadPath;
 
     public string SamplerName { get; }
     public string OriginalPath { get; }
@@ -1204,28 +1221,47 @@ public sealed class TextureSlot
     /// <summary>The underlying sampler element (struct), for removal. Null for inline/default slots.</summary>
     internal BinTreeProperty? Element { get; }
 
-    public TextureSlot(string samplerName, BinTreeString prop, BinTreeProperty? element = null)
+    /// <summary>
+    /// M590: the path property is EITHER a <c>String</c> or a <c>WadChunkLink</c>. Patch 16.17 flipped
+    /// every shipped material to the link form — 12,688 of 12,688 texturePath properties across 199
+    /// materials bins, where the same base_srx.materials.bin was 237 String / 0 link at 16.15. Both are
+    /// held, because a project can contain bins from either era and rewriting one era into the other
+    /// would break the client that ships with it.
+    /// </summary>
+    public TextureSlot(string samplerName, BinTreeProperty prop, BinTreeProperty? element = null,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         SamplerName = samplerName;
         _prop = prop;
-        OriginalPath = prop.Value;
+        _resolveWadPath = resolveWadPath;
+        OriginalPath = BinTexturePath.Read(prop, resolveWadPath);
         Element = element;
         _originalAddress = (ReadAddress(AddressFieldU), ReadAddress(AddressFieldV), ReadAddress(AddressFieldW));
     }
 
-    public string Path => _prop.Value;
+    public string Path => BinTexturePath.Read(_prop, _resolveWadPath);
+
+    /// <summary>M590: the wad chunk this slot points at, whichever form the bin uses. This is what a
+    /// loader should key on — it is what the client resolves, and it still identifies the texture when
+    /// the path dictionary cannot name it.</summary>
+    public ulong ChunkHash => BinTexturePath.HashOf(_prop);
+
+    /// <summary>M590: true when the bin stores this reference as a hash rather than a path — so a UI can
+    /// say why an unknown chunk shows as 0x… instead of looking like corruption.</summary>
+    public bool IsWadChunkLink => _prop is BinTreeWadChunkLink;
+
     public bool IsRemovable => Element is not null;
-    public void SetPath(string path) => _prop.Value = path ?? "";
+    public void SetPath(string path) => BinTexturePath.Write(_prop, path ?? "");
 
     public void Revert()
     {
-        _prop.Value = OriginalPath;
+        BinTexturePath.Write(_prop, OriginalPath);
         SetAddress(AddressAxis.U, _originalAddress.U);
         SetAddress(AddressAxis.V, _originalAddress.V);
         SetAddress(AddressAxis.W, _originalAddress.W);
     }
 
-    public bool IsDirty => !string.Equals(_prop.Value, OriginalPath, StringComparison.Ordinal)
+    public bool IsDirty => !string.Equals(Path, OriginalPath, StringComparison.Ordinal)
                            || AddressU != _originalAddress.U
                            || AddressV != _originalAddress.V
                            || AddressW != _originalAddress.W;

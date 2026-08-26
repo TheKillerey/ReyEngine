@@ -5,7 +5,7 @@ using LeagueToolkit.Core.Meta.Properties;
 
 namespace ReyEngine.Formats.Meta;
 
-public enum BinValueKind { ReadOnly, Bool, Int, UInt, Float, String, Hash, Vector2, Vector3, Vector4 }
+public enum BinValueKind { ReadOnly, Bool, Int, UInt, Float, String, Hash, Vector2, Vector3, Vector4, WadPath }
 
 /// <summary>
 /// Editable wrapper over a live (mutable) BinTree. Editing mutates primitive property values in
@@ -25,7 +25,10 @@ public sealed class BinEditorDocument
         Roots = roots;
     }
 
-    public static BinEditorDocument Parse(byte[] data, Func<uint, string?> resolve)
+    /// <param name="resolveWadPath">M590: 64-bit wad-path lookup so WadChunkLink values (every
+    /// material texturePath since 16.17) show their path instead of the bare type name.</param>
+    public static BinEditorDocument Parse(byte[] data, Func<uint, string?> resolve,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         var tree = SafeBinTree.Parse(data);
         var roots = new List<EditableBinField>(tree.Objects.Count);
@@ -43,7 +46,7 @@ public sealed class BinEditorDocument
                 Object = obj,   // M408: kept so the schema panel can ADD a field to this object
             };
             foreach (var (nh, prop) in obj.Properties)
-                node.Children.Add(Build(Name(nh, resolve), nh, prop, resolve, className));
+                node.Children.Add(Build(Name(nh, resolve), nh, prop, resolve, className, resolveWadPath));
             roots.Add(node);
         }
         return new BinEditorDocument(tree, roots);
@@ -58,7 +61,8 @@ public sealed class BinEditorDocument
         return ms.ToArray();
     }
 
-    private static EditableBinField Build(string name, uint nameHash, BinTreeProperty p, Func<uint, string?> resolve, string parentPath)
+    private static EditableBinField Build(string name, uint nameHash, BinTreeProperty p, Func<uint, string?> resolve, string parentPath,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         string path = parentPath + " / " + name;
         switch (p)
@@ -67,20 +71,20 @@ public sealed class BinEditorDocument
             {
                 var node = new EditableBinField { Name = name, NameHash = nameHash, TypeName = $"{c.ElementType}[{c.Elements.Count}]", IsBranch = true, Kind = BinValueKind.ReadOnly, PathLabel = path };
                 for (int i = 0; i < c.Elements.Count; i++)
-                    node.Children.Add(Build($"[{i}]", 0, c.Elements[i], resolve, path));
+                    node.Children.Add(Build($"[{i}]", 0, c.Elements[i], resolve, path, resolveWadPath));
                 return node;
             }
             case BinTreeStruct s:
             {
                 var node = new EditableBinField { Name = name, NameHash = nameHash, TypeName = Name(s.ClassHash, resolve), IsBranch = true, Kind = BinValueKind.ReadOnly, PathLabel = path };
                 foreach (var (nh, child) in s.Properties)
-                    node.Children.Add(Build(Name(nh, resolve), nh, child, resolve, path));
+                    node.Children.Add(Build(Name(nh, resolve), nh, child, resolve, path, resolveWadPath));
                 return node;
             }
             case BinTreeOptional o:
             {
                 var node = new EditableBinField { Name = name, NameHash = nameHash, TypeName = "optional", IsBranch = true, Kind = BinValueKind.ReadOnly, PathLabel = path };
-                if (o.Value is not null) node.Children.Add(Build("value", 0, o.Value, resolve, path));
+                if (o.Value is not null) node.Children.Add(Build("value", 0, o.Value, resolve, path, resolveWadPath));
                 return node;
             }
             // M151: Map (e.g. StaticMaterialDef.shaderMacros) was falling through to the leaf case, so it
@@ -102,7 +106,7 @@ public sealed class BinEditorDocument
                         BinTreeHash kh => resolve(kh.Value) ?? $"0x{kh.Value:x8}",
                         _ => e.Key?.ToString() ?? "?",
                     };
-                    node.Children.Add(Build(key, 0, e.Value, resolve, path));
+                    node.Children.Add(Build(key, 0, e.Value, resolve, path, resolveWadPath));
                 }
                 return node;
             }
@@ -115,7 +119,7 @@ public sealed class BinEditorDocument
                     IsBranch = false,
                     Kind = BinValueEditor.KindOf(p),
                     PathLabel = path,
-                    OriginalText = BinValueEditor.Format(p, resolve),
+                    OriginalText = BinValueEditor.Format(p, resolve, resolveWadPath),
                     Property = p,
                 };
         }
@@ -182,8 +186,8 @@ public sealed class EditableBinField
 
     /// <summary>M98e: the property's CURRENT value — <see cref="OriginalText"/> is a parse-time snapshot
     /// and goes stale the moment an edit is applied; row UIs must display this instead.</summary>
-    public string CurrentText(Func<uint, string?> resolve) =>
-        Property is null ? OriginalText : BinValueEditor.Format(Property, resolve);
+    public string CurrentText(Func<uint, string?> resolve, Func<ulong, string?>? resolveWadPath = null) =>
+        Property is null ? OriginalText : BinValueEditor.Format(Property, resolve, resolveWadPath);
 
     /// <summary>Apply text to the underlying property (throws on invalid input).</summary>
     public void Apply(string text)
@@ -207,14 +211,23 @@ public static class BinValueEditor
         BinTreeF32 => BinValueKind.Float,
         BinTreeString => BinValueKind.String,
         BinTreeHash => BinValueKind.Hash,
+        // M590: 16.17 turned every material texturePath into one of these. Without this it fell through
+        // to ReadOnly and Format printed the literal word "WadChunkLink" where the path used to be.
+        BinTreeWadChunkLink => BinValueKind.WadPath,
         BinTreeVector2 => BinValueKind.Vector2,
         BinTreeVector3 => BinValueKind.Vector3,
         BinTreeVector4 => BinValueKind.Vector4,
         _ => BinValueKind.ReadOnly,
     };
 
-    public static string Format(BinTreeProperty p, Func<uint, string?> resolve) => p switch
+    /// <param name="resolveWadPath">M590: 64-bit wad-path lookup, for <c>WadChunkLink</c> values. Null
+    /// leaves them as hex, which is honest and still round-trips through <see cref="Apply"/>.</param>
+    public static string Format(BinTreeProperty p, Func<uint, string?> resolve,
+        Func<ulong, string?>? resolveWadPath = null) => p switch
     {
+        // M590: before this, a WadChunkLink fell through to the bare type name — every material's
+        // texturePath read as the literal word "WadChunkLink" once 16.17 changed the field's type.
+        BinTreeWadChunkLink w => BinTexturePath.Read(w, resolveWadPath),
         BinTreeBool b => b.Value ? "true" : "false",
         BinTreeBitBool b => b.Value ? "true" : "false",
         BinTreeI8 v => v.Value.ToString(Inv),
@@ -268,6 +281,9 @@ public static class BinValueEditor
             case BinTreeF32 v: v.Value = float.Parse(t, NumberStyles.Float, Inv); break;
             case BinTreeString v: v.Value = text; break;
             case BinTreeHash v: v.Value = ParseHexOrUInt(t); break;
+            // M590: accepts a path (hashed with the wad rule) or a raw 0x… hash, so a chunk whose path the
+            // dictionary cannot name still round-trips unchanged instead of being destroyed by an edit.
+            case BinTreeWadChunkLink v: BinTexturePath.Write(v, t); break;
             case BinTreeColor v: { var f = ParseFloats(t, 4); v.Value = new LeagueToolkit.Core.Primitives.Color(f[0], f[1], f[2], f[3]); break; }   // M151
             case BinTreeVector2 v: { var f = ParseFloats(t, 2); v.Value = new Vector2(f[0], f[1]); break; }
             case BinTreeVector3 v: { var f = ParseFloats(t, 3); v.Value = new Vector3(f[0], f[1], f[2]); break; }

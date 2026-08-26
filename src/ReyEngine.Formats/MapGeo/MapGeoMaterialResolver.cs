@@ -2,6 +2,7 @@ using System.Numerics;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
+using ReyEngine.Formats.Meta;
 
 namespace ReyEngine.Formats.MapGeo;
 
@@ -64,7 +65,10 @@ public static class MapGeoMaterialResolver
     }
 
     /// <summary>material name → diffuse texture path.</summary>
-    public static Dictionary<string, string> Resolve(byte[] materialsBinData, IEnumerable<string> materialNames)
+    /// <param name="resolveWadPath">M590: 64-bit wad-path lookup for texturePath values stored as
+    /// WadChunkLink, which is every shipped material from patch 16.17 onward.</param>
+    public static Dictionary<string, string> Resolve(byte[] materialsBinData, IEnumerable<string> materialNames,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         BinTree bin;
@@ -74,7 +78,7 @@ public static class MapGeoMaterialResolver
         foreach (var name in materialNames.Where(n => !string.IsNullOrEmpty(n)).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!TryGetObject(bin, name, out var matObj)) continue;
-            var tex = ResolveDiffuse(bin, matObj);
+            var tex = ResolveDiffuse(bin, matObj, resolveWadPath);
             if (tex is not null) result[name] = tex;
         }
         return result;
@@ -87,7 +91,8 @@ public static class MapGeoMaterialResolver
         return false;
     }
 
-    private static string? ResolveDiffuse(BinTree bin, BinTreeObject material)
+    private static string? ResolveDiffuse(BinTree bin, BinTreeObject material,
+        Func<ulong, string?>? resolveWadPath)
     {
         if (Field(material.Properties, "samplerValues") is not BinTreeContainer samplers) return null;
 
@@ -100,8 +105,12 @@ public static class MapGeoMaterialResolver
             // (Other schemas use 'samplerName' / 'textureName'.)
             var name = (Field(s.Properties, "TextureName") as BinTreeString)?.Value
                        ?? (Field(s.Properties, "samplerName") as BinTreeString)?.Value ?? "";
-            var path = (Field(s.Properties, "texturePath") as BinTreeString)?.Value
-                       ?? (Field(s.Properties, "textureName") as BinTreeString)?.Value;
+            // M590: texturePath is a WadChunkLink on 16.17+ and a String before it. Reading only the
+            // string form left every material on the current patch with no diffuse at all.
+            var pathProp = Field(s.Properties, "texturePath") is { } tp && BinTexturePath.Is(tp) ? tp
+                         : Field(s.Properties, "textureName") is { } tn && BinTexturePath.Is(tn) ? tn
+                         : null;
+            var path = pathProp is null ? null : BinTexturePath.Read(pathProp, resolveWadPath);
             if (!IsTexturePath(path)) continue;
             first ??= path;
             if (name.Equals("Bottom_Texture", StringComparison.OrdinalIgnoreCase)) terrainBottom = path;

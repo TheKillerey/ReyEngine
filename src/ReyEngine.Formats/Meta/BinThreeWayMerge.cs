@@ -9,6 +9,10 @@ public sealed record BinMergeReport(
     IReadOnlyList<string> ConflictDetails, IReadOnlyList<string> Notes)
 {
     public bool HasModChanges => ModAdded + ModRemoved + ModModified > 0;
+
+    /// <summary>M590: asset references rewritten from String to WadChunkLink to match the wire form the
+    /// target patch uses. Reported because it changes bytes the mod author never edited.</summary>
+    public int Relinked { get; init; }
 }
 
 /// <summary>
@@ -26,6 +30,10 @@ public static class BinThreeWayMerge
         var oldT = SafeBinTree.Parse(oldBase);
         var modT = SafeBinTree.Parse(mod);
         var newT = SafeBinTree.Parse(newBase);
+        // M590: surveyed from an untouched parse - newT is mutated below, and a mod object
+        // carrying the old String form would otherwise teach the survey that the field is
+        // 'both', which is exactly the case that must convert.
+        var newTReference = SafeBinTree.Parse(newBase);
         string R(uint h) => resolve?.Invoke(h) ?? $"0x{h:x8}";
 
         int added = 0, removed = 0, modified = 0, conflicts = 0;
@@ -107,12 +115,23 @@ public static class BinThreeWayMerge
             if (!oldT.Dependencies.Contains(dep) && !newT.Dependencies.Contains(dep))
             { newT.Dependencies.Add(dep); notes.Add($"dependency added by mod kept: {dep}"); }
 
+        // M590: the mod's own objects came across verbatim, which on a patch that changed an asset
+        // field's WIRE FORM leaves one bin holding two eras. Rebasing a 16.10 map onto 16.17 produced
+        // exactly that: 1,029 String texturePaths beside 254 WadChunkLinks inherited from Riot's untouched
+        // objects. The client SKIPS a property whose form disagrees with the schema rather than saying so
+        // (M507), so those materials silently lose their textures - a rebase that looks clean and ships
+        // broken. The patch's own copy of this bin says which fields it writes only as links.
+        int relinked = BinAssetLinkMigration.AlignWith(newT, newTReference);
+        if (relinked > 0)
+            notes.Add($"{relinked:n0} asset reference(s) rewritten to the wire form this patch uses "
+                    + "(String -> WadChunkLink)");
+
         using var ms = new MemoryStream();
         newT.Write(ms);
         byte[] bytes = ms.ToArray();
         _ = SafeBinTree.Parse(bytes);   // must round-trip or the merge is unusable
 
         return (bytes, new BinMergeReport(newT.Objects.Count, added, removed, modified, conflicts,
-            conflictDetails, notes));
+            conflictDetails, notes) { Relinked = relinked });
     }
 }

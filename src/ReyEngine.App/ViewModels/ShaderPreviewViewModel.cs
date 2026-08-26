@@ -411,7 +411,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         }
         else
         {
-            try { _perms = new ShaderPermutationIndex(gameDataFinalDir); }
+            try { _perms = new ShaderPermutationIndex(gameDataFinalDir,
+                h => resolver is not null && resolver.TryGetPath(h, out var wp) ? wp : null); }
             catch { _perms = null; }   // only affects define-set completeness, not loading
 
             _cache = ShaderCacheReader.Open(gameDataFinalDir, resolver, out var err);

@@ -77,7 +77,9 @@ public sealed class SaveRebaseTests
         var back = MaterialDocument.Parse(merged, Resolve);
         Assert.NotNull(back);
         var saved = back!.Materials.First(m => m.Name == materialName);
-        Assert.Contains(saved.Slots, s => s.Path == "assets/rebase/test/marker.tex");
+        // M590: the slot is a WadChunkLink, so identity is the chunk it names rather than the literal.
+        Assert.Contains(saved.Slots,
+            s => s.ChunkHash == ReyEngine.Core.Hashing.HashAlgorithms.WadPath("assets/rebase/test/marker.tex"));
     }
 
     [Fact]

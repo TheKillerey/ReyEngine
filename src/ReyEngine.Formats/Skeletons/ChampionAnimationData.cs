@@ -51,7 +51,12 @@ public static class ChampionAnimationData
 
     /// <summary>All named clips in an animation bin. Clip names resolve via the bin-name resolver
     /// (mClipDataMap keys are FNV1a hashes of names like Idle1/Attack1).</summary>
-    public static IReadOnlyList<AnimClipInfo> ParseClips(byte[] animationBin, Func<uint, string?> resolve)
+    /// <param name="resolveWadPath">M590: 64-bit wad-path lookup. Patch 16.17 turned
+    /// <c>mAnimationFilePath</c> into a WadChunkLink - measured 8,983 links and ZERO strings across
+    /// a map wad and three champion wads - so without this every clip's .anm path reads as empty and
+    /// the whole clip list comes back blank.</param>
+    public static IReadOnlyList<AnimClipInfo> ParseClips(byte[] animationBin, Func<uint, string?> resolve,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         var clips = new List<AnimClipInfo>();
         try
@@ -73,8 +78,8 @@ public static class ChampionAnimationData
 
                     string anm = "";
                     if (s.Properties.TryGetValue(FAnimRes, out var res) && res is BinTreeStruct rs
-                        && rs.Properties.TryGetValue(FAnimPath, out var ap) && ap is BinTreeString aps)
-                        anm = aps.Value;
+                        && rs.Properties.TryGetValue(FAnimPath, out var ap) && Meta.BinTexturePath.Is(ap))
+                        anm = Meta.BinTexturePath.Read(ap, resolveWadPath);
                     if (anm.Length == 0) continue;
 
                     var showN = new List<string>(); var hideN = new List<string>();

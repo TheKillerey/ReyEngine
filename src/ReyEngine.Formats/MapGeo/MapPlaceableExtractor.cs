@@ -71,7 +71,9 @@ public static class MapPlaceableExtractor
     private static readonly uint F_visibilityFlags = HashAlgorithms.Fnv1a("mVisibilityFlags");
     private static readonly uint F_cubemapTexture = 0xfe380acfu;   // texture path string on MapCubemapProbe
 
-    public static (IReadOnlyList<MapCubemapProbe> Probes, IReadOnlyList<MapAnimatedProp> Props, IReadOnlyList<MapSoundPlacement> Sounds) Extract(byte[] materialsBin)
+    /// <param name="resolveWadPath">M590: cubemapTexture became a WadChunkLink in 16.17.</param>
+    public static (IReadOnlyList<MapCubemapProbe> Probes, IReadOnlyList<MapAnimatedProp> Props, IReadOnlyList<MapSoundPlacement> Sounds) Extract(byte[] materialsBin,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         var probes = new List<MapCubemapProbe>();
         var props = new List<MapAnimatedProp>();
@@ -105,7 +107,7 @@ public static class MapPlaceableExtractor
                 {
                     probes.Add(new MapCubemapProbe(
                         NameOf(s), transform.Translation, transform,
-                        (Get(s, F_cubemapTexture) as BinTreeString)?.Value,
+                        Meta.BinTexturePath.Read(Get(s, F_cubemapTexture), resolveWadPath) is { Length: > 0 } cm ? cm : null,
                         visibility, hasVisibility, id));
                 }
                 else if (s.ClassHash == MapAudioClass)
