@@ -4431,6 +4431,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private string WriteBakedAsset(string assetPath, byte[] bytes, string ext)
     {
         ulong hash = HashAlgorithms.WadPath(assetPath);
+        // M590: teach the dictionary this path as it is written. Riot's dictionary only knows Riot's
+        // files, and since 16.17 a material stores a texture as the HASH of its path - so an asset this
+        // editor invents (a legacy port's textures land under assets/maps/legacyimport/…) would show the
+        // author a bare 0x… with an unresolved warning, for a file the project itself just created.
+        // Registering here rather than at project open also covers assets made DURING a session, which
+        // is exactly when a port runs.
+        _resolver.Database.AddWad(hash, assetPath);
         if (Project.IsFolderProject && Project.RootPath is { } root && _currentMapEntry is { } mapEntry)
         {
             // Stage under the SAME WAD folder the map itself lives in (Map12.wad.client → "Map12"): the
