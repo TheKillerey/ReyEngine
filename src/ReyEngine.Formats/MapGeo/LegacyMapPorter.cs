@@ -384,23 +384,30 @@ public static class LegacyMapPorter
             // M528: a cutoff on a shader that does not test is inert, but it also lies to anyone reading
             // the material about what the surface does.
             //
-            // M543: a decal takes 0.3, NOT a near-zero floor. DefaultEnv_Flat_AlphaTest is an alpha-TEST
-            // shader: the client runs it in the OPAQUE pass, where it writes depth. At 0.3 a transparent
-            // texel is DISCARDED - never shaded, never writes depth - and the ground composites through.
-            // At 0.005 nothing is discarded, so every transparent texel is still shaded (black, over
-            // whatever has drawn so far) AND still stamps depth, which then rejects the very ground the
-            // decal was meant to sit on. That is the reported "the black is just the transparency, and it
-            // is something between the ground and the decal".
+            // M598: a decal takes 0.005. M543 put it at 0.3 and cited "3,091 of 3,347 shipped
+            // DefaultEnv_Flat_AlphaTest AND blended materials" - but that population is 99% NOT decals.
+            // Split it and the decals say the opposite. Over every shipped wad, 3,877 materials on an
+            // alpha-test shader with blending on:
             //
-            // Neither of our own viewports shows it: both derive WritesDepth from the render mode and
-            // force it off for a transparent material (M279), so the depth stamp never happens here. The
-            // client derives it from the shader class instead. That divergence is exactly why this looked
-            // correct in the editor and wrong in game.
+            //     decal-named (34):        32 at 0.005, 2 at 0.001, ZERO at 0.3
+            //     everything else (3,843): 3,221 at 0.3, 347 at 0.9, 220 at 0.005
             //
-            // 0.3 is Riot's own value on 3,091 of the 3,347 shipped materials that are
-            // DefaultEnv_Flat_AlphaTest AND blended - the directly comparable set - against 170 on 0.005.
+            // Riot's own decals in the destination bin (jade_container, lanetowerdcl_decalVersion3 and
+            // its siblings) are among the 0.005 group. So 0.3 was the mode of the wrong set.
+            //
+            // M543's mechanism does not hold either: it argued "at 0.005 nothing is discarded", but the
+            // test discards alpha BELOW the cutoff, and a fully transparent texel is below any positive
+            // one. On the ported legacy decals 0.005 discards 48-55% of the image - the whole clear
+            // surround - so the ground still composites through and nothing stamps depth there.
+            //
+            // What 0.3 actually did: it cuts the surviving art along the arbitrary alpha-0.3 contour, and
+            // legacy decal alpha is a GRADIENT (gloss packed into alpha - see LegacyAlphaClassifier),
+            // not a mask. Every ported decal texture measured classifies Gradient, and on
+            // order_base_decal_mid 71.8% of the image survives a 0.3 cut. Drawn on a generated flat
+            // plane that is a hard-edged slab of colour lying on the ground, which is how it was
+            // reported.
             parameters["AlphaTestValue"] = new Vector4(
-                role == LegacyMaterialRole.Decal ? 0.3f : 0.35f, 0, 0, 0);
+                role == LegacyMaterialRole.Decal ? 0.005f : 0.35f, 0, 0, 0);
         return parameters;
     }
 
