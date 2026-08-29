@@ -1666,7 +1666,14 @@ public sealed class ViewportControl : OpenGlControlBase
         bool changed = _particleSims.Count != wanted.Count || _particleSims.Any(sim => !wanted.Contains(sim));
         if (!changed) return;
         foreach (var sim in wanted)
-            if (!_particleSims.Contains(sim, ReferenceEqualityComparer.Instance)) sim.Reset();
+            if (!_particleSims.Contains(sim, ReferenceEqualityComparer.Instance))
+            {
+                sim.Reset();
+                // M595: warm up on camera entry exactly as the D3D11 path has since M536. This one never
+                // did, so the two viewports disagreed about how full the same map was, and a slow emitter
+                // (Jade's lillypad: 0.05/s, 100 s lifetime) drew nothing at all for the first 20 seconds.
+                sim.PreWarm(sim.FillDuration);
+            }
         _particleSims.Clear();
         _particleSims.AddRange(wanted);
         RebuildActiveParticleAnimations();

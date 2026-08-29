@@ -157,6 +157,14 @@ public sealed class VfxParticleSimulator
     /// renderer or the data path depends on this value - only the preview's auto-stop.</summary>
     public float NaturalDuration { get; private set; }
 
+    /// <summary>M595: how long this system needs to REACH steady state - one particle lifetime past the
+    /// first emission, not the emitter's whole run. <see cref="PreWarm"/> wants this;
+    /// <see cref="NaturalDuration"/> is the preview's auto-stop cycle and stays capped at 30 s.
+    ///
+    /// <para>Jade's lillypad emitter is why the two had to part company: rate 0.05/s with a 100 s
+    /// particle lifetime settles at 5 lilypads, and asking for 30 s of fill produces one.</para></summary>
+    public float FillDuration { get; private set; }
+
     /// <summary>How long the preview lets an endless emitter run before treating a cycle as finished.
     /// Chosen for the editor, not read from Riot.</summary>
     private const float InfiniteRunSeconds = 3f;
@@ -164,6 +172,7 @@ public sealed class VfxParticleSimulator
     private void ComputeNaturalDuration()
     {
         float longest = 0f;
+        float fill = 0f;
         foreach (var s in _emitters)
         {
             var d = s.Def;
@@ -174,8 +183,11 @@ public sealed class VfxParticleSimulator
             float pLife = d.ParticleLifetime.Constant;
             float tail = pLife > 0f ? pLife : MathF.Max(d.ParticleLinger, 0f);
             longest = MathF.Max(longest, start + emitFor + tail);
+            // M595: reaching steady state costs one particle lifetime, NOT the emitter's whole run.
+            fill = MathF.Max(fill, start + tail);
         }
         NaturalDuration = Math.Clamp(longest, 0.5f, 30f);
+        FillDuration = Math.Clamp(fill, 0.5f, 150f);
     }
 
     // Emitters that never terminate loop forever; give a hard cap so a runaway rate can't explode memory.
@@ -369,11 +381,21 @@ public sealed class VfxParticleSimulator
     /// </summary>
     public void PreWarm(float seconds)
     {
-        const float step = 1f / 15f;
-        const int maxSteps = 150;                       // 10 s of fill, which covers every Map2 system
+        // M595: the step ADAPTS so the requested window is actually covered; the cost bound is unchanged.
+        // It used to be a fixed 1/15 s with the same 150-step cap, i.e. 10 s of fill no matter what was
+        // asked for - so Jade's lillypad emitter (0.05 particles/s, 100 s lifetime, steady state 5) came
+        // out of warm-up with SpawnAccum 0.5 and drew NOTHING, then trickled to one after another 10 s.
+        // Anything that fits in 10 s keeps exactly the resolution it had; only long, slow systems trade
+        // resolution for coverage, and those are slow precisely because little happens per second.
+        const float minStep = 1f / 15f;
+        const float maxStep = 1f;
+        const int maxSteps = 150;
 
-        int steps = Math.Min(maxSteps, (int)MathF.Ceiling(MathF.Max(seconds, 0f) / step));
-        for (int i = 0; i < steps; i++) Update(step);
+        float want = MathF.Max(seconds, 0f);
+        if (want <= 0f) return;
+        float step = Math.Clamp(want / maxSteps, minStep, maxStep);
+        int steps = Math.Min(maxSteps, (int)MathF.Ceiling(want / step));
+        for (int i = 0; i < steps; i++) Advance(step);
     }
 
     /// <summary>Advance the whole system by <paramref name="dt"/> seconds and rebuild render instances.</summary>
@@ -394,6 +416,14 @@ public sealed class VfxParticleSimulator
             if (dt <= 0f) return;
         }
         dt = MathF.Min(dt, 0.1f);   // clamp big frame gaps so bursts don't teleport
+        Advance(dt);
+    }
+
+    /// <summary>One step of the simulation, without the frame-gap clamp. <see cref="Update"/> clamps
+    /// first because a hitch there is an accident; <see cref="PreWarm"/> calls this directly because its
+    /// step size is a deliberate choice and clamping it would silently shorten the warm-up window.</summary>
+    private void Advance(float dt)
+    {
         int live = 0;
         foreach (var s in _emitters)
         {
@@ -828,11 +858,26 @@ public sealed class VfxParticleSimulator
                 col *= SampleGradient(grad, s.ColorGradientW, s.ColorGradientH, u, v);
             }
 
+            // M595: with no authored rate the atlas is a set of VARIANTS, not an animation, so the
+            // cell is picked at birth and held. We used to spread one full pass of the atlas over the
+            // particle's lifetime, which is a number Riot never wrote down: on Jade's ripples
+            // (numFrames 4, particleLifetime 6, frameRate absent, isRandomStartFrame true) that is one
+            // hard cell jump every 1.5 s - the "1 fps instead of 30" the author reported, on a particle
+            // whose scale and colour curves are otherwise continuous.
+            //
+            // Evidence that absent means zero rather than some default: .bin omits any property equal
+            // to the class default, and the two Waterbugs emitters in the SAME system author
+            // frameRate = 30 explicitly - so 30 is not the default. A rate of 0 cannot animate, and
+            // isRandomStartFrame on exactly the emitters that omit the rate is what a variant atlas
+            // looks like (ripple_pieces32 is four ripple shapes, not four frames of one).
+            //
+            // 89.7% of flipbook emitters across Map453/11/12/30 are random-start-with-no-rate, so this
+            // governs most of them; see docs/research/vfx-support-report.md open question 10.
             float frame = 0f;
             if (d.NumFrames > 1)
-                frame = MathF.Floor(p.FrameRate > 0f
-                    ? (p.StartFrame + p.Age * p.FrameRate) % d.NumFrames
-                    : (p.StartFrame + t * d.NumFrames) % d.NumFrames);
+                frame = p.FrameRate > 0f
+                    ? MathF.Floor((p.StartFrame + p.Age * p.FrameRate) % d.NumFrames)
+                    : MathF.Floor(p.StartFrame);
 
             buf[k++] = p.Pos.X; buf[k++] = p.Pos.Y; buf[k++] = p.Pos.Z;
             float sizeX = p.BirthSize.X * scaleMul.X;

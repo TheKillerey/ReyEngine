@@ -670,7 +670,9 @@ public sealed class D3D11MapParticles
                 // glance showed about 30 and the map read as far sparser than the game renders it. The
                 // conversion was right; this preview was under-reporting it, which is worse than an
                 // obviously wrong preview because it invites tuning against a number that is not real.
-                sim.PreWarm(sim.NaturalDuration);
+                // M595: FillDuration, not NaturalDuration. The latter is the preview's auto-stop cycle
+                // and is capped at 30 s, which silently truncated the warm-up of every slower system.
+                sim.PreWarm(sim.FillDuration);
             }
 
         _active.Clear();
