@@ -27,7 +27,13 @@ public sealed record LegacyPortShaderOptions(
 /// </summary>
 /// <param name="GenerateQuads">Replace each legacy decal patch with flat planes carrying one whole
 /// texture each - one per occupied UV tile. Off by default: the legacy patches follow the terrain and
-/// the quads do not, so this is a deliberate trade, not an improvement.</param>
+/// the quads do not, so this is a deliberate trade, not an improvement.
+///
+/// <para><b>M597 - what "does not follow the terrain" cost in practice.</b> A Map453 port turned this on
+/// and shipped 107 planes where Riot's Jade has 6, the largest 739x1051 world units. In game they read as
+/// flat hard-edged rectangles lying on the ground, permanently visible, and were reported as a rendering
+/// bug in something else entirely - the turret standing next to two of them. The old wording described
+/// the mechanism honestly and still made this sound cosmetic, so say the outcome instead.</para></param>
 /// <param name="Lift">World units to raise a generated quad along its normal, clear of the ground.</param>
 /// <param name="SingleImage">Give each plane a clean 0..1 so its texture appears exactly once, instead
 /// of the patch's own UV range. Off by default - a legacy patch spans a median 1.92 x 1.78 tiles, so its
@@ -859,7 +865,8 @@ public static class LegacyMapPorter
             if (decals.GenerateQuads && quads > 0)
                 warnings.Add($"Rebuilt the decals as {quads:n0} flat plane(s), one per decal carrying its " +
                     $"whole texture, lifted {decals.Lift:0.#} unit(s) off the ground. They no longer follow "
-                    + "the terrain."
+                    + "the terrain, and a large one can read in game as a flat rectangle lying on the "
+                    + "ground rather than as its artwork - turn this off if you see those."
                     + (skippedTiles > 0 ? $" {skippedTiles:n0} had no usable UV mapping and kept their original patch." : ""));
             else if (decalsAfter != decalsBefore)
                 warnings.Add($"Split {decalsBefore:n0} combined decal mesh(es) into {decalsAfter:n0} " +
