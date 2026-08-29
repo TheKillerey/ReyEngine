@@ -516,4 +516,63 @@
     <Setter Property="MinHeight" Value="18" />
   </Style>
 
+  <!--
+    M593: NEW FEATURE HIGHLIGHT.
+
+    Marks a control that arrived in a release the user has not acknowledged yet:
+        Classes.newFeature="{Binding NewFeature[some-feature-id]}"
+
+    Design decisions, all deliberate:
+
+    * OUTER GLOW ONLY. The control's own background, foreground and content are untouched, so text and
+      icons keep their contrast and every hover/pressed/selected style still wins - those setters live on
+      the same template part and come later in the file, so they override this one's brush.
+    * NO LAYOUT EFFECT. BoxShadow renders outside the layout box and BorderThickness is not changed, so a
+      highlighted control does not move its neighbours by a pixel. That is why this is a shadow rather
+      than the extra border a "new" badge would otherwise want.
+    * ReyAccent2 (violet) rather than ReyAccent. Accent is the app's PRIMARY-ACTION colour - it is already
+      on Build Package and every selected tab - so glowing with it would read as "this is selected". Accent2
+      is the existing attention/unsaved colour and is distinct in all three palettes.
+    * NO ANIMATION. This codebase has zero declarative animations, and an infinite pulse on editor chrome
+      is a real distraction in a tool people keep open for hours. A static glow is noticeable on arrival
+      and stops competing for attention immediately afterwards.
+  -->
+  <Style Selector="Button.newFeature /template/ ContentPresenter">
+    <Setter Property="BoxShadow" Value="0 0 7 0 #8B7CF7" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccent2Brush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="ToggleButton.newFeature /template/ ContentPresenter">
+    <Setter Property="BoxShadow" Value="0 0 7 0 #8B7CF7" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccent2Brush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="SplitButton.newFeature /template/ ContentPresenter">
+    <Setter Property="BoxShadow" Value="0 0 7 0 #8B7CF7" />
+  </Style>
+  <!-- MenuItem paints through its own layout root rather than a ContentPresenter (see MenuItem above). -->
+  <Style Selector="MenuItem.newFeature /template/ Border#PART_LayoutRoot">
+    <Setter Property="BoxShadow" Value="0 0 7 0 #8B7CF7" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccent2Brush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <!-- TabItem is a HeaderedContentControl, not a Border - it has no BoxShadow of its own, so the glow
+       goes on its template root the same way the ColorView tab styles below pierce theirs. -->
+  <Style Selector="TabItem.newFeature /template/ Border#PART_LayoutRoot">
+    <Setter Property="BoxShadow" Value="0 0 7 0 #8B7CF7" />
+  </Style>
+  <!-- For an inspector section or any panel that is itself the new thing. -->
+  <Style Selector="Border.newFeature">
+    <Setter Property="BoxShadow" Value="0 0 7 0 #8B7CF7" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccent2Brush}" />
+  </Style>
+
+  <!-- The "NEW" pill, for putting next to a highlighted control's label. Reuses the badge vocabulary. -->
+  <Style Selector="Border.badge.new">
+    <Setter Property="Background" Value="#4D8B7CF7" />
+  </Style>
+  <Style Selector="Border.badge.new > TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource ReyAccent2Brush}" />
+  </Style>
+
 </Styles>

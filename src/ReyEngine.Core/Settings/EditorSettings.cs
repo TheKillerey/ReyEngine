@@ -47,6 +47,18 @@ public sealed class EditorSettings
     /// <summary>True once the first-run setup wizard has been completed (or skipped).</summary>
     public bool FirstRunCompleted { get; set; } = false;
 
+    // ---- feature discovery (M593) ----
+    /// <summary>
+    /// The newest release whose new-feature highlights this user has already seen, e.g. <c>0.4.0</c>.
+    ///
+    /// <para>Empty means "never seen any", which is what a fresh install and every pre-M593 settings file
+    /// both look like — so an existing user updating INTO the release sees that release's highlights once,
+    /// which is the point. Deliberately a plain version string rather than a set of feature ids: a string
+    /// round-trips through the settings test's supported types, and one comparison answers the question for
+    /// every feature at once.</para>
+    /// </summary>
+    public string LastSeenFeatureVersion { get; set; } = "";
+
     // ---- auto-save (M503c) ----
     /// <summary>
     /// Save mesh transforms and material edits automatically once editing goes quiet.
@@ -125,6 +137,7 @@ public sealed class EditorSettings
         Theme = s.Theme;
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder; PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
         FirstRunCompleted = s.FirstRunCompleted;
+        LastSeenFeatureVersion = s.LastSeenFeatureVersion;   // M593
         AutoSaveEdits = s.AutoSaveEdits; AutoSaveDelaySeconds = s.AutoSaveDelaySeconds;   // M505
         ProjectsDirectory = s.ProjectsDirectory;
         WwiseConsolePath = s.WwiseConsolePath; WwiseProjectPath = s.WwiseProjectPath;

@@ -173,8 +173,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         LoadFrom(src);
     }
 
+    /// <summary>M593: the settings this dialog was opened from. <see cref="ToSettings"/> starts from a
+    /// clone of these so a field the dialog does not edit SURVIVES a save.</summary>
+    private EditorSettings _source = new();
+
     private void LoadFrom(EditorSettings s)
     {
+        _source = s.Clone();
+
         Keybinds.Clear();
         Keybinds.Add(new KeybindRowViewModel { Label = "Fly Forward", ActionId = "FlyForward", Key = s.FlyForward });
         Keybinds.Add(new KeybindRowViewModel { Label = "Fly Back", ActionId = "FlyBack", Key = s.FlyBack });
@@ -210,7 +216,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     public EditorSettings ToSettings()
     {
         string K(string id) => Keybinds.First(k => k.ActionId == id).Key;
-        return new EditorSettings
+        // M593: start from what was loaded, then overwrite only what this dialog owns.
+        //
+        // This used to build a BRAND NEW EditorSettings, so every field the dialog does not show was
+        // silently reset by Preferences > Save - FirstRunCompleted among them, which put the first-run
+        // wizard back on the next launch. Cloning makes that class of bug structural rather than a thing
+        // each new field has to remember, which matters because CopyFrom carries fields ToSettings did not.
+        var result = _source.Clone();
+        result.CopyFrom(new EditorSettings
         {
             FlyForward = K("FlyForward"), FlyBack = K("FlyBack"), FlyLeft = K("FlyLeft"), FlyRight = K("FlyRight"),
             FlyUp = K("FlyUp"), FlyDown = K("FlyDown"), FocusSelected = K("FocusSelected"),
@@ -222,7 +235,11 @@ public sealed partial class SettingsViewModel : ObservableObject
             PreviewBackgroundMapFolder = PreviewBackgroundMapFolder, PreviewBackgroundEnabled = PreviewBackgroundEnabled,
             ProjectsDirectory = ProjectsDirectory.Trim(),
             WwiseConsolePath = WwiseConsolePath.Trim(), WwiseProjectPath = WwiseProjectPath.Trim(),
-        };
+            // Carried through unchanged - the dialog does not edit these.
+            FirstRunCompleted = _source.FirstRunCompleted,
+            LastSeenFeatureVersion = _source.LastSeenFeatureVersion,
+        });
+        return result;
     }
 
     /// <summary>M72: pick a theme card — applies immediately so the whole editor previews it.</summary>
