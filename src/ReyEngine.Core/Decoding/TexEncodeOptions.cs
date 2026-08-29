@@ -55,6 +55,14 @@ public sealed record TexEncodeOptions
     public long PredictBytes(int width, int height, TexFormat format)
     {
         if (width <= 0 || height <= 0) return 0;
+        // M594: the writer grows a block-compressed image onto the 4x4 grid before encoding, because D3D
+        // refuses to create one that is off it. Predict the size of what will actually be WRITTEN, or the
+        // import dialog under-reports every off-grid texture.
+        if (TexWriter.IsBlockCompressed(format) && !TexWriter.FitsBlockGrid(width, height))
+        {
+            width = Math.Max(4, (width + 3) / 4 * 4);
+            height = Math.Max(4, (height + 3) / 4 * 4);
+        }
         int perBlock = format == TexFormat.Bc1 ? 8 : 16;
         long total = 12;
         int w = width, h = height;

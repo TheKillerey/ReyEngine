@@ -62,8 +62,13 @@ public class TexEncodeOptionsTests
         var tex = TexEncodeOptions.Default.Encode(Img(w, h));
         Assert.True(tex.Length > 12);
         Assert.Equal((byte)'T', tex[0]);
-        Assert.Equal(w, tex[4] | (tex[5] << 8));
-        Assert.Equal(h, tex[6] | (tex[7] << 8));
+        // M594: a block-compressed image is grown onto the 4x4 grid first - D3D cannot create one that
+        // is off it (a 1x1 BC3 stopped a map from loading). So the written size is the input ROUNDED UP,
+        // never smaller and never off-grid.
+        int outW = tex[4] | (tex[5] << 8), outH = tex[6] | (tex[7] << 8);
+        Assert.Equal(Math.Max(4, (w + 3) / 4 * 4), outW);
+        Assert.Equal(Math.Max(4, (h + 3) / 4 * 4), outH);
+        Assert.True(outW >= w && outH >= h);
     }
 
     // ---- prediction vs reality ----

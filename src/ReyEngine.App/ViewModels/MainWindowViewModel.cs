@@ -1070,7 +1070,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (sknBytes is null) return null;
 
             var mesh = SkinnedMeshDecoder.Decode(sknBytes);
-            var mat = ChampionMaterialResolver.Resolve(binBytes, ResolveBinName);
+            var mat = ChampionMaterialResolver.Resolve(binBytes, ResolveBinName, ResolveWadPath);
             TextureImage? Tex(string? path)
             {
                 if (string.IsNullOrEmpty(path)) return null;
@@ -5481,7 +5481,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 props.GroupBy(prop => prop.Skin, StringComparer.OrdinalIgnoreCase)
                     .Select(group => new PropSkinUsage(group.Key, group.Count())),
                 skin => ReadAssetByPath($"data/{skin.ToLowerInvariant()}.bin"),
-                ResolveBinName);
+                ResolveBinName, ResolveWadPath);
             foreach (var texture in propTextures) Add(texture.AssetPath, propUses: texture.Placements);
         }
 
@@ -6004,6 +6004,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // ResolveBinName usually arrives from a background parse.
         _meta = new Lazy<MetaClassDatabase>(() => _metaSync.LoadLocal(m => _log.Info("Meta", m)));
         _cullBackfaces = Settings.CullBackfacesDefault;   // M40: honor saved viewport default
+        NewFeature.LastSeenVersion = Settings.LastSeenFeatureVersion;   // M593
         Project.GameDirectory = ReyProject.GuessGameDirectory();
         _log.Info("ReyEngine", "Editor started.");
         if (!string.IsNullOrEmpty(Project.GameDirectory))
@@ -6564,12 +6565,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     private IReadOnlyDictionary<string, string>? _workshopPreviewAliases;
 
+    /// <param name="path">A texture REFERENCE: a real asset path, or the <c>0x…</c> form a WadChunkLink
+    /// takes when the dictionary cannot name it. M592: this used to hash the string blindly, so a hex
+    /// reference became <c>WadPath("0x…")</c> — a chunk that does not exist — and the texture silently
+    /// failed to load, rendering the surface untextured. The hash the reference already carries is what
+    /// addresses the chunk, so loading no longer depends on the dictionary knowing its name.</param>
     private byte[]? ReadAssetByPath(string path)
     {
         if (string.IsNullOrEmpty(path)) return null;
         if (ContentLoaded)
         {
-            var hash = HashAlgorithms.WadPath(path);
+            var hash = Formats.Meta.BinTexturePath.HashOfReference(path);
             if (TryResolveEntry(hash, out _) && ReadAsset(hash) is { } bytes) return bytes;
         }
         if (_workshopPreviewAliases is null || _workshopCatalog is null) return null;
@@ -6580,7 +6586,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool TextureExistsByPath(string path)
     {
         if (!ContentLoaded || string.IsNullOrEmpty(path)) return false;
-        return TryResolveEntry(HashAlgorithms.WadPath(path), out _);
+        return TryResolveEntry(Formats.Meta.BinTexturePath.HashOfReference(path), out _);
     }
 
     private TextureImage? LoadTextureByPath(string path)
@@ -6603,7 +6609,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void OpenTextureByPath(string path)
     {
         if (!ContentLoaded) return;
-        var hash = HashAlgorithms.WadPath(path);
+        // M592: same addressing rule as ReadAssetByPath, or a hex-referenced texture that the
+        // viewport renders fine reports "not found" when you click it.
+        var hash = Formats.Meta.BinTexturePath.HashOfReference(path);
         if (_nodesByHash.TryGetValue(hash, out var node)) SelectedNode = node;
         else _log.Warn("Material", $"Texture not found: {path}");
     }
@@ -7217,14 +7225,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             if (MaterialEditor.Kind == MaterialSourceKind.ChampionSkin && CurrentMesh is { } mesh)
             {
-                var resolved = ChampionMaterialResolver.Resolve(bytes, ResolveBinName);
+                var resolved = ChampionMaterialResolver.Resolve(bytes, ResolveBinName, ResolveWadPath);
                 CurrentModelTextures = BuildSubmeshTextures(mesh, resolved, "material preview");
             }
             else if (MaterialEditor.Kind == MaterialSourceKind.MapMaterials && _currentMap is { } map && CurrentMesh is not null)
             {
                 var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
                 var m2t = MapGeoMaterialResolver.Resolve(bytes, names, ResolveWadPath);
-                var profiles = MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName);
+                var profiles = MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName, ResolveWadPath);
                 CurrentModelTextures = BuildMapTextures(map, m2t, profiles, names.Count, _currentMapEntry?.Path);
             }
             else { _log.Info("Material", "Nothing in the viewport to preview — select the matching .skn/.mapgeo."); return; }
@@ -10797,7 +10805,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!ContentLoaded || !skn.IsResolved) return null;
         var binPath = SkinPaths.BinPathForSkn(skn.Path);
         if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return null;
-        var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName);
+        var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName, ResolveWadPath);
         if (!resolved.HasAny) return null;
         var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
         var result = new TextureImage?[mesh.SubMeshes.Count];
@@ -11052,7 +11060,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var r = MapGeoMaterialResolver.Resolve(bytes, names, ResolveWadPath);
             if (r.Count > 0)
             {
-                return (r, MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName),
+                return (r, MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName, ResolveWadPath),
                     Formats.MapGeo.MapLighting.EffectiveSun(bytes));
             }
         }
@@ -11067,7 +11075,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (r.Count > 0)
                 {
                     _log.Info("MapGeo", "Used the original game materials.bin (the project's copy was broken/empty).");
-                    return (r, MaterialProfiles.ForMapMaterials(fb, names, ResolveBinName),
+                    return (r, MaterialProfiles.ForMapMaterials(fb, names, ResolveBinName, ResolveWadPath),
                         Formats.MapGeo.MapLighting.EffectiveSun(fb));
                 }
             }
@@ -11653,7 +11661,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Info("Material", $"No skin .bin found for {skn.DisplayName} (flat shading).");
             return null;
         }
-        var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName);
+        var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName, ResolveWadPath);
         if (!resolved.HasAny)
         {
             _log.Info("Material", $"No skin material found for {skn.DisplayName} (flat shading).");
@@ -14528,6 +14536,37 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // ---- Editor preferences (M40): keybinds + camera feel, persisted to %AppData%/ReyEngine ----
     public ReyEngine.Core.Settings.EditorSettings Settings { get; } = ReyEngine.Core.Settings.EditorSettings.Load();
     public event Action? RequestSettings;
+
+    // ---- new-feature discovery (M593) ----
+
+    /// <summary>
+    /// Bound from XAML as <c>Classes.newFeature="{Binding NewFeature[some-id]}"</c>. Seeded from the
+    /// user's acknowledged release, so a fresh install and an updating install both see the highlights
+    /// once and a returning user sees nothing.
+    /// </summary>
+    public NewFeatureLookup NewFeature { get; } = new();
+
+    /// <summary>True while anything is unacknowledged — drives the "What's New" affordance.</summary>
+    public bool HasNewFeatures => NewFeature.AnyUnseen;
+
+    /// <summary>
+    /// Mark this release's highlights as seen and put every glow out at once.
+    ///
+    /// <para>Tied to an explicit acknowledgement rather than to app start or to clicking any one control:
+    /// dismissing on launch would mean a user who blinked never sees them, and dismissing per control
+    /// would leave the rest glowing with no way to tell which were noticed. One deliberate action, one
+    /// write to settings.</para>
+    /// </summary>
+    [RelayCommand]
+    private void DismissNewFeatures()
+    {
+        if (!NewFeature.AnyUnseen) return;
+        Settings.LastSeenFeatureVersion = ReyEngine.Core.Settings.NewFeatures.CurrentVersion;
+        Settings.Save();
+        NewFeature.LastSeenVersion = Settings.LastSeenFeatureVersion;
+        OnPropertyChanged(nameof(HasNewFeatures));
+        _log.Info("ReyEngine", $"New-feature highlights for {ReyEngine.Core.Settings.NewFeatures.CurrentVersion} dismissed.");
+    }
 
     [RelayCommand]
     private void OpenSettings() => RequestSettings?.Invoke();

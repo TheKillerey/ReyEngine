@@ -49,6 +49,11 @@ public static class TexWriter
         uint height32 = BinaryPrimitives.ReadUInt32LittleEndian(dds.AsSpan(12, 4));
         if (width32 is 0 or > ushort.MaxValue || height32 is 0 or > ushort.MaxValue) return false;
         int width = (int)width32, height = (int)height32;
+        // M594: refuse a source whose top mip is not a multiple of 4. Wrapping copies the blocks through
+        // untouched, so a malformed legacy DDS would become a .tex the client cannot create
+        // (E_INVALIDARG, "A texture could not be created"). Returning false sends the caller down the
+        // decode-and-re-encode path, where Write pads it onto the block grid.
+        if (!FitsBlockGrid(width, height)) return false;
         uint fourCc = BinaryPrimitives.ReadUInt32LittleEndian(dds.AsSpan(84, 4));
         const uint Dxt1 = 0x31545844; // "DXT1"
         const uint Dxt5 = 0x35545844; // "DXT5"
@@ -122,6 +127,19 @@ public static class TexWriter
         ArgumentNullException.ThrowIfNull(image);
         if (image.Width <= 0 || image.Height <= 0) throw new ArgumentException("empty image", nameof(image));
 
+        // M594: a block-compressed texture stores 4x4 blocks, and D3D refuses to create one whose TOP mip
+        // is not a multiple of 4 in both dimensions. The client reports that as
+        // ALE-D0D00020 / E_INVALIDARG "A texture could not be created" and stops the game at load.
+        //
+        // A legacy port hit it: the Old Rift port produced assets/Legacy/black.tex as 1x1 BC3, referenced
+        // by the map's materials, and the map would not load. Riot ships ZERO such textures - 0 of 9,955
+        // block-compressed .tex in Map453 - and their own tiny utility textures are authored at 4x4
+        // (ASSETS/Shared/Materials/white.tex is 4x4), which is the convention this follows.
+        //
+        // Scaled rather than edge-padded so UV 0..1 keeps spanning the whole image. For the 1x1 case that
+        // produced the crash the two are identical anyway: one colour replicated into a 4x4 block.
+        if (IsBlockCompressed(format)) image = PadToBlockMultiple(image);
+
         var levels = mipmaps ? BuildMipChain(image) : new List<TextureImage> { image };
 
         var ms = new MemoryStream();
@@ -140,6 +158,39 @@ public static class TexWriter
             ms.Write(EncodeLevel(levels[i], format));
 
         return ms.ToArray();
+    }
+
+    /// <summary>M594: is this format stored as 4x4 blocks, and therefore constrained to multiples of 4?</summary>
+    public static bool IsBlockCompressed(TexFormat format) => format is TexFormat.Bc1 or TexFormat.Bc3;
+
+    /// <summary>M594: does this image's size satisfy the block-compression constraint?</summary>
+    public static bool FitsBlockGrid(int width, int height) =>
+        width > 0 && height > 0 && width % 4 == 0 && height % 4 == 0;
+
+    /// <summary>
+    /// M594: grow an image so both dimensions are multiples of 4 (minimum 4x4), leaving it untouched when
+    /// it already fits. Nearest-neighbour, because the caller is about to block-compress it anyway and the
+    /// only cases that reach here are tiny or near-aligned; a smooth filter would blur a 1x1 solid into
+    /// nothing different and cost more.
+    /// </summary>
+    public static TextureImage PadToBlockMultiple(TextureImage image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        if (FitsBlockGrid(image.Width, image.Height)) return image;
+
+        int w = Math.Max(4, (image.Width + 3) / 4 * 4);
+        int h = Math.Max(4, (image.Height + 3) / 4 * 4);
+        var dst = new byte[w * h * 4];
+        for (int y = 0; y < h; y++)
+        {
+            int sy = Math.Min(image.Height - 1, (int)((long)y * image.Height / h));
+            for (int x = 0; x < w; x++)
+            {
+                int sx = Math.Min(image.Width - 1, (int)((long)x * image.Width / w));
+                Array.Copy(image.Rgba, (sy * image.Width + sx) * 4, dst, (y * w + x) * 4, 4);
+            }
+        }
+        return new TextureImage(w, h, dst);
     }
 
     /// <summary>Box-filtered mip chain, largest first, ending at 1x1.</summary>
