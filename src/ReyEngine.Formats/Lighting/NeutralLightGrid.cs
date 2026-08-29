@@ -58,13 +58,26 @@ public static class NeutralLightGrid
         return best;
     }
 
+    /// <summary>M596: what a map should declare for character self-illumination when it does not already
+    /// say. Censused over every shipped map wad, 200 MapBakeProperties: <b>129 author 0.5</b>, 25 author
+    /// 0.65, 29 leave it out, and the rest scatter between 0.4 and 1.22.
+    ///
+    /// <para><b>0 of 200 author 0.25</b>, which is what this used to hardcode. On a Jade port that
+    /// replaced the destination's own 1.0, so every champion, minion and turret on the map rendered at a
+    /// QUARTER of the self-illumination Riot gave it - reported as "the tower looks darker" on a map
+    /// whose terrain was otherwise fine. The value reaches characters through LIGHTGRID_SCALE.y in
+    /// LIT_UBER_PS, so nothing about the map geometry shows it going wrong.</para></summary>
+    public const float CorpusCharacterFullBrightIntensity = 0.5f;
+
     /// <summary>
     /// A complete, valid grid for a map that has never been baked.
     /// </summary>
     /// <param name="characterFullBrightIntensity">Must equal what is written to the bin's
-    /// <c>lightGridCharacterFullBrightIntensity</c>; they match in 173/173 shipped pairs.</param>
+    /// <c>lightGridCharacterFullBrightIntensity</c>; they match in 173/173 shipped pairs. Prefer the
+    /// value the destination map already declares - see <see cref="CorpusCharacterFullBrightIntensity"/>
+    /// for why a hardcoded constant is the wrong default.</param>
     public static LightGridFile Build(MapGeoAsset map, int width = 256, int height = 256,
-        float characterFullBrightIntensity = 0.25f)
+        float characterFullBrightIntensity = CorpusCharacterFullBrightIntensity)
     {
         ArgumentNullException.ThrowIfNull(map);
         float size = WorldSizeFor(map);

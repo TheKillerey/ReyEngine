@@ -9817,7 +9817,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // with auto-exposure off every sample saturates to 255 - which the shader's mad_sat turns into
             // flat, unshaded characters. The corpus-derived constant is strictly better until
             // ProbeDirection grows real per-direction sky visibility.
-            var grid = Formats.Lighting.NeutralLightGrid.Build(map, characterFullBrightIntensity: 0.25f);
+            // M596: KEEP what the map already declares. This used to hardcode 0.25 - a value 0 of the 200
+            // shipped MapBakeProperties author (129 say 0.5, 25 say 0.65, 6 say 1.0). Jade declares 1.0,
+            // so baking over it quartered the self-illumination of every champion, minion and turret on
+            // the ported map. It reaches them through LIGHTGRID_SCALE.y in LIT_UBER_PS, which is why the
+            // terrain looked right and only the CHARACTERS came out dark.
+            float fullBright = Formats.MapGeo.MapBakeProperties.Read(ReadAsset(binEntry.PathHash)) is
+                { FullBright: > 0f } declared
+                ? declared.FullBright
+                : Formats.Lighting.NeutralLightGrid.CorpusCharacterFullBrightIntensity;
+            var grid = Formats.Lighting.NeutralLightGrid.Build(map, characterFullBrightIntensity: fullBright);
 
             // Riot's authored casing when the bin has it; the derived form otherwise (which resolves to
             // the same chunk key either way, since WadPath lowercases before hashing).
@@ -9837,8 +9846,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             // Link it. MapBakeProperties.Write leaves any other fields the map already has untouched.
             // lightGridCharacterFullBrightIntensity must EQUAL the file's header[28] - they match in
-            // 173/173 joinable shipped pairs. 0.5 (the old value) would double self-illumination on every
-            // character on this map.
+            // 173/173 joinable shipped pairs, so this passes the grid's own value rather than a constant.
             var linked = Formats.MapGeo.MapBakeProperties.Write(
                 ReadAsset(binEntry.PathHash), gridPath, grid.Width,
                 grid.CharacterFullBrightIntensity, out var linkResult);
