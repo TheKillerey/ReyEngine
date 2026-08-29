@@ -18,7 +18,7 @@ public static class PropTextureCatalog
     public static IReadOnlyList<PropTextureUsage> Discover(
         IEnumerable<PropSkinUsage> usages,
         Func<string, byte[]?> readSkinBin,
-        Func<uint, string?> resolve)
+        Func<uint, string?> resolve, Func<ulong, string?>? resolveWadPath = null)
     {
         var bySkin = usages
             .Where(usage => !string.IsNullOrWhiteSpace(usage.SkinPath) && usage.Placements > 0)
@@ -35,9 +35,9 @@ public static class PropTextureCatalog
             if (bytes is null) continue;
 
             var textures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            Add(textures, SkinMeshExtractor.Extract(bytes)?.DefaultTexture);
+            Add(textures, SkinMeshExtractor.Extract(bytes, resolveWadPath)?.DefaultTexture);
 
-            var material = ChampionMaterialResolver.Resolve(bytes, resolve);
+            var material = ChampionMaterialResolver.Resolve(bytes, resolve, resolveWadPath);
             Add(textures, material.DefaultDiffuse);
             foreach (string path in material.SubmeshDiffuse.Values) Add(textures, path);
 

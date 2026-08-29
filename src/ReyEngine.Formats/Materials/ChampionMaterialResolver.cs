@@ -44,11 +44,16 @@ public static class ChampionMaterialResolver
             new(M(), null, M(), null, M(), null, M(), null, M(), null, M(), null, P(), MaterialProfile.Default);
     }
 
-    public static Result Resolve(byte[] skinBin, Func<uint, string?> resolve)
+    /// <param name="resolveWadPath">M592: 64-bit wad-path lookup. Champion 'texture' is one of the
+    /// MIXED fields - both String and WadChunkLink ship - so without this a link-form skin's diffuse,
+    /// mask, gradient, emissive and matcap all come back as bare 0x… hashes and the model renders white.
+    /// It fails per-skin rather than uniformly, which is the harder version to notice.</param>
+    public static Result Resolve(byte[] skinBin, Func<uint, string?> resolve,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         try
         {
-            var doc = MaterialDocument.Parse(skinBin, resolve);
+            var doc = MaterialDocument.Parse(skinBin, resolve, resolveWadPath);
             return new Result(
                 doc.SubmeshDiffuse(), doc.DefaultDiffusePath,
                 doc.SubmeshSampler(b => b.Mask), doc.DefaultMaskPath,

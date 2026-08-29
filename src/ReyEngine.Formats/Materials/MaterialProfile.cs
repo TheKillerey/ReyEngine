@@ -439,13 +439,17 @@ public static class MaterialProfiles
 
     /// <summary>Classify every named material in a map .materials.bin. Returns material name → profile
     /// (only names present in <paramref name="materialNames"/>). Never throws — returns what it can.</summary>
-    public static Dictionary<string, MaterialProfile> ForMapMaterials(byte[] materialsBin, IEnumerable<string> materialNames, Func<uint, string?> resolve)
+    /// <param name="resolveWadPath">M592: 64-bit wad-path lookup. Without it every texture path this
+    /// profile carries - terrain layers, flow map, flow normal - comes back as a bare 0x… hash, and the
+    /// viewport then fails to load all of them.</param>
+    public static Dictionary<string, MaterialProfile> ForMapMaterials(byte[] materialsBin, IEnumerable<string> materialNames, Func<uint, string?> resolve,
+        Func<ulong, string?>? resolveWadPath = null)
     {
         var wanted = new HashSet<string>(materialNames.Where(n => !string.IsNullOrEmpty(n)), StringComparer.OrdinalIgnoreCase);
         var map = new Dictionary<string, MaterialProfile>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            var doc = MaterialDocument.Parse(materialsBin, resolve);
+            var doc = MaterialDocument.Parse(materialsBin, resolve, resolveWadPath);
             foreach (var b in doc.Materials)
                 if (wanted.Contains(b.Name)) map[b.Name] = b.Profile;
         }

@@ -89,6 +89,32 @@ public static class BinTexturePath
 
     public static string Hex(ulong hash) => $"0x{hash:x16}";
 
+    /// <summary>
+    /// M592: the chunk a texture REFERENCE addresses, whether it is a path or the <c>0x…</c> form
+    /// <see cref="Read"/> produces for a hash the dictionary cannot name.
+    ///
+    /// <para>This is the whole point of keeping the hex form first-class. A loader that hashes the
+    /// reference string blindly would turn <c>"0x1234…"</c> into <c>WadPath("0x1234…")</c> — a completely
+    /// different chunk that does not exist — so the texture silently fails to load and the surface renders
+    /// untextured. Loading must depend on the hash the reference already carries, never on whether the
+    /// path dictionary happens to know its name.</para>
+    /// </summary>
+    public static ulong HashOfReference(string? reference)
+    {
+        if (string.IsNullOrWhiteSpace(reference)) return 0UL;
+        return TryParseHex(reference, out ulong raw) ? raw : HashAlgorithms.WadPath(reference);
+    }
+
+    /// <summary>M592: does this string address a texture at all — a path with a texture extension, or the
+    /// <c>0x…</c> form? Used where a sampler value is filtered before being loaded.</summary>
+    public static bool IsTextureReference(string? reference)
+    {
+        if (string.IsNullOrWhiteSpace(reference)) return false;
+        if (TryParseHex(reference, out _)) return true;
+        return reference.EndsWith(".tex", StringComparison.OrdinalIgnoreCase)
+            || reference.EndsWith(".dds", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>A 64-bit hash written as <c>0x…</c>. Deliberately strict about the prefix: a bare 16-digit
     /// filename-looking token is far more likely to be a path than a hash, and guessing wrong would
     /// silently repoint a texture.</summary>

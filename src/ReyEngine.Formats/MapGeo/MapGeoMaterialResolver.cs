@@ -132,7 +132,8 @@ public static class MapGeoMaterialResolver
         return null;
     }
 
-    private static bool IsTexturePath(string? s) =>
-        !string.IsNullOrEmpty(s) &&
-        (s.EndsWith(".tex", StringComparison.OrdinalIgnoreCase) || s.EndsWith(".dds", StringComparison.OrdinalIgnoreCase));
+    // M592: a WadChunkLink the dictionary cannot name reads back as "0x…", which has no extension. This
+    // used to reject it, so the material ended up with NO diffuse at all and the surface rendered white -
+    // the loader can address that chunk perfectly well by its hash.
+    private static bool IsTexturePath(string? s) => Meta.BinTexturePath.IsTextureReference(s);
 }
