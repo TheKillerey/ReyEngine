@@ -14704,6 +14704,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <para>The workshop root is READ from the manager's own settings.json rather than guessed; the
     /// observed install points at <c>D:\Workshopmods</c>, which no default would have found.</para>
     /// </summary>
+    /// <summary>M607: the object that owns the D3D11 surface and the camera. Set by MainWindow, exactly
+    /// as PromptOwner is - the cinematic panel needs both and the view-model owns neither.</summary>
+    public ICinematicHost? CinematicHost { get; set; }
+
+    [RelayCommand]
+    private void OpenCinematicCapture()
+    {
+        if (PromptOwner is null || CinematicHost is null)
+        { _log.Error("Cinematic", "The viewport is not ready yet."); return; }
+        if (!UseDx11Viewport)
+        { _log.Error("Cinematic", "Cinematic capture renders through the Direct3D 11 viewport - switch to it first."); return; }
+        if (!Project.IsFolderProject || Project.RootPath is not { } root)
+        { _log.Error("Cinematic", "Open a folder project first - shots are saved beside it."); return; }
+
+        Views.CinematicWindow.Show(PromptOwner, CinematicHost, root,
+            (category, message) => _log.Info(category, message));
+    }
+
     [RelayCommand]
     private async Task SendToLtkManager()
     {

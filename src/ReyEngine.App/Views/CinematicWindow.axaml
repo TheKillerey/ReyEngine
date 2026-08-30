@@ -1,0 +1,162 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.CinematicWindow"
+        x:DataType="vm:CinematicWindowViewModel"
+        Title="ReyEngine - Cinematic Capture" Width="820" Height="640"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="BorderOnly"
+        Background="{DynamicResource ReyBgBrush}">
+  <DockPanel>
+    <views:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- Status and capture controls stay pinned: a capture can run for minutes and its progress must
+         never be scrolled out of view. -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,9">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+          <Button Content="Cancel" Command="{Binding CancelCaptureCommand}"
+                  IsVisible="{Binding Capturing}" Padding="14,5" />
+          <Button Classes="primary" Content="Capture Sequence"
+                  Command="{Binding CaptureCommand}"
+                  IsEnabled="{Binding !Capturing}" Padding="16,5" />
+        </StackPanel>
+        <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+          <ProgressBar Value="{Binding Progress}" Maximum="100" Height="3"
+                       IsVisible="{Binding Capturing}" Margin="0,0,0,4" />
+          <TextBlock Text="{Binding Status}" FontSize="11" TextWrapping="Wrap"
+                     Foreground="{DynamicResource ReyTextDimBrush}" />
+          <TextBlock Text="{Binding ProgressText}" FontSize="10" IsVisible="{Binding Capturing}"
+                     Foreground="{DynamicResource ReyTextDimBrush}" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <Grid ColumnDefinitions="220,*" Margin="12">
+
+      <!-- shots -->
+      <DockPanel Grid.Column="0" Margin="0,0,12,0">
+        <TextBlock DockPanel.Dock="Top" Text="SHOTS" FontSize="10" FontWeight="Bold"
+                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,0,6" />
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+          <Button Content="Add" Command="{Binding AddShotCommand}" Padding="12,4" />
+          <Button Content="Remove" Command="{Binding RemoveShotCommand}"
+                  IsEnabled="{Binding SelectedShot, Converter={x:Static ObjectConverters.IsNotNull}}"
+                  Padding="12,4" />
+        </StackPanel>
+        <ListBox ItemsSource="{Binding Shots}" SelectedItem="{Binding SelectedShot}"
+                 Background="{DynamicResource ReyPanelBrush}"
+                 BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <TextBlock Text="{Binding Name}" Padding="2" />
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+
+      <ScrollViewer Grid.Column="1">
+        <StackPanel Spacing="14">
+
+          <Border IsVisible="{Binding SaveBlocked, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                  Background="{DynamicResource ReyPanelBrush}"
+                  BorderBrush="{DynamicResource ReyAccent2Brush}" BorderThickness="1" Padding="10,7">
+            <TextBlock Text="{Binding SaveBlocked}" FontSize="11" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ReyAccent2Brush}" />
+          </Border>
+
+          <!-- keyframes -->
+          <StackPanel Spacing="6">
+            <TextBlock Text="KEYFRAMES" FontSize="10" FontWeight="Bold"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Text="Fly the viewport camera to the framing you want, then Add Keyframe. Each one records position, aim, field of view and roll."
+                       FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+            <Border Background="{DynamicResource ReyPanelBrush}"
+                    BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" Height="170">
+              <DockPanel>
+                <Grid DockPanel.Dock="Top" ColumnDefinitions="70,*,60,90" Margin="8,5,8,4">
+                  <TextBlock Grid.Column="0" Text="Time" FontSize="10" FontWeight="Bold"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Grid.Column="1" Text="Position" FontSize="10" FontWeight="Bold"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Grid.Column="2" Text="FOV" FontSize="10" FontWeight="Bold"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Grid.Column="3" Text="Ease" FontSize="10" FontWeight="Bold"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                </Grid>
+                <ListBox ItemsSource="{Binding Keys}" SelectedItem="{Binding SelectedKey}"
+                         Background="Transparent" BorderThickness="0">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:CinematicKeyRowViewModel">
+                      <Grid ColumnDefinitions="70,*,60,90">
+                        <TextBlock Grid.Column="0" Text="{Binding TimeText}" FontSize="11" />
+                        <TextBlock Grid.Column="1" Text="{Binding PositionText}" FontSize="11" />
+                        <TextBlock Grid.Column="2" Text="{Binding FovText}" FontSize="11" />
+                        <TextBlock Grid.Column="3" Text="{Binding EaseText}" FontSize="11" />
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </DockPanel>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <Button Classes="primary" Content="Add Keyframe" Command="{Binding AddKeyframeCommand}" Padding="14,4" />
+              <Button Content="Go To" Command="{Binding GoToKeyframeCommand}"
+                      IsEnabled="{Binding SelectedKey, Converter={x:Static ObjectConverters.IsNotNull}}" Padding="12,4" />
+              <Button Content="Remove" Command="{Binding RemoveKeyframeCommand}"
+                      IsEnabled="{Binding SelectedKey, Converter={x:Static ObjectConverters.IsNotNull}}" Padding="12,4" />
+            </StackPanel>
+          </StackPanel>
+
+          <!-- scrub -->
+          <StackPanel Spacing="6">
+            <CheckBox Content="Preview the move in the viewport" IsChecked="{Binding Previewing}" />
+            <Grid ColumnDefinitions="*,70">
+              <Slider Grid.Column="0" Minimum="0" Maximum="{Binding ShotDuration}"
+                      Value="{Binding ScrubTime}" IsEnabled="{Binding Previewing}" />
+              <TextBlock Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right"
+                         FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}"
+                         Text="{Binding ScrubTime, StringFormat='{}{0:0.00} s'}" />
+            </Grid>
+          </StackPanel>
+
+          <!-- capture settings -->
+          <StackPanel Spacing="6">
+            <TextBlock Text="CAPTURE" FontSize="10" FontWeight="Bold"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Text="Every frame is rendered at a fixed time step and written as a numbered PNG, so the result does not depend on how fast the viewport runs. Import the folder into your editor as an image sequence."
+                       FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+            <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Resolution" VerticalAlignment="Center" FontSize="11" />
+              <ComboBox Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding Resolutions}" SelectedIndex="{Binding ResolutionIndex}" />
+
+              <TextBlock Grid.Row="0" Grid.Column="2" Text="Frame rate" VerticalAlignment="Center" FontSize="11" />
+              <ComboBox Grid.Row="0" Grid.Column="3" HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding FrameRates}" SelectedItem="{Binding Fps}" />
+
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Supersample" VerticalAlignment="Center" FontSize="11" />
+              <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding SuperSamples}" SelectedItem="{Binding SuperSample}" />
+
+              <TextBlock Grid.Row="1" Grid.Column="2" Text="Name" VerticalAlignment="Center" FontSize="11" />
+              <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding NamePrefix}" />
+
+              <TextBlock Grid.Row="2" Grid.Column="0" Text="Folder" VerticalAlignment="Center" FontSize="11" />
+              <TextBox Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding OutputDirectory}" />
+            </Grid>
+
+            <TextBlock Text="{Binding CaptureSummary}" FontSize="11" Margin="0,2,0,0"
+                       Foreground="{DynamicResource ReyAccent2Brush}" />
+          </StackPanel>
+
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </DockPanel>
+</Window>

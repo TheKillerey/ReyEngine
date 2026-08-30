@@ -13,8 +13,44 @@ using ReyEngine.App.ViewModels;
 
 namespace ReyEngine.App.Views;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHost
 {
+    // ---- M607: ICinematicHost ---------------------------------------------------------------------
+    //
+    // Implemented here rather than on the view-model because this is the object that owns BOTH halves a
+    // capture needs: the D3D11 surface and the camera the viewport is flying. The panel asks for poses
+    // and frames and knows nothing about either.
+
+    ReyEngine.Core.Cinematics.CinematicPose ReyEngine.App.ViewModels.ICinematicHost.CurrentPose
+    {
+        get
+        {
+            var camera = Viewport.Camera;
+            return new ReyEngine.Core.Cinematics.CinematicPose(
+                camera.Position,
+                ReyEngine.Core.Cinematics.CinematicShot.Aim(camera.Position, camera.Target),
+                camera.FieldOfView,
+                0f);   // the orbit camera has no roll to record; a keyframe gains one by being edited
+        }
+    }
+
+    void ReyEngine.App.ViewModels.ICinematicHost.PreviewPose(ReyEngine.Core.Cinematics.CinematicPose? pose)
+    {
+        if (_dx11 is null) return;
+        _dx11.PreviewPose = pose;
+        QueueDx11Frame();   // scrubbing must repaint, and nothing else invalidates on a pose change
+    }
+
+    IDisposable ReyEngine.App.ViewModels.ICinematicHost.BeginCapture()
+    {
+        if (_dx11 is null) throw new InvalidOperationException("The Direct3D 11 viewport is not running.");
+        return _dx11.BeginCapture();
+    }
+
+    byte[]? ReyEngine.App.ViewModels.ICinematicHost.RenderFrame(
+        ReyEngine.Core.Cinematics.CinematicPose pose, int width, int height, float timeSeconds) =>
+        _dx11?.RenderCaptureFrame(pose, width, height, timeSeconds, Viewport.Camera);
+
     /// <summary>
     /// M576 (Avalonia 12): a drag payload is now a typed <see cref="DataFormat"/> rather than a string key
     /// on an untyped DataObject. In-process is the right kind for this one - the node is a live view model
@@ -541,6 +577,7 @@ public partial class MainWindow : Window
         {
             vm.Dialogs.Owner = this;
             vm.PromptOwner = this;   // M74: rename/delete prompts
+            vm.CinematicHost = this; // M607: the panel needs the surface and the camera, which live here
             vm.RequestProjectSettings += () => ShowProjectSettings(vm);
             vm.RequestSettings += () => ShowSettings(vm);
             vm.RequestNewProject += () => ShowNewProject(vm);   // M73: template wizard

@@ -180,6 +180,11 @@ public sealed class Dx11ViewportSurface : IDisposable
 
     private CaptureRequest? _capture;
 
+    /// <summary>M607: fly the LIVE viewport along a shot while scrubbing. Same override as a capture but
+    /// on the wall clock, so the preview is the frame that would be exported rather than an orbit camera
+    /// approximating it - which is the only way roll is visible before the sequence comes back.</summary>
+    public CinematicPose? PreviewPose { get; set; }
+
     /// <summary>
     /// Take the viewport out of live mode for the duration of a capture and put it back afterwards.
     ///
@@ -418,9 +423,11 @@ public sealed class Dx11ViewportSurface : IDisposable
             // The editor camera is authoritative. Supplying the matrices directly rather than copying
             // yaw/pitch/distance keeps the two viewports genuinely on the same camera - a reconstructed
             // one drifts, and a drifting camera makes an A/B comparison meaningless.
-            SuppliedView = _capture?.View ?? camera.View,
-            SuppliedProjection = _capture?.Projection ?? camera.Projection((float)width / height),
-            SuppliedCameraPosition = _capture?.Position ?? camera.Position,
+            SuppliedView = _capture?.View ?? PreviewPose?.ViewMatrix ?? camera.View,
+            SuppliedProjection = _capture?.Projection
+                ?? PreviewPose?.Projection((float)width / height, camera.EffectiveNear, camera.Far)
+                ?? camera.Projection((float)width / height),
+            SuppliedCameraPosition = _capture?.Position ?? PreviewPose?.Position ?? camera.Position,
 
             // M240's verified map preset. Mirror X matters: League data is authored in the opposite
             // handedness, and without it the DX11 image is mirrored against the GL one, which would read
@@ -498,11 +505,11 @@ public sealed class Dx11ViewportSurface : IDisposable
         // run against a null playback, so this costs nothing when there is nothing to draw.
         if (Particles is not null)
         {
-            var particleView = _capture?.View ?? camera.View;
+            var particleView = _capture?.View ?? PreviewPose?.ViewMatrix ?? camera.View;
             if (settings.MirrorX) particleView = Matrix4x4.CreateScale(-1f, 1f, 1f) * particleView;
             Particles.Tick(ParticleDelta(t), particleView,
                 particleView * settings.SuppliedProjection!.Value,
-                _capture?.Position ?? camera.Position, camera.Distance);
+                _capture?.Position ?? PreviewPose?.Position ?? camera.Position, camera.Distance);
             ParticleStatus = Particles.FrameReport();
             // Surface the BUILD report too, but only when it names a failure. It records unresolved
             // sprites, emitters whose permutation would not resolve, and a missing shader TOC - and it
