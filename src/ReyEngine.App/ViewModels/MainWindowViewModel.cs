@@ -10434,11 +10434,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         result = LegacyMapPorter.ApplyShaderOptions(result,
             LegacyPortShaderOptions.Defaults, macroSupport, note: null, ClassifyPortedAlpha);
 
+        // M600: open the dialog on what this project's last completed port used. Nothing recorded these
+        // before, so re-running a port to change ONE option meant re-deriving the other twelve from
+        // memory - and getting one wrong produced a different map with nothing saying so.
+        var remembered = Project?.LegacyPort;
+        if (remembered is not null)
+            _log.Info("Legacy Port", "Opening on this project's last port settings"
+                + (remembered.SavedUtc is { } when ? $" (saved {when.ToLocalTime():yyyy-MM-dd HH:mm})" : "")
+                + $" - decal planes {(remembered.GenerateDecalQuads ? "ON" : "off")}.");
+
         LegacyMapPortShaderSelection? selection = null;
         if (PromptOwner is not null)
         {
-            selection = await Views.LegacyMapPortWindow.ShowAsync(PromptOwner, result, shaderChoices, destinationSummary);
+            selection = await Views.LegacyMapPortWindow.ShowAsync(PromptOwner, result, shaderChoices,
+                destinationSummary, remembered);
             if (selection is null) { Status = "Legacy map port cancelled."; return; }
+        }
+        else if (remembered is not null)
+        {
+            // No dialog (headless/scripted): repeat the remembered port rather than silently falling back
+            // to FullReplacement, which is a DIFFERENT port and the exact trap this milestone exists for.
+            selection = LegacyMapPortWindowViewModel.Replay(remembered, shaderChoices);
         }
         // M550: rebuilding the decals as planes changes the GEOMETRY, and the port that produced `result`
         // ran before the dialog existed to ask. Re-run it with the option rather than trying to rebuild
@@ -10673,6 +10689,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                   + "only author that channel on four-blend terrain, so this is not a full lightmap unwrap. "
                   + "Use the lightmap layout generator if you need UVs on everything."
                 : "No imported mesh had a second UV set — this source authors Texcoord7 nowhere.");
+            // M600: record what actually ran, and only now - a cancelled dialog or a port that threw
+            // must leave the previous settings alone, or a failed experiment would overwrite the run
+            // that worked. Written from the SELECTION rather than the dialog, so a no-dialog replay
+            // records the same thing it replayed.
+            if (selection is not null && Project is { ProjectFilePath: { } portProjectFile })
+            {
+                try
+                {
+                    Project.LegacyPort = LegacyMapPortWindowViewModel.Remember(selection);
+                    Core.Projects.ReyProjectService.Save(Project, portProjectFile);
+                    _log.Info("Legacy Port", "Port settings remembered - the next port opens on these, "
+                        + $"decal planes {(selection.Decals?.GenerateQuads == true ? "ON" : "off")}.");
+                }
+                catch (Exception ex)
+                { _log.Warn("Legacy Port", $"The port succeeded but its settings were not saved: {ex.Message}"); }
+            }
+
             if (TryResolveEntry(mapEntry.PathHash, out var reloaded)) await LoadMapGeoAsync(reloaded);
             Status = "Legacy map port complete.";
         }

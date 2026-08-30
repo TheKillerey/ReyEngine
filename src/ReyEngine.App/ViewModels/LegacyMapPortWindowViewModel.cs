@@ -122,10 +122,14 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     public Action<LegacyMapPortShaderSelection>? Confirmed;
     public Action? Cancelled;
 
+    /// <param name="remembered">M600: what this project's last completed port used, or null when it has
+    /// never been ported. Seeded BEFORE the shader rows are built so a remembered role shader is what the
+    /// rows open on - see Add(), whose "preferred" argument is the porter default otherwise.</param>
     public LegacyMapPortWindowViewModel(LegacyMapPortResult result, IReadOnlyList<string> shaderChoices,
-        LegacyDestinationContentSummary destination)
+        LegacyDestinationContentSummary destination, Core.Projects.LegacyPortSettings? remembered = null)
     {
         _destination = destination;
+        if (remembered is not null) SeedFrom(remembered);
         Summary = $"{result.SourceFormat}: {result.SourceMeshCount:n0} source objects -> " +
                   $"{result.ImportedMeshCount:n0} mapgeo meshes, {result.Textures.Count:n0} textures, " +
                   $"{result.Materials.Count:n0} materials.";
@@ -136,14 +140,25 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
         PropCleanupText = $"Remove original animated props / mobs ({destination.Props:n0})";
         SoundCleanupText = $"Remove original map sounds ({destination.Sounds:n0})";
         ProbeCleanupText = $"Remove original cubemap probes ({destination.Probes:n0})";
+        // A remembered shader only wins when the installed client still OFFERS it - the catalogue comes
+        // from the game, so a name stored against an older patch can simply be gone. Falling back beats
+        // seeding a row with a shader the port would then refuse.
+        string Preferred(string? stored, string fallback) =>
+            !string.IsNullOrWhiteSpace(stored) && shaderChoices.Contains(stored, StringComparer.OrdinalIgnoreCase)
+                ? stored! : fallback;
+
         Add(result, shaderChoices, LegacyMaterialRole.Normal, "Normal alpha-tested surfaces",
-            "DefaultEnv_Flat_AlphaTest. Used for ordinary opaque and cutout textures.", LegacyMapPorter.NormalShader);
+            "DefaultEnv_Flat_AlphaTest. Used for ordinary opaque and cutout textures.",
+            Preferred(remembered?.NormalShader, LegacyMapPorter.NormalShader));
         Add(result, shaderChoices, LegacyMaterialRole.Decal, "Alpha-blended decals",
-            "Uses the selected shader with SrcAlpha / OneMinusSrcAlpha blending and a small alpha floor.", LegacyMapPorter.DecalShader);
+            "Uses the selected shader with SrcAlpha / OneMinusSrcAlpha blending and a small alpha floor.",
+            Preferred(remembered?.DecalShader, LegacyMapPorter.DecalShader));
         Add(result, shaderChoices, LegacyMaterialRole.Grass, "Grass and brushes",
-            "VertexDeform. The porter also generates the mesh-pivot vertex channel used for movement.", LegacyMapPorter.GrassShader);
+            "VertexDeform. The porter also generates the mesh-pivot vertex channel used for movement.",
+            Preferred(remembered?.GrassShader, LegacyMapPorter.GrassShader));
         Add(result, shaderChoices, LegacyMaterialRole.FourBlendTerrain, "Four-layer terrain",
-            "4TextureBlend_WorldProjected with the NVR blend canvas and four authored layer textures.", LegacyMapPorter.TerrainShader);
+            "4TextureBlend_WorldProjected with the NVR blend canvas and four authored layer textures.",
+            Preferred(remembered?.TerrainShader, LegacyMapPorter.TerrainShader));
         foreach (var material in result.Materials.OrderBy(material => material.Role).ThenBy(material => material.Name))
             Materials.Add(new LegacyPortMaterialRowViewModel
             {
@@ -216,6 +231,83 @@ public sealed partial class LegacyMapPortWindowViewModel : ObservableObject
     {
         SetCleanup(LegacyPortCleanupOptions.KeepEverything);
         Status = "All destination content will remain underneath the imported legacy map.";
+    }
+
+    /// <summary>M600: open the dialog on the last completed port rather than on the defaults.</summary>
+    private void SeedFrom(Core.Projects.LegacyPortSettings s)
+    {
+        RemoveOriginalMeshes = s.RemoveOriginalMeshes;
+        RemoveOriginalBushes = s.RemoveOriginalBushes;
+        RemoveUnusedOriginalMaterials = s.RemoveUnusedOriginalMaterials;
+        RemoveOriginalParticles = s.RemoveOriginalParticles;
+        RemoveOriginalProps = s.RemoveOriginalProps;
+        RemoveOriginalSounds = s.RemoveOriginalSounds;
+        RemoveOriginalProbes = s.RemoveOriginalProbes;
+        FixImportedMapPosition = s.FixImportedMapPosition;
+        ImportLegacyParticles = s.ImportLegacyParticles;
+        ImportLegacySounds = s.ImportLegacySounds;
+        GenerateDecalQuads = s.GenerateDecalQuads;
+        DecalSingleImage = s.DecalSingleImage;
+        DecalLift = s.DecalLift.ToString("0.###", CultureInfo.InvariantCulture);
+        CorrectionX = s.CorrectionX.ToString("0.###", CultureInfo.InvariantCulture);
+        CorrectionY = s.CorrectionY.ToString("0.###", CultureInfo.InvariantCulture);
+        CorrectionZ = s.CorrectionZ.ToString("0.###", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>M600: what a completed port should record. Read off the SELECTION rather than the dialog
+    /// so it stores what actually ran.</summary>
+    public static Core.Projects.LegacyPortSettings Remember(LegacyMapPortShaderSelection selection) => new()
+    {
+        RemoveOriginalMeshes = selection.Cleanup.RemoveOriginalMeshes,
+        RemoveOriginalBushes = selection.Cleanup.RemoveOriginalBushes,
+        RemoveUnusedOriginalMaterials = selection.Cleanup.RemoveUnusedOriginalMaterials,
+        RemoveOriginalParticles = selection.Cleanup.RemoveOriginalParticles,
+        RemoveOriginalProps = selection.Cleanup.RemoveOriginalProps,
+        RemoveOriginalSounds = selection.Cleanup.RemoveOriginalSounds,
+        RemoveOriginalProbes = selection.Cleanup.RemoveOriginalProbes,
+        FixImportedMapPosition = selection.FixImportedMapPosition,
+        ImportLegacyParticles = selection.ImportLegacyParticles,
+        ImportLegacySounds = selection.ImportLegacySounds,
+        GenerateDecalQuads = selection.Decals?.GenerateQuads ?? false,
+        DecalLift = selection.Decals?.Lift ?? LegacyPortDecalOptions.Defaults.Lift,
+        DecalSingleImage = selection.Decals?.SingleImage ?? false,
+        CorrectionX = selection.PositionCorrection.X,
+        CorrectionY = selection.PositionCorrection.Y,
+        CorrectionZ = selection.PositionCorrection.Z,
+        NormalShader = selection.RoleShaders.NormalShader,
+        DecalShader = selection.RoleShaders.DecalShader,
+        GrassShader = selection.RoleShaders.GrassShader,
+        TerrainShader = selection.RoleShaders.TerrainShader,
+        SavedUtc = DateTime.UtcNow,
+    };
+
+    /// <summary>M600: rebuild a selection from remembered settings, for a port that runs with no dialog.
+    /// A stored role shader the installed client no longer offers falls back to the porter default, the
+    /// same rule the dialog's rows use.</summary>
+    public static LegacyMapPortShaderSelection Replay(Core.Projects.LegacyPortSettings s,
+        IReadOnlyList<string> shaderChoices)
+    {
+        string Pick(string? stored, string fallback) =>
+            !string.IsNullOrWhiteSpace(stored) && shaderChoices.Contains(stored, StringComparer.OrdinalIgnoreCase)
+                ? stored! : fallback;
+
+        return new LegacyMapPortShaderSelection(
+            new LegacyPortShaderOptions(
+                Pick(s.NormalShader, LegacyMapPorter.NormalShader),
+                Pick(s.DecalShader, LegacyMapPorter.DecalShader),
+                Pick(s.GrassShader, LegacyMapPorter.GrassShader),
+                Pick(s.TerrainShader, LegacyMapPorter.TerrainShader)),
+            // No per-material overrides: those are row-level choices the dialog makes, and replaying a
+            // guess at them would change materials the user never touched.
+            new Dictionary<string, string>(),
+            new LegacyPortCleanupOptions(s.RemoveOriginalMeshes, s.RemoveOriginalBushes,
+                s.RemoveUnusedOriginalMaterials, s.RemoveOriginalParticles, s.RemoveOriginalProps,
+                s.RemoveOriginalSounds, s.RemoveOriginalProbes),
+            s.FixImportedMapPosition,
+            new System.Numerics.Vector3(s.CorrectionX, s.CorrectionY, s.CorrectionZ),
+            s.ImportLegacyParticles,
+            new LegacyPortDecalOptions(s.GenerateDecalQuads, s.DecalLift, s.DecalSingleImage),
+            s.ImportLegacySounds);
     }
 
     private void SetCleanup(LegacyPortCleanupOptions options)

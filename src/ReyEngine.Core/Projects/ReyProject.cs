@@ -53,6 +53,21 @@ public sealed class ReyProject
     /// after the import were never in a file at all.</para></summary>
     public List<MapLightingRecord> MapLighting { get; set; } = new();
 
+    /// <summary>M600: what the legacy map port was last run with, so a re-port repeats the same port
+    /// instead of silently falling back to defaults.
+    ///
+    /// <para>Nothing recorded these before. The wizard seeded itself from
+    /// <c>LegacyPortCleanupOptions</c>/<c>LegacyPortShaderOptions</c> defaults every time, so the seven
+    /// cleanup flags, the decal-plane choice, the alignment correction and the per-role shaders lived only
+    /// in the dialog and were gone the moment it closed. Re-running a port to change ONE option meant
+    /// re-deriving the other twelve from memory, and getting one wrong produced a different map with no
+    /// diagnostic saying so - a ported Map453 was re-run to turn decal planes off and there was no record
+    /// of which cleanup flags the first run had used.</para>
+    ///
+    /// <para>Null means this project has never completed a port; the wizard then opens on its defaults as
+    /// before. Only a port that actually ran writes this, so a cancelled dialog changes nothing.</para></summary>
+    public LegacyPortSettings? LegacyPort { get; set; }
+
     /// <summary>M132: pack only known game file types into wads — editor leftovers, notes, PSDs and
     /// other unknown extensions are skipped (each skip is logged). Default on.</summary>
     public bool PackKnownTypesOnly { get; set; } = true;
@@ -253,4 +268,48 @@ public sealed class ProjectAssetOverride
     public string? ResolvedPath { get; set; }
     public string OverrideFile { get; set; } = "";
     public string AddedUtc { get; set; } = "";
+}
+
+/// <summary>M600: the legacy map port wizard's state, persisted per project so a re-port repeats the run
+/// rather than the defaults. Plain settable properties because this round-trips through project.json.
+///
+/// <para>Shader names are stored as the strings the porter uses, not as an enum: the shader catalogue is
+/// read from the installed client, so a name that exists today may not tomorrow. A stored name that no
+/// longer resolves falls back to the default for its role rather than failing the port.</para></summary>
+public sealed class LegacyPortSettings
+{
+    // The seven cleanup flags, in the order LegacyPortCleanupOptions declares them.
+    public bool RemoveOriginalMeshes { get; set; } = true;
+    public bool RemoveOriginalBushes { get; set; } = true;
+    public bool RemoveUnusedOriginalMaterials { get; set; } = true;
+    public bool RemoveOriginalParticles { get; set; } = true;
+    public bool RemoveOriginalProps { get; set; } = true;
+    public bool RemoveOriginalSounds { get; set; } = true;
+    public bool RemoveOriginalProbes { get; set; } = true;
+
+    public bool FixImportedMapPosition { get; set; }
+    public bool ImportLegacyParticles { get; set; } = true;
+    public bool ImportLegacySounds { get; set; } = true;
+
+    /// <summary>M550: rebuild decals as flat planes. Off is the porter's default and stays the default
+    /// here - a remembered ON is a choice the user made, not something this should introduce.</summary>
+    public bool GenerateDecalQuads { get; set; }
+    public float DecalLift { get; set; } = 4f;
+    public bool DecalSingleImage { get; set; }
+
+    /// <summary>M473: the alignment correction. Stored as three floats rather than a Vector3 so the JSON
+    /// stays readable and hand-editable.</summary>
+    public float CorrectionX { get; set; }
+    public float CorrectionY { get; set; }
+    public float CorrectionZ { get; set; }
+
+    // Per-role shader choices. Empty means "use the porter default for that role".
+    public string? NormalShader { get; set; }
+    public string? DecalShader { get; set; }
+    public string? GrassShader { get; set; }
+    public string? TerrainShader { get; set; }
+
+    /// <summary>When this was written, so a project carrying settings from a much older ReyEngine is
+    /// recognisable in a bug report rather than looking like a fresh run.</summary>
+    public DateTime? SavedUtc { get; set; }
 }
