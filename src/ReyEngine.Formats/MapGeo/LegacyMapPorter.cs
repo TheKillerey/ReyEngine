@@ -1006,7 +1006,20 @@ public static class LegacyMapPorter
                 ? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["USE_TOP"] = true, ["USE_EXTRAS"] = true }
                 : new Dictionary<string, bool>();
             bool decal = key.Role == LegacyMaterialRole.Decal;
-            // M547: clamp only a decal that actually stays inside one tile.
+            // M601: EVERY ported decal clamps. M490 clamped the whole role; M547 narrowed that to decals
+            // whose UVs stay inside one tile, on the strength of a report that clamping smeared
+            // order_base_circle and order_seam across the surface. Measured in game on the Map1 port, the
+            // narrowed rule is wrong: it left 17 of 19 decals wrapping, and the author had to set
+            // addressU/addressV to Clamp on every one of them by hand before the map looked right.
+            //
+            // The smearing M547 answered is most likely the SAME defect M598 fixed - decals were being
+            // cut at AlphaTestValue 0.3 (a value Riot uses on 0 of its 34 blended alpha-test decals),
+            // which turns a gradient alpha channel into a hard-edged wash. That reads as a decal smeared
+            // over its surface, and it was attributed to the address mode. If the smearing returns with
+            // the alpha cut at 0.005, this belongs behind a port option rather than back on a heuristic -
+            // the two reports disagree and only the artist can say which map wants which.
+            //
+            // The old rule, kept as a record of what was measured rather than as code:
             //
             // M490 gave the whole decal role Clamp to stop a stamp repeating across the surface it sits on,
             // and its own note says that "would be the wrong one for a decal authored to tile". Measured
@@ -1019,7 +1032,7 @@ public static class LegacyMapPorter
             // So ask the geometry instead of the role. A material is authored to tile when a real share of
             // its triangles leave the square; one stray triangle is not a tiling intent, and 10% is the gap
             // in the measured distribution (order_ground_moss_patch1 sits at 1%, the next lowest at 12%).
-            bool tiles = decal && IsAuthoredToTile(meshes, key);
+
             // League 16.15 has no cooked DefaultEnv_Flat_AlphaTest permutation carrying
             // NO_BAKED_LIGHTING=1. Both ordinary imported surfaces and decals use that shader by default,
             // so only the grass and terrain roles may author the macro.
@@ -1029,34 +1042,11 @@ public static class LegacyMapPorter
             result.Add(new LegacyMaterialPlan(name, key.Role, shader, samplerPlan, parameters, switches,
                 macros,
                 BlendEnabled: decal, SourceBlendFactor: decal ? 6 : null, DestinationBlendFactor: decal ? 7 : null,
-                SamplerAddressMode: decal && !tiles ? ClampAddressMode : null));
+                SamplerAddressMode: decal ? ClampAddressMode : null));
         }
         return result;
     }
 
-    /// <summary>
-    /// M547: does this material's geometry leave the unit UV square often enough to mean it tiles?
-    /// </summary>
-    private static bool IsAuthoredToTile(IReadOnlyList<MeshAccumulator> meshes, MaterialKey key)
-    {
-        const float Slack = 1.05f;      // a hair over one tile absorbs edge-vertex rounding
-        const double Share = 0.10;      // below this it is a stray triangle, not an authoring intent
-        int total = 0, outside = 0;
-        foreach (var mesh in meshes)
-        {
-            if (mesh.Key.Role != key.Role || mesh.Key.TextureSet != key.TextureSet) continue;
-            for (int i = 0; i + 2 < mesh.Indices.Count; i += 3)
-            {
-                Vector2 a = mesh.Vertices[mesh.Indices[i]].Uv;
-                Vector2 b = mesh.Vertices[mesh.Indices[i + 1]].Uv;
-                Vector2 c = mesh.Vertices[mesh.Indices[i + 2]].Uv;
-                total++;
-                Vector2 lo = Vector2.Min(a, Vector2.Min(b, c)), hi = Vector2.Max(a, Vector2.Max(b, c));
-                if (hi.X - lo.X > Slack || hi.Y - lo.Y > Slack) outside++;
-            }
-        }
-        return total > 0 && (double)outside / total > Share;
-    }
 
     private static void AddMesh(MapGeoBinary target, MeshAccumulator source, string material)
     {

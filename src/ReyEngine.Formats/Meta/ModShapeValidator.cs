@@ -197,16 +197,19 @@ public static class ModShapeValidator
                         hash, o.ClassHash));
             }
 
-            // ---- 3c. a CLAMPED sampler authors all three axes (M599) ---------------------------
-            // Censused over every shipped map wad, 569 decal samplers: 379 author nothing at all (Wrap),
-            // 115 are U2/V2 (Mirror, no W), 58 are W1 alone, and every one of the 17 that CLAMP writes the
-            // full U1/V1/W1 triple. Zero author U1/V1 without W.
+            // ---- 3c. addressU and addressV move together (M599, narrowed M601) -----------------
+            // M599 flagged a clamped sampler that left addressW out, on the strength of Riot's DECAL
+            // census: 17 of 17 clamped decal samplers write the full U1/V1/W1 triple and none writes
+            // U1/V1 alone.
             //
-            // A ported map arrived with 17 of 19 decals at U1/V1/W- and 2 at U1/V1/W1, and only those 2
-            // clamped in game - the other 17 tiled their texture across the surface. The porter writes the
-            // three together, so a partial triple means something edited the sampler afterwards; the
-            // editor's own preset apply removes an axis the preset leaves unset, which produces exactly
-            // this shape. Whatever wrote it, the file no longer says what it means to say.
+            // RETRACTED, by the map author testing it in game: U1/V1 with no W renders correctly, and a
+            // ported map in exactly that shape was confirmed to look right. Widen the census past decals
+            // and the shape is ordinary - Riot ships U1/V1/W- on 124 map samplers. The decal-only count
+            // was too narrow a base to call it broken, and the rule fired on 17 samplers that were fine.
+            //
+            // What survives is the weaker claim the wider census still supports: U and V are the two axes
+            // a 2D sampler actually uses, and a sampler that sets one without the other is asking for
+            // something no shipped material asks for.
             if (o.Properties.TryGetValue(F_samplers, out var samplerProp) && samplerProp is BinTreeContainer samplers)
                 foreach (var element in samplers.Elements)
                 {
@@ -214,18 +217,12 @@ public static class ModShapeValidator
                     bool u = sampler.Properties.ContainsKey(F_addressU);
                     bool v = sampler.Properties.ContainsKey(F_addressV);
                     bool w = sampler.Properties.ContainsKey(F_addressW);
-                    if (!u && !v) continue;               // authoring nothing is Wrap, and Riot's commonest case
-                    if (u && v && w) continue;            // the full triple - what Riot writes when it clamps
-                    if (u && v && !w && IsClamp(sampler)) // U2/V2 Mirror without W is a real shipped shape
-                        issues.Add(new BinIssue("partial-address-triple", Name(hash, o),
-                            "a sampler authors addressU/addressV as Clamp but leaves addressW out. Riot writes all "
-                            + "three whenever it clamps (17 of 17 clamped decal samplers), and 0 of 569 ship this "
-                            + "shape. Measured in game, a decal with the partial triple TILES instead of clamping.",
-                            hash, o.ClassHash));
-                    else if (u != v)
-                        issues.Add(new BinIssue("partial-address-triple", Name(hash, o),
-                            $"a sampler authors address{(u ? "U" : "V")} without address{(u ? "V" : "U")}. Riot "
-                            + "always moves the U and V axes together.", hash, o.ClassHash));
+                    if (u == v) continue;   // both or neither - including U1/V1 with no W, which is fine
+                    issues.Add(new BinIssue("half-address-pair", Name(hash, o),
+                        $"a sampler authors address{(u ? "U" : "V")} without address{(u ? "V" : "U")}. Those are "
+                        + "the two axes a 2D sampler uses and Riot always moves them together, so half a pair "
+                        + "leaves one axis on the shader default while the other is authored.",
+                        hash, o.ClassHash));
                 }
 
             foreach (var pass in Passes(o))
@@ -392,12 +389,6 @@ public static class ModShapeValidator
 
     /// <summary>Every pass struct under a material's techniques, plus the technique structs themselves so
     /// the caller can inspect the nested 'passes' container.</summary>
-    /// <summary>Clamp is 1 in Riot's enum (Unity's TextureWrapMode ordering: 0 Wrap, 1 Clamp, 2 Mirror).
-    /// Only Clamp is checked here - Riot really does ship 115 decal samplers at U2/V2 with no W.</summary>
-    private static bool IsClamp(BinTreeStruct sampler) =>
-        sampler.Properties.TryGetValue(F_addressU, out var p)
-        && p is BinTreeU32 { Value: 1 };
-
     private static IEnumerable<BinTreeStruct> Passes(BinTreeObject o)
     {
         if (!o.Properties.TryGetValue(F_techniques, out var tp) || tp is not BinTreeContainer tc) yield break;

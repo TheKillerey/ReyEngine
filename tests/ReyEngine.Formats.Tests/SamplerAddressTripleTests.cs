@@ -6,22 +6,21 @@ using ReyEngine.Formats.Meta;
 namespace ReyEngine.Formats.Tests;
 
 /// <summary>
-/// M599: a sampler that clamps has to author all three address axes.
+/// M599, narrowed by M601: <c>addressU</c> and <c>addressV</c> move together.
 ///
-/// <para>Censused over every shipped map wad, <b>569 decal samplers</b>: 379 author nothing at all
-/// (Wrap - Riot's commonest case by far), 115 are <c>U2 V2 W-</c> (Mirror, genuinely without W), 58 are
-/// <c>W1</c> alone, and every one of the <b>17 that clamp writes the full U1/V1/W1 triple</b>.
-/// <b>Zero</b> ship <c>U1 V1 W-</c>.</para>
+/// <para>M599 flagged a clamped sampler that left <c>addressW</c> out, from Riot's DECAL census: of 569
+/// decal samplers, 379 author nothing (Wrap), 115 are <c>U2 V2 W-</c> (Mirror), 58 are <c>W1</c> alone,
+/// and all <b>17</b> that clamp write the full <c>U1 V1 W1</c> triple - none writes <c>U1 V1 W-</c>.</para>
 ///
-/// <para>A ported Map453 arrived with 17 of its 19 decals at <c>U1 V1 W-</c> and 2 at <c>U1 V1 W1</c>,
-/// and in game only those 2 clamped - the other 17 tiled their texture across the surface, which is what
-/// the author reported as "only 1 or 2 are getting the clamp". The porter writes the three together
-/// (M490), so a partial triple means something edited the sampler afterwards. The editor's preset apply
-/// is one path that produces it: an axis the preset leaves unset is written as <c>null</c>, and null
-/// REMOVES the field.</para>
+/// <para><b>That rule is retracted.</b> The map author tested it in game: a ported map whose decals sit at
+/// <c>U1 V1 W-</c> renders correctly, and they confirmed that state as the one they wanted. Widening the
+/// census past decals shows the shape is ordinary - Riot ships <c>U1 V1 W-</c> on <b>124</b> map samplers.
+/// A 569-row decal-only base was too narrow to call it broken, and the rule fired on 17 samplers that
+/// were fine. <c>addressW</c> is the third axis of a volume texture; a 2D sampler uses U and V.</para>
 ///
-/// <para>Mirror is deliberately not flagged: <c>U2 V2 W-</c> is a shape Riot really ships, 115 times.
-/// The rule is about clamping specifically.</para>
+/// <para>What survives is the weaker claim the wider census still supports, and which no shipped material
+/// violates in a way worth flagging: setting one of U/V without the other leaves one axis on the shader
+/// default while the other is authored.</para>
 /// </summary>
 public sealed class SamplerAddressTripleTests
 {
@@ -58,13 +57,14 @@ public sealed class SamplerAddressTripleTests
     }
 
     private static bool Flagged(IReadOnlyList<BinIssue> issues) =>
-        issues.Any(i => i.Category == "partial-address-triple");
+        issues.Any(i => i.Category == "half-address-pair");
 
     [Fact]
-    public void ClampingOnUAndVWithoutWIsFlagged()
+    public void ClampingOnUAndVWithoutWIsAcceptedBecauseItRendersCorrectly()
     {
-        // The exact shape the ported map shipped, and the one that tiled in game.
-        Assert.True(Flagged(Check(1, 1, null)));
+        // M601: the retraction. The author confirmed this exact shape in game, and Riot ships it 124
+        // times on map samplers. M599 called it broken from a decal-only census and was wrong.
+        Assert.False(Flagged(Check(1, 1, null)));
     }
 
     [Fact]
@@ -107,12 +107,11 @@ public sealed class SamplerAddressTripleTests
     }
 
     [Fact]
-    public void TheFindingSaysWhatBreaksRatherThanJustNamingTheField()
+    public void TheFindingSaysWhichAxisIsMissingItsPartner()
     {
-        var issue = Assert.Single(Check(1, 1, null).Where(i => i.Category == "partial-address-triple"));
+        var issue = Assert.Single(Check(1, null, null).Where(i => i.Category == "half-address-pair"));
 
-        Assert.Contains("addressW", issue.Detail, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("17 of 17", issue.Detail);
-        Assert.Contains("TILES", issue.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("addressV", issue.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("together", issue.Detail, StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -128,27 +128,54 @@ public sealed class LegacyDecalGeometryTests
             $"largest decal mesh holds {decals.Max(g => g.IndexCount / 3)} triangles");
     }
 
+    /// <summary>
+    /// M601: every ported decal clamps, and the UV-based rule that used to decide it is gone.
+    ///
+    /// <para>This test previously pinned the opposite. M490 clamped the whole decal role; M547 narrowed it
+    /// to decals whose UVs stay inside one tile, because the author reported that clamping smeared
+    /// <c>order_base_circle</c> and <c>order_seam</c> across their surfaces.</para>
+    ///
+    /// <para>The same author has now tested the narrowed rule in game and rejected it: it left 17 of 19
+    /// decals wrapping on the Map1 port, and every one had to be set to Clamp by hand before the map
+    /// looked right. This is a revision of their own earlier report, not a second opinion — and it was
+    /// made after M598, which is the likely explanation for the original smearing. Decals were being cut
+    /// at <c>AlphaTestValue</c> 0.3, a value Riot uses on 0 of its 34 blended alpha-test decals, which
+    /// turns a gradient alpha channel into a hard-edged wash that reads exactly like a smeared decal.</para>
+    ///
+    /// <para>If smearing returns with the cut at 0.005, this belongs behind a port option rather than back
+    /// on a heuristic: only the artist can say which map wants which, and the settings are remembered per
+    /// project since M600.</para>
+    /// </summary>
     [Fact]
-    public void TheAddressModeIsDecidedByTheUvsAndNotByTheRole()
+    public void EveryPortedDecalClamps()
     {
-        // M490 gave the whole decal role Clamp and its own note says that "would be the wrong one for a
-        // decal authored to tile". Measured, that is 19 of the 20 ported Map2 decal materials - including
-        // both textures the reporter named. The one that genuinely stays in the unit square must still
-        // clamp, or this trades one bug for the bug M490 fixed.
         if (Ported() is not { } result) return;
         var decals = result.Materials.Where(m => m.Role == LegacyMaterialRole.Decal).ToList();
         if (decals.Count == 0) return;
 
         string Tex(LegacyMaterialPlan m) => m.Samplers.Values.First().Split('/').Last();
-        var tiling = decals.Where(m => m.SamplerAddressMode is null).Select(Tex).ToList();
-        var clamped = decals.Where(m => m.SamplerAddressMode == LegacyMapPorter.ClampAddressMode)
-                            .Select(Tex).ToList();
+        var wrapping = decals.Where(m => m.SamplerAddressMode is null).Select(Tex).ToList();
 
-        Assert.Contains(tiling, t => t.StartsWith("order_base_circle", StringComparison.OrdinalIgnoreCase));
-        // M573 dropped the content digest from texture names, so this is "order_seam.tex" now rather
-        // than "order_seam_61b2b328ae42.tex" - and order_seam2 must not satisfy it.
-        Assert.Contains(tiling, t => t.Equals("order_seam.tex", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(clamped, t => t.StartsWith("order_ground_moss_patch1", StringComparison.OrdinalIgnoreCase));
+        Assert.True(wrapping.Count == 0,
+            "decals left wrapping: " + string.Join(", ", wrapping.Take(8)));
+        Assert.All(decals, m => Assert.Equal(LegacyMapPorter.ClampAddressMode, m.SamplerAddressMode));
+
+        // The two the M547 report named are in the set now, rather than excluded from it.
+        var clamped = decals.Select(Tex).ToList();
+        Assert.Contains(clamped, t => t.StartsWith("order_base_circle", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(clamped, t => t.Equals("order_seam.tex", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ANonDecalRoleStillAuthorsNoAddressModeAtAll()
+    {
+        // Clamping is scoped to decals: absent is the schema default (Wrap) and what 4,726 shipped
+        // samplers do. If this ever starts clamping, the role check has been lost.
+        if (Ported() is not { } result) return;
+        var others = result.Materials.Where(m => m.Role != LegacyMaterialRole.Decal).ToList();
+        if (others.Count == 0) return;
+
+        Assert.All(others, m => Assert.Null(m.SamplerAddressMode));
     }
 
     [Fact]
