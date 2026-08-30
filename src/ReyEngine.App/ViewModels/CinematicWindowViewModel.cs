@@ -37,15 +37,33 @@ public interface ICinematicHost
 /// <summary>One keyframe, as a row the panel can show and edit.</summary>
 public sealed partial class CinematicKeyRowViewModel : ObservableObject
 {
-    public CinematicKeyRowViewModel(CinematicKeyframe key) => Key = key;
+    public CinematicKeyRowViewModel(CinematicKeyframe key, int index, float segmentSeconds)
+    {
+        Key = key;
+        Index = index;
+        SegmentSeconds = segmentSeconds;
+    }
 
     public CinematicKeyframe Key { get; set; }
+    public int Index { get; }
 
+    /// <summary>How long the move LEAVING this keyframe lasts. Keyframe times are absolute, so without
+    /// this the author has to subtract two numbers in their head to answer "how long is this bit" - which
+    /// is the question actually being asked when a move feels too fast.</summary>
+    public float SegmentSeconds { get; }
+
+    public string NumberText => (Index + 1).ToString(CultureInfo.InvariantCulture);
     public string TimeText => Key.Time.ToString("0.00", CultureInfo.InvariantCulture) + " s";
     public string PositionText =>
         $"{Key.Position.X:0}, {Key.Position.Y:0}, {Key.Position.Z:0}";
     public string FovText => (Key.FieldOfView * 180f / MathF.PI).ToString("0", CultureInfo.InvariantCulture) + "°";
     public string EaseText => Key.Ease.ToString();
+    public string BlendText => Key.Blend.ToString();
+
+    /// <summary>Empty on the last keyframe, which nothing leaves.</summary>
+    public string SegmentText => SegmentSeconds <= 0f
+        ? "—"
+        : "+" + SegmentSeconds.ToString("0.00", CultureInfo.InvariantCulture) + " s";
 }
 
 /// <summary>
@@ -158,7 +176,26 @@ public sealed partial class CinematicWindowViewModel : ObservableObject
         ScrubTime = 0;
         OnPropertyChanged(nameof(ShotDuration));
         OnPropertyChanged(nameof(CaptureSummary));
+        OnPropertyChanged(nameof(ShotSpeed));
+        OnPropertyChanged(nameof(ShotSummary));
         if (value is not null && string.Equals(NamePrefix, "Shot", StringComparison.Ordinal)) NamePrefix = Safe(value.Name);
+    }
+
+    /// <summary>Per-shot playback speed. Changing it rescales every duration shown, which is why the rows
+    /// are rebuilt rather than just the total.</summary>
+    public double ShotSpeed
+    {
+        get => SelectedShot?.SpeedScale ?? 1d;
+        set
+        {
+            if (SelectedShot is not { } shot) return;
+            shot.SpeedScale = (float)Math.Clamp(value, 0.05d, 20d);
+            OnPropertyChanged();
+            RefreshKeys();
+            OnPropertyChanged(nameof(ShotDuration));
+            OnPropertyChanged(nameof(CaptureSummary));
+            Save();
+        }
     }
 
     partial void OnFpsChanged(int value) => OnPropertyChanged(nameof(CaptureSummary));
@@ -178,10 +215,30 @@ public sealed partial class CinematicWindowViewModel : ObservableObject
 
     private void RefreshKeys()
     {
+        var previous = SelectedKey?.Key;
+        int previousRow = SelectedKey?.Index ?? -1;
         Keys.Clear();
-        if (SelectedShot is not { } shot) return;
-        foreach (var key in shot.Keyframes) Keys.Add(new CinematicKeyRowViewModel(key));
+        if (SelectedShot is { } shot)
+        {
+            for (int i = 0; i < shot.Keyframes.Count; i++)
+                Keys.Add(new CinematicKeyRowViewModel(shot.Keyframes[i], i, shot.SegmentDuration(i)));
+
+            // Editing a keyframe rebuilds every row, and losing the selection each time would make
+            // changing several fields in a row impossible. Match on the keyframe first; commands that
+            // rewrite MANY keys at once (spacing them evenly, applying one blend to all) leave nothing
+            // to match, so fall back to the same ROW rather than jumping the selection to the top.
+            if (previousRow >= 0)
+                SelectedKey = Keys.FirstOrDefault(r => r.Key == previous)
+                              ?? Keys.ElementAtOrDefault(Math.Min(previousRow, Keys.Count - 1));
+        }
+        OnPropertyChanged(nameof(ShotSummary));
     }
+
+    /// <summary>What the selected shot costs, in the terms the author is deciding in.</summary>
+    public string ShotSummary => SelectedShot is not { } shot || shot.Keyframes.Count == 0
+        ? "No keyframes yet."
+        : $"{shot.Keyframes.Count} keyframe(s) · {shot.Duration:0.00} s"
+          + (Math.Abs(shot.SpeedScale - 1f) > 0.001f ? $" at {shot.SpeedScale:0.##}x speed" : "");
 
     private static string Safe(string name)
     {
@@ -257,6 +314,117 @@ public sealed partial class CinematicWindowViewModel : ObservableObject
         Previewing = true;
         ScrubTime = Math.Clamp(row.Key.Time, 0d, shot.Duration);
         _host.PreviewPose(shot.Sample((float)ScrubTime));
+    }
+
+    // ---- editing the selected keyframe ------------------------------------------------------------
+    //
+    // Keyframes are immutable records, so every edit is Replace(old, old with { ... }). That keeps the
+    // shot's time ordering in one place and means an edit can never leave the list half-sorted.
+
+    public IReadOnlyList<CinematicEase> Eases { get; } = Enum.GetValues<CinematicEase>();
+    public IReadOnlyList<CinematicBlend> Blends { get; } = Enum.GetValues<CinematicBlend>();
+
+    /// <summary>Guards the edit properties below: they are re-read whenever the selection changes, and
+    /// without this each assignment would write itself straight back into the shot.</summary>
+    private bool _syncingEdit;
+
+    [ObservableProperty] private double _editTime;
+    [ObservableProperty] private double _editFovDegrees;
+    [ObservableProperty] private double _editRollDegrees;
+    [ObservableProperty] private CinematicEase _editEase;
+    [ObservableProperty] private CinematicBlend _editBlend;
+
+    public bool HasSelectedKey => SelectedKey is not null;
+
+    partial void OnSelectedKeyChanged(CinematicKeyRowViewModel? value)
+    {
+        _syncingEdit = true;
+        if (value is { Key: var k })
+        {
+            EditTime = k.Time;
+            EditFovDegrees = k.FieldOfView * 180d / Math.PI;
+            EditRollDegrees = k.Roll * 180d / Math.PI;
+            EditEase = k.Ease;
+            EditBlend = k.Blend;
+        }
+        _syncingEdit = false;
+        OnPropertyChanged(nameof(HasSelectedKey));
+    }
+
+    partial void OnEditTimeChanged(double value) => ApplyEdit(k => k with { Time = (float)Math.Max(0d, value) });
+    partial void OnEditFovDegreesChanged(double value) =>
+        ApplyEdit(k => k with { FieldOfView = (float)(Math.Clamp(value, 1d, 170d) * Math.PI / 180d) });
+    partial void OnEditRollDegreesChanged(double value) =>
+        ApplyEdit(k => k with { Roll = (float)(value * Math.PI / 180d) });
+    partial void OnEditEaseChanged(CinematicEase value) => ApplyEdit(k => k with { Ease = value });
+    partial void OnEditBlendChanged(CinematicBlend value) => ApplyEdit(k => k with { Blend = value });
+
+    private void ApplyEdit(Func<CinematicKeyframe, CinematicKeyframe> edit)
+    {
+        if (_syncingEdit || SelectedShot is not { } shot || SelectedKey is not { } row) return;
+        var updated = edit(row.Key);
+        if (updated == row.Key) return;
+        if (!shot.Replace(row.Key, updated)) return;
+
+        row.Key = updated;
+        RefreshKeys();
+        OnPropertyChanged(nameof(ShotDuration));
+        OnPropertyChanged(nameof(CaptureSummary));
+        Save();
+        if (Previewing) _host.PreviewPose(shot.Sample((float)ScrubTime));
+    }
+
+    /// <summary>Re-record the selected keyframe from the camera you are looking through now, keeping its
+    /// time and its blending. Re-flying to a better framing is the natural way to fix a keyframe, and
+    /// deleting and re-adding one loses its place in the shot.</summary>
+    [RelayCommand]
+    private void UpdateKeyframeFromCamera()
+    {
+        if (SelectedShot is not { } shot || SelectedKey is not { } row) return;
+        var pose = _host.CurrentPose;
+        var updated = row.Key with
+        {
+            Position = pose.Position,
+            Orientation = pose.Orientation,
+            FieldOfView = pose.FieldOfView,
+        };
+        if (!shot.Replace(row.Key, updated)) return;
+        row.Key = updated;
+        RefreshKeys();
+        Save();
+        Status = $"Keyframe {row.Index + 1} re-recorded from the current camera.";
+    }
+
+    /// <summary>Space every keyframe evenly across the shot's current length. The quickest fix for a
+    /// sequence whose timing drifted while it was being built.</summary>
+    [RelayCommand]
+    private void DistributeEvenly()
+    {
+        if (SelectedShot is not { } shot || shot.Keyframes.Count < 3) return;
+        float total = shot.Keyframes[^1].Time - shot.Keyframes[0].Time;
+        float start = shot.Keyframes[0].Time;
+        int last = shot.Keyframes.Count - 1;
+
+        // Snapshot first: Replace re-sorts, and mutating while walking the live list would skip rows.
+        var snapshot = shot.Keyframes.ToList();
+        for (int i = 1; i < last; i++)
+            shot.Replace(snapshot[i], snapshot[i] with { Time = start + total * i / last });
+
+        RefreshKeys();
+        Save();
+        Status = $"Spaced {shot.Keyframes.Count} keyframes evenly across {shot.Duration:0.00} s.";
+    }
+
+    /// <summary>Apply the selected keyframe's easing and blend to every keyframe in the shot.</summary>
+    [RelayCommand]
+    private void ApplyBlendToAll()
+    {
+        if (SelectedShot is not { } shot || SelectedKey is not { } row) return;
+        foreach (var key in shot.Keyframes.ToList())
+            shot.Replace(key, key with { Ease = row.Key.Ease, Blend = row.Key.Blend });
+        RefreshKeys();
+        Save();
+        Status = $"Every keyframe now uses {row.Key.Blend} / {row.Key.Ease}.";
     }
 
     // ---- capture ----------------------------------------------------------------------------------

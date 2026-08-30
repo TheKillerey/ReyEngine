@@ -189,4 +189,57 @@ public sealed class CinematicDocumentTests : IDisposable
         Assert.StartsWith(_root, CinematicDocument.PathFor(_root), StringComparison.OrdinalIgnoreCase);
         Assert.Contains(".reyengine", CinematicDocument.PathFor(_root), StringComparison.OrdinalIgnoreCase);
     }
+
+    // ===================================================== M608
+
+    [Fact]
+    public void ABlendModeSurvivesTheRoundTrip()
+    {
+        // Blend is not recoverable from the geometry - a held segment and a very slow one look identical
+        // in the saved positions - so if it did not persist, reopening a shot would silently turn every
+        // cut back into a move.
+        var shot = new CinematicShot { Name = "Cuts" };
+        shot.Add(new CinematicKeyframe(0f, Vector3.Zero, Quaternion.Identity, 1f, 0f,
+            CinematicEase.Linear, CinematicBlend.Hold));
+        shot.Add(new CinematicKeyframe(1f, new Vector3(500, 0, 0), Quaternion.Identity, 1f, 0f,
+            CinematicEase.EaseInOutStrong, CinematicBlend.Linear));
+
+        var document = new CinematicDocument();
+        document.Shots.Add(shot);
+        document.Save(Path_);
+
+        var back = CinematicDocument.Load(Path_).Shots[0];
+        Assert.Equal(CinematicBlend.Hold, back.Keyframes[0].Blend);
+        Assert.Equal(CinematicBlend.Linear, back.Keyframes[1].Blend);
+        Assert.Equal(CinematicEase.EaseInOutStrong, back.Keyframes[1].Ease);
+        // And the held segment still holds after the trip, which is the thing actually being protected.
+        Assert.Equal(0f, back.Sample(0.5f).Position.X, 3);
+    }
+
+    [Fact]
+    public void AFileWrittenBeforeBlendModesExistedLoadsAsSpline()
+    {
+        // v1 predates the Blend field. Those keyframes were authored against a spline, so that is what
+        // they have to come back as - defaulting to anything else would rewrite finished shots.
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path_)!);
+        File.WriteAllText(Path_, """
+        {
+          "Version": 1,
+          "Shots": [
+            {
+              "Name": "Old",
+              "SpeedScale": 1,
+              "Keys": [
+                { "Time": 0, "Position": [0, 0, 0], "Orientation": [0, 0, 0, 1], "FieldOfView": 0.8, "Ease": "EaseInOut" },
+                { "Time": 2, "Position": [100, 0, 0], "Orientation": [0, 0, 0, 1], "FieldOfView": 0.8, "Ease": "EaseInOut" }
+              ]
+            }
+          ]
+        }
+        """);
+
+        var shot = Assert.Single(CinematicDocument.Load(Path_).Shots);
+        Assert.All(shot.Keyframes, k => Assert.Equal(CinematicBlend.Spline, k.Blend));
+        Assert.True(shot.Sample(1f).Position.X > 0f);
+    }
 }

@@ -101,6 +101,7 @@ public sealed class CinematicPanelTests : IDisposable
                  {
                      "AddShotCommand", "RemoveShotCommand", "AddKeyframeCommand", "RemoveKeyframeCommand",
                      "GoToKeyframeCommand", "CaptureCommand", "CancelCaptureCommand",
+                     "UpdateKeyframeFromCameraCommand", "DistributeEvenlyCommand", "ApplyBlendToAllCommand",
                  })
             Assert.NotNull(typeof(CinematicWindowViewModel).GetProperty(name));
     }
@@ -273,5 +274,190 @@ public sealed class CinematicPanelTests : IDisposable
         // The warning has to OUTLIVE the next action - a status line would have been wiped by the
         // keyframe message above, leaving the user building a shot that is never saved.
         Assert.Contains("Could not read", panel.SaveBlocked, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ===================================================== M608: timing and blending in the panel
+
+    [Fact]
+    public void EveryRowSaysHowLongItsOwnMoveLasts()
+    {
+        // "How long is this bit" is the question an author asks when a move feels wrong, and keyframe
+        // times are absolute - so without this they are subtracting two numbers in their head.
+        var panel = Panel(out _);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.AddKeyframeCommand.Execute(null);
+
+        Assert.Equal(3, panel.Keys.Count);
+        Assert.Equal("1", panel.Keys[0].NumberText);
+        Assert.StartsWith("+", panel.Keys[0].SegmentText);
+        Assert.StartsWith("+", panel.Keys[1].SegmentText);
+        Assert.Equal("—", panel.Keys[^1].SegmentText);   // nothing leaves the last keyframe
+    }
+
+    [Fact]
+    public void TheSegmentLengthsShownAddUpToTheShotLength()
+    {
+        var panel = Panel(out _);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.AddKeyframeCommand.Execute(null);
+
+        float sum = panel.Keys.Sum(k => k.SegmentSeconds);
+        Assert.Equal(panel.SelectedShot!.Duration, sum, 3);
+    }
+
+    [Fact]
+    public void RetimingTheSelectedKeyframeMovesItAndIsSaved()
+    {
+        var panel = Panel(out _);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.SelectedKey = panel.Keys[1];
+
+        panel.EditTime = 8.0;
+
+        Assert.Equal(8f, panel.SelectedShot!.Keyframes[^1].Time, 3);
+        Assert.Equal(8f, panel.ShotDuration, 3);
+        Assert.Equal(8f, Panel(out _).Shots[0].Keyframes[^1].Time, 3);   // reopened from disk
+    }
+
+    [Fact]
+    public void EditingAKeyframeKeepsItSelectedSoSeveralFieldsCanBeChangedInARow()
+    {
+        // Every edit rebuilds the rows. Losing the selection each time would mean re-clicking the row
+        // between setting the time, the blend and the field of view.
+        var panel = Panel(out _);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.SelectedKey = panel.Keys[0];
+
+        panel.EditFovDegrees = 35;
+        Assert.True(panel.HasSelectedKey);
+        Assert.Equal(0, panel.SelectedKey!.Index);
+
+        panel.EditBlend = CinematicBlend.Hold;
+        Assert.Equal(CinematicBlend.Hold, panel.SelectedShot!.Keyframes[0].Blend);
+        Assert.Equal(35f, panel.SelectedShot.Keyframes[0].FieldOfView * 180f / MathF.PI, 1);
+    }
+
+    [Fact]
+    public void SelectingAKeyframeLoadsItsValuesIntoTheEditorWithoutWritingThemBack()
+    {
+        // The editor fields are re-read on every selection change. If that re-read went through the
+        // same path as a user edit, clicking a row would rewrite the keyframe it just showed.
+        var panel = Panel(out _);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.SelectedKey = panel.Keys[1];
+        panel.EditBlend = CinematicBlend.Linear;
+
+        var before = panel.SelectedShot!.Keyframes.ToList();
+        panel.SelectedKey = panel.Keys[0];
+        panel.SelectedKey = panel.Keys[1];
+
+        Assert.Equal(before, panel.SelectedShot.Keyframes);
+        Assert.Equal(CinematicBlend.Linear, panel.EditBlend);
+    }
+
+    [Fact]
+    public void ApplyingABlendToAllSetsEveryKeyframeAndKeepsTheSelection()
+    {
+        var panel = Panel(out _);
+        for (int i = 0; i < 4; i++) panel.AddKeyframeCommand.Execute(null);
+        panel.SelectedKey = panel.Keys[2];
+        panel.EditBlend = CinematicBlend.Linear;
+        panel.EditEase = CinematicEase.SmoothStep;
+
+        panel.ApplyBlendToAllCommand.Execute(null);
+
+        Assert.All(panel.SelectedShot!.Keyframes, k =>
+        {
+            Assert.Equal(CinematicBlend.Linear, k.Blend);
+            Assert.Equal(CinematicEase.SmoothStep, k.Ease);
+        });
+        Assert.Equal(2, panel.SelectedKey!.Index);
+    }
+
+    [Fact]
+    public void SpacingEvenlyLeavesTheEndsWhereTheyAreAndEvensOutTheMiddle()
+    {
+        var panel = Panel(out _);
+        for (int i = 0; i < 4; i++) panel.AddKeyframeCommand.Execute(null);
+        panel.SelectedKey = panel.Keys[1];
+        panel.EditTime = 0.1;                       // bunch the middle up against the start
+        panel.SelectedKey = panel.Keys[2];
+        panel.EditTime = 0.2;
+
+        var shot = panel.SelectedShot!;
+        float first = shot.Keyframes[0].Time, last = shot.Keyframes[^1].Time;
+        panel.DistributeEvenlyCommand.Execute(null);
+
+        Assert.Equal(first, shot.Keyframes[0].Time, 3);
+        Assert.Equal(last, shot.Keyframes[^1].Time, 3);
+        float step = (last - first) / 3f;
+        Assert.Equal(first + step, shot.Keyframes[1].Time, 3);
+        Assert.Equal(first + step * 2f, shot.Keyframes[2].Time, 3);
+    }
+
+    [Fact]
+    public void ReRecordingAKeyframeTakesTheNewCameraButKeepsItsPlaceInTheShot()
+    {
+        // Re-flying to a better framing is the natural fix. Deleting and re-adding would lose the
+        // keyframe timing and its blend, which is the work the author actually wants to keep.
+        var panel = Panel(out var host);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.SelectedKey = panel.Keys[0];
+        panel.EditBlend = CinematicBlend.Hold;
+        float time = panel.SelectedShot!.Keyframes[0].Time;
+
+        host.Pose = new CinematicPose(new Vector3(-400, 900, 55), Quaternion.Identity, 0.7f, 0f);
+        panel.UpdateKeyframeFromCameraCommand.Execute(null);
+
+        var key = panel.SelectedShot.Keyframes[0];
+        Assert.Equal(new Vector3(-400, 900, 55), key.Position);
+        Assert.Equal(0.7f, key.FieldOfView, 3);
+        Assert.Equal(time, key.Time, 3);
+        Assert.Equal(CinematicBlend.Hold, key.Blend);
+    }
+
+    [Fact]
+    public void ShotSpeedRetimesTheWholeShotWithoutMovingAKeyframe()
+    {
+        var panel = Panel(out _);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.AddKeyframeCommand.Execute(null);
+        float authored = panel.SelectedShot!.Keyframes[^1].Time;
+        double before = panel.ShotDuration;
+
+        panel.ShotSpeed = 2.0;
+
+        Assert.Equal(before / 2d, panel.ShotDuration, 3);
+        Assert.Equal(authored, panel.SelectedShot.Keyframes[^1].Time, 3);
+        Assert.Equal(2f, Panel(out _).Shots[0].SpeedScale, 3);   // and it is saved
+    }
+
+    [Fact]
+    public void TheShotSummarySaysHowManyKeyframesAndHowLong()
+    {
+        var panel = Panel(out _);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.AddKeyframeCommand.Execute(null);
+
+        Assert.Contains("2", panel.ShotSummary);
+        Assert.Contains("s", panel.ShotSummary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void NothingIsSelectedUntilARowIs()
+    {
+        // The whole editor block is gated on this, so a wrong answer either hides the controls or shows
+        // an editor bound to nothing.
+        var panel = Panel(out _);
+        Assert.False(panel.HasSelectedKey);
+        panel.AddKeyframeCommand.Execute(null);
+        panel.SelectedKey = panel.Keys[0];
+        Assert.True(panel.HasSelectedKey);
     }
 }

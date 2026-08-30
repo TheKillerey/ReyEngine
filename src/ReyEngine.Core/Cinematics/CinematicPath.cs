@@ -11,6 +11,32 @@ public enum CinematicEase
     EaseIn,
     EaseOut,
     EaseInOut,
+    /// <summary>3t^2 - 2t^3. Gentler than <see cref="EaseInOut"/>: it leaves and arrives softly without
+    /// the hard mid-point acceleration, which is the one most moves actually want.</summary>
+    SmoothStep,
+    /// <summary>Cubic. A pronounced ramp for a deliberate reveal, where the quadratic reads as too eager.</summary>
+    EaseInStrong,
+    EaseOutStrong,
+    EaseInOutStrong,
+}
+
+/// <summary>
+/// How the PATH between two keyframes is built — a different question from how fast the camera moves
+/// along it, which is <see cref="CinematicEase"/>.
+///
+/// <para>Keeping the two apart is what makes them usable together. A hard cut wants Hold, whatever the
+/// easing says; a deliberately mechanical dolly wants Linear geometry with soft easing; and the default
+/// spline wants easing to stay independent of the curve's shape.</para>
+/// </summary>
+public enum CinematicBlend
+{
+    /// <summary>Catmull-Rom through the neighbouring keyframes: smooth, no corner at a keyframe.</summary>
+    Spline,
+    /// <summary>Straight line between the two keyframes. A spline bows outward near a tight turn; this
+    /// does not, which is what a rail or a locked dolly move needs.</summary>
+    Linear,
+    /// <summary>Stay on this keyframe until the next one arrives, then jump. A cut, not a move.</summary>
+    Hold,
 }
 
 /// <summary>
@@ -23,15 +49,17 @@ public enum CinematicEase
 /// <param name="FieldOfView">Vertical FOV in RADIANS, matching <c>OrbitCamera.FieldOfView</c>.</param>
 /// <param name="Roll">Radians about the view axis. Separate from <paramref name="Orientation"/> because a
 /// look-at shot still wants roll, and there is no orientation to put it in.</param>
-/// <param name="Ease">Shapes the segment that STARTS at this keyframe. The last keyframe's value is
-/// unused — nothing leaves it.</param>
+/// <param name="Ease">Shapes the SPEED of the segment that starts at this keyframe. The last keyframe's
+/// value is unused — nothing leaves it.</param>
+/// <param name="Blend">Shapes the PATH of that same segment. Also unused on the last keyframe.</param>
 public sealed record CinematicKeyframe(
     float Time,
     Vector3 Position,
     Quaternion Orientation,
     float FieldOfView,
     float Roll = 0f,
-    CinematicEase Ease = CinematicEase.EaseInOut);
+    CinematicEase Ease = CinematicEase.EaseInOut,
+    CinematicBlend Blend = CinematicBlend.Spline);
 
 /// <summary>What the camera is at one instant. <see cref="ViewMatrix"/> is what the renderer wants —
 /// <c>ShaderPreviewSettings.SuppliedView</c> takes it directly, which is also how roll survives: an
@@ -104,6 +132,30 @@ public sealed class CinematicShot
         ? 0f
         : MathF.Max(0f, (_keys[^1].Time - _keys[0].Time) / MathF.Max(0.0001f, SpeedScale));
 
+    /// <summary>How long the segment leaving keyframe <paramref name="index"/> lasts, after
+    /// <see cref="SpeedScale"/>. Zero for the last keyframe, which nothing leaves.
+    ///
+    /// <para>The panel shows this per row: a shot's total says nothing about which move is too fast, and
+    /// keyframe times are absolute, so working out "how long is this bit" from them is arithmetic the
+    /// author should not be doing in their head.</para></summary>
+    public float SegmentDuration(int index)
+    {
+        if (index < 0 || index >= _keys.Count - 1) return 0f;
+        return MathF.Max(0f, (_keys[index + 1].Time - _keys[index].Time) / MathF.Max(0.0001f, SpeedScale));
+    }
+
+    /// <summary>Replace a keyframe with an edited copy, keeping the list in time order. Keyframes are
+    /// immutable records, so retiming one is <c>Replace(key, key with { Time = t })</c> - there is no
+    /// separate move operation to get out of step with this one.</summary>
+    public bool Replace(CinematicKeyframe old, CinematicKeyframe updated)
+    {
+        int at = _keys.IndexOf(old);
+        if (at < 0) return false;
+        _keys[at] = updated;
+        _keys.Sort(static (x, y) => x.Time.CompareTo(y.Time));
+        return true;
+    }
+
     public void Add(CinematicKeyframe key)
     {
         _keys.Add(key);
@@ -140,16 +192,25 @@ public sealed class CinematicShot
         // becomes 50t + 150t^2 - 100t^3), so the spline imposes an ease the author did not ask for and
         // cannot switch off. Reflection gives a symmetric tangent, a two-key move is exactly linear, and
         // easing stays entirely under the Ease setting.
-        var p0 = i - 1 >= 0 ? _keys[i - 1].Position : a.Position + (a.Position - b.Position);
-        var p3 = i + 2 < _keys.Count ? _keys[i + 2].Position : b.Position + (b.Position - a.Position);
-        var position = CatmullRom(p0, a.Position, b.Position, p3, e);
+        // Hold ignores the eased parameter entirely: a cut is not a move, and easing a jump is meaningless.
+        float blended = a.Blend == CinematicBlend.Hold ? 0f : e;
+
+        Vector3 position;
+        if (a.Blend == CinematicBlend.Hold) position = a.Position;
+        else if (a.Blend == CinematicBlend.Linear) position = Vector3.Lerp(a.Position, b.Position, e);
+        else
+        {
+            var p0 = i - 1 >= 0 ? _keys[i - 1].Position : a.Position + (a.Position - b.Position);
+            var p3 = i + 2 < _keys.Count ? _keys[i + 2].Position : b.Position + (b.Position - a.Position);
+            position = CatmullRom(p0, a.Position, b.Position, p3, e);
+        }
 
         // FOV and roll are scalars along the same eased parameter: a dolly-zoom has to stay in step with
         // the move, so they must not run on their own clock.
-        float fov = Lerp(a.FieldOfView, b.FieldOfView, e);
-        float roll = Lerp(a.Roll, b.Roll, e);
+        float fov = Lerp(a.FieldOfView, b.FieldOfView, blended);
+        float roll = Lerp(a.Roll, b.Roll, blended);
 
-        var orientation = Quaternion.Slerp(Normalise(a.Orientation), Normalise(b.Orientation), e);
+        var orientation = Quaternion.Slerp(Normalise(a.Orientation), Normalise(b.Orientation), blended);
         return new CinematicPose(position, orientation, fov, roll) is var pose && LookAtTarget is { } target
             ? new CinematicPose(position, Aim(position, target), fov, roll)
             : pose;
@@ -221,6 +282,12 @@ public sealed class CinematicShot
             CinematicEase.EaseIn => u * u,
             CinematicEase.EaseOut => 1f - (1f - u) * (1f - u),
             CinematicEase.EaseInOut => u < 0.5f ? 2f * u * u : 1f - 2f * (1f - u) * (1f - u),
+            CinematicEase.SmoothStep => u * u * (3f - 2f * u),
+            CinematicEase.EaseInStrong => u * u * u,
+            CinematicEase.EaseOutStrong => 1f - (1f - u) * (1f - u) * (1f - u),
+            CinematicEase.EaseInOutStrong => u < 0.5f
+                ? 4f * u * u * u
+                : 1f - 4f * (1f - u) * (1f - u) * (1f - u),
             _ => u,
         };
     }

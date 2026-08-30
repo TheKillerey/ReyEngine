@@ -270,4 +270,195 @@ public sealed class CinematicPathTests
         Assert.True(pose.FieldOfView > 0f);
         Assert.False(float.IsNaN(pose.ViewMatrix.M11));
     }
+
+    // ===================================================== M608: blending between keyframes
+
+    private static CinematicKeyframe Keyb(float t, Vector3 p, CinematicBlend blend,
+        CinematicEase ease = CinematicEase.Linear) =>
+        new(t, p, Quaternion.Identity, 1.0f, 0f, ease, blend);
+
+    [Fact]
+    public void BlendAndEaseAreSeparateAxes()
+    {
+        // The two settings answer different questions - Blend is the SHAPE OF THE PATH out of a keyframe,
+        // Ease is the SPEED ALONG it - and conflating them is how a "smoother" setting ends up changing
+        // where the camera flies. Linear blend with an ease still eases; spline blend without one does not.
+        var straightEased = Shot(Keyb(0f, Vector3.Zero, CinematicBlend.Linear, CinematicEase.EaseIn),
+                                 Keyb(1f, new Vector3(100, 0, 0), CinematicBlend.Linear, CinematicEase.EaseIn));
+        var straightLinear = Shot(Keyb(0f, Vector3.Zero, CinematicBlend.Linear),
+                                  Keyb(1f, new Vector3(100, 0, 0), CinematicBlend.Linear));
+
+        Assert.True(straightEased.Sample(0.25f).Position.X < straightLinear.Sample(0.25f).Position.X);
+        // Both still land exactly on the keyframe: easing never moves where the camera ends up.
+        Assert.Equal(100f, straightEased.Sample(1f).Position.X, 2);
+        Assert.Equal(100f, straightLinear.Sample(1f).Position.X, 2);
+    }
+
+    [Fact]
+    public void LinearBlendDoesNotBowOutThroughACorner()
+    {
+        // A spline through a right-angle turn overshoots the corner keyframe on the way in and out. That
+        // is usually what you want in a flythrough and exactly what you do not want when the camera is
+        // meant to travel a straight leg - so Linear must stay on the segment it is given.
+        var corner = new Vector3(100, 0, 0);
+        var end = new Vector3(100, 0, 100);
+
+        var spline = Shot(Keyb(0f, Vector3.Zero, CinematicBlend.Spline),
+                          Keyb(1f, corner, CinematicBlend.Spline),
+                          Keyb(2f, end, CinematicBlend.Spline));
+        var linear = Shot(Keyb(0f, Vector3.Zero, CinematicBlend.Linear),
+                          Keyb(1f, corner, CinematicBlend.Linear),
+                          Keyb(2f, end, CinematicBlend.Linear));
+
+        // Halfway along the first leg the straight path is exactly on the axis; the spline is not.
+        Assert.Equal(0f, linear.Sample(0.5f).Position.Z, 3);
+        Assert.True(MathF.Abs(spline.Sample(0.5f).Position.Z) > 1f,
+            $"the spline should bow through the corner, got Z={spline.Sample(0.5f).Position.Z}");
+
+        // Both still pass through the corner itself.
+        Assert.Equal(corner.X, linear.Sample(1f).Position.X, 2);
+        Assert.Equal(corner.X, spline.Sample(1f).Position.X, 2);
+    }
+
+    [Fact]
+    public void HoldMakesACutRatherThanAMove()
+    {
+        // A cut is the one thing a camera path cannot express by interpolating: any blend, however sharp,
+        // still shows the camera travelling. Hold pins the pose for its whole segment; the jump happens
+        // when the NEXT segment starts, exactly on that keyframe.
+        var shot = Shot(Keyb(0f, Vector3.Zero, CinematicBlend.Hold),
+                        Keyb(2f, new Vector3(500, 0, 0), CinematicBlend.Linear),
+                        Keyb(3f, new Vector3(600, 0, 0), CinematicBlend.Linear));
+
+        Assert.Equal(0f, shot.Sample(0.5f).Position.X, 3);
+        Assert.Equal(0f, shot.Sample(1.99f).Position.X, 3);
+        Assert.Equal(500f, shot.Sample(2f).Position.X, 2);      // the cut lands on the keyframe
+    }
+
+    [Fact]
+    public void AHoldOnTheLastSegmentHoldsToTheEndInsteadOfFlashingTheFinalKeyframe()
+    {
+        // The final frame of a capture is sampled at exactly Duration. If a trailing Hold released there,
+        // every such shot would end with a single frame of a completely different camera - a one-frame
+        // flash that is invisible while scrubbing and obvious in the exported video.
+        var shot = Shot(Keyb(0f, Vector3.Zero, CinematicBlend.Hold),
+                        Keyb(2f, new Vector3(500, 0, 0), CinematicBlend.Spline));
+
+        Assert.Equal(0f, shot.Sample(shot.Duration).Position.X, 3);
+    }
+
+    [Fact]
+    public void HoldFreezesTheAimAndTheFieldOfViewToNotJustThePosition()
+    {
+        // A hold that let the camera keep turning or zooming would not be a still - and a slow zoom
+        // during what the author asked to be a locked-off shot is exactly the kind of thing you only
+        // notice after the export.
+        var turned = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2f);
+        var shot = new CinematicShot();
+        shot.Add(new CinematicKeyframe(0f, Vector3.Zero, Quaternion.Identity, 1.0f, 0f,
+            CinematicEase.Linear, CinematicBlend.Hold));
+        shot.Add(new CinematicKeyframe(2f, Vector3.Zero, turned, 0.5f, 0.4f,
+            CinematicEase.Linear, CinematicBlend.Spline));
+
+        var mid = shot.Sample(1f);
+        Assert.Equal(1.0f, mid.FieldOfView, 3);
+        Assert.Equal(0f, mid.Roll, 3);
+        Assert.Equal(1f, MathF.Abs(Quaternion.Dot(mid.Orientation, Quaternion.Identity)), 3);
+    }
+
+    [Fact]
+    public void ABlendAppliesToTheSegmentLeavingItsOwnKeyframeOnly()
+    {
+        // Blend is a property of the move OUT of a keyframe, so a hold on the first keyframe must not
+        // freeze the second segment as well.
+        var shot = Shot(Keyb(0f, Vector3.Zero, CinematicBlend.Hold),
+                        Keyb(1f, new Vector3(100, 0, 0), CinematicBlend.Linear),
+                        Keyb(2f, new Vector3(200, 0, 0), CinematicBlend.Linear));
+
+        Assert.Equal(0f, shot.Sample(0.5f).Position.X, 3);     // held
+        Assert.Equal(150f, shot.Sample(1.5f).Position.X, 2);   // moving again
+    }
+
+    [Theory]
+    [InlineData(CinematicEase.SmoothStep)]
+    [InlineData(CinematicEase.EaseInStrong)]
+    [InlineData(CinematicEase.EaseOutStrong)]
+    [InlineData(CinematicEase.EaseInOutStrong)]
+    public void TheNewEasingCurvesStillFixBothEnds(CinematicEase ease)
+    {
+        // Same contract as the original four: an easing that does not hit 0 and 1 exactly makes a
+        // keyframe stop being a point in time, which shows up as a jump at the segment boundary.
+        Assert.Equal(0f, CinematicShot.Shape(0f, ease), 5);
+        Assert.Equal(1f, CinematicShot.Shape(1f, ease), 5);
+        for (float u = 0f; u <= 1f; u += 0.05f)
+        {
+            float v = CinematicShot.Shape(u, ease);
+            Assert.InRange(v, -0.001f, 1.001f);
+        }
+    }
+
+    [Fact]
+    public void TheStrongEasingsAreStrongerThanTheGentleOnes()
+    {
+        // If they were not measurably different there would be no reason to offer them, and an author
+        // switching between the two would think the control was broken.
+        Assert.True(CinematicShot.Shape(0.25f, CinematicEase.EaseInStrong)
+                  < CinematicShot.Shape(0.25f, CinematicEase.EaseIn));
+        Assert.True(CinematicShot.Shape(0.25f, CinematicEase.EaseOutStrong)
+                  > CinematicShot.Shape(0.25f, CinematicEase.EaseOut));
+    }
+
+    // ===================================================== M608: how long each move takes
+
+    [Fact]
+    public void SegmentDurationIsTheGapToTheNextKeyframe()
+    {
+        var shot = Shot(Key(0f, Vector3.Zero), Key(0.5f, new Vector3(50, 0, 0)), Key(4f, new Vector3(400, 0, 0)));
+
+        Assert.Equal(0.5f, shot.SegmentDuration(0), 3);
+        Assert.Equal(3.5f, shot.SegmentDuration(1), 3);
+        Assert.Equal(0f, shot.SegmentDuration(2), 3);      // nothing leaves the last keyframe
+        Assert.Equal(0f, shot.SegmentDuration(-1), 3);
+        Assert.Equal(0f, shot.SegmentDuration(99), 3);
+    }
+
+    [Fact]
+    public void SegmentDurationFollowsSpeedScaleSoTheNumbersMatchTheClock()
+    {
+        // The panel shows these seconds beside a scrubber that is already scaled. If one honoured
+        // SpeedScale and the other did not, the rows would add up to a different length than the shot.
+        var shot = Shot(Key(0f, Vector3.Zero), Key(2f, new Vector3(200, 0, 0)), Key(6f, new Vector3(600, 0, 0)));
+        shot.SpeedScale = 2f;
+
+        Assert.Equal(1f, shot.SegmentDuration(0), 3);
+        Assert.Equal(2f, shot.SegmentDuration(1), 3);
+        Assert.Equal(shot.Duration, shot.SegmentDuration(0) + shot.SegmentDuration(1), 3);
+    }
+
+    // ===================================================== M608: editing a keyframe in place
+
+    [Fact]
+    public void ReplacingAKeyframeKeepsTheListInTimeOrder()
+    {
+        // Retiming is Replace(key, key with { Time = t }), so dragging a keyframe past its neighbour has
+        // to re-sort - otherwise Sample walks a list it assumes is ordered and reads the wrong segment.
+        var first = Key(0f, Vector3.Zero);
+        var middle = Key(1f, new Vector3(100, 0, 0));
+        var last = Key(2f, new Vector3(200, 0, 0));
+        var shot = Shot(first, middle, last);
+
+        Assert.True(shot.Replace(middle, middle with { Time = 5f }));
+
+        Assert.Equal(new[] { 0f, 2f, 5f }, shot.Keyframes.Select(k => k.Time).ToArray());
+        Assert.Equal(100f, shot.Keyframes[^1].Position.X, 2);
+        Assert.Equal(5f, shot.Duration, 3);
+    }
+
+    [Fact]
+    public void ReplacingAKeyframeThatIsNotInTheShotChangesNothing()
+    {
+        var shot = Shot(Key(0f, Vector3.Zero), Key(1f, new Vector3(100, 0, 0)));
+        Assert.False(shot.Replace(Key(9f, new Vector3(900, 0, 0)), Key(9f, Vector3.Zero)));
+        Assert.Equal(2, shot.Keyframes.Count);
+    }
 }

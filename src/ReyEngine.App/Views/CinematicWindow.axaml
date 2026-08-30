@@ -77,25 +77,36 @@
             <Border Background="{DynamicResource ReyPanelBrush}"
                     BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" Height="170">
               <DockPanel>
-                <Grid DockPanel.Dock="Top" ColumnDefinitions="70,*,60,90" Margin="8,5,8,4">
-                  <TextBlock Grid.Column="0" Text="Time" FontSize="10" FontWeight="Bold"
+                <Grid DockPanel.Dock="Top" ColumnDefinitions="26,62,66,*,52,84,96" Margin="8,5,8,4">
+                  <TextBlock Grid.Column="0" Text="#" FontSize="10" FontWeight="Bold"
                              Foreground="{DynamicResource ReyTextDimBrush}" />
-                  <TextBlock Grid.Column="1" Text="Position" FontSize="10" FontWeight="Bold"
+                  <TextBlock Grid.Column="1" Text="At" FontSize="10" FontWeight="Bold"
                              Foreground="{DynamicResource ReyTextDimBrush}" />
-                  <TextBlock Grid.Column="2" Text="FOV" FontSize="10" FontWeight="Bold"
+                  <TextBlock Grid.Column="2" Text="Lasts" FontSize="10" FontWeight="Bold"
                              Foreground="{DynamicResource ReyTextDimBrush}" />
-                  <TextBlock Grid.Column="3" Text="Ease" FontSize="10" FontWeight="Bold"
+                  <TextBlock Grid.Column="3" Text="Position" FontSize="10" FontWeight="Bold"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Grid.Column="4" Text="FOV" FontSize="10" FontWeight="Bold"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Grid.Column="5" Text="Blend" FontSize="10" FontWeight="Bold"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Grid.Column="6" Text="Ease" FontSize="10" FontWeight="Bold"
                              Foreground="{DynamicResource ReyTextDimBrush}" />
                 </Grid>
                 <ListBox ItemsSource="{Binding Keys}" SelectedItem="{Binding SelectedKey}"
                          Background="Transparent" BorderThickness="0">
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:CinematicKeyRowViewModel">
-                      <Grid ColumnDefinitions="70,*,60,90">
-                        <TextBlock Grid.Column="0" Text="{Binding TimeText}" FontSize="11" />
-                        <TextBlock Grid.Column="1" Text="{Binding PositionText}" FontSize="11" />
-                        <TextBlock Grid.Column="2" Text="{Binding FovText}" FontSize="11" />
-                        <TextBlock Grid.Column="3" Text="{Binding EaseText}" FontSize="11" />
+                      <Grid ColumnDefinitions="26,62,66,*,52,84,96">
+                        <TextBlock Grid.Column="0" Text="{Binding NumberText}" FontSize="11"
+                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <TextBlock Grid.Column="1" Text="{Binding TimeText}" FontSize="11" />
+                        <TextBlock Grid.Column="2" Text="{Binding SegmentText}" FontSize="11"
+                                   Foreground="{DynamicResource ReyAccent2Brush}" />
+                        <TextBlock Grid.Column="3" Text="{Binding PositionText}" FontSize="11" />
+                        <TextBlock Grid.Column="4" Text="{Binding FovText}" FontSize="11" />
+                        <TextBlock Grid.Column="5" Text="{Binding BlendText}" FontSize="11" />
+                        <TextBlock Grid.Column="6" Text="{Binding EaseText}" FontSize="11" />
                       </Grid>
                     </DataTemplate>
                   </ListBox.ItemTemplate>
@@ -106,15 +117,65 @@
             <StackPanel Orientation="Horizontal" Spacing="6">
               <Button Classes="primary" Content="Add Keyframe" Command="{Binding AddKeyframeCommand}" Padding="14,4" />
               <Button Content="Go To" Command="{Binding GoToKeyframeCommand}"
-                      IsEnabled="{Binding SelectedKey, Converter={x:Static ObjectConverters.IsNotNull}}" Padding="12,4" />
+                      IsEnabled="{Binding HasSelectedKey}" Padding="12,4" />
+              <Button Content="Re-record" Command="{Binding UpdateKeyframeFromCameraCommand}"
+                      IsEnabled="{Binding HasSelectedKey}" Padding="12,4"
+                      ToolTip.Tip="Replace this keyframe position, aim and field of view with the camera you are looking through now, keeping its time and blending." />
               <Button Content="Remove" Command="{Binding RemoveKeyframeCommand}"
-                      IsEnabled="{Binding SelectedKey, Converter={x:Static ObjectConverters.IsNotNull}}" Padding="12,4" />
+                      IsEnabled="{Binding HasSelectedKey}" Padding="12,4" />
             </StackPanel>
+
+            <TextBlock Text="{Binding ShotSummary}" FontSize="11"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+          </StackPanel>
+
+          <!-- the selected keyframe -->
+          <StackPanel Spacing="6" IsVisible="{Binding HasSelectedKey}">
+            <TextBlock Text="SELECTED KEYFRAME" FontSize="10" FontWeight="Bold"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Text="Blend shapes the PATH out of this keyframe; Ease shapes the SPEED along it. Hold makes a cut instead of a move."
+                       FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+            <Grid ColumnDefinitions="Auto,110,Auto,110,Auto,*" RowDefinitions="Auto,Auto"
+                  ColumnSpacing="8" RowSpacing="6">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Time (s)" VerticalAlignment="Center" FontSize="11" />
+              <NumericUpDown Grid.Row="0" Grid.Column="1" Value="{Binding EditTime}"
+                             Minimum="0" Maximum="3600" Increment="0.25" FormatString="0.00" />
+
+              <TextBlock Grid.Row="0" Grid.Column="2" Text="FOV" VerticalAlignment="Center" FontSize="11" />
+              <NumericUpDown Grid.Row="0" Grid.Column="3" Value="{Binding EditFovDegrees}"
+                             Minimum="1" Maximum="170" Increment="1" FormatString="0" />
+
+              <TextBlock Grid.Row="0" Grid.Column="4" Text="Roll" VerticalAlignment="Center" FontSize="11" />
+              <NumericUpDown Grid.Row="0" Grid.Column="5" HorizontalAlignment="Left" Width="110"
+                             Value="{Binding EditRollDegrees}"
+                             Minimum="-180" Maximum="180" Increment="1" FormatString="0" />
+
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Blend" VerticalAlignment="Center" FontSize="11" />
+              <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding Blends}" SelectedItem="{Binding EditBlend}" />
+
+              <TextBlock Grid.Row="1" Grid.Column="2" Text="Ease" VerticalAlignment="Center" FontSize="11" />
+              <ComboBox Grid.Row="1" Grid.Column="3" HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding Eases}" SelectedItem="{Binding EditEase}" />
+
+              <StackPanel Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="6">
+                <Button Content="Apply blend to all" Command="{Binding ApplyBlendToAllCommand}" Padding="10,4" />
+                <Button Content="Space evenly" Command="{Binding DistributeEvenlyCommand}" Padding="10,4"
+                        ToolTip.Tip="Spread the middle keyframes evenly between the first and last, keeping the shot length." />
+              </StackPanel>
+            </Grid>
           </StackPanel>
 
           <!-- scrub -->
           <StackPanel Spacing="6">
-            <CheckBox Content="Preview the move in the viewport" IsChecked="{Binding Previewing}" />
+            <Grid ColumnDefinitions="*,Auto,110">
+              <CheckBox Grid.Column="0" Content="Preview the move in the viewport" IsChecked="{Binding Previewing}" />
+              <TextBlock Grid.Column="1" Text="Shot speed" VerticalAlignment="Center" FontSize="11" Margin="0,0,8,0" />
+              <NumericUpDown Grid.Column="2" Value="{Binding ShotSpeed}"
+                             Minimum="0.05" Maximum="20" Increment="0.1" FormatString="0.00"
+                             ToolTip.Tip="Plays the whole shot faster or slower without moving any keyframe. 2 halves its length." />
+            </Grid>
             <Grid ColumnDefinitions="*,70">
               <Slider Grid.Column="0" Minimum="0" Maximum="{Binding ShotDuration}"
                       Value="{Binding ScrubTime}" IsEnabled="{Binding Previewing}" />

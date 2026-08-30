@@ -37,6 +37,11 @@ public sealed class CinematicDocument
     {
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // Easing and blend modes are written by NAME. As bare numbers they are positional, so the
+        // meaning of a saved shot would depend on the order of an enum in a build the file has no way of
+        // naming - and a file whose docs promise it can be rescued by hand should not need a lookup
+        // table to read. Numbers are still accepted on load, so documents saved before this still open.
+        Converters = { new JsonStringEnumConverter() },
     };
 
     public void Save(string path)
@@ -119,6 +124,9 @@ public sealed class CinematicDocument
         public float FieldOfView { get; set; } = MathF.PI / 4f;
         public float Roll { get; set; }
         public CinematicEase Ease { get; set; } = CinematicEase.EaseInOut;
+        /// <summary>Absent in a v1 file, which predates blend modes - those keyframes load as Spline,
+        /// the behaviour they were authored against.</summary>
+        public CinematicBlend Blend { get; set; } = CinematicBlend.Spline;
 
         public static KeyDto From(CinematicKeyframe k) => new()
         {
@@ -128,13 +136,14 @@ public sealed class CinematicDocument
             FieldOfView = k.FieldOfView,
             Roll = k.Roll,
             Ease = k.Ease,
+            Blend = k.Blend,
         };
 
         public CinematicKeyframe ToKeyframe() => new(
             Time,
             new Vector3(Get(Position, 0), Get(Position, 1), Get(Position, 2)),
             Normalise(new Quaternion(Get(Orientation, 0), Get(Orientation, 1), Get(Orientation, 2), Get(Orientation, 3, 1f))),
-            FieldOfView, Roll, Ease);
+            FieldOfView, Roll, Ease, Blend);
 
         private static float Get(float[]? a, int i, float fallback = 0f) => a is not null && i < a.Length ? a[i] : fallback;
 
