@@ -33,6 +33,9 @@ public static class ModShapeValidator
     private static readonly uint F_srcAlpha = HashAlgorithms.Fnv1a("srcAlphaBlendFactor");
     private static readonly uint F_dstColor = HashAlgorithms.Fnv1a("dstColorBlendFactor");
     private static readonly uint F_dstAlpha = HashAlgorithms.Fnv1a("dstAlphaBlendFactor");
+    private static readonly uint F_addressU = HashAlgorithms.Fnv1a("addressU");
+    private static readonly uint F_addressV = HashAlgorithms.Fnv1a("addressV");
+    private static readonly uint F_addressW = HashAlgorithms.Fnv1a("addressW");
 
     /// <summary>
     /// M430: the shader contract rules. Both were found by a crash with no useful Riot log, on
@@ -193,6 +196,37 @@ public static class ModShapeValidator
                         + "whose tag disagrees with the schema, so this field does not reach the game at all.",
                         hash, o.ClassHash));
             }
+
+            // ---- 3c. a CLAMPED sampler authors all three axes (M599) ---------------------------
+            // Censused over every shipped map wad, 569 decal samplers: 379 author nothing at all (Wrap),
+            // 115 are U2/V2 (Mirror, no W), 58 are W1 alone, and every one of the 17 that CLAMP writes the
+            // full U1/V1/W1 triple. Zero author U1/V1 without W.
+            //
+            // A ported map arrived with 17 of 19 decals at U1/V1/W- and 2 at U1/V1/W1, and only those 2
+            // clamped in game - the other 17 tiled their texture across the surface. The porter writes the
+            // three together, so a partial triple means something edited the sampler afterwards; the
+            // editor's own preset apply removes an axis the preset leaves unset, which produces exactly
+            // this shape. Whatever wrote it, the file no longer says what it means to say.
+            if (o.Properties.TryGetValue(F_samplers, out var samplerProp) && samplerProp is BinTreeContainer samplers)
+                foreach (var element in samplers.Elements)
+                {
+                    if (element is not BinTreeStruct sampler) continue;
+                    bool u = sampler.Properties.ContainsKey(F_addressU);
+                    bool v = sampler.Properties.ContainsKey(F_addressV);
+                    bool w = sampler.Properties.ContainsKey(F_addressW);
+                    if (!u && !v) continue;               // authoring nothing is Wrap, and Riot's commonest case
+                    if (u && v && w) continue;            // the full triple - what Riot writes when it clamps
+                    if (u && v && !w && IsClamp(sampler)) // U2/V2 Mirror without W is a real shipped shape
+                        issues.Add(new BinIssue("partial-address-triple", Name(hash, o),
+                            "a sampler authors addressU/addressV as Clamp but leaves addressW out. Riot writes all "
+                            + "three whenever it clamps (17 of 17 clamped decal samplers), and 0 of 569 ship this "
+                            + "shape. Measured in game, a decal with the partial triple TILES instead of clamping.",
+                            hash, o.ClassHash));
+                    else if (u != v)
+                        issues.Add(new BinIssue("partial-address-triple", Name(hash, o),
+                            $"a sampler authors address{(u ? "U" : "V")} without address{(u ? "V" : "U")}. Riot "
+                            + "always moves the U and V axes together.", hash, o.ClassHash));
+                }
 
             foreach (var pass in Passes(o))
             {
@@ -358,6 +392,12 @@ public static class ModShapeValidator
 
     /// <summary>Every pass struct under a material's techniques, plus the technique structs themselves so
     /// the caller can inspect the nested 'passes' container.</summary>
+    /// <summary>Clamp is 1 in Riot's enum (Unity's TextureWrapMode ordering: 0 Wrap, 1 Clamp, 2 Mirror).
+    /// Only Clamp is checked here - Riot really does ship 115 decal samplers at U2/V2 with no W.</summary>
+    private static bool IsClamp(BinTreeStruct sampler) =>
+        sampler.Properties.TryGetValue(F_addressU, out var p)
+        && p is BinTreeU32 { Value: 1 };
+
     private static IEnumerable<BinTreeStruct> Passes(BinTreeObject o)
     {
         if (!o.Properties.TryGetValue(F_techniques, out var tp) || tp is not BinTreeContainer tc) yield break;
