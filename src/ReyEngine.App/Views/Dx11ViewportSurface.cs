@@ -10,6 +10,7 @@ using ReyEngine.App.Services;
 using ReyEngine.App.ViewModels;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Rendering;
+using ReyEngine.Core.Cinematics;
 using ReyEngine.Rendering.D3D11;
 
 namespace ReyEngine.App.Views;
@@ -164,6 +165,80 @@ public sealed class Dx11ViewportSurface : IDisposable
     }
 
     private float _lastParticleTime = -1f;
+
+    // ---- M605: cinematic capture ------------------------------------------------------------------
+    //
+    // A capture frame is the ordinary frame with four things taken over: the camera comes from the shot
+    // rather than the editor, TIME comes from the frame index rather than the wall clock, the size is the
+    // export size rather than the control's, and the result is returned instead of presented.
+    //
+    // Held as a FIELD rather than threaded through Render's signature because it has to reach four places
+    // inside one synchronous call - the settings, the particle view, the particle tick and the tail - and
+    // a four-parameter overload of a method this long is harder to read than a field that is set and
+    // cleared within the same call. Never non-null across an await; RenderCaptureFrame is synchronous.
+    private readonly record struct CaptureRequest(Matrix4x4 View, Matrix4x4 Projection, Vector3 Position, float TimeSeconds);
+
+    private CaptureRequest? _capture;
+
+    /// <summary>
+    /// Take the viewport out of live mode for the duration of a capture and put it back afterwards.
+    ///
+    /// <para>The particle clock is the reason this exists. <see cref="ParticleDelta"/> is a difference
+    /// against the last tick, so walking the shot's timeline would otherwise hand the live viewport one
+    /// enormous delta on its next frame - every particle system on the map jumping forward by however
+    /// long the export took. Resetting it on the way in also gives the first captured frame a delta of
+    /// zero rather than a jump from whenever the viewport last drew.</para>
+    ///
+    /// <para>Wireframe and the gizmo are cleared here because they are the two pieces of editor
+    /// decoration this surface owns. The markers, icons and overlays belong to the view-model - Game Mode
+    /// already hides that set and restores it, so a capture turns Game Mode on rather than growing a
+    /// second switch that means the same thing.</para>
+    /// </summary>
+    public IDisposable BeginCapture()
+    {
+        var restore = new CaptureScope(this, _lastParticleTime, _frozenTime, Wireframe);
+        _lastParticleTime = -1f;
+        Wireframe = false;
+        _renderer.SetGizmoLines(null, null, null);
+        return restore;
+    }
+
+    private sealed class CaptureScope : IDisposable
+    {
+        private readonly Dx11ViewportSurface _surface;
+        private readonly float _particleTime, _frozen;
+        private readonly bool _wireframe;
+
+        public CaptureScope(Dx11ViewportSurface surface, float particleTime, float frozen, bool wireframe)
+        { _surface = surface; _particleTime = particleTime; _frozen = frozen; _wireframe = wireframe; }
+
+        public void Dispose()
+        {
+            _surface._capture = null;
+            _surface._lastParticleTime = _particleTime;
+            _surface._frozenTime = _frozen;
+            _surface.Wireframe = _wireframe;
+        }
+    }
+
+    /// <summary>
+    /// Render one frame of a cinematic shot and hand back its pixels as BGRA, top-down. Null when the
+    /// surface is not ready or the renderer produced nothing.
+    /// </summary>
+    /// <param name="camera">The live camera, for the two things a free pose has no opinion about: its
+    /// <c>Distance</c> drives the particle distance cull, and its near/far planes keep a captured frame
+    /// clipping exactly as the preview does.</param>
+    public byte[]? RenderCaptureFrame(CinematicPose pose, int width, int height, float timeSeconds, OrbitCamera camera)
+    {
+        if (!_ready || width <= 0 || height <= 0) return null;
+        // The live camera's own near/far, so a captured frame clips exactly as the preview it was framed
+        // in - see CinematicPose.Projection.
+        _capture = new CaptureRequest(pose.ViewMatrix,
+            pose.Projection((float)width / height, camera.EffectiveNear, camera.Far),
+            pose.Position, timeSeconds);
+        try { return Render(camera, width, height) ? LastPixels : null; }
+        finally { _capture = null; }
+    }
 
     /// <summary>
     /// <para>M266: seconds since the last particle tick, read off the SAME clock the TIME constant uses.</para>
@@ -331,7 +406,7 @@ public sealed class Dx11ViewportSurface : IDisposable
 
         // Hoisted out of the settings initialiser because the particle tick below needs the same value:
         // one clock reading per frame, or the shader animation and the particles would drift apart.
-        float t = AnimationTime();
+        float t = _capture?.TimeSeconds ?? AnimationTime();
 
         // M295: prop idle animations, off the SAME clock as everything else in this viewport - so pausing
         // pauses props too. GL drives these from a dedicated stopwatch; that divergence is deliberate and
@@ -343,9 +418,9 @@ public sealed class Dx11ViewportSurface : IDisposable
             // The editor camera is authoritative. Supplying the matrices directly rather than copying
             // yaw/pitch/distance keeps the two viewports genuinely on the same camera - a reconstructed
             // one drifts, and a drifting camera makes an A/B comparison meaningless.
-            SuppliedView = camera.View,
-            SuppliedProjection = camera.Projection((float)width / height),
-            SuppliedCameraPosition = camera.Position,
+            SuppliedView = _capture?.View ?? camera.View,
+            SuppliedProjection = _capture?.Projection ?? camera.Projection((float)width / height),
+            SuppliedCameraPosition = _capture?.Position ?? camera.Position,
 
             // M240's verified map preset. Mirror X matters: League data is authored in the opposite
             // handedness, and without it the DX11 image is mirrored against the GL one, which would read
@@ -423,10 +498,11 @@ public sealed class Dx11ViewportSurface : IDisposable
         // run against a null playback, so this costs nothing when there is nothing to draw.
         if (Particles is not null)
         {
-            var particleView = camera.View;
+            var particleView = _capture?.View ?? camera.View;
             if (settings.MirrorX) particleView = Matrix4x4.CreateScale(-1f, 1f, 1f) * particleView;
             Particles.Tick(ParticleDelta(t), particleView,
-                particleView * settings.SuppliedProjection!.Value, camera.Position, camera.Distance);
+                particleView * settings.SuppliedProjection!.Value,
+                _capture?.Position ?? camera.Position, camera.Distance);
             ParticleStatus = Particles.FrameReport();
             // Surface the BUILD report too, but only when it names a failure. It records unresolved
             // sprites, emitters whose permutation would not resolve, and a missing shader TOC - and it
@@ -449,6 +525,11 @@ public sealed class Dx11ViewportSurface : IDisposable
         LastCulled = _renderer.CulledSlices;
         ShadowDraws = _renderer.ShadowDraws;       // M466
         ShadowRadius = _renderer.ShadowRadius;
+
+        // A capture is read back, not shown. Presenting it would reallocate both display bitmaps at the
+        // export size - two 4K buffers per frame - and leave Current pointing at one the control is not
+        // sized for.
+        if (_capture is not null) { LastFrameMs = frameClock.Elapsed.TotalMilliseconds; return true; }
 
         EnsureBitmaps(width, height);
         var target = ReferenceEquals(Current, _front) ? _back : _front;

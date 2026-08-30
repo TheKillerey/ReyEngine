@@ -55,8 +55,16 @@ public readonly record struct CinematicPose(Vector3 Position, Quaternion Orienta
 
     public Matrix4x4 ViewMatrix => Matrix4x4.CreateLookAt(Position, Position + Forward, Up);
 
-    public Matrix4x4 Projection(float aspect) =>
-        Matrix4x4.CreatePerspectiveFieldOfView(FieldOfView, aspect, 1f, 200000f);
+    /// <summary>The frustum, with the near and far planes SUPPLIED rather than assumed.
+    ///
+    /// <para>The editor camera does not use a fixed near plane - it derives one from its distance
+    /// (<c>OrbitCamera.EffectiveNear</c>) so close-up framing does not clip. Hardcoding one here would
+    /// make a captured frame clip differently from the preview it was framed in, which is precisely the
+    /// "it looked right in the viewport" failure this whole mode exists to avoid. The capture passes the
+    /// live camera's own values so the two agree exactly.</para></summary>
+    public Matrix4x4 Projection(float aspect, float near = 1f, float far = 200000f) =>
+        Matrix4x4.CreatePerspectiveFieldOfView(FieldOfView, aspect <= 0f ? 1f : aspect,
+            MathF.Max(0.01f, near), MathF.Max(near + 0.02f, far));
 }
 
 /// <summary>
