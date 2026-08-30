@@ -101,10 +101,12 @@
         <MenuItem Header="Workshop..." Command="{Binding OpenWorkshopCommand}"
                   ToolTip.Tip="Browse one real game material per shader and every unique installed particle, then add a complete template directly to the open map" />
         <MenuItem Header="Port Legacy NVR / WGEO into Open Map..." Command="{Binding PortLegacyMapCommand}"
+                  Classes.newFeature="{Binding NewFeature[legacy-map-port]}"
                   ToolTip.Tip="Replace the open mapgeo's ordinary geometry from an old room.nvr or room.wgeo, port unique textures and shared editable materials, and retain the destination render regions" />
         <Separator />
         <!-- M580: the Blender link. Geometry out, placements back. -->
         <MenuItem Header="{Binding BlenderLinkMenuHeader}" Command="{Binding ToggleBlenderLinkCommand}"
+                  Classes.newFeature="{Binding NewFeature[blender-link]}"
                   ToolTip.Tip="Serve the open map's meshes to Blender on 127.0.0.1 so they can be edited there and their placements pushed back. Install tools/blender/reyengine_bridge.py in Blender, then use the ReyEngine tab in its 3D-view sidebar. Geometry only - materials stay here." />
         <MenuItem Header="{Binding BlenderLinkStatus}" IsEnabled="False" />
         <Separator />
@@ -140,10 +142,13 @@
         </MenuItem>
         <Separator />
         <MenuItem Header="Materials…" Command="{Binding OpenMaterialBrowserCommand}"
+                  Classes.newFeature="{Binding NewFeature[material-browser]}"
                   ToolTip.Tip="Every material in the open map with the meshes using it, its textures, and what is wrong with it — missing materials, uncooked permutations, macros the shader ignores, tints away from the shader's default. Filter, tick several, and select the meshes they affect." />
         <MenuItem Header="Edit Bin as Text (ritobin)…" Command="{Binding OpenRitobinEditorCommand}"
+                  Classes.newFeature="{Binding NewFeature[ritobin-editor]}"
                   ToolTip.Tip="Open the selected .bin as ritobin #PROP_text — the format the modding community edits bins in, usually saved as .py. Editable, with import/export, and written back byte-exactly; nothing is saved unless the text parses and the result reads back cleanly." />
         <MenuItem Header="Second UV (Texcoord7)…" Command="{Binding OpenUvEditorCommand}"
+                  Classes.newFeature="{Binding NewFeature[second-uv]}"
                   ToolTip.Tip="See a mesh's UV layout drawn against the 0..1 square, compare it with Texcoord0, and rewrite the second UV set — as a world-planar canvas, a copy of the diffuse UVs, or a scale/offset of what is there. Only the UV floats change; the vertex layout is untouched." />
         <MenuItem Header="Recolor Textures…" Command="{Binding OpenTextureRecolorCommand}"
                   ToolTip.Tip="Recolour map surfaces, placed mobs / animated props and baked lightmaps — hue, saturation, levels and tint across as many as you like. Every texture is re-derived from Riot's original, so re-tuning never stacks compression loss, and each one keeps its own pixel format and mip chain" />
@@ -168,6 +173,7 @@
           <MenuItem Header="Cleanup Project…" Command="{Binding CleanupProjectCommand}"
                     ToolTip.Tip="Find files nothing can load and project copies that are identical to the Riot original. Scan first, review a full preview, then move the selection into a project-local backup you can undo — nothing is deleted outright" />
           <MenuItem Header="Patch Update Wizard…" Command="{Binding OpenPatchUpdateWizardCommand}"
+                  Classes.newFeature="{Binding NewFeature[patch-update]}"
                     ToolTip.Tip="Update this mod to the current patch: old originals from CommunityDragon + three-way merge carries only the mod's edits onto the new base — with backups, a per-bin report and validation" />
         </MenuItem>
         <MenuItem Header="Hashes &amp; Names">
@@ -196,6 +202,7 @@
         <!-- M470: writes SOURCE files into LTK Manager's watched workshop folder, not a package into its
              library — its library.json also holds the user's profiles, enabled set and mod order. -->
         <MenuItem Header="Send to LTK Manager" Command="{Binding SendToLtkManagerCommand}"
+                  Classes.newFeature="{Binding NewFeature[ltk-manager]}"
                   ToolTip.Tip="Copy this project into LTK Manager's workshop folder as a source mod, creating it or updating it in place. The workshop path is read from LTK Manager's own settings. Updating replaces the mod's content layer so deleted files disappear too, and merges mod.config.json rather than overwriting it, so tags, maps and layer descriptions survive. Your profiles, enabled mods and mod order are never touched." />
         <MenuItem Header="Project Settings…" Command="{Binding OpenProjectSettingsCommand}" />
         <MenuItem Header="Manage Riot References…" Command="{Binding ManageRiotReferencesCommand}" />
@@ -691,6 +698,7 @@
               <!-- NavGrid keeps its own control: it carries a layer list, which does not fold into a
                    checkbox, and it is read constantly while judging bush and wall placement. -->
               <SplitButton Classes="vp" Content="🌿 NavGrid"
+                  Classes.newFeature="{Binding NewFeature[navgrid-overlay]}"
                            Command="{Binding ToggleNavGridOverlayCommand}"
                            ToolTip.Tip="Show the map's navigation grid on its 50-unit lattice, read from assets/maps/navgrid/&lt;map&gt;/aipath.aimesh_ngrid. Click to switch the overlay on; use the arrow to choose which flags to draw. The flags are NOT named - the editor reports the mask and how many cells carry it, and you decide what each one is by looking at where it lands.">
                 <SplitButton.Flyout>
@@ -831,6 +839,7 @@
                               ToolTip.Tip="Snap to increments — 100u move · 15° rotate · 0.25× scale" />
                 <Border Width="1" Margin="4,2" Background="{DynamicResource ReyBorderBrush}" />
                 <ToggleButton Classes="vp" Content="◩ Faces" IsChecked="{Binding FaceEditMode}"
+                  Classes.newFeature="{Binding NewFeature[face-editing]}"
                               ToolTip.Tip="Face mode: click a face of the map to select it, Ctrl+click to add or remove, Esc to clear. Delete removes the selected faces, F flips them, and the gizmo moves them. Nothing reaches the file until Save Map Content Edits - a deleted face is collapsed to zero area rather than cut out, so the mapgeo keeps its layout." />
                 <TextBlock Text="{Binding SelectedFaceCount, StringFormat='{}{0} face(s)'}"
                            IsVisible="{Binding FaceEditMode}" FontSize="10" VerticalAlignment="Center"

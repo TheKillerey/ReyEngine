@@ -28,10 +28,30 @@ public static class NewFeatures
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
     ///
-    /// <para>Empty until the release list is agreed. Populating it is a deliberate editorial act, not a
-    /// side effect of writing code — see the class remarks.</para>
+    /// <para>Each id is bound by one control in the UI, so this list and the marked controls have to move
+    /// together: an entry with nothing bound to it glows nowhere, and a control bound to an id that is not
+    /// here goes quiet (see <see cref="IsNew"/>). Nine entries for nine controls.</para>
+    ///
+    /// <para>What is NOT here is the point of the list — see the class remarks. Internal work, research,
+    /// renderer plumbing and anything unfinished stays out, however large it was.</para>
     /// </summary>
-    public static IReadOnlyList<NewFeature> All { get; private set; } = Array.Empty<NewFeature>();
+    public static IReadOnlyList<NewFeature> All { get; private set; } = Shipping;
+
+    /// <summary>The list this build actually ships, kept separate from <see cref="All"/> so it stays
+    /// inspectable after a test has swapped the registry out — <see cref="SetRegistry"/> mutates static
+    /// state, and a test that asserts against the real list must not be at the mercy of run order.</summary>
+    public static IReadOnlyList<NewFeature> Shipping { get; } = new NewFeature[]
+    {
+        new("blender-link",     "0.4.0", "Live Blender link — edit map geometry in Blender and push it back"),
+        new("face-editing",     "0.4.0", "Face editing in the viewport — move, extrude and inset faces"),
+        new("navgrid-overlay",  "0.4.0", "NavGrid overlay — see the gameplay bush and every navgrid layer"),
+        new("legacy-map-port",  "0.4.0", "Legacy map port now carries particles, sounds and lights across"),
+        new("ritobin-editor",   "0.4.0", "Edit a .bin as ritobin text and write it back byte-exactly"),
+        new("material-browser", "0.4.0", "Material browser — audit every material and copy one look onto many"),
+        new("second-uv",        "0.4.0", "Second UV (Texcoord7) viewer and editor"),
+        new("patch-update",     "0.4.0", "Patch Update Wizard — carry a mod onto a new Riot patch"),
+        new("ltk-manager",      "0.4.0", "Send to LTK Manager — create or update a workshop mod in place"),
+    };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever
     /// the shipping list happens to contain.</summary>

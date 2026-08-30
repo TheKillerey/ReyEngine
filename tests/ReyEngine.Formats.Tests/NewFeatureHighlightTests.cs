@@ -13,6 +13,10 @@ namespace ReyEngine.Formats.Tests;
 /// the field, so it reads as empty, and empty must sort below every real version or they would see
 /// nothing.</para>
 /// </summary>
+/// <summary>M602: shares a collection with NewFeatureRegistryWiringTests. Both mutate NewFeatures'
+/// STATIC registry, and xUnit runs classes in parallel by default - so without this they race and the
+/// loser sees the other's fixture data.</summary>
+[Collection(NewFeatureRegistryCollection.Name)]
 public sealed class NewFeatureHighlightTests : IDisposable
 {
     private readonly IReadOnlyList<NewFeature> _original = NewFeatures.All;
