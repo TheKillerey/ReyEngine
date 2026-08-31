@@ -390,10 +390,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         Func<ulong, byte[]?>? readAsset = null,
         IEnumerable<(string Path, ulong Hash)>? binAssets = null,
         Func<uint, string?>? resolveBinName = null,
-        IEnumerable<(string Path, ulong Hash)>? sceneAssets = null,
-        IEnumerable<(string Path, ulong Hash)>? animationAssets = null)
+        IEnumerable<(string Path, ulong Hash)>? sceneAssets = null)
     {
-        if (animationAssets is not null) _allAnimations.AddRange(animationAssets);
         _readAsset = readAsset;
         _resolveBinName = resolveBinName ?? (_ => null);
         if (binAssets is not null)
@@ -813,7 +811,6 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
         // M240: the render-state preset follows the CONTENT, not the last thing the user toggled.
         ApplyPreset(asset.IsMap ? PreviewKind.Map : PreviewKind.Character);
-        LoadSkeletonFor(asset);   // M615: and its skeleton, so the mesh can actually move
 
         // M244: the CPU half runs off the UI thread. Everything below this point that touches D3D stays
         // on it - device resource creation is free-threaded, but the immediate context is NOT, and the
@@ -1899,7 +1896,6 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         float dt = (float)Math.Clamp((now0 - _lastTick).TotalSeconds, 0.0, 0.25);
         _lastTick = now0;
         ApplyCameraInput(dt);
-        AdvanceAnimation(dt);      // M615: rebuild the bone palette for this frame
         _frameCounter++;
 
         // M233: advance the simulation and rebuild this frame's quads. Paused still rebuilds once so the

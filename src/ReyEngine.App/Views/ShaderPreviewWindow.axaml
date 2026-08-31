@@ -160,7 +160,7 @@
                       HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,7"
                       IsEnabled="{Binding SelectedSceneAsset, Converter={x:Static ObjectConverters.IsNotNull}}" />
 
-              <Grid RowDefinitions="*,4,*,Auto,Auto">
+              <Grid RowDefinitions="*,4,*,Auto">
                 <ListBox Grid.Row="0" ItemsSource="{Binding SceneAssets}" SelectedItem="{Binding SelectedSceneAsset}"
                          FontFamily="Consolas" FontSize="10.5">
                   <ListBox.ItemTemplate>
@@ -198,33 +198,7 @@
                   </ListBox.ItemTemplate>
                 </ListBox>
 
-                <!-- M615: the D3D11 renderer can pose a skeleton now. The .skl is found beside the .skn;
-                     clips are the .anm files shipped for the same character. -->
-                <StackPanel Grid.Row="3" Spacing="4" Margin="0,6,0,0" IsVisible="{Binding HasSkeleton}">
-                  <TextBlock Text="ANIMATION" FontSize="10" FontWeight="Bold" Opacity="0.6"
-                             Foreground="{DynamicResource ReyTextBrush}" />
-                  <ComboBox HorizontalAlignment="Stretch" FontSize="10.5" MaxDropDownHeight="400"
-                            PlaceholderText="Bind pose"
-                            ItemsSource="{Binding Animations}" SelectedItem="{Binding SelectedAnimation}"
-                            IsVisible="{Binding HasAnimations}">
-                    <ComboBox.ItemTemplate>
-                      <DataTemplate x:DataType="vm:PreviewAnimationRow">
-                        <TextBlock Text="{Binding Name}" FontSize="10.5" ToolTip.Tip="{Binding Path}" />
-                      </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                  </ComboBox>
-                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6" IsVisible="{Binding HasAnimations}">
-                    <CheckBox Grid.Column="0" Content="Play" IsChecked="{Binding AnimationPlaying}" FontSize="10.5" />
-                    <Slider Grid.Column="1" Minimum="0.05" Maximum="3" Value="{Binding AnimationSpeed}" />
-                    <TextBlock Grid.Column="2" VerticalAlignment="Center" FontSize="10" Opacity="0.6"
-                               Foreground="{DynamicResource ReyTextBrush}"
-                               Text="{Binding AnimationSpeed, StringFormat='{}{0:0.0}x'}" />
-                  </Grid>
-                  <TextBlock Text="{Binding AnimationStatus}" FontSize="9.5" Opacity="0.55" TextWrapping="Wrap"
-                             Foreground="{DynamicResource ReyTextBrush}" />
-                </StackPanel>
-
-                <ScrollViewer Grid.Row="4" MaxHeight="200" HorizontalScrollBarVisibility="Auto" Margin="0,6,0,0">
+                <ScrollViewer Grid.Row="3" MaxHeight="200" HorizontalScrollBarVisibility="Auto" Margin="0,6,0,0">
                   <SelectableTextBlock Text="{Binding SceneReport}" FontFamily="Consolas" FontSize="10"
                                        TextWrapping="NoWrap"
                                        Foreground="{DynamicResource ReyTextBrush}" />
