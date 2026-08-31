@@ -10801,6 +10801,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MeshPreview.SetVoiceEvents(TryLoadVoiceEvents(entry));   // M95c: authored VO lines
                 MeshPreview.SetActions(BuildCharacterActions(entry, clipsByAnm));   // M612: Q/W/E/R, move, recall
                 MeshPreview.SetDx11Scene(dx11.Scene, dx11.Status);                  // M618: Riot's own shaders
+                // M619: the D3D11 particle driver takes its shaders from here. Opened lazily with the
+                // first scene build, so it is pushed on every load rather than once.
+                MeshPreview.Dx11ShaderCache = _dx11ShaderCache;
                 MeshInspector.ShowMesh(mesh, skeleton);
                 ShowMeshPreviewWindow?.Invoke();
                 _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris — model preview window.");

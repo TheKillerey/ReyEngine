@@ -36,7 +36,20 @@ public static class BonePalette
     /// </summary>
     /// <param name="clip">Null for the bind pose, which is a legitimate thing to ask for — it is what a
     /// character with no animation selected should show.</param>
-    public static Matrix4x4[] Build(SkeletonAsset skeleton, AnimationClip? clip, float time)
+    public static Matrix4x4[] Build(SkeletonAsset skeleton, AnimationClip? clip, float time) =>
+        BuildWithSegments(skeleton, clip, time, wantSegments: false).Palette;
+
+    /// <summary>
+    /// M619: the palette AND the bone segments, from one walk of the skeleton.
+    ///
+    /// <para>The GL viewport gets its segments from <see cref="SkinnedMeshAnimator.Skin"/>, which computes
+    /// them as a by-product of transforming every vertex on the CPU. A GPU-skinned path has no reason to
+    /// pay that: the segments are joint positions, and the joint globals are already computed here. On a
+    /// 108-bone champion this is a few hundred multiplies instead of a pass over 30,000 vertices, every
+    /// frame the overlay is on.</para>
+    /// </summary>
+    public static (Matrix4x4[] Palette, float[] Segments) BuildWithSegments(
+        SkeletonAsset skeleton, AnimationClip? clip, float time, bool wantSegments = true)
     {
         var pose = new Dictionary<uint, (Quaternion Rotation, Vector3 Translation, Vector3 Scale)>();
         if (clip is not null)
@@ -44,7 +57,7 @@ public static class BonePalette
             catch { /* a clip that will not evaluate falls back to the bind pose, as the CPU skinner does */ }
 
         var joints = skeleton.Joints;
-        if (joints.Count == 0) return Bind(1);
+        if (joints.Count == 0) return (Bind(1), Array.Empty<float>());
 
         int maxId = 0;
         foreach (var j in joints) maxId = Math.Max(maxId, j.Id);
@@ -84,7 +97,20 @@ public static class BonePalette
             int jointId = influences.Count > 0 ? influences[slot] : slot;
             palette[slot] = (uint)jointId <= maxId ? skin[jointId] : Matrix4x4.Identity;
         }
-        return palette;
+
+        if (!wantSegments) return (palette, Array.Empty<float>());
+
+        // One line per joint that has a parent, exactly the pairs the GL overlay draws.
+        var segments = new List<float>(joints.Count * 6);
+        foreach (var j in joints)
+        {
+            if (j.ParentId < 0 || !byId.ContainsKey(j.ParentId)) continue;
+            var a = Global(j.Id).Translation;
+            var b = Global(j.ParentId).Translation;
+            segments.Add(a.X); segments.Add(a.Y); segments.Add(a.Z);
+            segments.Add(b.X); segments.Add(b.Y); segments.Add(b.Z);
+        }
+        return (palette, segments.ToArray());
     }
 
     /// <summary>Same composition the CPU skinner uses, kept identical so the two paths cannot drift.</summary>

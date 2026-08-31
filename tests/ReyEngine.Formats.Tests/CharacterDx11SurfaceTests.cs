@@ -147,7 +147,11 @@ public sealed class CharacterDx11SurfaceTests
         if (!File.Exists(surface) || !File.Exists(window)) return;
 
         Assert.Contains("BonePalette = BonePalette", File.ReadAllText(surface));
-        Assert.Contains("_dx11.BonePalette = vm.CurrentBonePalette()", File.ReadAllText(window));
+        // M619 moved the source from CurrentBonePalette to CurrentPose, so that the palette and the
+        // skeleton overlay come from ONE walk of the joints. The link is what matters, not the call.
+        string text = File.ReadAllText(window);
+        Assert.Contains("_dx11.BonePalette = palette", text);
+        Assert.Contains("vm.CurrentPose(", text);
     }
 
     [Fact]

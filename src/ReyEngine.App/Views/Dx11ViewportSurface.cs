@@ -78,6 +78,9 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// by the character preview; every other host leaves it null and renders exactly as it always has.</summary>
     public System.Numerics.Matrix4x4[]? BonePalette { get; set; }
 
+    /// <summary>M619: the animated skeleton, as the position pairs the GL overlay draws. Null clears it.</summary>
+    public float[]? BoneLines { get; set; }
+
     /// <summary>
     /// <para>M261: the map's own lighting, from the same source the GL viewport binds to
     /// (<c>CurrentSunProperties</c>). Until now this surface supplied NONE of it, so every scene rendered
@@ -421,6 +424,8 @@ public sealed class Dx11ViewportSurface : IDisposable
         // pauses props too. GL drives these from a dedicated stopwatch; that divergence is deliberate and
         // noted here rather than left to be discovered.
         Props?.Tick(t, PlayPropAnimations);
+
+        _renderer.SetBoneLines(BoneLines);   // M619
 
         var settings = new PreviewSettings
         {

@@ -2493,6 +2493,12 @@ float4 psmain(VOut i) : SV_Target
     private ComPtr<ID3D11Buffer> _bakeBoxVb;   // M412: bake-volume preview lines
     private int _bakeBoxVbCapacity;
     private int _bakeBoxVerts;
+    // M619: the skeleton overlay. Its own small VB for the same reason the bake box has one - it is
+    // rewritten EVERY FRAME while an animation plays, and sharing a channel with anything larger would
+    // re-upload that too, sixty times a second.
+    private ComPtr<ID3D11Buffer> _boneVb;
+    private int _boneVbCapacity;
+    private int _boneVerts;
     private int _gizmoTotalVerts;
 
     /// <summary>
@@ -2571,6 +2577,63 @@ float4 psmain(VOut i) : SV_Target
             System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
         _ctx.Unmap(_brushRingVb, 0);
         _brushRingVerts = verts.Length / 3;
+    }
+
+    /// <summary>M619: the animated skeleton, as the same position pairs the GL viewport draws
+    /// (<c>SkinnedFrame.BoneSegments</c>). Null clears it.</summary>
+    public void SetBoneLines(float[]? verts)
+    {
+        _boneVerts = 0;
+        if (verts is null || verts.Length < 6 || !EnsureOverlay()) return;
+
+        int bytes = verts.Length * sizeof(float);
+        if (_boneVbCapacity < bytes || _boneVb.Handle is null)
+        {
+            _boneVb.Dispose();
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)bytes, Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> vb = default;
+            if (_device.CreateBuffer(in desc, null, ref vb) < 0) { Log("bone vertex buffer failed"); return; }
+            _boneVb = vb; _boneVbCapacity = bytes;
+        }
+
+        var map = new MappedSubresource();
+        if (_ctx.Map(_boneVb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        fixed (float* p = verts)
+            System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
+        _ctx.Unmap(_boneVb, 0);
+        _boneVerts = verts.Length / 3;
+    }
+
+    private int DrawBoneLines(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_boneVerts == 0 || _boneVb.Handle is null || !EnsureOverlay()) return 0;
+
+        var mvp = Matrix4x4.Multiply(view, proj);
+        _ctx.IASetInputLayout(_overlayLayout);
+        _ctx.VSSetShader(_overlayVs, null, 0);
+        _ctx.PSSetShader(_overlayPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
+
+        uint stride = 3 * sizeof(float), offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _boneVb, in stride, in offset);
+        _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        // No depth test, exactly as GL draws it: a skeleton you can only see where it pokes out of the
+        // mesh is not a skeleton overlay.
+        _ctx.OMSetDepthStencilState(_overlayDepthNoTest, 0);
+
+        // GL's (1.0, 0.65, 0.2). The two viewports must draw the same bones the same colour or an A/B
+        // between them turns into a discussion about the colour.
+        SetOverlayCb(mvp, new Vector4(1.0f, 0.65f, 0.2f, 1f));
+        _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.Draw((uint)_boneVerts, 0);
+
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
+        return 1;
     }
 
     /// <summary>M412: the bucket-grid bake volume, built by ViewportMeshRenderer.BuildBoxLines so both
@@ -4605,6 +4668,7 @@ float4 psmain(VOut i) : SV_Target
             int gizmoDraws = DrawGizmo(view, proj);
  DrawBrushRing(view, proj);   // M361: after the gizmo, same overlay pipeline      // M296, last so it is over everything
             DrawBakeBox(view, proj);     // M412: same overlay pipeline
+            DrawBoneLines(view, proj);   // M619: the skeleton, same overlay pipeline
             DrawCalls += HighlightDraws + IconDraws + gridDraws + gizmoDraws + lightDraws;
 
             _ctx.CopyResource(_stage, _rt);
@@ -4843,6 +4907,7 @@ float4 psmain(VOut i) : SV_Target
         _gridVs.Dispose(); _gridPs.Dispose(); _gridLayout.Dispose(); _gridVb.Dispose();
         _gizmoVb.Dispose();
         _bakeBoxVb.Dispose();
+        _boneVb.Dispose();   // M619
         DisposeSky();
         DisposeRibbon();
         DisposeDynamicLights();

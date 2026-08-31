@@ -114,11 +114,32 @@ public partial class MeshPreviewWindow
             }
         }
 
-        // The bone palette for THIS frame, off the same clock the GL path animates with. Null when the
-        // subject has no skeleton, which leaves the renderer's bind-pose constant in place.
-        _dx11.BonePalette = vm.CurrentBonePalette();
+        // The pose for THIS frame, off the same clock the GL path animates with. Null palette leaves the
+        // renderer's bind-pose constant in place, which is right for anything unskinned.
+        var (palette, bones) = vm.CurrentPose(vm.ShowBones);
+        _dx11.BonePalette = palette;
+        _dx11.BoneLines = bones;
         _dx11.Wireframe = vm.Wireframe;
         _dx11.CullBackFaces = vm.CullBackfaces;
+
+        // M619: the VFX. The SAME playback object the GL viewport is bound to in XAML, so both viewports
+        // show the same effect at the same age rather than two independent simulations.
+        _dx11.ShaderCache = vm.Dx11ShaderCache;
+        _dx11.ParticlePlayback = vm.Playback;
+
+        // M619: the target dummy's translate gizmo, built by ViewportMeshRenderer's own builder at the arm
+        // length PreviewViewport.HitTestGizmoAxis measures against - so what is DRAWN and what is
+        // GRABBABLE are the same geometry by construction, which is the whole reason the map viewport
+        // builds it this way too.
+        if (vm.DummyGizmoPivot is { } pivot)
+        {
+            float arm = PreviewViewport.GizmoArmLengthFor(pivot);
+            _dx11.Renderer.SetGizmoLines(
+                Rendering.ViewportMeshRenderer.BuildGizmoAxis(0, pivot, System.Numerics.Vector3.UnitX, arm),
+                Rendering.ViewportMeshRenderer.BuildGizmoAxis(0, pivot, System.Numerics.Vector3.UnitY, arm),
+                Rendering.ViewportMeshRenderer.BuildGizmoAxis(0, pivot, System.Numerics.Vector3.UnitZ, arm));
+        }
+        else _dx11.Renderer.SetGizmoLines(null, null, null);
 
         if (!_dx11.Render(PreviewViewport.Camera, w, h)) return;
 

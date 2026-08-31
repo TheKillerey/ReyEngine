@@ -48,6 +48,20 @@ public sealed partial class MeshPreviewViewModel
         return BonePalette.Build(skeleton, CurrentAnimation, (float)AnimationTime);
     }
 
+    /// <summary>M619: the palette and the skeleton overlay from ONE walk of the joints. Two calls would
+    /// evaluate the clip twice per frame for the same instant, which is pure waste and one refactor away
+    /// from being two different instants.</summary>
+    public (Matrix4x4[]? Palette, float[]? Bones) CurrentPose(bool wantBones)
+    {
+        if (Skeleton is not { } skeleton) return (null, null);
+        var (palette, segments) = BonePalette.BuildWithSegments(
+            skeleton, CurrentAnimation, (float)AnimationTime, wantBones);
+        return (palette, wantBones && segments.Length > 0 ? segments : null);
+    }
+
+    /// <summary>The shader cache the D3D11 particle driver needs. Supplied by the host, which owns it.</summary>
+    public Formats.Shaders.ShaderCacheReader? Dx11ShaderCache { get; set; }
+
     partial void OnUseDx11PreviewChanged(bool value)
     {
         if (!value) { Dx11Status = ""; return; }
