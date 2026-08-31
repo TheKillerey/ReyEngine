@@ -469,9 +469,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             };
         }
 
-        foreach (var h in ev.CasterSystems) if (Make(h, System.Numerics.Vector3.Zero, null) is { } i) items.Add(i);
+        // M613: the caster is wherever the character is standing, not the origin. Bone-attached systems
+        // ride the model matrix and always followed; these free-standing ones were spawning back at the
+        // world origin, so every spell fired at the spot the character started from.
+        var caster = CharacterPosition;
+        foreach (var h in ev.CasterSystems) if (Make(h, caster, null) is { } i) items.Add(i);
         foreach (var h in ev.TargetSystems) if (Make(h, dummy, null) is { } i) items.Add(i);
-        foreach (var h in ev.MissileSystems) if (Make(h, System.Numerics.Vector3.Zero, dummy) is { } i) items.Add(i);
+        foreach (var h in ev.MissileSystems) if (Make(h, caster, dummy) is { } i) items.Add(i);
         return items;
     }
 

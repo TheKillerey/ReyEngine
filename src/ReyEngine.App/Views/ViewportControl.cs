@@ -301,7 +301,7 @@ public sealed class ViewportControl : OpenGlControlBase
 
     public double ModelScale { get => GetValue(ModelScaleProperty); set => SetValue(ModelScaleProperty, value); }
     public Vector3 ModelPosition { get => GetValue(ModelPositionProperty); set => SetValue(ModelPositionProperty, value); }
-    /// <summary>Radians. 0 faces -Z, the direction champion meshes are authored to face.</summary>
+    /// <summary>Radians about Y. 0 faces +Z — measured against the viewport, see CharacterController.</summary>
     public double ModelYaw { get => GetValue(ModelYawProperty); set => SetValue(ModelYawProperty, value); }
     public IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? ModelSubmeshMaterials { get => GetValue(ModelSubmeshMaterialsProperty); set => SetValue(ModelSubmeshMaterialsProperty, value); }
     public int MeshVerticesRevision { get => GetValue(MeshVerticesRevisionProperty); set => SetValue(MeshVerticesRevisionProperty, value); }

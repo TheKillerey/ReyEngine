@@ -2704,8 +2704,12 @@ void main(){
 
         if ((showBounds && _boundsVerts > 0) || (showBones && _boneVerts > 0))
         {
+            // M613: through the world transform, like the mesh. Bone segments and bounds are in MODEL
+            // space, so drawing them with the bare view-projection pinned the skeleton to the origin
+            // while the character it belongs to walked away.
+            var lineMvp = _worldModel.IsIdentity ? m : _worldModel * m;
             _gl.UseProgram(_lineProgram);
-            _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+            _gl.UniformMatrix4(_lMvp, 1, false, in lineMvp.M11);
 
             if (showBounds && _boundsVerts > 0)
             {

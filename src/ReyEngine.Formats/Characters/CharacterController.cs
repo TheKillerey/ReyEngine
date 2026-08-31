@@ -49,7 +49,11 @@ public sealed class CharacterController
     public float ArriveEpsilon { get; set; } = 4f;
 
     public Vector3 Position { get; private set; }
-    /// <summary>Yaw in radians, 0 = facing -Z (the direction the meshes are authored to face).</summary>
+    /// <summary>Yaw in radians, 0 = facing +Z.
+    ///
+    /// <para>Measured in the viewport, not assumed: with the -Z convention every left/right order aimed
+    /// correctly and every forward/back one aimed exactly backwards, which is only possible if the sign
+    /// on Z is wrong. A general mirror would have broken both axes.</para></summary>
     public float Facing { get; private set; }
     public CharacterStance Stance { get; private set; } = CharacterStance.Idle;
 
@@ -162,7 +166,7 @@ public sealed class CharacterController
         // answer that does not spin the model.
         if (flat.LengthSquared() < 1e-6f) return;
 
-        float wanted = MathF.Atan2(flat.X, -flat.Z);
+        float wanted = MathF.Atan2(flat.X, flat.Z);
         float delta = Wrap(wanted - Facing);
         float step = TurnSpeed * seconds;
         Facing = Wrap(MathF.Abs(delta) <= step ? wanted : Facing + MathF.Sign(delta) * step);

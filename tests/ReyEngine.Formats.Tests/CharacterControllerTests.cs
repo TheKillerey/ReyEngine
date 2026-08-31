@@ -87,8 +87,10 @@ public sealed class CharacterControllerTests
     [Fact]
     public void TheCharacterFacesWhereItIsWalking()
     {
+        // Yaw 0 is +Z. Measured in the viewport: with the -Z convention, left and right aimed correctly
+        // and forward and back aimed exactly backwards - which only a wrong sign on Z can produce.
         var c = Walker();
-        c.MoveTo(new Vector3(0, 0, -500));    // straight ahead is -Z, which is yaw 0
+        c.MoveTo(new Vector3(0, 0, 500));
         c.Tick(0.1f);
         Assert.Equal(0f, c.Facing, 2);
 
@@ -100,9 +102,14 @@ public sealed class CharacterControllerTests
         Assert.Equal(MathF.PI / 2f, c.Facing, 2);
 
         c.Teleport(Vector3.Zero);
-        c.MoveTo(new Vector3(0, 0, 500));     // behind, half a turn
+        c.MoveTo(new Vector3(0, 0, -500));    // behind, half a turn
         c.Tick(0.1f);
         Assert.Equal(MathF.PI, MathF.Abs(c.Facing), 2);
+
+        c.Teleport(Vector3.Zero);
+        c.MoveTo(new Vector3(-500, 0, 0));    // and left is the other quarter
+        c.Tick(0.1f);
+        Assert.Equal(-MathF.PI / 2f, c.Facing, 2);
     }
 
     [Fact]
@@ -112,7 +119,7 @@ public sealed class CharacterControllerTests
         // the long way: correct final pose, absurd path.
         var c = new CharacterController { MoveSpeed = 100f, TurnSpeed = 1f };
         c.Teleport(Vector3.Zero, facing: 3.0f);            // just under pi
-        c.MoveTo(new Vector3(0, 0, 500));                  // behind: yaw pi
+        c.MoveTo(new Vector3(0, 0, -500));                 // yaw pi: a short turn away from 3.0
 
         c.Tick(0.05f);
 
