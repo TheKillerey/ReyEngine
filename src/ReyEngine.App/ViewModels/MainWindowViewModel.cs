@@ -16011,11 +16011,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .OrderBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        // M615: and the clips, so a character loaded here can be animated rather than posed.
+        var anims = AssetEntries
+            .Where(e => e.IsResolved && e.Path.EndsWith(".anm", StringComparison.OrdinalIgnoreCase))
+            .Select(e => (e.Path, e.PathHash))
+            .OrderBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         var vm = new ShaderPreviewViewModel(dir, _resolver.Database,
             readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
             binAssets: bins,
             resolveBinName: h => _resolver.Database.TryGetBinName(h, out var n) ? n : null,
-            sceneAssets: scenes);
+            sceneAssets: scenes,
+            animationAssets: anims);
 
         if (bins.Count == 0)
             _log.Info("Shader", "No .bin assets are mounted, so the Material tab will be empty. "

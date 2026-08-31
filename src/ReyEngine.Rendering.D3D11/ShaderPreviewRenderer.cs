@@ -147,6 +147,16 @@ public sealed class PreviewSettings
     /// hold the view matrix. Identity was the first guess and it put the mesh on the near plane.</para></summary>
     public BonePose BonePose = BonePose.ViewTransposed;
 
+    /// <summary>M615: per-bone skinning matrices, indexed by influence slot — what
+    /// <c>Formats.Animation.BonePalette.Build</c> produces. Null keeps the M216 behaviour of one constant
+    /// matrix in every slot, which is the bind pose and is what everything that is not an animated
+    /// character wants.
+    ///
+    /// <para>Object-to-object, NOT pre-multiplied by the view: the renderer folds the view in, because it
+    /// is the only place that knows which view this draw is using and a capture renders the same palette
+    /// from a different camera.</para></summary>
+    public Matrix4x4[]? BonePalette;
+
     /// <summary>Rows per bone matrix in <c>BonesCB</c>. League caps skeletons at 256 bones and the buffer is
     /// 12,288 bytes, which is 48 bytes each at 3 rows (a 4x3) or 64 at 4 (a full 4x4 over 192 bones). Both
     /// divide evenly, so this is measured in the app rather than assumed - a wrong stride makes the skeleton
@@ -3617,24 +3627,38 @@ float4 psmain(VOut i) : SV_Target
         {
             int rows = Math.Clamp(s.BoneMatrixRows, 3, 4);
             int stride = rows * 16;
+            var palette = s.BonePalette;
 
-            var m = s.BonePose switch
+            // M615: the whole reason this reduces to the M216 constant is what makes it safe. With no
+            // animation every skinning matrix is identity, so skin * view IS view, and an animated palette
+            // is the same expression with the identity replaced. The known-good bind-pose case is a
+            // special case of this rather than a separate branch.
+            var baseM = s.BonePose switch
             {
-                BonePose.View => view,
-                BonePose.ViewTransposed => Matrix4x4.Transpose(view),
+                BonePose.View or BonePose.ViewTransposed => view,
                 _ => Matrix4x4.Identity,
             };
-            var pose = new[]
-            {
-                m.M11, m.M12, m.M13, m.M14,
-                m.M21, m.M22, m.M23, m.M24,
-                m.M31, m.M32, m.M33, m.M34,
-                m.M41, m.M42, m.M43, m.M44,
-            };
+            bool transpose = s.BonePose is BonePose.ViewTransposed;
 
-            for (int at = 0; at + stride <= bytes.Length; at += stride)
+            var slot = new float[16];
+            int index = 0;
+            for (int at = 0; at + stride <= bytes.Length; at += stride, index++)
+            {
+                // Past the end of the palette the remaining slots stay at the bind pose. A shader may
+                // index a bone the skeleton does not have, and zeroes there collapse that vertex to the
+                // origin and streak a triangle across the screen.
+                var skinM = palette is not null && index < palette.Length ? palette[index] : Matrix4x4.Identity;
+                var m = skinM.IsIdentity ? baseM : skinM * baseM;
+                if (transpose) m = Matrix4x4.Transpose(m);
+
+                slot[0] = m.M11; slot[1] = m.M12; slot[2] = m.M13; slot[3] = m.M14;
+                slot[4] = m.M21; slot[5] = m.M22; slot[6] = m.M23; slot[7] = m.M24;
+                slot[8] = m.M31; slot[9] = m.M32; slot[10] = m.M33; slot[11] = m.M34;
+                slot[12] = m.M41; slot[13] = m.M42; slot[14] = m.M43; slot[15] = m.M44;
+
                 for (int i = 0; i < rows * 4; i++)
-                    BitConverter.TryWriteBytes(bytes.AsSpan(at + i * 4, 4), pose[i]);
+                    BitConverter.TryWriteBytes(bytes.AsSpan(at + i * 4, 4), slot[i]);
+            }
 
             _pendingCb = bytes; _pendingLength = need;
             return;
