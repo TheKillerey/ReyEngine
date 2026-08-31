@@ -24,6 +24,51 @@ public partial class MeshPreviewWindow : Window
         PreviewInput.PointerMoved += OnMoved;
         PreviewInput.PointerReleased += OnReleased;
         PreviewInput.PointerWheelChanged += OnWheel;
+        // M613: ability keys. Tunnelling because a focused list or text box would otherwise eat them.
+        AddHandler(KeyDownEvent, OnControlKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        Closed += (_, _) => (DataContext as MeshPreviewViewModel)?.StopControl();
+    }
+
+    /// <summary>Q/W/E/R cast, S stops. Only while control mode is on, and never while something is
+    /// being typed into — a champion search box would otherwise fire an ability per keystroke.</summary>
+    private void OnControlKey(object? sender, KeyEventArgs e)
+    {
+        if (DataContext is not MeshPreviewViewModel { ControlMode: true } vm) return;
+        if (FocusManager?.GetFocusedElement() is TextBox) return;
+
+        int slot = e.Key switch { Key.Q => 0, Key.W => 1, Key.E => 2, Key.R => 3, _ => -1 };
+        if (slot >= 0) { vm.CastAbility(slot); e.Handled = true; }
+        else if (e.Key == Key.S) { vm.ResetCharacterCommand.Execute(null); e.Handled = true; }
+    }
+
+    /// <summary>M613: a right-click order. On the dummy it is an attack, anywhere else on the ground
+    /// plane it is a move — the same two meanings the right button has in game.</summary>
+    private void OnOrder(Avalonia.Point at, MeshPreviewViewModel vm)
+    {
+        if (!PreviewViewport.TryGetPickRay(at, out var origin, out var dir)) return;
+
+        // The dummy first: clicking a target you can see must never be read as a move order past it.
+        if (vm.TargetDummyPosition is { } dummy && HitsSphere(origin, dir, dummy, 120f))
+        {
+            vm.OrderAttack(dummy);
+            return;
+        }
+
+        // The ground is the plane the character stands on, not y=0 — a preview whose model sits on a
+        // backdrop at another height would otherwise walk through the floor.
+        float planeY = vm.CharacterPosition.Y;
+        if (MathF.Abs(dir.Y) < 1e-5f) return;                 // looking along the plane: no intersection
+        float t = (planeY - origin.Y) / dir.Y;
+        if (t <= 0f) return;                                   // the plane is behind the camera
+        vm.OrderMove(origin + dir * t);
+    }
+
+    private static bool HitsSphere(Vector3 origin, Vector3 dir, Vector3 centre, float radius)
+    {
+        var toCentre = centre - origin;
+        float along = Vector3.Dot(toCentre, dir);
+        if (along < 0f) return false;
+        return (toCentre - dir * along).LengthSquared() <= radius * radius;
     }
 
     private void OnPressed(object? sender, PointerPressedEventArgs e)
@@ -33,6 +78,15 @@ public partial class MeshPreviewWindow : Window
         _mmb = props.IsMiddleButtonPressed;
         _last = e.GetPosition(PreviewInput);
         e.Pointer.Capture(PreviewInput);
+
+        // M613: the right button is the only one control mode claims. Left still orbits, middle still
+        // pans, and the dummy gizmo still takes the left drag first.
+        if (props.IsRightButtonPressed && DataContext is MeshPreviewViewModel { ControlMode: true } order)
+        {
+            OnOrder(_last, order);
+            e.Handled = true;
+            return;
+        }
 
         // M114: left press on a dummy gizmo arm starts a move drag instead of orbiting
         if (_lmb && DataContext is MeshPreviewViewModel { TargetDummyPosition: { } pivot }

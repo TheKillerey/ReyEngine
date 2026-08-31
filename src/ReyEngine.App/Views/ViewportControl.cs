@@ -205,6 +205,12 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowGrid), true);
     public static readonly StyledProperty<double> ModelScaleProperty =               // M90: preview model scale
         AvaloniaProperty.Register<ViewportControl, double>(nameof(ModelScale), 1.0);
+    // M613: where the previewed character is standing and which way it faces. Zero and zero for every
+    // other use of this control, so the transform stays exactly the scale-only matrix it always was.
+    public static readonly StyledProperty<Vector3> ModelPositionProperty =
+        AvaloniaProperty.Register<ViewportControl, Vector3>(nameof(ModelPosition));
+    public static readonly StyledProperty<double> ModelYawProperty =
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(ModelYaw));
     public static readonly StyledProperty<IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?> ModelSubmeshMaterialsProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>?>(nameof(ModelSubmeshMaterials));
     public static readonly StyledProperty<int> MeshVerticesRevisionProperty =
@@ -286,7 +292,17 @@ public sealed class ViewportControl : OpenGlControlBase
     public double VertexLightmapScale { get => GetValue(VertexLightmapScaleProperty); set => SetValue(VertexLightmapScaleProperty, value); }
     public double BackgroundBrightness { get => GetValue(BackgroundBrightnessProperty); set => SetValue(BackgroundBrightnessProperty, value); }
     public bool ShowGrid { get => GetValue(ShowGridProperty); set => SetValue(ShowGridProperty, value); }
+    /// <summary>Scale, then facing, then position — the transform the previewed model is drawn with.
+    /// Identity for every caller that leaves the M613 properties alone.</summary>
+    public Matrix4x4 ModelWorldTransform =>
+        Matrix4x4.CreateScale((float)ModelScale)
+        * Matrix4x4.CreateRotationY((float)ModelYaw)
+        * Matrix4x4.CreateTranslation(ModelPosition);
+
     public double ModelScale { get => GetValue(ModelScaleProperty); set => SetValue(ModelScaleProperty, value); }
+    public Vector3 ModelPosition { get => GetValue(ModelPositionProperty); set => SetValue(ModelPositionProperty, value); }
+    /// <summary>Radians. 0 faces -Z, the direction champion meshes are authored to face.</summary>
+    public double ModelYaw { get => GetValue(ModelYawProperty); set => SetValue(ModelYawProperty, value); }
     public IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? ModelSubmeshMaterials { get => GetValue(ModelSubmeshMaterialsProperty); set => SetValue(ModelSubmeshMaterialsProperty, value); }
     public int MeshVerticesRevision { get => GetValue(MeshVerticesRevisionProperty); set => SetValue(MeshVerticesRevisionProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
@@ -1126,7 +1142,8 @@ public sealed class ViewportControl : OpenGlControlBase
             bg.Render(viewProj, view, _camera.Position, 0, Wireframe, false, false, cullBackfaces: false);
         }
         // M90: uniform preview-model scale (identity at 1.0 — the main map viewport never changes it).
-        _meshRenderer.SetWorldTransform(Matrix4x4.CreateScale((float)ModelScale));
+        // M613: plus where the character is standing, so click-to-move actually moves something.
+        _meshRenderer.SetWorldTransform(ModelWorldTransform);
         _meshRenderer.Render(viewProj, view, _camera.Position, PreviewMode, Wireframe, ShowBounds, ShowBones, CullBackfaces);
         if (AnimateWater) RequestAnimationFrame(); // keep frames coming so the water animates, at 60fps
 
@@ -1717,6 +1734,8 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == LightFalloffSoftnessProperty                              // M160
                  || change.Property == NvrSunProperty || change.Property == NvrUseMapSunProperty) { RequestNextFrameRendering(); }   // M149
         else if (change.Property == ModelScaleProperty) { _skinDirty = true; RequestNextFrameRendering(); }   // M90: rescale attached VFX too
+        else if (change.Property == ModelPositionProperty || change.Property == ModelYawProperty)
+        { _skinDirty = true; RequestNextFrameRendering(); }   // M613: move the model and its attached VFX
         else if (change.Property == BackgroundOffsetProperty || change.Property == BackgroundRotationProperty)
         { _dynamicLightsDirty = true; RequestNextFrameRendering(); }   // M89: move/rotate lights with the map
         else if (change.Property == ModelSubmeshMaterialsProperty) { _materialsDirty = true; RequestNextFrameRendering(); }
@@ -1793,10 +1812,12 @@ public sealed class ViewportControl : OpenGlControlBase
                 // M90: bone globals are pre-scale, so apply the preview model scale on top.
                 if (frame.BoneGlobals is { } bones)
                 {
-                    var scaleM = ModelScale is 1.0 ? Matrix4x4.Identity : Matrix4x4.CreateScale((float)ModelScale);
+                    // M613: the SAME matrix the mesh uses. A separate scale-only one here left every
+                    // bone-attached effect standing at the origin while the character walked off.
+                    var modelM = ModelWorldTransform;
                     foreach (var (item, sim) in _particleSimCache)
                         if (item.AttachBone is { Length: > 0 } bone && bones.TryGetValue(bone, out var bm))
-                            sim.SetWorldTransform(scaleM.IsIdentity ? bm : bm * scaleM);
+                            sim.SetWorldTransform(modelM.IsIdentity ? bm : bm * modelM);
                 }
                 _wasAnimating = true;
             }

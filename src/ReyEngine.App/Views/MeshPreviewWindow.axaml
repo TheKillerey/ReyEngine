@@ -127,6 +127,36 @@
             </StackPanel>
           </Border>
 
+          <!-- M613: control mode - right-click to move, right-click the dummy to attack, QWER to cast. -->
+          <Border Classes="card" IsVisible="{Binding HasActions}">
+            <StackPanel Spacing="5">
+              <TextBlock Classes="cardTitle" Text="CONTROL" />
+              <CheckBox Content="Drive the character" IsChecked="{Binding ControlMode}" FontSize="11" />
+              <TextBlock Text="{Binding ControlStatus}" FontSize="9" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyAccentBrush}" />
+              <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="3"
+                    IsVisible="{Binding ControlMode}">
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Speed" FontSize="10" VerticalAlignment="Center"
+                           Foreground="{DynamicResource ReyTextDimBrush}" />
+                <NumericUpDown Grid.Row="0" Grid.Column="1" Value="{Binding MoveSpeed}" FontSize="10"
+                               Minimum="10" Maximum="2000" Increment="10" FormatString="0" />
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Range" FontSize="10" VerticalAlignment="Center"
+                           Foreground="{DynamicResource ReyTextDimBrush}" />
+                <NumericUpDown Grid.Row="1" Grid.Column="1" Value="{Binding AttackRange}" FontSize="10"
+                               Minimum="25" Maximum="2000" Increment="25" FormatString="0" />
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Att/s" FontSize="10" VerticalAlignment="Center"
+                           Foreground="{DynamicResource ReyTextDimBrush}" />
+                <NumericUpDown Grid.Row="2" Grid.Column="1" Value="{Binding AttacksPerSecond}" FontSize="10"
+                               Minimum="0.1" Maximum="5" Increment="0.05" FormatString="0.00" />
+              </Grid>
+              <Button Classes="tool" Content="Reset position (S)" Command="{Binding ResetCharacterCommand}"
+                      IsVisible="{Binding ControlMode}" />
+              <TextBlock IsVisible="{Binding ControlMode}" FontSize="9" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyTextDimBrush}"
+                         Text="Speed, range and attack speed are per-champion values the editor does not read - these are editable defaults, not this champion's real numbers." />
+            </StackPanel>
+          </Border>
+
           <!-- M612: ACTIONS - what the character DOES. Q/W/E/R come from the champion record in slot
                order; the clip for each comes from Riot's SpellN naming. Playing one prefers the M116
                VFX composite for the same slot, and falls back to the clip, whose own particle and sound
@@ -373,6 +403,8 @@
                              CullBackfaces="{Binding CullBackfaces}"
                              ModelSubmeshVisible="{Binding SubmeshVisible}"
                              ModelScale="{Binding ModelScale}"
+                             ModelPosition="{Binding CharacterPosition}"
+                             ModelYaw="{Binding CharacterYaw}"
                              BackgroundMesh="{Binding BackgroundMesh}"
                              BackgroundTextures="{Binding BackgroundTextures}"
                              BackgroundBlendTextures="{Binding BackgroundBlendTextures}"
