@@ -74,6 +74,10 @@ public sealed class Dx11ViewportSurface : IDisposable
     public string SceneReport { get; set; } = "";
     public bool HasScene { get; set; }
 
+    /// <summary>M618: per-bone skinning matrices for this frame, or null for the bind pose. Set per frame
+    /// by the character preview; every other host leaves it null and renders exactly as it always has.</summary>
+    public System.Numerics.Matrix4x4[]? BonePalette { get; set; }
+
     /// <summary>
     /// <para>M261: the map's own lighting, from the same source the GL viewport binds to
     /// (<c>CurrentSunProperties</c>). Until now this surface supplied NONE of it, so every scene rendered
@@ -420,6 +424,8 @@ public sealed class Dx11ViewportSurface : IDisposable
 
         var settings = new PreviewSettings
         {
+            // M618: null means the M216 bind-pose constant, which is what every non-character host wants.
+            BonePalette = BonePalette,
             // The editor camera is authoritative. Supplying the matrices directly rather than copying
             // yaw/pitch/distance keeps the two viewports genuinely on the same camera - a reconstructed
             // one drifts, and a drifting camera makes an A/B comparison meaningless.

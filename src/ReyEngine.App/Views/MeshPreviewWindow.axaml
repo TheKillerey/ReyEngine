@@ -127,6 +127,17 @@
             </StackPanel>
           </Border>
 
+          <!-- M618: which renderer draws this window. -->
+          <Border Classes="card">
+            <StackPanel Spacing="5">
+              <TextBlock Classes="cardTitle" Text="RENDERER" />
+              <CheckBox Content="Direct3D 11" IsChecked="{Binding UseDx11Preview}" FontSize="11"
+                        ToolTip.Tip="Draw this character with Riot's own compiled shaders instead of the OpenGL approximation." />
+              <TextBlock Text="{Binding Dx11Status}" FontSize="9" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+            </StackPanel>
+          </Border>
+
           <!-- M613: control mode - right-click to move, right-click the dummy to attack, QWER to cast. -->
           <Border Classes="card" IsVisible="{Binding HasActions}">
             <StackPanel Spacing="5">
@@ -373,6 +384,7 @@
 
     <Grid>
       <views:ViewportControl x:Name="PreviewViewport"
+                             IsVisible="{Binding !UseDx11Preview}"
                              Mesh="{Binding Mesh}"
                              Skeleton="{Binding Skeleton}"
                              ModelTextures="{Binding Textures}"
@@ -438,6 +450,13 @@
           </Border>
         </DockPanel>
       </Border>
+      <!-- M618: the D3D11 surface and the GL control are siblings that swap by visibility, the pattern
+           the map viewport has used since M248. ViewportControl derives from OpenGlControlBase, so it IS
+           the GL surface and cannot draw D3D itself. Stretch=Fill, not None: the frame is rendered at
+           device pixels and wrapped in a 96-dpi bitmap, and None centre-crops that mismatch. -->
+      <Image x:Name="Dx11Preview" Stretch="Fill"
+             RenderOptions.BitmapInterpolationMode="None"
+             IsVisible="{Binding UseDx11Preview}" />
       <Border x:Name="PreviewInput" Background="Transparent" IsVisible="{Binding !HasImagePreview}" />
       <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
                  Margin="8,6" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />

@@ -98,6 +98,41 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
         }
     }
 
+    /// <summary>M618: resolve this skin into a D3D11 scene, so the preview window can draw it with Riot's
+    /// own compiled shaders instead of the OpenGL approximation.
+    ///
+    /// <para>Runs off the UI thread as part of loading the skin, because it decodes every texture the
+    /// character references. Returns null for anything that is not a character with a skin bin — a prop
+    /// has no materials to resolve, and the window falls back to GL rather than showing an empty frame.</para></summary>
+    private (Services.PreparedCharacterScene? Scene, string Status) BuildCharacterDx11Scene(WadAssetEntry skn)
+    {
+        if (!skn.IsResolved || _dx11ShaderCache is null)
+            return (null, _dx11ShaderCache is null ? "No shader cache - set the game folder." : "");
+
+        try
+        {
+            string? binPath = Formats.Meta.SkinPaths.BinPathForSkn(skn.Path);
+            byte[]? bin = binPath is not null && TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)
+                ? ReadAsset(binEntry.PathHash)
+                : null;
+
+            var scene = Services.Dx11CharacterScene.Prepare(
+                ReadAsset(skn.PathHash), bin, _dx11ShaderCache, ShaderPerms(),
+                readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
+                resolveBinName: ResolveBinName,
+                resolveWadPath: ResolveWadPath);
+
+            if (scene is null) return (null, "The mesh would not decode for D3D11.");
+            return (scene, scene.Slices.Count > 0
+                ? $"{scene.Slices.Count} of {scene.SubmeshCount} submesh(es) resolved"
+                : "No materials resolved - " + (scene.Failures.Count > 0 ? scene.Failures[0] : "the skin bin was not found"));
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.Message);
+        }
+    }
+
     /// <summary>Make a champion WAD readable without disturbing whatever is already open. True when the
     /// assets can now be read.</summary>
     private bool MakeCharacterWadReadable(string wadPath)

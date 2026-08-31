@@ -26,6 +26,7 @@ public partial class MeshPreviewWindow : Window
         PreviewInput.PointerWheelChanged += OnWheel;
         // M613: ability keys. Tunnelling because a focused list or text box would otherwise eat them.
         AddHandler(KeyDownEvent, OnControlKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        HookDx11();   // M618: the Direct3D 11 surface, off until the toggle turns it on
         Closed += (_, _) => (DataContext as MeshPreviewViewModel)?.StopControl();
     }
 

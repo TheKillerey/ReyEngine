@@ -10787,6 +10787,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M85: game-accurate submesh visibility — skin bin initial-hide + animation-graph clip lists.
             var (initialHide, clipsByAnm, ownAnms) = LoadSubmeshRules(entry);
             await Task.Run(() => LoadChampionAudio(entry));   // M90: clip SFX banks
+            // M618: and the D3D11 scene, off the UI thread - it decodes every texture the skin references.
+            var dx11 = await Task.Run(() => BuildCharacterDx11Scene(entry));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -10798,6 +10800,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MeshPreview.SetVfx(vfx.systems, vfx.resourceMap);
                 MeshPreview.SetVoiceEvents(TryLoadVoiceEvents(entry));   // M95c: authored VO lines
                 MeshPreview.SetActions(BuildCharacterActions(entry, clipsByAnm));   // M612: Q/W/E/R, move, recall
+                MeshPreview.SetDx11Scene(dx11.Scene, dx11.Status);                  // M618: Riot's own shaders
                 MeshInspector.ShowMesh(mesh, skeleton);
                 ShowMeshPreviewWindow?.Invoke();
                 _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris — model preview window.");
