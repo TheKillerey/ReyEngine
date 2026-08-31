@@ -106,8 +106,12 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     /// has no materials to resolve, and the window falls back to GL rather than showing an empty frame.</para></summary>
     private (Services.PreparedCharacterScene? Scene, string Status) BuildCharacterDx11Scene(WadAssetEntry skn)
     {
-        if (!skn.IsResolved || _dx11ShaderCache is null)
-            return (null, _dx11ShaderCache is null ? "No shader cache - set the game folder." : "");
+        if (!skn.IsResolved) return (null, "");
+
+        // M620: opening the cache is this path's job too. It used to happen only while building a MAP
+        // scene, so every character reported "no materials" for a reason that had nothing to do with it.
+        if (OpenDx11ShaderCache(out var cacheError) is not { } cache)
+            return (null, "Shader cache: " + (cacheError ?? "not readable"));
 
         try
         {
@@ -117,7 +121,7 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 : null;
 
             var scene = Services.Dx11CharacterScene.Prepare(
-                ReadAsset(skn.PathHash), bin, _dx11ShaderCache, ShaderPerms(),
+                ReadAsset(skn.PathHash), bin, cache, ShaderPerms(),
                 readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
                 resolveBinName: ResolveBinName,
                 resolveWadPath: ResolveWadPath);

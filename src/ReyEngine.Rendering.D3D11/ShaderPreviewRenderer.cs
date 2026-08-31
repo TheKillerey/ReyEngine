@@ -157,6 +157,14 @@ public sealed class PreviewSettings
     /// from a different camera.</para></summary>
     public Matrix4x4[]? BonePalette;
 
+    /// <summary>M620: where the subject stands. Identity for every existing caller.
+    ///
+    /// <para>For a SKINNED mesh this has to reach the bone palette rather than a world constant: Riot's
+    /// character vertex shaders transform a vertex by its bone matrices and nothing else, so a world
+    /// matrix written anywhere else is a matrix no character shader reads. Folded in as
+    /// <c>skin * world * view</c>, which is still exactly <c>view</c> when both are identity.</para></summary>
+    public Matrix4x4 World = Matrix4x4.Identity;
+
     /// <summary>Rows per bone matrix in <c>BonesCB</c>. League caps skeletons at 256 bones and the buffer is
     /// 12,288 bytes, which is 48 bytes each at 3 rows (a 4x3) or 64 at 4 (a full 4x4 over 192 bones). Both
     /// divide evenly, so this is measured in the app rather than assumed - a wrong stride makes the skeleton
@@ -3698,8 +3706,11 @@ float4 psmain(VOut i) : SV_Target
             // special case of this rather than a separate branch.
             var baseM = s.BonePose switch
             {
-                BonePose.View or BonePose.ViewTransposed => view,
-                _ => Matrix4x4.Identity,
+                // M620: the model transform belongs here, ahead of the view - it is the only matrix a
+                // skinned character shader multiplies by. Identity World leaves this exactly as it was.
+                BonePose.View or BonePose.ViewTransposed =>
+                    s.World.IsIdentity ? view : s.World * view,
+                _ => s.World,
             };
             bool transpose = s.BonePose is BonePose.ViewTransposed;
 
@@ -4391,7 +4402,7 @@ float4 psmain(VOut i) : SV_Target
             if (s.MirrorX) view = Matrix4x4.CreateScale(-1f, 1f, 1f) * view;
             var proj = s.SuppliedProjection ?? Matrix4x4.CreatePerspectiveFieldOfView(
                 s.Fov, (float)width / height, radius * 0.02f, radius * 40f);
-            var world = Matrix4x4.Identity;
+            var world = s.World;
 
             // M465: the sun shadow map, FIRST - before the scene's targets are bound and before anything
             // samples it. It binds a depth-stencil view of its own and its own viewport, which the line

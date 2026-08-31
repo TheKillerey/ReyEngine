@@ -81,6 +81,10 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// <summary>M619: the animated skeleton, as the position pairs the GL overlay draws. Null clears it.</summary>
     public float[]? BoneLines { get; set; }
 
+    /// <summary>M620: where the subject stands, for the character preview's control mode. Identity for
+    /// the map viewport, which draws its geometry at the coordinates the data puts it.</summary>
+    public System.Numerics.Matrix4x4 World { get; set; } = System.Numerics.Matrix4x4.Identity;
+
     /// <summary>
     /// <para>M261: the map's own lighting, from the same source the GL viewport binds to
     /// (<c>CurrentSunProperties</c>). Until now this surface supplied NONE of it, so every scene rendered
@@ -431,6 +435,7 @@ public sealed class Dx11ViewportSurface : IDisposable
         {
             // M618: null means the M216 bind-pose constant, which is what every non-character host wants.
             BonePalette = BonePalette,
+            World = World,   // M620
             // The editor camera is authoritative. Supplying the matrices directly rather than copying
             // yaw/pitch/distance keeps the two viewports genuinely on the same camera - a reconstructed
             // one drifts, and a drifting camera makes an A/B comparison meaningless.

@@ -119,6 +119,7 @@ public partial class MeshPreviewWindow
         var (palette, bones) = vm.CurrentPose(vm.ShowBones);
         _dx11.BonePalette = palette;
         _dx11.BoneLines = bones;
+        _dx11.World = vm.ModelWorld;   // M620: control mode moves the character here too
         _dx11.Wireframe = vm.Wireframe;
         _dx11.CullBackFaces = vm.CullBackfaces;
 

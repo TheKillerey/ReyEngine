@@ -56,16 +56,40 @@ public sealed partial class MeshPreviewViewModel
         if (Skeleton is not { } skeleton) return (null, null);
         var (palette, segments) = BonePalette.BuildWithSegments(
             skeleton, CurrentAnimation, (float)AnimationTime, wantBones);
-        return (palette, wantBones && segments.Length > 0 ? segments : null);
+        if (!wantBones || segments.Length == 0) return (palette, null);
+
+        // The segments are joint positions in MODEL space. The mesh beside them travels through the
+        // palette; without the same transform here the skeleton stays at the origin while the character
+        // it belongs to walks away - which is exactly what M614 had to fix on the GL side.
+        var world = ModelWorld;
+        if (!world.IsIdentity)
+            for (int i = 0; i + 2 < segments.Length; i += 3)
+            {
+                var p = Vector3.Transform(new Vector3(segments[i], segments[i + 1], segments[i + 2]), world);
+                segments[i] = p.X; segments[i + 1] = p.Y; segments[i + 2] = p.Z;
+            }
+        return (palette, segments);
     }
 
     /// <summary>The shader cache the D3D11 particle driver needs. Supplied by the host, which owns it.</summary>
     public Formats.Shaders.ShaderCacheReader? Dx11ShaderCache { get; set; }
 
+    /// <summary>M620: where the character is standing, as one matrix. The SAME composition the GL
+    /// viewport builds (scale, then facing, then position), so control mode moves the character the same
+    /// way whichever renderer is drawing it.</summary>
+    public Matrix4x4 ModelWorld =>
+        Matrix4x4.CreateScale((float)ModelScale)
+        * Matrix4x4.CreateRotationY((float)CharacterYaw)
+        * Matrix4x4.CreateTranslation(CharacterPosition);
+
     partial void OnUseDx11PreviewChanged(bool value)
     {
         if (!value) { Dx11Status = ""; return; }
-        if (Dx11Scene is null)
+
+        // M620: only when nothing more specific has been said. This used to overwrite unconditionally,
+        // so the real reason - which the host had already put here - was replaced by a guess at it, and
+        // "the shader cache never opened" read as "this is not a character".
+        if (Dx11Scene is null && string.IsNullOrWhiteSpace(Dx11Status))
             Dx11Status = "No D3D11 scene for this subject - it resolved no materials, or it is not a character.";
     }
 }

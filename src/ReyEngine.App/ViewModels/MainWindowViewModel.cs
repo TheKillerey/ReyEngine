@@ -4227,6 +4227,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// the GL viewport does.</summary>
     public Formats.Shaders.ShaderCacheReader? Dx11ShaderCache => _dx11ShaderCache;
 
+    /// <summary>M620: open the shader cache, or return the already-open one.
+    ///
+    /// <para>This used to live inside BuildDx11SceneAsync, which returns early unless a MAP is open - so
+    /// opening a champion never opened the cache, and the character preview reported "no materials" for
+    /// every character in the game. The cache has nothing to do with maps; it is per game folder.</para></summary>
+    private Formats.Shaders.ShaderCacheReader? OpenDx11ShaderCache(out string? error)
+    {
+        error = null;
+        string? dir = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
+        if (dir is null || !Directory.Exists(dir))
+        {
+            error = "the game folder is not set, so the shader cache cannot be opened";
+            return null;
+        }
+
+        if (_dx11ShaderCache is not null
+            && string.Equals(_dx11ShaderCacheDir, dir, StringComparison.OrdinalIgnoreCase))
+            return _dx11ShaderCache;
+
+        _dx11ShaderCache = Formats.Shaders.ShaderCacheReader.Open(dir, _resolver.Database, out error);
+        _dx11ShaderCacheDir = dir;
+        return _dx11ShaderCache;
+    }
+
     // M365d: the SYNCHRONOUS BuildDx11Scene overload used to live here and has been deleted.
     //
     // It had no callers - MainWindow.axaml.cs:109 awaits BuildDx11SceneAsync, and that is the only
@@ -4247,12 +4271,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         string? dir = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
         if (dir is null || !Directory.Exists(dir)) return "Game directory is not set, so the shader cache cannot be opened.";
 
-        if (_dx11ShaderCache is null || !string.Equals(_dx11ShaderCacheDir, dir, StringComparison.OrdinalIgnoreCase))
-        {
-            _dx11ShaderCache = Formats.Shaders.ShaderCacheReader.Open(dir, _resolver.Database, out var cacheErr);
-            _dx11ShaderCacheDir = dir;
-            if (_dx11ShaderCache is null) return "ShaderCache.dx11.wad.client: " + (cacheErr ?? "not readable");
-        }
+        if (OpenDx11ShaderCache(out var cacheErr) is null)
+            return "ShaderCache.dx11.wad.client: " + (cacheErr ?? "not readable");
 
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
             return "No materials.bin alongside this mapgeo.";
