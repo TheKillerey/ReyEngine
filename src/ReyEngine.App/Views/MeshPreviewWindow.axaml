@@ -127,6 +127,38 @@
             </StackPanel>
           </Border>
 
+          <!-- M612: ACTIONS - what the character DOES. Q/W/E/R come from the champion record in slot
+               order; the clip for each comes from Riot's SpellN naming. Playing one prefers the M116
+               VFX composite for the same slot, and falls back to the clip, whose own particle and sound
+               events still fire. -->
+          <Border Classes="card" IsVisible="{Binding HasActions}">
+            <StackPanel Spacing="5">
+              <TextBlock Classes="cardTitle" Text="ACTIONS" />
+              <ListBox ItemsSource="{Binding Actions}" SelectedItem="{Binding SelectedAction, Mode=TwoWay}"
+                       MaxHeight="230" Background="Transparent" BorderThickness="0">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:CharacterActionRowViewModel">
+                    <Grid ColumnDefinitions="30,*" Margin="0,1">
+                      <TextBlock Grid.Column="0" Text="{Binding Group}" FontSize="8" VerticalAlignment="Center"
+                                 Opacity="0.45" TextTrimming="CharacterEllipsis" />
+                      <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Label}" FontSize="11"
+                                   Opacity="{Binding HasClip, Converter={x:Static views:M612Converters.ClipOpacity}}" />
+                        <TextBlock Text="{Binding Detail}" FontSize="9" Opacity="0.5" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <Button Classes="tool" Content="↺ Replay" Command="{Binding ReplayActionCommand}" />
+                <Button Classes="tool" Content="■ Stop" Command="{Binding StopEventCommand}" />
+              </StackPanel>
+              <TextBlock Text="{Binding ActionSummary}" FontSize="9"
+                         Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
           <Border Classes="card">
             <StackPanel Spacing="6">
               <TextBlock Classes="cardTitle" Text="ANIMATIONS" />

@@ -62,6 +62,42 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
         }
     }
 
+    /// <summary>M612: the action list for a loaded character — Q/W/E/R named from the champion record,
+    /// plus attack, move, recall and emotes matched to this skin's clips.
+    ///
+    /// <para>Empty for anything that is not a character. A prop or a map mesh has no champion record, and
+    /// four empty ability rows on a lamppost would be worse than no list at all.</para></summary>
+    private IReadOnlyList<CharacterAction> BuildCharacterActions(
+        WadAssetEntry skn, IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? clipsByAnm)
+    {
+        if (clipsByAnm is not { Count: > 0 } || !skn.IsResolved) return Array.Empty<CharacterAction>();
+
+        try
+        {
+            var parts = skn.Path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            int ci = Array.FindIndex(parts, p => p.Equals("characters", StringComparison.OrdinalIgnoreCase));
+            if (ci < 0 || ci + 1 >= parts.Length) return Array.Empty<CharacterAction>();
+
+            string character = parts[ci + 1];
+            var spells = TryResolveEntry(HashAlgorithms.WadPath(ChampionRecord.PathFor(character)), out var record)
+                ? ChampionRecord.SpellNames(ReadAsset(record.PathHash))
+                : Array.Empty<string>();
+
+            // clipsByAnm is keyed by .anm file name, so its values are this skin's clips exactly once.
+            var actions = CharacterActions.Build(spells, clipsByAnm.Values.ToList());
+            _log.Info("Character",
+                $"{character}: {actions.Count(a => a.HasClip)}/{actions.Count} actions have an animation"
+                + (spells.Count > 0 ? $", {spells.Count} abilities named from the record." : ", no champion record."));
+            return actions;
+        }
+        catch (Exception ex)
+        {
+            // A character that will not describe itself must still preview.
+            _log.Warn("Character", $"action list: {ex.Message}");
+            return Array.Empty<CharacterAction>();
+        }
+    }
+
     /// <summary>Make a champion WAD readable without disturbing whatever is already open. True when the
     /// assets can now be read.</summary>
     private bool MakeCharacterWadReadable(string wadPath)

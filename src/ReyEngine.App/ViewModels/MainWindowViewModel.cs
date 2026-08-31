@@ -10797,6 +10797,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     : Enumerable.Empty<AnimationEntryViewModel>());
                 MeshPreview.SetVfx(vfx.systems, vfx.resourceMap);
                 MeshPreview.SetVoiceEvents(TryLoadVoiceEvents(entry));   // M95c: authored VO lines
+                MeshPreview.SetActions(BuildCharacterActions(entry, clipsByAnm));   // M612: Q/W/E/R, move, recall
                 MeshInspector.ShowMesh(mesh, skeleton);
                 ShowMeshPreviewWindow?.Invoke();
                 _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris — model preview window.");
