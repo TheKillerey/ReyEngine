@@ -162,6 +162,105 @@ public sealed class Dx11CharacterSceneTests
     }
 
     [Fact]
+    public void TheGeometryKeepsItsAuthoredCoordinatesBecauseSkinningDependsOnThem()
+    {
+        // The bug that made the D3D11 character invisible while its bones and VFX drew fine.
+        //
+        // A bone matrix maps BIND-POSE object space to posed space. Recentre the vertices first and
+        // (p - c) * skin is not (p * skin) - c, so every bone rotates about a pivot the skeleton does not
+        // know about. Measured below: the error is not a small offset, it is hundreds of units - the mesh
+        // leaves the frustum, which is why it read as "nothing is drawn" rather than "the pose is wrong".
+        if (Ahri() is not { } f) return;
+        using (f)
+        {
+            var scene = Prepare(f);
+            if (scene is null) return;
+
+            var mesh = Meshes.SkinnedMeshDecoder.Decode(f.Skn);
+            Assert.Equal(mesh.VertexCount, scene.Mesh.Vertices.Length);
+
+            // What Prepare produced has to BE the authored positions.
+            float worst = 0f;
+            for (int v = 0; v < mesh.VertexCount; v += 97)
+            {
+                var authored = new System.Numerics.Vector3(
+                    mesh.Positions[v * 3], mesh.Positions[v * 3 + 1], mesh.Positions[v * 3 + 2]);
+                worst = MathF.Max(worst, System.Numerics.Vector3.Distance(scene.Mesh.Vertices[v].Position, authored));
+            }
+            Assert.True(worst < 0.01f, $"the geometry was moved {worst:0.00} units from where it was authored");
+        }
+    }
+
+    [Fact]
+    public void RecentringWouldHaveScatteredTheSkinnedMesh()
+    {
+        // The measurement behind the fix above, so the reasoning is on the record rather than asserted.
+        // Skin the same vertices twice - once authored, once pre-shifted by the mesh centre - and compare
+        // both against the CPU skinner. The authored one matches; the shifted one does not, and not by a
+        // little.
+        if (Ahri() is not { } f) return;
+        using (f)
+        {
+            var mesh = Meshes.SkinnedMeshDecoder.Decode(f.Skn);
+            if (mesh.BlendIndices is null || mesh.BlendWeights is null) return;
+
+            string skl = "assets/characters/ahri/skins/base/ahri_base.skl";
+            string anm = "assets/characters/ahri/skins/base/animations/spell1.anm";
+            if (!f.Archive.TryGetEntry(HashAlgorithms.WadPath(skl), out _)) return;
+            if (!f.Archive.TryGetEntry(HashAlgorithms.WadPath(anm), out _)) return;
+
+            var skeleton = Skeletons.SkeletonDecoder.Decode(f.Archive.Extract(HashAlgorithms.WadPath(skl)));
+            var clip = Animation.AnimationDecoder.Decode(f.Archive.Extract(HashAlgorithms.WadPath(anm)), "spell1");
+            float t = clip.Duration * 0.5f;
+
+            var palette = Animation.BonePalette.Build(skeleton, clip, t);
+            var cpu = Animation.SkinnedMeshAnimator.Skin(mesh, skeleton, clip, t);
+
+            // The centre PreviewGeometry would have subtracted.
+            var min = new System.Numerics.Vector3(float.MaxValue);
+            var max = new System.Numerics.Vector3(float.MinValue);
+            for (int v = 0; v < mesh.VertexCount; v++)
+            {
+                var p = new System.Numerics.Vector3(mesh.Positions[v * 3], mesh.Positions[v * 3 + 1], mesh.Positions[v * 3 + 2]);
+                min = System.Numerics.Vector3.Min(min, p);
+                max = System.Numerics.Vector3.Max(max, p);
+            }
+            var centre = (min + max) * 0.5f;
+
+            System.Numerics.Vector3 Skin(System.Numerics.Vector3 p, int v)
+            {
+                System.Numerics.Vector3 sum = default;
+                float weight = 0f;
+                for (int k = 0; k < 4; k++)
+                {
+                    float w = mesh.BlendWeights[v * 4 + k];
+                    if (w <= 0f) continue;
+                    int slot = mesh.BlendIndices[v * 4 + k];
+                    if (slot < 0 || slot >= palette.Length) continue;
+                    sum += w * System.Numerics.Vector3.Transform(p, palette[slot]);
+                    weight += w;
+                }
+                return weight <= 0f ? p : sum;
+            }
+
+            float authoredWorst = 0f, shiftedWorst = 0f;
+            for (int v = 0; v < mesh.VertexCount; v += 97)
+            {
+                var p = new System.Numerics.Vector3(mesh.Positions[v * 3], mesh.Positions[v * 3 + 1], mesh.Positions[v * 3 + 2]);
+                var expected = new System.Numerics.Vector3(cpu.Positions[v * 3], cpu.Positions[v * 3 + 1], cpu.Positions[v * 3 + 2]);
+
+                authoredWorst = MathF.Max(authoredWorst, System.Numerics.Vector3.Distance(Skin(p, v), expected));
+                // What a recentred buffer would have fed the same shader, put back where it belongs.
+                shiftedWorst = MathF.Max(shiftedWorst, System.Numerics.Vector3.Distance(Skin(p - centre, v) + centre, expected));
+            }
+
+            Assert.True(authoredWorst < 0.01f, $"authored vertices disagreed by {authoredWorst:0.00}");
+            Assert.True(shiftedWorst > 10f,
+                $"recentring was expected to break skinning badly; it moved vertices only {shiftedWorst:0.00} units");
+        }
+    }
+
+    [Fact]
     public void TheSlicesCoverTheMeshTheyCameFrom()
     {
         // A slice whose range runs off the end of the index buffer is a GPU read out of bounds, and the

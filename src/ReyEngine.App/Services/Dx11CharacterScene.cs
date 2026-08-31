@@ -80,9 +80,21 @@ public static class Dx11CharacterScene
             "character", mesh.VertexCount,
             mesh.Positions, mesh.Normals, mesh.Uvs, mesh.Colors, mesh.LightmapUvs, mesh.Indices,
             mesh.BlendIndices, mesh.BlendWeights,
-            // Recentred on its own bounds: a champion is authored around its own origin already, and the
-            // preview camera frames what it is given.
-            recentre: true);
+            // NOT recentred, and this is not a preference.
+            //
+            // A bone matrix maps BIND-POSE object space to posed space. Shifting every vertex by -centre
+            // first means (p - c) * skin is not (p * skin) - c, so with 127 bones each rotating about a
+            // pivot that is no longer where the skeleton thinks it is, the mesh scatters - measured on
+            // Ahri mid-clip, 263 units, on a champion 275 units tall. That is the whole model out of
+            // frame, which reads as "nothing is drawn" rather than as a wrong pose, and is why the bones
+            // and the VFX looked fine while the character was simply absent.
+            // The Shader Preview recentres and gets away
+            // with it only because it never animates: identity times a shifted vertex is still just a
+            // shifted vertex.
+            //
+            // It is also what the GL preview does. Both viewports draw the character at its authored
+            // coordinates and let the shared camera frame it, which is the only way the two can agree.
+            recentre: false);
 
         MaterialDocument? document = null;
         if (skinBinBytes is { Length: > 0 })
