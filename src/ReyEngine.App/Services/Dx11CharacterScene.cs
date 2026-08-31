@@ -114,6 +114,14 @@ public static class Dx11CharacterScene
         sb.AppendLine($"{mesh.VertexCount:n0} vertices, {mesh.Indices.Length / 3:n0} triangles, "
                       + $"{mesh.SubMeshes.Count} submesh(es), {bindings.Count} material(s) in the bin");
 
+        // Without the permutation index there are no shader parameter DEFAULTS, so every parameter the
+        // material does not author stays zero - and zero is a value the shader multiplies by, not an
+        // absence. The usual result is a model that draws perfectly and is entirely black, which on a
+        // dark viewport is indistinguishable from not drawing at all. Said out loud for that reason.
+        if (perms is null)
+            scene.Failures.Add("No shader permutation index: unauthored parameters default to zero, "
+                               + "which usually renders the character black.");
+
         foreach (var sub in mesh.SubMeshes)
         {
             var binding = MaterialFor(bindings, sub.Material);

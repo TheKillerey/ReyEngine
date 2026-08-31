@@ -22,6 +22,7 @@ public partial class MeshPreviewWindow
     private int _dx11CommittedRevision = -1;
     private readonly Stopwatch _dx11Clock = Stopwatch.StartNew();
     private double _dx11LastFrame = double.NegativeInfinity;
+    private int _dx11LastReport = -1;
 
     /// <summary>~60 fps. The preview is one character, but the loop still self-throttles rather than
     /// spinning the GPU on a model nobody is moving.</summary>
@@ -143,6 +144,17 @@ public partial class MeshPreviewWindow
         else _dx11.Renderer.SetGizmoLines(null, null, null);
 
         if (!_dx11.Render(PreviewViewport.Camera, w, h)) return;
+
+        // M622: what the renderer actually DID, once a second. Three milestones were spent guessing at an
+        // invisible mesh from the outside, and the numbers that separate the possibilities - was it
+        // submitted at all, was it frustum-culled, is a palette even being supplied - existed the whole
+        // time and were never shown. Cheap, and it makes the next failure a reading rather than a guess.
+        if (_dx11.HasScene && (int)(_dx11Clock.Elapsed.TotalSeconds * 2) != _dx11LastReport)
+        {
+            _dx11LastReport = (int)(_dx11Clock.Elapsed.TotalSeconds * 2);
+            vm.Dx11Status = $"{_dx11.LastDrawCalls} draw(s), {_dx11.LastCulled} culled, "
+                            + $"{palette?.Length.ToString() ?? "no"} bone(s), {_dx11.LastFrameMs:F1} ms";
+        }
 
         Dx11Preview.Source = _dx11.Current;
         Dx11Preview.Width = surface.Width;

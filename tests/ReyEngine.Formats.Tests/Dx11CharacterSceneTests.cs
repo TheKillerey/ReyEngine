@@ -366,6 +366,42 @@ public sealed class Dx11CharacterSceneTests
     }
 
     [Fact]
+    public void AMissingPermutationIndexIsReportedBecauseItRendersBlack()
+    {
+        // The failure this test exists for is not a crash, it is a character that draws perfectly and is
+        // entirely black - indistinguishable, on a dark viewport, from not drawing at all. Without the
+        // index there are no shader parameter DEFAULTS, so every parameter the material does not author
+        // stays zero, and zero is a value the shader multiplies by (M255).
+        if (Ahri() is not { } f) return;
+        using (f)
+        {
+            var scene = Prepare(f);      // Prepare is called with perms: null
+            Assert.NotNull(scene);
+            Assert.Contains(scene!.Failures, x => x.Contains("permutation index", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
+    public void TheHostBuildsItsPermutationIndexFromTheSameLocatorAsEverythingElse()
+    {
+        // It built the path by hand from GameDirectory, so a folder the shared locator copes with but
+        // Path.Combine does not gave a null index while the shader cache opened fine - two game-data
+        // lookups disagreeing, with a black model as the only symptom.
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(System.IO.Path.Combine(dir.FullName, "ReyEngine.slnx"))) dir = dir.Parent;
+        if (dir is null) return;
+
+        string host = System.IO.Path.Combine(dir.FullName, "src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs");
+        if (!File.Exists(host)) return;
+        string text = File.ReadAllText(host);
+
+        int at = text.IndexOf("ShaderPermutationIndex? ShaderPerms()", StringComparison.Ordinal);
+        Assert.True(at > 0, "ShaderPerms() is gone or renamed");
+        string body = text.Substring(at, Math.Min(900, text.Length - at));
+        Assert.Contains("GameReferenceLibrary.FindFinalDirectory", body);
+    }
+
+    [Fact]
     public void TheReportSaysWhatWasResolved()
     {
         if (Ahri() is not { } f) return;

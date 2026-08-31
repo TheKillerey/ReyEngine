@@ -4366,8 +4366,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private string? _shaderPermsDir;
     private Formats.Materials.ShaderPermutationIndex? ShaderPerms()
     {
-        string? dir = string.IsNullOrEmpty(Project.GameDirectory) ? null
-            : Path.Combine(Project.GameDirectory, "DATA", "FINAL");
+        // M622: the SAME locator the shader cache and every other game-data path uses. This built the
+        // path by hand, so a GameDirectory that FindFinalDirectory copes with but Path.Combine does not
+        // returned null here while the cache opened fine - and a null index means no shader parameter
+        // DEFAULTS, which leaves every unauthored parameter at zero. Zero is not "unspecified": it is a
+        // value the shader multiplies by, and the result is a black model (M255).
+        string? dir = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
         if (dir is null || !Directory.Exists(dir)) return null;
         if (_shaderPerms is null || !string.Equals(_shaderPermsDir, dir, StringComparison.OrdinalIgnoreCase))
         {
