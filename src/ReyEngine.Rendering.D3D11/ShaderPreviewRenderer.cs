@@ -2507,6 +2507,10 @@ float4 psmain(VOut i) : SV_Target
     private ComPtr<ID3D11Buffer> _boneVb;
     private int _boneVbCapacity;
     private int _boneVerts;
+    // M628: the target dummy's box, for the case where its real model is unavailable.
+    private ComPtr<ID3D11Buffer> _dummyVb;
+    private int _dummyVbCapacity;
+    private int _dummyVerts;
     private int _gizmoTotalVerts;
 
     /// <summary>
@@ -2614,6 +2618,61 @@ float4 psmain(VOut i) : SV_Target
             System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
         _ctx.Unmap(_boneVb, 0);
         _boneVerts = verts.Length / 3;
+    }
+
+    /// <summary>M628: the target dummy as a wire box, for hosts with no dummy MODEL to place. GL draws a
+    /// solid-plus-wireframe cube; this is the wireframe half, built from the same
+    /// <c>ViewportMeshRenderer.BuildBoxLines</c> so the two viewports agree on where it is.</summary>
+    public void SetDummyLines(float[]? verts)
+    {
+        _dummyVerts = 0;
+        if (verts is null || verts.Length < 6 || !EnsureOverlay()) return;
+
+        int bytes = verts.Length * sizeof(float);
+        if (_dummyVbCapacity < bytes || _dummyVb.Handle is null)
+        {
+            _dummyVb.Dispose();
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)bytes, Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> vb = default;
+            if (_device.CreateBuffer(in desc, null, ref vb) < 0) { Log("dummy vertex buffer failed"); return; }
+            _dummyVb = vb; _dummyVbCapacity = bytes;
+        }
+
+        var map = new MappedSubresource();
+        if (_ctx.Map(_dummyVb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        fixed (float* p = verts)
+            System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
+        _ctx.Unmap(_dummyVb, 0);
+        _dummyVerts = verts.Length / 3;
+    }
+
+    private int DrawDummyLines(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_dummyVerts == 0 || _dummyVb.Handle is null || !EnsureOverlay()) return 0;
+
+        var mvp = Matrix4x4.Multiply(view, proj);
+        _ctx.IASetInputLayout(_overlayLayout);
+        _ctx.VSSetShader(_overlayVs, null, 0);
+        _ctx.PSSetShader(_overlayPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
+
+        uint stride = 3 * sizeof(float), offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _dummyVb, in stride, in offset);
+        _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        // Depth-tested, unlike the bones: this stands in for a solid object and should be occluded by one.
+        _ctx.OMSetDepthStencilState(_overlayDepth, 0);
+
+        SetOverlayCb(mvp, new Vector4(0.90f, 0.30f, 0.30f, 1f));
+        _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.Draw((uint)_dummyVerts, 0);
+
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
+        return 1;
     }
 
     private int DrawBoneLines(Matrix4x4 view, Matrix4x4 proj)
@@ -4693,6 +4752,7 @@ float4 psmain(VOut i) : SV_Target
  DrawBrushRing(view, proj);   // M361: after the gizmo, same overlay pipeline      // M296, last so it is over everything
             DrawBakeBox(view, proj);     // M412: same overlay pipeline
             DrawBoneLines(view, proj);   // M619: the skeleton, same overlay pipeline
+            DrawDummyLines(view, proj);  // M628: the target dummy box, same overlay pipeline
             DrawCalls += HighlightDraws + IconDraws + gridDraws + gizmoDraws + lightDraws;
 
             _ctx.CopyResource(_stage, _rt);
@@ -4932,6 +4992,7 @@ float4 psmain(VOut i) : SV_Target
         _gizmoVb.Dispose();
         _bakeBoxVb.Dispose();
         _boneVb.Dispose();   // M619
+        _dummyVb.Dispose();  // M628
         DisposeSky();
         DisposeRibbon();
         DisposeDynamicLights();

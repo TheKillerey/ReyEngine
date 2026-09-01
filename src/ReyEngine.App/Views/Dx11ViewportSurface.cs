@@ -70,6 +70,10 @@ public sealed class Dx11ViewportSurface : IDisposable
         }
     }
 
+    /// <summary>M627: why the last frame produced nothing, or null when it produced a frame. The host is
+    /// expected to SHOW this - a silent failed frame leaves a stale image on screen that looks live.</summary>
+    public string? LastError { get; private set; }
+
     /// <summary>M249: what happened the last time a scene was built, and whether one is loaded at all.</summary>
     public string SceneReport { get; set; } = "";
     public bool HasScene { get; set; }
@@ -80,6 +84,9 @@ public sealed class Dx11ViewportSurface : IDisposable
 
     /// <summary>M619: the animated skeleton, as the position pairs the GL overlay draws. Null clears it.</summary>
     public float[]? BoneLines { get; set; }
+
+    /// <summary>M628: the target dummy's wire box, for a host with no dummy MODEL. Null clears it.</summary>
+    public float[]? DummyLines { get; set; }
 
     /// <summary>M620: where the subject stands, for the character preview's control mode. Identity for
     /// the map viewport, which draws its geometry at the coordinates the data puts it.</summary>
@@ -435,6 +442,7 @@ public sealed class Dx11ViewportSurface : IDisposable
         Props?.Tick(t, PlayPropAnimations);
 
         _renderer.SetBoneLines(BoneLines);   // M619
+        _renderer.SetDummyLines(DummyLines); // M628
 
         var settings = new PreviewSettings
         {
@@ -545,7 +553,12 @@ public sealed class Dx11ViewportSurface : IDisposable
         // M255: collect the constants nothing supplied. This report is what solved M229, M230 and M235,
         // and the viewport path was built without it - so it has been resolving scenes blind.
         _unbound.Clear();
-        var pixels = _renderer.RenderFrame(width, height, settings, out _, _unbound);
+        // M627: KEEP the reason. This was `out _`, and RenderFrame catches every exception internally, so
+        // a frame that failed for any reason produced exactly the same observable state as a frame that
+        // was never asked for: false, no log, and Current still holding the last good bitmap. That is why
+        // "the gizmo draws but nothing responds" was undiagnosable - the picture on screen was minutes old.
+        var pixels = _renderer.RenderFrame(width, height, settings, out var renderError, _unbound);
+        LastError = pixels is null ? renderError ?? "RenderFrame returned nothing and gave no reason" : null;
         if (pixels is null) return false;
 
         LastPixels = pixels;

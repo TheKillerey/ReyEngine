@@ -24,6 +24,7 @@ public partial class MeshPreviewWindow
     private double _dx11LastFrame = double.NegativeInfinity;
     private int _dx11LastReport = -1;
     private bool _dx11ReportedBlank;
+    private string? _dx11LastErrorShown;
 
     /// <summary>~60 fps. The preview is one character, but the loop still self-throttles rather than
     /// spinning the GPU on a model nobody is moving.</summary>
@@ -107,6 +108,12 @@ public partial class MeshPreviewWindow
                 _dx11.HasScene = drew > 0;
                 _dx11.SceneReport = scene.Report;
 
+                // M627: Commit calls ClearMaterials, which disposes the particle and prop materials along
+                // with the character's and releases the geometry their handles point at. The map host has
+                // called this after every commit since M266; this one never did, so every champion load
+                // silently destroyed the particle driver's materials and nothing re-registered them.
+                _dx11.NotifySceneRebuilt();
+
                 // M625: what the renderer is actually holding, straight after the commit. Two turns were
                 // spent theorising about where the character materials went; this reads the list instead.
                 vm.LogDx11?.Invoke("D3D11", $"after commit: {_dx11.Renderer.MaterialCount} material(s)");
@@ -150,6 +157,20 @@ public partial class MeshPreviewWindow
         _dx11.ShaderCache = vm.Dx11ShaderCache;
         _dx11.ParticlePlayback = vm.Playback;
 
+        // M628: the target dummy itself. Two halves, exactly as the GL viewport has always had them, and
+        // the D3D11 host was wired for NEITHER - which is why its gizmo drew over empty space.
+        //
+        // The real practice-tool model when one loaded (it lives in Map11.wad and is absent on some
+        // installs), and a wire box at the same place when it did not. The two are mutually exclusive by
+        // construction: DummyCubePosition is non-null only while DummyProps is null.
+        _dx11.PropMeshes = vm.DummyProps;
+        _dx11.PlayPropAnimations = true;
+        _dx11.DummyLines = vm.DummyCubePosition is { } box
+            ? Rendering.ViewportMeshRenderer.BuildBoxLines(
+                box - new System.Numerics.Vector3(60f, 0f, 60f),
+                box + new System.Numerics.Vector3(60f, 120f, 60f))
+            : null;
+
         // M619: the target dummy's translate gizmo, built by ViewportMeshRenderer's own builder at the arm
         // length PreviewViewport.HitTestGizmoAxis measures against - so what is DRAWN and what is
         // GRABBABLE are the same geometry by construction, which is the whole reason the map viewport
@@ -164,7 +185,26 @@ public partial class MeshPreviewWindow
         }
         else _dx11.Renderer.SetGizmoLines(null, null, null);
 
-        if (!_dx11.Render(PreviewViewport.Camera, w, h)) return;
+        // M627: BEFORE the render, not after. These are the matrices the dummy gizmo drag and the M613
+        // right-click orders raycast against, and they live on the GL control, which is hidden and not
+        // rendering. Refreshing them after an early return meant that any frame the renderer declined to
+        // produce also froze picking - at Identity/1x1 on the very first one - and the failure was silent
+        // in both places at once.
+        PreviewViewport.SyncPickMatrices(surface.Width, surface.Height);
+
+        if (!_dx11.Render(PreviewViewport.Camera, w, h))
+        {
+            // M627: say so. A failed frame used to return in silence while the last good bitmap stayed on
+            // screen, which reads as a live viewport that has stopped responding.
+            if (_dx11.LastError is { Length: > 0 } why && why != _dx11LastErrorShown)
+            {
+                _dx11LastErrorShown = why;
+                vm.Dx11Status = "render failed: " + why;
+                vm.LogDx11?.Invoke("D3D11", "render failed: " + why);
+            }
+            return;
+        }
+        _dx11LastErrorShown = null;
 
         // M622: what the renderer actually DID, once a second. Three milestones were spent guessing at an
         // invisible mesh from the outside, and the numbers that separate the possibilities - was it
@@ -195,9 +235,7 @@ public partial class MeshPreviewWindow
         Dx11Preview.Width = surface.Width;
         Dx11Preview.Height = surface.Height;
 
-        // The GL control is hidden and not rendering, so nothing else refreshes the matrices that picking
-        // raycasts against - and control mode's right-click orders go through exactly those.
-        PreviewViewport.SyncPickMatrices(surface.Width, surface.Height);
+
     }
 
     private static string GameVersionOf(MeshPreviewViewModel vm) => "";
