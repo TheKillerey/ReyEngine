@@ -152,8 +152,10 @@ public partial class MeshPreviewWindow
         if (_dx11.HasScene && (int)(_dx11Clock.Elapsed.TotalSeconds * 2) != _dx11LastReport)
         {
             _dx11LastReport = (int)(_dx11Clock.Elapsed.TotalSeconds * 2);
-            vm.Dx11Status = $"{_dx11.LastDrawCalls} draw(s), {_dx11.LastCulled} culled, "
-                            + $"{palette?.Length.ToString() ?? "no"} bone(s), {_dx11.LastFrameMs:F1} ms";
+            vm.Dx11Status =
+                $"{_dx11.LastGeometryDraws}/{_dx11.Renderer.MaterialCount} mesh draw(s), "
+                + $"{_dx11.LastHidden} hidden, {_dx11.LastCulled} culled, "
+                + $"{palette?.Length.ToString() ?? "no"} bone(s), {_dx11.LastFrameMs:F1} ms";
         }
 
         Dx11Preview.Source = _dx11.Current;

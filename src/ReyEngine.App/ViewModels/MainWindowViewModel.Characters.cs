@@ -127,6 +127,18 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 resolveWadPath: ResolveWadPath);
 
             if (scene is null) return (null, "The mesh would not decode for D3D11.");
+
+            // M623: to the console, in full. The status line has room for a count; the reason a submesh
+            // did not resolve is a sentence, and it is the sentence that says what to do about it.
+            foreach (string line in scene.Report.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                _log.Info("D3D11", line.TrimEnd());
+            foreach (string why in scene.Failures) _log.Warn("D3D11", why);
+            foreach (var slice in scene.Slices)
+                _log.Info("D3D11", $"  {slice.Submesh} -> {slice.Material}"
+                                   + $"  idx {slice.Start}+{slice.Count}"
+                                   + $"  {slice.Textures.Count} texture(s)"
+                                   + (slice.Hidden ? "  HIDDEN by initialSubmeshToHide" : "")
+                                   + (slice.UsedFallbackShader ? "  (stand-in shader)" : ""));
             return (scene, scene.Slices.Count > 0
                 ? $"{scene.Slices.Count} of {scene.SubmeshCount} submesh(es) resolved"
                 : "No materials resolved - " + (scene.Failures.Count > 0 ? scene.Failures[0] : "the skin bin was not found"));

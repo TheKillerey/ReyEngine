@@ -390,6 +390,11 @@ public sealed class Dx11ViewportSurface : IDisposable
     public int LastDrawCalls { get; private set; }
     public int LastCulled { get; private set; }
 
+    /// <summary>M623: scene materials that actually drew, and ones skipped as invisible - separately from
+    /// DrawCalls, which also counts overlays.</summary>
+    public int LastGeometryDraws { get; private set; }
+    public int LastHidden { get; private set; }
+
     /// <summary>M466: the sun shadow pass's own counters, forwarded for the status detail.
     ///
     /// <para>M465 computed both and surfaced neither, which left the two ways to see no shadows
@@ -545,6 +550,8 @@ public sealed class Dx11ViewportSurface : IDisposable
 
         LastPixels = pixels;
         LastDrawCalls = _renderer.DrawCalls;
+        LastGeometryDraws = _renderer.GeometryDraws;   // M623
+        LastHidden = _renderer.HiddenSlices;
         LastCulled = _renderer.CulledSlices;
         ShadowDraws = _renderer.ShadowDraws;       // M466
         ShadowRadius = _renderer.ShadowRadius;

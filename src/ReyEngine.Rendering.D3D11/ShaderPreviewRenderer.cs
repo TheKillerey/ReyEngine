@@ -4280,6 +4280,16 @@ float4 psmain(VOut i) : SV_Target
     /// than assumed - a culler that quietly rejects nothing is indistinguishable from one that works.</summary>
     public int CulledSlices { get; private set; }
 
+    /// <summary>M623: how many of the scene's own materials actually issued a DrawIndexed last frame.
+    ///
+    /// <para>Separate from <see cref="DrawCalls"/>, which also counts gizmo, icon, grid and light draws.
+    /// That mixing is what made "2 draw(s)" ambiguous on a 5-submesh character: two materials drawing, or
+    /// none drawing and two overlays. Those are completely different faults.</para></summary>
+    public int GeometryDraws { get; private set; }
+
+    /// <summary>M623: materials the draw loop skipped because Visible was false.</summary>
+    public int HiddenSlices { get; private set; }
+
     /// <summary>M246: how many times the pipeline actually changed while drawing the last frame. With
     /// sorting on this approaches the number of distinct pipelines; without it, it approaches the number
     /// of draws. Reported so the difference is visible rather than claimed.</summary>
@@ -4460,6 +4470,8 @@ float4 psmain(VOut i) : SV_Target
             // frame, not per slice.
             var planes = ExtractFrustum(Matrix4x4.Multiply(view, proj));
             CulledSlices = 0;
+            GeometryDraws = 0;
+            HiddenSlices = 0;
 
             // M214: one pass per material. A champion skin is one vertex/index buffer whose submeshes each
             // want their own shader, permutation and textures, so the pipeline is rebound per slice.
@@ -4496,7 +4508,7 @@ float4 psmain(VOut i) : SV_Target
             foreach (var drawIndex in _drawOrder)
             {
             var mat = _materials[drawIndex];
-            if (!mat.Visible) continue;
+            if (!mat.Visible) { HiddenSlices++; continue; }
 
             // M245: frustum cull. Slices with no bounds are always drawn.
             if (mat.Bounds is { } bb && !FrustumContains(planes, bb.Min, bb.Max)) { CulledSlices++; continue; }
@@ -4631,6 +4643,7 @@ float4 psmain(VOut i) : SV_Target
             {
                 _ctx.DrawIndexed(count, (uint)Math.Max(0, mat.StartIndex), 0);
                 DrawCalls++;
+                GeometryDraws++;
             }
             }
 
