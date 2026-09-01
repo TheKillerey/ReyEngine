@@ -169,8 +169,65 @@ public static class VfxD3D11EmitterPipeline
         // The sprite. TEXTURE__TX is the name quad_ps declares for it.
         BindTexture(renderer, mat, ps, "TEXTURE", sprites, log, texImage);
         if (!string.IsNullOrEmpty(e.TextureMultPath)) BindTexture(renderer, mat, ps, "TEXTUREMULT", sprites, log);
-        if (e.AlphaErosion is not null) BindTexture(renderer, mat, ps, "sAlphaErosionTexture", sprites, log);
-        if (e.Palette is not null) BindTexture(renderer, mat, ps, "sPalettesTexture", sprites, log);
+        // M629: bind the map AND send the parameters that go with it.
+        //
+        // The permutation is selected with ALPHA_EROSION / PALETTIZE_TEXTURES on, the sampler is bound -
+        // and then nothing wrote the constants, so the renderer's deliberately-neutral stand-ins stood.
+        // Those are documented as no-ops "a real emitter overrides", and for two milestones no emitter
+        // ever did. Measured on Aatrox: 77 of his 205 visual emitters run an erosion stage that dissolved
+        // nothing, and 38 run a palette stage that recoloured every one of them off row 0. Same shape as
+        // M237's AlphaTestReferenceValue: the flag that PICKS a permutation must also send its values.
+        if (e.AlphaErosion is { } erosion)
+        {
+            string? slot = BindTexture(renderer, mat, ps, "sAlphaErosionTexture", sprites, log);
+
+            // Two conditions, and both are load-bearing.
+            //
+            // The map must really be BOUND: against the renderer's white stand-in the erosion texel reads
+            // 1, and real parameters then evaluate mask = 0 over most of the drive - the sprite vanishes.
+            // The neutral default exists precisely to survive that case, so leave it standing.
+            //
+            // And IsDegenerate is GL's own guard (VfxParticleRenderer.cs), for the same reason: under the
+            // INFERRED P.y/P.z/P.w assignment 16% of erosion emitters evaluate to a mask of zero
+            // everywhere. Skipping those can only restore the pre-M174 look, never make one worse.
+            if (slot is not null && !erosion.IsDegenerate)
+            {
+                var yzw = erosion.PackYzw();
+                // .x is unread by the shader - the drive arrives per particle on the instance attribute,
+                // which ParticleQuadBuilder already writes into Uv0.w. Same layout GL uploads.
+                mat.Params["cAlphaErosionParams"] = new[] { 0f, yzw.X, yzw.Y, yzw.Z };
+                mat.Params["cAlphaErosionTextureMixer"] = new[]
+                    { erosion.ChannelMixer.X, erosion.ChannelMixer.Y, erosion.ChannelMixer.Z, erosion.ChannelMixer.W };
+                log.AppendLine($"     erosion: slice {erosion.SliceWidth:0.###}, "
+                    + $"feather {erosion.FeatherIn:0.###}/{erosion.FeatherOut:0.###}");
+            }
+            else if (slot is not null)
+                log.AppendLine("     erosion: degenerate under the inferred packing - left neutral, as GL does");
+        }
+
+        if (e.Palette is { } palette)
+        {
+            string? slot = BindTexture(renderer, mat, ps, "sPalettesTexture", sprites, log);
+
+            // The palette stage REPLACES the sprite's RGB and has no bypass, so a bound-but-unparameterised
+            // palette is not a missing effect, it is a wrong colour on every particle. Only IsUsable
+            // configurations get here; the rest keep row 0, which is what they were already showing.
+            if (slot is not null && palette.IsUsable)
+            {
+                // The shader reads v = Select.w + Select.x and u = mixed + Select.z. GL sends the row in
+                // one uniform; here it goes in .x with the two animated offsets left at zero, which is the
+                // same sample point.
+                mat.Params["cPaletteSelectMain"] = new[] { palette.RowV, 0f, 0f, 0f };
+                mat.Params["cPaletteSrcMixerMain"] = new[]
+                    { palette.SrcMixer.X, palette.SrcMixer.Y, palette.SrcMixer.Z, palette.SrcMixer.W };
+                log.AppendLine($"     palette: row {palette.Selector:0.#}/{palette.Count} -> v {palette.RowV:0.###}");
+
+                // NOT handled here, and stated rather than left to be found: GL binds a CLAMP sampler to
+                // the palette slot (M184) because a lookup landing outside [0,1] wraps to the far end of
+                // the gradient. PreviewMaterial.SamplerAddress is per MATERIAL, not per slot, so the same
+                // fix cannot be expressed on this path without a per-slot sampler - its own change.
+            }
+        }
 
         // M282: heat haze. The strength is set whether or not the normal map resolves, because it is what
         // routes this material away from the billboard path - and an unresolved heat haze must draw NOTHING
@@ -230,7 +287,10 @@ public static class VfxD3D11EmitterPipeline
     /// declared textures. Needed for the distortion normal map, which no permutation of quad_ps declares -
     /// it feeds our own pipeline - but which still wants the pooling and lifetime handling every other
     /// stage gets, so it takes the same road with a different destination.</param>
-    private static void BindTexture(ShaderPreviewRenderer renderer, PreviewMaterial mat, DxbcShader ps,
+    /// <summary>Binds a sampler's texture and returns the SLOT NAME it bound to, or null when nothing was
+    /// bound. M629 needs that answer: uploading real alpha-erosion parameters against the renderer's WHITE
+    /// stand-in erases the sprite outright, so the parameters may only be sent when the map is really there.</summary>
+    private static string? BindTexture(ShaderPreviewRenderer renderer, PreviewMaterial mat, DxbcShader ps,
         string sampler, Func<string, Sprite?> sprites, StringBuilder log, TextureImage? preloaded = null,
         string? targetKey = null)
     {
@@ -241,11 +301,11 @@ public static class VfxD3D11EmitterPipeline
             var slot = ps.Textures.FirstOrDefault(t =>
                 t.Name.Equals(sampler + "__TX", StringComparison.OrdinalIgnoreCase)
                 || t.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase));
-            if (slot is null) { log.AppendLine($"     {sampler}: no such slot in this permutation"); return; }
+            if (slot is null) { log.AppendLine($"     {sampler}: no such slot in this permutation"); return null; }
             slotName = slot.Name;
         }
 
-        if (sprites(sampler) is not { } sprite) { log.AppendLine($"     {sampler}: not authored"); return; }
+        if (sprites(sampler) is not { } sprite) { log.AppendLine($"     {sampler}: not authored"); return null; }
 
         // M266 (divergence 15): TryBindCached FIRST, always, and before the sprite is even opened.
         //
@@ -265,7 +325,7 @@ public static class VfxD3D11EmitterPipeline
         if (renderer.TryBindCached(mat, slotName, sprite.Key))
         {
             log.AppendLine($"     {sampler} -> {slotName} (pooled: {sprite.Key})");
-            return;
+            return slotName;
         }
 
         if (sprite.Open is null)
@@ -273,18 +333,19 @@ public static class VfxD3D11EmitterPipeline
             renderer.SetTexture(mat, slotName, sprite.Key, VfxPlaybackSim.SoftDot(SoftDotSize),
                 SoftDotSize, SoftDotSize);
             log.AppendLine($"     {sampler} -> {slotName}  [soft-dot fallback]");
-            return;
+            return slotName;
         }
 
         TextureImage? img = preloaded;
         if (img is null)
         {
             try { img = sprite.Open(); }
-            catch (Exception ex) { log.AppendLine($"     {sampler}: FAILED {ex.Message}"); return; }
+            catch (Exception ex) { log.AppendLine($"     {sampler}: FAILED {ex.Message}"); return null; }
         }
-        if (img is null) return;   // the callback already said why; nothing bound = the renderer's stand-in
+        if (img is null) return null;   // the callback already said why; nothing bound = the renderer's stand-in
 
         renderer.SetTexture(mat, slotName, sprite.Key, img.Rgba, img.Width, img.Height);
         log.AppendLine($"     {sampler} -> {slotName} ({img.Width}x{img.Height})");
+        return slotName;
     }
 }
