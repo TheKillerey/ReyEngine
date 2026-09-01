@@ -88,6 +88,15 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// <summary>M628: the target dummy's wire box, for a host with no dummy MODEL. Null clears it.</summary>
     public float[]? DummyLines { get; set; }
 
+    /// <summary>M630: this frame's animated bone transforms and the model transform to apply over them,
+    /// so clip particle events ride their bone instead of standing at the world origin. Null for a map.</summary>
+    public System.Collections.Generic.IReadOnlyDictionary<string, System.Numerics.Matrix4x4>? BoneGlobals { get; set; }
+    public System.Numerics.Matrix4x4 BoneModelWorld { get; set; } = System.Numerics.Matrix4x4.Identity;
+
+    /// <summary>M630: where beams terminate. Null leaves the simulator to resolve them from the emitter's
+    /// own authored target offset, which is what a map wants.</summary>
+    public System.Numerics.Vector3? BeamTarget { get; set; }
+
     /// <summary>M620: where the subject stands, for the character preview's control mode. Identity for
     /// the map viewport, which draws its geometry at the coordinates the data puts it.</summary>
     public System.Numerics.Matrix4x4 World { get; set; } = System.Numerics.Matrix4x4.Identity;
@@ -526,6 +535,10 @@ public sealed class Dx11ViewportSurface : IDisposable
         // above, and reconstructing that anywhere else would be a second source of truth for the one thing
         // hardest to get right.
         EnsureParticles();
+        // M630: pushed every frame, like the sun and the lightmap scale - the bone pose changes on every
+        // animated frame and the target moves whenever the user drags it.
+        Particles?.SetBoneGlobals(BoneGlobals, BoneModelWorld);
+        Particles?.SetBeamTarget(BeamTarget);
         // Gated on the DRIVER existing, not on it having a playback. SetPlayback(null) only marks the
         // driver dirty - the teardown that calls RemoveMaterials lives in Tick's Rebuild - so gating on
         // HasPlayback made retraction unreachable: switching Play All off left the last frame's quads

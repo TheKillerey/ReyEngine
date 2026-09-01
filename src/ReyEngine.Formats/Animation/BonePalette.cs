@@ -113,6 +113,53 @@ public static class BonePalette
         return (palette, segments.ToArray());
     }
 
+    /// <summary>
+    /// M630: the animated GLOBAL transform of every joint, by name — what a bone-attached particle rides.
+    ///
+    /// <para>The GL path gets these from <see cref="SkinnedMeshAnimator.Skin"/> as a by-product of
+    /// transforming every vertex on the CPU. A GPU-skinned path has no such by-product, and this is the
+    /// same walk of the joints the palette already does — global, NOT the skinning matrix: a particle is
+    /// placed at the bone, it is not a vertex being moved from its bind pose.</para>
+    /// </summary>
+    public static IReadOnlyDictionary<string, Matrix4x4> Globals(
+        SkeletonAsset skeleton, AnimationClip? clip, float time)
+    {
+        var pose = new Dictionary<uint, (Quaternion Rotation, Vector3 Translation, Vector3 Scale)>();
+        if (clip is not null)
+            try { clip.Evaluate(time, pose); }
+            catch { /* bind pose, as everywhere else here */ }
+
+        var joints = skeleton.Joints;
+        var globals = new Dictionary<string, Matrix4x4>(joints.Count, StringComparer.OrdinalIgnoreCase);
+        if (joints.Count == 0) return globals;
+
+        int maxId = 0;
+        foreach (var j in joints) maxId = Math.Max(maxId, j.Id);
+        var byId = new Dictionary<int, SkinJoint>(joints.Count);
+        foreach (var j in joints) byId[j.Id] = j;
+
+        var global = new Matrix4x4[maxId + 1];
+        var done = new bool[maxId + 1];
+
+        Matrix4x4 Global(int id)
+        {
+            if ((uint)id > maxId || !byId.TryGetValue(id, out var j)) return Matrix4x4.Identity;
+            if (done[id]) return global[id];
+            done[id] = true;
+
+            var local = pose.TryGetValue(j.AnimHash, out var trs)
+                ? Compose(trs.Translation, trs.Rotation, trs.Scale)
+                : j.LocalTransform;
+
+            global[id] = j.ParentId >= 0 && byId.ContainsKey(j.ParentId) ? local * Global(j.ParentId) : local;
+            return global[id];
+        }
+
+        // By NAME, and case-insensitively, because that is how a ParticleEventData names its bone.
+        foreach (var j in joints) globals[j.Name] = Global(j.Id);
+        return globals;
+    }
+
     /// <summary>Same composition the CPU skinner uses, kept identical so the two paths cannot drift.</summary>
     private static Matrix4x4 Compose(Vector3 translation, Quaternion rotation, Vector3 scale) =>
         Matrix4x4.CreateScale(scale)

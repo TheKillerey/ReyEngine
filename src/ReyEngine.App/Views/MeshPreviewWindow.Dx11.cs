@@ -157,6 +157,13 @@ public partial class MeshPreviewWindow
         _dx11.ShaderCache = vm.Dx11ShaderCache;
         _dx11.ParticlePlayback = vm.Playback;
 
+        // M630: the two things that make a spell land where it should. Clip particle events ride their
+        // bone, and beams terminate at the dummy - both pushed per frame, because the pose changes every
+        // animated frame and the dummy moves whenever it is dragged.
+        _dx11.BoneGlobals = vm.CurrentBoneGlobals();
+        _dx11.BoneModelWorld = vm.ModelWorld;
+        _dx11.BeamTarget = vm.TargetDummyPosition;
+
         // M628: the target dummy itself. Two halves, exactly as the GL viewport has always had them, and
         // the D3D11 host was wired for NEITHER - which is why its gizmo drew over empty space.
         //

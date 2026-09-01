@@ -138,6 +138,36 @@ public sealed class D3D11MapParticles
 
     // ---------------------------------------------------------------- state the UI reads
 
+    // ---- M630: re-anchoring -----------------------------------------------------------------------
+    //
+    // Three things the GL viewport has always done per frame and this driver did none of. They are one
+    // milestone rather than three because they are one idea: a placement's transform is not fixed at
+    // build time. Measured on Aatrox - 23 of 23 of his clip particle events name a bone, so without the
+    // first of these EVERY clip-driven effect he has plays at the world origin instead of on him.
+
+    private IReadOnlyDictionary<string, Matrix4x4>? _boneGlobals;
+    private Matrix4x4 _boneModelWorld = Matrix4x4.Identity;
+    private Vector3? _beamTarget;
+    /// <summary>How long each travelling placement has been in flight. Keyed by the item, like _sims, so a
+    /// rebuild drops the elapsed time with the simulator it belonged to.</summary>
+    private readonly Dictionary<VfxPlaybackItem, float> _travelElapsed =
+        new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>The animated bone transforms this frame, and the model transform to apply on top of them.
+    /// Bone globals are pre-scale and pre-placement, exactly as the GL path documents.
+    ///
+    /// <para>Null for a map, which has no skeleton - and then nothing is re-anchored, which is the
+    /// behaviour this driver had before.</para></summary>
+    public void SetBoneGlobals(IReadOnlyDictionary<string, Matrix4x4>? bones, Matrix4x4 modelWorld)
+    {
+        _boneGlobals = bones;
+        _boneModelWorld = modelWorld;
+    }
+
+    /// <summary>Where beams terminate. Pushed every frame rather than at build time so dragging the target
+    /// moves live beams instead of needing a replay - the same reason GL pushes it (M183).</summary>
+    public void SetBeamTarget(Vector3? worldTarget) => _beamTarget = worldTarget;
+
     public bool HasPlayback => _playback is not null;
     public int Placements { get; private set; }
     public int ActivePlacements { get; private set; }
@@ -165,6 +195,35 @@ public sealed class D3D11MapParticles
     /// ParticleStopped property is unbound in MainWindow.axaml. This exists for the harness's NEGATIVE
     /// CONTROL: after the particles have died the same measurement must read ~0%, and without that a
     /// "greater than 0.5%" result cannot tell working particles from a background that moved.</para></summary>
+    /// <summary>M630: move every placement that is not standing still - bone-attached systems onto their
+    /// bone, travelling systems along their flight. Both were GL-only.</summary>
+    private void Reanchor(float dt)
+    {
+        foreach (var (item, sim) in _sims)
+        {
+            // A clip particle event rides its bone. Bone globals are pre-scale and pre-placement, so the
+            // model transform goes on top - the SAME matrix the mesh is drawn with, or the effect stands
+            // at the origin while the character walks away (the M613/M614 lesson, on this path now).
+            if (item.AttachBone is { Length: > 0 } bone
+                && _boneGlobals is { } bones && bones.TryGetValue(bone, out var bm))
+            {
+                sim.SetWorldTransform(_boneModelWorld.IsIdentity ? bm : bm * _boneModelWorld);
+                continue;
+            }
+
+            // A missile flies from where it was spawned to where it was aimed. Nothing here reads the
+            // clock except this: the elapsed time is accumulated per item so a paused viewport freezes
+            // the flight along with everything else.
+            if (item.TravelTo is not { } destination || item.TravelSeconds <= 0f) continue;
+
+            float elapsed = (_travelElapsed.TryGetValue(item, out var t) ? t : 0f) + dt;
+            _travelElapsed[item] = elapsed;
+            float progress = Math.Clamp((elapsed - item.StartDelay) / item.TravelSeconds, 0f, 1f);
+            sim.SetWorldTransform(
+                Matrix4x4.CreateTranslation(Vector3.Lerp(item.WorldPos, destination, progress)));
+        }
+    }
+
     public void StopAll()
     {
         foreach (var sim in _sims.Values) sim.Stop();
@@ -206,6 +265,7 @@ public sealed class D3D11MapParticles
             _renderer.ReleaseRibbon(id);
         _ribbonSlices.Clear();
         _liveBySlice.Clear();
+        _travelElapsed.Clear();   // M630: elapsed flight belongs to the sims being discarded
         _byEmitter.Clear();
         _noPipeline.Clear();
         _sims.Clear();
@@ -396,12 +456,19 @@ public sealed class D3D11MapParticles
 
         UpdateActive(pb, mirrorInclusiveViewProj, cameraPosition, cameraDistance);
 
-        foreach (var (_, sim) in _active) sim.Update(dt);
-        // SetBeamTarget is still deliberately not called: TargetDummyPosition is unbound in
-        // MainWindow.axaml, so the GL map path passes null too. M364 note - that no longer means beams do
-        // not draw. The simulator resolves endpoints without a target, using the emitter's authored target
-        // offset, which is Riot's own pattern for untargeted beams (the _Long_FakeDir family); only an
-        // emitter authoring neither gets the editor's fallback length.
+        // M630: re-anchor BEFORE the step, so a bone-attached system is simulated from where its bone is
+        // this frame rather than from where it was last frame.
+        Reanchor(dt);
+
+        foreach (var (_, sim) in _active)
+        {
+            // M630: beams terminate at the target. The map host still passes null - it has no dummy to
+            // bind - and the simulator then resolves endpoints from the emitter's own authored target
+            // offset, which is Riot's pattern for untargeted beams. So this is inert for maps and is the
+            // whole of "the cast points at the dummy" for a character.
+            sim.SetBeamTarget(_beamTarget);
+            sim.Update(dt);
+        }
         TickMeshSlices();
         TickRibbonSlices(cameraPosition);
 

@@ -71,6 +71,16 @@ public sealed partial class MeshPreviewViewModel
         return (palette, segments);
     }
 
+    /// <summary>M630: this frame's animated bone transforms, by joint name - what a clip particle event
+    /// re-anchors onto. The GL path takes these from the CPU skinner's by-product; the D3D11 path skins on
+    /// the GPU and has no such by-product, so they come from the same walk of the joints that builds the
+    /// palette.</summary>
+    public IReadOnlyDictionary<string, Matrix4x4>? CurrentBoneGlobals()
+    {
+        if (Skeleton is not { } skeleton) return null;
+        return BonePalette.Globals(skeleton, CurrentAnimation, (float)AnimationTime);
+    }
+
     /// <summary>M625: the editor console, so the D3D11 path can say what the renderer is holding. Supplied
     /// by the host - this view model has no logger of its own and should not grow one.</summary>
     public Action<string, string>? LogDx11 { get; set; }
