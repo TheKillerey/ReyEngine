@@ -85,6 +85,21 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
 
             // clipsByAnm is keyed by .anm file name, so its values are this skin's clips exactly once.
             var actions = CharacterActions.Build(spells, clipsByAnm.Values.ToList());
+
+            // M631: and the spell records, so the composite can use the champion's own missile speeds and
+            // cast timings instead of the constants it used to invent. Same bin the spell NAMES came from,
+            // read once more rather than threaded through - it is a few hundred objects.
+            if (TryResolveEntry(HashAlgorithms.WadPath(ChampionRecord.PathFor(character)), out var recordEntry))
+            {
+                var abilities = ChampionSpellData.Read(ReadAsset(recordEntry.PathHash), character);
+                MeshPreview.SetAbilities(abilities);
+                int missiles = abilities.Count(a => a.HasMissile);
+                if (missiles > 0)
+                    _log.Info("Character",
+                        $"{character}: {missiles} ability slot(s) with an authored missile, "
+                        + $"{abilities.Count(a => a.CastFrame > 0f || a.CastTimeSeconds > 0f)} with authored cast timing.");
+            }
+            else MeshPreview.SetAbilities(Array.Empty<AbilitySlot>());
             _log.Info("Character",
                 $"{character}: {actions.Count(a => a.HasClip)}/{actions.Count} actions have an animation"
                 + (spells.Count > 0 ? $", {spells.Count} abilities named from the record." : ", no champion record."));

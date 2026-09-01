@@ -444,12 +444,46 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         }
     }
 
-    /// <summary>The spell composite: caster systems on the champion, target systems on the dummy,
-    /// missiles travelling between at ~1800 u/s (League's common missile speed band).</summary>
+    /// <summary>M631: the ability records, when the host could read them. Empty for a non-champion, and
+    /// for the one shipped CharacterRecord that has no spells at all.</summary>
+    private IReadOnlyList<Formats.Characters.AbilitySlot> _abilities = Array.Empty<Formats.Characters.AbilitySlot>();
+
+    public void SetAbilities(IReadOnlyList<Formats.Characters.AbilitySlot> abilities) => _abilities = abilities;
+
+    /// <summary>The ability slot this event belongs to, by its Q/W/E/R label. The event builder names a
+    /// composite after its slot letter, which is the only thing the two lists share.</summary>
+    private Formats.Characters.AbilitySlot? SlotFor(Formats.Vfx.ChampionEvent ev)
+    {
+        if (_abilities.Count == 0 || ev.Name.Length == 0) return null;
+        string slot = ev.Name[..1];
+        foreach (var a in _abilities)
+            if (a.Slot.Equals(slot, StringComparison.OrdinalIgnoreCase)) return a;
+        return null;
+    }
+
+    /// <summary>
+    /// The spell composite: caster systems on the champion, target systems on the dummy, missiles
+    /// travelling between.
+    ///
+    /// <para>M631: the missile's SPEED and the cast's DELAY now come from the champion's own spell
+    /// records where they are authored. They used to be constants - 1,800 units/s and 0.15 s - and the
+    /// speed was measurably one champion's number: exactly 1,800 occurs in 14 of 463 authored speeds,
+    /// and Aatrox W is one of them, which is almost certainly how it was picked. Ezreal's Q is 2,000 at
+    /// a 0.066 s cast; Ahri's R is 1,400.</para>
+    ///
+    /// <para>The IMPACT half still comes from the name-token heuristic, and that is not a shortcut.
+    /// Measured over 692 ability slots, only 58 name a hit effect this reader can reach: the ability's
+    /// impact effect is linked by the compiled spell script, which ships in no bin at all. There is no
+    /// authored link to prefer.</para>
+    /// </summary>
     private List<VfxPlaybackItem> BuildEventBundle(Formats.Vfx.ChampionEvent ev)
     {
         var items = new List<VfxPlaybackItem>();
         var dummy = TargetDummyPosition ?? new System.Numerics.Vector3(350, 0, 0);
+        var ability = SlotFor(ev);
+        // The authored cast, in seconds. castFrame is in ANIMATION frames, so the clip's own rate decides
+        // what it means; 0.15 s was a constant that matched no champion in particular.
+        float castDelay = ability?.CastSecondsAt(ClipFps()) ?? 0.15f;
 
         VfxPlaybackItem? Make(uint hash, System.Numerics.Vector3 at, System.Numerics.Vector3? travelTo)
         {
@@ -464,8 +498,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def))
             {
                 TravelTo = travelTo,
-                TravelSeconds = dist > 1f ? dist / 1800f : 0f,
-                StartDelay = travelTo is not null ? 0.15f : 0f,   // small windup before the missile leaves
+                // M631: the champion's own numbers where it authored them. The fallbacks are the old
+                // constants, kept for the 20 slots that author no motion at all and the ones with no
+                // record to read - a guess is still better than an instant hit.
+                TravelSeconds = travelTo is null ? 0f
+                    : ability?.Missiles.Select(m => m.Motion.SecondsFor(dist)).FirstOrDefault(v => v is > 0f)
+                      ?? (dist > 1f ? dist / 1800f : 0f),
+                StartDelay = travelTo is not null ? castDelay : 0f,
             };
         }
 
@@ -476,6 +515,20 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         foreach (var h in ev.CasterSystems) if (Make(h, caster, null) is { } i) items.Add(i);
         foreach (var h in ev.TargetSystems) if (Make(h, dummy, null) is { } i) items.Add(i);
         foreach (var h in ev.MissileSystems) if (Make(h, caster, dummy) is { } i) items.Add(i);
+
+        // M631: the missile the spell record NAMES, when the token rule did not already find it. The
+        // record says which system is the missile outright - 280 of 692 slots do - where the tokens infer
+        // it from a substring of the system's name and classify only about three quarters of the corpus.
+        // Added rather than substituted: a system the tokens found and the record does not name is still
+        // that spell's missile, and dropping it would trade one incomplete answer for another.
+        if (ability is not null)
+            foreach (var missile in ability.Missiles)
+            {
+                if (missile.MissileEffectKey == 0) continue;
+                if (!_vfxResourceMap.TryGetValue(missile.MissileEffectKey, out var systemHash)) continue;
+                if (ev.MissileSystems.Contains(systemHash) || ev.CasterSystems.Contains(systemHash)) continue;
+                if (Make(systemHash, caster, dummy) is { } authored) items.Add(authored);
+            }
         return items;
     }
 
