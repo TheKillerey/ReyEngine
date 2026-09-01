@@ -122,7 +122,18 @@ public partial class MeshPreviewWindow
         _dx11.BoneLines = bones;
         _dx11.World = vm.ModelWorld;   // M620: control mode moves the character here too
         _dx11.Wireframe = vm.Wireframe;
-        _dx11.CullBackFaces = vm.CullBackfaces;
+
+        // M624: back-face culling OFF, and not as a preference.
+        //
+        // The character winding on this renderer has never been measured, and the one configuration known
+        // to draw a champion through it - the Shader Preview's M240 preset - pins this false for exactly
+        // that reason. With it on, every triangle can be rejected by the RASTERISER, which counts as
+        // neither culled nor hidden: the draw calls all issue and produce nothing, which is what
+        // "3/11 mesh draw(s), 0 culled" and an empty viewport meant.
+        //
+        // This is the same trap M356 recorded on the map path, where M354 turned culling on and deleted
+        // the terrain. Turning it back on is a milestone with a measurement in it, not a toggle.
+        _dx11.CullBackFaces = false;
 
         // M619: the VFX. The SAME playback object the GL viewport is bound to in XAML, so both viewports
         // show the same effect at the same age rather than two independent simulations.

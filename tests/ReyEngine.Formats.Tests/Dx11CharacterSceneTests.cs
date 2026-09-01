@@ -320,6 +320,59 @@ public sealed class Dx11CharacterSceneTests
     }
 
     [Fact]
+    public void TheFallbackShaderResolvesTheSubmeshesThatWouldOtherwiseBeDropped()
+    {
+        // A skin bin's default diffuse and its inline per-submesh overrides carry TEXTURES and no shader.
+        // With no stand-in they resolve to nothing, and the character draws with holes in it - measured
+        // on Aatrox as 3 of 5 submeshes. The constant is the Shader Preview's, which is the one
+        // configuration known to draw a champion through this renderer.
+        if (Ahri() is not { } f) return;
+        using (f)
+        {
+            var without = Prepare(f, fallback: null);
+            var with = Prepare(f, fallback: Dx11CharacterScene.DefaultCharacterShader);
+            if (without is null || with is null) return;
+
+            Assert.True(with.Slices.Count >= without.Slices.Count,
+                $"the stand-in resolved fewer slices ({with.Slices.Count}) than none ({without.Slices.Count})");
+            // And every slice it added is honestly marked as using one.
+            Assert.All(with.Slices.Where(x => x.UsedFallbackShader),
+                x => Assert.True(x.Vs is not null && x.Ps is not null));
+        }
+    }
+
+    [Fact]
+    public void TheHostSuppliesTheStandInShader()
+    {
+        // Without this the constant exists and nothing passes it, which is the failure it was written for.
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(System.IO.Path.Combine(dir.FullName, "ReyEngine.slnx"))) dir = dir.Parent;
+        if (dir is null) return;
+
+        string host = System.IO.Path.Combine(dir.FullName, "src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.Characters.cs");
+        if (!File.Exists(host)) return;
+        Assert.Contains("Dx11CharacterScene.DefaultCharacterShader", File.ReadAllText(host));
+    }
+
+    [Fact]
+    public void TheCharacterPreviewDoesNotBackFaceCull()
+    {
+        // The character winding on this renderer has never been measured. With culling on, every triangle
+        // can be rejected by the RASTERISER - which counts as neither culled nor hidden, so the draws all
+        // issue and produce nothing. Same trap M356 recorded on the map path.
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(System.IO.Path.Combine(dir.FullName, "ReyEngine.slnx"))) dir = dir.Parent;
+        if (dir is null) return;
+
+        string window = System.IO.Path.Combine(dir.FullName, "src", "ReyEngine.App", "Views", "MeshPreviewWindow.Dx11.cs");
+        if (!File.Exists(window)) return;
+        string text = File.ReadAllText(window);
+
+        Assert.Contains("_dx11.CullBackFaces = false", text);
+        Assert.DoesNotContain("_dx11.CullBackFaces = vm.CullBackfaces", text);
+    }
+
+    [Fact]
     public void AMaterialWithNoShaderIsReportedRatherThanGuessedAt()
     {
         // 42% of the material corpus authors no renderShader. Drawing those with an invented shader

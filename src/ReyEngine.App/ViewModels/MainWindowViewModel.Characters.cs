@@ -124,7 +124,8 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 ReadAsset(skn.PathHash), bin, cache, ShaderPerms(),
                 readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
                 resolveBinName: ResolveBinName,
-                resolveWadPath: ResolveWadPath);
+                resolveWadPath: ResolveWadPath,
+                fallbackShader: Services.Dx11CharacterScene.DefaultCharacterShader);
 
             if (scene is null) return (null, "The mesh would not decode for D3D11.");
 

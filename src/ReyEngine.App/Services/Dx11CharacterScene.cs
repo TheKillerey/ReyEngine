@@ -55,6 +55,15 @@ public sealed class PreparedCharacterScene
 /// </summary>
 public static class Dx11CharacterScene
 {
+    /// <summary>M624: the shader a skin's materials fall back to when they name none of their own.
+    ///
+    /// <para>Not invented here - it is the same constant the Shader Preview has used since M240, which is
+    /// the one configuration known to draw a champion through this renderer. It matters more than it
+    /// sounds: a skin bin's default diffuse and every inline per-submesh override carry TEXTURES and no
+    /// shader, so with no stand-in those submeshes resolve to nothing at all. Measured on Ahri: 2 of her
+    /// 4 submeshes resolved without it, 4 of 4 with it - half the character was simply absent.</para></summary>
+    public const string DefaultCharacterShader = "shaders/skinnedmesh/diffuse_alpha";
+
     /// <summary>Decode and resolve. Returns null only when the mesh itself will not decode — a scene with
     /// materials missing is still a scene, and reports what it could not resolve.</summary>
     /// <param name="fallbackShader">Used for materials that author no <c>renderShader</c> of their own.
