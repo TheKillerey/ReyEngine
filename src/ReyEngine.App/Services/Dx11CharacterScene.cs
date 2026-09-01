@@ -195,9 +195,20 @@ public static class Dx11CharacterScene
                 if (!scene.Textures.TryGetValue(key, out var img)) continue;
                 renderer.SetTexture(mat, target, key, img.Rgba, img.Width, img.Height);
             }
+
+            // M626: REGISTER it. BuildMaterial constructs a material and hands it back; AddMaterial is the
+            // only path into the renderer's draw list, and without this line every character material was
+            // built, textured, parameterised - and then dropped on the floor. Nothing drew, and nothing
+            // was disposed either, so each scene leaked its constant buffers as well.
+            renderer.AddMaterial(mat);
             ok++;
         }
-        return ok;
+
+        // The RENDERER's count, not the local one. Returning what this method built rather than what the
+        // renderer holds is what let the bug hide: the window logged "after commit: 0 material(s)" and,
+        // three lines later, "5 material(s) drawing". A return value that cannot disagree with the
+        // renderer cannot tell that lie again.
+        return renderer.MaterialCount;
     }
 
     // ---- resolution ---------------------------------------------------------------------------------

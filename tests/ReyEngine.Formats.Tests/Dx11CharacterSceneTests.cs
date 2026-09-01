@@ -454,6 +454,54 @@ public sealed class Dx11CharacterSceneTests
         Assert.Contains("GameReferenceLibrary.FindFinalDirectory", body);
     }
 
+    // ===================================================== Commit, the seam everything stopped at
+
+    [Fact]
+    public void CommittingRegistersTheMaterialsWithTheRenderer()
+    {
+        // THE test this file was missing, and the gap is the whole reason M617-M625 happened: every test
+        // here stopped at Prepare, which was always correct, while Commit built five materials and handed
+        // none of them to the renderer. Eight milestones of symptoms downstream of one unregistered
+        // object, and no assertion anywhere crossed the boundary.
+        //
+        // Needs a device, so it skips where there is none - the same rule the rest of the suite uses for
+        // the game install.
+        if (Ahri() is not { } f) return;
+        using (f)
+        {
+            var scene = Prepare(f, Dx11CharacterScene.DefaultCharacterShader);
+            if (scene is null || scene.Slices.Count == 0) return;
+
+            using var renderer = new Rendering.D3D11.ShaderPreviewRenderer();
+            if (!renderer.Initialize(out _)) return;      // no D3D11 here; nothing to assert
+
+            int committed = Dx11CharacterScene.Commit(renderer, scene, "");
+
+            Assert.True(renderer.MaterialCount > 0,
+                $"Commit reported {committed} but the renderer holds {renderer.MaterialCount} - "
+                + "the materials were built and never registered");
+            Assert.Equal(renderer.MaterialCount, committed);
+        }
+    }
+
+    [Fact]
+    public void CommitReportsWhatTheRendererHoldsNotWhatItBuilt()
+    {
+        // The return value is what every caller drives its status and its HasScene flag from. While it
+        // counted this method's own successes it could - and did - say "5 material(s) drawing" beside a
+        // log line reading "after commit: 0 material(s)". A count taken FROM the renderer cannot.
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(System.IO.Path.Combine(dir.FullName, "ReyEngine.slnx"))) dir = dir.Parent;
+        if (dir is null) return;
+
+        string source = System.IO.Path.Combine(dir.FullName, "src", "ReyEngine.App", "Services", "Dx11CharacterScene.cs");
+        if (!File.Exists(source)) return;
+        string text = File.ReadAllText(source);
+
+        Assert.Contains("renderer.AddMaterial(mat);", text);
+        Assert.Contains("return renderer.MaterialCount;", text);
+    }
+
     [Fact]
     public void TheReportSaysWhatWasResolved()
     {
