@@ -23,6 +23,7 @@ public partial class MeshPreviewWindow
     private readonly Stopwatch _dx11Clock = Stopwatch.StartNew();
     private double _dx11LastFrame = double.NegativeInfinity;
     private int _dx11LastReport = -1;
+    private bool _dx11ReportedBlank;
 
     /// <summary>~60 fps. The preview is one character, but the loop still self-throttles rather than
     /// spinning the GPU on a model nobody is moving.</summary>
@@ -60,6 +61,7 @@ public partial class MeshPreviewWindow
         }
 
         _dx11CommittedRevision = -1;    // commit whatever scene is loaded, on the next frame
+        _dx11ReportedBlank = false;
         QueueDx11Frame();
     }
 
@@ -104,6 +106,14 @@ public partial class MeshPreviewWindow
                 int drew = Dx11CharacterScene.Commit(_dx11.Renderer, scene, GameVersionOf(vm));
                 _dx11.HasScene = drew > 0;
                 _dx11.SceneReport = scene.Report;
+
+                // M625: what the renderer is actually holding, straight after the commit. Two turns were
+                // spent theorising about where the character materials went; this reads the list instead.
+                vm.LogDx11?.Invoke("D3D11", $"after commit: {_dx11.Renderer.MaterialCount} material(s)");
+                foreach (var m in _dx11.Renderer.Materials)
+                    vm.LogDx11?.Invoke("D3D11",
+                        $"   {(m.Visible ? "shown " : "HIDDEN")} {m.Name}  idx {m.StartIndex}+{m.IndexCount}"
+                        + $"  group {m.MapGroupIndex}  dynamic={m.UsesDynamicMesh}");
                 vm.Dx11Status = drew > 0
                     ? $"{drew} material(s) drawing"
                       + (scene.Failures.Count > 0 ? $", {scene.Failures.Count} unresolved" : "")
@@ -163,6 +173,18 @@ public partial class MeshPreviewWindow
         if (_dx11.HasScene && (int)(_dx11Clock.Elapsed.TotalSeconds * 2) != _dx11LastReport)
         {
             _dx11LastReport = (int)(_dx11Clock.Elapsed.TotalSeconds * 2);
+
+            // M625: and once, the first time everything is hidden at DRAW time - which is a different
+            // moment from the commit above, and the difference between the two is the whole question.
+            if (_dx11.LastGeometryDraws == 0 && !_dx11ReportedBlank)
+            {
+                _dx11ReportedBlank = true;
+                vm.LogDx11?.Invoke("D3D11", $"nothing drew: {_dx11.Renderer.MaterialCount} material(s) held");
+                foreach (var m in _dx11.Renderer.Materials)
+                    vm.LogDx11?.Invoke("D3D11",
+                        $"   {(m.Visible ? "shown " : "HIDDEN")} {m.Name}  idx {m.StartIndex}+{m.IndexCount}"
+                        + $"  group {m.MapGroupIndex}  dynamic={m.UsesDynamicMesh}");
+            }
             vm.Dx11Status =
                 $"{_dx11.LastGeometryDraws}/{_dx11.Renderer.MaterialCount} mesh draw(s), "
                 + $"{_dx11.LastHidden} hidden, {_dx11.LastCulled} culled, "

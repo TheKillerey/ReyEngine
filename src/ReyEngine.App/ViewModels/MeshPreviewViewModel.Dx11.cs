@@ -71,6 +71,10 @@ public sealed partial class MeshPreviewViewModel
         return (palette, segments);
     }
 
+    /// <summary>M625: the editor console, so the D3D11 path can say what the renderer is holding. Supplied
+    /// by the host - this view model has no logger of its own and should not grow one.</summary>
+    public Action<string, string>? LogDx11 { get; set; }
+
     /// <summary>The shader cache the D3D11 particle driver needs. Supplied by the host, which owns it.</summary>
     public Formats.Shaders.ShaderCacheReader? Dx11ShaderCache { get; set; }
 
