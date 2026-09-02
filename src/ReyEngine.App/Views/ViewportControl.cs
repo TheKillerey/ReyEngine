@@ -657,7 +657,23 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool TryProjectToScreen(Vector3 world, out Vector2 screen)
         => ViewportPicking.ProjectToScreen(world, _lastViewProj, _lastViewportW, _lastViewportH, out screen);
 
-    private float GizmoArmLength(Vector3 pivot) => Math.Clamp(Vector3.Distance(_lastCamPos, pivot) * 0.15f, 10f, 5000f);
+    /// <summary>
+    /// M632: measured in WORLD space, against the real camera - not against <c>_lastCamPos</c>.
+    ///
+    /// <para>_lastCamPos is deliberately X-MIRRORED (CachePickMatrices), because its other two readers
+    /// work in mirrored space: the VFX distance cull compares it against a mirrored viewProj, and the
+    /// audio listener follows what is drawn. The pivot passed here is un-mirrored world, so this one call
+    /// was measuring between two different spaces. Measured on the default view: true distance 495 units,
+    /// mirrored distance 848 - and sweeping the orbit, the arm came out up to 7.06x the length it should
+    /// be, changing size as the camera turned rather than as it moved closer.</para>
+    ///
+    /// <para>The arm is what the user AIMS at, and both the drawn gizmo and the hit test read this one
+    /// function, so they were consistently wrong together rather than misaligned. What it cost is size:
+    /// at camera angles where the mirrored eye lands near the pivot the arm collapses toward the 10-unit
+    /// floor, which is a gizmo of a few pixels.</para>
+    /// </summary>
+    private float GizmoArmLength(Vector3 pivot) =>
+        Math.Clamp(Vector3.Distance(_camera.Position, pivot) * 0.15f, 10f, 5000f);
 
     /// <summary>M296: the arm length the HIT-TEST uses, exposed so the D3D11 viewport draws an arm of
     /// exactly that length. It is derived from the cached mirrored camera position, so anything computing

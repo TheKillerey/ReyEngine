@@ -79,7 +79,22 @@ public partial class MeshPreviewWindow
             if (now - _dx11LastFrame >= Dx11FrameSeconds)
             {
                 _dx11LastFrame = now;
-                RenderDx11Frame(vm);
+                // M632: a throw in here used to kill the loop for good. This callback re-arms itself on
+                // its LAST line, and SyncPickMatrices has exactly one caller, reached only from
+                // RenderDx11Frame - so one exception froze the picture AND froze the dummy drag and the
+                // right-click orders with it, silently, because the error reporting below only surfaces
+                // failures the renderer RETURNS and never ones it throws.
+                try { RenderDx11Frame(vm); }
+                catch (Exception ex)
+                {
+                    string why = ex.GetType().Name + ": " + ex.Message;
+                    if (why != _dx11LastErrorShown)
+                    {
+                        _dx11LastErrorShown = why;
+                        vm.Dx11Status = "render threw: " + why;
+                        vm.LogDx11?.Invoke("D3D11", "render threw: " + why);
+                    }
+                }
             }
             QueueDx11Frame();
         });
