@@ -155,17 +155,19 @@ public partial class MeshPreviewWindow
         _dx11.World = vm.ModelWorld;   // M620: control mode moves the character here too
         _dx11.Wireframe = vm.Wireframe;
 
-        // M624: back-face culling OFF, and not as a preference.
+        // M633: the window's own Cull toggle, which the GL viewport beside it has honoured all along.
         //
-        // The character winding on this renderer has never been measured, and the one configuration known
-        // to draw a champion through it - the Shader Preview's M240 preset - pins this false for exactly
-        // that reason. With it on, every triangle can be rejected by the RASTERISER, which counts as
-        // neither culled nor hidden: the draw calls all issue and produce nothing, which is what
-        // "3/11 mesh draw(s), 0 culled" and an empty viewport meant.
+        // M624 pinned this false and said why: "the character winding on this renderer has never been
+        // measured", with M354 - culling on, terrain deleted - as the precedent for not guessing. That was
+        // the right call at the time and it is what this milestone came back with the measurement for.
+        // Two independent ones, plus a picture; they are written out in Dx11CharacterScene.Commit next to
+        // the per-material flag this gates, because that is where the reader who wants them will be.
         //
-        // This is the same trap M356 recorded on the map path, where M354 turned culling on and deleted
-        // the terrain. Turning it back on is a milestone with a measurement in it, not a toggle.
-        _dx11.CullBackFaces = false;
+        // Gated rather than forced. The material decides per submesh (cullEnable, absent = cull), this
+        // decides for the viewport, and the AND of the two is what reaches the rasteriser - the same rule
+        // GL uses and the same escape hatch: if anything ever does vanish, "Cull" is one click away and
+        // turning it off is exactly the old behaviour.
+        _dx11.CullBackFaces = vm.CullBackfaces;
 
         // M619: the VFX. The SAME playback object the GL viewport is bound to in XAML, so both viewports
         // show the same effect at the same age rather than two independent simulations.

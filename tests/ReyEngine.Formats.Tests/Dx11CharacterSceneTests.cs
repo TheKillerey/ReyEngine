@@ -355,11 +355,20 @@ public sealed class Dx11CharacterSceneTests
     }
 
     [Fact]
-    public void TheCharacterPreviewDoesNotBackFaceCull()
+    public void TheCharacterPreviewCullsPerMaterialUnderTheWindowsToggle()
     {
-        // The character winding on this renderer has never been measured. With culling on, every triangle
-        // can be rejected by the RASTERISER - which counts as neither culled nor hidden, so the draws all
-        // issue and produce nothing. Same trap M356 recorded on the map path.
+        // M624 pinned this OFF and this test held it there, because the character winding on this renderer
+        // had never been measured and M354 is the precedent for guessing: it turned map culling on and
+        // deleted the terrain.
+        //
+        // M633 measured it, so the guard now points the other way. The measurement lives in
+        // CharacterCullingTests - champion triangles agree with their own authored normals 99.6-100.0% of
+        // the time against the map's 94.8-98.8%, so M357's rasterizer state carries over; GL has culled
+        // champions in this same window since M34; and 21 champions rendered headless on a real device
+        // change pixels on 13 without the silhouette ever collapsing.
+        //
+        // What must not come back is the PIN. Per material AND per viewport, so "Cull" still turns the
+        // whole thing off - that toggle is the escape hatch M354 did not have.
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(System.IO.Path.Combine(dir.FullName, "ReyEngine.slnx"))) dir = dir.Parent;
         if (dir is null) return;
@@ -368,8 +377,8 @@ public sealed class Dx11CharacterSceneTests
         if (!File.Exists(window)) return;
         string text = File.ReadAllText(window);
 
-        Assert.Contains("_dx11.CullBackFaces = false", text);
-        Assert.DoesNotContain("_dx11.CullBackFaces = vm.CullBackfaces", text);
+        Assert.Contains("_dx11.CullBackFaces = vm.CullBackfaces", text);
+        Assert.DoesNotContain("_dx11.CullBackFaces = false", text);
     }
 
     [Fact]

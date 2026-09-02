@@ -249,6 +249,36 @@ public static class VfxD3D11EmitterPipeline
         // Derived in M231 from quad_vs's cell arithmetic.
         mat.Params["TEXTURE_INFO"] = ParticleQuadBuilder.TextureInfo(e.TexDiv);
 
+        // M633: and the SECOND one, for the multiply stage. Same shape, same source, and it was the only
+        // atlas descriptor this method never sent - so every MULT_PASS emitter fell back to the renderer's
+        // identity default and its multiplier texture was sampled as ONE cell covering the whole sprite.
+        //
+        // Read off the shipped bytecode rather than assumed. quad_vs blob 9 (MULT_PASS=1) spends the two
+        // descriptors in the same arithmetic, from the SAME flipbook frame index:
+        //
+        //     round_ni r0.x, v2.z                  // frame = floor(TEXCOORD0.z)
+        //     mul  r0.y, r0.x, cb1[0].y            // primary: row  = floor(frame / cols)
+        //     ...                                  //          o2.xy = (col+u)/cols, (row+v)/rows
+        //     mul  r0.y, r0.x, cb1[1].y            // MULT:    row2 = floor(frame / cols2)
+        //     mad  r0.x, -r0.y, cb1[1].x, r0.x     //          col2 = frame - row2*cols2
+        //     add  r0.xy, r0.xyxx, v3.xyxx         //          + TEXCOORD1 (the cell coordinate)
+        //     mul  o2.zw, r0.xxxy, cb1[1].yyyz     //          o2.zw = (col2+u2)/cols2, (row2+v2)/rows2
+        //
+        // cb1[1] is TEXTURE_INFO_2 at $Globals+16. Two facts follow. Its layout is identical to
+        // TEXTURE_INFO, so ParticleQuadBuilder.TextureInfo builds it unchanged; and the multiplier atlas
+        // ADVANCES with the flipbook, which the GL path has never done and recorded as a known defect - so
+        // this does not merely restore parity, it is the first path that gets it right.
+        //
+        // What the identity default actually did: cols2 = 1 makes col2 = frame - floor(frame) = 0 and
+        // row2 = frame, so the V coordinate came out as (frame + v) and the U as the full 0..1 sweep. On a
+        // 2x2 multiplier sheet that stretches all four cells across the quad, which is a mask over the
+        // wrong pixels rather than a subtle error. Measured over the skin0 VFX closure of five champions:
+        // 192 emitters bind a multiplier texture and 35 of them author a non-1x1 grid, including 20 on
+        // Aatrox's R (Aatrox_Base_R_burning_mult, 2x2) and 9 on his Q (Aatrox_Base_Q_smoke_mult, 2x2).
+        // A 1x1 grid builds the identity, so this is a no-op for the other 157.
+        if (!string.IsNullOrEmpty(e.TextureMultPath))
+            mat.Params["TEXTURE_INFO_2"] = ParticleQuadBuilder.TextureInfo(e.TextureMultTexDiv);
+
         // M237: pass the values that SELECTED the permutation, which the first cut did not.
         //
         // VfxShaderFlags turns ALPHA_TEST on precisely because alphaRef > 0, and then the renderer's engine

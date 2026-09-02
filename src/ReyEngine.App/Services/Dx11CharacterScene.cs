@@ -24,7 +24,12 @@ public sealed record CharacterSlice(
     /// <summary>The skin's own <c>initialSubmeshToHide</c>. Hidden rather than dropped, so a host can
     /// switch it back on — Kalista's Altar_Spear draws through her otherwise.</summary>
     bool Hidden,
-    bool UsedFallbackShader);
+    bool UsedFallbackShader,
+    /// <summary>M633: the material's OWN render state, off its technique/pass in the skin bin. The map path
+    /// has carried this on its slice since M279; this one threw it away and gave every submesh the same
+    /// hardcoded state, which is why an opaque champion material was alpha-blended and a two-sided one was
+    /// indistinguishable from a single-sided one. See <see cref="Commit"/> for what is honoured.</summary>
+    MaterialProfile Profile);
 
 /// <summary>Everything the scene needs that does not touch D3D.</summary>
 public sealed class PreparedCharacterScene
@@ -167,7 +172,27 @@ public static class Dx11CharacterScene
         return scene;
     }
 
-    /// <summary>Upload the scene. Returns how many materials drew.</summary>
+    /// <summary>Upload the scene. Returns how many materials drew.
+    ///
+    /// <para><b>The blend state stays hardcoded, and that is a MEASURED decision, not an oversight.</b>
+    /// 68 of the 420 base-skin materials across the roster author <c>blendEnable</c> with SrcAlpha /
+    /// OneMinusSrcAlpha (6/7, all 68 of them); the other 352 are the inline default-texture binding and
+    /// author no blend at all. Every one of the 420 is drawn here through the renderer's fixed
+    /// SrcAlpha/InvSrcAlpha, so honouring the flag looked like an obvious fix.</para>
+    ///
+    /// <para>It changes nothing. Rendered headless on a real device across 21 champions, feeding each
+    /// material its own authored factors - One/Zero for the ones that author no blend - moved <b>0 pixels</b>
+    /// on all 21. The control rules out a dead code path: forcing the same materials to One/One through the
+    /// same field moves 46,690 px on Aatrox and 201,250 on Garen. The reason is that Riot's champion pixel
+    /// shaders resolve their own coverage with a <c>discard</c> and then write opaque alpha - every
+    /// permutation in play carries one - so the blend equation has nothing to interpolate. Aatrox's five
+    /// diffuse and mask textures are 100.0% alpha-255; the masking is entirely in the shader.</para>
+    ///
+    /// <para>Depth is left alone for a different reason. The profile calls those 68 materials Transparent
+    /// and would stop them writing depth, but M557/M558 CONFIRMED against the live client that the game
+    /// derives depth-write from the shader CLASS and not from a material's blend state. Taking the mask off
+    /// here would make this viewport kinder than the target, which is the one thing
+    /// <c>editor-must-not-be-kinder</c> exists to stop.</para></summary>
     public static int Commit(ShaderPreviewRenderer renderer, PreparedCharacterScene scene, string gameVersion)
     {
         renderer.GameVersion = gameVersion;
@@ -187,6 +212,36 @@ public static class Dx11CharacterScene
 
             mat.SortableByPipeline = StateDescription.Geometry.DepthWrite;
             mat.Visible = !slice.Hidden;
+
+            // M633: the material's own cullEnable, which this path threw away - every champion submesh drew
+            // two-sided, so interior faces showed through and back faces lit that the game never rasterises.
+            // The map path has honoured the same field per material since M358; this is its character half.
+            //
+            // Riot leaves the field ABSENT on 416 of the 420 base-skin materials, and the schema default is
+            // "cull". The four exceptions are the argument that absent really means cull rather than
+            // unspecified: they are Locke's hair, casket and weapon and Morgana's bush diffuse, all
+            // cullEnable=FALSE - Riot writes the field exactly where a surface is meant to be seen from
+            // behind, which is the classic hair-and-foliage-card list.
+            //
+            // Safe to switch on here for two measured reasons, because M624 pinned it off on the honest
+            // grounds that "the character winding on this renderer has never been measured" and M354's
+            // precedent is a milestone that turned culling on and deleted the terrain:
+            //
+            //  - The winding is the SAME as the map's. Checked against the authored vertex normals, which
+            //    every League mesh ships: cross(p1-p0, p2-p0) agrees with the mean vertex normal on 99.9%
+            //    of Aatrox's 8,594 triangles, 100.0% of Ahri's 21,678, 99.9% of Ezreal's and Garen's and
+            //    99.6% of Lux's - against 98.8% of Map11's 910,649 and 94.8% of Map12's. Same convention,
+            //    same sign, so M357's measured FrontCounterClockwise and the _rasterCull state built from
+            //    it carry over rather than needing to be settled again.
+            //  - The GL viewport in this same window has culled champions per submesh since M34, off the
+            //    same authored flag and the same default-on toggle. If champion winding were wrong there,
+            //    every character in the editor would already be inside-out.
+            //
+            // And then rendered, rather than argued: headless on a real device over 21 champions, culling
+            // changes pixels on 13 of them without ever collapsing the silhouette - 25,752 px on Locke,
+            // 1,461 on Kayle, 1,393 on Aatrox, down to 1 px on Zed, with covered area moving by at most
+            // 0.2%. An inverted cull cannot look like that.
+            mat.CullBackFaces = slice.Profile.CullEnabled;
             foreach (var (name, value) in slice.Parameters) mat.Params[name] = value;
 
             foreach (var (target, key) in slice.Textures)
@@ -340,7 +395,7 @@ public static class Dx11CharacterScene
             vs, ps,
             new ShaderDescription(full, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, macros, vs),
             new ShaderDescription(full, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, macros, ps),
-            textures, parameters, hidden, usedFallback);
+            textures, parameters, hidden, usedFallback, b.Profile);
     }
 
     /// <summary>Which declared texture a sampler feeds.

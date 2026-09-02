@@ -1574,11 +1574,20 @@ void main(){
 
     vUv = (vec2(fx, fy) + uvc) / vec2(cols, rows)
         + uUvScrollRate * age;
-    // M174: the multiply stage gets the same treatment. It still does NOT advance with the flipbook frame
-    // - a multi-cell multiplier atlas stays on cell 0 - which is a separate known defect (tier 2.3).
-    vec2 multDiv = vec2(uTexDivMult.x == 0.0 ? 1.0 : uTexDivMult.x,
-                        uTexDivMult.y == 0.0 ? 1.0 : uTexDivMult.y);
-    vUvMult = vec2(cell.x, 1.0 - cell.y) / multDiv
+    // M174: the multiply stage gets the same treatment.
+    // M633: and it now ADVANCES WITH THE FLIPBOOK, which the M174 note recorded as a known defect on the
+    // grounds that a multi-cell multiplier atlas stayed on cell 0. Riot's own shader does walk it: quad_vs
+    // blob 9 (MULT_PASS=1) derives the multiplier cell from the SAME frame index as the primary, through
+    // the same three instructions against TEXTURE_INFO_2 - row2 = floor(frame/cols2),
+    // col2 = frame - row2*cols2, uv = (cell + (col2,row2)) / (cols2,rows2). Mirrored here exactly, with
+    // the same magnitude/sign split the primary axis uses so a negative divisor still mirrors.
+    // A 1x1 multiplier grid puts both cell indices at zero, so this is identical to the old line for every
+    // emitter that does not author a grid.
+    float multCols = uTexDivMult.x == 0.0 ? 1.0 : uTexDivMult.x;
+    float multRows = uTexDivMult.y == 0.0 ? 1.0 : uTexDivMult.y;
+    float mfx = mod(frame, max(abs(multCols), 1.0));
+    float mfy = floor(frame / max(abs(multCols), 1.0));
+    vUvMult = (vec2(mfx, mfy) + vec2(cell.x, 1.0 - cell.y)) / vec2(multCols, multRows)
         + uUvScrollRateMult * aAgeVelX.x;
     vColor = aColor;
     vErosionDrive = aErosionDrive;
