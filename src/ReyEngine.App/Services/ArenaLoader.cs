@@ -80,16 +80,21 @@ public static class ArenaLoader
 
         using var wad = WadArchive.Open(wadPath, resolver);
 
-        // The base mapgeo: Riot names it base_srx / base / <map>_base. Take the largest resolved .mapgeo
-        // under the map's own mapgeometry folder rather than guessing a name, and say which one it was.
-        var geo = wad.Entries
+        // Which mapgeo: a map WAD is a family of them. Map11 ships 26 - base_srx (the Rift as played),
+        // base, bloom, 10year, arcade, a22, boba_srs, trueshot, contentcapture... - so "the largest" is
+        // the wrong rule: it picked trueshot (110 MB) over base_srx (91.8 MB). The playable one is
+        // base_srx, then base, and only then the largest resolved file, for maps that name theirs otherwise.
+        var candidates = wad.Entries
             .Where(e => e.IsResolved
                         && e.Path.EndsWith(".mapgeo", StringComparison.OrdinalIgnoreCase)
                         && e.Path.Contains("/mapgeometry/" + folder + "/", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(e => e.UncompressedSize)
-            .FirstOrDefault()
-            ?? throw new InvalidOperationException($"{mapKey}: no .mapgeo under data/maps/mapgeometry/{folder}/");
-        log?.Invoke($"{mapKey}: geometry {Path.GetFileName(geo.Path)} ({geo.UncompressedSize / 1_048_576.0:0.0} MB)");
+            .ToList();
+        var geo = candidates.FirstOrDefault(e => e.Path.EndsWith("/base_srx.mapgeo", StringComparison.OrdinalIgnoreCase))
+                  ?? candidates.FirstOrDefault(e => e.Path.EndsWith("/base.mapgeo", StringComparison.OrdinalIgnoreCase))
+                  ?? candidates.OrderByDescending(e => e.UncompressedSize).FirstOrDefault()
+                  ?? throw new InvalidOperationException($"{mapKey}: no .mapgeo under data/maps/mapgeometry/{folder}/");
+        log?.Invoke($"{mapKey}: geometry {Path.GetFileName(geo.Path)} ({geo.UncompressedSize / 1_048_576.0:0.0} MB), "
+                    + $"{candidates.Count} variant(s) in the WAD");
 
         var map = MapGeoDecoder.Decode(wad.Extract(geo));
 
