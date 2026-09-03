@@ -1115,8 +1115,9 @@ public sealed class ViewportControl : OpenGlControlBase
             float t = (float)_propAnimClock.Elapsed.TotalSeconds;
             foreach (var (geo, pm) in _animatedPropGeoms)
             {
-                float dur = pm.IdleClip!.Duration > 1e-3f ? pm.IdleClip.Duration : 1f;
-                var frame = SkinnedMeshAnimator.Skin(pm.SknMesh!, pm.Skeleton!, pm.IdleClip, t % dur);
+                // M636: a driven mesh (the playground actor) supplies its own clip and time; a prop idles.
+                var (clip, time) = pm.PoseAt(t);
+                var frame = SkinnedMeshAnimator.Skin(pm.SknMesh!, pm.Skeleton!, clip, time);
                 _meshRenderer.UpdatePropGeometryVertices(geo, frame.Positions, frame.Normals);
             }
             RequestAnimationFrame();

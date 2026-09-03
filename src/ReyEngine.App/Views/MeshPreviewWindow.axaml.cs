@@ -55,13 +55,21 @@ public partial class MeshPreviewWindow : Window
             return;
         }
 
+        // M636: on an arena the ground is the navgrid's height field, and the order goes through its
+        // walkability and A* rather than straight at the point.
+        if (vm.TryArenaGroundHit(origin, dir, out var arenaPoint))
+        {
+            if (vm.OrderMoveOnArena(arenaPoint)) return;
+        }
+
         // The ground is the plane the character stands on, not y=0 — a preview whose model sits on a
         // backdrop at another height would otherwise walk through the floor.
         float planeY = vm.CharacterPosition.Y;
         if (MathF.Abs(dir.Y) < 1e-5f) return;                 // looking along the plane: no intersection
         float t = (planeY - origin.Y) / dir.Y;
         if (t <= 0f) return;                                   // the plane is behind the camera
-        vm.OrderMove(origin + dir * t);
+        var point = origin + dir * t;
+        if (!vm.OrderMoveOnArena(point)) vm.OrderMove(point);
     }
 
     private static bool HitsSphere(Vector3 origin, Vector3 dir, Vector3 centre, float radius)

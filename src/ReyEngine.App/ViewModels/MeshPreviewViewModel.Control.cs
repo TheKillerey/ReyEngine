@@ -90,6 +90,7 @@ public sealed partial class MeshPreviewViewModel
         var tick = _controller.Tick(dt);
         CharacterPosition = _controller.Position;
         CharacterYaw = _controller.Facing;
+        AdvanceArena();   // M636: next waypoint, ground height, follow camera - no-ops without an arena
 
         if (now < _castBusyUntil) return;      // a cast owns the animation until it finishes
 

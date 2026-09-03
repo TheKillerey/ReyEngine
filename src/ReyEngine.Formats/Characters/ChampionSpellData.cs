@@ -56,6 +56,58 @@ public sealed record AbilitySlot(
 {
     public bool HasMissile => Missiles.Count > 0;
 
+    // ---- the casting envelope, read off the root spell ---------------------------------------------
+
+    /// <summary>The class name of the spell's <c>mTargetingTypeData</c>, which is how Riot says HOW a
+    /// spell is aimed: "direction", "Location", "Self", "SelfAoe", "Target", "Cone" and eight more - the
+    /// struct has a class and no body. "" when the spell authors none (104 of 692 slots). A class this
+    /// reader has never seen comes back as its hash in hex rather than being folded into "", so a new
+    /// targeting type in a patch shows up instead of disappearing.</summary>
+    public string TargetingKind { get; init; } = "";
+
+    /// <summary><c>castRange</c> at rank 1, in units; 0 when absent (31 of 692). Riot authors 25,000 on a
+    /// spell that is not range-limited - a dash, a self-buff, a global - see <see cref="IsUnboundedRange"/>.</summary>
+    public float CastRange { get; init; }
+
+    /// <summary><c>castRangeDisplayOverride</c> at rank 1, when authored (283 of 692): the range the
+    /// indicator draws when it is not the range the spell uses. Ezreal's Q casts at 1200 and shows 1150;
+    /// his E casts at 25,000 and shows 475.</summary>
+    public float? CastRangeDisplayOverride { get; init; }
+
+    /// <summary>The range to draw: the display override when authored, else <see cref="CastRange"/>.</summary>
+    public float CastRangeDisplay => CastRangeDisplayOverride ?? CastRange;
+
+    /// <summary><c>cooldownTime</c> at rank 1, in seconds; 0 when absent (12 of 692).</summary>
+    public float Cooldown { get; init; }
+
+    /// <summary><c>mana</c> at rank 1; 0 when absent, which is how a manaless champion's spells are
+    /// authored (124 of 692) - Aatrox has no mana array at all.</summary>
+    public float Mana { get; init; }
+
+    /// <summary><c>castRadius</c> at rank 1; 0 when absent (163 of 692).</summary>
+    public float CastRadius { get; init; }
+
+    /// <summary><c>castConeAngle</c> as authored; 0 when absent, which is 622 of 692 - only cones author it.</summary>
+    public float CastConeAngle { get; init; }
+
+    /// <summary><c>castConeDistance</c> as authored; 0 when absent (131 of 692). Riot writes 100 on most
+    /// non-cone spells as well, so a value here does not make the spell a cone - <see cref="TargetingKind"/>
+    /// does.</summary>
+    public float CastConeDistance { get; init; }
+
+    /// <summary>The cast clip the spell names (<c>Spell1</c>), or null when it names none: absent (32 of
+    /// 692), empty (85), or the literal "None"/"none" (33) that marks an ability whose sub-casts carry
+    /// their own clips - Aatrox's Q is three swings, each a child spell with its own animation.</summary>
+    public string? AnimationName { get; init; }
+
+    /// <summary><c>mSpellTags</c>, Riot's trait strings: <c>Trait_Ultimate</c>,
+    /// <c>Trait_PlayerSelectedDashDirection</c>, <c>Trait_Target_Directional</c>. Empty when absent (9 of 692).</summary>
+    public IReadOnlyList<string> Tags { get; init; } = Array.Empty<string>();
+
+    /// <summary>Riot's "no range limit": 132 of 661 authored ranges are exactly 25,000, and everything at
+    /// or above 20,000 (139) is a dash, a self-cast or a global, not a distance anyone measured.</summary>
+    public bool IsUnboundedRange => CastRange >= 20000f;
+
     /// <summary>When the cast fires, in seconds. <c>castFrame</c> is in animation frames; without
     /// <c>useAnimatorFramerate</c> Riot's own convention is 30 fps, which is what the clip decoder
     /// assumes elsewhere in this codebase for a missing rate.</summary>
@@ -86,6 +138,11 @@ public sealed record AbilitySlot(
 /// linked by the compiled spell script, which ships in no bin at all — so the name-token heuristic is
 /// not a workaround there, it is the only bridge that exists, and it stays.</item>
 /// </list>
+///
+/// <para>Extended with the casting envelope a playable character needs - targeting kind, range, cooldown,
+/// mana, radius, cone, clip name and tags - all read off the ROOT spell, because a sub-cast is a child
+/// spell and owns none of it. Per-level arrays are read at rank 1, which is NOT element 0 of a 7-entry
+/// array; see <see cref="Rank1"/>.</para>
 /// </summary>
 public static class ChampionSpellData
 {
@@ -107,6 +164,29 @@ public static class ChampionSpellData
     private static readonly uint FTravelTime = HashAlgorithms.Fnv1a("mTravelTime");
     private static readonly uint FMissileWidth = HashAlgorithms.Fnv1a("mMissileWidth");
     private static readonly uint FScriptName = HashAlgorithms.Fnv1a("mScriptName");
+    private static readonly uint FTargetingTypeData = HashAlgorithms.Fnv1a("mTargetingTypeData");
+    private static readonly uint FCastRange = HashAlgorithms.Fnv1a("castRange");
+    private static readonly uint FCastRangeDisplayOverride = HashAlgorithms.Fnv1a("castRangeDisplayOverride");
+    private static readonly uint FCooldownTime = HashAlgorithms.Fnv1a("cooldownTime");
+    private static readonly uint FMana = HashAlgorithms.Fnv1a("mana");
+    private static readonly uint FCastRadius = HashAlgorithms.Fnv1a("castRadius");
+    private static readonly uint FCastConeAngle = HashAlgorithms.Fnv1a("castConeAngle");
+    private static readonly uint FCastConeDistance = HashAlgorithms.Fnv1a("castConeDistance");
+    private static readonly uint FAnimationName = HashAlgorithms.Fnv1a("mAnimationName");
+    private static readonly uint FSpellTags = HashAlgorithms.Fnv1a("mSpellTags");
+
+    /// <summary>
+    /// The 14 targeting classes Riot ships, by hash. Measured over all 692 slots: 588 author a
+    /// <c>mTargetingTypeData</c>, every one is a pointer struct with an empty body, and every one of the
+    /// 14 class hashes is in this table - there is no fifteenth. The hash database does not know these
+    /// names, and the bin hash is case-folded, so the spelling is this table's; "direction" is lower-case
+    /// because that is how Riot's own name list spells it.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<uint, string> TargetingKinds = new[]
+    {
+        "Location", "Self", "direction", "Area", "SelfAoe", "LocationClamped", "TargetOrLocation", "Cone",
+        "AreaClamped", "Target", "DragDirection", "WallDetection", "TerrainLocation", "TerrainType",
+    }.ToDictionary(HashAlgorithms.Fnv1a, name => name);
 
     /// <summary>The four ability slots, in Q/W/E/R order. Empty for anything that is not a champion —
     /// a companion record, or TFTChampion, which ships a CharacterRecord with no spells at all.</summary>
@@ -167,11 +247,13 @@ public static class ChampionSpellData
         var missiles = new List<AbilityMissile>();
         float castFrame = 0f, castTime = 0f;
         bool animatorFps = false;
+        BinTreeStruct? data = null;
 
         // The root spell carries the timing, and sometimes IS the missile - Ezreal's Q is one spell that
         // both casts and flies. Ahri's Q is not: her missiles are sibling spells under the ability.
         if (tree.Objects.TryGetValue(rootSpell, out var root) && Spell(root) is { } rootSpell2)
         {
+            data = rootSpell2;
             castFrame = F32(rootSpell2, FCastFrame);
             castTime = F32(rootSpell2, FCastTime);
             animatorFps = Get(rootSpell2.Properties, FUseAnimatorFps) is BinTreeBool { Value: true };
@@ -191,13 +273,27 @@ public static class ChampionSpellData
             {
                 if (element is not BinTreeObjectLink child || child.Value == rootSpell) continue;
                 if (!tree.Objects.TryGetValue(child.Value, out var spellObject)) continue;
-                if (Spell(spellObject) is not { } data) continue;
-                if (ReadMissile(spellObject, data) is { } m) missiles.Add(m);
+                if (Spell(spellObject) is not { } childSpell) continue;
+                if (ReadMissile(spellObject, childSpell) is { } m) missiles.Add(m);
             }
             break;
         }
 
-        return new AbilitySlot(index, slot, entry, castFrame, animatorFps, castTime, missiles);
+        // The casting envelope is the root spell's as well: Aatrox's Q is three child swings, and none of
+        // them owns the slot's range, cooldown or targeting.
+        return new AbilitySlot(index, slot, entry, castFrame, animatorFps, castTime, missiles)
+        {
+            TargetingKind = TargetingKindOf(data),
+            CastRange = Rank1(data, FCastRange) ?? 0f,
+            CastRangeDisplayOverride = Rank1(data, FCastRangeDisplayOverride),
+            Cooldown = Rank1(data, FCooldownTime) ?? 0f,
+            Mana = Rank1(data, FMana) ?? 0f,
+            CastRadius = Rank1(data, FCastRadius) ?? 0f,
+            CastConeAngle = data is null ? 0f : F32(data, FCastConeAngle),
+            CastConeDistance = data is null ? 0f : F32(data, FCastConeDistance),
+            AnimationName = AnimationNameOf(data),
+            Tags = StringsOf(data, FSpellTags),
+        };
     }
 
     /// <summary>A missile, or null when this spell launches none. A spell with no missile spec and no
@@ -256,4 +352,51 @@ public static class ChampionSpellData
     /// M590 mistake in a different field, and its symptom is identical: nothing, silently.</summary>
     private static uint Hash(BinTreeStruct s, uint key) =>
         Get(s.Properties, key) is BinTreeHash h ? h.Value : 0u;
+
+    private static BinTreeProperty? Unwrap(BinTreeProperty? property) =>
+        property is BinTreeOptional optional ? optional.Value : property;
+
+    /// <summary>
+    /// The rank-1 entry of a per-level array, or null when the array is absent or empty.
+    ///
+    /// <para>Riot ships two shapes and they are NOT indexed alike. The 7-entry arrays (castRange,
+    /// cooldownTime, castRadius, castRangeDisplayOverride) are indexed by spell LEVEL 0..6, and level 0 is
+    /// the unlearned spell: Ezreal's R authors cooldownTime [10, 120, 105, 90, 10, 10, 10] - nobody would
+    /// call 10 s the rank-1 cooldown of an ultimate - and his Q's [5.75, 5.5, 5.25, ...] puts the 5.5 the
+    /// game shows at element 1. The 6-entry arrays (mana) start at level 1, so his Q's [28, 31, ...] is
+    /// right at element 0. Taking element 0 of both is the obvious mistake, and it is silent for most
+    /// spells because level 0 usually copies level 1.</para>
+    /// </summary>
+    private static float? Rank1(BinTreeStruct? s, uint key)
+    {
+        if (s is null || Unwrap(Get(s.Properties, key)) is not BinTreeContainer { Elements.Count: > 0 } levels) return null;
+        int rank1 = levels.Elements.Count >= 7 ? 1 : 0;
+        return levels.Elements[rank1] is BinTreeF32 f ? f.Value : null;
+    }
+
+    private static string TargetingKindOf(BinTreeStruct? spell)
+    {
+        if (spell is null || Unwrap(Get(spell.Properties, FTargetingTypeData)) is not BinTreeStruct t || t.ClassHash == 0)
+            return "";
+        return TargetingKinds.TryGetValue(t.ClassHash, out var name) ? name : $"0x{t.ClassHash:x8}";
+    }
+
+    private static string? AnimationNameOf(BinTreeStruct? spell) =>
+        spell is not null
+        && Get(spell.Properties, FAnimationName) is BinTreeString { Value: var clip }
+        && !string.IsNullOrWhiteSpace(clip)
+        && !clip.Equals("none", StringComparison.OrdinalIgnoreCase)
+            ? clip
+            : null;
+
+    private static IReadOnlyList<string> StringsOf(BinTreeStruct? spell, uint key)
+    {
+        if (spell is null || Unwrap(Get(spell.Properties, key)) is not BinTreeContainer { Elements.Count: > 0 } c)
+            return Array.Empty<string>();
+
+        var strings = new List<string>(c.Elements.Count);
+        foreach (var element in c.Elements)
+            if (element is BinTreeString { Value.Length: > 0 } s) strings.Add(s.Value);
+        return strings;
+    }
 }

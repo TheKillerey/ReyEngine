@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ReyEngine.Core.Decoding;
@@ -22,6 +23,23 @@ public sealed record PropMesh(
     public ReyEngine.Formats.Skeletons.SkeletonAsset? Skeleton { get; init; }
     public ReyEngine.Formats.Animation.AnimationClip? IdleClip { get; init; }
     public bool CanAnimate => SknMesh is { CanSkin: true } && Skeleton is not null && IdleClip is not null;
+
+    /// <summary>M636: a mesh that is DRIVEN rather than idling. A prop breathes its idle on the viewport's
+    /// shared clock; a playable actor runs, attacks and casts on a clock of its own, so it supplies the
+    /// clip and the time it wants posed each frame. Null keeps the idle behaviour exactly. Set by the
+    /// playground session on the actor's own PropMesh - which is unique to the actor, so "per mesh" is
+    /// "per actor" there. Both renderers read it through <see cref="PoseAt"/>.</summary>
+    public Func<(ReyEngine.Formats.Animation.AnimationClip Clip, float Time)>? PoseSource { get; set; }
+
+    /// <summary>The clip and time to skin this frame: the driven pose when one is supplied, otherwise the
+    /// idle looping on <paramref name="sharedSeconds"/>. Only meaningful when <see cref="CanAnimate"/>.</summary>
+    public (ReyEngine.Formats.Animation.AnimationClip Clip, float Time) PoseAt(float sharedSeconds)
+    {
+        if (PoseSource is { } driven) return driven();
+        var idle = IdleClip!;
+        float dur = idle.Duration > 1e-3f ? idle.Duration : 1f;
+        return (idle, sharedSeconds % dur);
+    }
 }
 
 /// <summary>One placed prop: a shared mesh at a world transform.</summary>

@@ -75,7 +75,7 @@ public sealed class CharacterDx11DummyTests
         // PropMeshes had exactly one assignment in the whole app - the map window's - so the preview's
         // prop driver was never even constructed and the dummy could not draw however well it loaded.
         if (Window() is not { } text) return;
-        Assert.Contains("_dx11.PropMeshes = vm.DummyProps", text);
+        Assert.Contains("_dx11.PropMeshes = vm.SceneProps", text);
     }
 
     [Fact]

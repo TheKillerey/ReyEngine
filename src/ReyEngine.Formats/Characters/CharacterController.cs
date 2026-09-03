@@ -77,6 +77,11 @@ public sealed class CharacterController
         _attackCooldown = 0f;
     }
 
+    /// <summary>M636: put the character on the ground the arena reports under it. Movement is flat - Step
+    /// never changes Y - so a walker on a map with real terrain needs its height re-read every tick, and
+    /// this is the one setter that changes Y without cancelling the order the way Teleport does.</summary>
+    public void SetGroundHeight(float y) => Position = new Vector3(Position.X, y, Position.Z);
+
     /// <summary>Walk into range of a target and keep attacking it.</summary>
     public void Attack(Vector3 target)
     {

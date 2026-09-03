@@ -187,7 +187,8 @@ public partial class MeshPreviewWindow
         // The real practice-tool model when one loaded (it lives in Map11.wad and is absent on some
         // installs), and a wire box at the same place when it did not. The two are mutually exclusive by
         // construction: DummyCubePosition is non-null only while DummyProps is null.
-        _dx11.PropMeshes = vm.DummyProps;
+        // M636: the arena floor rides in the same set as the dummy - one PropRenderSet per renderer.
+        _dx11.PropMeshes = vm.SceneProps;
         _dx11.PlayPropAnimations = true;
         _dx11.DummyLines = vm.DummyCubePosition is { } box
             ? Rendering.ViewportMeshRenderer.BuildBoxLines(

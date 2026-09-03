@@ -188,11 +188,12 @@ public sealed class D3D11MapProps
         {
             var m = g.Mesh;
             if (!m.CanAnimate) continue;
-            float dur = m.IdleClip!.Duration > 1e-3f ? m.IdleClip.Duration : 1f;
+            // M636: a driven mesh (the playground actor) supplies its own clip and time; a prop idles.
+            var (clip, time) = m.PoseAt(seconds);
             try
             {
                 var frame = ReyEngine.Formats.Animation.SkinnedMeshAnimator.Skin(
-                    m.SknMesh!, m.Skeleton!, m.IdleClip, seconds % dur);
+                    m.SknMesh!, m.Skeleton!, clip, time);
                 _renderer.UpdateMeshGeometryPositions(g.GeometryId, frame.Positions);
             }
             catch { /* a bad clip must not take the frame down; the prop simply stays in bind pose */ }

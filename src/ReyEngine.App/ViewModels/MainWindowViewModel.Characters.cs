@@ -72,6 +72,12 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     {
         if (clipsByAnm is not { Count: > 0 } || !skn.IsResolved) return Array.Empty<CharacterAction>();
 
+        // M636: the arena needs the install and the readers this window owns; handed over on every
+        // character load, because the resolver only exists once the hash database has been read.
+        if (_resolver is { } resolver)
+            MeshPreview.ConfigureArena(new MeshPreviewViewModel.ArenaHost(
+                Project.GameDirectory, resolver, ResolveBinName, ResolveWadPath));
+
         try
         {
             var parts = skn.Path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -91,8 +97,16 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
             // read once more rather than threaded through - it is a few hundred objects.
             if (TryResolveEntry(HashAlgorithms.WadPath(ChampionRecord.PathFor(character)), out var recordEntry))
             {
-                var abilities = ChampionSpellData.Read(ReadAsset(recordEntry.PathHash), character);
+                byte[] recordBytes = ReadAsset(recordEntry.PathHash);
+                var abilities = ChampionSpellData.Read(recordBytes, character);
                 MeshPreview.SetAbilities(abilities);
+
+                // M636: the champion's authored movement and attack numbers, for the arena.
+                var stats = ChampionStatsReader.Read(recordBytes);
+                MeshPreview.SetStats(stats);
+                if (stats is not null)
+                    _log.Info("Character", $"{character}: move speed {stats.MoveSpeed:0}, attack range {stats.AttackRange:0}, "
+                                           + $"attack speed {stats.AttackSpeed:0.###}, HP {stats.BaseHealth:0}.");
                 int missiles = abilities.Count(a => a.HasMissile);
                 if (missiles > 0)
                     _log.Info("Character",

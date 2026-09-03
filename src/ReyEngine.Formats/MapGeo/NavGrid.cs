@@ -234,4 +234,31 @@ public sealed class NavGrid
         }
         catch (Exception ex) { error = ex.Message; return false; }
     }
+
+    /// <summary>
+    /// Builds a grid from parts, for tests that want a lattice they can reason about by hand rather than
+    /// a 9 MB file from the game install. <paramref name="max"/> is derived from the lattice extent, and
+    /// <see cref="HasHeights"/> is simply whether <paramref name="heights"/> covers every cell — a flat
+    /// synthetic plane is still a plane, unlike the shipped stub grids that <see cref="TryParse"/> rejects.
+    /// </summary>
+    public static NavGrid CreateForTests(Vector3 min, float cellSize, int countX, int countZ, ushort[] flags, float[]? heights)
+    {
+        if (countX <= 0 || countZ <= 0) throw new ArgumentOutOfRangeException(nameof(countX), "a grid needs at least one cell");
+        if (!(cellSize > 0f)) throw new ArgumentOutOfRangeException(nameof(cellSize));
+        int cells = countX * countZ;
+        if (flags.Length != cells) throw new ArgumentException($"expected {cells} flags, got {flags.Length}", nameof(flags));
+        bool hasHeights = heights is not null && heights.Length == cells;
+        float top = min.Y;
+        if (hasHeights) foreach (float h in heights!) top = Math.Max(top, h);
+        return new NavGrid
+        {
+            VersionMajor = 7, VersionMinor = 1,
+            Min = min,
+            Max = new Vector3(min.X + countX * cellSize, top, min.Z + countZ * cellSize),
+            CellSize = cellSize, CountX = countX, CountZ = countZ,
+            Flags = flags,
+            Heights = hasHeights ? heights! : Array.Empty<float>(),
+            HasHeights = hasHeights,
+        };
+    }
 }

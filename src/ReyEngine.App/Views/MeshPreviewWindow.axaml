@@ -258,6 +258,26 @@
             </StackPanel>
           </Border>
 
+          <!-- M636: the ARENA - a shipped map as a floor to play on, with its navgrid driving movement -->
+          <Border Classes="card" IsVisible="{Binding HasArenaMaps}">
+            <StackPanel Spacing="6">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Classes="cardTitle" Grid.Column="0" Text="ARENA" VerticalAlignment="Center" />
+                <ToggleButton Grid.Column="1" Classes="vp" Content="Follow" FontSize="10" Padding="6,1"
+                              IsChecked="{Binding ArenaFollowCamera}" ToolTip.Tip="Keep the camera on the character while it moves" />
+              </Grid>
+              <TextBlock Text="Play the character on a shipped map. Movement follows the map's navigation grid."
+                         Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <ComboBox Width="120" ItemsSource="{Binding ArenaMaps}" SelectedItem="{Binding SelectedArenaMap}" FontSize="11" />
+                <Button Classes="tool" Content="Load" Command="{Binding LoadArenaCommand}" IsEnabled="{Binding !ArenaLoading}" />
+                <Button Classes="tool" Content="Unload" Command="{Binding UnloadArenaCommand}" IsVisible="{Binding HasArena}" />
+              </StackPanel>
+              <TextBlock Text="{Binding ArenaStatus}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding StatsSummary, StringFormat='Champion: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
           <!-- M89: NVR map backdrop tuning — move the map, boost its lights, tune baked ground shading -->
           <Border Classes="card" IsVisible="{Binding HasBackground}">
             <StackPanel Spacing="6">
@@ -407,7 +427,8 @@
                              ParticlePlayback="{Binding Playback}"
                              Skybox="{Binding Skybox}"
                              TargetDummyPosition="{Binding DummyCubePosition}"
-                             PropMeshes="{Binding DummyProps}"
+                             PropMeshes="{Binding SceneProps}"
+                             FocusPoint="{Binding FocusPoint}"
                              PlayPropAnimations="True"
                              GizmoPivot="{Binding DummyGizmoPivot}"
                              ShowBones="{Binding ShowBones}"
