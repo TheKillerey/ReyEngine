@@ -87,6 +87,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     public Action<string>? PlaySoundEvent;   // M90: clip SFX via the champion's Wwise banks
     public Action? StopSounds;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveTextures;
+    /// <summary>M634: Riot's TEXTUREMULT stage - the multiplier / mask texture. The one stage this window
+    /// never resolved: the map viewport and the particle editor have passed it since M117, and here every
+    /// MULT_PASS emitter got the renderer's white stand-in, which multiplies by one. That is what "the
+    /// mask is not applied" was.</summary>
+    public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveMultTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveDistortionTextures;
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveColorTextures;   // M68
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveErosionTextures;   // M174 (2.1)
@@ -283,16 +288,12 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 || (ev.EffectHash != 0 && (d.PathHash == ev.EffectHash
                     || ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(d.Name) == ev.EffectHash)));
             if (def is null || !def.Emitters.Any(e => e.IsVisual)) continue;
-            var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
             // M114: target-bound systems ("_tar") anchor at the dummy, not on the caster's bones.
             var anchor = AnchorFor(def);
             bool atDummy = anchor != System.Numerics.Vector3.Zero;
-            items.Add(new VfxPlaybackItem(def, anchor, texs,
-                ResolveMeshes?.Invoke(def),
-                emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
-                emitterColorTextures: ResolveColorTextures?.Invoke(def),
-                emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
-                emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def))
+            // M634: every stage, through the one builder - this copy had no multiplier texture and no
+            // child systems, so a clip event's mask was white and its children never spawned.
+            items.Add(BuildItem(def, anchor) with
             {
                 AttachBone = atDummy ? null : ResolveBoneName(ev),
                 StartDelay = MathF.Max(0f, ev.StartFrame) / ClipFps(),   // M91: fire at the authored frame
@@ -488,14 +489,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         VfxPlaybackItem? Make(uint hash, System.Numerics.Vector3 at, System.Numerics.Vector3? travelTo)
         {
             if (!_vfxDefs.TryGetValue(hash, out var def)) return null;
-            var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
             float dist = travelTo is { } dst ? (dst - at).Length() : 0f;
-            return new VfxPlaybackItem(def, at, texs,
-                ResolveMeshes?.Invoke(def),
-                emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
-                emitterColorTextures: ResolveColorTextures?.Invoke(def),
-                emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
-                emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def))
+            // M634: every stage, through the one builder - see BuildItem for what this copy was missing.
+            return BuildItem(def, at) with
             {
                 TravelTo = travelTo,
                 // M631: the champion's own numbers where it authored them. The fallbacks are the old
@@ -763,11 +759,20 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// and the cost of getting recursion wrong here is an editor that hangs on preview.</summary>
     private const int MaxChildDepth = 2;
 
-    /// <summary>M180: build a playback item with all its texture stages and its resolved children.</summary>
+    /// <summary>M180: build a playback item with all its texture stages and its resolved children.
+    ///
+    /// <para>M634: THE ONLY place in this class that constructs a <see cref="VfxPlaybackItem"/>. There were
+    /// four - the clip events, the spell composite, the manual pick and this one - each listing the stages
+    /// by hand, and no two lists agreed: none of the four passed the multiplier texture, and the events and
+    /// the spells also skipped child systems and reflection cubemaps. A stage forgotten in one copy is not
+    /// an error anyone sees; it is a white stand-in the shader multiplies by, which reads as "the mask is
+    /// not applied". The three callers now take this item and set only what is theirs - bone, delay,
+    /// travel - with a <c>with</c> expression, so a stage added here reaches every path at once.</para></summary>
     private VfxPlaybackItem BuildItem(VfxSystemDefinition def, System.Numerics.Vector3 at, int depth = 0)
         => new(def, at,
             ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count],
             ResolveMeshes?.Invoke(def),
+            emitterMultTextures: ResolveMultTextures?.Invoke(def),
             emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
             emitterColorTextures: ResolveColorTextures?.Invoke(def),
             emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
@@ -794,16 +799,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         _eventPlaybackActive = false; _eventBundle = null; _activeEvent = null;   // manual pick replaces an event
         // M116: _tar systems play ONLY on the target dummy — picking one turns the dummy on.
         if (IsTargetVfxName(def.Name) && !TargetDummyEnabled) { TargetDummyEnabled = true; return; }   // re-enters via ReplaySelectedOrClip
-        var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         // M114: "_tar" systems (or the explicit override) play at the target dummy — Kayn's
         // R_tar_enemy lands on the dummy instead of stacking on the caster.
-        Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, AnchorFor(def, PlaySelectedAtDummy), texs,
-            ResolveMeshes?.Invoke(def), emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
-            emitterColorTextures: ResolveColorTextures?.Invoke(def),
-            emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
-            emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
-            emitterChildren: ResolveChildren(def, 0),
-            emitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def)) });
+        // M634: every stage, through the one builder.
+        Playback = new VfxPlayback(new[] { BuildItem(def, AnchorFor(def, PlaySelectedAtDummy)) });
     }
 
     [RelayCommand] private void StopVfx() => SelectedVfx = null;

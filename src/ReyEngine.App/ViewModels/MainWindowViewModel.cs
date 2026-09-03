@@ -6097,6 +6097,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             m => _log.Warn("Preview", m));   // M115: Riot's practice dummy from Map11.wad
         MeshPreview.LoadSkybox = LoadSkyboxAtAsync;   // M122: same catalogue, its own pick
         MeshPreview.ResolveTextures = ResolveSystemTextures;
+        // M634: the multiplier / mask stage. Wired for the particle editor (above) and the map viewport
+        // since M117, and never for the character window - the resolver existed, the delegate did not.
+        MeshPreview.ResolveMultTextures = ResolveSystemMultTextures;
         MeshPreview.ResolveDistortionTextures = ResolveSystemDistortionTextures;
         MeshPreview.ResolveColorTextures = ResolveSystemColorTextures;   // M68
         MeshPreview.ResolveErosionTextures = ResolveSystemErosionTextures;   // M175 (see above)

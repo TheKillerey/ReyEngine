@@ -92,7 +92,8 @@ public sealed class ParticleMultiplierAtlasTests
         // collapse to the cell's corner texel and the fix above would do nothing visible.
         var text = Source("src", "ReyEngine.Rendering.D3D11", "ParticleQuadBuilder.cs");
         if (text is null) return;
-        Assert.Contains("vert.Uv1 = new Vector2(u, v);", text);
+        // M634: the cell coordinate plus the baked multiplier scroll (zero when none is authored).
+        Assert.Contains("vert.Uv1 = new Vector2(u + du1, v + dv1);", text);
     }
 
     // ===================================================== the two renderers, and that they agree
@@ -141,6 +142,76 @@ public sealed class ParticleMultiplierAtlasTests
             Assert.All(literal, c => Assert.True(c < 128, $"non-ASCII U+{(int)c:X4} inside a shader literal"));
             at = end;
         }
+    }
+
+    // ===================================================== M634: the scroll the shader cannot apply
+
+    private static PreviewVertex[] Quad(float age, ParticleQuadBuilder.UvScroll scroll)
+    {
+        var instance = new float[ParticleQuadBuilder.Stride];
+        instance[ParticleQuadBuilder.OffSizeX] = 10f;
+        instance[ParticleQuadBuilder.OffSizeY] = 10f;
+        instance[ParticleQuadBuilder.OffFrame + 1] = age;
+        var verts = new PreviewVertex[4];
+        var indices = new uint[6];
+        int v = 0, i = 0;
+        int written = ParticleQuadBuilder.Append(instance, 1, verts, ref v, indices, ref i,
+            Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ, default, scroll);
+        Assert.Equal(1, written);
+        return verts;
+    }
+
+    [Fact]
+    public void TheMultiplierScrollIsBakedIntoTexcoord1PreMultipliedByItsGrid()
+    {
+        // quad_vs computes (col2 + u2) / cols2 from TEXCOORD1 and has no scroll constant of its own, so the
+        // scroll has to arrive already in the vertex, and scaled by the grid: an authored 0.25/s on a 2x2
+        // sheet after 2 s must land at +0.5 in TEXTURE space, which is +1.0 in cell space.
+        var scroll = new ParticleQuadBuilder.UvScroll(Vector2.Zero, Vector2.One,
+            new Vector2(0.25f, -0.5f), new Vector2(2f, 2f));
+        var verts = Quad(age: 2f, scroll);
+
+        // Corner 0 is (u, v) = (0, 0).
+        Assert.Equal(0f + 0.25f * 2f * 2f, verts[0].Uv1.X, 5);
+        Assert.Equal(0f - 0.5f * 2f * 2f, verts[0].Uv1.Y, 5);
+        // The primary UV is untouched by the multiplier's scroll.
+        Assert.Equal(0f, verts[0].Uv0.X, 5);
+        Assert.Equal(0f, verts[0].Uv0.Y, 5);
+    }
+
+    [Fact]
+    public void ThePrimaryScrollIsBakedIntoTexcoord0TheSameWay()
+    {
+        var scroll = new ParticleQuadBuilder.UvScroll(new Vector2(0.1f, 0.2f), new Vector2(4f, 1f),
+            Vector2.Zero, Vector2.One);
+        var verts = Quad(age: 3f, scroll);
+
+        Assert.Equal(0f + 0.1f * 3f * 4f, verts[0].Uv0.X, 5);   // 4 columns
+        Assert.Equal(0f + 0.2f * 3f * 1f, verts[0].Uv0.Y, 5);   // 1 row
+        Assert.Equal(0f, verts[0].Uv1.X, 5);
+        Assert.Equal(0f, verts[0].Uv1.Y, 5);
+    }
+
+    [Fact]
+    public void NoScrollLeavesTheCellCoordinateExactlyAsBefore()
+    {
+        // The default is the M232 layout byte for byte: 216 of 401 multiplier emitters author no scroll,
+        // and every non-multiplier emitter takes this path.
+        var verts = Quad(age: 5f, ParticleQuadBuilder.UvScroll.None);
+        Assert.Equal(new Vector2(0f, 0f), new Vector2(verts[0].Uv0.X, verts[0].Uv0.Y));
+        Assert.Equal(new Vector2(1f, 1f), new Vector2(verts[2].Uv0.X, verts[2].Uv0.Y));
+        Assert.Equal(new Vector2(0f, 0f), verts[0].Uv1);
+        Assert.Equal(new Vector2(1f, 1f), verts[2].Uv1);
+    }
+
+    [Fact]
+    public void TheDriverHandsTheAuthoredScrollsToTheBuilder()
+    {
+        var text = Source("src", "ReyEngine.App", "Services", "D3D11MapParticles.cs");
+        if (text is null) return;
+        Assert.Contains("new ParticleQuadBuilder.UvScroll(", text);
+        Assert.Contains("es.Def.TextureMultUvScrollRate", text);
+        Assert.Contains("es.Def.UvScrollRate, es.Def.TexDiv", text);
     }
 
     // ===================================================== and that any of it matters
