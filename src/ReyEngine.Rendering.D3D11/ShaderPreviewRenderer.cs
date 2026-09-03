@@ -268,6 +268,16 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// comparison samplers still take precedence when the shader declares them.</summary>
     public PreviewSamplerAddress SamplerAddress { get; set; }
 
+    /// <summary>M635: sampler slots (by reflected name, e.g. <c>sPalettesTexture__SMP</c>) that must CLAMP
+    /// whatever <see cref="SamplerAddress"/> says for the rest of the material. A particle's sprite has to
+    /// wrap - flipbooks scroll and multipliers drift - while its palette strip is a lookup table: under WRAP
+    /// with linear filtering, a lookup at u = 0 (every black texel of an additive sprite) blends the strip's
+    /// first texel with its LAST, and Aatrox's AA_Gradient_RGB runs from (51,0,54) to (249,249,134), so the
+    /// whole black field of the sprite came out (150,125,94) grey and drew as a rectangle. GL has bound a
+    /// clamp sampler to this slot since M184 for the same reason; this is the per-slot mechanism that path
+    /// needed and did not have.</summary>
+    public HashSet<string>? ClampedSamplers { get; set; }
+
     /// <summary>M246: which distinct pipeline this material uses. Materials sharing an id share their
     /// shaders and input layout, so drawing them back to back costs no state change. -1 = uncached, which
     /// sorts last and keeps its relative order.</summary>
@@ -4908,8 +4918,11 @@ float4 psmain(VOut i) : SV_Target
             // point maps are still the 1x1 R32_FLOAT stand-in holding 1.0, every one of their references is
             // saturated into [0,1] by the shader before the compare (light-system.md §2.5), so LessEqual
             // against 1.0 returns "lit" exactly as Always did.
+            // M635: and a slot the material itself marked as a lookup table clamps too, whatever address
+            // mode the rest of the material uses - see PreviewMaterial.ClampedSamplers.
             var st = smp.IsComparisonSampler ? (_shadowFrame is null ? _comparison : _comparisonLessEqual)
                 : smp.Name.StartsWith("Clamp", StringComparison.OrdinalIgnoreCase) ? _linearClamp
+                : mat.ClampedSamplers is { } clamped && clamped.Contains(smp.Name) ? _linearClamp
                 : MaterialSampler(mat.SamplerAddress);
             if (pixel) _ctx.PSSetSamplers(smp.BindPoint, 1, ref st);
             else _ctx.VSSetSamplers(smp.BindPoint, 1, ref st);

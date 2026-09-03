@@ -293,7 +293,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             bool atDummy = anchor != System.Numerics.Vector3.Zero;
             // M634: every stage, through the one builder - this copy had no multiplier texture and no
             // child systems, so a clip event's mask was white and its children never spawned.
-            items.Add(BuildItem(def, anchor) with
+            // M635: a clip event at the dummy faces the caster; a bone-attached one takes its frame from
+            // the bone every frame, so its placement here is only where it starts.
+            items.Add(BuildItem(def, atDummy
+                    ? VfxCastFrame.Toward(anchor, CharacterPosition, anchor)
+                    : System.Numerics.Matrix4x4.CreateTranslation(anchor)) with
             {
                 AttachBone = atDummy ? null : ResolveBoneName(ev),
                 StartDelay = MathF.Max(0f, ev.StartFrame) / ClipFps(),   // M91: fire at the authored frame
@@ -486,12 +490,17 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // what it means; 0.15 s was a constant that matched no champion in particular.
         float castDelay = ability?.CastSecondsAt(ClipFps()) ?? 0.15f;
 
-        VfxPlaybackItem? Make(uint hash, System.Numerics.Vector3 at, System.Numerics.Vector3? travelTo)
+        // M635: every spell item is AIMED. Caster-side systems and missiles point their local forward at
+        // the target; a target-side system faces back at the caster - its sparks are authored to fly on
+        // along +Z, which is "away from the caster" only when -Z looks back at him. VfxCastFrame holds the
+        // axis convention and the evidence for it.
+        VfxPlaybackItem? Make(uint hash, System.Numerics.Vector3 at, System.Numerics.Vector3 faceToward,
+            System.Numerics.Vector3? travelTo)
         {
             if (!_vfxDefs.TryGetValue(hash, out var def)) return null;
             float dist = travelTo is { } dst ? (dst - at).Length() : 0f;
             // M634: every stage, through the one builder - see BuildItem for what this copy was missing.
-            return BuildItem(def, at) with
+            return BuildItem(def, VfxCastFrame.Toward(at, faceToward, at)) with
             {
                 TravelTo = travelTo,
                 // M631: the champion's own numbers where it authored them. The fallbacks are the old
@@ -508,9 +517,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // ride the model matrix and always followed; these free-standing ones were spawning back at the
         // world origin, so every spell fired at the spot the character started from.
         var caster = CharacterPosition;
-        foreach (var h in ev.CasterSystems) if (Make(h, caster, null) is { } i) items.Add(i);
-        foreach (var h in ev.TargetSystems) if (Make(h, dummy, null) is { } i) items.Add(i);
-        foreach (var h in ev.MissileSystems) if (Make(h, caster, dummy) is { } i) items.Add(i);
+        foreach (var h in ev.CasterSystems) if (Make(h, caster, dummy, null) is { } i) items.Add(i);
+        foreach (var h in ev.TargetSystems) if (Make(h, dummy, caster, null) is { } i) items.Add(i);
+        foreach (var h in ev.MissileSystems) if (Make(h, caster, dummy, dummy) is { } i) items.Add(i);
 
         // M631: the missile the spell record NAMES, when the token rule did not already find it. The
         // record says which system is the missile outright - 280 of 692 slots do - where the tokens infer
@@ -523,7 +532,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 if (missile.MissileEffectKey == 0) continue;
                 if (!_vfxResourceMap.TryGetValue(missile.MissileEffectKey, out var systemHash)) continue;
                 if (ev.MissileSystems.Contains(systemHash) || ev.CasterSystems.Contains(systemHash)) continue;
-                if (Make(systemHash, caster, dummy) is { } authored) items.Add(authored);
+                if (Make(systemHash, caster, dummy, dummy) is { } authored) items.Add(authored);
             }
         return items;
     }
@@ -769,16 +778,23 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// not applied". The three callers now take this item and set only what is theirs - bone, delay,
     /// travel - with a <c>with</c> expression, so a stage added here reaches every path at once.</para></summary>
     private VfxPlaybackItem BuildItem(VfxSystemDefinition def, System.Numerics.Vector3 at, int depth = 0)
-        => new(def, at,
+        => BuildItem(def, System.Numerics.Matrix4x4.CreateTranslation(at), depth);
+
+    /// <summary>M635: the placement as a whole frame rather than a point, so a cast can be AIMED. Every
+    /// spell item used to take a bare translation, which is the identity rotation - so Aatrox's W slammed
+    /// the ground along the same world axis whatever he was aiming at. See <see cref="VfxCastFrame"/> for
+    /// which local axis the data points at the target, and the evidence.</summary>
+    private VfxPlaybackItem BuildItem(VfxSystemDefinition def, System.Numerics.Matrix4x4 placement, int depth = 0)
+        => new(def, placement,
             ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count],
             ResolveMeshes?.Invoke(def),
-            emitterMultTextures: ResolveMultTextures?.Invoke(def),
-            emitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
-            emitterColorTextures: ResolveColorTextures?.Invoke(def),
-            emitterErosionTextures: ResolveErosionTextures?.Invoke(def),
-            emitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
-            emitterChildren: ResolveChildren(def, depth),
-            emitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def));
+            EmitterMultTextures: ResolveMultTextures?.Invoke(def),
+            EmitterDistortionTextures: ResolveDistortionTextures?.Invoke(def),
+            EmitterColorTextures: ResolveColorTextures?.Invoke(def),
+            EmitterErosionTextures: ResolveErosionTextures?.Invoke(def),
+            EmitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
+            EmitterChildren: ResolveChildren(def, depth),
+            EmitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def));
 
     public void SetVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems,
         IReadOnlyDictionary<uint, uint>? resourceMap = null)
@@ -802,7 +818,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // M114: "_tar" systems (or the explicit override) play at the target dummy — Kayn's
         // R_tar_enemy lands on the dummy instead of stacking on the caster.
         // M634: every stage, through the one builder.
-        Playback = new VfxPlayback(new[] { BuildItem(def, AnchorFor(def, PlaySelectedAtDummy)) });
+        // M635: and aimed - at the dummy it faces the caster, at the caster it faces the dummy.
+        var anchor = AnchorFor(def, PlaySelectedAtDummy);
+        var target = TargetDummyPosition ?? new System.Numerics.Vector3(350, 0, 0);
+        var placement = anchor != System.Numerics.Vector3.Zero
+            ? VfxCastFrame.Toward(anchor, CharacterPosition, anchor)
+            : VfxCastFrame.Toward(anchor, target, anchor);
+        Playback = new VfxPlayback(new[] { BuildItem(def, placement) });
     }
 
     [RelayCommand] private void StopVfx() => SelectedVfx = null;

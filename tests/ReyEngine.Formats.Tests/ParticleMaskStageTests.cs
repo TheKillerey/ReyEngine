@@ -111,13 +111,14 @@ public sealed class ParticleMaskStageTests
         if (text is null) return;
 
         Assert.DoesNotContain("new VfxPlaybackItem(", text);
-        Assert.Contains("emitterMultTextures: ResolveMultTextures?.Invoke(def)", text);
-        Assert.Contains("emitterChildren: ResolveChildren(def, depth)", text);
+        Assert.Contains("EmitterMultTextures: ResolveMultTextures?.Invoke(def)", text);
+        Assert.Contains("EmitterChildren: ResolveChildren(def, depth)", text);
 
-        // The three callers set only what is theirs on top of the built item.
-        Assert.Contains("BuildItem(def, anchor) with", text);          // clip events: bone + start frame
-        Assert.Contains("BuildItem(def, at) with", text);              // spell composite: travel
-        Assert.Contains("BuildItem(def, AnchorFor(def, PlaySelectedAtDummy))", text);   // manual pick
+        // The three callers set only what is theirs on top of the built item (M635 aims them; the frame
+        // goes in as a placement matrix rather than a point).
+        Assert.Contains("items.Add(BuildItem(def, atDummy", text);                                  // clip events
+        Assert.Contains("BuildItem(def, VfxCastFrame.Toward(at, faceToward, at)) with", text);     // spell composite
+        Assert.Contains("Playback = new VfxPlayback(new[] { BuildItem(def, placement) });", text); // manual pick
     }
 
     [Fact]

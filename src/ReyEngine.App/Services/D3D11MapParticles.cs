@@ -219,8 +219,10 @@ public sealed class D3D11MapParticles
             float elapsed = (_travelElapsed.TryGetValue(item, out var t) ? t : 0f) + dt;
             _travelElapsed[item] = elapsed;
             float progress = Math.Clamp((elapsed - item.StartDelay) / item.TravelSeconds, 0f, 1f);
-            sim.SetWorldTransform(
-                Matrix4x4.CreateTranslation(Vector3.Lerp(item.WorldPos, destination, progress)));
+            // M635: the AIM travels with it. Rebuilding the matrix from the lerped position alone threw the
+            // item's rotation away on the first tick of flight, so a missile flew sideways-on.
+            sim.SetWorldTransform(VfxCastFrame.RotationOf(item.Transform)
+                * Matrix4x4.CreateTranslation(Vector3.Lerp(item.WorldPos, destination, progress)));
         }
     }
 

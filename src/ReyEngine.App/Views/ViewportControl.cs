@@ -1199,7 +1199,10 @@ public sealed class ViewportControl : OpenGlControlBase
                     _travelElapsed[item] = elapsed;
                     float t01 = Math.Clamp((elapsed - item.StartDelay) / item.TravelSeconds, 0f, 1f);
                     var pos = Vector3.Lerp(item.WorldPos, dest, t01);
-                    sim.SetWorldTransform(Matrix4x4.CreateTranslation(pos));
+                    // M635: the aim travels with it - same as the D3D11 driver, or the two viewports
+                    // would fly the same missile in two directions.
+                    sim.SetWorldTransform(ReyEngine.Formats.Vfx.VfxCastFrame.RotationOf(item.Transform)
+                        * Matrix4x4.CreateTranslation(pos));
                 }
 
             // M185 (2.15): the Stop action. Applied here rather than at build time so the linger phase

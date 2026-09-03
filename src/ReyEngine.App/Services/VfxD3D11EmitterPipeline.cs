@@ -88,6 +88,18 @@ public static class VfxD3D11EmitterPipeline
         // The whole point of the milestone: the define set comes from the emitter's own flags.
         var defines = VfxShaderFlags.For(e, out var why);
 
+        // M635: a stage whose texture did not resolve is not selected at all, which is what GL does
+        // (hasPalette = texture bound && authored; hasErosion likewise). Selecting the permutation anyway
+        // hands the stage the renderer's 1x1 WHITE stand-in, and neither stage has a bypass: the palette
+        // REPLACES the sprite's rgb with a lookup into white, and erosion multiplies alpha by a mask read
+        // from white. Both turn a missing texture into a solid card instead of a missing effect.
+        foreach (var (define, sampler) in new[] { ("PALETTIZE_TEXTURES", "sPalettesTexture"), ("ALPHA_EROSION", "sAlphaErosionTexture") })
+            if (defines.ContainsKey(define) && sprites(sampler) is null)
+            {
+                defines.Remove(define);
+                why.Add($"{define} dropped: the {sampler} texture did not resolve, so the stage stays off as it does on GL");
+            }
+
         var vsPerm = ShaderCacheReader.ResolvePermutation(tocs.Vs, defines, null, null, null, out var vw);
         var psPerm = ShaderCacheReader.ResolvePermutation(tocs.Ps, defines, null, null, null, out var pw);
 
@@ -208,6 +220,16 @@ public static class VfxD3D11EmitterPipeline
         if (e.Palette is { } palette)
         {
             string? slot = BindTexture(renderer, mat, ps, "sPalettesTexture", sprites, log);
+
+            // M635: the strip is a LOOKUP TABLE, so its sampler clamps - the sprite's own sampler must
+            // keep wrapping for flipbooks and scrolls, which is why this is per slot and not per material.
+            // Under WRAP, u = 0 (every black texel of an additive sprite) filtered the strip's first texel
+            // with its last and painted the sprite's whole black field a mid grey: a rectangle. GL has bound
+            // a clamp sampler here since M184; the per-slot mechanism this path lacked is
+            // PreviewMaterial.ClampedSamplers.
+            if (slot is not null)
+                (mat.ClampedSamplers ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+                    .Add(slot.Replace("__TX", "__SMP", StringComparison.OrdinalIgnoreCase));
 
             // The palette stage REPLACES the sprite's RGB and has no bypass, so a bound-but-unparameterised
             // palette is not a missing effect, it is a wrong colour on every particle. Only IsUsable
