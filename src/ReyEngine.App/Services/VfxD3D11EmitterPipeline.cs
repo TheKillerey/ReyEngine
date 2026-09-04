@@ -28,21 +28,36 @@ public static class VfxD3D11EmitterPipeline
     public const string VsName = "assets/shaders/hlsl/particlesystem/quad_vs";
     public const string PsName = "assets/shaders/hlsl/particlesystem/quad_ps";
 
-    /// <summary>The two stage tables every emitter resolves its permutation against. Read once per
-    /// playback, not once per emitter.</summary>
-    public sealed record Tocs(ShaderStageToc Vs, ShaderStageToc Ps);
+    /// <summary>M640: Riot's shaders for MESH primitives. mesh_vs takes POSITION0/NORMAL0/TEXCOORD0, a
+    /// per-draw <c>mWorld</c>, the particle colour as <c>kColorFactor</c> and a <c>vParticleUVTransform</c>
+    /// affine; mesh_ps carries the same stages as quad_ps (PALETTIZE_TEXTURES, ALPHA_EROSION,
+    /// SOFT_PARTICLES, ALPHA_TEST, MULT_PASS, MASKED) plus REFLECTIVE. Read off the shipped bytecode.</summary>
+    public const string MeshVsName = "assets/shaders/hlsl/particlesystem/mesh_vs";
+    public const string MeshPsName = "assets/shaders/hlsl/particlesystem/mesh_ps";
 
-    public static Tocs? ReadTocs(ShaderCacheReader cache, out string? error)
+    /// <summary>The two stage tables every emitter resolves its permutation against, and the names they
+    /// were read under so the build loads and describes the blobs of whichever pair it was handed. Read
+    /// once per playback, not once per emitter.</summary>
+    public sealed record Tocs(ShaderStageToc Vs, ShaderStageToc Ps, string VsName = VsName, string PsName = PsName);
+
+    public static Tocs? ReadTocs(ShaderCacheReader cache, out string? error) =>
+        ReadTocs(cache, VsName, PsName, "particlesystem/quad_vs+quad_ps", out error);
+
+    /// <summary>M640: the mesh pair. Null, with the reason, when the cache lacks either stage.</summary>
+    public static Tocs? ReadMeshTocs(ShaderCacheReader cache, out string? error) =>
+        ReadTocs(cache, MeshVsName, MeshPsName, "particlesystem/mesh_vs+mesh_ps", out error);
+
+    private static Tocs? ReadTocs(ShaderCacheReader cache, string vsName, string psName, string label, out string? error)
     {
         error = null;
-        var vs = cache.ReadToc(ShaderCacheReader.TocPathFor(VsName, DxbcStage.Vertex));
-        var ps = cache.ReadToc(ShaderCacheReader.TocPathFor(PsName, DxbcStage.Pixel));
+        var vs = cache.ReadToc(ShaderCacheReader.TocPathFor(vsName, DxbcStage.Vertex));
+        var ps = cache.ReadToc(ShaderCacheReader.TocPathFor(psName, DxbcStage.Pixel));
         if (vs is null || ps is null)
         {
-            error = "particlesystem/quad_vs+quad_ps not in the shader cache";
+            error = label + " not in the shader cache";
             return null;
         }
-        return new Tocs(vs, ps);
+        return new Tocs(vs, ps, vsName, psName);
     }
 
     /// <summary>
@@ -100,6 +115,14 @@ public static class VfxD3D11EmitterPipeline
                 why.Add($"{define} dropped: the {sampler} texture did not resolve, so the stage stays off as it does on GL");
             }
 
+        // M640: mesh_vs has a REFLECTIVE axis quad_vs lacks (the fresnel rim in vFresnel). Only asked of the
+        // mesh pair; asking quad_vs for an axis it does not have would resolve nothing.
+        if (tocs.VsName == MeshVsName && e.Reflection is { HasFresnel: true })
+        {
+            defines["REFLECTIVE"] = "1";
+            why.Add("REFLECTIVE  <- reflectionDefinition authors a fresnel colour and power");
+        }
+
         var vsPerm = ShaderCacheReader.ResolvePermutation(tocs.Vs, defines, null, null, null, out var vw);
         var psPerm = ShaderCacheReader.ResolvePermutation(tocs.Ps, defines, null, null, null, out var pw);
 
@@ -110,8 +133,8 @@ public static class VfxD3D11EmitterPipeline
         if (psPerm is null) log.AppendLine($"       ps: {pw}");
         if (vsPerm is null || psPerm is null) return null;
 
-        var vs = cache.LoadShader(ShaderCacheReader.TocPathFor(VsName, DxbcStage.Vertex), vsPerm.BlobIndex, out _);
-        var ps = cache.LoadShader(ShaderCacheReader.TocPathFor(PsName, DxbcStage.Pixel), psPerm.BlobIndex, out _);
+        var vs = cache.LoadShader(ShaderCacheReader.TocPathFor(tocs.VsName, DxbcStage.Vertex), vsPerm.BlobIndex, out _);
+        var ps = cache.LoadShader(ShaderCacheReader.TocPathFor(tocs.PsName, DxbcStage.Pixel), psPerm.BlobIndex, out _);
         if (vs is null || ps is null) { log.AppendLine("       bytecode would not load"); return null; }
 
         // M273: modes 2 and 3 pick their blend from the SPRITE, not the integer, so the diffuse stage has to
@@ -150,8 +173,8 @@ public static class VfxD3D11EmitterPipeline
         // bright refracted sample is exactly what turns it into a white blob. GL overrides the authored
         // mode back to alpha for these (VfxParticleRenderer.cs:398-402); so does this.
         bool additive = !isDistortion && VfxShaderFlags.IsAdditive(e.BlendMode, texHasAlpha);
-        var vsDesc = new ShaderDescription(VsName, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, defines, vs);
-        var psDesc = new ShaderDescription(PsName, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, defines, ps);
+        var vsDesc = new ShaderDescription(tocs.VsName, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, defines, vs);
+        var psDesc = new ShaderDescription(tocs.PsName, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, defines, ps);
         var stateDesc = StateDescription.Particle(
             additive ? BlendKind.Additive : BlendKind.Alpha, e.AlphaRef / 255f);
 

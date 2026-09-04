@@ -96,6 +96,8 @@ public sealed class VfxParticleSimulator
         public Vector2 BirthSize;   // absolute (birthScale0 xy)
         public Vector4 BirthColor;
         public Vector3 BirthRotation;
+        /// <summary>M640: birthScale.z. Meshes scale per axis; quads never read it.</summary>
+        public float BirthSizeZ;
         public float Rot, RotVel;
         public float StartFrame, FrameRate;
         public float ColorRandom;   // M68: stable per-particle 0..1 roll for the colour-gradient variant axis
@@ -790,6 +792,8 @@ public sealed class VfxParticleSimulator
             BirthSize = d.Extras?.IsUniformScale == true
                 ? new Vector2(birthScale.X, birthScale.X)
                 : new Vector2(birthScale.X, birthScale.Y == 0 ? birthScale.X : birthScale.Y),
+            // M640: the Z axis, for meshes. Same junk guard as Y: a zero falls back to X.
+            BirthSizeZ = d.Extras?.IsUniformScale == true ? birthScale.X : (birthScale.Z == 0 ? birthScale.X : birthScale.Z),
             BirthColor = d.BirthColor.SampleBirth(_rng),
             BirthRotation = birthRotation * (MathF.PI / 180f),
             Rot = d.IsMeshPrimitive ? 0f : birthRotation.X * (MathF.PI / 180f),
@@ -886,10 +890,18 @@ public sealed class VfxParticleSimulator
             buf[k++] = p.BirthSize.Y * scaleMul.Y;
             buf[k++] = col.X; buf[k++] = col.Y; buf[k++] = col.Z; buf[k++] = col.W;
             buf[k++] = p.Rot;
-            buf[k++] = frame;
+            // M640: a mesh has no flipbook (its texDiv TILES - M117c), so slot 10 carries its Z scale.
+            // Aatrox's W cone is authored <2, 1, 1.5> and its black hole <0.35, 0.1, 0.35>; a uniform X
+            // scale made the first twice too tall and the second a sphere instead of a disc.
+            buf[k++] = d.IsMeshPrimitive ? p.BirthSizeZ * scaleMul.Z : frame;
             buf[k++] = p.Age;
             buf[k++] = p.Vel.X; buf[k++] = p.Vel.Y; buf[k++] = p.Vel.Z;
-            buf[k++] = p.Rot; buf[k++] = p.BirthRotation.Y; buf[k++] = p.BirthRotation.Z;
+            // M640: slots 15-17 are the Euler birth rotation. A quad's X is its spin (p.Rot starts at
+            // birthRotation.X); a mesh keeps its authored orientation and its spin starts at 0 (slot 9),
+            // so the birth X used to be dropped for every mesh - 513 of 684 mesh emitters on 10 champions
+            // author a non-zero birth rotation that neither renderer applied.
+            buf[k++] = d.IsMeshPrimitive ? p.BirthRotation.X : p.Rot;
+            buf[k++] = p.BirthRotation.Y; buf[k++] = p.BirthRotation.Z;
             // M174 (2.1): the erosion drive is ONE scalar per particle - Riot's quad path feeds it
             // through a vertex attribute (quad_vs: mov o3.z, v2.w), which is why the curve is
             // evaluated here on the CPU rather than in the shader.

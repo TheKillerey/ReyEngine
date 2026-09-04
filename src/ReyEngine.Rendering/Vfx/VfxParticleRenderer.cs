@@ -695,6 +695,7 @@ public sealed class VfxParticleRenderer
     // ---- M47 mesh-primitive particles (.scb/.sco): per-particle uniforms, simple textured draw ----
     private uint _meshProgram;
     private int _muViewProj, _muWorldPos, _muScale, _muRot, _muColor, _muTex, _muUvOffset;
+    private int _muMeshEuler;   // M640: the Euler birth rotation, instance slots 15-17
     private int _muTexMult, _muHasTexMult, _muUvOffsetMult;
     private int _muMeshTexDiv, _muMeshTexDivMult;   // M117
     private int _muPlacementRight, _muPlacementUp, _muPlacementForward;
@@ -788,6 +789,7 @@ public sealed class VfxParticleRenderer
             _muWorldPos = _gl.GetUniformLocation(_meshProgram, "uWorldPos");
             _muScale = _gl.GetUniformLocation(_meshProgram, "uScale");
             _muRot = _gl.GetUniformLocation(_meshProgram, "uRot");
+            _muMeshEuler = _gl.GetUniformLocation(_meshProgram, "uMeshEuler");
             _muColor = _gl.GetUniformLocation(_meshProgram, "uColor");
             _muTex = _gl.GetUniformLocation(_meshProgram, "uTex");
             _muUvOffset = _gl.GetUniformLocation(_meshProgram, "uUvOffset");
@@ -999,14 +1001,17 @@ public sealed class VfxParticleRenderer
         {
             int o = i * Stride;   // [cx,cy,cz, sx,sy, r,g,b,a, rot, frame]
             _gl.Uniform3(_muWorldPos, es.Instances[o], es.Instances[o + 1], es.Instances[o + 2]);
-            // mesh particles use birthScale.x as a uniform scale; a scale of ~1 means unscaled geometry
-            float rawScale = es.Instances[o + 3];
-            float sc = MathF.Abs(rawScale) < 0.01f ? MathF.CopySign(0.01f, rawScale == 0f ? 1f : rawScale) : rawScale;
-            _gl.Uniform1(_muScale, sc);
-            // M209: a negative scale mirrors the mesh (uScale is scalar, so det = sc^3 < 0) and reverses
-            // its winding. Without this those particles cull exactly the faces they should keep.
-            if (cull) _gl.FrontFace(sc < 0f ? FrontFaceDirection.Ccw : FrontFaceDirection.CW);
+            // M640: per-axis scale - X and Y from the size slots, Z from slot 10 (see the simulator's
+            // packing). A magnitude under 0.01 is clamped so a zero-scale particle stays a degenerate
+            // draw rather than a NaN one.
+            static float Guard(float v) => MathF.Abs(v) < 0.01f ? MathF.CopySign(0.01f, v == 0f ? 1f : v) : v;
+            float sx = Guard(es.Instances[o + 3]), sy = Guard(es.Instances[o + 4]), sz = Guard(es.Instances[o + 10]);
+            _gl.Uniform3(_muScale, sx, sy, sz);
+            // M209: a negative scale mirrors the mesh and reverses its winding (det < 0 when an odd
+            // number of axes is negative). Without this those particles cull exactly the faces they should keep.
+            if (cull) _gl.FrontFace(sx * sy * sz < 0f ? FrontFaceDirection.Ccw : FrontFaceDirection.CW);
             _gl.Uniform1(_muRot, es.Instances[o + 9]);
+            _gl.Uniform3(_muMeshEuler, es.Instances[o + 15], es.Instances[o + 16], es.Instances[o + 17]);
             _gl.Uniform4(_muColor, es.Instances[o + 5], es.Instances[o + 6], es.Instances[o + 7], es.Instances[o + 8]);
             unsafe
             {
@@ -1360,8 +1365,9 @@ uniform float uReflGlancing;
 uniform highp int uHasRefl;   // explicit: ES defaults int to highp in VS but mediump in FS, and a
                               // uniform shared by both stages must agree or the program will not link
 uniform vec3 uWorldPos;
-uniform float uScale;
+uniform vec3 uScale;           // M640: per axis (slots 3, 4, 10), applied in mesh space before the Euler
 uniform float uRot;
+uniform vec3 uMeshEuler;       // M640: birthRotation (radians), applied X then Y then Z before the spin
 uniform vec2 uUvOffset;
 uniform vec2 uUvOffsetMult;
 uniform vec2 uMeshTexDiv;      // M117c: UV tiling factor (uv * texDiv)
@@ -1373,9 +1379,20 @@ out vec2 vUv;
 out vec2 vUvMult;
 out vec3 vFresnel;
 out vec4 vReflect;   // M181: xyz = reflection vector, w = reflection opacity
+vec3 rotateEuler(vec3 p, vec3 r){
+    float sx = sin(r.x); float cx = cos(r.x);
+    float sy = sin(r.y); float cy = cos(r.y);
+    float sz = sin(r.z); float cz = cos(r.z);
+    p = vec3(p.x, p.y * cx - p.z * sx, p.y * sx + p.z * cx);
+    p = vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
+    return vec3(p.x * cz - p.y * sz, p.x * sz + p.y * cz, p.z);
+}
 void main(){
     float s = sin(uRot); float c = cos(uRot);
-    vec3 local = vec3(aPos.x * c - aPos.z * s, aPos.y, aPos.x * s + aPos.z * c) * uScale;
+    // M640: the authored birth rotation first (the same X-Y-Z order the quad path decoded), then the
+    // over-life spin about Y, then the placement basis. The D3D11 Riot mesh path composes the same chain.
+    vec3 e = rotateEuler(aPos * uScale, uMeshEuler);
+    vec3 local = vec3(e.x * c - e.z * s, e.y, e.x * s + e.z * c);
     vec3 p = uPlacementRight * local.x + uPlacementUp * local.y + uPlacementForward * local.z + uWorldPos;
     gl_Position = uViewProj * vec4(p, 1.0);
     // M178 (2.12): the fresnel rim. DECODED from particlesystem/mesh_vs permutation REFLECTIVE:
@@ -1385,7 +1402,8 @@ void main(){
     vFresnel = vec3(0.0);
     vReflect = vec4(0.0, 1.0, 0.0, 0.0);
     if (uHasFresnel != 0 || uHasRefl != 0) {
-        vec3 nLocal = vec3(aNormal.x * c - aNormal.z * s, aNormal.y, aNormal.x * s + aNormal.z * c);
+        vec3 ne = rotateEuler(aNormal, uMeshEuler);
+        vec3 nLocal = vec3(ne.x * c - ne.z * s, ne.y, ne.x * s + ne.z * c);
         vec3 nWorld = uPlacementRight * nLocal.x + uPlacementUp * nLocal.y + uPlacementForward * nLocal.z;
         float len = length(nWorld);
         if (len > 1e-5) {

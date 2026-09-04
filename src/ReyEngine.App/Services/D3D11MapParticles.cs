@@ -107,8 +107,18 @@ public sealed class D3D11MapParticles
         public required VfxParticleSimulator.EmitterState State { get; init; }
         public required int GeometryId { get; init; }
         public ReyEngine.Formats.Meshes.VfxMeshAnimation? Animation { get; init; }
+        /// <summary>M640: set when the slice draws through Riot's mesh_vs/mesh_ps; GeometryId is -1 then.</summary>
+        public int RiotGeometryId { get; init; } = -1;
     }
     private readonly List<MeshSlice> _meshSlices = new();
+    /// <summary>M640: the mesh shader pair, read once per rebuild. Null when the cache lacks it, in which
+    /// case mesh emitters draw through the M283 approximation and the report says so.</summary>
+    private VfxD3D11EmitterPipeline.Tocs? _meshTocs;
+    /// <summary>M640: how many mesh emitters were built on Riot's mesh shaders in the last rebuild.</summary>
+    public int RiotMeshEmitters { get; private set; }
+    /// <summary>M640: off = every mesh emitter takes the M283 approximation. Exists so the two can be
+    /// rendered from one process and compared as pictures; the window never turns it off.</summary>
+    public bool UseRiotMeshShaders { get; set; } = true;
 
     /// <summary>M364: a beam or trail emitter. One per PLACEMENT for the same reason <see cref="MeshSlice"/>
     /// is: the ribbon is world-space geometry extruded from THIS placement's particle history and basis
@@ -260,8 +270,10 @@ public sealed class D3D11MapParticles
         _renderer.RemoveMaterials(m => _mine.Contains(m));
         _mine.Clear();
         _slices.Clear();
-        foreach (int id in _meshSlices.Select(s => s.GeometryId).Distinct())
+        foreach (int id in _meshSlices.Where(s => s.GeometryId >= 0).Select(s => s.GeometryId).Distinct())
             _renderer.ReleaseMeshGeometry(id);
+        foreach (int id in _meshSlices.Where(s => s.RiotGeometryId >= 0).Select(s => s.RiotGeometryId).Distinct())
+            _renderer.ReleaseRiotMeshGeometry(id);
         _meshSlices.Clear();
         foreach (int id in _ribbonSlices.Select(s => s.RibbonId).Distinct())
             _renderer.ReleaseRibbon(id);
@@ -286,6 +298,11 @@ public sealed class D3D11MapParticles
             BuildReport = tocError ?? "the particle shaders could not be read";
             return;
         }
+        // M640: the mesh pair is optional - its absence degrades mesh emitters to the M283 path, visibly.
+        string? meshTocError = null;
+        _meshTocs = UseRiotMeshShaders ? VfxD3D11EmitterPipeline.ReadMeshTocs(_cache, out meshTocError) : null;
+        RiotMeshEmitters = 0;
+        if (_meshTocs is null) sb.AppendLine($"mesh emitters on the M283 approximation: {meshTocError ?? "UseRiotMeshShaders is off"}");
 
         Placements = pb.Items.Count;
         int emptySystems = 0, failedPipelines = 0;
@@ -544,6 +561,40 @@ public sealed class D3D11MapParticles
             return false;
         }
 
+        // M640: Riot's own mesh_vs/mesh_ps for the static case. The permutation, the stage textures and the
+        // blend decision come from the same Build the quad path uses; only the shader pair and the geometry
+        // differ. Animated meshes stay on the M283 path, which owns their re-skinning.
+        if (_meshTocs is { } meshTocs && mesh.Animation is null)
+        {
+            int riotId = _renderer.CreateRiotMeshGeometry(mesh.Positions, null, mesh.Uvs,
+                mesh.Indices is { Length: > 0 } ? mesh.Indices : null);
+            if (riotId >= 0)
+            {
+                var riotMat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, meshTocs, def,
+                    sampler => ResolveSprite(sampler, item, def), sb);
+                if (riotMat is not null)
+                {
+                    riotMat.RiotMeshGeometryId = riotId;
+                    riotMat.UsesDynamicMesh = false;
+                    riotMat.Visible = false;
+                    // The authored flag, as GL applies it (absent = cull). Gated on the window's Cull
+                    // toggle by the renderer like every other per-material cull.
+                    riotMat.CullBackFaces = !def.DisableBackfaceCull;
+                    _renderer.AddMaterial(riotMat);
+                    _mine.Add(riotMat);
+                    _meshSlices.Add(new MeshSlice
+                    {
+                        Material = riotMat, Def = def, Owner = sim, State = es,
+                        GeometryId = -1, RiotGeometryId = riotId,
+                    });
+                    RiotMeshEmitters++;
+                    return true;
+                }
+                _renderer.ReleaseRiotMeshGeometry(riotId);
+                sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: mesh_vs/mesh_ps did not resolve - M283 mesh pipeline instead");
+            }
+        }
+
         int geometryId = _renderer.CreateMeshGeometry(mesh.Positions, mesh.Uvs,
             mesh.Indices is { Length: > 0 } ? mesh.Indices : null);
         if (geometryId < 0)
@@ -562,6 +613,7 @@ public sealed class D3D11MapParticles
 
         mat.MeshGeometryId = geometryId;
         mat.UsesDynamicMesh = false;      // its geometry is its own, not the shared quad buffer
+        mat.CullBackFaces = !def.DisableBackfaceCull;   // M640: the authored flag, as on the Riot path
         mat.Visible = false;              // until a Tick finds it active and gives it particles
         _renderer.AddMaterial(mat);
         _mine.Add(mat);
@@ -602,6 +654,26 @@ public sealed class D3D11MapParticles
             mat.MeshTexDiv = new Vector2(div.X > 0 ? div.X : 1f, div.Y > 0 ? div.Y : 1f);
             var divMult = ms.Def.TextureMultTexDiv;
             mat.MeshTexDivMult = new Vector2(divMult.X > 0 ? divMult.X : 1f, divMult.Y > 0 ? divMult.Y : 1f);
+
+            // M640: Riot's mesh_vs takes the same tiling and scroll as ONE affine on the mesh UV -
+            // vParticleUVTransform is a float4x3 and the decoded VS does o2.x = dot((u,v,1), reg1.xyz),
+            // o2.y = dot((u,v,1), reg2.xyz). The rim light is vFresnel: rgb = colour, w = power.
+            if (mat.RiotMeshGeometryId is not null)
+            {
+                var sc = mat.MeshUvOffset;
+                var dv = mat.MeshTexDiv;
+                mat.Params["vParticleUVTransform"] = new[] { dv.X, 0f, sc.X, 0f, 0f, dv.Y, sc.Y, 0f, 0f, 0f, 1f, 0f };
+                // MULT_PASS blobs read a second affine (vParticleUVTransformMult, $Globals+64) into the
+                // multiplier UV output the same way. Left unbound it is zero, and the whole mesh then
+                // samples texel (0,0) of its multiplier - which is how Aatrox's W cone went dark.
+                var scm = mat.MeshUvOffsetMult;
+                var dvm = mat.MeshTexDivMult;
+                mat.Params["vParticleUVTransformMult"] = new[] { dvm.X, 0f, scm.X, 0f, 0f, dvm.Y, scm.Y, 0f, 0f, 0f, 1f, 0f };
+                var refl = ms.Def.Reflection;
+                mat.Params["vFresnel"] = refl is { HasFresnel: true }
+                    ? new[] { refl.FresnelColor.X, refl.FresnelColor.Y, refl.FresnelColor.Z, refl.Fresnel }
+                    : new[] { 0f, 0f, 0f, 1f };
+            }
 
             // The skinned pose is per EMITTER, not per particle: one vertex buffer serves every particle of
             // this emitter, so they necessarily share a pose. GL has the same property for the same reason.

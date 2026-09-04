@@ -363,6 +363,15 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// that are visually absent and halos whatever is behind.</summary>
     public float MeshAlphaCutoff { get; set; }
 
+    /// <summary>M640: a mesh-primitive emitter drawn through RIOT'S mesh shaders (particlesystem/mesh_vs +
+    /// mesh_ps) rather than the ported MeshHlsl. The material's own pipeline, textures, constants and
+    /// stages apply exactly as they do to a quad; only the final draw differs - the geometry lives in
+    /// <see cref="ShaderPreviewRenderer.CreateRiotMeshGeometry"/>'s store and is drawn once per particle
+    /// with <c>mWorld</c> and <c>kColorFactor</c> re-issued per instance, which is how the shader takes
+    /// them (mesh_vs blob 0: <c>dp4 r1, pos, cb3[0..3]</c> and <c>mov o1, cb1[7]</c>). Mutually exclusive
+    /// with <see cref="MeshGeometryId"/>.</summary>
+    public int? RiotMeshGeometryId { get; set; }
+
     /// <summary>The key <see cref="Textures"/> holds a distortion emitter's normal map under. Reserved
     /// rather than a real sampler name because no shader in Riot's cache declares this stage - it belongs
     /// to our own pipeline. Routed through the ordinary texture pool so its lifetime is pooled like every
@@ -3115,6 +3124,202 @@ float4 psmain(VOut i) : SV_Target
         foreach (var g in _meshGeoms)
             if (g is not null) { g.Vb.Dispose(); g.Ib.Dispose(); }
         _meshGeoms.Clear();
+        ReleaseRiotMeshGeometry();
+    }
+
+    // ---- M640: mesh-primitive geometry for RIOT'S mesh shaders ------------------------------------
+
+    private sealed class RiotMeshGeom
+    {
+        public ComPtr<ID3D11Buffer> Vb, Ib;
+        public int VertexCount, IndexCount;
+    }
+    private readonly List<RiotMeshGeom?> _riotMeshGeoms = new();
+
+    /// <summary>
+    /// Upload a mesh primitive in the layout Riot's <c>particlesystem/mesh_vs</c> declares - POSITION0,
+    /// NORMAL0, TEXCOORD0 - which is <see cref="PreviewVertex"/>, the same vertex the material path builds
+    /// its input layouts against. Returns an id for <see cref="PreviewMaterial.RiotMeshGeometryId"/>.
+    ///
+    /// <para>Normals are REQUIRED by that shader even when nothing reads the result: it normalises the
+    /// world-space normal with <c>rsq</c> for the fresnel term, and a zero normal makes that NaN, which
+    /// the pixel stage then adds into the colour. .scb/.sco primitives carry no normals, so when
+    /// <paramref name="normals"/> is null they are computed here from the triangles, area-weighted.</para>
+    /// </summary>
+    public int CreateRiotMeshGeometry(float[] positions, float[]? normals, float[] uvs, uint[]? indices)
+    {
+        int vertexCount = positions.Length / 3;
+        if (vertexCount == 0) return -1;
+        var idx = indices is { Length: > 0 } ? indices : Enumerable.Range(0, vertexCount).Select(i => (uint)i).ToArray();
+        if (idx.Length < 3) return -1;
+
+        float[] n = normals is { Length: > 0 } && normals.Length == positions.Length ? normals : FlatNormals(positions, idx);
+        var verts = new PreviewVertex[vertexCount];
+        for (int v = 0; v < vertexCount; v++)
+        {
+            float u = v * 2 + 1 < uvs.Length ? uvs[v * 2] : 0f;
+            float w = v * 2 + 1 < uvs.Length ? uvs[v * 2 + 1] : 0f;
+            verts[v] = new PreviewVertex
+            {
+                Position = new Vector3(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]),
+                Normal = new Vector3(n[v * 3], n[v * 3 + 1], n[v * 3 + 2]),
+                Uv0 = new Vector4(u, w, 0f, 0f),
+                Uv1 = new Vector2(u, w),
+                Color = Vector4.One,
+            };
+        }
+
+        var geom = new RiotMeshGeom { VertexCount = vertexCount, IndexCount = idx.Length };
+        var vdesc = new BufferDesc
+        {
+            ByteWidth = (uint)(verts.Length * PreviewVertex.SizeInBytes),
+            Usage = Usage.Immutable, BindFlags = (uint)BindFlag.VertexBuffer,
+        };
+        fixed (PreviewVertex* p = verts)
+        {
+            var sub = new SubresourceData { PSysMem = p };
+            ComPtr<ID3D11Buffer> b = default;
+            if (_device.CreateBuffer(in vdesc, in sub, ref b) < 0) { Log("riot mesh vertex buffer failed"); return -1; }
+            geom.Vb = b;
+        }
+        var idesc = new BufferDesc
+        {
+            ByteWidth = (uint)(idx.Length * sizeof(uint)),
+            Usage = Usage.Immutable, BindFlags = (uint)BindFlag.IndexBuffer,
+        };
+        fixed (uint* p = idx)
+        {
+            var sub = new SubresourceData { PSysMem = p };
+            ComPtr<ID3D11Buffer> b = default;
+            if (_device.CreateBuffer(in idesc, in sub, ref b) < 0) { geom.Vb.Dispose(); Log("riot mesh index buffer failed"); return -1; }
+            geom.Ib = b;
+        }
+
+        for (int i = 0; i < _riotMeshGeoms.Count; i++)
+            if (_riotMeshGeoms[i] is null) { _riotMeshGeoms[i] = geom; return i; }
+        _riotMeshGeoms.Add(geom);
+        return _riotMeshGeoms.Count - 1;
+    }
+
+    public void ReleaseRiotMeshGeometry(int id)
+    {
+        if (id < 0 || id >= _riotMeshGeoms.Count || _riotMeshGeoms[id] is not { } geom) return;
+        geom.Vb.Dispose();
+        geom.Ib.Dispose();
+        _riotMeshGeoms[id] = null;
+    }
+
+    private void ReleaseRiotMeshGeometry()
+    {
+        foreach (var g in _riotMeshGeoms)
+            if (g is not null) { g.Vb.Dispose(); g.Ib.Dispose(); }
+        _riotMeshGeoms.Clear();
+    }
+
+    private static float[] FlatNormals(float[] positions, uint[] indices)
+    {
+        var n = new float[positions.Length];
+        for (int t = 0; t + 2 < indices.Length; t += 3)
+        {
+            int a = (int)indices[t], b = (int)indices[t + 1], c = (int)indices[t + 2];
+            if ((c + 1) * 3 > positions.Length || (a + 1) * 3 > positions.Length || (b + 1) * 3 > positions.Length) continue;
+            var pa = new Vector3(positions[a * 3], positions[a * 3 + 1], positions[a * 3 + 2]);
+            var pb = new Vector3(positions[b * 3], positions[b * 3 + 1], positions[b * 3 + 2]);
+            var pc = new Vector3(positions[c * 3], positions[c * 3 + 1], positions[c * 3 + 2]);
+            var face = Vector3.Cross(pb - pa, pc - pa);   // area-weighted by construction
+            foreach (int v in new[] { a, b, c })
+            { n[v * 3] += face.X; n[v * 3 + 1] += face.Y; n[v * 3 + 2] += face.Z; }
+        }
+        for (int v = 0; v * 3 + 2 < n.Length; v++)
+        {
+            var nv = new Vector3(n[v * 3], n[v * 3 + 1], n[v * 3 + 2]);
+            nv = nv.LengthSquared() > 1e-12f ? Vector3.Normalize(nv) : Vector3.UnitY;   // never zero: see the remarks
+            n[v * 3] = nv.X; n[v * 3 + 1] = nv.Y; n[v * 3 + 2] = nv.Z;
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// M640: draw a Riot-shader mesh emitter, once per particle. The material's pipeline, textures and
+    /// samplers are already bound by the loop; this binds the geometry and re-issues the two constants the
+    /// shader takes per instance - <c>mWorld</c> (CharacterPerDrawVertexCB) and <c>kColorFactor</c>
+    /// ($Globals, the particle colour - mesh_vs has no COLOR input) - through the same by-name constant
+    /// filling every other material uses, so a material Param and a per-instance value cannot disagree.
+    ///
+    /// <para>The world matrix is scale, then the particle's Euler rotation, then the emitter's placement
+    /// basis, then the position. The Euler is the instance's own (X = the integrated spin, Y/Z = the
+    /// authored birth rotation - the same triple the arbitrary-quad path rotates by), applied X, Y, Z in
+    /// the order GL's rotateEuler applies it. Measured over ten champions, 513 of 684 mesh emitters author
+    /// a non-zero birth rotation - (0,180,0), (1,90,90), (-90,0,0), (90,0,0) - and both renderers used to
+    /// draw every one of them unrotated.</para>
+    /// </summary>
+    private void DrawRiotMeshInstances(PreviewMaterial mat, int geometryId, PreviewSettings s,
+        Matrix4x4 world, Matrix4x4 view, Matrix4x4 proj, List<string>? unbound)
+    {
+        if (geometryId < 0 || geometryId >= _riotMeshGeoms.Count || _riotMeshGeoms[geometryId] is not { } geom) return;
+        var inst = mat.MeshInstances;
+        int count = mat.MeshInstanceCount;
+        if (inst is null || count <= 0) return;
+
+        uint stride = PreviewVertex.SizeInBytes, offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref geom.Vb, in stride, in offset);
+        _ctx.IASetIndexBuffer(geom.Ib, Format.FormatR32Uint, 0);
+
+        var basis = new Matrix4x4(
+            mat.MeshRight.X, mat.MeshRight.Y, mat.MeshRight.Z, 0f,
+            mat.MeshUp.X, mat.MeshUp.Y, mat.MeshUp.Z, 0f,
+            mat.MeshForward.X, mat.MeshForward.Y, mat.MeshForward.Z, 0f,
+            0f, 0f, 0f, 1f);
+
+        const int S = 19;   // ParticleQuadBuilder.Stride - the simulator's packed instance
+        for (int i = 0; i < count; i++)
+        {
+            int o = i * S;
+            if (o + S > inst.Length) break;
+            // M640: per-axis scale - X and Y from the size slots, Z from slot 10 (the simulator packs a
+            // mesh's Z scale where a quad keeps its flipbook frame). Magnitudes under 0.01 are clamped.
+            static float Guard(float v) => MathF.Abs(v) < 0.01f ? MathF.CopySign(0.01f, v == 0f ? 1f : v) : v;
+            var scale = new Vector3(Guard(inst[o + 3]), Guard(inst[o + 4]), Guard(inst[o + 10]));
+            var pos = new Vector3(inst[o], inst[o + 1], inst[o + 2]);
+            var euler = new Vector3(inst[o + 15], inst[o + 16], inst[o + 17]);
+            var colour = new[] { inst[o + 5], inst[o + 6], inst[o + 7], inst[o + 8] };
+
+            // Euler birth rotation (X, then Y, then Z - the order the quad path decoded from quad_vs; the
+            // client composes a mesh's mWorld on the CPU, so the mesh order is NOT measurable from bytecode
+            // and is taken to match), then the over-life spin about Y (slot 9, as GL), then the placement.
+            var model = Matrix4x4.CreateScale(scale)   // a mirrored (negative) axis flips the winding; the
+                                                       // rasterizer state is per material, so that case is
+                                                       // still drawn with the unflipped cull (GL flips it)
+                        * Matrix4x4.CreateRotationX(euler.X)
+                        * Matrix4x4.CreateRotationY(euler.Y)
+                        * Matrix4x4.CreateRotationZ(euler.Z)
+                        * Matrix4x4.CreateRotationY(inst[o + 9])
+                        * basis
+                        * Matrix4x4.CreateTranslation(pos);
+            mat.Params["mWorld"] = Mat(model, s);
+            mat.Params["kColorFactor"] = colour;
+
+            foreach (var cb in mat.VsRefl.ConstantBuffers)
+            {
+                if (cb.BindPoint < 0) continue;
+                if (!cb.Variables.Any(v => v.Name is "mWorld" or "kColorFactor")) continue;
+                var buf = ResolveCb(mat, cb, mat.VsCbs, s, world, view, proj, unbound);
+                if (buf.Handle is null) continue;
+                _ctx.VSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
+            }
+            foreach (var cb in mat.PsRefl.ConstantBuffers)
+            {
+                if (cb.BindPoint < 0) continue;
+                if (!cb.Variables.Any(v => v.Name is "mWorld" or "kColorFactor")) continue;
+                var buf = ResolveCb(mat, cb, mat.PsCbs, s, world, view, proj, unbound);
+                if (buf.Handle is null) continue;
+                _ctx.PSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
+            }
+
+            _ctx.DrawIndexed((uint)geom.IndexCount, 0, 0);
+            DrawCalls++;
+            MeshDraws++;
+        }
     }
 
     /// <summary>How many mesh-particle draws the last frame issued. One per PARTICLE, as GL does - mesh
@@ -4511,8 +4716,10 @@ float4 psmain(VOut i) : SV_Target
         DrawCalls = 0;
         if (!IsReady) { error = "no shader loaded"; return null; }
         // M264: either source is enough. A particle-only frame has no static mesh, and a map frame has
-        // no dynamic one until something uploads quads.
-        if ((_vb.Handle is null || _indexCount == 0) && (_dynVb.Handle is null || _dynIndexCount == 0))
+        // no dynamic one until something uploads quads. M640: mesh-particle geometry counts too - a
+        // system whose quads have all died while a mesh emitter still lives was refused as "no mesh set".
+        if ((_vb.Handle is null || _indexCount == 0) && (_dynVb.Handle is null || _dynIndexCount == 0)
+            && _meshGeoms.All(g => g is null) && _riotMeshGeoms.All(g => g is null))
         { error = "no mesh set"; return null; }
         if (width <= 0 || height <= 0) { error = "zero-sized target"; return null; }
 
@@ -4762,6 +4969,15 @@ float4 psmain(VOut i) : SV_Target
                 BindResources(mat, mat.PsRefl, pixel: true);
             }
             BindResources(mat, mat.VsRefl, pixel: false);
+
+            // M640: a Riot-shader mesh emitter takes everything bound above and draws its own geometry once
+            // per particle; the shared vertex source is left unbound for whoever comes next.
+            if (mat.RiotMeshGeometryId is { } riotGeometry)
+            {
+                DrawRiotMeshInstances(mat, riotGeometry, s, world, view, proj, unboundConstants);
+                boundSource = -1;
+                continue;
+            }
 
             uint count = mat.IndexCount < 0
                 ? (uint)(mat.UsesDynamicMesh ? _dynIndexCount : _indexCount)
