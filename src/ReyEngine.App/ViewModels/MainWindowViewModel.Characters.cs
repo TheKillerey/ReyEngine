@@ -101,6 +101,14 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 var abilities = ChampionSpellData.Read(recordBytes, character);
                 MeshPreview.SetAbilities(abilities);
 
+                // M638: the basic attacks - clip, windup frame, hit, and the missile for a ranged champion.
+                var attacks = ChampionSpellData.ReadAttacks(recordBytes, character);
+                MeshPreview.SetAttacks(attacks);
+                if (attacks.Count > 0)
+                    _log.Info("Character", $"{character}: {attacks.Count(a => !a.IsCrit)} basic attack(s) in the cycle"
+                                           + (attacks.Any(a => a.IsRanged) ? ", ranged" : ", melee")
+                                           + $", {attacks.Count(a => a.IsCrit)} crit.");
+
                 // M636: the champion's authored movement and attack numbers, for the arena.
                 var stats = ChampionStatsReader.Read(recordBytes);
                 MeshPreview.SetStats(stats);

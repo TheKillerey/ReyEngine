@@ -95,7 +95,7 @@ public sealed partial class MeshPreviewViewModel
 
         if (now < _castBusyUntil) return;      // a cast owns the animation until it finishes
 
-        if (tick.StartedAttack) PlayKind(CharacterActionKind.Attack);
+        if (tick.StartedAttack) PlayAttack();   // M638: the attack cycle, with its missile and hit
         else if (tick.StanceChanged)
             PlayKind(tick.Stance switch
             {
@@ -233,6 +233,113 @@ public sealed partial class MeshPreviewViewModel
         SelectedAction = null;
         SelectedAction = row;
         Animation.Loop = kind is CharacterActionKind.Movement or CharacterActionKind.Idle;
+    }
+
+    // ---- M638: the basic-attack composite ----
+
+    private IReadOnlyList<AttackSpell> _attacks = Array.Empty<AttackSpell>();
+    private int _attackCycle;
+    private readonly Random _attackRandom = new();
+
+    /// <summary>The champion's basic attacks off its record (ChampionSpellData.ReadAttacks), in cycle
+    /// order. Without them a swing plays the first Attack clip and nothing else, as before M638.</summary>
+    public void SetAttacks(IReadOnlyList<AttackSpell> attacks)
+    {
+        _attacks = attacks;
+        _attackCycle = 0;
+    }
+
+    /// <summary>One swing of the cycle: the record's next attack, its authored clip (Attack1, Attack2,
+    /// Attack3 - Aatrox cycles three), and beside it the missile and the hit the same SpellObject names.
+    /// The controller has already decided the cadence (AttacksPerSecond) and that the target is in range.</summary>
+    private void PlayAttack()
+    {
+        // The record's pool: weighted by mAttackProbability where the champion authors weights (Akali,
+        // Ashe, Garen...), else the plain BasicAttackN cycle (Aatrox) - see AttackSpell.Pool.
+        var pool = AttackSpell.Pool(_attacks);
+        if (pool.Count == 0) { PlayKind(CharacterActionKind.Attack); return; }
+
+        AttackSpell attack;
+        if (pool.Any(a => a.Probability > 0f))
+        {
+            float total = pool.Sum(a => a.Probability);
+            float roll = (float)_attackRandom.NextDouble() * total;
+            attack = pool[^1];
+            foreach (var candidate in pool)
+            {
+                roll -= candidate.Probability;
+                if (roll <= 0f) { attack = candidate; break; }
+            }
+        }
+        else attack = pool[_attackCycle % pool.Count];
+        _attackCycle++;
+
+        // The clip the record names, out of the Attack row's own clip and its variants; the row's clip
+        // (Attack1) when the skin has no clip of that name.
+        var row = Actions.FirstOrDefault(a => a.Action.Kind == CharacterActionKind.Attack && a.HasClip);
+        Formats.Skeletons.AnimClipInfo? clip = null;
+        if (row is not null)
+        {
+            var wanted = attack.ClipName;
+            clip = row.Action.Clip is { } c && c.Name.Equals(wanted, StringComparison.OrdinalIgnoreCase) ? c
+                 : row.Action.Variants.FirstOrDefault(v => v.Name.Equals(wanted, StringComparison.OrdinalIgnoreCase))
+                   ?? row.Action.Clip;
+        }
+        AnimationEntryViewModel? entry = clip is null ? null : Animation.Animations.FirstOrDefault(e =>
+            string.Equals(e.Name, System.IO.Path.GetFileName(clip.AnmPath.Replace('\\', '/')), StringComparison.OrdinalIgnoreCase));
+
+        // The composite rides the clip through ApplyClipParticles, exactly as a spell's does.
+        _eventPlaybackActive = false;
+        _activeEvent = null;
+        _eventBundle = BuildAttackBundle(attack);
+        ControlStatus = $"{attack.Name}: {attack.ClipName}"
+                        + (attack.IsRanged ? " · missile" : "")
+                        + (attack.HitEffectKey != 0 ? " · hit" : "");
+
+        if (entry is null)
+        {
+            Playback = _eventBundle.Count > 0 ? new VfxPlayback(_eventBundle) : null;
+            return;
+        }
+        Animation.Loop = false;
+        Animation.SelectedAnimation = null;     // restart even when the cycle repeats a clip
+        Animation.SelectedAnimation = entry;
+    }
+
+    /// <summary>The attack's missile flying caster to target from the windup, and its hit at the target
+    /// when the missile lands - or at the windup for a melee swing. Both face the way a cast's do.</summary>
+    private List<VfxPlaybackItem> BuildAttackBundle(AttackSpell attack)
+    {
+        var items = new List<VfxPlaybackItem>();
+        var caster = CharacterPosition;
+        var target = _controller.Target ?? TargetDummyPosition ?? caster + Forward() * (float)AttackRange;
+        float windup = attack.CastSecondsAt(ClipFps());
+        float flight = 0f;
+
+        foreach (var missile in attack.Missiles)
+        {
+            if (missile.MissileEffectKey == 0) continue;
+            if (!_vfxResourceMap.TryGetValue(missile.MissileEffectKey, out var systemHash)) continue;
+            if (!_vfxDefs.TryGetValue(systemHash, out var def)) continue;
+            float dist = (target - caster).Length();
+            float seconds = missile.Motion.SecondsFor(dist) ?? (dist > 1f ? dist / 1800f : 0f);
+            flight = MathF.Max(flight, seconds);
+            items.Add(BuildItem(def, Formats.Vfx.VfxCastFrame.Toward(caster, target, caster)) with
+            {
+                TravelTo = target,
+                TravelSeconds = seconds,
+                StartDelay = windup,
+            });
+        }
+
+        if (attack.HitEffectKey != 0
+            && _vfxResourceMap.TryGetValue(attack.HitEffectKey, out var hitHash)
+            && _vfxDefs.TryGetValue(hitHash, out var hitDef))
+            items.Add(BuildItem(hitDef, Formats.Vfx.VfxCastFrame.Toward(target, caster, target)) with
+            {
+                StartDelay = windup + flight,
+            });
+        return items;
     }
 
     /// <summary>Put the character back at the origin facing forward.</summary>

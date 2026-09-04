@@ -144,6 +144,84 @@ public sealed record AbilitySlot(
 /// spell and owns none of it. Per-level arrays are read at rank 1, which is NOT element 0 of a 7-entry
 /// array; see <see cref="Rank1"/>.</para>
 /// </summary>
+/// <summary>
+/// M638: one basic attack, as the champion record authors it - a <c>SpellObject</c> of its own with the
+/// clip it plays, the frame it connects on, the hit it plays and, for a ranged champion, the missile.
+/// </summary>
+/// <param name="Name">The spell script name (<c>AatroxBasicAttack2</c>).</param>
+/// <param name="AnimationName"><c>mAnimationName</c>; null on the first attack, which runs Attack1.</param>
+/// <param name="CastFrame">The clip frame the attack connects on (missile launch / melee hit).</param>
+/// <param name="UseAnimatorFramerate">Whether <see cref="CastFrame"/> counts at the clip's own rate rather
+/// than 30 fps - the same rule as <see cref="AbilitySlot"/>.</param>
+/// <param name="CastTimeSeconds"><c>mCastTime</c> when authored, which wins over the frame.</param>
+/// <param name="HitEffectKey">The hit VFX, as a resource-map key (0 when none).</param>
+/// <param name="Missiles">The attack's missile, when it flies one; empty for melee.</param>
+/// <param name="IsCrit">A <c>critAttacks</c> entry.</param>
+public sealed record AttackSpell(
+    string Name,
+    string? AnimationName,
+    float CastFrame,
+    bool UseAnimatorFramerate,
+    float CastTimeSeconds,
+    uint HitEffectKey,
+    IReadOnlyList<AbilityMissile> Missiles,
+    bool IsCrit)
+{
+    public bool IsRanged => Missiles.Any(m => m.MissileEffectKey != 0);
+
+    /// <summary>The record slot's <c>mAttackProbability</c>: the weight this attack has in the random
+    /// pool. 0 when the slot authors none, which is what a script-driven attack looks like in the data.</summary>
+    public float Probability { get; init; }
+
+    /// <summary>The clip this attack plays. An unnamed attack is the first of the cycle, Attack1.</summary>
+    public string ClipName => string.IsNullOrWhiteSpace(AnimationName) ? "Attack1" : AnimationName!;
+
+    /// <summary>
+    /// The attacks a plain swing may pick from, measured off the record slots:
+    /// <list type="bullet">
+    ///   <item>Most champions weight a random POOL - Akali 0.5 / 0.5, Ashe 0.75 / 0.25 (BasicAttack,
+    ///     BasicAttack2), Garen 0.5 / 0.5, Fiora 0.5 / 0.5. Slots with a probability of 0 beside them
+    ///     (Jinx's rocket attacks, Aatrox's R and passive attacks) are switched in by scripts the arena
+    ///     does not have, so they stay out.</item>
+    ///   <item>When NO slot carries a weight (Aatrox: six slots, all 0 - his Attack1/2/3 cycle is a
+    ///     script, AatroxAttackAnimationCycle), the arena cycles the slots that are plainly the basic
+    ///     attack by name - <c>&lt;Champ&gt;BasicAttack</c>, <c>BasicAttack2</c>... - and leaves the
+    ///     state attacks (<c>RAttack1</c>, <c>PassiveAttack</c>) out. A name rule, and said so.</item>
+    /// </list>
+    /// Crits are never in it; the arena has no crit chance.
+    /// </summary>
+    public static IReadOnlyList<AttackSpell> Pool(IReadOnlyList<AttackSpell> attacks, string? champion = null)
+    {
+        var basics = attacks.Where(a => !a.IsCrit).ToList();
+        var weighted = basics.Where(a => a.Probability > 0f).ToList();
+        if (weighted.Count > 0) return weighted;
+
+        var plain = basics.Where(a => IsPlainBasicName(a.Name, champion)).ToList();
+        return plain.Count > 0 ? plain : basics.Take(1).ToList();
+    }
+
+    /// <summary><c>&lt;Champ&gt;BasicAttack</c> or <c>&lt;Champ&gt;BasicAttack&lt;digits&gt;</c>, and
+    /// nothing else - <c>AatroxRAttack1</c>, <c>AkaliBasicAttackPassive</c> and <c>JinxQAttack</c> are
+    /// state attacks. With no champion name given, any <c>...BasicAttack&lt;digits&gt;</c> qualifies.</summary>
+    public static bool IsPlainBasicName(string name, string? champion)
+    {
+        const string Token = "BasicAttack";
+        int at = name.IndexOf(Token, StringComparison.OrdinalIgnoreCase);
+        if (at < 0) return false;
+        if (champion is { Length: > 0 } && !name[..at].Equals(champion, StringComparison.OrdinalIgnoreCase)) return false;
+        string tail = name[(at + Token.Length)..];
+        return tail.Length == 0 || tail.All(char.IsDigit);
+    }
+
+    /// <summary>Seconds from the start of the clip to the moment the attack connects.</summary>
+    public float CastSecondsAt(float clipFps)
+    {
+        if (CastTimeSeconds > 0f) return CastTimeSeconds;
+        float fps = UseAnimatorFramerate && clipFps > 1f ? clipFps : 30f;
+        return CastFrame > 0f ? CastFrame / fps : 0f;
+    }
+}
+
 public static class ChampionSpellData
 {
     private static readonly uint ClassCharacterRecord = HashAlgorithms.Fnv1a("CharacterRecord");
@@ -223,6 +301,96 @@ public static class ChampionSpellData
             // A record that will not parse costs the composite its data, not the preview its character.
             return Array.Empty<AbilitySlot>();
         }
+    }
+
+    // ---- M638: the basic attacks -----------------------------------------------------------------
+
+    private static readonly uint ClassSpellObject = HashAlgorithms.Fnv1a("SpellObject");
+    private static readonly uint FCharacterName = HashAlgorithms.Fnv1a("mCharacterName");
+    private static readonly uint FBasicAttack = HashAlgorithms.Fnv1a("basicAttack");
+    private static readonly uint FExtraAttacks = HashAlgorithms.Fnv1a("extraAttacks");
+    private static readonly uint FCritAttacks = HashAlgorithms.Fnv1a("critAttacks");
+    private static readonly uint FAttackName = HashAlgorithms.Fnv1a("mAttackName");
+    private static readonly uint FAttackProbability = HashAlgorithms.Fnv1a("mAttackProbability");
+
+    /// <summary>
+    /// The champion's basic attacks, in cycle order: the <c>basicAttack</c> slot, then <c>extraAttacks</c>
+    /// as authored, then <c>critAttacks</c> flagged as crits. Each is a <c>SpellObject</c> in the same bin -
+    /// <c>Characters/&lt;Champ&gt;/Spells/&lt;Champ&gt;BasicAttack2</c> - and it authors exactly what the
+    /// arena needs: the clip (<c>mAnimationName</c>, absent on the first attack = Attack1), the windup
+    /// (<c>castFrame</c>: Aatrox 11 / 9 / 7.5, Ezreal 9.5), the hit effect, and for a ranged champion the
+    /// missile effect and its FixedSpeedMovement speed (Ezreal 2000, Ahri 1750, Jinx 2750).
+    ///
+    /// <para>Measured over six champions: every basic attack authors a hit effect key that the skin's
+    /// resource map resolves; the ranged ones author the missile too. An unnamed <c>basicAttack</c> slot
+    /// - 130 of 173 champions - runs <c>&lt;Champ&gt;BasicAttack</c>, which is what the game does.</para>
+    /// </summary>
+    public static IReadOnlyList<AttackSpell> ReadAttacks(byte[] recordBin, string? characterName = null)
+    {
+        try
+        {
+            var tree = new BinTree(new MemoryStream(recordBin));
+            if (PickRecord(tree, characterName) is not { } record) return Array.Empty<AttackSpell>();
+            string champ = Get(record.Properties, FCharacterName) is BinTreeString cn && cn.Value.Length > 0
+                ? cn.Value
+                : characterName ?? "";
+
+            var attacks = new List<AttackSpell>();
+            void Add(BinTreeProperty? slot, bool crit, string fallbackName)
+            {
+                string name = AttackNameOf(slot) ?? fallbackName;
+                if (name.Length == 0) return;
+                if (FindSpellObject(tree, champ, name) is not { } spellObject) return;
+                if (Spell(spellObject) is not { } spell) return;
+
+                var missiles = new List<AbilityMissile>();
+                if (ReadMissile(spellObject, spell) is { } m) missiles.Add(m);
+                attacks.Add(new AttackSpell(
+                    name,
+                    AnimationNameOf(spell),
+                    F32(spell, FCastFrame),
+                    Get(spell.Properties, FUseAnimatorFps) is BinTreeBool { Value: true },
+                    F32(spell, FCastTime),
+                    Hash(spell, FHitEffectKey),
+                    missiles,
+                    crit)
+                {
+                    Probability = slot is BinTreeStruct ss && Unwrap(Get(ss.Properties, FAttackProbability)) is BinTreeF32 pr ? pr.Value : 0f,
+                });
+            }
+
+            Add(Unwrap(Get(record.Properties, FBasicAttack)), false, champ + "BasicAttack");
+            if (Get(record.Properties, FExtraAttacks) is BinTreeContainer extras)
+                foreach (var e in extras.Elements) Add(Unwrap(e), false, "");
+            if (Get(record.Properties, FCritAttacks) is BinTreeContainer crits)
+                foreach (var e in crits.Elements) Add(Unwrap(e), true, champ + "CritAttack");
+            return attacks;
+        }
+        catch
+        {
+            return Array.Empty<AttackSpell>();
+        }
+    }
+
+    private static string? AttackNameOf(BinTreeProperty? slot) =>
+        slot is BinTreeStruct s && Unwrap(Get(s.Properties, FAttackName)) is BinTreeString n && n.Value.Length > 0
+            ? n.Value
+            : null;
+
+    /// <summary>The object at <c>Characters/&lt;champ&gt;/Spells/&lt;name&gt;</c>, else the SpellObject
+    /// whose script name is <paramref name="name"/> - the address first, the label as the fallback.</summary>
+    private static BinTreeObject? FindSpellObject(BinTree tree, string champ, string name)
+    {
+        if (champ.Length > 0 && tree.Objects.TryGetValue(HashAlgorithms.Fnv1a($"Characters/{champ}/Spells/{name}"), out var direct)
+            && direct.ClassHash == ClassSpellObject)
+            return direct;
+        foreach (var o in tree.Objects.Values)
+        {
+            if (o.ClassHash != ClassSpellObject) continue;
+            if (Get(o.Properties, FScriptName) is BinTreeString sn && sn.Value.Equals(name, StringComparison.OrdinalIgnoreCase))
+                return o;
+        }
+        return null;
     }
 
     private static BinTreeObject? PickRecord(BinTree tree, string? characterName)
