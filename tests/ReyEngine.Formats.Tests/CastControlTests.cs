@@ -52,30 +52,49 @@ public sealed class CastControlTests
     }
 
     [Fact]
-    public void ACastOnCooldownIsRefusedAndSaysWhen()
+    public void ACastIsNeverRefusedForACooldown()
     {
+        // M639: the arena is for looking at the effects; waiting 120 s to see an ultimate again serves
+        // nothing. Casting the same slot twice in a row re-fires it.
         var preview = Preview();
         preview.ControlMode = true;
         preview.CastAbility(0, new Vector3(500f, 0f, 0f));
         var first = preview.SelectedAction;
-
         preview.CastAbility(0, new Vector3(0f, 0f, 500f));
-        Assert.Contains("ready in", preview.ControlStatus);
-        Assert.Same(first, preview.SelectedAction);               // nothing re-fired
-        Assert.Contains("Q ", preview.CooldownStatus);            // and the readout shows it counting
-        Assert.Contains("W ready", preview.CooldownStatus);
+        Assert.NotNull(preview.SelectedAction);
+        Assert.DoesNotContain("ready in", preview.ControlStatus);
+        Assert.Equal(0f, (float)preview.CharacterYaw, 3);         // re-aimed at the second cursor (+Z)
+        preview.CastAbility(3, null);
+        Assert.StartsWith("R", preview.SelectedAction!.Label);
+        Assert.Contains("SelfAoe", preview.ControlStatus);
         preview.StopControl();
     }
 
     [Fact]
-    public void OtherSlotsAreNotBlockedByOneSlotsCooldown()
+    public void ACastShowsItsRangeRingAndAPinnedSlotKeepsIt()
     {
         var preview = Preview();
         preview.ControlMode = true;
+        Assert.Null(preview.RangeRingLines);
+
+        // Q is a bounded direction cast (1200): its cast draws the ring at that radius around the character.
         preview.CastAbility(0, new Vector3(500f, 0f, 0f));
-        preview.CastAbility(3, null);
-        Assert.StartsWith("R", preview.SelectedAction!.Label);
-        Assert.Contains("SelfAoe", preview.ControlStatus);
+        Assert.NotNull(preview.RangeRingLines);
+        float far = 0f;
+        for (int i = 0; i + 2 < preview.RangeRingLines!.Length; i += 3)
+            far = MathF.Max(far, MathF.Sqrt(preview.RangeRingLines[i] * preview.RangeRingLines[i] + preview.RangeRingLines[i + 2] * preview.RangeRingLines[i + 2]));
+        Assert.Equal(1200f, far, 0);
+
+        // R is unbounded (25000): no ring, because a ring the size of the map says nothing.
+        preview.RangeRingSlot = 3;
+        Assert.Null(preview.RangeRingLines);
+
+        // Pinning W keeps a ring of W's display range on screen.
+        preview.RangeRingSlot = 1;
+        Assert.NotNull(preview.RangeRingLines);
+        Assert.True(preview.IsRangeRingW);
+        Assert.False(preview.IsRangeRingQ);
+        Assert.Equal(800f, preview.RangeRingRadiusFor(1));
         preview.StopControl();
     }
 
@@ -89,7 +108,7 @@ public sealed class CastControlTests
 
         Assert.Null(preview.SelectedAction);
         Assert.Contains("walking into range", preview.ControlStatus);
-        Assert.Equal("", preview.CooldownStatus);                 // not cast yet, so not on cooldown
+        Assert.Null(preview.RangeRingLines);                      // not cast yet, so no ring either
         preview.StopControl();
     }
 

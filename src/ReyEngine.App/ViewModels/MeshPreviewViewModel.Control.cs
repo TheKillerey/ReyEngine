@@ -91,7 +91,8 @@ public sealed partial class MeshPreviewViewModel
         CharacterPosition = _controller.Position;
         CharacterYaw = _controller.Facing;
         AdvanceArena();   // M636: next waypoint, ground height, follow camera - no-ops without an arena
-        AdvancePendingCast(now);   // M637: a walk-into-range cast fires on arrival; cooldowns count down
+        AdvancePendingCast(now);   // M637: a walk-into-range cast fires on arrival
+        RefreshRangeRing();        // M639: the ring follows the character and expires after a cast
 
         if (now < _castBusyUntil) return;      // a cast owns the animation until it finishes
 
@@ -128,10 +129,7 @@ public sealed partial class MeshPreviewViewModel
     /// behaviour every other caller of the bundle still gets.</summary>
     private CastPlan? _castPlan;
 
-    private readonly DateTime[] _cooldownUntil = new DateTime[4];
     private (int Slot, Vector3? Cursor)? _pendingCast;
-
-    [ObservableProperty] private string _cooldownStatus = "";
 
     /// <summary>Q/W/E/R, as 0..3. <paramref name="cursorGround"/> is the ground point under the mouse when
     /// the key went down - the only aim a player has in game - and null falls back to the dummy. The spell's
@@ -145,13 +143,8 @@ public sealed partial class MeshPreviewViewModel
             a.Action.Kind == CharacterActionKind.Ability && a.Label.StartsWith("QWER"[slot]));
         if (row is null) return;
 
-        var now = DateTime.UtcNow;
-        if (now < _cooldownUntil[slot])
-        {
-            ControlStatus = $"{row.Label}: ready in {(_cooldownUntil[slot] - now).TotalSeconds:0.0} s";
-            return;
-        }
-
+        // M639: no cooldown gate. The arena is for looking at the effects, and waiting 120 s to see
+        // Aatrox's R again serves nothing; the authored cooldown stays readable on the AbilitySlot.
         var ability = _abilities.FirstOrDefault(a => a.Index == slot);
         var dummy = TargetDummyPosition;
         var cursor = cursorGround ?? dummy ?? CharacterPosition + Forward() * 500f;
@@ -174,10 +167,7 @@ public sealed partial class MeshPreviewViewModel
         CharacterPosition = _controller.Position;
         CharacterYaw = _controller.Facing;
         _castPlan = plan;
-
-        if (ability is { Cooldown: > 0f })
-            _cooldownUntil[slot] = now + TimeSpan.FromSeconds(ability.Cooldown);
-        RefreshCooldownStatus(now);
+        ShowRangeRingFor(slot);   // M639: where the range was, for a moment
 
         if (!row.HasClip)
         {
@@ -201,25 +191,9 @@ public sealed partial class MeshPreviewViewModel
     /// the same OrderMove - cannot cancel its own cast.</summary>
     public void CancelPendingCast() => _pendingCast = null;
 
-    /// <summary>Q/W/E/R with seconds left, refreshed every control tick while any is running.</summary>
-    private void RefreshCooldownStatus(DateTime now)
-    {
-        bool any = false;
-        var parts = new string[4];
-        for (int i = 0; i < 4; i++)
-        {
-            double left = (_cooldownUntil[i] - now).TotalSeconds;
-            if (left > 0) { any = true; parts[i] = $"{"QWER"[i]} {left:0.0}s"; }
-            else parts[i] = $"{"QWER"[i]} ready";
-        }
-        CooldownStatus = any ? string.Join(" · ", parts) : "";
-    }
-
-    /// <summary>Called by the control tick: the walk-into-range cast fires once the walk is over, and the
-    /// cooldown readout counts down.</summary>
+    /// <summary>Called by the control tick: the walk-into-range cast fires once the walk is over.</summary>
     private void AdvancePendingCast(DateTime now)
     {
-        if (CooldownStatus.Length > 0) RefreshCooldownStatus(now);
         if (_pendingCast is not { } pending) return;
         if (_controller.Destination is not null || _waypoints.Count > 0) return;
         _pendingCast = null;

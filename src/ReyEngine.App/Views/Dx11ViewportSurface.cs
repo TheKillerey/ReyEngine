@@ -88,6 +88,9 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// <summary>M628: the target dummy's wire box, for a host with no dummy MODEL. Null clears it.</summary>
     public float[]? DummyLines { get; set; }
 
+    /// <summary>M639: the cast-range ring, as a line list; null clears it.</summary>
+    public float[]? RangeLines { get; set; }
+
     /// <summary>M630: this frame's animated bone transforms and the model transform to apply over them,
     /// so clip particle events ride their bone instead of standing at the world origin. Null for a map.</summary>
     public System.Collections.Generic.IReadOnlyDictionary<string, System.Numerics.Matrix4x4>? BoneGlobals { get; set; }
@@ -452,6 +455,7 @@ public sealed class Dx11ViewportSurface : IDisposable
 
         _renderer.SetBoneLines(BoneLines);   // M619
         _renderer.SetDummyLines(DummyLines); // M628
+        _renderer.SetRangeLines(RangeLines); // M639
 
         var settings = new PreviewSettings
         {

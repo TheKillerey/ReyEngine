@@ -164,6 +164,82 @@ public sealed partial class MeshPreviewViewModel
     /// <summary>Where the viewport should look. Set on spawn and, while following, every control tick.</summary>
     [ObservableProperty] private Vector3? _focusPoint;
 
+    // ---- M639: the cast-range ring ----
+
+    /// <summary>The ring drawn around the character, as a line list both viewports take; null when none
+    /// is shown. Rebuilt every control tick while shown, because the character moves under it.</summary>
+    [ObservableProperty] private float[]? _rangeRingLines;
+
+    /// <summary>The slot whose range is pinned on screen (0..3), or null. Toggled from the arena card.</summary>
+    [ObservableProperty] private int? _rangeRingSlot;
+
+    /// <summary>A cast shows its ring briefly on its own - long enough to see where the range was.</summary>
+    private DateTime _rangeRingUntil = DateTime.MinValue;
+    private int _rangeRingCastSlot = -1;
+
+    public static readonly TimeSpan CastRingHold = TimeSpan.FromSeconds(1.5);
+
+    [RelayCommand]
+    private void ToggleRangeRing(string slot)
+    {
+        int s = slot switch { "Q" => 0, "W" => 1, "E" => 2, "R" => 3, _ => -1 };
+        if (s < 0) return;
+        RangeRingSlot = RangeRingSlot == s ? null : s;
+        RefreshRangeRing();
+    }
+
+    partial void OnRangeRingSlotChanged(int? value) => RefreshRangeRing();
+
+    public bool IsRangeRingQ => RangeRingSlot == 0;
+    public bool IsRangeRingW => RangeRingSlot == 1;
+    public bool IsRangeRingE => RangeRingSlot == 2;
+    public bool IsRangeRingR => RangeRingSlot == 3;
+
+    /// <summary>Called by a cast: show that slot's ring for <see cref="CastRingHold"/>.</summary>
+    private void ShowRangeRingFor(int slot)
+    {
+        _rangeRingCastSlot = slot;
+        _rangeRingUntil = DateTime.UtcNow + CastRingHold;
+        RefreshRangeRing();
+    }
+
+    /// <summary>The range the ring shows for a slot: the DISPLAY range the game draws (Ezreal Q 1150,
+    /// not the 1200 it checks against), and nothing for a range authored as unbounded - a 25000-unit ring
+    /// would be the whole map.</summary>
+    public float? RangeRingRadiusFor(int slot)
+    {
+        var ability = _abilities.FirstOrDefault(a => a.Index == slot);
+        if (ability is null || ability.IsUnboundedRange || ability.CastRangeDisplay <= 0f) return null;
+        return ability.CastRangeDisplay;
+    }
+
+    /// <summary>Rebuild the ring for the pinned slot, else for the slot just cast while its hold lasts.</summary>
+    public void RefreshRangeRing()
+    {
+        int? slot = RangeRingSlot;
+        if (slot is null && _rangeRingCastSlot >= 0)
+        {
+            if (DateTime.UtcNow <= _rangeRingUntil) slot = _rangeRingCastSlot;
+            else _rangeRingCastSlot = -1;
+        }
+        OnPropertyChanged(nameof(IsRangeRingQ));
+        OnPropertyChanged(nameof(IsRangeRingW));
+        OnPropertyChanged(nameof(IsRangeRingE));
+        OnPropertyChanged(nameof(IsRangeRingR));
+
+        if (slot is not { } s || RangeRingRadiusFor(s) is not { } radius)
+        {
+            if (RangeRingLines is not null) RangeRingLines = null;
+            return;
+        }
+
+        var nav = _arena?.Nav;
+        var centre = CharacterPosition;
+        int segments = Math.Clamp((int)(radius / 12f), 48, 160);
+        RangeRingLines = Rendering.ViewportMeshRenderer.BuildCircleLines(centre, radius, segments,
+            nav is null ? null : p => NavGridPath.GroundHeight(nav, p));
+    }
+
     // ---- movement on the grid ----
 
     private readonly Queue<Vector3> _waypoints = new();

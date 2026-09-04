@@ -2520,6 +2520,10 @@ float4 psmain(VOut i) : SV_Target
     // M628: the target dummy's box, for the case where its real model is unavailable.
     private ComPtr<ID3D11Buffer> _dummyVb;
     private int _dummyVbCapacity;
+    // M639: the cast-range ring, its own buffer on the same overlay pipeline
+    private ComPtr<ID3D11Buffer> _rangeVb;
+    private int _rangeVbCapacity;
+    private int _rangeVerts;
     private int _dummyVerts;
     private int _gizmoTotalVerts;
 
@@ -2680,6 +2684,60 @@ float4 psmain(VOut i) : SV_Target
         _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
         _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
         _ctx.Draw((uint)_dummyVerts, 0);
+
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
+        return 1;
+    }
+
+    /// <summary>M639: the cast-range ring as a line list (xyz pairs). Null or short clears it.</summary>
+    public void SetRangeLines(float[]? verts)
+    {
+        _rangeVerts = 0;
+        if (verts is null || verts.Length < 6 || !EnsureOverlay()) return;
+
+        int bytes = verts.Length * sizeof(float);
+        if (_rangeVbCapacity < bytes || _rangeVb.Handle is null)
+        {
+            _rangeVb.Dispose();
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)bytes, Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> vb = default;
+            if (_device.CreateBuffer(in desc, null, ref vb) < 0) { Log("range ring vertex buffer failed"); return; }
+            _rangeVb = vb; _rangeVbCapacity = bytes;
+        }
+
+        var map = new MappedSubresource();
+        if (_ctx.Map(_rangeVb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        fixed (float* p = verts)
+            System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
+        _ctx.Unmap(_rangeVb, 0);
+        _rangeVerts = verts.Length / 3;
+    }
+
+    private int DrawRangeLines(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_rangeVerts == 0 || _rangeVb.Handle is null || !EnsureOverlay()) return 0;
+
+        var mvp = Matrix4x4.Multiply(view, proj);
+        _ctx.IASetInputLayout(_overlayLayout);
+        _ctx.VSSetShader(_overlayVs, null, 0);
+        _ctx.PSSetShader(_overlayPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
+
+        uint stride = 3 * sizeof(float), offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _rangeVb, in stride, in offset);
+        _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        // Depth-tested like the dummy: the ring lies on the ground and terrain in front of the camera
+        // should hide the part behind it.
+        _ctx.OMSetDepthStencilState(_overlayDepth, 0);
+
+        SetOverlayCb(mvp, new Vector4(0.40f, 0.95f, 0.55f, 1f));
+        _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.Draw((uint)_rangeVerts, 0);
 
         _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
         return 1;
@@ -4763,6 +4821,7 @@ float4 psmain(VOut i) : SV_Target
             DrawBakeBox(view, proj);     // M412: same overlay pipeline
             DrawBoneLines(view, proj);   // M619: the skeleton, same overlay pipeline
             DrawDummyLines(view, proj);  // M628: the target dummy box, same overlay pipeline
+            DrawRangeLines(view, proj);  // M639: the cast-range ring
             DrawCalls += HighlightDraws + IconDraws + gridDraws + gizmoDraws + lightDraws;
 
             _ctx.CopyResource(_stage, _rt);
@@ -5006,6 +5065,7 @@ float4 psmain(VOut i) : SV_Target
         _bakeBoxVb.Dispose();
         _boneVb.Dispose();   // M619
         _dummyVb.Dispose();  // M628
+        _rangeVb.Dispose();  // M639
         DisposeSky();
         DisposeRibbon();
         DisposeDynamicLights();

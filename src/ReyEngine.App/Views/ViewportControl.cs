@@ -90,6 +90,9 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>M566: the faces currently selected for editing, as a pos3+bary3 soup.</summary>
     public static readonly StyledProperty<float[]?> SelectedFaceLinesProperty =
         AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(SelectedFaceLines));
+    /// <summary>M639: the cast-range ring around the playable character, as a line list.</summary>
+    public static readonly StyledProperty<float[]?> RangeRingLinesProperty =
+        AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(RangeRingLines));
     /// <summary>M565: where each visible flag's cells sit in that soup, and what colour to draw them.</summary>
     public static readonly StyledProperty<(int Start, int Count, System.Numerics.Vector4 Color)[]?> BushCellLayersProperty =
         AvaloniaProperty.Register<ViewportControl, (int Start, int Count, System.Numerics.Vector4 Color)[]?>(nameof(BushCellLayers));
@@ -336,6 +339,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public float[]? BucketGridLines { get => GetValue(BucketGridLinesProperty); set => SetValue(BucketGridLinesProperty, value); }
     public float[]? BushCellLines { get => GetValue(BushCellLinesProperty); set => SetValue(BushCellLinesProperty, value); }
     public float[]? SelectedFaceLines { get => GetValue(SelectedFaceLinesProperty); set => SetValue(SelectedFaceLinesProperty, value); }
+    public float[]? RangeRingLines { get => GetValue(RangeRingLinesProperty); set => SetValue(RangeRingLinesProperty, value); }   // M639
     public (int Start, int Count, System.Numerics.Vector4 Color)[]? BushCellLayers
     { get => GetValue(BushCellLayersProperty); set => SetValue(BushCellLayersProperty, value); }
     /// <summary>Decoded placed prop meshes to render at their transforms (M41); null clears them.</summary>
@@ -899,6 +903,7 @@ public sealed class ViewportControl : OpenGlControlBase
             var pts = ParticleMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>();
             _meshRenderer.SetParticleMarkers(pts, SelectedParticlePosition, _markerSize);
             _meshRenderer.SetTargetDummy(TargetDummyPosition, 120f);   // M114: ~melee-minion sized cube
+            _meshRenderer.SetRangeRingLines(RangeRingLines);           // M639: the cast-range ring
             _meshRenderer.SetPropMarkers(PropMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize);
             _meshRenderer.SetProbeMarkers(ProbeMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.4f);
             _meshRenderer.SetSoundMarkers(SoundMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.2f);
@@ -1787,6 +1792,7 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == SoundMarkersProperty || change.Property == BucketGridLinesProperty
                  || change.Property == BushCellLinesProperty || change.Property == BushCellLayersProperty
                  || change.Property == SelectedFaceLinesProperty
+                 || change.Property == RangeRingLinesProperty
                  || change.Property == BakeBoxProperty)
         { _particlesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticlePlaybackProperty)

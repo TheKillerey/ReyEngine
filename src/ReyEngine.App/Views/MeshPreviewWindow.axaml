@@ -275,8 +275,18 @@
               </StackPanel>
               <TextBlock Text="{Binding ArenaStatus}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
               <TextBlock Text="{Binding StatsSummary, StringFormat='Champion: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
-              <!-- M637: Q/W/E/R cooldowns from the spell records, counting down while any is running -->
-              <TextBlock Text="{Binding CooldownStatus}" FontSize="11" TextWrapping="Wrap" FontFamily="Consolas,monospace" />
+              <!-- M639: pin a slot's cast-range ring on the ground; a cast shows its own ring briefly anyway -->
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+                <TextBlock Text="Range" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                <ToggleButton Classes="vp" Content="Q" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingQ, Mode=OneWay}"
+                              Command="{Binding ToggleRangeRingCommand}" CommandParameter="Q" ToolTip.Tip="Show Q's cast range" />
+                <ToggleButton Classes="vp" Content="W" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingW, Mode=OneWay}"
+                              Command="{Binding ToggleRangeRingCommand}" CommandParameter="W" ToolTip.Tip="Show W's cast range" />
+                <ToggleButton Classes="vp" Content="E" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingE, Mode=OneWay}"
+                              Command="{Binding ToggleRangeRingCommand}" CommandParameter="E" ToolTip.Tip="Show E's cast range" />
+                <ToggleButton Classes="vp" Content="R" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingR, Mode=OneWay}"
+                              Command="{Binding ToggleRangeRingCommand}" CommandParameter="R" ToolTip.Tip="Show R's cast range" />
+              </StackPanel>
             </StackPanel>
           </Border>
 
@@ -431,6 +441,7 @@
                              TargetDummyPosition="{Binding DummyCubePosition}"
                              PropMeshes="{Binding SceneProps}"
                              FocusPoint="{Binding FocusPoint}"
+                             RangeRingLines="{Binding RangeRingLines}"
                              PlayPropAnimations="True"
                              GizmoPivot="{Binding DummyGizmoPivot}"
                              ShowBones="{Binding ShowBones}"

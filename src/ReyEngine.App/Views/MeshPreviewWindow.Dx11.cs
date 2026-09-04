@@ -189,6 +189,7 @@ public partial class MeshPreviewWindow
         // construction: DummyCubePosition is non-null only while DummyProps is null.
         // M636: the arena floor rides in the same set as the dummy - one PropRenderSet per renderer.
         _dx11.PropMeshes = vm.SceneProps;
+        _dx11.RangeLines = vm.RangeRingLines;   // M639: the cast-range ring, same line list GL draws
         _dx11.PlayPropAnimations = true;
         _dx11.DummyLines = vm.DummyCubePosition is { } box
             ? Rendering.ViewportMeshRenderer.BuildBoxLines(

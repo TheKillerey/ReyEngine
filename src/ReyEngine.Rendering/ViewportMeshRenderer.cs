@@ -134,6 +134,9 @@ public sealed class ViewportMeshRenderer : IDisposable
     private uint _dummyVao, _dummyVbo;
     private int _dummyTriVerts, _dummyEdgeVerts;
     private bool _hasDummy;
+    // M639: the cast-range ring - a line list on the ground around the character
+    private uint _rangeVao, _rangeVbo;
+    private int _rangeVerts;
 
     private bool _hasGizmo;
     private Vector3 _gizmoPivot;
@@ -1047,6 +1050,8 @@ void main() { FragColor = uColor; }";
         _gizmoVbo = gl.GenBuffer();
         _dummyVao = gl.GenVertexArray();
         _dummyVbo = gl.GenBuffer();
+        _rangeVao = gl.GenVertexArray();   // M639
+        _rangeVbo = gl.GenBuffer();
         _particleVao = gl.GenVertexArray();
         _particleVbo = gl.GenBuffer();
         _particleSelVao = gl.GenVertexArray();
@@ -2788,6 +2793,19 @@ void main(){
             _gl.BindVertexArray(0);
         }
 
+        // M639: the cast-range ring. Depth-tested like the dummy: it lies on the ground and a wall in
+        // front of the camera should hide the part behind it.
+        if (_rangeVerts > 0)
+        {
+            _gl.UseProgram(_lineProgram);
+            _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+            _gl.Enable(EnableCap.DepthTest);
+            _gl.BindVertexArray(_rangeVao);
+            _gl.Uniform4(_lColor, 0.40f, 0.95f, 0.55f, 1f);
+            _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_rangeVerts);
+            _gl.BindVertexArray(0);
+        }
+
         // Transform gizmo (M42): move arrows / rotate rings / scale arms, along the selected mesh's axes
         // from its pivot (X=red, Y=green, Z=blue), always on top so it stays clickable.
         if (_hasGizmo)
@@ -2970,6 +2988,48 @@ void main(){
 
     /// <summary>M412: public for the same reason BuildGizmoAxis is (M296) - the D3D11 viewport draws the
     /// SAME box from the same builder, so the two cannot drift.</summary>
+    /// <summary>M639: the cast-range ring, as a line list. Null or empty clears it.</summary>
+    public unsafe void SetRangeRingLines(float[]? verts)
+    {
+        if (!_ready) return;
+        if (verts is null || verts.Length < 6) { _rangeVerts = 0; return; }
+        _gl.BindVertexArray(_rangeVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _rangeVbo);
+        fixed (float* fp = verts)
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(verts.Length * sizeof(float)), fp, BufferUsageARB.DynamicDraw);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+        _gl.BindVertexArray(0);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        _rangeVerts = verts.Length / 3;
+    }
+
+    /// <summary>M639: a circle on the ground as a line list, <paramref name="segments"/> segments, each
+    /// vertex at the height <paramref name="heightAt"/> reports for it - so on an arena the ring lies on
+    /// the terrain rather than cutting through a hill. Same xyz-pairs format as <see cref="BuildBoxLines"/>.</summary>
+    public static float[] BuildCircleLines(Vector3 centre, float radius, int segments, Func<Vector3, float>? heightAt = null, float lift = 4f)
+    {
+        segments = Math.Max(8, segments);
+        var pts = new Vector3[segments];
+        for (int i = 0; i < segments; i++)
+        {
+            float a = i * (MathF.PI * 2f / segments);
+            var p = new Vector3(centre.X + MathF.Cos(a) * radius, centre.Y, centre.Z + MathF.Sin(a) * radius);
+            if (heightAt is not null) p.Y = heightAt(p);
+            p.Y += lift;
+            pts[i] = p;
+        }
+        var list = new float[segments * 2 * 3];
+        int k = 0;
+        for (int i = 0; i < segments; i++)
+        {
+            var a = pts[i]; var b = pts[(i + 1) % segments];
+            list[k++] = a.X; list[k++] = a.Y; list[k++] = a.Z;
+            list[k++] = b.X; list[k++] = b.Y; list[k++] = b.Z;
+        }
+        return list;
+    }
+
     public static float[] BuildBoxLines(Vector3 a, Vector3 b)
     {
         Vector3[] c =
