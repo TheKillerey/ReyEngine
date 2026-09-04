@@ -3298,11 +3298,18 @@ float4 psmain(VOut i) : SV_Target
                         * Matrix4x4.CreateTranslation(pos);
             mat.Params["mWorld"] = Mat(model, s);
             mat.Params["kColorFactor"] = colour;
+            // M641: the erosion drive. Riot's mesh_ps reads it from cAlphaErosionParams.x - the slot the
+            // quad path leaves at zero, because THERE the drive arrives per vertex (quad_ps: mov o3.z,
+            // v2.w). A mesh draw is already one particle, so the constant is the per-particle channel;
+            // leaving it zero froze every mesh dissolve at drive 0, which is a static mask, not a
+            // dissolve. Decoded from mesh_ps blob 777: te = cb0[0].x - E, then the two saturated ramps.
+            if (mat.Params.TryGetValue("cAlphaErosionParams", out var erosionParams) && erosionParams.Length == 4)
+                erosionParams[0] = inst[o + 18];
 
             foreach (var cb in mat.VsRefl.ConstantBuffers)
             {
                 if (cb.BindPoint < 0) continue;
-                if (!cb.Variables.Any(v => v.Name is "mWorld" or "kColorFactor")) continue;
+                if (!cb.Variables.Any(v => v.Name is "mWorld" or "kColorFactor" or "cAlphaErosionParams")) continue;
                 var buf = ResolveCb(mat, cb, mat.VsCbs, s, world, view, proj, unbound);
                 if (buf.Handle is null) continue;
                 _ctx.VSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
@@ -3310,7 +3317,7 @@ float4 psmain(VOut i) : SV_Target
             foreach (var cb in mat.PsRefl.ConstantBuffers)
             {
                 if (cb.BindPoint < 0) continue;
-                if (!cb.Variables.Any(v => v.Name is "mWorld" or "kColorFactor")) continue;
+                if (!cb.Variables.Any(v => v.Name is "mWorld" or "kColorFactor" or "cAlphaErosionParams")) continue;
                 var buf = ResolveCb(mat, cb, mat.PsCbs, s, world, view, proj, unbound);
                 if (buf.Handle is null) continue;
                 _ctx.PSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);

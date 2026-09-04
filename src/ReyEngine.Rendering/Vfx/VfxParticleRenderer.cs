@@ -700,6 +700,9 @@ public sealed class VfxParticleRenderer
     private int _muMeshTexDiv, _muMeshTexDivMult;   // M117
     private int _muPlacementRight, _muPlacementUp, _muPlacementForward;
     private int _muCamPosMesh, _muFresnelColor, _muFresnelPower, _muHasFresnel;   // M178 (2.12)
+    private int _muPaletteTex, _muPaletteMixer, _muPaletteV, _muHasPalette;   // M641
+    private int _muErosionTex, _muErosionParams, _muErosionMixer, _muHasErosion, _muErosionDrive;   // M641
+    private int _muAlphaRef;   // M641
     private int _muReflCube, _muReflFresnel, _muReflDirect, _muReflGlancing, _muReflTint, _muHasRefl;   // M181
     private uint _whiteTex;
 
@@ -811,6 +814,16 @@ public sealed class VfxParticleRenderer
             _muReflGlancing = _gl.GetUniformLocation(_meshProgram, "uReflGlancing");
             _muReflTint = _gl.GetUniformLocation(_meshProgram, "uReflTint");
             _muHasRefl = _gl.GetUniformLocation(_meshProgram, "uHasRefl");
+            _muPaletteTex = _gl.GetUniformLocation(_meshProgram, "uPaletteTex");
+            _muPaletteMixer = _gl.GetUniformLocation(_meshProgram, "uPaletteMixer");
+            _muPaletteV = _gl.GetUniformLocation(_meshProgram, "uPaletteV");
+            _muHasPalette = _gl.GetUniformLocation(_meshProgram, "uHasPalette");
+            _muErosionTex = _gl.GetUniformLocation(_meshProgram, "uErosionTex");
+            _muErosionParams = _gl.GetUniformLocation(_meshProgram, "uErosionParams");
+            _muErosionMixer = _gl.GetUniformLocation(_meshProgram, "uErosionMixer");
+            _muHasErosion = _gl.GetUniformLocation(_meshProgram, "uHasErosion");
+            _muErosionDrive = _gl.GetUniformLocation(_meshProgram, "uErosionDrive");
+            _muAlphaRef = _gl.GetUniformLocation(_meshProgram, "uAlphaRef");
         }
         if (_whiteTex == 0) _whiteTex = UploadTexture(new byte[] { 255, 255, 255, 255 }, 1, 1);
     }
@@ -935,6 +948,37 @@ public sealed class VfxParticleRenderer
         _gl.Uniform1(_muTex, 0);
         _gl.Uniform1(_muTexMult, 1);
         _gl.Uniform1(_muHasTexMult, es.TextureMult != 0 ? 1 : 0);
+        // M641: the palette and erosion stages, on the same texture units and with the same guards the
+        // quad path uses - IsDegenerate skips the erosion configurations that would erase the emitter,
+        // and the palette takes its authored address mode through a sampler object because one cached GL
+        // texture is shared across every slot.
+        bool meshHasPalette = es.PaletteTexture != 0 && es.Def.Palette is not null;
+        _gl.Uniform1(_muHasPalette, meshHasPalette ? 1 : 0);
+        if (meshHasPalette)
+        {
+            var pal = es.Def.Palette!;
+            _gl.ActiveTexture(TextureUnit.Texture6);
+            _gl.BindTexture(TextureTarget.Texture2D, es.PaletteTexture);
+            _gl.Uniform1(_muPaletteTex, 6);
+            _gl.BindSampler(6, PaletteSampler(es.Def.PaletteAddressMode));
+            _gl.Uniform4(_muPaletteMixer, pal.SrcMixer.X, pal.SrcMixer.Y, pal.SrcMixer.Z, pal.SrcMixer.W);
+            _gl.Uniform1(_muPaletteV, pal.RowV);
+            _gl.ActiveTexture(TextureUnit.Texture0);
+        }
+        bool meshHasErosion = es.ErosionTexture != 0 && es.Def.AlphaErosion is { IsDegenerate: false };
+        _gl.Uniform1(_muHasErosion, meshHasErosion ? 1 : 0);
+        if (meshHasErosion)
+        {
+            var ero = es.Def.AlphaErosion!;
+            var yzw = ero.PackYzw();
+            _gl.ActiveTexture(TextureUnit.Texture5);
+            _gl.BindTexture(TextureTarget.Texture2D, es.ErosionTexture);
+            _gl.Uniform1(_muErosionTex, 5);
+            _gl.Uniform4(_muErosionParams, 0f, yzw.X, yzw.Y, yzw.Z);   // .x is the per-particle drive, set below
+            _gl.Uniform4(_muErosionMixer, ero.ChannelMixer.X, ero.ChannelMixer.Y, ero.ChannelMixer.Z, ero.ChannelMixer.W);
+            _gl.ActiveTexture(TextureUnit.Texture0);
+        }
+        _gl.Uniform1(_muAlphaRef, es.Def.AlphaRef / 255f);
         _gl.Uniform3(_muPlacementRight, es.PlacementRight.X, es.PlacementRight.Y, es.PlacementRight.Z);
         _gl.Uniform3(_muPlacementUp, es.PlacementUp.X, es.PlacementUp.Y, es.PlacementUp.Z);
         _gl.Uniform3(_muPlacementForward, es.PlacementForward.X, es.PlacementForward.Y, es.PlacementForward.Z);
@@ -1012,6 +1056,9 @@ public sealed class VfxParticleRenderer
             if (cull) _gl.FrontFace(sx * sy * sz < 0f ? FrontFaceDirection.Ccw : FrontFaceDirection.CW);
             _gl.Uniform1(_muRot, es.Instances[o + 9]);
             _gl.Uniform3(_muMeshEuler, es.Instances[o + 15], es.Instances[o + 16], es.Instances[o + 17]);
+            // M641: slot 18 is the erosion drive the simulator evaluates per particle. On a mesh it is a
+            // uniform because the draw IS the particle - the same place Riot puts it (cAlphaErosionParams.x).
+            if (meshHasErosion) _gl.Uniform1(_muErosionDrive, es.Instances[o + 18]);
             _gl.Uniform4(_muColor, es.Instances[o + 5], es.Instances[o + 6], es.Instances[o + 7], es.Instances[o + 8]);
             unsafe
             {
@@ -1443,11 +1490,50 @@ uniform sampler2D uTex;
 uniform sampler2D uTexMult;
 uniform int uHasTexMult;
 uniform vec4 uColor;
+// M641: the two stages the mesh program never had. Same uniform NAMES as the quad program (they are
+// per-program, so this is free) to make the parity between the two shaders readable.
+uniform sampler2D uPaletteTex;
+uniform vec4 uPaletteMixer;
+uniform float uPaletteV;
+uniform int uHasPalette;
+uniform sampler2D uErosionTex;
+uniform vec4 uErosionParams;
+uniform vec4 uErosionMixer;
+uniform int uHasErosion;
+uniform float uErosionDrive;   // per PARTICLE, and on the mesh path that is per draw - see below
+uniform float uAlphaRef;
 out vec4 fragColor;
 void main(){
     vec4 texel = texture(uTex, vUv);
+    // M641: palette FIRST, on the RAW texel, then the multiplier. DECODED from mesh_ps blob 781
+    // (PALETTIZE_TEXTURES + MULT_PASS) and quad_ps blob 39, which agree instruction for instruction:
+    //     m = saturate(dot(TEXTURE.Sample(uv), cPaletteSrcMixerMain))   <- the source texel, unmultiplied
+    //     rgb = sPalettesTexture.Sample(m + select.z, select.x + select.w).rgb
+    //     rgba *= TEXTUREMULT.Sample(multUv)                            <- AFTER the lookup
+    // The lookup coordinate therefore comes from the source art, and the multiplier tints the palette
+    // result. Doing the multiply first (as this renderer's quad shader did until now) both picks the
+    // wrong gradient entry and throws the multiplier's rgb away, because the palette REPLACES rgb.
+    if (uHasPalette != 0) {
+        float m = clamp(dot(texel, uPaletteMixer), 0.0, 1.0);
+        texel.rgb = texture(uPaletteTex, vec2(m, uPaletteV)).rgb;
+    }
     if (uHasTexMult != 0) texel *= texture(uTexMult, vUvMult);
+    // M641: alpha erosion. Identical arithmetic to the quad path - a difference of two saturated linear
+    // ramps - but the DRIVE is a uniform here, not an interpolant. mesh_ps blob 777 reads it from
+    // cAlphaErosionParams.x, the very slot quad_ps leaves unused, because a mesh draw is already one
+    // particle: te = cb0[0].x - E. So Riot's own mesh path feeds it exactly the way this one does.
+    if (uHasErosion != 0) {
+        float E  = clamp(dot(texture(uErosionTex, vUv), uErosionMixer), 0.0, 1.0);
+        float te = uErosionDrive - E;
+        float ea = clamp((te + uErosionParams.y) * uErosionParams.z, 0.0, 1.0);
+        float eb = clamp( te                    * uErosionParams.w, 0.0, 1.0);
+        texel.a *= (ea - eb);
+    }
     vec4 outColor = texel * uColor;
+    // M641: the alpha test, on the ERODED alpha as Riot orders it. mesh_ps carries an ALPHA_TEST axis and
+    // the D3D11 path has been selecting it from alphaRef since M232, so GL not testing was a divergence
+    // between the two previews rather than a missing feature.
+    if (uAlphaRef > 0.0 && outColor.a < uAlphaRef) discard;
     // M181 (2.12): DECODED from mesh_ps REFLECTIVE, instructions 28-32 -
     //     r1.xyz = cubemap.Sample(R).rgb;   r1.xyz *= reflOpacity
     //     r2.xyz = lerp(1, vReflectionFColor.rgb, reflOpacity)
@@ -1641,12 +1727,17 @@ uniform int uHasPalette;
 out vec4 fragColor;
 void main(){
     vec4 t = texture(uTex, vUv);
-    if (uHasTexMult != 0) t *= texture(uTexMult, vUvMult);
 
     // M175 (2.6): palette recolour. DECODED from particlesystem/quad_ps and VALIDATED against Riot's own
     // permutation on a D3D11 device (worst 0.0096 - docs/research/d3d11-spike.md):
     //     m   = saturate(dot(sourceTexel, mixer));  U = m + select.z;  V = select.x + select.w
     //     rgb = palette.Sample(U, V).rgb            // REPLACES rgb; alpha stays the source's
+    //
+    // M641: it runs BEFORE the multiplier, on the SOURCE texel. quad_ps blob 39 (PALETTIZE_TEXTURES +
+    // MULT_PASS) samples TEXTURE, mixes THAT into the lookup, and only then multiplies TEXTUREMULT in;
+    // mesh_ps blob 781 does the same. Multiplying first fed the lookup a darkened texel and then
+    // discarded the multiplier's rgb entirely, since the lookup REPLACES rgb. Six of the 2,652 live
+    // emitters on ten champions carry both stages - small, but wrong in both renderers' disagreement.
     // The U/V animation curves that would feed those two offsets are deliberately NOT applied - see the
     // remarks on VfxPalette. Their authored median is 1.0, and a constant +1 on U would drive every
     // lookup off the right-hand end of the gradient, so the naive curve-value-is-the-offset reading is
@@ -1655,6 +1746,7 @@ void main(){
         float m = clamp(dot(t, uPaletteMixer), 0.0, 1.0);
         t.rgb = texture(uPaletteTex, vec2(m, uPaletteV)).rgb;
     }
+    if (uHasTexMult != 0) t *= texture(uTexMult, vUvMult);
     // M174 (2.1): alpha erosion (dissolve). DECODED from the SHEX instruction streams of
     // particlesystem/quad_ps, particlesystem/mesh_ps and skinnedmesh/particle_ps, which agree exactly:
     // a difference of two SATURATED LINEAR ramps, giving a trapezoidal band. Deliberately NOT a
