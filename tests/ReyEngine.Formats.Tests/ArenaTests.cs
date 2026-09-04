@@ -132,8 +132,11 @@ public sealed class ArenaTests
     {
         var window = Source("src", "ReyEngine.App", "Views", "MeshPreviewWindow.axaml.cs");
         if (window is null) return;
-        Assert.Contains("vm.TryArenaGroundHit(origin, dir, out var arenaPoint)", window);
+        // M637 folded the ground pick into TryGroundPoint, which the cast keys use too: the arena's
+        // height field first, the character's plane only when there is no arena.
+        Assert.Contains("if (vm.TryArenaGroundHit(origin, dir, out point)) return true;", window);
         Assert.Contains("if (!vm.OrderMoveOnArena(point)) vm.OrderMove(point);", window);
+        Assert.Contains("vm.CastAbility(slot, TryGroundPoint(_hover, vm, out var aim) ? aim : null);", window);
     }
 
     [Fact]

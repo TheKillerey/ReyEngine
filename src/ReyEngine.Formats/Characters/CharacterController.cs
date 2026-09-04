@@ -82,6 +82,15 @@ public sealed class CharacterController
     /// this is the one setter that changes Y without cancelling the order the way Teleport does.</summary>
     public void SetGroundHeight(float y) => Position = new Vector3(Position.X, y, Position.Z);
 
+    /// <summary>M637: turn to face a point at once, the way a cast snaps a champion toward its aim in
+    /// game. Keeps whatever order is pending; a point underfoot leaves the facing alone.</summary>
+    public void FaceToward(Vector3 point)
+    {
+        var flat = Flatten(point - Position);
+        if (flat.LengthSquared() < 1e-6f) return;
+        Facing = Wrap(MathF.Atan2(flat.X, flat.Z));
+    }
+
     /// <summary>Walk into range of a target and keep attacking it.</summary>
     public void Attack(Vector3 target)
     {

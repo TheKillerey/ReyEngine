@@ -38,7 +38,13 @@ public partial class MeshPreviewWindow : Window
         if (FocusManager?.GetFocusedElement() is TextBox) return;
 
         int slot = e.Key switch { Key.Q => 0, Key.W => 1, Key.E => 2, Key.R => 3, _ => -1 };
-        if (slot >= 0) { vm.CastAbility(slot); e.Handled = true; }
+        if (slot >= 0)
+        {
+            // M637: aimed at the ground under the cursor; null when the cursor is off the ground (the sky,
+            // or outside the viewport), in which case the cast falls back to the dummy.
+            vm.CastAbility(slot, TryGroundPoint(_hover, vm, out var aim) ? aim : null);
+            e.Handled = true;
+        }
         else if (e.Key == Key.S) { vm.ResetCharacterCommand.Execute(null); e.Handled = true; }
     }
 
@@ -47,6 +53,7 @@ public partial class MeshPreviewWindow : Window
     private void OnOrder(Avalonia.Point at, MeshPreviewViewModel vm)
     {
         if (!PreviewViewport.TryGetPickRay(at, out var origin, out var dir)) return;
+        vm.CancelPendingCast();   // M637: a manual order overrides a cast still walking into range
 
         // The dummy first: clicking a target you can see must never be read as a move order past it.
         if (vm.TargetDummyPosition is { } dummy && HitsSphere(origin, dir, dummy, 120f))
@@ -55,21 +62,25 @@ public partial class MeshPreviewWindow : Window
             return;
         }
 
-        // M636: on an arena the ground is the navgrid's height field, and the order goes through its
-        // walkability and A* rather than straight at the point.
-        if (vm.TryArenaGroundHit(origin, dir, out var arenaPoint))
-        {
-            if (vm.OrderMoveOnArena(arenaPoint)) return;
-        }
-
-        // The ground is the plane the character stands on, not y=0 — a preview whose model sits on a
-        // backdrop at another height would otherwise walk through the floor.
-        float planeY = vm.CharacterPosition.Y;
-        if (MathF.Abs(dir.Y) < 1e-5f) return;                 // looking along the plane: no intersection
-        float t = (planeY - origin.Y) / dir.Y;
-        if (t <= 0f) return;                                   // the plane is behind the camera
-        var point = origin + dir * t;
+        if (!TryGroundPoint(at, vm, out var point)) return;
         if (!vm.OrderMoveOnArena(point)) vm.OrderMove(point);
+    }
+
+    /// <summary>The ground under a screen position. M636: on an arena that is the navgrid's height field,
+    /// so a click on a hill lands on the hill; otherwise the plane the character stands on, not y=0 - a
+    /// preview whose model sits on a backdrop at another height would otherwise walk through the floor.</summary>
+    private bool TryGroundPoint(Avalonia.Point at, MeshPreviewViewModel vm, out Vector3 point)
+    {
+        point = default;
+        if (!PreviewViewport.TryGetPickRay(at, out var origin, out var dir)) return false;
+        if (vm.TryArenaGroundHit(origin, dir, out point)) return true;
+
+        float planeY = vm.CharacterPosition.Y;
+        if (MathF.Abs(dir.Y) < 1e-5f) return false;           // looking along the plane: no intersection
+        float t = (planeY - origin.Y) / dir.Y;
+        if (t <= 0f) return false;                             // the plane is behind the camera
+        point = origin + dir * t;
+        return true;
     }
 
     private static bool HitsSphere(Vector3 origin, Vector3 dir, Vector3 centre, float radius)
@@ -108,10 +119,15 @@ public partial class MeshPreviewWindow : Window
         }
     }
 
+    /// <summary>M637: where the mouse last was over the viewport, pressed or not - a cast key aims at the
+    /// ground under it, the way the game aims every spell at the cursor.</summary>
+    private Avalonia.Point _hover;
+
     private void OnMoved(object? sender, PointerEventArgs e)
     {
+        _hover = e.GetPosition(PreviewInput);
         if (!(_lmb || _mmb)) return;
-        var p = e.GetPosition(PreviewInput);
+        var p = _hover;
 
         if (_dummyAxis is { } axis && DataContext is MeshPreviewViewModel vm)
         {

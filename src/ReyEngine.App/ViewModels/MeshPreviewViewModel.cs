@@ -517,9 +517,19 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // ride the model matrix and always followed; these free-standing ones were spawning back at the
         // world origin, so every spell fired at the spot the character started from.
         var caster = CharacterPosition;
-        foreach (var h in ev.CasterSystems) if (Make(h, caster, dummy, null) is { } i) items.Add(i);
-        foreach (var h in ev.TargetSystems) if (Make(h, dummy, caster, null) is { } i) items.Add(i);
-        foreach (var h in ev.MissileSystems) if (Make(h, caster, dummy, dummy) is { } i) items.Add(i);
+
+        // M637: an aimed cast overrides the dummy. The plan says where the caster faces, where the missile
+        // flies and where - if anywhere - the hit plays: a skillshot that passed nobody has no HitAt, and
+        // then the target-side systems simply do not play, which is what happens in game.
+        var plan = _castPlan;
+        var aim = plan?.Aim ?? dummy;
+        var flightEnd = plan?.TravelTo ?? dummy;
+        System.Numerics.Vector3? hitAt = plan is null ? dummy : plan.HitAt;
+
+        foreach (var h in ev.CasterSystems) if (Make(h, caster, aim, null) is { } i) items.Add(i);
+        if (hitAt is { } hit)
+            foreach (var h in ev.TargetSystems) if (Make(h, hit, caster, null) is { } i) items.Add(i);
+        foreach (var h in ev.MissileSystems) if (Make(h, caster, flightEnd, flightEnd) is { } i) items.Add(i);
 
         // M631: the missile the spell record NAMES, when the token rule did not already find it. The
         // record says which system is the missile outright - 280 of 692 slots do - where the tokens infer
@@ -532,7 +542,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 if (missile.MissileEffectKey == 0) continue;
                 if (!_vfxResourceMap.TryGetValue(missile.MissileEffectKey, out var systemHash)) continue;
                 if (ev.MissileSystems.Contains(systemHash) || ev.CasterSystems.Contains(systemHash)) continue;
-                if (Make(systemHash, caster, dummy, dummy) is { } authored) items.Add(authored);
+                if (Make(systemHash, caster, flightEnd, flightEnd) is { } authored) items.Add(authored);
             }
         return items;
     }

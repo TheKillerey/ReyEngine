@@ -91,6 +91,7 @@ public sealed partial class MeshPreviewViewModel
         CharacterPosition = _controller.Position;
         CharacterYaw = _controller.Facing;
         AdvanceArena();   // M636: next waypoint, ground height, follow camera - no-ops without an arena
+        AdvancePendingCast(now);   // M637: a walk-into-range cast fires on arrival; cooldowns count down
 
         if (now < _castBusyUntil) return;      // a cast owns the animation until it finishes
 
@@ -120,9 +121,23 @@ public sealed partial class MeshPreviewViewModel
         _castBusyUntil = DateTime.MinValue;
     }
 
-    /// <summary>Q/W/E/R, as 0..3. Casting stops the character where it stands, which is what the vast
-    /// majority of League casts do and is the only behaviour derivable without the spell records.</summary>
-    public void CastAbility(int slot)
+    // ---- M637: casts are AIMED, gated by cooldown, and walk into range like the game ----
+
+    /// <summary>The plan the current cast resolved to; BuildEventBundle reads it for where the caster
+    /// faces, where the missile flies and where the hit plays. Null means "at the dummy", the pre-M637
+    /// behaviour every other caller of the bundle still gets.</summary>
+    private CastPlan? _castPlan;
+
+    private readonly DateTime[] _cooldownUntil = new DateTime[4];
+    private (int Slot, Vector3? Cursor)? _pendingCast;
+
+    [ObservableProperty] private string _cooldownStatus = "";
+
+    /// <summary>Q/W/E/R, as 0..3. <paramref name="cursorGround"/> is the ground point under the mouse when
+    /// the key went down - the only aim a player has in game - and null falls back to the dummy. The spell's
+    /// authored targeting kind decides what that point means (SpellAim); its cooldown gates the cast; a
+    /// plain location cast beyond range walks into range first and fires on arrival.</summary>
+    public void CastAbility(int slot, Vector3? cursorGround = null)
     {
         if (!ControlMode || slot is < 0 or > 3) return;
 
@@ -130,8 +145,39 @@ public sealed partial class MeshPreviewViewModel
             a.Action.Kind == CharacterActionKind.Ability && a.Label.StartsWith("QWER"[slot]));
         if (row is null) return;
 
+        var now = DateTime.UtcNow;
+        if (now < _cooldownUntil[slot])
+        {
+            ControlStatus = $"{row.Label}: ready in {(_cooldownUntil[slot] - now).TotalSeconds:0.0} s";
+            return;
+        }
+
+        var ability = _abilities.FirstOrDefault(a => a.Index == slot);
+        var dummy = TargetDummyPosition;
+        var cursor = cursorGround ?? dummy ?? CharacterPosition + Forward() * 500f;
+        var plan = SpellAim.Plan(ability, CharacterPosition, cursor, dummy);
+
+        // Out of range: walk in, then cast from there. The pending cast re-plans on arrival, so the aim is
+        // re-measured from where the character actually stopped.
+        if (plan.WalkTo is { } walkTo)
+        {
+            _pendingCast = (slot, cursorGround);
+            _castBusyUntil = DateTime.MinValue;
+            if (!OrderMoveOnArena(walkTo)) _controller.MoveTo(walkTo);
+            ControlStatus = $"{row.Label}: {plan.Note}";
+            return;
+        }
+        _pendingCast = null;
+
         _controller.Stop();
+        if (!plan.IsSelfCast) _controller.FaceToward(plan.Aim);
         CharacterPosition = _controller.Position;
+        CharacterYaw = _controller.Facing;
+        _castPlan = plan;
+
+        if (ability is { Cooldown: > 0f })
+            _cooldownUntil[slot] = now + TimeSpan.FromSeconds(ability.Cooldown);
+        RefreshCooldownStatus(now);
 
         if (!row.HasClip)
         {
@@ -141,9 +187,43 @@ public sealed partial class MeshPreviewViewModel
 
         SelectedAction = null;                 // re-fire even when the same ability is cast twice
         SelectedAction = row;
-        ControlStatus = row.Label;
+        ControlStatus = $"{row.Label}: {plan.Note}"
+                        + (ability is { Mana: > 0f } ? $" · {ability.Mana:0} mana" : "");
         // Hold the animation for as long as the clip runs, so the idle does not stamp over the cast.
         _castBusyUntil = DateTime.UtcNow + TimeSpan.FromSeconds(Math.Clamp(Animation.Duration, 0.1, 10.0));
+    }
+
+    private Vector3 Forward() =>
+        new(MathF.Sin(_controller.Facing), 0f, MathF.Cos(_controller.Facing));
+
+    /// <summary>A manual order (right-click) cancels a cast that was still walking into range, as it does
+    /// in game. Called by the window before it issues the order, so the walk itself - which goes through
+    /// the same OrderMove - cannot cancel its own cast.</summary>
+    public void CancelPendingCast() => _pendingCast = null;
+
+    /// <summary>Q/W/E/R with seconds left, refreshed every control tick while any is running.</summary>
+    private void RefreshCooldownStatus(DateTime now)
+    {
+        bool any = false;
+        var parts = new string[4];
+        for (int i = 0; i < 4; i++)
+        {
+            double left = (_cooldownUntil[i] - now).TotalSeconds;
+            if (left > 0) { any = true; parts[i] = $"{"QWER"[i]} {left:0.0}s"; }
+            else parts[i] = $"{"QWER"[i]} ready";
+        }
+        CooldownStatus = any ? string.Join(" · ", parts) : "";
+    }
+
+    /// <summary>Called by the control tick: the walk-into-range cast fires once the walk is over, and the
+    /// cooldown readout counts down.</summary>
+    private void AdvancePendingCast(DateTime now)
+    {
+        if (CooldownStatus.Length > 0) RefreshCooldownStatus(now);
+        if (_pendingCast is not { } pending) return;
+        if (_controller.Destination is not null || _waypoints.Count > 0) return;
+        _pendingCast = null;
+        CastAbility(pending.Slot, pending.Cursor);
     }
 
     private void PlayKind(CharacterActionKind kind)

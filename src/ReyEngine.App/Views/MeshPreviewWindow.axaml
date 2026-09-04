@@ -275,6 +275,8 @@
               </StackPanel>
               <TextBlock Text="{Binding ArenaStatus}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
               <TextBlock Text="{Binding StatsSummary, StringFormat='Champion: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
+              <!-- M637: Q/W/E/R cooldowns from the spell records, counting down while any is running -->
+              <TextBlock Text="{Binding CooldownStatus}" FontSize="11" TextWrapping="Wrap" FontFamily="Consolas,monospace" />
             </StackPanel>
           </Border>
 

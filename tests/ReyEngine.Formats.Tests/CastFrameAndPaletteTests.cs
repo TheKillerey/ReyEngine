@@ -87,10 +87,11 @@ public sealed class CastFrameAndPaletteTests
     {
         var preview = Source("src", "ReyEngine.App", "ViewModels", "MeshPreviewViewModel.cs");
         if (preview is null) return;
-        // Caster and missile systems aim at the dummy; target systems aim back at the caster.
-        Assert.Contains("Make(h, caster, dummy, null)", preview);
-        Assert.Contains("Make(h, dummy, caster, null)", preview);
-        Assert.Contains("Make(h, caster, dummy, dummy)", preview);
+        // Caster and missile systems aim at the cast's aim (M637: the cursor's plan, else the dummy);
+        // target systems play at the hit and aim back at the caster.
+        Assert.Contains("Make(h, caster, aim, null)", preview);
+        Assert.Contains("Make(h, hit, caster, null)", preview);
+        Assert.Contains("Make(h, caster, flightEnd, flightEnd)", preview);
         Assert.Contains("BuildItem(def, VfxCastFrame.Toward(at, faceToward, at))", preview);
 
         // Both renderers re-issue the missile's matrix every tick; both keep the rotation now.
