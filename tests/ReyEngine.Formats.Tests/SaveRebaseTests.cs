@@ -123,7 +123,10 @@ public sealed class SaveRebaseTests
         if (!File.Exists(file)) return;
         string source = File.ReadAllText(file);
 
-        Assert.Contains("RebaseOntoCurrent(binEntry, bytes, MaterialEditor.BaseBytes", source);
+        // M642: one save path serves BOTH material editors (the inspector's and the character window's),
+        // so the rebase reads the editor it was handed rather than the inspector's field.
+        Assert.Contains("RebaseOntoCurrent(binEntry, bytes, editor.BaseBytes", source);
+        Assert.Contains("SaveMaterialOverrideFor(MaterialEditor, ApplyMaterialToViewport)", source);
         Assert.Contains("RebaseOntoCurrent(entry, bytes, BinEditor.BaseBytes", source);
     }
 }

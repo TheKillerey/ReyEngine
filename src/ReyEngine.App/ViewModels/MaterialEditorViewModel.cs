@@ -1340,6 +1340,16 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         if (!string.IsNullOrEmpty(value) && RequestCatalog is { } req) _ = req(value);
     }
 
+    /// <summary>M642: take another editor's environment pick without asking for the catalogue again. The
+    /// host hands the catalogue to every editor it owns, so a request from the mirror would only re-read
+    /// the cache and log the load twice.</summary>
+    public void SetEnvironmentSilently(string? environment)
+    {
+        if (string.Equals(_selectedShaderEnvironment, environment, StringComparison.Ordinal)) return;
+        _selectedShaderEnvironment = environment;
+        OnPropertyChanged(nameof(SelectedShaderEnvironment));
+    }
+
     public void SetCatalog(ShaderCatalog? catalog)
     {
         Catalog = catalog;

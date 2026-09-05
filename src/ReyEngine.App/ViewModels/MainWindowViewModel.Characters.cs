@@ -141,7 +141,7 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     /// <para>Runs off the UI thread as part of loading the skin, because it decodes every texture the
     /// character references. Returns null for anything that is not a character with a skin bin — a prop
     /// has no materials to resolve, and the window falls back to GL rather than showing an empty frame.</para></summary>
-    private (Services.PreparedCharacterScene? Scene, string Status) BuildCharacterDx11Scene(WadAssetEntry skn)
+    private (Services.PreparedCharacterScene? Scene, string Status) BuildCharacterDx11Scene(WadAssetEntry skn, byte[]? binOverride = null)
     {
         if (!skn.IsResolved) return (null, "");
 
@@ -153,9 +153,10 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
         try
         {
             string? binPath = Formats.Meta.SkinPaths.BinPathForSkn(skn.Path);
-            byte[]? bin = binPath is not null && TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)
+            // M642: the character editor hands its EDITED bin in; the load path reads the shipped one.
+            byte[]? bin = binOverride ?? (binPath is not null && TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)
                 ? ReadAsset(binEntry.PathHash)
-                : null;
+                : null);
 
             var scene = Services.Dx11CharacterScene.Prepare(
                 ReadAsset(skn.PathHash), bin, cache, ShaderPerms(),

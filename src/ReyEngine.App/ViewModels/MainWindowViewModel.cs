@@ -6058,25 +6058,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         BinEditor.CopyHandler = Dialogs.CopyAsync;
         BinEditor.UndoService = UndoService;
 
-        MaterialEditor.UndoService = UndoService;
-        MaterialEditor.CopyHandler = Dialogs.CopyAsync;
+        // M642: two material editors, ONE wiring. The map's lives in the inspector; the character's lives
+        // in the character window, previews on both of its renderers there, and saves through the same
+        // override path. See MainWindowViewModel.CharacterMaterials.cs.
+        WireMaterialEditor(MaterialEditor, ApplyMaterialToViewport, SaveMaterialOverride);
+        WireMaterialEditor(MeshPreview.MaterialEditor, ApplyCharacterMaterialsToPreview, SaveCharacterMaterialOverride);
         Inspector.CopyHandler = Dialogs.CopyAsync;   // M351c: copy button beside the asset path
-        MaterialEditor.TextureExists = TextureExistsByPath;
-        MaterialEditor.LoadThumbnail = LoadThumbnailByPath;
-        // M368: the same schema source the particle editor uses, so both panels agree by construction.
-        MaterialEditor.DeclaredProperties = h => Meta.PropertiesOf(h);
-        MaterialEditor.ClassName = h => Meta.TryGetName(h, out var n) ? n : null;
-        MaterialEditor.LoadTextureRaw = LoadTextureByPath;   // M351k: the material ball samples raw RGBA
-        MaterialEditor.OpenTexture = OpenTextureByPath;
-        MaterialEditor.ReplaceTextureAsset = ReplaceTextureForSlot;
-        MaterialEditor.ApplyToViewport = ApplyMaterialToViewport;
-        MaterialEditor.Edited = ScheduleAutoSave;   // M505: arm auto-save on the EDIT, not on the preview
-        MaterialEditor.AskMacroSupport = CachedMacroSupport;   // M506: inline permutation verdicts
-        MaterialEditor.Warn = m => _log.Warn("Material", m);                 // M533
-        MaterialEditor.AskMacroFixes = SuggestMacroFixes;                    // M533
-        MaterialEditor.SaveOverride = SaveMaterialOverride;
-        MaterialEditor.RequestCatalog = LoadShaderCatalogAsync;   // M103
-        MaterialEditor.RequestCommonShaderSetup = LoadCommonShaderSetupAsync;
         InitShaderEnvironments();
 
         // M46 Particle Editor wiring
@@ -6135,7 +6122,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.ClassName = h => Meta.TryGetName(h, out var n) ? n : null;
         ParticleEditor.SaveOverrideAsync = SaveParticleOverride;
         ParticleEditor.OpenIssues = OpenParticleBinIssues;   // M125
-        MaterialEditor.OpenIssues = OpenMaterialBinIssues;   // M125
 
         // M138: the wem encoder reuses vgmstream for input formats Media Foundation can't read
         Encoder.VgmstreamPath = Sound.VgmstreamPath;
@@ -6186,6 +6172,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         HasInspectorBody = true;
 
         await LoadMaterialBinAsync(material.SourceEntry, alsoRawBin: false);
+        // M642: a champion material lands in the character window's editor, not the inspector's.
+        if (MeshPreview.MaterialEditor.BinEntry?.PathHash == material.SourceEntry.PathHash)
+        {
+            MeshPreview.MaterialEditor.Search = material.FullName;
+            MeshPreview.ShowMaterials(true);
+            ShowMeshPreviewWindow?.Invoke();
+            return;
+        }
         if (!HasMaterialData)
         {
             _log.Warn("Material", $"'{material.FullName}': no editable materials resolved from {material.SourceBin}.");
@@ -7114,6 +7108,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
+                ForgetPreviewSkin();   // M642: a prop has no skin bin
                 MeshPreview.Show(entry.DisplayName, mesh, skeleton: null, textures: null);
                 MeshPreview.SetAnimations(Enumerable.Empty<AnimationEntryViewModel>());
                 MeshPreview.SetVfx(new Dictionary<uint, ReyEngine.Formats.Vfx.VfxSystemDefinition>());
@@ -7222,7 +7217,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             if (alsoRawBin && binDoc is not null) BinEditor.Load(binDoc, binEntry, bytes);
-            if (matDoc is not null && matDoc.Materials.Count > 0)
+            if (matDoc is not null && matDoc.Materials.Count > 0 && matDoc.Kind == MaterialSourceKind.ChampionSkin)
+            {
+                // M642: a champion skin's materials belong to the character window - that is where the
+                // model is, on both renderers. The inspector keeps whatever MAP document it holds. Before
+                // this, opening a skin replaced the map's materials in the inspector with the skin's, a
+                // window away from the character they belonged to.
+                MeshPreview.MaterialEditor.Load(matDoc, binEntry, bytes);
+                MeshPreview.ShowMaterials(true);
+                if (MeshPreview.MaterialEditor.UnresolvedCount > 0)
+                    _log.Warn("Material", $"{binEntry.DisplayName}: {matDoc.Materials.Count} material(s), {MeshPreview.MaterialEditor.UnresolvedCount} texture path(s) unresolved in this WAD - Character Editor.");
+                else
+                    _log.Info("Material", $"{binEntry.DisplayName}: {matDoc.Materials.Count} material(s) - Character Editor.");
+                if (matDoc.Issues.Count > 0)   // M125
+                    _log.Warn("Material", $"{binEntry.DisplayName}: {matDoc.Issues.Count} issue(s) repaired while reading - see the banner in the Character Editor's Material tab.");
+            }
+            else if (matDoc is not null && matDoc.Materials.Count > 0)
             {
                 MaterialEditor.Load(matDoc, binEntry, bytes);
                 HasMaterialData = true;
@@ -7271,27 +7281,31 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Material", $"Apply failed: {ex.Message}"); }
     }
 
-    private async Task SaveMaterialOverride()
+    private Task SaveMaterialOverride() => SaveMaterialOverrideFor(MaterialEditor, ApplyMaterialToViewport);
+
+    /// <summary>M642: the one save path for both material editors - the inspector's and the character
+    /// window's. The editor supplies the bin and the bytes; the caller supplies the preview to refresh.</summary>
+    private async Task SaveMaterialOverrideFor(MaterialEditorViewModel editor, Action applyToViewport)
     {
-        if (MaterialEditor.BinEntry is not { } binEntry) { _log.Warn("Material", "No material .bin open."); return; }
+        if (editor.BinEntry is not { } binEntry) { _log.Warn("Material", "No material .bin open."); return; }
         if (!GuardEditable(binEntry)) return;
-        if (!MaterialEditor.IsDirty) { _log.Info("Material", "No material edits to save."); return; }
+        if (!editor.IsDirty) { _log.Info("Material", "No material edits to save."); return; }
         if (!await EnsureProjectSavedAsync()) return;
 
-        var bytes = MaterialEditor.Serialize();
+        var bytes = editor.Serialize();
         if (bytes is null) return;
-        bytes = RebaseOntoCurrent(binEntry, bytes, MaterialEditor.BaseBytes, "Material");
+        bytes = RebaseOntoCurrent(binEntry, bytes, editor.BaseBytes, "Material");
         try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
         catch (Exception ex) { _log.Error("Material", $"Edited material .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
 
         // M126: one save path for project bins — folder-project files are written IN PLACE (and any
         // stale shadow override dissolves); only wad-backed assets go to the override workspace.
         if (!await SaveMapBinBytesAsync(binEntry, bytes)) return;
-        ApplyMaterialToViewport();
+        applyToViewport();
         UndoService.MarkSaved();
     }
 
-    private async Task ReplaceTextureForSlot(TextureSlotViewModel slot)
+    private async Task ReplaceTextureForSlot(TextureSlotViewModel slot, Action applyToViewport)
     {
         if (!ContentLoaded) return;
         var path = slot.EditedPath;
@@ -7315,7 +7329,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project.IsDirty = true;
             UpdateTitle();
             slot.RefreshResolved();
-            ApplyMaterialToViewport();
+            applyToViewport();
             _log.Success("Material", $"Replaced texture {Path.GetFileName(path)} with {Path.GetFileName(file)} (raw). Build Package will include it.");
         }
         catch (Exception ex) { _log.Error("Material", ex.Message); }
@@ -10759,6 +10773,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             var bg = await Task.Run(() => Services.MapPreviewLoader.Load(folder));
+            ForgetPreviewSkin();   // M642: neither has a legacy map
             MeshPreview.Show($"{bg.MapName} (legacy NVR map)", bg.Mesh, skeleton: null, textures: bg.SubmeshTextures);
             // M142.8: a legacy map IS the subject — drop any character-preview backdrop still attached from
             // an earlier skin preview, or both maps render at once (Map8 backdrop behind the Map10 subject).
@@ -10801,6 +10816,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task LoadMeshPreviewAsync(WadAssetEntry entry)
     {
         if (!ContentLoaded) return;
+        _previewSkn = entry;   // M642: what a material edit rebuilds the D3D11 scene for
         try
         {
             var (mesh, skeleton, textures, vfx) = await Task.Run(() =>
@@ -10882,17 +10898,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var binPath = SkinPaths.BinPathForSkn(skn.Path);
         if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return null;
         var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName, ResolveWadPath);
-        if (!resolved.HasAny) return null;
-        var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
-        var result = new TextureImage?[mesh.SubMeshes.Count];
-        for (int i = 0; i < mesh.SubMeshes.Count; i++)
-        {
-            var p = resolved.For(mesh.SubMeshes[i].Material);
-            if (string.IsNullOrEmpty(p)) continue;
-            if (!cache.TryGetValue(p, out var img)) cache[p] = img = LoadTextureByPath(p);
-            result[i] = img;
-        }
-        return result;
+        return ResolveSubmeshDiffuse(mesh, resolved);   // M642: shared with the character editor's live preview
     }
 
     private async Task LoadMeshAsync(WadAssetEntry entry)
@@ -12788,16 +12794,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // ---- M125: Bin Issues window — repairs the tolerant reader applied, navigable + fixable ----
 
     /// <summary>Open the Bin Issues window for the materials document (map/champion .bin).</summary>
-    private void OpenMaterialBinIssues()
+    private void OpenMaterialBinIssues(MaterialEditorViewModel editor)
     {
-        if (MaterialEditor.BinEntry is not { } entry || MaterialEditor.Issues.Count == 0) return;
+        if (editor.BinEntry is not { } entry || editor.Issues.Count == 0) return;
         var vm = new BinIssuesWindowViewModel
         {
             BinName = entry.DisplayName,
             RepairAsync = entry.ReadOnly ? null : async () =>
             {
                 // The tolerantly-parsed tree IS the healed form — re-saving it writes a clean file.
-                var bytes = MaterialEditor.Serialize();
+                var bytes = editor.Serialize();
                 if (bytes is null || !await SaveMapBinBytesAsync(entry, bytes)) return false;
                 await LoadMaterialBinAsync(entry, alsoRawBin: false);   // reload: the red marks clear
                 return true;
@@ -12805,9 +12811,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         };
         var group = new BinIssueGroupViewModel { BinName = entry.DisplayName };
         vm.Groups.Add(group);
-        foreach (var i in MaterialEditor.Issues)
+        foreach (var i in editor.Issues)
         {
-            var mat = MaterialEditor.Materials.FirstOrDefault(m => m.Model.ObjectPathHash == i.ObjectPathHash);
+            var mat = editor.Materials.FirstOrDefault(m => m.Model.ObjectPathHash == i.ObjectPathHash);
             group.Rows.Add(new BinIssueRowViewModel
             {
                 Kind = i.Kind,
@@ -13287,6 +13293,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             Project.IsDirty = true;
             if (MaterialEditor.BinEntry?.PathHash == entry.PathHash) { MaterialEditor.Clear(); HasMaterialData = false; }
+            if (MeshPreview.MaterialEditor.BinEntry?.PathHash == entry.PathHash) ForgetPreviewSkin();   // M642
             RefreshBrowser();
             _log.Success("Validate", $"Deleted {entry.DisplayName} from the project — the game will use the original file.");
             return true;
@@ -14509,15 +14516,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void InitShaderEnvironments()
     {
         _shaderEnvironmentDirs.Clear();
-        MaterialEditor.ShaderEnvironments.Clear();
+        foreach (var editor in MaterialEditors) editor.ShaderEnvironments.Clear();   // M642: both editors
         foreach (var install in GameInstallLocator.Discover())
             if (_shaderEnvironmentDirs.TryAdd(install.Platform, install.GameDirectory))
-                MaterialEditor.ShaderEnvironments.Add(install.Platform);
+                foreach (var editor in MaterialEditors) editor.ShaderEnvironments.Add(install.Platform);
 
         if (Project.GameDirectory is { Length: > 0 } gd
             && !_shaderEnvironmentDirs.Values.Any(d => string.Equals(d, gd, StringComparison.OrdinalIgnoreCase))
             && _shaderEnvironmentDirs.TryAdd("Project", gd))
-            MaterialEditor.ShaderEnvironments.Add("Project");
+            foreach (var editor in MaterialEditors) editor.ShaderEnvironments.Add("Project");
 
         // Prefer the install the project actually targets, else the first one found.
         var preferred = _shaderEnvironmentDirs.FirstOrDefault(kv =>
@@ -14534,7 +14541,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (!_shaderEnvironmentDirs.TryGetValue(environment, out var gameDir))
         {
-            MaterialEditor.SetCatalog(null);
+            SetShaderCatalog(environment, null);
             return;
         }
         // M475: locate the WAD BEFORE consulting the cache — the cache is only valid for a specific build
@@ -14546,7 +14553,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var wad = GameReferenceLibrary.FindGlobalWad(gameDir);
         if (wad is null)
         {
-            MaterialEditor.SetCatalog(null);
+            SetShaderCatalog(environment, null);
             _log.Warn("Shader", $"{environment}: Global.wad.client not found under {gameDir} — no shader list.");
             return;
         }
@@ -14554,7 +14561,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var cachePath = ShaderCatalogCachePath(environment);
         string stamp = ShaderCatalogLoader.StampFor(wad);
         var cached = await Task.Run(() => ShaderCatalogCache.Load(cachePath, gameDir, stamp));
-        if (cached is not null) { MaterialEditor.SetCatalog(cached); return; }
+        if (cached is not null) { SetShaderCatalog(environment, cached); return; }
         if (File.Exists(cachePath))
             _log.Info("Shader", $"{environment}: the cached shader catalogue came from a different build of "
                               + "Global.wad — rescanning. A Riot patch used to leave it stale.");
@@ -14568,7 +14575,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Success("Shader", $"{environment}: {catalog.Shaders.Count:n0} shader definitions loaded.");
         }
         else _log.Warn("Shader", $"{environment}: {ShaderCatalogLoader.ShaderBinPath} not readable.");
-        MaterialEditor.SetCatalog(catalog);
+        SetShaderCatalog(environment, catalog);   // M642: every editor
     }
 
     [RelayCommand]

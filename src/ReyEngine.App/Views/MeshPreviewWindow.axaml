@@ -4,7 +4,8 @@
         xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         x:Class="ReyEngine.App.Views.MeshPreviewWindow"
         x:DataType="vm:MeshPreviewViewModel"
-        Title="ReyEngine — Model Preview" Width="980" Height="760"
+        Title="{Binding WindowTitle}" Width="1240" Height="800"
+        x:CompileBindings="True"
         WindowStartupLocation="CenterOwner"
         WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
@@ -32,389 +33,11 @@
         </StackPanel>
       </DockPanel>
     </Border>
-    <!-- M55: right panel — animation playback + champion VFX -->
-    <Border DockPanel.Dock="Right" Width="250" Background="{DynamicResource ReyPanelBrush}"
-            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1,0,0,0">
-      <ScrollViewer>
-        <StackPanel Margin="10" Spacing="8">
-          <!-- M90: model scale — size the champion against the map backdrop -->
-          <Border Classes="card">
-            <StackPanel Spacing="4">
-              <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Classes="cardTitle" Grid.Column="0" Text="MODEL" VerticalAlignment="Center" />
-                <Button Grid.Column="1" Classes="tool" Content="1×" FontSize="10" Padding="6,1"
-                        Command="{Binding ResetModelScaleCommand}" ToolTip.Tip="Reset scale" />
-              </Grid>
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Text="Scale" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
-                <Slider Minimum="0.1" Maximum="5" Value="{Binding ModelScale, Mode=TwoWay}" Width="120" />
-                <TextBlock Text="{Binding ModelScale, StringFormat='{}{0:0.00}×'}" FontSize="11" VerticalAlignment="Center" />
-              </StackPanel>
-            </StackPanel>
-          </Border>
-
-          <!-- M148: legacy (NVR) map render settings — only shown when the subject IS a map. Old levels
-               split into two ground models and the right one is picked on load; these expose the knobs so
-               any map can be tuned by eye. -->
-          <Border Classes="card" IsVisible="{Binding IsLegacyMap}">
-            <StackPanel Spacing="5">
-              <TextBlock Classes="cardTitle" Text="NVR MAP" />
-              <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
-                         Text="Height-blend ground (baked composite atlas + baked vertex lighting)."
-                         IsVisible="{Binding NvrHeightBlend}" />
-              <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
-                         Text="Mask-blend ground (four-blend BLEND_MAP) lit by a flat sun/sky."
-                         IsVisible="{Binding !NvrHeightBlend}" />
-
-              <TextBlock Text="{Binding NvrSunSource}" FontSize="10" TextWrapping="Wrap"
-                         Foreground="{DynamicResource ReyAccent2Brush}" />
-              <CheckBox Content="Use map's sun / ambient" IsChecked="{Binding NvrUseMapSun}" FontSize="11"
-                        IsVisible="{Binding HasNvrSun}"
-                        ToolTip.Tip="Light the map with the sun direction and sun/ambient colours it actually shipped (terrain.inibin on newer levels, sun.ini on older ones). Off falls back to a flat neutral sun/sky." />
-              <CheckBox Content="Four-blend ground" IsChecked="{Binding NvrFourBlend}" FontSize="11"
-                        ToolTip.Tip="Blend the ground's 4 colour maps through its BLEND_MAP (CREATE_GROUND_MOSAIC_FOUR_BLEND). Off shows only the base tile — useful for checking the raw layer." />
-              <CheckBox Content="Baked vertex lighting" IsChecked="{Binding UseVertexLightmap}" FontSize="11"
-                        ToolTip.Tip="Use each mesh's PrimaryColor AS its lightmap. Correct for height-blend maps (Twisted Treeline), whose statics carry real baked night lighting. Wrong for maps whose vertex colours are near-black mask/AO data (Dominion) — they go black." />
-
-              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding UseVertexLightmap}">
-                <TextBlock Text="Baked" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="46" />
-                <Slider Minimum="0" Maximum="6" Value="{Binding VertexLightmapScale, Mode=TwoWay}" Width="110" />
-                <TextBlock Text="{Binding VertexLightmapScale, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding !UseVertexLightmap}">
-                <TextBlock Text="Bright" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="46"
-                           ToolTip.Tip="Flat sun/sky level for mask-blend and plain maps." />
-                <Slider Minimum="0" Maximum="2" Value="{Binding NvrBrightness, Mode=TwoWay}" Width="110" />
-                <TextBlock Text="{Binding NvrBrightness, StringFormat='{}{0:0.00}'}" FontSize="11" VerticalAlignment="Center" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding !UseVertexLightmap}">
-                <TextBlock Text="Ground" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="46"
-                           ToolTip.Tip="Add the mesh's baked vertex colour on top (NVR paints ground shading/AO there). 0 = off." />
-                <Slider Minimum="0" Maximum="6" Value="{Binding NvrVertexLight, Mode=TwoWay}" Width="110" />
-                <TextBlock Text="{Binding NvrVertexLight, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
-              </StackPanel>
-
-              <CheckBox Content="Light.dat point lights" IsChecked="{Binding BackgroundLightsEnabled}" FontSize="11"
-                        ToolTip.Tip="Render the map's own Light.dat torches/braziers. Off by default on maps whose lighting is already baked in, where they would double up." />
-              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding BackgroundLightsEnabled}">
-                <TextBlock Text="Lights" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="46" />
-                <Slider Minimum="0" Maximum="16" Value="{Binding BackgroundLightIntensity, Mode=TwoWay}" Width="110" />
-                <TextBlock Text="{Binding BackgroundLightIntensity, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
-              </StackPanel>
-            </StackPanel>
-          </Border>
-
-          <!-- M114: target dummy — position + behaviour -->
-          <Border Classes="card" IsVisible="{Binding TargetDummyEnabled}">
-            <StackPanel Spacing="4">
-              <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Classes="cardTitle" Grid.Column="0" Text="TARGET DUMMY" VerticalAlignment="Center" />
-                <Button Grid.Column="1" Classes="tool" Content="Reset" FontSize="10" Padding="6,1"
-                        Command="{Binding ResetDummyCommand}" ToolTip.Tip="Back to 350 units in front" />
-              </Grid>
-              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" >
-                <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="1" Text="{Binding DummyX, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="3" Text="{Binding DummyY, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
-                <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <TextBox Grid.Column="5" Text="{Binding DummyZ, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
-              </Grid>
-              <CheckBox Content="Play selected VFX at dummy" IsChecked="{Binding PlaySelectedAtDummy}" FontSize="10"
-                        ToolTip.Tip="Force the manually picked system onto the dummy. Systems named *_tar* go there automatically." />
-              <TextBlock Text="Drag the gizmo arrows in the viewport to move it. Target-bound systems (*_tar*) land here automatically."
-                         FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-            </StackPanel>
-          </Border>
-
-          <!-- M618: which renderer draws this window. -->
-          <Border Classes="card">
-            <StackPanel Spacing="5">
-              <TextBlock Classes="cardTitle" Text="RENDERER" />
-              <CheckBox Content="Direct3D 11" IsChecked="{Binding UseDx11Preview}" FontSize="11"
-                        ToolTip.Tip="Draw this character with Riot's own compiled shaders instead of the OpenGL approximation." />
-              <TextBlock Text="{Binding Dx11Status}" FontSize="9" TextWrapping="Wrap"
-                         Foreground="{DynamicResource ReyTextDimBrush}" />
-            </StackPanel>
-          </Border>
-
-          <!-- M613: control mode - right-click to move, right-click the dummy to attack, QWER to cast. -->
-          <Border Classes="card" IsVisible="{Binding HasActions}">
-            <StackPanel Spacing="5">
-              <TextBlock Classes="cardTitle" Text="CONTROL" />
-              <CheckBox Content="Drive the character" IsChecked="{Binding ControlMode}" FontSize="11" />
-              <TextBlock Text="{Binding ControlStatus}" FontSize="9" TextWrapping="Wrap"
-                         Foreground="{DynamicResource ReyAccentBrush}" />
-              <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="3"
-                    IsVisible="{Binding ControlMode}">
-                <TextBlock Grid.Row="0" Grid.Column="0" Text="Speed" FontSize="10" VerticalAlignment="Center"
-                           Foreground="{DynamicResource ReyTextDimBrush}" />
-                <NumericUpDown Grid.Row="0" Grid.Column="1" Value="{Binding MoveSpeed}" FontSize="10"
-                               Minimum="10" Maximum="2000" Increment="10" FormatString="0" />
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="Range" FontSize="10" VerticalAlignment="Center"
-                           Foreground="{DynamicResource ReyTextDimBrush}" />
-                <NumericUpDown Grid.Row="1" Grid.Column="1" Value="{Binding AttackRange}" FontSize="10"
-                               Minimum="25" Maximum="2000" Increment="25" FormatString="0" />
-                <TextBlock Grid.Row="2" Grid.Column="0" Text="Att/s" FontSize="10" VerticalAlignment="Center"
-                           Foreground="{DynamicResource ReyTextDimBrush}" />
-                <NumericUpDown Grid.Row="2" Grid.Column="1" Value="{Binding AttacksPerSecond}" FontSize="10"
-                               Minimum="0.1" Maximum="5" Increment="0.05" FormatString="0.00" />
-              </Grid>
-              <Button Classes="tool" Content="Reset position (S)" Command="{Binding ResetCharacterCommand}"
-                      IsVisible="{Binding ControlMode}" />
-              <TextBlock IsVisible="{Binding ControlMode}" FontSize="9" TextWrapping="Wrap"
-                         Foreground="{DynamicResource ReyTextDimBrush}"
-                         Text="Speed, range and attack speed are per-champion values the editor does not read - these are editable defaults, not this champion's real numbers." />
-            </StackPanel>
-          </Border>
-
-          <!-- M612: ACTIONS - what the character DOES. Q/W/E/R come from the champion record in slot
-               order; the clip for each comes from Riot's SpellN naming. Playing one prefers the M116
-               VFX composite for the same slot, and falls back to the clip, whose own particle and sound
-               events still fire. -->
-          <Border Classes="card" IsVisible="{Binding HasActions}">
-            <StackPanel Spacing="5">
-              <TextBlock Classes="cardTitle" Text="ACTIONS" />
-              <ListBox ItemsSource="{Binding Actions}" SelectedItem="{Binding SelectedAction, Mode=TwoWay}"
-                       MaxHeight="230" Background="Transparent" BorderThickness="0">
-                <ListBox.ItemTemplate>
-                  <DataTemplate x:DataType="vm:CharacterActionRowViewModel">
-                    <Grid ColumnDefinitions="30,*" Margin="0,1">
-                      <TextBlock Grid.Column="0" Text="{Binding Group}" FontSize="8" VerticalAlignment="Center"
-                                 Opacity="0.45" TextTrimming="CharacterEllipsis" />
-                      <StackPanel Grid.Column="1">
-                        <TextBlock Text="{Binding Label}" FontSize="11"
-                                   Opacity="{Binding HasClip, Converter={x:Static views:M612Converters.ClipOpacity}}" />
-                        <TextBlock Text="{Binding Detail}" FontSize="9" Opacity="0.5" TextTrimming="CharacterEllipsis" />
-                      </StackPanel>
-                    </Grid>
-                  </DataTemplate>
-                </ListBox.ItemTemplate>
-              </ListBox>
-              <StackPanel Orientation="Horizontal" Spacing="4">
-                <Button Classes="tool" Content="↺ Replay" Command="{Binding ReplayActionCommand}" />
-                <Button Classes="tool" Content="■ Stop" Command="{Binding StopEventCommand}" />
-              </StackPanel>
-              <TextBlock Text="{Binding ActionSummary}" FontSize="9"
-                         Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-            </StackPanel>
-          </Border>
-
-          <Border Classes="card">
-            <StackPanel Spacing="6">
-              <TextBlock Classes="cardTitle" Text="ANIMATIONS" />
-              <TextBlock Text="Pure .anm playback — no VFX or sounds. Use EVENTS below for the full sequence."
-                         FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-              <TextBlock Text="{Binding Animation.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
-              <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Select animation…"
-                        ItemsSource="{Binding Animation.Animations}"
-                        SelectedItem="{Binding Animation.SelectedAnimation, Mode=TwoWay}"
-                        IsVisible="{Binding Animation.HasAnimations}">
-                <ComboBox.ItemTemplate>
-                  <DataTemplate>
-                    <!-- M115: grouped by skin — the loaded skin's clips glow green, others carry a badge -->
-                    <Border CornerRadius="3" Padding="4,1" Margin="-2,0"
-                            Background="{Binding IsCurrentSkin, Converter={x:Static views:M115Converters.CurrentSkinBrush}}">
-                      <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="11" VerticalAlignment="Center" />
-                        <Border Grid.Column="1" Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="3"
-                                Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center">
-                          <TextBlock Text="{Binding SkinGroup}" FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" />
-                        </Border>
-                      </Grid>
-                    </Border>
-                  </DataTemplate>
-                </ComboBox.ItemTemplate>
-              </ComboBox>
-              <!-- M84 fix: the Loop checkbox overflowed the 250px panel and was cut off — compact ⟳ toggle -->
-              <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Animation.HasClip}">
-                <Button Classes="tool" Content="◀|" Command="{Binding Animation.StepBackCommand}" />
-                <Button Classes="tool" Content="Play / Pause" Command="{Binding Animation.TogglePlayCommand}" />
-                <Button Classes="tool" Content="|▶" Command="{Binding Animation.StepForwardCommand}" />
-                <ToggleButton Classes="vp" Content="⟳" IsChecked="{Binding Animation.Loop}" ToolTip.Tip="Loop playback" />
-              </StackPanel>
-              <Slider Minimum="0" Maximum="{Binding Animation.Duration}" Value="{Binding Animation.Time, Mode=TwoWay}"
-                      IsVisible="{Binding Animation.HasClip}" />
-              <TextBlock Text="{Binding Animation.TimeText}" Foreground="{DynamicResource ReyTextDimBrush}"
-                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" IsVisible="{Binding Animation.HasClip}" />
-              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding Animation.HasClip}">
-                <TextBlock Text="Speed" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" />
-                <Slider Minimum="0.1" Maximum="2" Value="{Binding Animation.Speed, Mode=TwoWay}" Width="110" />
-                <TextBlock Text="{Binding Animation.Speed, StringFormat='{}{0:0.0}x'}" FontSize="11" VerticalAlignment="Center" />
-              </StackPanel>
-            </StackPanel>
-          </Border>
-
-          <!-- M95c: voice lines — the skin's authored Play_vo_ events; picking one plays it -->
-          <Border Classes="card" IsVisible="{Binding HasVoiceEvents}">
-            <StackPanel Spacing="6">
-              <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Classes="cardTitle" Grid.Column="0" Text="VOICE LINES" VerticalAlignment="Center" />
-                <Button Grid.Column="1" Classes="tool" Content="▶" FontSize="10" Padding="8,1"
-                        Command="{Binding ReplayVoiceEventCommand}" ToolTip.Tip="Replay the selected line" />
-              </Grid>
-              <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Pick a voice line…" FontSize="11"
-                        ItemsSource="{Binding VoiceEvents}" SelectedItem="{Binding SelectedVoiceEvent, Mode=TwoWay}" />
-            </StackPanel>
-          </Border>
-
-          <!-- M636: the ARENA - a shipped map as a floor to play on, with its navgrid driving movement -->
-          <Border Classes="card" IsVisible="{Binding HasArenaMaps}">
-            <StackPanel Spacing="6">
-              <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Classes="cardTitle" Grid.Column="0" Text="ARENA" VerticalAlignment="Center" />
-                <ToggleButton Grid.Column="1" Classes="vp" Content="Follow" FontSize="10" Padding="6,1"
-                              IsChecked="{Binding ArenaFollowCamera}" ToolTip.Tip="Keep the camera on the character while it moves" />
-              </Grid>
-              <TextBlock Text="Play the character on a shipped map. Movement follows the map's navigation grid."
-                         Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <ComboBox Width="120" ItemsSource="{Binding ArenaMaps}" SelectedItem="{Binding SelectedArenaMap}" FontSize="11" />
-                <Button Classes="tool" Content="Load" Command="{Binding LoadArenaCommand}" IsEnabled="{Binding !ArenaLoading}" />
-                <Button Classes="tool" Content="Unload" Command="{Binding UnloadArenaCommand}" IsVisible="{Binding HasArena}" />
-              </StackPanel>
-              <TextBlock Text="{Binding ArenaStatus}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
-              <TextBlock Text="{Binding StatsSummary, StringFormat='Champion: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
-              <!-- M639: pin a slot's cast-range ring on the ground; a cast shows its own ring briefly anyway -->
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
-                <TextBlock Text="Range" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
-                <ToggleButton Classes="vp" Content="Q" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingQ, Mode=OneWay}"
-                              Command="{Binding ToggleRangeRingCommand}" CommandParameter="Q" ToolTip.Tip="Show Q's cast range" />
-                <ToggleButton Classes="vp" Content="W" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingW, Mode=OneWay}"
-                              Command="{Binding ToggleRangeRingCommand}" CommandParameter="W" ToolTip.Tip="Show W's cast range" />
-                <ToggleButton Classes="vp" Content="E" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingE, Mode=OneWay}"
-                              Command="{Binding ToggleRangeRingCommand}" CommandParameter="E" ToolTip.Tip="Show E's cast range" />
-                <ToggleButton Classes="vp" Content="R" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingR, Mode=OneWay}"
-                              Command="{Binding ToggleRangeRingCommand}" CommandParameter="R" ToolTip.Tip="Show R's cast range" />
-              </StackPanel>
-            </StackPanel>
-          </Border>
-
-          <!-- M89: NVR map backdrop tuning — move the map, boost its lights, tune baked ground shading -->
-          <Border Classes="card" IsVisible="{Binding HasBackground}">
-            <StackPanel Spacing="6">
-              <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Classes="cardTitle" Grid.Column="0" Text="MAP BACKDROP" VerticalAlignment="Center" />
-                <ToggleButton Grid.Column="1" Classes="vp" Content="Show" FontSize="10" Padding="6,1"
-                              IsChecked="{Binding BackgroundVisible}" />
-              </Grid>
-              <TextBlock Text="{Binding BackgroundMapName, StringFormat='Map: {0}'}"
-                         Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
-
-              <TextBlock Text="Move map (world units)" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" Margin="0,2,0,0" />
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Width="12" />
-                <NumericUpDown Width="182" Value="{Binding BackgroundOffsetX}" Increment="50" FormatString="0" FontSize="11" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Width="12" />
-                <NumericUpDown Width="182" Value="{Binding BackgroundOffsetY}" Increment="20" FormatString="0" FontSize="11" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Width="12" />
-                <NumericUpDown Width="182" Value="{Binding BackgroundOffsetZ}" Increment="50" FormatString="0" FontSize="11" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
-                <TextBlock Text="Rotate" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
-                <Slider Minimum="0" Maximum="360" Value="{Binding BackgroundRotation, Mode=TwoWay}" Width="120" />
-                <TextBlock Text="{Binding BackgroundRotation, StringFormat='{}{0:0}°'}" FontSize="11" VerticalAlignment="Center" />
-              </StackPanel>
-              <Button Classes="tool" Content="Reset position" Command="{Binding ResetBackgroundOffsetCommand}" HorizontalAlignment="Stretch" />
-
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
-                <TextBlock Text="Light" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
-                <Slider Minimum="0" Maximum="8" Value="{Binding BackgroundLightIntensity, Mode=TwoWay}" Width="120" />
-                <TextBlock Text="{Binding BackgroundLightIntensity, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Text="Bright" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
-                <Slider Minimum="0" Maximum="2" Value="{Binding BackgroundBrightness, Mode=TwoWay}" Width="120" />
-                <TextBlock Text="{Binding BackgroundBrightness, StringFormat='{}{0:0.00}'}" FontSize="11" VerticalAlignment="Center" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Text="Ground" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
-                <Slider Minimum="0" Maximum="8" Value="{Binding BackgroundVertexLight, Mode=TwoWay}" Width="120" />
-                <TextBlock Text="{Binding BackgroundVertexLight, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
-              </StackPanel>
-            </StackPanel>
-          </Border>
-
-          <!-- M84: per-submesh visibility (user request) — toggle any of the model's submeshes -->
-          <Border Classes="card" IsVisible="{Binding HasSubmeshes}">
-            <StackPanel Spacing="4">
-              <Grid ColumnDefinitions="*,Auto,Auto,Auto">
-                <TextBlock Classes="cardTitle" Grid.Column="0" Text="SUBMESHES" VerticalAlignment="Center" />
-                <ToggleButton Classes="vp" Grid.Column="1" Content="Auto" FontSize="10" Padding="6,1" Margin="0,0,4,0"
-                              IsChecked="{Binding AutoSubmeshVisibility}"
-                              ToolTip.Tip="AUTO: apply the game's visibility (skin bin initial-hide + the playing clip's show/hide lists). Off = manual control." />
-                <Button Classes="icon" Grid.Column="2" Content="All" FontSize="10" Command="{Binding ShowAllSubmeshesCommand}" />
-                <Button Classes="icon" Grid.Column="3" Content="None" FontSize="10" Command="{Binding HideAllSubmeshesCommand}" />
-              </Grid>
-              <ItemsControl ItemsSource="{Binding Submeshes}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsVisible}" FontSize="11" Margin="0,1" />
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </StackPanel>
-          </Border>
-
-          <!-- M122: skybox picker (same catalogue as the map viewport, independent pick) -->
-          <Border Classes="card" IsVisible="{Binding HasSkyboxOptions}">
-            <StackPanel Spacing="4">
-              <TextBlock Classes="cardTitle" Text="SKYBOX" />
-              <ComboBox HorizontalAlignment="Stretch" FontSize="10" MaxDropDownHeight="420"
-                        ItemsSource="{Binding SkyboxOptions}" SelectedIndex="{Binding SelectedSkyboxIndex}" />
-              <TextBlock Text="☁ cubemap · ⛰ authored dome · 🖼 sky texture. 'Custom image…' loads your own (png/jpg/tex/dds)."
-                         FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-            </StackPanel>
-          </Border>
-
-          <!-- M116: EVENTS — complete sequences: animation + VFX + SFX, with caster systems on the
-               champion, _tar systems on the target dummy and missiles travelling between. -->
-          <Border Classes="card" IsVisible="{Binding HasEvents}">
-            <StackPanel Spacing="5">
-              <TextBlock Classes="cardTitle" Text="EVENTS" />
-              <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Play an event…"
-                        ItemsSource="{Binding ChampionEvents}"
-                        SelectedItem="{Binding SelectedEvent, Mode=TwoWay}">
-                <ComboBox.ItemTemplate>
-                  <DataTemplate>
-                    <StackPanel>
-                      <TextBlock Text="{Binding Name}" FontSize="11" />
-                      <TextBlock Text="{Binding Description}" FontSize="9" Opacity="0.55" />
-                    </StackPanel>
-                  </DataTemplate>
-                </ComboBox.ItemTemplate>
-              </ComboBox>
-              <StackPanel Orientation="Horizontal" Spacing="4">
-                <Button Classes="tool" Content="↺ Replay" Command="{Binding ReplayEventCommand}" />
-                <Button Classes="tool" Content="■ Stop" Command="{Binding StopEventCommand}" />
-              </StackPanel>
-              <TextBlock Text="Spell composites are assembled from Riot's VFX naming — timing between caster, missile and target is approximate."
-                         FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-            </StackPanel>
-          </Border>
-
-          <Border Classes="card" IsVisible="{Binding HasVfx}">
-            <StackPanel Spacing="6">
-              <TextBlock Classes="cardTitle" Text="CHAMPION VFX" />
-              <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Play effect…"
-                        ItemsSource="{Binding VfxSystems}"
-                        SelectedItem="{Binding SelectedVfx, Mode=TwoWay}">
-                <ComboBox.ItemTemplate>
-                  <DataTemplate><TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" /></DataTemplate>
-                </ComboBox.ItemTemplate>
-              </ComboBox>
-              <Button Classes="tool" Content="⏹ Stop VFX" Command="{Binding StopVfxCommand}" HorizontalAlignment="Left" />
-            </StackPanel>
-          </Border>
-        </StackPanel>
-      </ScrollViewer>
-    </Border>
-
-    <Grid>
+    <!-- M642: the character editor layout. The viewport keeps the left; the right is a resizable
+         tabbed panel - Material (the skin bin, live on both renderers), Animate, Play, Scene - in
+         place of the one 250px column every card used to share. -->
+    <Grid ColumnDefinitions="*,4,340">
+      <Grid Grid.Column="0">
       <views:ViewportControl x:Name="PreviewViewport"
                              IsVisible="{Binding !UseDx11Preview}"
                              Mesh="{Binding Mesh}"
@@ -494,6 +117,398 @@
       <Border x:Name="PreviewInput" Background="Transparent" IsVisible="{Binding !HasImagePreview}" />
       <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
                  Margin="8,6" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />
+      </Grid>
+      <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" ResizeDirection="Columns" />
+      <Border Grid.Column="2" Background="{DynamicResource ReyPanelBrush}"
+              BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1,0,0,0">
+        <TabControl SelectedIndex="{Binding PanelTab}" Padding="0" Margin="4,2,4,0">
+          <TabItem FontSize="12" IsVisible="{Binding HasMaterialEditor}">
+            <TabItem.Header><TextBlock Text="Material" FontSize="12" /></TabItem.Header>
+            <views:MaterialEditorView DataContext="{Binding MaterialEditor}" />
+          </TabItem>
+          <TabItem FontSize="12">
+            <TabItem.Header><TextBlock Text="Animate" FontSize="12" /></TabItem.Header>
+            <ScrollViewer>
+              <StackPanel Margin="10" Spacing="8">
+                  <!-- M612: ACTIONS - what the character DOES. Q/W/E/R come from the champion record in slot
+                       order; the clip for each comes from Riot's SpellN naming. Playing one prefers the M116
+                       VFX composite for the same slot, and falls back to the clip, whose own particle and sound
+                       events still fire. -->
+                  <Border Classes="card" IsVisible="{Binding HasActions}">
+                    <StackPanel Spacing="5">
+                      <TextBlock Classes="cardTitle" Text="ACTIONS" />
+                      <ListBox ItemsSource="{Binding Actions}" SelectedItem="{Binding SelectedAction, Mode=TwoWay}"
+                               MaxHeight="230" Background="Transparent" BorderThickness="0">
+                        <ListBox.ItemTemplate>
+                          <DataTemplate x:DataType="vm:CharacterActionRowViewModel">
+                            <Grid ColumnDefinitions="30,*" Margin="0,1">
+                              <TextBlock Grid.Column="0" Text="{Binding Group}" FontSize="8" VerticalAlignment="Center"
+                                         Opacity="0.45" TextTrimming="CharacterEllipsis" />
+                              <StackPanel Grid.Column="1">
+                                <TextBlock Text="{Binding Label}" FontSize="11"
+                                           Opacity="{Binding HasClip, Converter={x:Static views:M612Converters.ClipOpacity}}" />
+                                <TextBlock Text="{Binding Detail}" FontSize="9" Opacity="0.5" TextTrimming="CharacterEllipsis" />
+                              </StackPanel>
+                            </Grid>
+                          </DataTemplate>
+                        </ListBox.ItemTemplate>
+                      </ListBox>
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Button Classes="tool" Content="↺ Replay" Command="{Binding ReplayActionCommand}" />
+                        <Button Classes="tool" Content="■ Stop" Command="{Binding StopEventCommand}" />
+                      </StackPanel>
+                      <TextBlock Text="{Binding ActionSummary}" FontSize="9"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                  <Border Classes="card">
+                    <StackPanel Spacing="6">
+                      <TextBlock Classes="cardTitle" Text="ANIMATIONS" />
+                      <TextBlock Text="Pure .anm playback — no VFX or sounds. Use EVENTS below for the full sequence."
+                                 FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding Animation.SkeletonStatus}" Foreground="{DynamicResource ReyAccentBrush}" FontSize="11" />
+                      <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Select animation…"
+                                ItemsSource="{Binding Animation.Animations}"
+                                SelectedItem="{Binding Animation.SelectedAnimation, Mode=TwoWay}"
+                                IsVisible="{Binding Animation.HasAnimations}">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate>
+                            <!-- M115: grouped by skin — the loaded skin's clips glow green, others carry a badge -->
+                            <Border CornerRadius="3" Padding="4,1" Margin="-2,0"
+                                    Background="{Binding IsCurrentSkin, Converter={x:Static views:M115Converters.CurrentSkinBrush}}">
+                              <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="11" VerticalAlignment="Center" />
+                                <Border Grid.Column="1" Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="3"
+                                        Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center">
+                                  <TextBlock Text="{Binding SkinGroup}" FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" />
+                                </Border>
+                              </Grid>
+                            </Border>
+                          </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                      <!-- M84 fix: the Loop checkbox overflowed the 250px panel and was cut off — compact ⟳ toggle -->
+                      <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Animation.HasClip}">
+                        <Button Classes="tool" Content="◀|" Command="{Binding Animation.StepBackCommand}" />
+                        <Button Classes="tool" Content="Play / Pause" Command="{Binding Animation.TogglePlayCommand}" />
+                        <Button Classes="tool" Content="|▶" Command="{Binding Animation.StepForwardCommand}" />
+                        <ToggleButton Classes="vp" Content="⟳" IsChecked="{Binding Animation.Loop}" ToolTip.Tip="Loop playback" />
+                      </StackPanel>
+                      <Slider Minimum="0" Maximum="{Binding Animation.Duration}" Value="{Binding Animation.Time, Mode=TwoWay}"
+                              IsVisible="{Binding Animation.HasClip}" />
+                      <TextBlock Text="{Binding Animation.TimeText}" Foreground="{DynamicResource ReyTextDimBrush}"
+                                 FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" IsVisible="{Binding Animation.HasClip}" />
+                      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding Animation.HasClip}">
+                        <TextBlock Text="Speed" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" />
+                        <Slider Minimum="0.1" Maximum="2" Value="{Binding Animation.Speed, Mode=TwoWay}" Width="110" />
+                        <TextBlock Text="{Binding Animation.Speed, StringFormat='{}{0:0.0}x'}" FontSize="11" VerticalAlignment="Center" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                  <!-- M116: EVENTS — complete sequences: animation + VFX + SFX, with caster systems on the
+                       champion, _tar systems on the target dummy and missiles travelling between. -->
+                  <Border Classes="card" IsVisible="{Binding HasEvents}">
+                    <StackPanel Spacing="5">
+                      <TextBlock Classes="cardTitle" Text="EVENTS" />
+                      <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Play an event…"
+                                ItemsSource="{Binding ChampionEvents}"
+                                SelectedItem="{Binding SelectedEvent, Mode=TwoWay}">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate>
+                            <StackPanel>
+                              <TextBlock Text="{Binding Name}" FontSize="11" />
+                              <TextBlock Text="{Binding Description}" FontSize="9" Opacity="0.55" />
+                            </StackPanel>
+                          </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Button Classes="tool" Content="↺ Replay" Command="{Binding ReplayEventCommand}" />
+                        <Button Classes="tool" Content="■ Stop" Command="{Binding StopEventCommand}" />
+                      </StackPanel>
+                      <TextBlock Text="Spell composites are assembled from Riot's VFX naming — timing between caster, missile and target is approximate."
+                                 FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                  <!-- M95c: voice lines — the skin's authored Play_vo_ events; picking one plays it -->
+                  <Border Classes="card" IsVisible="{Binding HasVoiceEvents}">
+                    <StackPanel Spacing="6">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Classes="cardTitle" Grid.Column="0" Text="VOICE LINES" VerticalAlignment="Center" />
+                        <Button Grid.Column="1" Classes="tool" Content="▶" FontSize="10" Padding="8,1"
+                                Command="{Binding ReplayVoiceEventCommand}" ToolTip.Tip="Replay the selected line" />
+                      </Grid>
+                      <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Pick a voice line…" FontSize="11"
+                                ItemsSource="{Binding VoiceEvents}" SelectedItem="{Binding SelectedVoiceEvent, Mode=TwoWay}" />
+                    </StackPanel>
+                  </Border>
+                  <Border Classes="card" IsVisible="{Binding HasVfx}">
+                    <StackPanel Spacing="6">
+                      <TextBlock Classes="cardTitle" Text="CHAMPION VFX" />
+                      <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Play effect…"
+                                ItemsSource="{Binding VfxSystems}"
+                                SelectedItem="{Binding SelectedVfx, Mode=TwoWay}">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate><TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" /></DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                      <Button Classes="tool" Content="⏹ Stop VFX" Command="{Binding StopVfxCommand}" HorizontalAlignment="Left" />
+                    </StackPanel>
+                  </Border>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+          <TabItem FontSize="12">
+            <TabItem.Header><TextBlock Text="Play" FontSize="12" /></TabItem.Header>
+            <ScrollViewer>
+              <StackPanel Margin="10" Spacing="8">
+                  <!-- M613: control mode - right-click to move, right-click the dummy to attack, QWER to cast. -->
+                  <Border Classes="card" IsVisible="{Binding HasActions}">
+                    <StackPanel Spacing="5">
+                      <TextBlock Classes="cardTitle" Text="CONTROL" />
+                      <CheckBox Content="Drive the character" IsChecked="{Binding ControlMode}" FontSize="11" />
+                      <TextBlock Text="{Binding ControlStatus}" FontSize="9" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource ReyAccentBrush}" />
+                      <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="3"
+                            IsVisible="{Binding ControlMode}">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Speed" FontSize="10" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <NumericUpDown Grid.Row="0" Grid.Column="1" Value="{Binding MoveSpeed}" FontSize="10"
+                                       Minimum="10" Maximum="2000" Increment="10" FormatString="0" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Range" FontSize="10" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <NumericUpDown Grid.Row="1" Grid.Column="1" Value="{Binding AttackRange}" FontSize="10"
+                                       Minimum="25" Maximum="2000" Increment="25" FormatString="0" />
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Att/s" FontSize="10" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <NumericUpDown Grid.Row="2" Grid.Column="1" Value="{Binding AttacksPerSecond}" FontSize="10"
+                                       Minimum="0.1" Maximum="5" Increment="0.05" FormatString="0.00" />
+                      </Grid>
+                      <Button Classes="tool" Content="Reset position (S)" Command="{Binding ResetCharacterCommand}"
+                              IsVisible="{Binding ControlMode}" />
+                      <TextBlock IsVisible="{Binding ControlMode}" FontSize="9" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource ReyTextDimBrush}"
+                                 Text="Speed, range and attack speed are per-champion values the editor does not read - these are editable defaults, not this champion's real numbers." />
+                    </StackPanel>
+                  </Border>
+                  <!-- M636: the ARENA - a shipped map as a floor to play on, with its navgrid driving movement -->
+                  <Border Classes="card" IsVisible="{Binding HasArenaMaps}">
+                    <StackPanel Spacing="6">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Classes="cardTitle" Grid.Column="0" Text="ARENA" VerticalAlignment="Center" />
+                        <ToggleButton Grid.Column="1" Classes="vp" Content="Follow" FontSize="10" Padding="6,1"
+                                      IsChecked="{Binding ArenaFollowCamera}" ToolTip.Tip="Keep the camera on the character while it moves" />
+                      </Grid>
+                      <TextBlock Text="Play the character on a shipped map. Movement follows the map's navigation grid."
+                                 Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ComboBox Width="120" ItemsSource="{Binding ArenaMaps}" SelectedItem="{Binding SelectedArenaMap}" FontSize="11" />
+                        <Button Classes="tool" Content="Load" Command="{Binding LoadArenaCommand}" IsEnabled="{Binding !ArenaLoading}" />
+                        <Button Classes="tool" Content="Unload" Command="{Binding UnloadArenaCommand}" IsVisible="{Binding HasArena}" />
+                      </StackPanel>
+                      <TextBlock Text="{Binding ArenaStatus}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding StatsSummary, StringFormat='Champion: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
+                      <!-- M639: pin a slot's cast-range ring on the ground; a cast shows its own ring briefly anyway -->
+                      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+                        <TextBlock Text="Range" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                        <ToggleButton Classes="vp" Content="Q" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingQ, Mode=OneWay}"
+                                      Command="{Binding ToggleRangeRingCommand}" CommandParameter="Q" ToolTip.Tip="Show Q's cast range" />
+                        <ToggleButton Classes="vp" Content="W" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingW, Mode=OneWay}"
+                                      Command="{Binding ToggleRangeRingCommand}" CommandParameter="W" ToolTip.Tip="Show W's cast range" />
+                        <ToggleButton Classes="vp" Content="E" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingE, Mode=OneWay}"
+                                      Command="{Binding ToggleRangeRingCommand}" CommandParameter="E" ToolTip.Tip="Show E's cast range" />
+                        <ToggleButton Classes="vp" Content="R" FontSize="10" Padding="7,1" IsChecked="{Binding IsRangeRingR, Mode=OneWay}"
+                                      Command="{Binding ToggleRangeRingCommand}" CommandParameter="R" ToolTip.Tip="Show R's cast range" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                  <!-- M114: target dummy — position + behaviour -->
+                  <Border Classes="card" IsVisible="{Binding TargetDummyEnabled}">
+                    <StackPanel Spacing="4">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Classes="cardTitle" Grid.Column="0" Text="TARGET DUMMY" VerticalAlignment="Center" />
+                        <Button Grid.Column="1" Classes="tool" Content="Reset" FontSize="10" Padding="6,1"
+                                Command="{Binding ResetDummyCommand}" ToolTip.Tip="Back to 350 units in front" />
+                      </Grid>
+                      <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" >
+                        <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <TextBox Grid.Column="1" Text="{Binding DummyX, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
+                        <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <TextBox Grid.Column="3" Text="{Binding DummyY, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
+                        <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <TextBox Grid.Column="5" Text="{Binding DummyZ, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
+                      </Grid>
+                      <CheckBox Content="Play selected VFX at dummy" IsChecked="{Binding PlaySelectedAtDummy}" FontSize="10"
+                                ToolTip.Tip="Force the manually picked system onto the dummy. Systems named *_tar* go there automatically." />
+                      <TextBlock Text="Drag the gizmo arrows in the viewport to move it. Target-bound systems (*_tar*) land here automatically."
+                                 FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+          <TabItem FontSize="12">
+            <TabItem.Header><TextBlock Text="Scene" FontSize="12" /></TabItem.Header>
+            <ScrollViewer>
+              <StackPanel Margin="10" Spacing="8">
+                  <!-- M90: model scale — size the champion against the map backdrop -->
+                  <Border Classes="card">
+                    <StackPanel Spacing="4">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Classes="cardTitle" Grid.Column="0" Text="MODEL" VerticalAlignment="Center" />
+                        <Button Grid.Column="1" Classes="tool" Content="1×" FontSize="10" Padding="6,1"
+                                Command="{Binding ResetModelScaleCommand}" ToolTip.Tip="Reset scale" />
+                      </Grid>
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="Scale" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                        <Slider Minimum="0.1" Maximum="5" Value="{Binding ModelScale, Mode=TwoWay}" Width="120" />
+                        <TextBlock Text="{Binding ModelScale, StringFormat='{}{0:0.00}×'}" FontSize="11" VerticalAlignment="Center" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                  <!-- M618: which renderer draws this window. -->
+                  <Border Classes="card">
+                    <StackPanel Spacing="5">
+                      <TextBlock Classes="cardTitle" Text="RENDERER" />
+                      <CheckBox Content="Direct3D 11" IsChecked="{Binding UseDx11Preview}" FontSize="11"
+                                ToolTip.Tip="Draw this character with Riot's own compiled shaders instead of the OpenGL approximation." />
+                      <TextBlock Text="{Binding Dx11Status}" FontSize="9" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" />
+                    </StackPanel>
+                  </Border>
+                  <!-- M84: per-submesh visibility (user request) — toggle any of the model's submeshes -->
+                  <Border Classes="card" IsVisible="{Binding HasSubmeshes}">
+                    <StackPanel Spacing="4">
+                      <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                        <TextBlock Classes="cardTitle" Grid.Column="0" Text="SUBMESHES" VerticalAlignment="Center" />
+                        <ToggleButton Classes="vp" Grid.Column="1" Content="Auto" FontSize="10" Padding="6,1" Margin="0,0,4,0"
+                                      IsChecked="{Binding AutoSubmeshVisibility}"
+                                      ToolTip.Tip="AUTO: apply the game's visibility (skin bin initial-hide + the playing clip's show/hide lists). Off = manual control." />
+                        <Button Classes="icon" Grid.Column="2" Content="All" FontSize="10" Command="{Binding ShowAllSubmeshesCommand}" />
+                        <Button Classes="icon" Grid.Column="3" Content="None" FontSize="10" Command="{Binding HideAllSubmeshesCommand}" />
+                      </Grid>
+                      <ItemsControl ItemsSource="{Binding Submeshes}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsVisible}" FontSize="11" Margin="0,1" />
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                  </Border>
+                  <!-- M122: skybox picker (same catalogue as the map viewport, independent pick) -->
+                  <Border Classes="card" IsVisible="{Binding HasSkyboxOptions}">
+                    <StackPanel Spacing="4">
+                      <TextBlock Classes="cardTitle" Text="SKYBOX" />
+                      <ComboBox HorizontalAlignment="Stretch" FontSize="10" MaxDropDownHeight="420"
+                                ItemsSource="{Binding SkyboxOptions}" SelectedIndex="{Binding SelectedSkyboxIndex}" />
+                      <TextBlock Text="☁ cubemap · ⛰ authored dome · 🖼 sky texture. 'Custom image…' loads your own (png/jpg/tex/dds)."
+                                 FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                  <!-- M89: NVR map backdrop tuning — move the map, boost its lights, tune baked ground shading -->
+                  <Border Classes="card" IsVisible="{Binding HasBackground}">
+                    <StackPanel Spacing="6">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Classes="cardTitle" Grid.Column="0" Text="MAP BACKDROP" VerticalAlignment="Center" />
+                        <ToggleButton Grid.Column="1" Classes="vp" Content="Show" FontSize="10" Padding="6,1"
+                                      IsChecked="{Binding BackgroundVisible}" />
+                      </Grid>
+                      <TextBlock Text="{Binding BackgroundMapName, StringFormat='Map: {0}'}"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
+
+                      <TextBlock Text="Move map (world units)" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" Margin="0,2,0,0" />
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Width="12" />
+                        <NumericUpDown Width="182" Value="{Binding BackgroundOffsetX}" Increment="50" FormatString="0" FontSize="11" />
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Width="12" />
+                        <NumericUpDown Width="182" Value="{Binding BackgroundOffsetY}" Increment="20" FormatString="0" FontSize="11" />
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Width="12" />
+                        <NumericUpDown Width="182" Value="{Binding BackgroundOffsetZ}" Increment="50" FormatString="0" FontSize="11" />
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+                        <TextBlock Text="Rotate" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                        <Slider Minimum="0" Maximum="360" Value="{Binding BackgroundRotation, Mode=TwoWay}" Width="120" />
+                        <TextBlock Text="{Binding BackgroundRotation, StringFormat='{}{0:0}°'}" FontSize="11" VerticalAlignment="Center" />
+                      </StackPanel>
+                      <Button Classes="tool" Content="Reset position" Command="{Binding ResetBackgroundOffsetCommand}" HorizontalAlignment="Stretch" />
+
+                      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+                        <TextBlock Text="Light" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                        <Slider Minimum="0" Maximum="8" Value="{Binding BackgroundLightIntensity, Mode=TwoWay}" Width="120" />
+                        <TextBlock Text="{Binding BackgroundLightIntensity, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="Bright" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                        <Slider Minimum="0" Maximum="2" Value="{Binding BackgroundBrightness, Mode=TwoWay}" Width="120" />
+                        <TextBlock Text="{Binding BackgroundBrightness, StringFormat='{}{0:0.00}'}" FontSize="11" VerticalAlignment="Center" />
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="Ground" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
+                        <Slider Minimum="0" Maximum="8" Value="{Binding BackgroundVertexLight, Mode=TwoWay}" Width="120" />
+                        <TextBlock Text="{Binding BackgroundVertexLight, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                  <!-- M148: legacy (NVR) map render settings — only shown when the subject IS a map. Old levels
+                       split into two ground models and the right one is picked on load; these expose the knobs so
+                       any map can be tuned by eye. -->
+                  <Border Classes="card" IsVisible="{Binding IsLegacyMap}">
+                    <StackPanel Spacing="5">
+                      <TextBlock Classes="cardTitle" Text="NVR MAP" />
+                      <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
+                                 Text="Height-blend ground (baked composite atlas + baked vertex lighting)."
+                                 IsVisible="{Binding NvrHeightBlend}" />
+                      <TextBlock FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
+                                 Text="Mask-blend ground (four-blend BLEND_MAP) lit by a flat sun/sky."
+                                 IsVisible="{Binding !NvrHeightBlend}" />
+
+                      <TextBlock Text="{Binding NvrSunSource}" FontSize="10" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource ReyAccent2Brush}" />
+                      <CheckBox Content="Use map's sun / ambient" IsChecked="{Binding NvrUseMapSun}" FontSize="11"
+                                IsVisible="{Binding HasNvrSun}"
+                                ToolTip.Tip="Light the map with the sun direction and sun/ambient colours it actually shipped (terrain.inibin on newer levels, sun.ini on older ones). Off falls back to a flat neutral sun/sky." />
+                      <CheckBox Content="Four-blend ground" IsChecked="{Binding NvrFourBlend}" FontSize="11"
+                                ToolTip.Tip="Blend the ground's 4 colour maps through its BLEND_MAP (CREATE_GROUND_MOSAIC_FOUR_BLEND). Off shows only the base tile — useful for checking the raw layer." />
+                      <CheckBox Content="Baked vertex lighting" IsChecked="{Binding UseVertexLightmap}" FontSize="11"
+                                ToolTip.Tip="Use each mesh's PrimaryColor AS its lightmap. Correct for height-blend maps (Twisted Treeline), whose statics carry real baked night lighting. Wrong for maps whose vertex colours are near-black mask/AO data (Dominion) — they go black." />
+
+                      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding UseVertexLightmap}">
+                        <TextBlock Text="Baked" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="46" />
+                        <Slider Minimum="0" Maximum="6" Value="{Binding VertexLightmapScale, Mode=TwoWay}" Width="110" />
+                        <TextBlock Text="{Binding VertexLightmapScale, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding !UseVertexLightmap}">
+                        <TextBlock Text="Bright" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="46"
+                                   ToolTip.Tip="Flat sun/sky level for mask-blend and plain maps." />
+                        <Slider Minimum="0" Maximum="2" Value="{Binding NvrBrightness, Mode=TwoWay}" Width="110" />
+                        <TextBlock Text="{Binding NvrBrightness, StringFormat='{}{0:0.00}'}" FontSize="11" VerticalAlignment="Center" />
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding !UseVertexLightmap}">
+                        <TextBlock Text="Ground" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="46"
+                                   ToolTip.Tip="Add the mesh's baked vertex colour on top (NVR paints ground shading/AO there). 0 = off." />
+                        <Slider Minimum="0" Maximum="6" Value="{Binding NvrVertexLight, Mode=TwoWay}" Width="110" />
+                        <TextBlock Text="{Binding NvrVertexLight, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
+                      </StackPanel>
+
+                      <CheckBox Content="Light.dat point lights" IsChecked="{Binding BackgroundLightsEnabled}" FontSize="11"
+                                ToolTip.Tip="Render the map's own Light.dat torches/braziers. Off by default on maps whose lighting is already baked in, where they would double up." />
+                      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding BackgroundLightsEnabled}">
+                        <TextBlock Text="Lights" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="46" />
+                        <Slider Minimum="0" Maximum="16" Value="{Binding BackgroundLightIntensity, Mode=TwoWay}" Width="110" />
+                        <TextBlock Text="{Binding BackgroundLightIntensity, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+        </TabControl>
+      </Border>
     </Grid>
   </DockPanel>
 </Window>
