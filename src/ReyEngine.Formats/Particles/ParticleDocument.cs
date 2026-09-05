@@ -338,9 +338,13 @@ public sealed class ParticleEmitterEntry
         {
             switch (prop)
             {
+                // M648: the header names its CLASS. Riot's structs are polymorphic - `primitive` alone
+                // is eleven different classes - and a header reading "(3 field(s))" said nothing about
+                // which one, for 735,194 measured rows.
                 case BinTreeStruct s when s.Properties.Count > 0:
                     into.Add(new ParticleProperty(module, name, prop, readOnly: true, depth: depth,
-                        displayText: $"({s.Properties.Count} field(s))", previewNote: previewNote,
+                        displayText: $"{ClassLabel(s, resolveName)} ({s.Properties.Count} field(s))",
+                        previewNote: previewNote ?? PrimitiveNote(fieldHash, s),
                         readOnlyReason: "A struct header. Its fields are the rows indented beneath it."));
                     foreach (var (h, child) in s.Properties)
                         AddRows(into, module, resolveName?.Invoke(h) ?? $"0x{h:x8}", h, child, depth + 1, resolveName, previewNote);
@@ -362,7 +366,7 @@ public sealed class ParticleEmitterEntry
             }
         }
 
-        var row = MakeRow(module, name, prop, depth, previewNote);
+        var row = MakeRow(module, name, prop, depth, previewNote, fieldHash, resolveName);
         // Depth-limited rather than silently truncated: say so on the row that stopped.
         if (depth >= MaxRowDepth && prop is BinTreeStruct or BinTreeContainer)
             row = new ParticleProperty(module, name, prop, readOnly: true, depth: depth, previewNote: previewNote,
@@ -423,7 +427,7 @@ public sealed class ParticleEmitterEntry
     /// <summary>Turn one live bin property into an editor row. Shared by emitters and, since M188, by the
     /// system-level panel - the type handling is a property of the .bin format, not of who owns the field.</summary>
     internal static ParticleProperty MakeRow(string module, string fieldName, BinTreeProperty prop,
-        int depth = 0, string? previewNote = null)
+        int depth = 0, string? previewNote = null, uint fieldHash = 0, Func<uint, string?>? resolveName = null)
     {
         {
             switch (prop)
@@ -461,13 +465,36 @@ public sealed class ParticleEmitterEntry
                         previewNote: previewNote,
                         readOnlyReason: "This optional field is present but empty. Giving it a value would change "
                                       + "whether the field exists, not what it holds, which this row cannot express.");
+                // M648: a struct with no fields expands to nothing, so it fell to `default:` and read
+                // "unsupported type or Riot reference" - a message about type support, in front of a row
+                // whose CLASS is its entire content. 82,862 of the 95,198 empty-struct rows measured are
+                // `primitive`, where the class is what decides whether the emitter is a billboard, a mesh,
+                // a ray or a trail. Still read-only - there is no value to edit - but it now says what it is.
+                case BinTreeStruct empty when empty.Properties.Count == 0:
+                    return new ParticleProperty(module, fieldName, prop, readOnly: true, depth: depth,
+                        displayText: ClassLabel(empty, resolveName),
+                        previewNote: previewNote ?? PrimitiveNote(fieldHash, empty),
+                        readOnlyReason: "This field's value is its class - the struct carries no fields of its "
+                                      + "own, so there is nothing beneath it and nothing to type into.");
                 // plain primitives (numbers, bools, strings/paths, vectors, colours) - directly editable.
                 // The signed/wide integer types were missing: `pass` alone is 976,544 I16 occurrences.
+                // M648: and WadChunkLink, which 16.17 turned asset references into (M590). BinValueEditor
+                // has read and written it since then - only this list had not been told, so 7,856 measured
+                // rows (oldAsset, baseTexture, Material...) were read-only for no reason.
                 case BinTreeF32 or BinTreeU8 or BinTreeU16 or BinTreeU32 or BinTreeU64 or BinTreeI8
                     or BinTreeI16 or BinTreeI32 or BinTreeI64 or BinTreeBool or BinTreeBitBool
                     or BinTreeString or BinTreeHash or BinTreeVector2 or BinTreeVector3 or BinTreeVector4
-                    or BinTreeColor:
+                    or BinTreeColor or BinTreeWadChunkLink:
                     return new ParticleProperty(module, fieldName, prop, depth: depth, previewNote: previewNote);
+                // M648: a matrix formats to three decimals for readability, which is a DISPLAY format and
+                // not round-trippable. Making the row editable on top of it would quietly round every
+                // matrix that passed through a save, so it stays read-only and says so.
+                case BinTreeMatrix44:
+                    return new ParticleProperty(module, fieldName, prop, readOnly: true, depth: depth,
+                        previewNote: previewNote,
+                        readOnlyReason: "A matrix is shown rounded for readability, so editing the text back "
+                                      + "would lose precision on every save. Read-only until it has a "
+                                      + "component-wise editor.");
                 default:
                     return new ParticleProperty(module, fieldName, prop, readOnly: true, depth: depth,
                         previewNote: previewNote); // unsupported: show, don't crash
@@ -477,6 +504,18 @@ public sealed class ParticleEmitterEntry
 
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> p, string name) =>
         p.TryGetValue(HashAlgorithms.Fnv1a(name), out var v) ? v : null;
+
+    /// <summary>M648: a struct's class as a label. Falls back to the hash, which is still more than the
+    /// bare word "Struct" the row used to show.</summary>
+    private static string ClassLabel(BinTreeStruct s, Func<uint, string?>? resolveName) =>
+        resolveName?.Invoke(s.ClassHash) is { Length: > 0 } n ? n : $"0x{s.ClassHash:x8}";
+
+    /// <summary>M648: the `primitive` field decides the emitter's whole shape, and the preview does not
+    /// implement every class Riot ships. Badge the row when it will not draw what the data says.</summary>
+    private static string? PrimitiveNote(uint fieldHash, BinTreeStruct s) =>
+        fieldHash == F_primitive ? VfxPrimitiveSupport.DegradeNote(s.ClassHash) : null;
+
+    private static readonly uint F_primitive = HashAlgorithms.Fnv1a("primitive");
 
     /// <summary>dynamics{times[],values[]} → parallel arrays plus the LIVE containers, so M190 can write
     /// keys back into the tree rather than editing a copy.</summary>
