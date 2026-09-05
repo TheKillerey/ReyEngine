@@ -264,6 +264,15 @@ public sealed partial class MaterialMacroViewModel : ViewModelBase
         _initializing = false;
     }
 
+    /// <summary>M645: take the model's state without writing it back - after a bulk edit or its undo.</summary>
+    internal void SyncFromModel()
+    {
+        _initializing = true;
+        IsOn = Model.On;
+        _initializing = false;
+        RaiseDirty();
+    }
+
     public string Name => Model.Name;
     public bool IsDirty => Model.IsDirty;
     public string Hint => MacroHints.For(Name);
@@ -409,6 +418,15 @@ public sealed partial class MaterialSwitchViewModel : ViewModelBase
         _binding = binding;
         _isOn = model.On;
         _initializing = false;
+    }
+
+    /// <summary>M645: take the model's state without writing it back - after a bulk edit or its undo.</summary>
+    internal void SyncFromModel()
+    {
+        _initializing = true;
+        IsOn = Model.On;
+        _initializing = false;
+        RaiseDirty();
     }
 
     public string Name => Model.Name;
@@ -761,7 +779,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
 
     private bool _renderStateLoading;
 
-    private void LoadRenderState()
+    internal void LoadRenderState()
     {
         _renderStateLoading = true;
         CullEnable = Model.GetPassBool("cullEnable", whenAbsent: true);
@@ -1701,6 +1719,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         // change handlers do not fire and the master list would otherwise load empty.
         ShowModifiedOnly = false;
         ApplyFilter();
+        RefreshBulk();   // M645: a pick from the previous document is gone with it
     }
 
     public void Clear()
@@ -1714,6 +1733,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         UsedShaders.Clear(); KnownShaders.Clear(); BulkSourceShader = null; BulkTargetShader = "";
         BulkShaderStatus = ""; UpdateBulkShaderPreview();
         BulkCommonSetupStatus = ""; IsApplyingCommonSetups = false;
+        BulkSelection.Clear();   // M645
     }
 
     public byte[]? Serialize() => _doc?.Serialize();
@@ -1756,6 +1776,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         if (SelectedMaterial is { } sm) RefreshSphere(sm);   // M351k: edits show on the ball immediately
         ScheduleLiveApply();
         if (IsDirty) Edited?.Invoke();
+        if (IsBulk) RefreshBulk();   // M645: the shared labels follow single edits too
     }
 
     // ---- M351i + M351k: what happens when a material becomes the selected one ----

@@ -77,7 +77,190 @@
                      Foreground="{DynamicResource ReyTextDimBrush}" VerticalAlignment="Center" Margin="8,0,0,0" />
         </Grid>
 
-        <ContentControl Content="{Binding SelectedMaterial}">
+        <!-- M645: SELECT SEVERAL. Two or more picked materials turn the detail pane below into the shared
+             inspector: a field shows the value every picked material agrees on, or mixed, and an edit
+             writes all of them as one undo step. The map inspector and the character window both host
+             this control, so both get it. -->
+        <Expander FontSize="11" IsExpanded="{Binding ShowBulkPicker}">
+          <Expander.Header><TextBlock Classes="cardTitle" Text="{Binding BulkPickerHeader}" /></Expander.Header>
+          <StackPanel Spacing="4" Margin="0,4,0,0">
+            <TextBlock Text="Click rows to pick materials, click again to unpick. Two or more picked edit together."
+                       FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <Button Classes="tool" Content="Pick all shown" Command="{Binding SelectAllShownCommand}"
+                      ToolTip.Tip="Pick every material the search and filters above currently show" />
+              <Button Classes="tool" Content="Clear" Command="{Binding ClearBulkCommand}" />
+            </StackPanel>
+            <ListBox ItemsSource="{Binding FilteredMaterials}" SelectedItems="{Binding BulkSelection}"
+                     SelectionMode="Multiple,Toggle" MaxHeight="220" FontSize="10"
+                     Background="{DynamicResource ReyBgBrush}" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:MaterialBindingViewModel">
+                  <StackPanel Orientation="Horizontal" Spacing="5">
+                    <TextBlock Text="●" Foreground="{DynamicResource ReyAccent2Brush}" FontSize="9" VerticalAlignment="Center"
+                               IsVisible="{Binding IsDirty}" ToolTip.Tip="Modified — not saved to an override yet" />
+                    <TextBlock Text="{Binding Name}" FontSize="10" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding ShaderName}" FontSize="8" VerticalAlignment="Center"
+                               Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </StackPanel>
+        </Expander>
+
+        <!-- M645: BULK EDIT - the shared inspector -->
+        <Border Classes="card" IsVisible="{Binding IsBulk}">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="cardTitle" Text="BULK EDIT" />
+            <TextBlock Text="{Binding BulkStatus}" FontSize="10" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" />
+            <TextBlock Text="A value shown is common to every picked material; mixed means they differ. An edit writes every picked material that has the field, as one undo step. A material without the field is left alone."
+                       FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+            <Button Classes="tool" Content="Revert picked materials" Command="{Binding RevertBulkCommand}" HorizontalAlignment="Left"
+                    ToolTip.Tip="Put every picked material back to what the file authored" />
+
+            <Expander IsExpanded="True" FontSize="11" IsVisible="{Binding BulkCanChangeShader}">
+              <Expander.Header><TextBlock Classes="cardTitle" Text="SHADER" /></Expander.Header>
+              <StackPanel Spacing="3" Margin="0,4,0,0">
+                <TextBlock Text="{Binding BulkShaderLabel}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                <Grid ColumnDefinitions="*,Auto">
+                  <AutoCompleteBox Grid.Column="0" Text="{Binding BulkShader}" FontSize="10"
+                                   ItemsSource="{Binding KnownShaders}" FilterMode="Contains" Watermark="Shaders/StaticMesh/…" />
+                  <Button Grid.Column="1" Content="Set on all" Command="{Binding ApplyBulkShaderCommand}" FontSize="10" Padding="7,1" Margin="3,0,0,0"
+                          ToolTip.Tip="Switch every picked material with a technique pass to this shader, adding the sampler slots it declares - one undo step" />
+                </Grid>
+                <TextBlock Text="{Binding BulkPickShaderStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap"
+                           IsVisible="{Binding BulkPickShaderStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              </StackPanel>
+            </Expander>
+
+            <Expander IsExpanded="True" FontSize="11">
+              <Expander.Header><TextBlock Classes="cardTitle" Text="SAMPLERS" /></Expander.Header>
+              <ItemsControl ItemsSource="{Binding BulkSamplers}" Margin="0,4,0,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:BulkFieldViewModel">
+                    <StackPanel Spacing="2" Margin="0,3,0,0">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" MinWidth="110" />
+                        <TextBlock Text="{Binding Presence}" FontSize="9" Foreground="#E5A227"
+                                   IsVisible="{Binding Presence, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <TextBlock Text="— mixed —" FontSize="9" Foreground="#E5A227" IsVisible="{Binding Mixed}" />
+                      </StackPanel>
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBox Grid.Column="0" Text="{Binding EditedText}" Watermark="{Binding ValueLabel}" FontSize="10" Padding="4,1"
+                                 FontFamily="Cascadia Mono, Consolas, monospace">
+                          <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" /></TextBox.KeyBindings>
+                        </TextBox>
+                        <Button Grid.Column="1" Content="✓ all" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" Margin="3,0,0,0"
+                                ToolTip.Tip="Write this path into every picked material that has this sampler" />
+                      </Grid>
+                      <TextBlock Text="{Binding Error}" FontSize="9" Foreground="#FF6B6B" TextWrapping="Wrap" IsVisible="{Binding HasError}" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </Expander>
+
+            <Expander IsExpanded="True" FontSize="11">
+              <Expander.Header><TextBlock Classes="cardTitle" Text="PARAMETERS" /></Expander.Header>
+              <ItemsControl ItemsSource="{Binding BulkParameters}" Margin="0,4,0,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:BulkFieldViewModel">
+                    <StackPanel Spacing="2" Margin="0,3,0,0">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" MinWidth="110" />
+                        <TextBlock Text="{Binding Presence}" FontSize="9" Foreground="#E5A227"
+                                   IsVisible="{Binding Presence, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <TextBlock Text="— mixed —" FontSize="9" Foreground="#E5A227" IsVisible="{Binding Mixed}" />
+                      </StackPanel>
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBox Grid.Column="0" Text="{Binding EditedText}" Watermark="{Binding ValueLabel}" FontSize="10" Padding="4,1"
+                                 FontFamily="Cascadia Mono, Consolas, monospace">
+                          <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" /></TextBox.KeyBindings>
+                        </TextBox>
+                        <Button Grid.Column="1" Content="✓ all" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" Margin="3,0,0,0"
+                                ToolTip.Tip="Write this value into every picked material that has this parameter. A value one of them cannot take rolls the whole edit back." />
+                      </Grid>
+                      <TextBlock Text="{Binding Error}" FontSize="9" Foreground="#FF6B6B" TextWrapping="Wrap" IsVisible="{Binding HasError}" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </Expander>
+
+            <Expander IsExpanded="True" FontSize="11">
+              <Expander.Header><TextBlock Classes="cardTitle" Text="SWITCHES &amp; MACROS" /></Expander.Header>
+              <StackPanel Spacing="3" Margin="0,4,0,0">
+                <TextBlock Text="FEATURE SWITCHES" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}"
+                           IsVisible="{Binding HasBulkSwitches}" />
+                <ItemsControl ItemsSource="{Binding BulkSwitches}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:BulkToggleViewModel">
+                      <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,1">
+                        <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="9" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="1" Text="{Binding StateLabel}" FontSize="9" Margin="4,0" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <Button Grid.Column="2" Classes="tool" Content="On" FontSize="8" Padding="4,0" Command="{Binding TurnOnCommand}" />
+                        <Button Grid.Column="3" Classes="tool" Content="Off" FontSize="8" Padding="4,0" Margin="2,0,0,0" Command="{Binding TurnOffCommand}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="SHADER MACROS" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,3,0,0"
+                           IsVisible="{Binding HasBulkMacros}" />
+                <ItemsControl ItemsSource="{Binding BulkMacros}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:BulkToggleViewModel">
+                      <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,1">
+                        <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="9" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="1" Text="{Binding StateLabel}" FontSize="9" Margin="4,0" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <Button Grid.Column="2" Classes="tool" Content="1" FontSize="8" Padding="4,0" Command="{Binding TurnOnCommand}"
+                                ToolTip.Tip="Set the define to 1 on every picked material that has it - a material without it is not given one" />
+                        <Button Grid.Column="3" Classes="tool" Content="0" FontSize="8" Padding="4,0" Margin="2,0,0,0" Command="{Binding TurnOffCommand}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Expander>
+
+            <Expander IsExpanded="True" FontSize="11" IsVisible="{Binding BulkCanEditRenderState}">
+              <Expander.Header><TextBlock Classes="cardTitle" Text="RENDER STATE" /></Expander.Header>
+              <StackPanel Spacing="3" Margin="0,4,0,0">
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="4">
+                  <TextBlock Grid.Column="0" Text="Culling" FontSize="9" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Grid.Column="1" Text="{Binding BulkCullLabel}" FontSize="9" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                  <Button Grid.Column="2" Classes="tool" Content="Cull" FontSize="8" Padding="4,0" Command="{Binding SetBulkCullCommand}" CommandParameter="on" />
+                  <Button Grid.Column="3" Classes="tool" Content="Two-sided" FontSize="8" Padding="4,0" Command="{Binding SetBulkCullCommand}" CommandParameter="off" />
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="4">
+                  <TextBlock Grid.Column="0" Text="Blending" FontSize="9" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Grid.Column="1" Text="{Binding BulkBlendLabel}" FontSize="9" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                  <Button Grid.Column="2" Classes="tool" Content="Blend" FontSize="8" Padding="4,0" Command="{Binding SetBulkBlendCommand}" CommandParameter="on" />
+                  <Button Grid.Column="3" Classes="tool" Content="Opaque" FontSize="8" Padding="4,0" Command="{Binding SetBulkBlendCommand}" CommandParameter="off" />
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                  <TextBlock Grid.Column="0" Text="Src blend" FontSize="9" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <StackPanel Grid.Column="1" Spacing="1">
+                    <TextBlock Text="{Binding BulkSrcLabel}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                    <ComboBox FontSize="9" HorizontalAlignment="Stretch" ItemsSource="{Binding BulkBlendChoices}" SelectedIndex="{Binding BulkSrcChoice}"
+                              ToolTip.Tip="Picking a factor writes it on every picked material with a pass, colour and alpha together; 'not set' removes the field" />
+                  </StackPanel>
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                  <TextBlock Grid.Column="0" Text="Dst blend" FontSize="9" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <StackPanel Grid.Column="1" Spacing="1">
+                    <TextBlock Text="{Binding BulkDstLabel}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                    <ComboBox FontSize="9" HorizontalAlignment="Stretch" ItemsSource="{Binding BulkBlendChoices}" SelectedIndex="{Binding BulkDstChoice}" />
+                  </StackPanel>
+                </Grid>
+              </StackPanel>
+            </Expander>
+          </StackPanel>
+        </Border>
+
+        <ContentControl Content="{Binding SelectedMaterial}" IsVisible="{Binding !IsBulk}">
         <ContentControl.ContentTemplate>
           <DataTemplate x:DataType="vm:MaterialBindingViewModel">
             <Border Classes="card">

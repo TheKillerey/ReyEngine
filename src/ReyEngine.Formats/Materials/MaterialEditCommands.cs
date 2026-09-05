@@ -131,3 +131,104 @@ public sealed class SamplerAddRemoveCommand : IEditorCommand
     public bool CanMergeWith(IEditorCommand next) => false;
     public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
 }
+
+/// <summary>M645: reversible feature-switch edit, for the bulk editor - the single row writes the model
+/// directly and records nothing.</summary>
+public sealed class SwitchEditCommand : IEditorCommand
+{
+    private readonly MaterialSwitch _switch;
+    private readonly bool _old, _new;
+    private readonly Action? _onApplied;
+
+    public SwitchEditCommand(object? context, MaterialSwitch sw, bool oldOn, bool newOn, Action? onApplied)
+    {
+        Context = context; _switch = sw; _old = oldOn; _new = newOn; _onApplied = onApplied;
+    }
+
+    public string Name => $"Edit {_switch.Name}";
+    public object? Context { get; }
+    public void Execute() { _switch.SetOn(_new); _onApplied?.Invoke(); }
+    public void Undo() { _switch.SetOn(_old); _onApplied?.Invoke(); }
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
+
+/// <summary>M645: reversible shader-macro VALUE edit ("0" / "1"). Only ever applied to a macro the material
+/// already has, so undo never has to decide between "0" and absent.</summary>
+public sealed class MacroEditCommand : IEditorCommand
+{
+    private readonly MaterialBinding _binding;
+    private readonly string _name, _old, _new;
+    private readonly Action? _onApplied;
+
+    public MacroEditCommand(object? context, MaterialBinding binding, string name, string oldValue, string newValue, Action? onApplied)
+    {
+        Context = context; _binding = binding; _name = name; _old = oldValue; _new = newValue; _onApplied = onApplied;
+    }
+
+    public string Name => $"Edit {_name}";
+    public object? Context { get; }
+    public void Execute() { _binding.SetMacroValue(_name, _new); _onApplied?.Invoke(); }
+    public void Undo() { _binding.SetMacroValue(_name, _old); _onApplied?.Invoke(); }
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
+
+/// <summary>M645: reversible pass boolean (cullEnable / blendEnable). Undo restores the value the pass READ
+/// before the edit; a field that was absent comes back written at its default rather than absent, because
+/// the pass reads absent and default identically and the binding does not expose which it was.</summary>
+public sealed class PassBoolEditCommand : IEditorCommand
+{
+    private readonly MaterialBinding _binding;
+    private readonly string _field;
+    private readonly bool _old, _new;
+    private readonly Action? _onApplied;
+
+    public PassBoolEditCommand(object? context, MaterialBinding binding, string field, bool oldValue, bool newValue, Action? onApplied)
+    {
+        Context = context; _binding = binding; _field = field; _old = oldValue; _new = newValue; _onApplied = onApplied;
+    }
+
+    public string Name => $"Edit {_field}";
+    public object? Context { get; }
+    public void Execute() { _binding.SetPassBool(_field, _new); _onApplied?.Invoke(); }
+    public void Undo() { _binding.SetPassBool(_field, _old); _onApplied?.Invoke(); }
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
+
+/// <summary>M645: reversible blend factor for one half of the equation, colour and alpha together; -1 is
+/// ABSENT, which removes both fields (M511: absent is not 0).</summary>
+public sealed class BlendFactorEditCommand : IEditorCommand
+{
+    private readonly MaterialBinding _binding;
+    private readonly string _half;
+    private readonly int _old, _new;
+    private readonly Action? _onApplied;
+
+    public BlendFactorEditCommand(object? context, MaterialBinding binding, string half, int oldFactor, int newFactor, Action? onApplied)
+    {
+        Context = context; _binding = binding; _half = half; _old = oldFactor; _new = newFactor; _onApplied = onApplied;
+    }
+
+    public static void Write(MaterialBinding binding, string half, int factor)
+    {
+        if (factor < 0)
+        {
+            binding.RemovePassProperty(half + "ColorBlendFactor");
+            binding.RemovePassProperty(half + "AlphaBlendFactor");
+        }
+        else
+        {
+            binding.SetPassU32(half + "ColorBlendFactor", (uint)factor);
+            binding.SetPassU32(half + "AlphaBlendFactor", (uint)factor);
+        }
+    }
+
+    public string Name => $"Edit {_half} blend factor";
+    public object? Context { get; }
+    public void Execute() { Write(_binding, _half, _new); _onApplied?.Invoke(); }
+    public void Undo() { Write(_binding, _half, _old); _onApplied?.Invoke(); }
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
