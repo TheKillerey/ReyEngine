@@ -223,9 +223,12 @@ public sealed class CharacterMaterialEditorTests
         var main = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs");
         if (host is null || main is null) return;
 
-        // Both renderers, from the SAME edited bytes.
+        // Both renderers, from the SAME edited bytes. M647 moved the D3D11 half into
+        // RebuildCharacterDx11Scene, which the state switch shares, and the call now carries the
+        // situation to draw as well as the bytes.
         Assert.Contains("MeshPreview.Textures = ResolveSubmeshDiffuse(mesh, resolved);", host);
-        Assert.Contains("BuildCharacterDx11Scene(skn, bytes)", host);
+        Assert.Contains("RebuildCharacterDx11Scene(bytes);", host);
+        Assert.Contains("BuildCharacterDx11Scene(skn, bytes, state)", host);
         Assert.Contains("MeshPreview.SetDx11Scene(scene, status)", host);
 
         // The routing, and that the inspector keeps its map document when a skin arrives.

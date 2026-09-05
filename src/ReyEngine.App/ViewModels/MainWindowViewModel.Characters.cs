@@ -156,7 +156,8 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     /// <para>Runs off the UI thread as part of loading the skin, because it decodes every texture the
     /// character references. Returns null for anything that is not a character with a skin bin — a prop
     /// has no materials to resolve, and the window falls back to GL rather than showing an empty frame.</para></summary>
-    private (Services.PreparedCharacterScene? Scene, string Status) BuildCharacterDx11Scene(WadAssetEntry skn, byte[]? binOverride = null)
+    private (Services.PreparedCharacterScene? Scene, string Status) BuildCharacterDx11Scene(
+        WadAssetEntry skn, byte[]? binOverride = null, Formats.Materials.MaterialDriverState? driverState = null)
     {
         if (!skn.IsResolved) return (null, "");
 
@@ -178,7 +179,8 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
                 resolveBinName: ResolveBinName,
                 resolveWadPath: ResolveWadPath,
-                fallbackShader: Services.Dx11CharacterScene.DefaultCharacterShader);
+                fallbackShader: Services.Dx11CharacterScene.DefaultCharacterShader,
+                driverState: driverState);   // M647: which of the skin's conditions to draw
 
             if (scene is null) return (null, "The mesh would not decode for D3D11.");
 

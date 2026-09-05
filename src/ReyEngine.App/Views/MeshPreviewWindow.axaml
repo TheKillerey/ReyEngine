@@ -213,7 +213,55 @@
         <TabControl SelectedIndex="{Binding PanelTab}" Padding="0" Margin="4,2,4,0">
           <TabItem FontSize="12" IsVisible="{Binding HasMaterialEditor}">
             <TabItem.Header><TextBlock Text="Material" FontSize="12" /></TabItem.Header>
-            <views:MaterialEditorView DataContext="{Binding MaterialEditor}" />
+            <DockPanel>
+              <!-- M647: the state switch. A champion's materials do not draw what their paramValues say -
+                   Locke authors VCDissolve_Value 1.23 and drives it from an IsDead lerp to -0.8 while
+                   alive - so the preview needs to be told which situation to draw. The switches are the
+                   skin's OWN driver conditions, not a hardcoded list, and the card hides itself for a
+                   skin whose materials carry no dynamicMaterial (619 of 690 skin bins). -->
+              <Border Classes="card" DockPanel.Dock="Top" Margin="10,10,10,2" IsVisible="{Binding HasConditions}">
+                <StackPanel Spacing="5">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Classes="cardTitle" Grid.Column="0" Text="STATE" VerticalAlignment="Center"
+                               ToolTip.Tip="What situation to draw this skin in. Every condition comes from the skin's own material drivers; each one that is on is applied to every material of the skin that asks about it." />
+                    <Button Grid.Column="1" Classes="tool" Content="↺ Alive" FontSize="10" Padding="6,1"
+                            Command="{Binding ResetStateCommand}" IsEnabled="{Binding !IsRestState}"
+                            ToolTip.Tip="Back to rest - alive, unbuffed, idle." />
+                  </Grid>
+                  <ItemsControl ItemsSource="{Binding Conditions}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:CharacterConditionViewModel">
+                        <ToggleButton Classes="vp" Content="{Binding Label}" IsChecked="{Binding IsOn}"
+                                      FontSize="10" Margin="0,0,4,4" ToolTip.Tip="{Binding Tip}" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <!-- Riot's drivers are lerps with their own durations, so a state is a ramp rather than
+                       one picture: Locke's five materials dissolve over 6, 8 and 10 s, and held to the end
+                       the dissolve has removed him entirely. Flipping a switch parks this at 40% of that
+                       condition's ramp; from there the slider walks the whole of it. -->
+                  <Grid ColumnDefinitions="Auto,*,Auto" IsVisible="{Binding !IsRestState}">
+                    <TextBlock Grid.Column="0" Text="Since" FontSize="10" VerticalAlignment="Center"
+                               Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,6,0"
+                               ToolTip.Tip="How long the switched-on conditions have held. Each driver walks its own turn-on time, so this scrubs the transition - a death dissolve is only visible part-way through it." />
+                    <Slider Grid.Column="1" Minimum="0" Maximum="{Binding StateSecondsMax}"
+                            Value="{Binding StateSeconds}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Text="{Binding StateSeconds, StringFormat='{}{0:0.##} s'}"
+                               FontSize="10" VerticalAlignment="Center" MinWidth="42"
+                               HorizontalAlignment="Right" Foreground="{DynamicResource ReyTextDimBrush}" />
+                  </Grid>
+                  <TextBlock Text="{Binding StateSummary}" FontSize="9" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Text="The GL preview approximates these materials and ignores the state - switch the viewport to D3D11 to see it."
+                             FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyAccent2Brush}"
+                             IsVisible="{Binding !UseDx11Preview}" />
+                </StackPanel>
+              </Border>
+              <views:MaterialEditorView DataContext="{Binding MaterialEditor}" />
+            </DockPanel>
           </TabItem>
           <TabItem FontSize="12">
             <TabItem.Header><TextBlock Text="Animate" FontSize="12" /></TabItem.Header>

@@ -36,6 +36,9 @@ public sealed partial class MeshPreviewViewModel
         Dx11Scene = scene;
         Dx11SceneRevision++;
         Dx11Status = status;
+        // M647: the state switch is built from the skin's own driver conditions, which the scene reports.
+        SetConditions(scene?.Conditions ?? Array.Empty<ReyEngine.Formats.Materials.MaterialDriverCondition>(),
+            scene?.LongestTransitionSeconds ?? 0f, scene?.TransitionByCondition);
     }
 
     /// <summary>The bone palette for this instant, or null when there is no skeleton — in which case the

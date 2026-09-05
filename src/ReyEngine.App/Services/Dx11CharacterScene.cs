@@ -39,6 +39,23 @@ public sealed class PreparedCharacterScene
     public required Dictionary<string, TextureImage> Textures { get; init; }
     public SkinMeshProperties? SkinMesh { get; init; }
     public int SubmeshCount { get; init; }
+
+    /// <summary>M647: every condition this skin's material drivers ask about - what a state switch can
+    /// offer for it. Empty for a skin whose materials carry no dynamicMaterial, which is most of them
+    /// (71 of 690 skin bins across every champion wad).</summary>
+    public IReadOnlyList<MaterialDriverCondition> Conditions { get; init; } = Array.Empty<MaterialDriverCondition>();
+
+    /// <summary>The longest transition any driver in this skin takes to settle after its condition flips.
+    /// The range a "seconds since" control needs to cover.</summary>
+    public float LongestTransitionSeconds { get; init; }
+
+    /// <summary>Per condition, the longest ramp among the parameters that ask about it - what "halfway
+    /// through THIS transition" means when that one switch is turned on.</summary>
+    public IReadOnlyDictionary<string, float> TransitionByCondition { get; init; } =
+        new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The situation this scene was built for.</summary>
+    public MaterialDriverState DriverState { get; init; } = MaterialDriverState.Rest;
     public List<string> Failures { get; } = new();
     public string Report { get; set; } = "";
 }
@@ -75,6 +92,8 @@ public static class Dx11CharacterScene
     /// A skin bin frequently authors none: the default diffuse and every inline per-submesh override carry
     /// textures and no shader, and 42% of the material corpus is in the same position. Null means such a
     /// material is reported as unresolved instead of drawn with a guess.</param>
+    /// <param name="driverState">M647: the situation to draw - which of the skin's driver conditions hold
+    /// and for how long. Null is <see cref="MaterialDriverState.Rest"/>: alive, unbuffed, idle.</param>
     public static PreparedCharacterScene? Prepare(
         byte[] sknBytes,
         byte[]? skinBinBytes,
@@ -83,8 +102,10 @@ public static class Dx11CharacterScene
         Func<ulong, byte[]?> readAsset,
         Func<uint, string?> resolveBinName,
         Func<ulong, string?>? resolveWadPath = null,
-        string? fallbackShader = null)
+        string? fallbackShader = null,
+        MaterialDriverState? driverState = null)
     {
+        var state = driverState ?? MaterialDriverState.Rest;
         MeshAsset mesh;
         try { mesh = SkinnedMeshDecoder.Decode(sknBytes); }
         catch { return null; }
@@ -123,6 +144,18 @@ public static class Dx11CharacterScene
             Textures = new Dictionary<string, TextureImage>(StringComparer.OrdinalIgnoreCase),
             SkinMesh = document?.SkinMesh,
             SubmeshCount = mesh.SubMeshes.Count,
+            Conditions = MaterialDrivers.ConditionsOf(bindings),
+            TransitionByCondition = bindings
+                .SelectMany(b => b.DynamicParameters)
+                .Where(p => p.Enabled)
+                .SelectMany(p => p.Conditions.Select(c => (c.Key, p.TransitionSeconds)))
+                .GroupBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Max(x => x.TransitionSeconds), StringComparer.OrdinalIgnoreCase),
+            LongestTransitionSeconds = bindings
+                .SelectMany(b => b.DynamicParameters)
+                .Where(p => p.Enabled)
+                .Aggregate(0f, (a, p) => MathF.Max(a, p.TransitionSeconds)),
+            DriverState = state,
         };
 
         sb.AppendLine($"{mesh.VertexCount:n0} vertices, {mesh.Indices.Length / 3:n0} triangles, "
@@ -145,7 +178,7 @@ public static class Dx11CharacterScene
                 continue;
             }
 
-            var slice = BuildSlice(sub, binding, cache, perms, fallbackShader, scene, sb);
+            var slice = BuildSlice(sub, binding, cache, perms, fallbackShader, scene, sb, state);
             if (slice is not null) scene.Slices.Add(slice);
         }
 
@@ -299,7 +332,7 @@ public static class Dx11CharacterScene
 
     private static CharacterSlice? BuildSlice(
         SubMeshInfo sub, MaterialBinding b, ShaderCacheReader cache, ShaderPermutationIndex? perms,
-        string? fallbackShader, PreparedCharacterScene scene, StringBuilder sb)
+        string? fallbackShader, PreparedCharacterScene scene, StringBuilder sb, MaterialDriverState state)
     {
         bool usedFallback = false;
         string? shader = b.RenderShader;
@@ -385,25 +418,27 @@ public static class Dx11CharacterScene
             if (skin.FresnelColor is { } fc) Put("Fresnel_Color", fc.X, fc.Y, fc.Z, fc.W);
         }
 
-        // M646: what the material's dynamicMaterial drives. The authored paramValues entry is the editor's
-        // value, not the game's: Locke authors VCDissolve_Value = 1.23, which dissolves everything below a
-        // quarter of his height, and drives it to -0.8 while alive - drawing the authored value draws him
-        // dead. A driver's rest value replaces the authored one when the bin writes it; when it does not,
-        // the authored value stands and the report says which driver was not evaluated.
+        // M646/M647: what the material's dynamicMaterial drives, in the situation being drawn. The
+        // authored paramValues entry is the editor's value, not the game's: Locke authors
+        // VCDissolve_Value = 1.23, which dissolves everything below a quarter of his height, and drives it
+        // to -0.8 while alive - drawing the authored value draws him dead. The driver's value replaces the
+        // authored one whenever this reader can work it out; when it cannot, the authored value stands and
+        // the report says which driver was not evaluated.
         foreach (var dp in b.DynamicParameters)
         {
             if (!dp.Enabled) continue;
             string material = b.Name.Split('/').Last();
-            if (dp.RestValue is not { } rest)
+            var got = dp.Evaluate(state);
+            if (got.Value is not { } value)
             {
-                sb.AppendLine($"   {material}: {dp.Summary}");
+                sb.AppendLine($"   {material}: {dp.Name} driven by {dp.Driver}; {got.Reason} - the authored value stands");
                 continue;
             }
             int at = parameters.FindIndex(p => p.Name.Equals(dp.Name, StringComparison.OrdinalIgnoreCase));
             string was = at < 0 ? "unauthored" : "authored " + MaterialDrivers.Fmt(new System.Numerics.Vector4(parameters[at].Value[0], parameters[at].Value[1], parameters[at].Value[2], parameters[at].Value[3]));
             if (at >= 0) parameters.RemoveAt(at);
-            parameters.Add((dp.Name, new[] { rest.X, rest.Y, rest.Z, rest.W }));
-            sb.AppendLine($"   {material}: {dp.Summary}; {was}");
+            parameters.Add((dp.Name, new[] { value.X, value.Y, value.Z, value.W }));
+            sb.AppendLine($"   {material}: {dp.Name} = {MaterialDrivers.Fmt(value)} ({got.Reason}); {dp.Driver}; {was}");
         }
 
         bool hidden = scene.SkinMesh?.InitialSubmeshesToHide

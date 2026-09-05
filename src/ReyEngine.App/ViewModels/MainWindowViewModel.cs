@@ -6064,6 +6064,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // override path. See MainWindowViewModel.CharacterMaterials.cs.
         WireMaterialEditor(MaterialEditor, ApplyMaterialToViewport, SaveMaterialOverride);
         WireMaterialEditor(MeshPreview.MaterialEditor, ApplyCharacterMaterialsToPreview, SaveCharacterMaterialOverride);
+        MeshPreview.RequestDriverState = () => RebuildCharacterDx11Scene();   // M647: the state switch
         Inspector.CopyHandler = Dialogs.CopyAsync;   // M351c: copy button beside the asset path
         InitShaderEnvironments();
 

@@ -167,12 +167,13 @@ public sealed class OnsenCharacterTests
 
             // Written disabled: dead data, and reported as such rather than applied.
             Assert.False(drivers["Dissolve_Bias"].Enabled);
-            // A lerp whose rest branch is unwritten is NOT guessed at: the authored value stands.
-            Assert.Null(drivers["Dissolve_LerpOverride"].RestValue);
-            Assert.Contains("not written", drivers["Dissolve_LerpOverride"].RestReason, StringComparison.Ordinal);
-            // A colour graph over that same unwritten lerp is unknown for the same reason.
-            Assert.Null(drivers["Dissolve_Color"].RestValue);
+            // M647: a lerp whose branch Locke never writes reads its SCHEMA default (mOffValue 0), not
+            // "unknown" - see MaterialDriverStateTests, which pins those defaults against meta.db.json.
+            Assert.Equal(0f, drivers["Dissolve_LerpOverride"].RestValue!.Value.X, 3);
+            Assert.Contains("mOffValue", drivers["Dissolve_LerpOverride"].RestReason, StringComparison.Ordinal);
+            // And the colour graph over that lerp samples at 0, which is its first key.
             Assert.Contains("ColorGraph", drivers["Dissolve_Color"].Driver, StringComparison.Ordinal);
+            Assert.NotNull(drivers["Dissolve_Color"].RestValue);
 
             // All five Onsen materials carry the same drivers.
             foreach (var m in doc.Materials.Where(m => m.Name.EndsWith("_inst", StringComparison.OrdinalIgnoreCase)))
@@ -185,7 +186,7 @@ public sealed class OnsenCharacterTests
             var bodySlice = scene!.Slices.First(sl => sl.Submesh == "Body");
             Assert.Equal(-0.8f, bodySlice.Parameters.Single(p => p.Name == "VCDissolve_Value").Value[0], 3);
             Assert.Equal(-0.2f, bodySlice.Parameters.Single(p => p.Name == "Transition_Value").Value[0], 3);
-            Assert.Contains("VCDissolve_Value = -0.8 at rest", scene.Report, StringComparison.Ordinal);
+            Assert.Contains("VCDissolve_Value = -0.8 (IsDead is off -> mOffValue)", scene.Report, StringComparison.Ordinal);
         }
     }
 

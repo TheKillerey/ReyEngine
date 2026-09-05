@@ -128,8 +128,22 @@ public sealed partial class MainWindowViewModel
             _log.Warn("Material", "Preview (GL): " + ex.Message);
         }
 
+        RebuildCharacterDx11Scene(bytes);
+    }
+
+    /// <summary>
+    /// M647: the D3D11 half of the character preview, rebuilt for the current bin AND the current driver
+    /// state. Split out of <see cref="ApplyCharacterMaterialsToPreview"/> because flipping a state switch
+    /// is not an edit: nothing to re-resolve for GL, nothing to auto-save, only a scene to build again
+    /// with different parameter values.
+    /// </summary>
+    private void RebuildCharacterDx11Scene(byte[]? binBytes = null)
+    {
+        if (_previewSkn is not { } skn) return;
+        byte[]? bytes = binBytes ?? MeshPreview.MaterialEditor.Serialize();
+        var state = MeshPreview.DriverState;
         int token = ++_characterSceneRebuild;
-        _ = Task.Run(() => BuildCharacterDx11Scene(skn, bytes)).ContinueWith(t =>
+        _ = Task.Run(() => BuildCharacterDx11Scene(skn, bytes, state)).ContinueWith(t =>
         {
             if (t.IsFaulted)
             {
