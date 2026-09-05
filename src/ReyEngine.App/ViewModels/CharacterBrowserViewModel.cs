@@ -110,6 +110,18 @@ public sealed partial class CharacterBrowserViewModel : ObservableObject, IDispo
         Load();
     }
 
+    /// <summary>M643: list the install again. The picker lives inside the character window now and outlives
+    /// a change of game folder, so it has to be able to start over.</summary>
+    public void Reload()
+    {
+        Champions.Clear();
+        Characters.Clear();
+        Skins.Clear();
+        SelectedChampion = null;
+        _allChampions = Array.Empty<ChampionRowViewModel>();
+        Load();
+    }
+
     /// <summary>Where the champion WADs live for the configured game folder, or null.</summary>
     public string? ChampionsDirectory
     {

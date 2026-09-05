@@ -22,7 +22,14 @@ namespace ReyEngine.App.ViewModels;
 public sealed partial class SubmeshToggleViewModel : ObservableObject
 {
     public required string Name { get; init; }
+    /// <summary>M643: the submesh's index in the mesh, which is what the viewport outlines by.</summary>
+    public int Index { get; init; }
     [ObservableProperty] private bool _isVisible = true;
+    /// <summary>M643: the name of the material this submesh draws with - its own materialOverride entry,
+    /// else the skin's default. Empty until the skin's materials have loaded.</summary>
+    [ObservableProperty] private string _materialName = "";
+    public bool HasMaterial => MaterialName.Length > 0;
+    partial void OnMaterialNameChanged(string value) => OnPropertyChanged(nameof(HasMaterial));
     public Action? Changed;
     partial void OnIsVisibleChanged(bool value) => Changed?.Invoke();
 }
@@ -166,12 +173,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Submeshes.Clear();
         foreach (var s in mesh.SubMeshes)
         {
-            var t = new SubmeshToggleViewModel { Name = string.IsNullOrEmpty(s.Material) ? $"submesh {Submeshes.Count}" : s.Material };
+            var t = new SubmeshToggleViewModel { Index = Submeshes.Count, Name = string.IsNullOrEmpty(s.Material) ? $"submesh {Submeshes.Count}" : s.Material };
             t.Changed = RebuildSubmeshVisibility;
             Submeshes.Add(t);
         }
         HasSubmeshes = Submeshes.Count > 1;
         RebuildSubmeshVisibility();
+        RefreshOutliner();   // M643: material names, selection and outline follow the new mesh
     }
 
     // ---- M88: NVR map backdrop (character stands in-map, lit by the map's Light.dat) ----

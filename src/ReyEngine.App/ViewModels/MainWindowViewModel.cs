@@ -10817,6 +10817,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (!ContentLoaded) return;
         _previewSkn = entry;   // M642: what a material edit rebuilds the D3D11 scene for
+        EnsureCharacterBrowser();   // M643: the window's picker lists the install this skin came from
         try
         {
             var (mesh, skeleton, textures, vfx) = await Task.Run(() =>

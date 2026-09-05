@@ -31,11 +31,26 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     string? ICharacterBrowserHost.GameDirectory => Project.GameDirectory;
     IHashResolver? ICharacterBrowserHost.Resolver => _resolver;
 
+    /// <summary>M643: opens the Character Editor window, whose left panel is the champion picker. The
+    /// separate browser window of M610 still exists; nothing opens it any more.</summary>
     [RelayCommand]
     private void OpenCharacterBrowser()
     {
-        if (PromptOwner is null) { _log.Error("Character", "The window is not ready yet."); return; }
-        Views.CharacterBrowserWindow.Show(PromptOwner, this, (category, message) => _log.Info(category, message));
+        EnsureCharacterBrowser();
+        ShowMeshPreviewWindow?.Invoke();
+    }
+
+    private string? _browserGameDirectory;
+
+    /// <summary>The picker embedded in the character window: created once, listed again when the game
+    /// folder changes, because it lists whichever install the project points at.</summary>
+    private void EnsureCharacterBrowser()
+    {
+        if (MeshPreview.Browser is null)
+            MeshPreview.Browser = new CharacterBrowserViewModel(this, (category, message) => _log.Info(category, message));
+        else if (!string.Equals(_browserGameDirectory, Project.GameDirectory, StringComparison.OrdinalIgnoreCase))
+            MeshPreview.Browser.Reload();
+        _browserGameDirectory = Project.GameDirectory;
     }
 
     void ICharacterBrowserHost.OpenSkin(ChampionPackage champion, CharacterEntry character, CharacterSkinInfo skin)

@@ -4,7 +4,7 @@
         xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         x:Class="ReyEngine.App.Views.MeshPreviewWindow"
         x:DataType="vm:MeshPreviewViewModel"
-        Title="{Binding WindowTitle}" Width="1240" Height="800"
+        Title="{Binding WindowTitle}" Width="1400" Height="820"
         x:CompileBindings="True"
         WindowStartupLocation="CenterOwner"
         WindowDecorations="BorderOnly"
@@ -36,9 +36,98 @@
     <!-- M642: the character editor layout. The viewport keeps the left; the right is a resizable
          tabbed panel - Material (the skin bin, live on both renderers), Animate, Play, Scene - in
          place of the one 250px column every card used to share. -->
-    <Grid ColumnDefinitions="*,4,340">
-      <Grid Grid.Column="0">
+    <Grid ColumnDefinitions="250,4,*,4,340">
+      <!-- M643: the left panel. The champion picker is M610's browser, embedded - the same view model,
+           the same three lists - and the outliner is the SUBMESHES card grown up: each row names the
+           material it draws with, and selecting one outlines it and opens that material on the right. -->
+      <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}"
+              BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,1,0">
+        <ScrollViewer>
+          <StackPanel Margin="8" Spacing="8">
+            <Border Classes="card" IsVisible="{Binding Browser, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <StackPanel Spacing="4">
+                <TextBlock Classes="cardTitle" Text="CHARACTER" />
+                <TextBox Text="{Binding Browser.Search}" Watermark="Search champions" FontSize="11" Padding="4,2" />
+                <ListBox ItemsSource="{Binding Browser.Champions}" SelectedItem="{Binding Browser.SelectedChampion}"
+                         Height="180" Background="{DynamicResource ReyBgBrush}"
+                         BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ChampionRowViewModel">
+                      <StackPanel Margin="2,0">
+                        <TextBlock Text="{Binding Name}" FontSize="11" />
+                        <TextBlock Text="{Binding Folder}" FontSize="9" IsVisible="{Binding ShowFolder}"
+                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <ComboBox ItemsSource="{Binding Browser.Characters}" SelectedItem="{Binding Browser.SelectedCharacter}"
+                          HorizontalAlignment="Stretch" FontSize="11"
+                          ToolTip.Tip="A champion WAD also ships its pets, summons and second forms - each a full character with its own skins.">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:CharacterRowViewModel">
+                      <TextBlock FontSize="11"><Run Text="{Binding Name}" /><Run Text=" · " /><Run Text="{Binding SkinCountText}" /></TextBlock>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <ListBox ItemsSource="{Binding Browser.Skins}" SelectedItem="{Binding Browser.SelectedSkin}"
+                         Height="160" Background="{DynamicResource ReyBgBrush}"
+                         BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SkinRowViewModel">
+                      <Grid ColumnDefinitions="28,*,Auto" Margin="2,0">
+                        <TextBlock Grid.Column="0" Text="{Binding NumberText}" FontSize="10"
+                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="2" Text="{Binding Badge}" FontSize="9"
+                                   Foreground="{DynamicResource ReyAccent2Brush}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <Button Classes="primary" Content="Load skin" Command="{Binding Browser.OpenSkinCommand}"
+                        HorizontalAlignment="Stretch" FontSize="11" Padding="8,3" />
+                <TextBlock Text="{Binding Browser.Status}" FontSize="9" TextWrapping="Wrap"
+                           Foreground="{DynamicResource ReyTextDimBrush}" />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card" IsVisible="{Binding HasSubmeshes}">
+              <StackPanel Spacing="4">
+                <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                  <TextBlock Classes="cardTitle" Grid.Column="0" Text="SUBMESHES" VerticalAlignment="Center" />
+                  <ToggleButton Classes="vp" Grid.Column="1" Content="Auto" FontSize="10" Padding="6,1" Margin="0,0,4,0"
+                                IsChecked="{Binding AutoSubmeshVisibility}"
+                                ToolTip.Tip="AUTO: apply the game's visibility (skin bin initial-hide + the playing clip's show/hide lists). Off = manual control." />
+                  <Button Classes="icon" Grid.Column="2" Content="All" FontSize="10" Command="{Binding ShowAllSubmeshesCommand}" />
+                  <Button Classes="icon" Grid.Column="3" Content="None" FontSize="10" Command="{Binding HideAllSubmeshesCommand}" />
+                </Grid>
+                <TextBlock Text="Tick to show. Click a row to outline it and open its material."
+                           FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                <ListBox ItemsSource="{Binding Submeshes}" SelectedItem="{Binding SelectedSubmesh}"
+                         Background="Transparent" BorderThickness="0">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SubmeshToggleViewModel">
+                      <Grid ColumnDefinitions="Auto,*" Margin="0,1">
+                        <CheckBox Grid.Column="0" IsChecked="{Binding IsVisible}" Padding="0" MinWidth="0"
+                                  VerticalAlignment="Center" ToolTip.Tip="Show / hide this submesh" />
+                        <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                          <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding MaterialName}" FontSize="9" IsVisible="{Binding HasMaterial}"
+                                     Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+      <Grid Grid.Column="2">
       <views:ViewportControl x:Name="PreviewViewport"
+                             HighlightSubmeshes="{Binding HighlightedSubmeshes}"
                              IsVisible="{Binding !UseDx11Preview}"
                              Mesh="{Binding Mesh}"
                              Skeleton="{Binding Skeleton}"
@@ -118,8 +207,8 @@
       <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
                  Margin="8,6" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />
       </Grid>
-      <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" ResizeDirection="Columns" />
-      <Border Grid.Column="2" Background="{DynamicResource ReyPanelBrush}"
+      <GridSplitter Grid.Column="3" Background="{DynamicResource ReyBorderBrush}" ResizeDirection="Columns" />
+      <Border Grid.Column="4" Background="{DynamicResource ReyPanelBrush}"
               BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1,0,0,0">
         <TabControl SelectedIndex="{Binding PanelTab}" Padding="0" Margin="4,2,4,0">
           <TabItem FontSize="12" IsVisible="{Binding HasMaterialEditor}">
@@ -376,27 +465,7 @@
                                  Foreground="{DynamicResource ReyTextDimBrush}" />
                     </StackPanel>
                   </Border>
-                  <!-- M84: per-submesh visibility (user request) — toggle any of the model's submeshes -->
-                  <Border Classes="card" IsVisible="{Binding HasSubmeshes}">
-                    <StackPanel Spacing="4">
-                      <Grid ColumnDefinitions="*,Auto,Auto,Auto">
-                        <TextBlock Classes="cardTitle" Grid.Column="0" Text="SUBMESHES" VerticalAlignment="Center" />
-                        <ToggleButton Classes="vp" Grid.Column="1" Content="Auto" FontSize="10" Padding="6,1" Margin="0,0,4,0"
-                                      IsChecked="{Binding AutoSubmeshVisibility}"
-                                      ToolTip.Tip="AUTO: apply the game's visibility (skin bin initial-hide + the playing clip's show/hide lists). Off = manual control." />
-                        <Button Classes="icon" Grid.Column="2" Content="All" FontSize="10" Command="{Binding ShowAllSubmeshesCommand}" />
-                        <Button Classes="icon" Grid.Column="3" Content="None" FontSize="10" Command="{Binding HideAllSubmeshesCommand}" />
-                      </Grid>
-                      <ItemsControl ItemsSource="{Binding Submeshes}">
-                        <ItemsControl.ItemTemplate>
-                          <DataTemplate>
-                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsVisible}" FontSize="11" Margin="0,1" />
-                          </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                      </ItemsControl>
-                    </StackPanel>
-                  </Border>
-                  <!-- M122: skybox picker (same catalogue as the map viewport, independent pick) -->
+                    <!-- M122: skybox picker (same catalogue as the map viewport, independent pick) -->
                   <Border Classes="card" IsVisible="{Binding HasSkyboxOptions}">
                     <StackPanel Spacing="4">
                       <TextBlock Classes="cardTitle" Text="SKYBOX" />

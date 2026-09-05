@@ -44,5 +44,6 @@ public sealed partial class MeshPreviewViewModel
     {
         HasMaterialEditor = has;
         if (has) PanelTab = MaterialTab;
+        RefreshOutliner();   // M643: the outliner names each submesh's material from this editor
     }
 }
