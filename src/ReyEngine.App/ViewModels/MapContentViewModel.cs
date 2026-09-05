@@ -75,19 +75,20 @@ public sealed partial class ParticlePlacementViewModel : MapOutlinerItemViewMode
 
     /// <summary>The tint as the writer wants it, or null when untouched or unparseable. InvariantCulture:
     /// this machine runs a German locale, where "0,5" would otherwise split into two components.</summary>
-    public Vector4? ParsedTint
+    public Vector4? ParsedTint => ParseTint(EditedTint);
+
+    /// <summary>M644: the one tint-text rule, shared with the batch editor so the two cannot accept
+    /// different strings.</summary>
+    public static Vector4? ParseTint(string? text)
     {
-        get
-        {
-            if (string.IsNullOrWhiteSpace(EditedTint)) return null;
-            var parts = EditedTint.Split(',', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length != 4) return null;
-            var f = new float[4];
-            for (int i = 0; i < 4; i++)
-                if (!float.TryParse(parts[i].Trim(), System.Globalization.NumberStyles.Float,
-                                    System.Globalization.CultureInfo.InvariantCulture, out f[i])) return null;
-            return new Vector4(f[0], f[1], f[2], f[3]);
-        }
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var parts = text.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 4) return null;
+        var f = new float[4];
+        for (int i = 0; i < 4; i++)
+            if (!float.TryParse(parts[i].Trim(), System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out f[i])) return null;
+        return new Vector4(f[0], f[1], f[2], f[3]);
     }
 
     /// <summary>True when the tint text is present but not four numbers - so the UI can say so rather than

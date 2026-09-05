@@ -135,6 +135,10 @@ public sealed class CompositeCommand : IEditorCommand
     public string Name { get; }
     public object? Context { get; }
 
+    /// <summary>M644: how many commands this step holds. A batch that changed nothing is empty, and an
+    /// empty step must not be pushed - undoing it would be a click that does nothing.</summary>
+    public int Count => _commands.Count;
+
     public void Execute() { foreach (var c in _commands) c.Execute(); }
     public void Undo() { for (int i = _commands.Count - 1; i >= 0; i--) _commands[i].Undo(); }
     public bool CanMergeWith(IEditorCommand next) => false;

@@ -265,6 +265,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     partial void OnSelectedParticleNodeChanged(ParticlePlacementViewModel? value)
     {
+        OnPropertyChanged(nameof(ShowSingleParticleCard));   // M644
         SelectedParticleMarker = value?.CurrentPosition;
         RefreshParticleMoveFields(value);
         SyncRelinkPicker(value);   // M205
@@ -8046,6 +8047,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapContentAnchor = anchor;
         RaiseMapContentSelection();
         RefreshPlacementLayerEditor();
+        RefreshParticleBatch();   // M644: two or more particles make a batch
     }
 
     private List<MapOutlinerItemViewModel> FlatMapContentItems() =>

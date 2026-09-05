@@ -118,6 +118,10 @@
             <TextBlock Text="✨" FontSize="9" VerticalAlignment="Center" />
             <TextBlock Text="{Binding Header}" FontSize="10" FontWeight="SemiBold"
                        Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+            <!-- M644: select every placement of the system, then edit them all at once in the inspector -->
+            <Button Classes="tool" Content="all" FontSize="8" Padding="4,0" VerticalAlignment="Center"
+                    Command="{Binding $parent[TreeView].DataContext.SelectParticleGroupCommand}" CommandParameter="{Binding}"
+                    ToolTip.Tip="Select every placement of this system - the inspector then edits them all at once" />
           </StackPanel>
         </TreeDataTemplate>
         <DataTemplate DataType="vm:ParticlePlacementViewModel">
