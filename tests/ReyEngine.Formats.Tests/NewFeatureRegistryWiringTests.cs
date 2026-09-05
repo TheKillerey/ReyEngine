@@ -117,11 +117,27 @@ public sealed class NewFeatureRegistryWiringTests
     }
 
     [Fact]
-    public void EveryEntryCarriesTheCurrentVersionAndAUsefulLabel()
+    public void NoEntryIsFromTheFutureAndThisReleaseContributesOne()
+    {
+        // Until v0.4.1 this asserted every entry carried CurrentVersion, which only held while the
+        // registry described exactly one release. The rest of the class is built for more than one - a
+        // feature carries the version it arrived in, IsNew compares it against what the user has
+        // acknowledged, and Unseen orders by version descending - so an entry from an earlier release is
+        // correct and is what lets someone updating across two releases see both. What must not happen is
+        // an entry from a release that has not shipped: it would still glow after this one is
+        // acknowledged, with nothing able to clear it. And a release that highlights nothing is a mistake
+        // in the other direction.
+        Assert.All(NewFeatures.Shipping, f =>
+            Assert.True(NewFeatures.Compare(f.Version, NewFeatures.CurrentVersion) <= 0,
+                $"{f.Id} is marked {f.Version}, which is newer than the current release {NewFeatures.CurrentVersion}"));
+        Assert.Contains(NewFeatures.Shipping, f => f.Version == NewFeatures.CurrentVersion);
+    }
+
+    [Fact]
+    public void EveryEntryHasALabelThatReadsAsASentence()
     {
         Assert.All(NewFeatures.Shipping, f =>
         {
-            Assert.Equal(NewFeatures.CurrentVersion, f.Version);
             Assert.False(string.IsNullOrWhiteSpace(f.Label));
             // The label is what a What's New list shows, so it has to read as a sentence, not as an id.
             Assert.DoesNotContain('-', f.Id.Length > 0 ? f.Label.Split(' ')[0] : "x");

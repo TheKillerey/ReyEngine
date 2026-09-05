@@ -23,14 +23,14 @@ public sealed record NewFeature(string Id, string Version, string Label);
 public static class NewFeatures
 {
     /// <summary>The release whose highlights are currently on offer. Bump alongside the app version.</summary>
-    public const string CurrentVersion = "0.4.0";
+    public const string CurrentVersion = "0.4.1";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
     ///
     /// <para>Each id is bound by one control in the UI, so this list and the marked controls have to move
     /// together: an entry with nothing bound to it glows nowhere, and a control bound to an id that is not
-    /// here goes quiet (see <see cref="IsNew"/>). Nine entries for nine controls.</para>
+    /// here goes quiet (see <see cref="IsNew"/>). Eleven entries for eleven controls.</para>
     ///
     /// <para>What is NOT here is the point of the list — see the class remarks. Internal work, research,
     /// renderer plumbing and anything unfinished stays out, however large it was.</para>
@@ -51,6 +51,11 @@ public static class NewFeatures
         new("second-uv",        "0.4.0", "Second UV (Texcoord7) viewer and editor"),
         new("patch-update",     "0.4.0", "Patch Update Wizard — carry a mod onto a new Riot patch"),
         new("ltk-manager",      "0.4.0", "Send to LTK Manager — create or update a workshop mod in place"),
+        // 0.4.1. Only the two entry points this release ADDS to the main window are here: the arena, the
+        // bulk edits and the state switch live inside those windows and have no control here to glow on,
+        // and an entry with nothing bound to it glows nowhere.
+        new("character-editor", "0.4.1", "Character Editor — preview a champion on Riot's own shaders and edit its materials"),
+        new("cinematic",        "0.4.1", "Cinematic Capture — fly a camera on keyframes and export a PNG sequence"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever

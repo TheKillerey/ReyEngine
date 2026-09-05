@@ -111,8 +111,10 @@
         <MenuItem Header="{Binding BlenderLinkStatus}" IsEnabled="False" />
         <Separator />
         <MenuItem Header="Character Editor…" Command="{Binding OpenCharacterBrowserCommand}"
+                  Classes.newFeature="{Binding NewFeature[character-editor]}"
                   ToolTip.Tip="Pick a champion, a character and a skin, preview it on either renderer and edit its materials - one window." />
         <MenuItem Header="Cinematic Capture…" Command="{Binding OpenCinematicCaptureCommand}"
+                  Classes.newFeature="{Binding NewFeature[cinematic]}"
                   ToolTip.Tip="Fly a camera through the map on keyframes and export the move as a numbered PNG sequence. Every frame is rendered at a fixed time step, so the result is smooth whatever the viewport is running at, and identical on every run. Renders through the Direct3D 11 viewport." />
         <Separator />
         <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"
