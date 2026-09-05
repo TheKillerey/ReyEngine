@@ -618,11 +618,26 @@
                                   Command="{Binding $parent[ItemsControl].DataContext.RemoveParameterCommand}"
                                   CommandParameter="{Binding}" ToolTip.Tip="Remove this parameter" />
                           <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                          <!-- M646: a dynamicMaterial driver overrides this value in the game -->
+                          <TextBlock Text="⚡" FontSize="10" VerticalAlignment="Center" Foreground="{DynamicResource ReyAccent2Brush}"
+                                     IsVisible="{Binding IsDriven}" ToolTip.Tip="{Binding DrivenNote}" />
                           <TextBlock Text="{Binding ErrorText}" Foreground="#FF6B6B" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding HasError}" />
                         </StackPanel>
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
+                  <!-- M646: the material's runtime drivers (dynamicMaterial). The preview draws each driver's rest value. -->
+                  <StackPanel Spacing="1" Margin="0,6,0,0" IsVisible="{Binding HasDrivers}">
+                    <TextBlock Text="DRIVEN AT RUNTIME" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}"
+                               ToolTip.Tip="This material's dynamicMaterial overrides these parameters in the game - by buffs, death, movement. The preview draws each driver's value at rest; an authored value a driver overrides is marked with a bolt." />
+                    <ItemsControl ItemsSource="{Binding DriverLines}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                          <TextBlock Text="{Binding}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
                   </StackPanel>
                 </Expander>
         <StackPanel IsVisible="{Binding CanChangeShader}">

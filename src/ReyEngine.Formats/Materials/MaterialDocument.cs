@@ -349,9 +349,13 @@ public sealed class MaterialDocument
                 : Array.Empty<string>();
             bool isDefault = defaultMaterialHash == pathHash;
 
+            // M646: what the material's dynamicMaterial drives at runtime - see MaterialDynamicParameter.
+            var dynamicParameters = MaterialDrivers.Parse(Field(o.Properties, "dynamicMaterial"), resolve);
+
             materials.Add(new MaterialBinding(name, renderShader ?? shader, subs, isDefault, slots, parameters)
             {
                 ObjectPathHash = pathHash,
+                DynamicParameters = dynamicParameters,
                 MaterialObject = isStaticMat ? o : null,
                 SamplerContainer = samplers,
                 NameFieldHash = nameFieldHash,
@@ -939,6 +943,11 @@ public sealed class MaterialBinding
     /// on purpose. Clamp ships 2,870 times as the addressU/V/W triple, mostly on VFX.</summary>
     public int DiffuseAddressU { get; init; }
     public int DiffuseAddressV { get; init; }
+
+    /// <summary>M646: the parameters this material's <c>dynamicMaterial</c> drives at runtime. For these
+    /// the authored paramValues entry is the editor's value, not the game's - see
+    /// <see cref="MaterialDynamicParameter"/>. Empty for materials without a DynamicMaterialDef.</summary>
+    public IReadOnlyList<MaterialDynamicParameter> DynamicParameters { get; init; } = Array.Empty<MaterialDynamicParameter>();
 
     /// <summary>The derived RiotApprox preview profile (features + UV transform). Set during parse (M32).</summary>
     public MaterialProfile Profile { get; internal set; } = MaterialProfile.Default;

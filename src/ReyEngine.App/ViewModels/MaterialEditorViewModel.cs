@@ -189,12 +189,22 @@ public sealed partial class MaterialParameterViewModel : ViewModelBase
     [ObservableProperty] private bool _hasError;
     [ObservableProperty] private string _errorText = "";
 
-    public MaterialParameterViewModel(MaterialParameter model, MaterialEditorViewModel owner)
+    public MaterialParameterViewModel(MaterialParameter model, MaterialEditorViewModel owner, MaterialDynamicParameter? driver = null)
     {
         Model = model;
         _owner = owner;
         _editedText = model.CurrentText;
+        if (driver is not null)
+            DrivenNote = driver.RestValue is { } rest
+                ? $"Driven at runtime by {driver.Driver}: {MaterialDrivers.Fmt(rest)} at rest ({driver.RestReason}). "
+                  + "The preview draws the rest value; the game overrides this authored value the same way."
+                : $"Driven at runtime by {driver.Driver}; {driver.RestReason}, so this authored value stands.";
     }
+
+    /// <summary>M646: set when the material's dynamicMaterial drives this parameter - the authored value
+    /// is the editor's, the driver's is the game's. See <see cref="MaterialDynamicParameter"/>.</summary>
+    public string? DrivenNote { get; }
+    public bool IsDriven => DrivenNote is not null;
 
     public string Name => Model.Name;
     public string TypeName => Model.TypeName;
@@ -468,7 +478,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         Owner = owner;
         _editedShader = model.RenderShader ?? "";
         foreach (var s in model.Slots) Slots.Add(new TextureSlotViewModel(s, owner) { Binding = this });
-        foreach (var p in model.Parameters) Parameters.Add(new MaterialParameterViewModel(p, owner));
+        foreach (var p in model.Parameters) Parameters.Add(Row(p));
         foreach (var w in model.AllSwitches) Switches.Add(new MaterialSwitchViewModel(w, this));   // M103
         foreach (var m in model.AllMacros) Macros.Add(new MaterialMacroViewModel(m, this));        // M150
         RefreshMissingMacros();
@@ -487,6 +497,15 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     /// <summary>M368: fields StaticMaterialDef declares that this material omits, with their defaults.
     /// Empty (and hidden) when the meta database was never synced.</summary>
     public MetaSchemaPanelViewModel Schema { get; } = MetaSchemaPanelViewModel.None;
+
+    /// <summary>M646: a parameter row, told when the material's dynamicMaterial drives it at runtime.</summary>
+    private MaterialParameterViewModel Row(MaterialParameter p) => new(p, Owner!,
+        Model.DynamicParameters.FirstOrDefault(d => d.Enabled && d.Name.Equals(p.Name, StringComparison.OrdinalIgnoreCase)));
+
+    /// <summary>M646: the runtime drivers, one line each - including the ones with no authored row, such
+    /// as a VCDissolve_Value the material never authors and the driver alone supplies.</summary>
+    public IReadOnlyList<string> DriverLines => Model.DynamicParameters.Where(d => d.Enabled).Select(d => d.Summary).ToList();
+    public bool HasDrivers => Model.DynamicParameters.Any(d => d.Enabled);
 
     public string Name => Model.Name;
     public string ShaderName => Model.RenderShader ?? Model.ShaderName;
@@ -699,7 +718,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         var p = Model.AddParameter(def.Name);
         if (p is null) return;
         try { p.Apply(def.DefaultText); } catch { /* keep the cloned prototype value */ }
-        Parameters.Add(new MaterialParameterViewModel(p, Owner!));
+        Parameters.Add(Row(p));
         OnPropertyChanged(nameof(HasParameters));
         RaiseDirty();
         Owner!.NotifyChanged();
@@ -734,7 +753,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     {
         Parameters.Clear();
         foreach (var parameter in Model.Parameters)
-            Parameters.Add(new MaterialParameterViewModel(parameter, Owner!));
+            Parameters.Add(Row(parameter));
         Switches.Clear();
         foreach (var feature in Model.AllSwitches)
             Switches.Add(new MaterialSwitchViewModel(feature, this));
@@ -981,7 +1000,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         if (vm is not null) return vm;
         var p = Model.AddParameter(name);
         if (p is null) return null;   // no prototype parameter to clone a schema from
-        vm = new MaterialParameterViewModel(p, Owner!);
+        vm = Row(p);
         Parameters.Add(vm);
         OnPropertyChanged(nameof(HasParameters));
         return vm;
@@ -1072,7 +1091,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         if (name.Length == 0) return;
         var p = Model.AddParameter(name);
         if (p is null) return;   // no prototype param to clone the schema from
-        Parameters.Add(new MaterialParameterViewModel(p, Owner!));
+        Parameters.Add(Row(p));
         NewParamName = "";
         OnPropertyChanged(nameof(HasParameters));
         RaiseDirty();

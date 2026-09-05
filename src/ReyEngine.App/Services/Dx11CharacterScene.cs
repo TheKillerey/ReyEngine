@@ -385,6 +385,27 @@ public static class Dx11CharacterScene
             if (skin.FresnelColor is { } fc) Put("Fresnel_Color", fc.X, fc.Y, fc.Z, fc.W);
         }
 
+        // M646: what the material's dynamicMaterial drives. The authored paramValues entry is the editor's
+        // value, not the game's: Locke authors VCDissolve_Value = 1.23, which dissolves everything below a
+        // quarter of his height, and drives it to -0.8 while alive - drawing the authored value draws him
+        // dead. A driver's rest value replaces the authored one when the bin writes it; when it does not,
+        // the authored value stands and the report says which driver was not evaluated.
+        foreach (var dp in b.DynamicParameters)
+        {
+            if (!dp.Enabled) continue;
+            string material = b.Name.Split('/').Last();
+            if (dp.RestValue is not { } rest)
+            {
+                sb.AppendLine($"   {material}: {dp.Summary}");
+                continue;
+            }
+            int at = parameters.FindIndex(p => p.Name.Equals(dp.Name, StringComparison.OrdinalIgnoreCase));
+            string was = at < 0 ? "unauthored" : "authored " + MaterialDrivers.Fmt(new System.Numerics.Vector4(parameters[at].Value[0], parameters[at].Value[1], parameters[at].Value[2], parameters[at].Value[3]));
+            if (at >= 0) parameters.RemoveAt(at);
+            parameters.Add((dp.Name, new[] { rest.X, rest.Y, rest.Z, rest.W }));
+            sb.AppendLine($"   {material}: {dp.Summary}; {was}");
+        }
+
         bool hidden = scene.SkinMesh?.InitialSubmeshesToHide
             .Any(h => h.Equals(sub.Material, StringComparison.OrdinalIgnoreCase)) == true;
         if (hidden) sb.AppendLine($"   '{sub.Material}' hidden by initialSubmeshToHide");

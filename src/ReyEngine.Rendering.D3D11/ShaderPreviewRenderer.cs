@@ -141,11 +141,20 @@ public sealed class PreviewSettings
 
     /// <summary>M216: what the bone palette should contain.
     ///
-    /// <para>A champion vertex shader marks <c>mProj</c> as USED while <c>VIEW_PROJECTION_MATRIX</c> and
-    /// <c>mView</c> are not, which says the bones are expected to carry object-to-VIEW and the shader only
-    /// applies projection afterwards. With no animation, bone-to-object is identity, so the palette should
-    /// hold the view matrix. Identity was the first guess and it put the mesh on the near plane.</para></summary>
-    public BonePose BonePose = BonePose.ViewTransposed;
+    /// <para>M646: object-to-WORLD, and <c>mProj</c> is then the full view-projection. M216 read the
+    /// bytecode as "mProj used, mView unused, so the bones must carry object-to-view and mProj is
+    /// projection alone" - a reading under which the picture is geometrically identical, which is why it
+    /// held for 430 milestones. It is refuted by what the vertex shaders DO with the skinned position:
+    /// skinnedmesh/onsen computes <c>normalize(pos - vCamera)</c> for its depth push and builds its fog-of-war
+    /// UV from <c>pos.xz * FOG_OF_WAR_PARAMS</c>, a world-space map; and the particle path had already
+    /// measured vCamera as a world-space camera (M231, quad_vs). A world-space camera subtracted from a
+    /// view-space position is nonsense in Riot's own engine, so the position is world-space and the bones
+    /// carry object-to-world. Under the old reading every constant that reads the skinned position as
+    /// world - the view vector behind every fresnel, the fog-of-war lookup, the depth push - was wrong,
+    /// and Onsen, whose whole look is fresnel, was the first shader where it showed.</para>
+    ///
+    /// <para>ViewTransposed is kept as the A/B against the old reading.</para></summary>
+    public BonePose BonePose = BonePose.WorldTransposed;
 
     /// <summary>M615: per-bone skinning matrices, indexed by influence slot — what
     /// <c>Formats.Animation.BonePalette.Build</c> produces. Null keeps the M216 behaviour of one constant
@@ -183,6 +192,9 @@ public enum BonePose
     View,
     /// <summary>The view matrix transposed - the layout a float4x3 takes under HLSL's default packing.</summary>
     ViewTransposed,
+    /// <summary>M646: the model transform alone (object-to-world), transposed into the float4x3 layout.
+    /// The shader's <c>mProj</c> then has to be the full view-projection - see BonePose above.</summary>
+    WorldTransposed,
 }
 
 /// <summary>Per-material 2D texture addressing derived from the authored sampler value.</summary>
@@ -1022,6 +1034,16 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     /// <summary>M231: does this material's vertex shader want mProj to be the whole world-to-clip transform?
     /// True when it uses mProj without a bone palette, which across the cache selects exactly the particle
     /// shaders. Null material (the built-in comparison path) keeps the champion reading.</summary>
+    /// <summary>M646: whether this draw's <c>mProj</c> must be the full view-projection. Particle-style
+    /// shaders always (M231); bone shaders whenever their palette is posed in world space, which is the
+    /// default - under the old view-space pose the bones carried the view and mProj was projection alone.</summary>
+    private static bool NeedsViewProjection(PreviewMaterial? mat, PreviewSettings s)
+    {
+        if (ParticleStyleProjection(mat)) return true;
+        if (mat is null || s.BonePose is BonePose.View or BonePose.ViewTransposed) return false;
+        return mat.VsRefl.ConstantBuffers.Any(cb => cb.Name.Contains("Bone", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static bool ParticleStyleProjection(PreviewMaterial? mat)
     {
         if (mat is null) return false;
@@ -4027,7 +4049,7 @@ float4 psmain(VOut i) : SV_Target
         var bytes = _cbScratch;
         Array.Clear(bytes, 0, need);
         var vp = Matrix4x4.Multiply(view, proj);
-        var cam = s.SuppliedCameraPosition ?? CameraPosition(s);
+        var cam = ShaderCamera(s);
 
         // M214: the bone palette. A skinned character's vertex shader transforms every vertex by the bones
         // its BLENDINDICES name, so a zero-filled BonesCB collapses the whole mesh to the origin and draws
@@ -4051,7 +4073,7 @@ float4 psmain(VOut i) : SV_Target
                     s.World.IsIdentity ? view : s.World * view,
                 _ => s.World,
             };
-            bool transpose = s.BonePose is BonePose.ViewTransposed;
+            bool transpose = s.BonePose is BonePose.ViewTransposed or BonePose.WorldTransposed;
 
             var slot = new float[16];
             int index = 0;
@@ -4131,8 +4153,9 @@ float4 psmain(VOut i) : SV_Target
                     // itself does not say which - only the company it keeps does.
                     //
                     // Censused every vertex stage in the cache and the split is total:
-                    //   235 use mProj AND declare a bone buffer  -> champions. The bone palette carries
-                    //       object-to-VIEW (see BonePose), so mProj is projection ALONE.
+                    //   235 use mProj AND declare a bone buffer  -> champions. M646: the bone palette
+                    //       carries object-to-WORLD (see BonePose), so mProj is the view-projection too;
+                    //       under the old view-space pose it was projection alone.
                     //    17 use mProj and declare NO bone buffer -> and all 17 are particle shaders
                     //       (particles/* and particlesystem/*). Nothing else is in that set.
                     //
@@ -4144,7 +4167,9 @@ float4 psmain(VOut i) : SV_Target
                     // Five staticmesh shaders (env_scrollingdiffuse, tft_*) use mProj AND a VP matrix. They
                     // are outside this rule and keep the old behaviour; nothing has measured what their
                     // mProj is for.
-                    "MPROJ" => Mat(ParticleStyleProjection(mat) ? vp : proj, s),
+                    // M646: and bone shaders posed in WORLD space (the default now) need it too - the
+                    // bones no longer carry the view, so mProj has to. See BonePose.
+                    "MPROJ" => Mat(NeedsViewProjection(mat, s) ? vp : proj, s),
 
                     // Engine/map-owned transforms. The shader definition cannot author these because
                     // their real values come from the loaded map. Identity is the neutral bench value:
@@ -4681,6 +4706,25 @@ float4 psmain(VOut i) : SV_Target
 
     private static Matrix4x4 Invert(Matrix4x4 m) => Matrix4x4.Invert(m, out var r) ? r : Matrix4x4.Identity;
 
+    /// <summary>The frame's mesh radius, which scales the headless orbit camera. Set per frame.</summary>
+    private float _frameRadius = 1f;
+
+    /// <summary>
+    /// M646: the camera position as the SHADERS must see it - in the space of the positions they see.
+    ///
+    /// <para>Two corrections to the raw camera. The X mirror: MirrorX is applied as <c>Scale(-1,1,1) * view</c>,
+    /// so every position the shader receives is League-space (unmirrored) and only the view flips it for
+    /// display; the editor's camera lives on the DISPLAY side of that flip, so its League-space position is
+    /// the X-mirror of it. And the headless orbit: the LookAt is built from <c>CameraPosition(s) * radius</c>,
+    /// so the position the shaders get must be scaled the same way, or a fresnel evaluated from a camera
+    /// one unit from the origin reads every surface as edge-on.</para>
+    /// </summary>
+    public Vector3 ShaderCamera(PreviewSettings s)
+    {
+        var c = s.SuppliedCameraPosition ?? CameraPosition(s) * _frameRadius;
+        return s.MirrorX ? new Vector3(-c.X, c.Y, c.Z) : c;
+    }
+
     /// <summary>M231: unit vector from the origin toward the camera - which is what a billboard at the origin
     /// needs to face. Uses the supplied camera position when a scene set one, otherwise the orbit.</summary>
     public static Vector3 CameraForward(PreviewSettings s)
@@ -4748,6 +4792,7 @@ float4 psmain(VOut i) : SV_Target
             UpdateLightRegion(s);
 
             float radius = MathF.Max(0.05f, Mesh?.Radius ?? 1f);
+            _frameRadius = radius;   // M646: ShaderCamera scales the headless orbit by the same radius
             var view = s.SuppliedView ?? Matrix4x4.CreateLookAt(
                 CameraPosition(s) * radius, Vector3.Zero, Vector3.UnitY);
             if (s.MirrorX) view = Matrix4x4.CreateScale(-1f, 1f, 1f) * view;
