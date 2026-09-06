@@ -160,6 +160,7 @@
         <MenuItem Header="Recolor Textures…" Command="{Binding OpenTextureRecolorCommand}"
                   ToolTip.Tip="Recolour map surfaces, placed mobs / animated props and baked lightmaps — hue, saturation, levels and tint across as many as you like. Every texture is re-derived from Riot's original, so re-tuning never stacks compression loss, and each one keeps its own pixel format and mip chain" />
         <MenuItem Header="Map Skin Switcher…" Command="{Binding OpenMapSkinSwitcherCommand}"
+                  Classes.newFeature="{Binding NewFeature[map-skin-units]}"
                   ToolTip.Tip="Force every registered normal-map slot through one shipped environment while preserving each slot's runtime data. TFT / Map22 is intentionally unavailable." />
         <Separator />
         <MenuItem Header="Assign Skeleton…" Command="{Binding AssignSkeletonCommand}" />

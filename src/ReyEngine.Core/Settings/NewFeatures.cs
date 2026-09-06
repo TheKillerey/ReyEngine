@@ -23,14 +23,14 @@ public sealed record NewFeature(string Id, string Version, string Label);
 public static class NewFeatures
 {
     /// <summary>The release whose highlights are currently on offer. Bump alongside the app version.</summary>
-    public const string CurrentVersion = "0.4.1";
+    public const string CurrentVersion = "0.4.2";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
     ///
     /// <para>Each id is bound by one control in the UI, so this list and the marked controls have to move
     /// together: an entry with nothing bound to it glows nowhere, and a control bound to an id that is not
-    /// here goes quiet (see <see cref="IsNew"/>). Eleven entries for eleven controls.</para>
+    /// here goes quiet (see <see cref="IsNew"/>). Twelve entries for twelve controls.</para>
     ///
     /// <para>What is NOT here is the point of the list — see the class remarks. Internal work, research,
     /// renderer plumbing and anything unfinished stays out, however large it was.</para>
@@ -56,6 +56,9 @@ public static class NewFeatures
         // and an entry with nothing bound to it glows nowhere.
         new("character-editor", "0.4.1", "Character Editor — preview a champion on Riot's own shaders and edit its materials"),
         new("cinematic",        "0.4.1", "Cinematic Capture — fly a camera on keyframes and export a PNG sequence"),
+        // 0.4.2. The switcher window is not new, but what it can do is: it now shows and can carry the
+        // turret / minion / nexus skins a map skin forces, which is the thing a user reported missing.
+        new("map-skin-units",   "0.4.2", "Map Skin Switcher — see and carry a map skin's turret, minion and nexus skins"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever
