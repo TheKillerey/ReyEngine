@@ -200,11 +200,25 @@ public sealed partial class RitobinEditorViewModel : ObservableObject
                 return;
             }
 
+            // M649: the client dispatches on a property's one-byte TYPE TAG and silently SKIPS anything
+            // tagged unexpectedly - the file loads and the field is simply gone. Editing ritobin text is
+            // the easiest way to re-tag something by accident: write a texture path as `string` where Riot
+            // ships `file` and the map loads with no textures, which is what a user reported on 16.17.
+            // So the tags are compared against the bin that was opened, not against a schema - the file
+            // Riot shipped is the authority, and this catches forms this build has never heard of.
+            var retagged = BinWireForm.Compare(_tree, readBack, target.ResolveName);
+            if (BinWireForm.Describe(retagged) is { } warning)
+            {
+                Status = "Saved, but CHECK THIS: " + warning;
+                _log(Status);
+            }
+
             string savedTo = await target.Save(bytes);
             _tree = readBack;
             IsDirty = false;
             Status = $"Saved {objects:n0} edited object(s) into {merged.Objects.Count:n0}, "
-                   + $"{bytes.Length:n0} bytes → {savedTo}";
+                   + $"{bytes.Length:n0} bytes → {savedTo}"
+                   + (BinWireForm.Describe(retagged) is { } note ? "  |  CHECK THIS: " + note : "");
             _log(Status);
         }
         catch (Exception ex)

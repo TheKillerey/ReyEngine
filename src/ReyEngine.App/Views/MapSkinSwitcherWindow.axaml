@@ -68,9 +68,25 @@
                         DisplayMemberBinding="{Binding DisplayName}" FontSize="11" MaxDropDownHeight="320" />
               <TextBlock Text="{Binding SourceDetail}" FontSize="10" TextWrapping="Wrap"
                          Foreground="{DynamicResource ReyTextDimBrush}" />
+              <!-- M649: what this slot does to turrets, minions and the nexus. Most slots force nothing,
+                   and saying so is the point: switching to one of those can never bring turrets with it. -->
+              <TextBlock Text="{Binding SelectedSource.CharacterDetail, FallbackValue=''}" FontSize="10"
+                         TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
             </StackPanel>
           </Border>
         </Grid>
+
+        <!-- M649: the turret swap. The four environment fields describe a PLACE and are always routed;
+             these describe units the server spawns, so they are opt-in and reported separately. -->
+        <Border Classes="card">
+          <StackPanel Spacing="5">
+            <CheckBox IsChecked="{Binding CarryCharacterSkins}" FontSize="12"
+                      Content="Also carry the source skin's turret, minion and nexus skins"
+                      ToolTip.Tip="A map skin picks its unit skins in one of two fields - mObjectSkinFallbacks on the older slots, an unnamed per-character list (0x2d3285eb) on the newest two. Without this the switch routes only the environment, so the turrets stay as the base skin has them." />
+            <TextBlock Text="{Binding CharacterSkinDetail}" FontSize="10" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+          </StackPanel>
+        </Border>
 
         <Border Classes="card">
           <StackPanel Spacing="5">

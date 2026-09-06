@@ -5,6 +5,16 @@ using System.Numerics;
 
 namespace ReyEngine.Formats.Meta;
 
+/// <summary>M649: one character whose skin a map skin forces - a turret, a minion, the nexus.</summary>
+/// <param name="Character">The character record, e.g. <c>Characters/Turret</c>.</param>
+/// <param name="SkinId">The skin index that character is given while this map skin is selected.</param>
+/// <param name="FromFallbackMap">True when it came from the older <c>mObjectSkinFallbacks</c> map rather
+/// than the newer per-character list. Both are live: 11 of Map11's slots use the map, 2 use the list.</param>
+public sealed record MapSkinCharacterOverride(string Character, int SkinId, bool FromFallbackMap)
+{
+    public string DisplayName => $"{Character.Split('/').Last()} = skin {SkinId}";
+}
+
 /// <summary>One registered skin slot from a shipping map bin.</summary>
 public sealed record MapSkinInfo(
     int Index,
@@ -14,9 +24,18 @@ public sealed record MapSkinInfo(
     string? MapContainerLink,
     int PropertyCount)
 {
+    /// <summary>M649: the turret/minion/nexus skins this slot forces. Empty for most slots.</summary>
+    public IReadOnlyList<MapSkinCharacterOverride> CharacterSkins { get; init; } = Array.Empty<MapSkinCharacterOverride>();
+
     public string DisplayName => MapContainerLink is { Length: > 0 }
         ? $"{Name}  -  {MapContainerLink.Split('/').Last()}"
         : $"{Name}  -  legacy/default geometry";
+
+    /// <summary>What this slot does to characters, for the row under its name.</summary>
+    public string CharacterSummary => CharacterSkins.Count == 0
+        ? "no character skins"
+        : $"{CharacterSkins.Count} character skin(s): " + string.Join(", ", CharacterSkins.Take(4).Select(o => o.DisplayName))
+          + (CharacterSkins.Count > 4 ? $", +{CharacterSkins.Count - 4} more" : "");
 }
 
 /// <summary>The Map object and only the MapSkin objects it actually registers.</summary>
@@ -34,7 +53,15 @@ public sealed record MapSkinSwapResult(
     int ChangedAudioProperties,
     uint? RoutedAudioTargetHash,
     uint? RoutedAudioSourceHash,
-    IReadOnlyList<string> ReferencedStrings);
+    IReadOnlyList<string> ReferencedStrings)
+{
+    /// <summary>M649: slots whose character-skin overrides were replaced by the source's.</summary>
+    public int CharacterSkinSlotsRouted { get; init; }
+    /// <summary>M649: slots that shipped with NO character-skin field and were given one. Reported
+    /// separately because it is the part of this that Riot's own data has no example of.</summary>
+    public int CharacterSkinSlotsAdded { get; init; }
+    public IReadOnlyList<MapSkinCharacterOverride> CarriedCharacterSkins { get; init; } = Array.Empty<MapSkinCharacterOverride>();
+}
 
 /// <summary>A source map-container rewritten to retain the server-addressed gameplay identities
 /// from the current/base container while keeping the source skin's authored values and visuals.</summary>
@@ -94,6 +121,52 @@ public static class MapSkinSwitcher
         GrassTintField,
     };
 
+    /// <summary>
+    /// M649: the two fields that decide which SKIN a turret, minion or nexus wears while a map skin is
+    /// selected - the thing a user means by "swapping the turrets".
+    ///
+    /// <para>There are two of them because Riot moved: <c>mObjectSkinFallbacks</c> is a
+    /// <c>map[hash,i32]</c> and is what every older slot uses (Odyssey, Arcade, URF, Project…), while
+    /// 0x2d3285eb is a <c>list2</c> of <c>{Character, SkinID}</c> added in schema revision 7231955 and so
+    /// far used only by the two newest Map11 slots - Milkshake_SRS (24 entries, Turret = 4) and
+    /// Sodapop_SRS (6 entries, Turret = 48). Neither field is named in Riot's public hash list for the
+    /// second one, which is why it shows in an editor as a bare 0x2d3285eb.</para>
+    ///
+    /// <para>They are NOT part of <see cref="EnvironmentRouteFields"/> and must not become part of it:
+    /// routing an environment is safe because the values describe a place, while these describe units the
+    /// server spawns. Carrying them is opt-in for that reason.</para>
+    /// </summary>
+    private const uint CharacterSkinListField = 0x2d3285eb;
+    private static readonly uint ObjectSkinFallbacksField = H("mObjectSkinFallbacks");
+    private static readonly uint CharacterField = H("Character");
+    private static readonly uint SkinIdField = H("SkinID");
+    private static readonly uint[] CharacterSkinFields = { CharacterSkinListField, ObjectSkinFallbacksField };
+
+    /// <summary>Read what a MapSkin forces onto characters, from either mechanism.</summary>
+    internal static IReadOnlyList<MapSkinCharacterOverride> ReadCharacterSkins(
+        BinTreeObject skin, Func<uint, string?>? resolve)
+    {
+        var result = new List<MapSkinCharacterOverride>();
+        if (skin.Properties.TryGetValue(CharacterSkinListField, out var listProp) && listProp is BinTreeContainer list)
+            foreach (var element in list.Elements.OfType<BinTreeStruct>())
+            {
+                if (element.Properties.TryGetValue(CharacterField, out var c) && c is not BinTreeHash) continue;
+                uint characterHash = element.Properties.TryGetValue(CharacterField, out var ch) && ch is BinTreeHash h ? h.Value : 0;
+                int skinId = element.Properties.TryGetValue(SkinIdField, out var s) && s is BinTreeU32 u ? (int)u.Value : 0;
+                if (characterHash == 0) continue;
+                result.Add(new MapSkinCharacterOverride(NameOf(resolve, characterHash), skinId, false));
+            }
+        if (skin.Properties.TryGetValue(ObjectSkinFallbacksField, out var mapProp) && mapProp is BinTreeMap map)
+            foreach (var pair in map)
+                if (pair.Key is BinTreeHash key)
+                    result.Add(new MapSkinCharacterOverride(NameOf(resolve, key.Value),
+                        pair.Value is BinTreeI32 i ? i.Value : 0, true));
+        return result;
+    }
+
+    private static string NameOf(Func<uint, string?>? resolve, uint hash) =>
+        resolve?.Invoke(hash) is { Length: > 0 } n ? n : $"0x{hash:x8}";
+
     private static uint H(string value) => HashAlgorithms.Fnv1a(value);
 
     /// <summary>Map22 and any bin that identifies its mode as TFT are deliberately unavailable.</summary>
@@ -135,17 +208,25 @@ public static class MapSkinSwitcher
                 && containerProperty is BinTreeString containerString && containerString.Value.Length > 0
                 ? containerString.Value : null;
             skins.Add(new MapSkinInfo(i, link.Value, resolve?.Invoke(link.Value) ?? $"0x{link.Value:x8}",
-                name.Value, container, skin.Properties.Count));
+                name.Value, container, skin.Properties.Count)
+            {
+                CharacterSkins = ReadCharacterSkins(skin, resolve),   // M649
+            });
         }
         return new MapSkinCatalog(mapStringId, mapHash, skins);
     }
 
+    /// <param name="carryCharacterSkins">M649: also give every rewritten slot the SOURCE skin's
+    /// turret/minion/nexus skins. Off by default - see <see cref="CharacterSkinFields"/> for why these are
+    /// not environment fields. A slot that shipped without the field is GIVEN one, which is the one part of
+    /// this that Riot's own data has no example of; the result counts those separately so a caller can say so.</param>
     public static MapSkinSwapResult Switch(
         byte[] shippingBin,
         int mapId,
         uint targetSkinHash,
         uint sourceSkinHash,
-        Func<uint, string?>? resolve = null)
+        Func<uint, string?>? resolve = null,
+        bool carryCharacterSkins = false)
     {
         var catalog = ReadCatalog(shippingBin, resolve);
         if (BlockReason(mapId, catalog.MapStringId) is { } blocked) throw new InvalidOperationException(blocked);
@@ -161,6 +242,7 @@ public static class MapSkinSwitcher
         var tree = SafeBinTree.Parse(shippingBin);
         var source = tree.Objects[sourceSkinHash];
         int changedRouteProperties = 0;
+        int characterSkinSlotsRouted = 0, characterSkinSlotsAdded = 0;   // M649
         var routedSkinHashes = new List<uint>();
         var allMapSkins = tree.Objects
             .Where(pair => pair.Value.ClassHash == MapSkinClass)
@@ -177,18 +259,43 @@ public static class MapSkinSwitcher
                 if (hadSkin && hasSource && !BinPropEquality.PropsEqual(skinRoute!, sourceRoute!))
                     changedForSkin++;
             }
-            if (changedForSkin == 0) continue;
 
+            // M649: the character skins, when asked for. Unlike the environment fields these are ADDED to a
+            // slot that lacks them - which is the whole point, since 35 of Map11's 37 slots carry neither
+            // field and a user swapping to one of the two that do would otherwise keep default turrets.
+            var addHere = new List<uint>();
+            int routedHere = 0;
+            if (carryCharacterSkins && skinHash != sourceSkinHash)
+                foreach (uint field in CharacterSkinFields)
+                {
+                    if (!source.Properties.TryGetValue(field, out var sourceValue)) continue;
+                    if (skin.Properties.TryGetValue(field, out var mine))
+                    {
+                        if (BinPropEquality.PropsEqual(mine, sourceValue)) continue;
+                        routedHere++;
+                    }
+                    else addHere.Add(field);
+                }
+
+            if (changedForSkin == 0 && routedHere == 0 && addHere.Count == 0) continue;
+
+            var routeFields = carryCharacterSkins
+                ? EnvironmentRouteFields.Concat(CharacterSkinFields).ToArray()
+                : EnvironmentRouteFields;
             var properties = skin.Properties
-                .Select(pair => EnvironmentRouteFields.Contains(pair.Key)
+                .Select(pair => routeFields.Contains(pair.Key)
                     && source.Properties.TryGetValue(pair.Key, out var sourceRoute)
                         ? BinTreeCloner.Clone(sourceRoute, pair.Key)
                         : BinTreeCloner.Clone(pair.Value, pair.Key))
                 .ToList();
+            foreach (uint field in addHere)
+                properties.Add(BinTreeCloner.Clone(source.Properties[field], field));
 
             tree.Objects[skinHash] = new BinTreeObject(skinHash, MapSkinClass, properties);
             routedSkinHashes.Add(skinHash);
             changedRouteProperties += changedForSkin;
+            if (routedHere > 0) characterSkinSlotsRouted++;
+            if (addHere.Count > 0) characterSkinSlotsAdded++;
         }
         var audio = RouteFeatureAudio(tree, targetInfo, sourceInfo);
 
@@ -226,7 +333,12 @@ public static class MapSkinSwitcher
                     CollectStrings(property, strings);
         return new MapSkinSwapResult(bytes, targetInfo, sourceInfo, changedRouteProperties,
             routedSkinHashes, audio.ChangedProperties, audio.TargetHash, audio.SourceHash,
-            strings.Order().ToList());
+            strings.Order().ToList())
+        {
+            CharacterSkinSlotsRouted = characterSkinSlotsRouted,
+            CharacterSkinSlotsAdded = characterSkinSlotsAdded,
+            CarriedCharacterSkins = carryCharacterSkins ? sourceInfo.CharacterSkins : Array.Empty<MapSkinCharacterOverride>(),
+        };
     }
 
     /// <summary>

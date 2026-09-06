@@ -13532,7 +13532,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         byte[] original = ReadAsset(shippingEntry.PathHash);
         var swap = await Task.Run(() => MapSkinSwitcher.Switch(original, request.Map.MapId,
-            request.Target.Info.PathHash, request.Source.Info.PathHash, ResolveBinName));
+            request.Target.Info.PathHash, request.Source.Info.PathHash, ResolveBinName,
+            request.CarryCharacterSkins));   // M649: the turret/minion/nexus skins, when asked for
 
         string sourceContainerPath = MapSkinSwitcher.ContainerBinPath(swap.Source.MapContainerLink)
             ?? throw new InvalidDataException("The selected source skin has no materials container.");
@@ -13592,6 +13593,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             $"Source container: {swap.Source.MapContainerLink ?? "legacy/default"}",
             $"MapSkin definitions rerouted (registered + aliases): {swap.RoutedSkinHashes.Count:n0}",
             $"Changed environment-route properties: {swap.ChangedRouteProperties:n0}",
+            // M649: what happened to the turret/minion/nexus skins, named because it is the one
+            // part of a swap a user notices immediately and the tool used to say nothing about.
+            $"Character skins: {(request.CarryCharacterSkins
+                ? swap.CarriedCharacterSkins.Count == 0
+                    ? $"{swap.Source.Name} forces none, so nothing was carried"
+                    : $"carried {swap.CarriedCharacterSkins.Count:n0} from {swap.Source.Name} "
+                      + $"(replaced on {swap.CharacterSkinSlotsRouted:n0} slot(s), added to {swap.CharacterSkinSlotsAdded:n0})"
+                : "left with each slot (turrets, minions and nexus stay as the base skin has them)")}",
             $"Audio profile: {(swap.RoutedAudioSourceHash is null
                 ? "no dedicated source profile"
                 : swap.ChangedAudioProperties > 0
