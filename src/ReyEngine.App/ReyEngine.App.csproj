@@ -15,13 +15,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
     <!-- M155: ColorPicker lives in its own assembly with its own control themes; FluentTheme does NOT
          merge them, so without this (and the StyleInclude in App.axaml) the control renders as nothing. -->
-    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.2" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <!-- M576: NAudio 3 split the Windows output devices (WaveOutEvent) and Media Foundation out of
          the metapackage, which now carries only Core + Midi. Both halves are needed here. -->
