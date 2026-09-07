@@ -13,10 +13,39 @@ namespace ReyEngine.Formats.Vfx;
 /// UNKNOWN semantics. Parking a raw value is honest; guessing at what it means would not be.
 ///
 /// EVERY MEMBER IS NULLABLE, and that is load-bearing. Riot's writer omits default-valued properties, so
-/// "absent" means "whatever the executable defaults to" - which for most of these is unknown. Collapsing
-/// absent to <c>false</c>/<c>0</c> would invent data. Seven of the bools here ship ONLY <c>true</c>
-/// (isUniformScale, isGroundLayer, useNavmeshMask, particleIsLocalOrientation, isRotationEnabled,
-/// hasPostRotateOrientation, doesCastShadow), so their polarity is unreadable from the corpus at all.
+/// "absent" means "whatever the executable defaults to". Collapsing absent to <c>false</c>/<c>0</c> would
+/// invent data.
+///
+/// <para><b>M652 corrects this class on one point.</b> It used to say that because several of these bools
+/// ship with only ONE value, "their polarity is unreadable from the corpus at all". That was true when
+/// M193 was written and is not any more: the meta-class database arrived afterwards (M368/M370) and
+/// DECLARES each field's default, and every one of these is written only when it differs from that
+/// default - so the value is the non-default one and the field's PRESENCE is the signal. Measured over 6
+/// shipping map wads and 70 champion wads, against <c>data/meta/meta.db.json</c>:</para>
+///
+/// <list type="table">
+///   <item><c>isUniformScale</c> - declared false, written true 420,772/420,772</item>
+///   <item><c>isGroundLayer</c> - declared false, written true 160,406/160,406</item>
+///   <item><c>isLocalOrientation</c> - declared <b>true</b>, written <b>false</b> 162,164/162,164</item>
+///   <item><c>particleIsLocalOrientation</c> - declared false, written true 125,910/125,910</item>
+///   <item><c>meshRenderFlags</c> - declared <b>1</b>, written <b>0</b> 77,178/77,178</item>
+///   <item><c>useNavmeshMask</c> - declared false, written true 77,028/77,028</item>
+///   <item><c>isRotationEnabled</c> - declared false, written true 63,857/63,857</item>
+/// </list>
+///
+/// <para><b>Polarity is not semantics, and the semantics are still unknown.</b> Knowing that
+/// <c>isGroundLayer</c> means "true" does not say what the renderer should do differently, and the corpus
+/// cannot settle it: <c>isUniformScale</c> was tested directly and 89.3% of the emitters carrying it ship
+/// an anisotropic scale - but so do 80.7% of the emitters without it, so the data shape does not correlate
+/// with the flag. Wiring a renderer on the name alone would reshape 177,296 emitters on a guess, which is
+/// the M354 mistake. The remaining route is a frame capture of the live client, and
+/// <c>docs/research/renderdoc-capture-plan.md</c> explains why that is not worth an account.</para>
+///
+/// <para>What the correction IS worth: a later renderer stage reading <c>IsLocalOrientation ?? false</c>
+/// would be wrong for every emitter that omits the field, because the declared default is TRUE - use
+/// <see cref="IsLocalOrientationOrDefault"/>. It is the only one of these this class parks whose default
+/// is not the zero value; <c>meshRenderFlags</c> (default 1) has the same trap but is not parked here at
+/// all, so anyone adding it should bring its default with it.</para>
 ///
 /// Init-only properties rather than positional parameters: <see cref="VfxEmitterDefinition"/> already
 /// carries 71 positional params, and 43 more optional ones - all defaulted, so most misorderings would
@@ -25,7 +54,10 @@ namespace ReyEngine.Formats.Vfx;
 public sealed record VfxEmitterExtras
 {
     // ---- render state ------------------------------------------------------------------------------
-    /// <summary>484,286 occurrences. Values 1 (480,922), 5, 3, 4, 2 - only bits 0-2 ever set. Meaning UNKNOWN.</summary>
+    /// <summary>484,286 occurrences. Values 1 (480,922), 5, 3, 4, 2 - only bits 0-2 ever set. Meaning UNKNOWN.
+    /// M259 measured it as the constant 1 in 99.3%, and its declared default is 0 - so unlike the flags in
+    /// the class remarks this one really does carry almost nothing, and ranking the unread fields by
+    /// frequency puts it third from the top for no gain.</summary>
     public int? MiscRenderFlags { get; init; }
     /// <summary>341,316. Values 3 (310,104), 1, 5, 4, 0. Meaning UNKNOWN; likely a draw-priority bucket.</summary>
     public int? Importance { get; init; }
@@ -60,8 +92,14 @@ public sealed record VfxEmitterExtras
     // ---- orientation / placement -------------------------------------------------------------------
     /// <summary>694,827, always true.</summary>
     public bool? IsUniformScale { get; init; }
-    /// <summary>265,968, always true.</summary>
+    /// <summary>M652: 162,164 occurrences, always FALSE - not "always true" as this line used to read,
+    /// which contradicted the class remarks' own list of seven all-true bools (it never included this one).
+    /// The declared default is TRUE, so an emitter that omits the field is local-oriented and one that
+    /// writes it is not.</summary>
     public bool? IsLocalOrientation { get; init; }
+
+    /// <summary>The declared default is <c>true</c>, so absent does NOT mean false here.</summary>
+    public bool IsLocalOrientationOrDefault => IsLocalOrientation ?? true;
     /// <summary>217,121, always true.</summary>
     public bool? ParticleIsLocalOrientation { get; init; }
     /// <summary>1,547, always true.</summary>
