@@ -44,6 +44,21 @@ public sealed class ParticleDocument
     /// <param name="resolveName">M187 (3.1): the host's hash dictionary, used to name emitter fields.
     /// Optional so the Formats layer stays standalone; when null (or when a hash is unknown to it) the
     /// built-in <see cref="ParticleEmitterEntry"/> fallback table is used instead.</param>
+    /// <summary>M651: the name resolver this document was parsed with, so rows can be rebuilt after a
+    /// structural edit (adding or removing a list item changes how many rows there are).</summary>
+    internal Func<uint, string?>? ResolveName { get; init; }
+
+    /// <summary>Rebuild an emitter's rows from its live bin struct - after a list edit the row list is a
+    /// different length, so refreshing the existing rows is not enough.</summary>
+    public ParticleEmitterEntry RebuildRows(ParticleEmitterEntry emitter) =>
+        ParticleEmitterEntry.From(emitter.EmitterStruct, ResolveName);
+
+    /// <summary>The same for a system's own fields.</summary>
+    public ParticleSystemEntry RebuildRows(ParticleSystemEntry system) =>
+        system.SystemObject is { } o
+            ? system with { Properties = ParticleSystemEntry.ReadProperties(o, ResolveName) }
+            : system;
+
     public static ParticleDocument? Parse(byte[] data, Func<uint, string?>? resolveName = null)
     {
         BinTree tree;
@@ -77,7 +92,7 @@ public sealed class ParticleDocument
                 ParticleSystemEntry.ReadProperties(o, resolveName),
                 o.ClassHash, o.Properties.Keys.ToList()) { SystemObject = o });
         }
-        return systems.Count > 0 ? new ParticleDocument(tree, systems, issues) : null;
+        return systems.Count > 0 ? new ParticleDocument(tree, systems, issues) { ResolveName = resolveName } : null;
     }
 
     private static string? Str(IReadOnlyDictionary<uint, BinTreeProperty> p, string name) =>
@@ -141,7 +156,7 @@ public sealed record ParticleSystemEntry(uint PathHash, string Name, string Part
         {
             if (hash == ComplexEmittersHash || hash == SimpleEmittersHash) continue;
             string fieldName = resolveName?.Invoke(hash) ?? (SystemFieldNames.TryGetValue(hash, out var fn) ? fn : $"0x{hash:x8}");
-            ParticleEmitterEntry.AddSystemRows(props, ModuleOf(fieldName), fieldName, hash, prop, resolveName);
+            ParticleEmitterEntry.AddSystemRows(props, ModuleOf(fieldName), fieldName, hash, prop, resolveName, o.Properties);
         }
         ParticleEmitterEntry.SortRows(props, ModuleOrder);
         return props;
@@ -272,7 +287,7 @@ public sealed class ParticleEmitterEntry
             string fieldName = resolveName?.Invoke(hash) ?? (FieldNames.TryGetValue(hash, out var fn) ? fn : $"0x{hash:x8}");
             if (hash == EmitterNameHash && prop is BinTreeString ns) name = ns.Value;
 
-            AddRows(props, ModuleOf(fieldName), fieldName, hash, prop, 0, resolveName, null);
+            AddRows(props, ModuleOf(fieldName), fieldName, hash, prop, 0, resolveName, null, emitter.Properties);
         }
         SortRows(props, ModuleOrder);
         return new ParticleEmitterEntry { Name = name, Properties = props, EmitterStruct = emitter };
@@ -310,11 +325,16 @@ public sealed class ParticleEmitterEntry
     /// <summary>M189: the same expansion for the system panel - assetRemappingTable and
     /// materialOverrideDefinitions were read-only containers there for exactly the same reason.</summary>
     internal static void AddSystemRows(List<ParticleProperty> into, string module, string name,
-        uint fieldHash, BinTreeProperty prop, Func<uint, string?>? resolveName)
-        => AddRows(into, module, name, fieldHash, prop, 0, resolveName, null);
+        uint fieldHash, BinTreeProperty prop, Func<uint, string?>? resolveName,
+        IDictionary<uint, BinTreeProperty>? owner = null)
+        => AddRows(into, module, name, fieldHash, prop, 0, resolveName, null, owner);
 
+    /// <param name="owner">M651: the property dictionary the row's field lives in. A container is replaced
+    /// on its owner rather than mutated in place (LeagueToolkit containers are built, not edited), so an
+    /// item row has to know where to put the rebuilt list back.</param>
     private static void AddRows(List<ParticleProperty> into, string module, string name, uint fieldHash,
-        BinTreeProperty prop, int depth, Func<uint, string?>? resolveName, string? inheritedNote)
+        BinTreeProperty prop, int depth, Func<uint, string?>? resolveName, string? inheritedNote,
+        IDictionary<uint, BinTreeProperty>? owner = null)
     {
         // M191 (3.7), corrected in M192: EVERY row with a field identity of its own gets its own answer.
         // Inheriting the parent's verdict was wrong in one direction - a field inside a struct the resolver
@@ -347,16 +367,22 @@ public sealed class ParticleEmitterEntry
                         previewNote: previewNote ?? PrimitiveNote(fieldHash, s),
                         readOnlyReason: "A struct header. Its fields are the rows indented beneath it."));
                     foreach (var (h, child) in s.Properties)
-                        AddRows(into, module, resolveName?.Invoke(h) ?? $"0x{h:x8}", h, child, depth + 1, resolveName, previewNote);
+                        AddRows(into, module, resolveName?.Invoke(h) ?? $"0x{h:x8}", h, child, depth + 1, resolveName, previewNote, s.Properties);
                     return;
 
                 case BinTreeContainer c when c.Elements.Count > 0:
                     into.Add(new ParticleProperty(module, name, prop, readOnly: true, depth: depth,
                         displayText: $"({c.Elements.Count} item(s))", previewNote: previewNote,
-                        readOnlyReason: "A list header. Its items are the rows indented beneath it. Adding and "
-                                      + "removing items is not supported."));
+                        readOnlyReason: "A list header. Its items are the rows indented beneath it; each item "
+                                      + "can be duplicated or removed from its own row."));
                     for (int i = 0; i < c.Elements.Count; i++)   // element: no field identity, inherits
+                    {
+                        int first = into.Count;
                         AddRows(into, module, $"[{i}]", 0, c.Elements[i], depth + 1, resolveName, previewNote);
+                        // M651: the handle goes on the element's FIRST row, which is the one the user sees
+                        // as the item - a struct element expands into several rows beneath it.
+                        if (owner is not null && into.Count > first) into[first].AttachToList(owner, fieldHash, i);
+                    }
                     return;
 
                 // An Optional holding a struct: unwrap it and expand, rather than stopping at the wrapper.
@@ -684,7 +710,8 @@ public sealed class ParticleProperty
     }
 
     public string CurrentText => _display ?? SafeFormat();
-    public bool IsDirty => _curveEdited || !string.Equals(CurrentText, _originalText, StringComparison.Ordinal);
+    public bool IsDirty => _curveEdited || _listEdited
+                           || !string.Equals(CurrentText, _originalText, StringComparison.Ordinal);
 
     // ---- M190 (3.6): curve key editing ---------------------------------------------------------------
     // The curve display was a copy of the keys, so nothing the user did to it could reach the bin. These
@@ -696,6 +723,76 @@ public sealed class ParticleProperty
     // keeps the whole path on supported API instead of casting the library's backing list.
     private readonly BinTreeStruct? _dynamics;
     private bool _curveEdited;
+
+
+    // ===================================================== M651: the list this row is an item of
+
+    private IDictionary<uint, BinTreeProperty>? _listOwner;
+    private uint _listField;
+
+    /// <summary>Where this row sits in its list, or -1 when it is not a list item.</summary>
+    public int ListIndex { get; private set; } = -1;
+
+    internal void AttachToList(IDictionary<uint, BinTreeProperty> owner, uint fieldHash, int index)
+    {
+        _listOwner = owner; _listField = fieldHash; ListIndex = index;
+    }
+
+    private BinTreeContainer? ListContainer =>
+        _listOwner is not null && _listOwner.TryGetValue(_listField, out var p) ? p as BinTreeContainer : null;
+
+    /// <summary>True when this row is one item of a list and the list can still be edited.</summary>
+    public bool IsListItem => ListIndex >= 0 && ListContainer is not null;
+
+    /// <summary>How many items the owning list holds; 0 when this is not a list item.</summary>
+    public int ListCount => ListContainer?.Elements.Count ?? 0;
+
+    /// <summary>
+    /// M651: a list may not be emptied. Measured over 5,754,355 containers in 6 shipping map wads and 25
+    /// champion wads, Riot ships exactly ZERO empty ones - the same result M414 got over the material
+    /// corpus, where writing one crashed the game at map load. Removing the last item would also be a
+    /// different edit from the one this row offers: it changes whether the field exists, not what it holds.
+    /// </summary>
+    public bool CanRemoveFromList => IsListItem && ListCount > 1;
+
+    public string ListBlockedReason => !IsListItem
+        ? ""
+        : ListCount > 1 ? ""
+        : "This is the list's last item. An empty list is not something Riot ships anywhere (0 of 5,754,355 "
+          + "measured) and an empty container crashes the game at map load, so the last item stays.";
+
+    /// <summary>Insert a copy of this item straight after it. Cloning rather than synthesising is what
+    /// makes this safe for every element type at once: a duplicated force field, submesh name or rotation
+    /// angle is structurally exactly what Riot wrote, and the user edits it from there.</summary>
+    public void DuplicateInList()
+    {
+        var list = ListContainer ?? throw new InvalidOperationException("This row is not a list item.");
+        var elements = list.Elements.ToList();
+        elements.Insert(ListIndex + 1, BinTreeCloner.Clone(elements[ListIndex], 0));
+        WriteList(list, elements);
+    }
+
+    public void RemoveFromList()
+    {
+        var list = ListContainer ?? throw new InvalidOperationException("This row is not a list item.");
+        if (list.Elements.Count <= 1) throw new InvalidOperationException(ListBlockedReason);
+        var elements = list.Elements.ToList();
+        elements.RemoveAt(ListIndex);
+        WriteList(list, elements);
+    }
+
+    /// <summary>Put the rebuilt list back on its owner, KEEPING its wire form. An ordered container written
+    /// back as an unordered one (or the reverse) is a property the client silently skips - see
+    /// <see cref="ReyEngine.Formats.Meta.BinWireForm"/> for the three times this project has been bitten.</summary>
+    private void WriteList(BinTreeContainer old, List<BinTreeProperty> elements)
+    {
+        _listOwner![_listField] = old is BinTreeUnorderedContainer
+            ? new BinTreeUnorderedContainer(_listField, old.ElementType, elements)
+            : new BinTreeContainer(_listField, old.ElementType, elements);
+        _listEdited = true;
+    }
+
+    private bool _listEdited;
 
     // M523: which two containers hold the keys. A curve keeps them in times/values on the dynamics
     // struct; a PROBABILITY TABLE keeps the identically-shaped pair in keyTimes/keyValues on its own

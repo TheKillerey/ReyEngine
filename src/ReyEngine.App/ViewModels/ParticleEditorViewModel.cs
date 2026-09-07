@@ -182,6 +182,36 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         catch (Exception ex) { row.ErrorText = ex.Message; }
     }
 
+    /// <summary>
+    /// M651: a list edit, which is a curve edit plus one thing - the number of rows changes, so the card
+    /// is rebuilt rather than refreshed. <see cref="EditCurve"/> can refresh in place because a curve
+    /// lives inside one row; adding or removing a list item adds or removes rows around it.
+    /// </summary>
+    internal void EditList(ParticleEmitterCardViewModel card, ParticlePropertyRowViewModel row, Action mutate)
+    {
+        if (Document is null) return;
+        if (!IsEditable) { row.ErrorText = "Read-only: Copy To Project first."; return; }
+        int at = Cards.IndexOf(card);
+        if (at < 0) return;
+        try
+        {
+            mutate();
+            MarkDocumentDirty?.Invoke();
+            _defs = VfxSystemResolver.ExtractAll(Document.Serialize());
+
+            var rebuilt = card.Entry is { } emitter
+                ? new ParticleEmitterCardViewModel(Document.RebuildRows(emitter), this)
+                : SelectedSystem is { } node
+                    ? new ParticleEmitterCardViewModel(Document.RebuildRows(node.Entry), this)
+                    : null;
+            if (rebuilt is not null) { Cards[at] = rebuilt; SelectedProperty = null; }
+
+            RebuildPlayback();
+            Info?.Invoke($"{row.Name}: the list now holds {row.Prop.ListCount} item(s).");
+        }
+        catch (Exception ex) { row.ErrorText = ex.Message; }
+    }
+
     private void RebuildPlayback()
     {
         if (SelectedSystem is null) { Playback = null; return; }
@@ -317,7 +347,7 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
         Modules = emitter.Modules
             .Select(m => new ParticleModuleGroupViewModel(m,
                 emitter.Properties.Where(p => p.Module == m)
-                    .Select(p => new ParticlePropertyRowViewModel(p, owner)).ToList()))
+                    .Select(p => new ParticlePropertyRowViewModel(p, owner) { Card = this }).ToList()))
             .ToList();
         var texPath = emitter.Properties.FirstOrDefault(p => p.Name == "texture")?.CurrentText;
         if (!string.IsNullOrWhiteSpace(texPath))
@@ -343,7 +373,7 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
         Modules = system.Modules
             .Select(m => new ParticleModuleGroupViewModel(m,
                 system.Properties.Where(p => p.Module == m)
-                    .Select(p => new ParticlePropertyRowViewModel(p, owner)).ToList()))
+                    .Select(p => new ParticlePropertyRowViewModel(p, owner) { Card = this }).ToList()))
             .ToList();
         Schema = MetaSchemaPanelViewModel.Build(
             system.ClassHash, system.PresentHashes, owner.DeclaredProperties, owner.ClassName,
@@ -418,6 +448,37 @@ public sealed partial class ParticlePropertyRowViewModel : ObservableObject
         _currentText = prop.CurrentText;
         _editText = prop.CurrentText;
         RebuildCurveKeys();
+    }
+
+    /// <summary>M651: the card this row is shown on. A list edit changes how many rows there are, so the
+    /// host rebuilds this card rather than refreshing the row.</summary>
+    internal ParticleEmitterCardViewModel? Card { get; init; }
+
+    /// <summary>M651: true when this row is one item of a list, so the item buttons appear on it.</summary>
+    public bool IsListItem => Prop.IsListItem && _owner.IsEditable;
+
+    /// <summary>The last item of a list stays - Riot ships no empty containers anywhere and an empty one
+    /// crashes the game at map load.</summary>
+    public bool CanRemoveItem => Prop.CanRemoveFromList && _owner.IsEditable;
+
+    public string RemoveItemTip => Prop.ListBlockedReason is { Length: > 0 } why
+        ? why
+        : $"Remove item {Prop.ListIndex} of {Prop.ListCount}.";
+
+    public string DuplicateItemTip =>
+        $"Insert a copy of item {Prop.ListIndex} right after it. The copy is exactly what Riot wrote, "
+        + "so it is valid before you have changed anything in it.";
+
+    [RelayCommand]
+    private void DuplicateItem()
+    {
+        if (Card is { } card) _owner.EditList(card, this, Prop.DuplicateInList);
+    }
+
+    [RelayCommand]
+    private void RemoveItem()
+    {
+        if (Card is { } card) _owner.EditList(card, this, Prop.RemoveFromList);
     }
 
     public void Refresh() { CurrentText = Prop.CurrentText; EditText = Prop.CurrentText; }

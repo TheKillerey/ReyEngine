@@ -114,6 +114,18 @@
                                               HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
                                               Command="{Binding SelectCommand}">
                                         <DockPanel Margin="{Binding Indent}">
+                                          <!-- M651: one item of a list. Duplicate clones what Riot wrote, so the
+                                               new item is valid before anything is changed in it; remove refuses
+                                               the last one, because Riot ships no empty container anywhere and an
+                                               empty one crashes the game at map load. -->
+                                          <Button DockPanel.Dock="Right" Content="✕" FontSize="8" Padding="3,0"
+                                                  Background="Transparent" BorderThickness="0" Margin="2,0,0,0"
+                                                  IsVisible="{Binding IsListItem}" IsEnabled="{Binding CanRemoveItem}"
+                                                  Command="{Binding RemoveItemCommand}" ToolTip.Tip="{Binding RemoveItemTip}" />
+                                          <Button DockPanel.Dock="Right" Content="⧉" FontSize="8" Padding="3,0"
+                                                  Background="Transparent" BorderThickness="0"
+                                                  IsVisible="{Binding IsListItem}"
+                                                  Command="{Binding DuplicateItemCommand}" ToolTip.Tip="{Binding DuplicateItemTip}" />
                                           <TextBlock DockPanel.Dock="Right" Text="{Binding CurrentText}" FontSize="9"
                                                      Opacity="0.6" MaxWidth="80" TextTrimming="CharacterEllipsis" />
                                           <!-- M191: the preview does not show this field's effect -->
