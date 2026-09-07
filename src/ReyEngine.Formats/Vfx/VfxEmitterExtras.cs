@@ -61,8 +61,35 @@ public sealed record VfxEmitterExtras
     public int? MiscRenderFlags { get; init; }
     /// <summary>341,316. Values 3 (310,104), 1, 5, 4, 0. Meaning UNKNOWN; likely a draw-priority bucket.</summary>
     public int? Importance { get; init; }
-    /// <summary>183,823. Both components continuous. Meaning UNKNOWN - not the same thing as depthPushPull,
-    /// which M175 decoded from the vertex shader and the renderer does apply.</summary>
+    /// <summary>
+    /// 183,823 occurrences. Meaning STILL UNKNOWN, but M653 narrowed it to one hypothesis and established
+    /// why the files cannot confirm it. Not the same thing as depthPushPull, which M175 decoded from the
+    /// vertex shader and the renderer does apply.
+    ///
+    /// <para><b>Shape</b> (6 shipping map wads + 40 champion wads, 65,197 of 487,907 emitters carry it):
+    /// the two components have completely different characters. X takes 30 distinct values but is -1 in
+    /// 80.0%, 0 in 8.7% and 1 in 8.7% - 97.4% inside {-1, 0, 1}, full range -110..100. Y takes 176 distinct
+    /// values spread across -18000..5000 (-1, -80, -30, -50, -100, -2, -3, -5, -10, -60 …). A small
+    /// signed factor beside a wide-ranging magnitude is exactly the shape of D3D11's rasterizer pair
+    /// <c>SlopeScaledDepthBias</c> (a float, conventionally around 1) and <c>DepthBias</c> (an int in
+    /// depth-buffer units, conventionally tens to thousands), and the field name is plural.</para>
+    ///
+    /// <para><b>Why that is a hypothesis and not a finding.</b> Rasterizer state never appears in shader
+    /// reflection, so its absence there is consistent with the reading but is not evidence for it. What
+    /// evidence there is points away from the obvious alternatives: no particle shader carries it (all
+    /// four of quad_vs/quad_ps/mesh_vs/mesh_ps checked - their only depth constants are
+    /// PARTICLE_DEPTH_PUSH_PULL, which a different field already feeds, and an unused NORMAL_OFFSET_BIAS);
+    /// it does NOT correlate with isGroundLayer (14.8% of carriers against a 21.3% baseline, slightly
+    /// anti-correlated, so it is not a decal z-fighting fix); it almost never appears beside depthPushPull
+    /// (2.8%); and it is spread evenly across every primitive class, both main blend modes, and every kind
+    /// of effect by name - Idle, Recall, Emote, Glow, death - with no ground-drawn cluster at all.</para>
+    ///
+    /// <para><b>The trap worth recording.</b> <c>mesh_ps</c> DOES declare <c>CONSTANT_DEPTH_BIAS</c> and
+    /// <c>SLOPE_SCALED_DEPTH_BIAS</c> - the exact pair the plural name suggests. They are not it: both sit
+    /// in <c>PerFramePixelCB</c> beside SHADOW_SAMPLE_OFFSETS and SPOT_SHADOW_SAMPLE_OFFSETS, which is
+    /// per-frame shadow-map state and cannot carry a per-emitter value. A name match in the right
+    /// neighbourhood is not a wiring.</para>
+    /// </summary>
     public Vector2? DepthBiasFactors { get; init; }
     /// <summary>633. Meaning UNKNOWN.</summary>
     public int? RenderPhaseOverride { get; init; }
