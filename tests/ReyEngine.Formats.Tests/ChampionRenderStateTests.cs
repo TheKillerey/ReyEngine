@@ -1,4 +1,4 @@
-﻿using ReyEngine.Core.Hashing;
+using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Materials;
 
@@ -75,6 +75,63 @@ public sealed class ChampionRenderStateTests
         if (checkedSkins == 0) return;
         Assert.True(offenders.Count == 0,
             $"{offenders.Count} champion(s) inherit a non-depth-writing sibling as their default: "
+            + string.Join(", ", offenders.Take(20)));
+    }
+
+    /// <summary>
+    /// M666: the rule underneath the one above. A submesh with no material of its own must inherit the
+    /// skin's OWN default — either the default StaticMaterialDef when it names one, or the
+    /// skinMeshProperties block, which every champion has — and never some other material that merely
+    /// happens to sit first in the file.
+    ///
+    /// <para>Both earlier attempts failed this. Taking the first StaticMaterialDef gave Renata's body her
+    /// glass; skipping blended ones then left Locke, whose five materials are all blended, with nothing to
+    /// borrow and a weapon smear that drew as a solid quad. Asserting the RESULT (depth write) missed
+    /// both, because a wrong-but-opaque sibling looks identical to the right answer in that one bit.</para>
+    /// </summary>
+    [Fact]
+    public void TheDefaultProfileIsAlwaysTheSkinsOwnAndNeverASiblings()
+    {
+        if (!Installed || Database.Value is null) return;
+        var database = Database.Value!;
+        var resolver = new WadPathResolver(database);
+        string? Bin(uint h) => database.TryGetBinName(h, out var n) ? n : null;
+        string? Wad(ulong h) => database.TryGetPath(h, out var p) ? p : null;
+
+        var offenders = new List<string>();
+        int checkedSkins = 0;
+
+        foreach (string wadPath in Directory.GetFiles(Champions, "*.wad.client").OrderBy(x => x))
+        {
+            string champ = Path.GetFileNameWithoutExtension(wadPath).Replace(".wad", "");
+            string lower = champ.ToLowerInvariant();
+            WadArchive archive;
+            try { archive = WadArchive.Open(wadPath, resolver); } catch { continue; }
+            using (archive)
+            {
+                ulong skin = HashAlgorithms.WadPath($"data/characters/{lower}/skins/skin0.bin");
+                if (!archive.TryGetEntry(skin, out _)) continue;
+                MaterialDocument doc;
+                try { doc = MaterialDocument.Parse(archive.Extract(skin), Bin, Wad); }
+                catch { continue; }
+                checkedSkins++;
+
+                var authored = doc.Materials.Where(m => m.IsDefault).Select(m => m.Profile).ToList();
+                var actual = doc.DefaultProfile;
+
+                // Either it came from a binding the skin marks as ITS default, or the skin declared none
+                // and the generic profile stands in. A non-default binding's profile is never acceptable.
+                bool fromAuthored = authored.Any(a => a.RenderMode == actual.RenderMode
+                                                      && a.DepthWrite == actual.DepthWrite
+                                                      && a.DoubleSided == actual.DoubleSided);
+                bool generic = authored.Count == 0 && actual.RenderMode == MaterialRenderMode.Opaque;
+                if (!fromAuthored && !generic) offenders.Add($"{champ} ({actual.RenderMode})");
+            }
+        }
+
+        if (checkedSkins == 0) return;
+        Assert.True(offenders.Count == 0,
+            $"{offenders.Count} champion(s) take their default from a material that is not the skin's own: "
             + string.Join(", ", offenders.Take(20)));
     }
 

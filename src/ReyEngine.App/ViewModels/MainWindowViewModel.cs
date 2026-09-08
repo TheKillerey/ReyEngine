@@ -6224,9 +6224,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private MapVisibilityDefinition _mapVisibility = MapVisibilityDefinition.Empty;
     private ShaderDatabase? _shaderDb;
 
+    /// <summary>M666: the session log on disk. Held so Program.cs can append a crash to the same file,
+    /// after the breadcrumbs that led to it.</summary>
+    public static ReyEngine.Core.Diagnostics.SessionLogSink? SessionLog { get; private set; }
+
     public MainWindowViewModel()
     {
         _log.AddSink(Console);
+        // M666: and to %AppData%/ReyEngine/session.log, flushed per line. A crash that is not a managed
+        // exception - a driver fault, a stack overflow, a kill - leaves no crash.log and takes the
+        // in-memory console with it, which is why "the tool crashed loading Locke" came with nothing to
+        // read. This at least says which step it died on.
+        SessionLog ??= new ReyEngine.Core.Diagnostics.SessionLogSink();
+        if (SessionLog is not null) _log.AddSink(SessionLog);
         Console.EntryWritten += OnConsoleEntry;   // M519: badge the Console tab while it is behind
         // M367: deferred, not eager - LoadLocal reads and parses ~3.6 MB, and a session that never opens a
         // bin should not pay for it at startup. Lazy is thread-safe, which matters because the first

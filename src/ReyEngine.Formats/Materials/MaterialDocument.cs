@@ -101,23 +101,28 @@ public sealed class MaterialDocument
     }
 
     /// <summary>
-    /// Profile for submeshes with no override — the default StaticMaterialDef's profile.
+    /// Profile for submeshes with no material override of their own.
     ///
-    /// <para>M664: when the skin declares no default StaticMaterialDef the fallback takes the first one in
-    /// the FILE, and file order is not a statement about anything. Measured over the roster: 162 of 174
-    /// champions have no default StaticMaterialDef, and in 24 of them the first one is a BLENDED material,
-    /// so 92 plain body submeshes inherited a blend state that was never meant for them — Renata's body
-    /// borrowed her glass, Akali's borrowed her kama, Locke's borrowed his glasses. Blended means
-    /// depthWrite off, so those parts also stopped occluding anything behind them.</para>
+    /// <para><b>M666: it never needed to guess.</b> Two rules were tried here and both picked an UNRELATED
+    /// material by file order. The original took the first StaticMaterialDef, so Renata's body inherited
+    /// her GLASS, Akali's her kama and Locke's his glasses — 24 champions, 92 submeshes, all of them
+    /// silently losing their depth write because those materials blend. M664 then skipped blended
+    /// siblings, which fixed those 24 and broke Locke the other way: every one of his five
+    /// StaticMaterialDefs is blended, so nothing was left to borrow and his weapon smear — a trail whose
+    /// texture is 32% fully transparent — fell to plain Opaque and drew as a solid quad.</para>
     ///
-    /// <para>The fallback therefore skips blended siblings. The 137 skins whose first StaticMaterialDef is
-    /// opaque are unaffected — borrowing an opaque sibling's state is harmless, and it still carries the
-    /// UV transform a converted skin may rely on. Where only blended ones exist, a plain submesh gets the
-    /// neutral profile rather than someone else's glass.</para>
+    /// <para>The authored answer was in the file the whole time. A champion skin's
+    /// <c>skinMeshProperties</c> block is itself a default binding (it carries the base mesh's texture),
+    /// and it is recorded here with <c>IsDefault</c> set. Measured across the roster: all 174 champions
+    /// have one, and 162 of them have NO default StaticMaterialDef at all — for those, that block IS what
+    /// the client falls back to, and its profile is the champion-skin neutral: alpha-tested, depth
+    /// writing. So: the default StaticMaterialDef when the skin names one (12 champions), otherwise the
+    /// skin's own default block, and only with neither does anything generic stand in. No sibling is ever
+    /// consulted.</para>
     /// </summary>
     public MaterialProfile DefaultProfile =>
         Materials.FirstOrDefault(m => m.IsDefault && m.IsStaticMaterialDef)?.Profile
-        ?? Materials.FirstOrDefault(m => m.IsStaticMaterialDef && m.Profile.DepthWrite)?.Profile
+        ?? Materials.FirstOrDefault(m => m.IsDefault)?.Profile
         ?? MaterialProfile.Default;
 
     /// <summary>Map (or any): material name → diffuse texture path (live).</summary>
