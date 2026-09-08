@@ -2,6 +2,7 @@ using System.Numerics;
 using Silk.NET.OpenGL;
 using ReyEngine.Formats.Lighting;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Core.Assets;
 
 namespace ReyEngine.Rendering;
 
@@ -1090,6 +1091,9 @@ void main() { FragColor = uColor; }";
         _mkSize = gl.GetUniformLocation(_markerProgram, "uSize");
         _mkColor = gl.GetUniformLocation(_markerProgram, "uColor");
         _mkTex = gl.GetUniformLocation(_markerProgram, "uTex");
+        _mkViewportH = gl.GetUniformLocation(_markerProgram, "uViewportH");
+        _mkMaxPx = gl.GetUniformLocation(_markerProgram, "uMaxPx");
+        _mkTint = gl.GetUniformLocation(_markerProgram, "uTint");
         float[] quad = { -0.5f, -0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f };   // triangle strip
         _markerQuadVbo = gl.GenBuffer();
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, _markerQuadVbo);
@@ -1101,11 +1105,13 @@ void main() { FragColor = uColor; }";
         ConfigureMarkerVao(_probeVao, _probeVbo);
         ConfigureMarkerVao(_soundVao, _soundVbo);
         ConfigureMarkerVao(_lightMkVao, _lightMkVbo);
-        _icoSparkle = UploadIcon(IconSparkle(96));   // M76: hi-res crisp star (was a 48px soft-ray blur)
-        _icoPerson = UploadIcon(IconPerson(48));
-        _icoRing = UploadIcon(IconRing(48));
-        _icoSpeaker = UploadIcon(IconSpeaker(48));
-        _icoLight = UploadIcon(IconLight(96));       // M76: match the star's resolution
+        // M657: painted art, with the drawn glyph as the fallback so a decode failure costs fidelity
+        // rather than markers. M76's shapes are kept for exactly that.
+        _icoSparkle = UploadIcon(ViewportIcon.Particle, IconSparkle(96));
+        _icoPerson = UploadIcon(ViewportIcon.Prop, IconPerson(48));
+        _icoRing = UploadIcon(ViewportIcon.Probe, IconRing(48));
+        _icoSpeaker = UploadIcon(ViewportIcon.Sound, IconSpeaker(48));
+        _icoLight = UploadIcon(ViewportIcon.Light, IconLight(96));
 
         _ready = true;
     }
@@ -1126,7 +1132,14 @@ void main() { FragColor = uColor; }";
     private int _bucketMeshVerts, _bwMvp, _bwColor;
     private uint _lightMkVao, _lightMkVbo;                       // M71: dynamic-light position icons
     private int _soundVerts, _bucketVerts, _lightMkVerts;
-    private int _mkViewProj, _mkCamRight, _mkCamUp, _mkSize, _mkColor, _mkTex;
+    private int _mkViewProj, _mkCamRight, _mkCamUp, _mkSize, _mkColor, _mkTex, _mkViewportH, _mkMaxPx, _mkTint;
+
+    private float _viewportHeightPx;
+
+    /// <summary>M657: told to the renderer because only the host knows the framebuffer size, and the
+    /// marker cap is expressed in screen space. Zero leaves markers uncapped, which is the pre-M657
+    /// behaviour rather than a broken one.</summary>
+    public void SetViewportSize(int widthPx, int heightPx) => _viewportHeightPx = MathF.Max(0f, heightPx);
     private float _particleMarkerSize = 20f, _propMarkerSize = 20f, _probeMarkerSize = 20f, _particleSelSize = 20f, _soundMarkerSize = 20f, _lightMkSize = 20f;
 
     private unsafe void ConfigureMarkerVao(uint vao, uint instVbo)
@@ -1142,14 +1155,26 @@ void main() { FragColor = uColor; }";
         _gl.BindVertexArray(0);
     }
 
-    private unsafe uint UploadIcon((byte[] Rgba, int N) icon)
+    /// <summary>M657: the painted icon when it is there, the drawn glyph when it is not.</summary>
+    private unsafe uint UploadIcon(ViewportIcon icon, (byte[] Rgba, int N) fallback)
+    {
+        var art = ViewportIcons.Load(icon);
+        return art is not null ? UploadIcon((art.Rgba, art.Size), mipmapped: true)
+                               : UploadIcon(fallback, mipmapped: false);
+    }
+
+    private unsafe uint UploadIcon((byte[] Rgba, int N) icon, bool mipmapped = false)
     {
         var tex = _gl.GenTexture();
         _gl.BindTexture(TextureTarget.Texture2D, tex);
         fixed (byte* p = icon.Rgba)
             _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)icon.N, (uint)icon.N, 0,
                 PixelFormat.Rgba, PixelType.UnsignedByte, p);
-        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        // 256px art drawn at a few dozen pixels aliases badly without a mip chain - the drawn glyphs were
+        // authored at the size they are seen at and do not need one.
+        if (mipmapped) _gl.GenerateMipmap(TextureTarget.Texture2D);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
+            (int)(mipmapped ? TextureMinFilter.LinearMipmapLinear : TextureMinFilter.Linear));
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
@@ -1277,6 +1302,14 @@ void main() { FragColor = uColor; }";
         return (px, n);
     }
 
+    // M657: a marker is a WORLD-sized billboard, which is right at a distance and wrong up close - fly in
+    // to move a particle and its icon grows without limit until it covers what you are placing. The size
+    // is measured in pixels here and capped, so a marker stops growing once it fills uMaxPx of the
+    // viewport height. Nothing is done at the far end: shrinking with distance is what keeps a zoomed-out
+    // map from becoming a wall of icons, and that half was never the complaint.
+    //
+    // The measurement is two clip-space points rather than a projection term, so it needs nothing but the
+    // viewport height and is identical to what the D3D11 path computes on the CPU.
     private const string MarkerVert = @"
 layout(location=0) in vec2 aCorner;
 layout(location=1) in vec3 aCenter;
@@ -1284,22 +1317,47 @@ uniform mat4 uViewProj;
 uniform vec3 uCamRight;
 uniform vec3 uCamUp;
 uniform float uSize;
+uniform float uViewportH;
+uniform float uMaxPx;
 out vec2 vUv;
 void main(){
-    vec3 world = aCenter + uCamRight * (aCorner.x * uSize) + uCamUp * (aCorner.y * uSize);
+    float size = uSize;
+    if (uViewportH > 0.0 && uMaxPx > 0.0) {
+        vec4 c0 = uViewProj * vec4(aCenter, 1.0);
+        vec4 c1 = uViewProj * vec4(aCenter + uCamUp * uSize, 1.0);
+        if (c0.w > 0.0001 && c1.w > 0.0001) {
+            float px = abs(c1.y / c1.w - c0.y / c0.w) * 0.5 * uViewportH;
+            if (px > uMaxPx) size = uSize * (uMaxPx / px);
+        }
+    }
+    vec3 world = aCenter + uCamRight * (aCorner.x * size) + uCamUp * (aCorner.y * size);
     gl_Position = uViewProj * vec4(world, 1.0);
-    vUv = aCorner + vec2(0.5, 0.5);
+    // V is FLIPPED against the corner: aCorner.y is +0.5 at the top of the quad, while glTexImage2D puts
+    // the image's FIRST row - its top - at v = 0. Mapping v straight from the corner drew every icon
+    // upside down, which had been true since M53 and was invisible because every glyph drawn in code was
+    // vertically symmetric (four-point star, ring, radial glow); the one that was not, IconPerson, is a
+    // white blob at twenty pixels and reads the same either way. Painted art made it obvious at once.
+    // D3D11 builds its quads on the CPU and already assigns v = 0 to the top pair, which is why only the
+    // OpenGL viewport had the problem.
+    vUv = vec2(aCorner.x + 0.5, 0.5 - aCorner.y);
 }";
 
+    // M657: the icons are painted art and carry their own colour, so the texture's rgb is what is drawn.
+    // uColor is a MULTIPLY (opacity, and a per-type wash where one is still wanted) and uTint mixes
+    // toward uColor for the selected marker - substituting a flat tint for the art, which is what this
+    // did while the glyphs were white-with-alpha, would have thrown the artwork away.
     private const string MarkerFrag = @"
 in vec2 vUv;
 uniform sampler2D uTex;
 uniform vec4 uColor;
+uniform float uTint;
 out vec4 fragColor;
 void main(){
-    float a = texture(uTex, vUv).a * uColor.a;
+    vec4 t = texture(uTex, vUv);
+    float a = t.a * uColor.a;
     if (a < 0.02) discard;
-    fragColor = vec4(uColor.rgb, a);
+    vec3 rgb = mix(t.rgb * uColor.rgb, uColor.rgb, uTint);
+    fragColor = vec4(rgb, a);
 }";
 
     public unsafe void SetMesh(float[] positions, float[] normals, float[] uvs, uint[] indices,
@@ -2934,27 +2992,39 @@ void main(){
             _gl.Uniform3(_mkCamRight, camRight.X, camRight.Y, camRight.Z);
             _gl.Uniform3(_mkCamUp, camUp.X, camUp.Y, camUp.Z);
             _gl.Uniform1(_mkTex, 0);
+            _gl.Uniform1(_mkViewportH, _viewportHeightPx);
             _gl.ActiveTexture(TextureUnit.Texture0);
             _gl.Disable(EnableCap.DepthTest);
             _gl.Enable(EnableCap.Blend);
             _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
-            DrawIconSet(_particleVao, _particleVerts, _icoSparkle, _particleMarkerSize, 0.30f, 0.89f, 0.95f, 0.85f);
-            DrawIconSet(_propVao, _propVerts, _icoPerson, _propMarkerSize, 1.00f, 0.58f, 0.18f, 0.9f);
-            DrawIconSet(_probeVao, _probeVerts, _icoRing, _probeMarkerSize, 0.32f, 0.93f, 0.47f, 0.9f);
-            DrawIconSet(_soundVao, _soundVerts, _icoSpeaker, _soundMarkerSize, 0.78f, 0.55f, 1.0f, 0.9f);
-            DrawIconSet(_lightMkVao, _lightMkVerts, _icoLight, _lightMkSize, 1.0f, 0.83f, 0.35f, 0.95f);   // M71: warm light glow
-            DrawIconSet(_particleSelVao, _particleSelVerts, _icoSparkle, _particleSelSize, 1.0f, 0.92f, 0.25f, 1f);
+            // M657: the art is colour-coded already, so these are opacity and nothing else. The old
+            // per-type tints are gone with the white glyphs they were colouring.
+            DrawIconSet(_particleVao, _particleVerts, _icoSparkle, _particleMarkerSize, 1f, 1f, 1f, 0.95f);
+            DrawIconSet(_propVao, _propVerts, _icoPerson, _propMarkerSize, 1f, 1f, 1f, 0.95f);
+            DrawIconSet(_probeVao, _probeVerts, _icoRing, _probeMarkerSize, 1f, 1f, 1f, 0.95f);
+            DrawIconSet(_soundVao, _soundVerts, _icoSpeaker, _soundMarkerSize, 1f, 1f, 1f, 0.95f);
+            DrawIconSet(_lightMkVao, _lightMkVerts, _icoLight, _lightMkSize, 1f, 1f, 1f, 0.95f);
+            // The selected marker: the same art, drawn larger and washed toward the selection yellow so it
+            // is unmistakable without becoming a flat silhouette.
+            DrawIconSet(_particleSelVao, _particleSelVerts, _icoSparkle, _particleSelSize, 1.0f, 0.92f, 0.25f, 1f,
+                tint: 0.5f, maxPxScale: 2f);   // authored at 2x the normal size (3.2 vs 1.6) - keep the ratio
 
             _gl.Disable(EnableCap.Blend);
             _gl.BindVertexArray(0);
         }
     }
 
-    private unsafe void DrawIconSet(uint vao, int count, uint icon, float size, float r, float g, float b, float a)
+    /// <param name="maxPxScale">M657: how much of the shared cap this set may use. The SELECTED marker is
+    /// authored at twice the normal world size, and one cap for everything would collapse that difference
+    /// the moment the camera came close - which is exactly when knowing what is selected matters.</param>
+    private unsafe void DrawIconSet(uint vao, int count, uint icon, float size, float r, float g, float b, float a,
+        float tint = 0f, float maxPxScale = 1f)
     {
         if (count == 0) return;
         _gl.Uniform4(_mkColor, r, g, b, a);
+        _gl.Uniform1(_mkTint, tint);
+        _gl.Uniform1(_mkMaxPx, _viewportHeightPx * ViewportIcons.MaxHeightFraction * maxPxScale);
         _gl.Uniform1(_mkSize, size);
         _gl.BindTexture(TextureTarget.Texture2D, icon);
         _gl.BindVertexArray(vao);

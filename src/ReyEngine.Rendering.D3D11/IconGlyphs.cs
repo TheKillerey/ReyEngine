@@ -1,28 +1,33 @@
 using System;
+using ReyEngine.Core.Assets;
 
 namespace ReyEngine.Rendering.D3D11;
-
-/// <summary>The placement types the viewport marks.</summary>
-public enum IconGlyph { Particle = 0, Sound = 1, Prop = 2, Probe = 3, Light = 4 }
 
 /// <summary>
 /// <para>M271: the marker glyphs, rasterised in code rather than loaded from files.</para>
 ///
-/// <para>There is no icon art in the repository - the OpenGL viewport draws a soft dot and nothing else -
-/// so shipping textured markers meant either introducing an art pipeline or drawing them. Drawing them
-/// has no missing-file failure mode, no packaging step, and no way for a build to ship with the icons
-/// silently absent, which for five small symbols is worth more than the fidelity a painted sprite would
-/// add.</para>
+/// <para>M657: superseded as the DEFAULT by painted art in <see cref="ViewportIcons"/>, and kept as the
+/// fallback. The reason M271 drew them still stands - no missing-file failure mode, no packaging step,
+/// no way for a build to ship with the markers silently absent - and embedding the art keeps that
+/// property while a decode failure now costs fidelity rather than markers.</para>
 ///
-/// <para>Each glyph is a white RGBA image whose ALPHA carries the shape; the colour comes from the
-/// overlay's constant buffer, so one glyph serves every tint and the same five textures cover both the
-/// normal and the selected state.</para>
+/// <para>Each drawn glyph is a white RGBA image whose ALPHA carries the shape, so the colour comes from
+/// the overlay's constant buffer. The painted icons are the other way round: they carry their own
+/// colour, which is why the textured pixel shader multiplies rather than substitutes.</para>
 /// </summary>
 public static class IconGlyphs
 {
     public const int Size = 64;
 
-    public static byte[] Build(IconGlyph glyph)
+    /// <summary>The painted icon when it is there, the drawn glyph when it is not. The second return is
+    /// the edge length, since the art and the drawn glyph are not the same size.</summary>
+    public static (byte[] Rgba, int Size) Load(ViewportIcon glyph)
+    {
+        var art = ViewportIcons.Load(glyph);
+        return art is not null ? (art.Rgba, art.Size) : (Build(glyph), Size);
+    }
+
+    public static byte[] Build(ViewportIcon glyph)
     {
         var px = new byte[Size * Size * 4];
         for (int y = 0; y < Size; y++)
@@ -33,10 +38,10 @@ public static class IconGlyphs
             float v = 1f - (y + 0.5f) / Size * 2f;
             float a = glyph switch
             {
-                IconGlyph.Particle => Spark(u, v),
-                IconGlyph.Sound => Speaker(u, v),
-                IconGlyph.Prop => Cube(u, v),
-                IconGlyph.Probe => Probe(u, v),
+                ViewportIcon.Particle => Spark(u, v),
+                ViewportIcon.Sound => Speaker(u, v),
+                ViewportIcon.Prop => Cube(u, v),
+                ViewportIcon.Probe => Probe(u, v),
                 _ => Light(u, v),
             };
             int o = (y * Size + x) * 4;

@@ -968,6 +968,9 @@ public sealed class ViewportControl : OpenGlControlBase
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
 
         _gl.Viewport(0, 0, w, h);
+        // M657: the renderer caps a placement marker at a fraction of the viewport height, which it can
+        // only do if it knows what that height is.
+        _meshRenderer?.SetViewportSize((int)w, (int)h);
         _gl.ClearColor(0.039f, 0.051f, 0.075f, 1f);
         // M182 (2.9): the stencil plane must be cleared too. Without this, last frame's mask persists and
         // a mode-2/3 emitter tests against stale values - which reads as particles flickering in and out

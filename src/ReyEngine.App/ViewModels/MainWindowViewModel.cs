@@ -6074,11 +6074,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private float _dx11IconSize, _dx11IconSpread, _dx11IconScaleX, _dx11IconScaleZ, _dx11IconOffsetX, _dx11IconOffsetZ;
     private bool _dx11IconShowLights;
     private IReadOnlyList<(System.Numerics.Vector3 Pos, System.Numerics.Vector4 Color, float Size,
-        ReyEngine.Rendering.D3D11.IconGlyph Glyph)> _dx11IconCache =
-        Array.Empty<(System.Numerics.Vector3, System.Numerics.Vector4, float, ReyEngine.Rendering.D3D11.IconGlyph)>();
+        ReyEngine.Core.Assets.ViewportIcon Glyph)> _dx11IconCache =
+        Array.Empty<(System.Numerics.Vector3, System.Numerics.Vector4, float, ReyEngine.Core.Assets.ViewportIcon)>();
 
     public IReadOnlyList<(System.Numerics.Vector3 Pos, System.Numerics.Vector4 Color, float Size,
-        ReyEngine.Rendering.D3D11.IconGlyph Glyph)> Dx11Icons(float cameraDistance)
+        ReyEngine.Core.Assets.ViewportIcon Glyph)> Dx11Icons(float cameraDistance)
     {
         float size = Math.Clamp(cameraDistance * 0.012f, 12f, 320f);
         float spread = (float)DynamicLightPositionScale;
@@ -6100,29 +6100,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _dx11IconScaleX = scaleX; _dx11IconScaleZ = scaleZ; _dx11IconOffsetX = offsetX; _dx11IconOffsetZ = offsetZ;
 
         var outp = new List<(System.Numerics.Vector3, System.Numerics.Vector4, float,
-            ReyEngine.Rendering.D3D11.IconGlyph)>();
+            ReyEngine.Core.Assets.ViewportIcon)>();
         void Add(IReadOnlyList<System.Numerics.Vector3>? pts, System.Numerics.Vector4 colour,
-                 ReyEngine.Rendering.D3D11.IconGlyph glyph)
+                 ReyEngine.Core.Assets.ViewportIcon glyph)
         {
             if (pts is null) return;
             foreach (var p in pts) outp.Add((p, colour, size, glyph));
         }
-        Add(ParticleMarkers, new System.Numerics.Vector4(1.00f, 0.42f, 0.78f, 0.85f),
-            ReyEngine.Rendering.D3D11.IconGlyph.Particle);
-        Add(SoundMarkers, new System.Numerics.Vector4(0.35f, 0.80f, 1.00f, 0.85f),
-            ReyEngine.Rendering.D3D11.IconGlyph.Sound);
-        Add(PropMarkers, new System.Numerics.Vector4(1.00f, 0.80f, 0.25f, 0.85f),
-            ReyEngine.Rendering.D3D11.IconGlyph.Prop);
-        Add(ProbeMarkers, new System.Numerics.Vector4(0.55f, 1.00f, 0.45f, 0.85f),
-            ReyEngine.Rendering.D3D11.IconGlyph.Probe);
+        // M657: the painted icons carry their own colour, so these are opacity and nothing else - the
+        // per-type tints went with the white glyphs they were colouring. Kept as a Vector4 because the
+        // renderer batches by colour, and because a wash is still the way to say "highlighted".
+        var plain = new System.Numerics.Vector4(1f, 1f, 1f, 0.95f);
+        Add(ParticleMarkers, plain, ReyEngine.Core.Assets.ViewportIcon.Particle);
+        Add(SoundMarkers, plain, ReyEngine.Core.Assets.ViewportIcon.Sound);
+        Add(PropMarkers, plain, ReyEngine.Core.Assets.ViewportIcon.Prop);
+        Add(ProbeMarkers, plain, ReyEngine.Core.Assets.ViewportIcon.Probe);
         if (ShowLightMarkers && DynamicLights is { Count: > 0 } lights)
         {
             var scaleXZ = new System.Numerics.Vector2(scaleX, scaleZ);
             var offset = new System.Numerics.Vector2(offsetX, offsetZ);
             foreach (var light in lights)
                 outp.Add((Formats.Baking.BakeLighting.FitPosition(light.Position, spread, scaleXZ, offset),
-                    new System.Numerics.Vector4(1.00f, 0.62f, 0.20f, 0.90f), size * 1.2f,
-                    ReyEngine.Rendering.D3D11.IconGlyph.Light));
+                    plain, size * 1.2f,
+                    ReyEngine.Core.Assets.ViewportIcon.Light));
         }
         return _dx11IconCache = outp;
     }

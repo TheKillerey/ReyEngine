@@ -11,6 +11,7 @@ using Silk.NET.DXGI;
 // our namespace is itself called D3D11, which shadows Silk's API type of the same name
 using SilkD3D11 = Silk.NET.Direct3D11.D3D11;
 
+using ReyEngine.Core.Assets;
 namespace ReyEngine.Rendering.D3D11;
 
 /// <summary>Camera / lighting / render knobs the preview drives the shader with.</summary>
@@ -481,7 +482,7 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     // dynamic pair belongs to the particle simulation and both are rewritten every frame.
     private ComPtr<ID3D11Buffer> _iconVb, _iconIb;
     private int _iconVbCapacity, _iconIbCapacity;
-    private readonly List<(Vector3 Pos, Vector4 Color, float Size, IconGlyph Glyph)> _icons = new();
+    private readonly List<(Vector3 Pos, Vector4 Color, float Size, ViewportIcon Glyph)> _icons = new();
     private object? _iconSource;
     private PreviewVertex[] _iconVertsCpu = Array.Empty<PreviewVertex>();
     private uint[] _iconIndicesCpu = Array.Empty<uint>();
@@ -1255,7 +1256,7 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     /// a Summoner's Rift bin carries a thousand of these and per-marker draws would cost more than the map
     /// behind them.</para>
     /// </summary>
-    public void SetIcons(IReadOnlyList<(Vector3 Pos, Vector4 Color, float Size, IconGlyph Glyph)>? icons)
+    public void SetIcons(IReadOnlyList<(Vector3 Pos, Vector4 Color, float Size, ViewportIcon Glyph)>? icons)
     {
         if (ReferenceEquals(_iconSource, icons)) return;
         _iconSource = icons;
@@ -1302,9 +1303,14 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         }
         var verts = _iconVertsCpu;
         var idx = _iconIndicesCpu;
+        var mvp = Matrix4x4.Multiply(view, proj);
         for (int i = 0; i < quads; i++)
         {
             var (pos, _, size, _) = _icons[i];
+            // M657: a marker is a world-sized billboard, so flying in to move something made its icon
+            // cover the thing being placed. Capped here rather than in a shader because these quads are
+            // built on the CPU; the GL vertex shader does the same arithmetic per vertex.
+            size = ViewportIcons.CapWorldSize(pos, up, size, mvp, _height);
             float h = size * 0.5f;
             var r = right * h; var u = up * h;
             int v = i * 4;
@@ -1336,7 +1342,6 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         var factor = stackalloc float[4] { 0, 0, 0, 0 };
         _ctx.OMSetBlendState(_overlayBlend, factor, 0xFFFFFFFF);
 
-        var mvp = Matrix4x4.Multiply(view, proj);
         int draws = 0, runStart = 0;
         for (int i = 1; i <= quads; i++)
         {
@@ -1473,8 +1478,10 @@ struct VIn { float3 pos : POSITION; };
 float4 vsmain(VIn i) : SV_Position { return mul(float4(i.pos, 1.0), gMvp); }
 float4 psmain() : SV_Target { return gColor; }
 
-// Textured variant, for the placement glyphs. The glyph carries its SHAPE in alpha and is otherwise
-// white, so one texture serves every tint - the colour comes from gColor and multiplies through.
+// Textured variant, for the placement glyphs. M657: the painted icons carry their own COLOUR as well as
+// their shape, so gColor multiplies through rather than replacing the texture - substituting a flat tint
+// (what this did while the glyphs were white-with-alpha) would throw the artwork away. A white gColor is
+// therefore 'draw the art as paintedgColor.a is still the opacity.
 struct VTexIn  { float3 pos : POSITION; float2 uv : TEXCOORD0; };
 struct VTexOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 Texture2D gGlyph : register(t0);
@@ -1489,7 +1496,7 @@ VTexOut vsmain_tex(VTexIn i)
 float4 psmain_tex(VTexOut i) : SV_Target
 {
     float4 g = gGlyph.Sample(gGlyphSamp, i.uv);
-    return float4(gColor.rgb, gColor.a * g.a);
+    return float4(g.rgb * gColor.rgb, gColor.a * g.a);
 }
 ";
 
@@ -1667,8 +1674,10 @@ float4 psmain_tex(VTexOut i) : SV_Target
 
         for (int g = 0; g < _glyphSrv.Length; g++)
         {
-            var rgba = IconGlyphs.Build((IconGlyph)g);
-            var srv = MakeTexture(rgba, IconGlyphs.Size, IconGlyphs.Size);
+            // M657: painted art when it decodes, the M271 drawn glyph when it does not. MakeTexture
+            // builds the full mip chain (M294), which 256px art drawn at a few dozen pixels needs.
+            var (rgba, size) = IconGlyphs.Load((ViewportIcon)g);
+            var srv = MakeTexture(rgba, size, size);
             if (srv is { } v) _glyphSrv[g] = v;
         }
 

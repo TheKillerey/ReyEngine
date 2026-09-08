@@ -15,4 +15,11 @@
     <PackageReference Include="CommunityToolkit.HighPerformance" Version="8.4.2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- M657: the viewport's placement icons. Embedded, not copied next to the exe, so there is no
+         packaging step that can ship a build with the markers silently absent. Both renderers read
+         them from here because they deliberately do not reference each other. -->
+    <EmbeddedResource Include="Assets\ViewportIcons\*.png" />
+  </ItemGroup>
+
 </Project>
