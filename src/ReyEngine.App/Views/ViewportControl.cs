@@ -1734,6 +1734,9 @@ public sealed class ViewportControl : OpenGlControlBase
         var pb = ParticlePlayback;
         _particleRenderer.ClearTextures();
         if (pb is null || pb.Items.Count == 0) { _particleClock.Stop(); return; }
+        // M667: bracket the GL particle upload. This is the last step of playing an event that can fault
+        // natively (texture and mesh uploads), and the last line before a fault is the diagnosis.
+        Log?.Invoke("Viewport", $"particle upload: {pb.Items.Count} item(s)");
 
         // Upload every unique sprite once (shared across placements of the same system) + a soft-dot fallback.
         _softDotTex = _particleRenderer.UploadTexture(SoftDot(64), 64, 64);
@@ -1751,6 +1754,8 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         if (pb.CullByCamera) _particleSims.Clear();
         RebuildActiveParticleAnimations();
+        Log?.Invoke("Viewport", $"particle upload done: {_particleSims.Count} sim(s), "
+            + $"{_particleTextureCache.Count} texture(s), {_particleMeshAnimations.Count} animated mesh emitter(s)");
         _particleClock.Restart();
         RequestNextFrameRendering();
     }

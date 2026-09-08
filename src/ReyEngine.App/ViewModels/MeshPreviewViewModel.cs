@@ -320,6 +320,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             });
         }
         if (_eventBundle is { Count: > 0 }) items.AddRange(_eventBundle);   // M116: spell composite rides along
+        // M667: the whole playback about to reach the renderers, in one line. Item counts and bone
+        // attachments are what a native fault in the GL upload would need to be traced back to.
+        LogDx11?.Invoke("Event", $"clip '{anm}': {items.Count} item(s) to the viewport, "
+            + $"{items.Count(i => i.AttachBone is { Length: > 0 })} bone-attached, "
+            + $"{items.Count(i => i.EmitterMeshes is not null)} with mesh emitters");
         if (items.Count > 0) Playback = new VfxPlayback(items);
     }
 
@@ -483,11 +488,19 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     private void PlayEvent(Formats.Vfx.ChampionEvent ev)
     {
+        // M667: event playback used to log nothing at all, so a session that died during one ended on
+        // whatever happened to be logged last - an arena load, in the case that prompted this - and the
+        // wrong thing got investigated. Every event, composite and clip alike, is played through the real
+        // D3D11 driver headlessly without a fault (all 50 of Locke's); the GL path cannot be, so it says
+        // what it is doing instead.
+        LogDx11?.Invoke("Event", $"play '{ev.Name}' ({ev.Description}) - building composite");
         SelectedVfx = null;                       // manual pick and events are exclusive
         _activeEvent = ev;
         _eventPlaybackActive = true;
         if (ev.NeedsTarget && !TargetDummyEnabled) TargetDummyEnabled = true;   // _tar plays ONLY on the dummy
         _eventBundle = BuildEventBundle(ev);
+        LogDx11?.Invoke("Event", $"'{ev.Name}': composite {_eventBundle.Count} item(s), "
+            + $"clip {(ev.ClipAnmFile ?? "(none)")}");
 
         // The clip drives timing when the event has one; else the bundle plays on its own.
         var entry = ev.ClipAnmFile is { } anm
