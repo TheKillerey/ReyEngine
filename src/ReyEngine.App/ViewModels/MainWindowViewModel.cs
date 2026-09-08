@@ -1738,17 +1738,59 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_currentMap is null) { _log.Warn("AddMesh", "Open a map (.mapgeo) first."); return; }
         var file = await Dialogs.OpenFileAsync("Import mesh (.mapgeo / .fbx / .glb / .gltf / .obj / .scb / .sco)",
             new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
-            { Patterns = new[] { "*.mapgeo", "*.fbx", "*.glb", "*.gltf", "*.obj", "*.scb", "*.sco" } },
+            { Patterns = Formats.Meshes.SceneFileLoader.Extensions.Select(e => "*" + e).ToArray() },
             DialogService.All);
         if (file is null) return;
 
         // M123: the dedicated import + setup window replaces the old direct-add flow.
+        var vm = await BuildAddMeshWindowAsync();
+        if (vm is null)
+        { _log.Warn("AddMesh", "No shader catalogue — pick a game environment in the Materials tab first."); return; }
+        vm.LoadFile(file);
+        ShowAddMeshWindow?.Invoke(vm);
+    }
+
+    /// <summary>Wired by MainWindow — owns the Add Mesh window instance.</summary>
+    public Action<AddMeshWindowViewModel>? ShowAddMeshWindow;
+
+    /// <summary>
+    /// M656: add one mesh off the Workshop shelf.
+    ///
+    /// <para>It opens the Add Mesh window on that file with that mesh ticked rather than staging it
+    /// directly, because the material question is not optional and that window is where it is asked
+    /// properly (M654) - copy the original out of the source map's bin, reuse one this map already has,
+    /// or build one from a League shader with its samplers set up. A second, quieter path that picked a
+    /// material silently is how surfaces end up drawing untextured.</para>
+    /// </summary>
+    private async Task<string> AddWorkshopMeshAsync(WorkshopUserMesh mesh)
+    {
+        if (_currentMap is null) throw new InvalidOperationException("Open a map (.mapgeo) first.");
+        if (!File.Exists(mesh.FilePath))
+            throw new InvalidOperationException($"'{Path.GetFileName(mesh.FilePath)}' is no longer where the shelf points.");
+
+        var vm = await BuildAddMeshWindowAsync();
+        if (vm is null) throw new InvalidOperationException(
+            "No shader catalogue — pick a game environment in the Materials tab first.");
+
+        bool exact = vm.LoadFileAndSelectOnly(mesh.FilePath, new[] { mesh.MeshName });
+        if (mesh.SourceMaterialsBin is { Length: > 0 } bin && File.Exists(bin)) vm.UseSourceBin(bin);
+        ShowAddMeshWindow?.Invoke(vm);
+        return exact
+            ? $"Opened Add Mesh on '{mesh.MeshName}'. Set its material there, then Add To Map."
+            : $"Opened '{Path.GetFileName(mesh.FilePath)}', but it no longer holds a mesh called "
+              + $"'{mesh.MeshName}' — pick what you want in the window.";
+    }
+
+    /// <summary>The Add Mesh window with everything the host owns already wired. Shared by the toolbar
+    /// command and the Workshop shelf so the two cannot drift apart.</summary>
+    private async Task<AddMeshWindowViewModel?> BuildAddMeshWindowAsync()
+    {
         // M123b: new materials build from the shader catalogue, so it must be loaded.
         if (MaterialEditor.Catalog is null && MaterialEditor.SelectedShaderEnvironment is { } env)
             await LoadShaderCatalogAsync(env);
-        if (MaterialEditor.Catalog is not { } cat)
-        { _log.Warn("AddMesh", "No shader catalogue — pick a game environment in the Materials tab first."); return; }
+        if (MaterialEditor.Catalog is not { } cat) return null;
 
+        var patterns = Formats.Meshes.SceneFileLoader.Extensions.Select(e => "*" + e).ToArray();
         var vm = new AddMeshWindowViewModel
         {
             ExistingMaterials = MapMaterialNames,
@@ -1765,8 +1807,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         };
         vm.SetVisibilityLayers(_mapVisibility.Primary?.Layers ?? Array.Empty<VisibilityLayer>());
         vm.PickFile = async title => await Dialogs.OpenFileAsync(title,
-            new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
-            { Patterns = new[] { "*.mapgeo", "*.fbx", "*.glb", "*.gltf", "*.obj", "*.scb", "*.sco" } },
+            new Avalonia.Platform.Storage.FilePickerFileType("Mesh") { Patterns = patterns },
             DialogService.All);
         // M654: a mapgeo extracted out of a wad on its own has no sibling .materials.bin, and until now
         // that silently meant the original materials could not be carried over at all.
@@ -1775,12 +1816,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             { Patterns = new[] { "*.bin" } },
             DialogService.All);
         vm.Confirmed = plan => _ = ExecuteAddMeshPlanAsync(plan);
-        vm.LoadFile(file);
-        ShowAddMeshWindow?.Invoke(vm);
+        return vm;
     }
-
-    /// <summary>Wired by MainWindow — owns the Add Mesh window instance.</summary>
-    public Action<AddMeshWindowViewModel>? ShowAddMeshWindow;
 
     [RelayCommand]
     private void OpenWorkshop()
@@ -1810,6 +1847,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 new Avalonia.Platform.Storage.FilePickerFileType("League bin")
                 { Patterns = new[] { "*.bin" } },
                 DialogService.All),
+            // M656: the same shelf, for geometry.
+            PickMeshFile = async () => await Dialogs.OpenFileAsync("Shelve meshes from a file",
+                new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
+                { Patterns = Formats.Meshes.SceneFileLoader.Extensions.Select(e => "*" + e).ToArray() },
+                DialogService.All),
+            AddMesh = AddWorkshopMeshAsync,
         };
         ShowWorkshopWindow?.Invoke(vm);
         _ = vm.InitializeAsync();

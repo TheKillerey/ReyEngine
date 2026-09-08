@@ -25,6 +25,10 @@
                         IsChecked="{Binding IsMaterialsTab, Mode=OneWay}" Padding="18,6" />
           <ToggleButton Content="Particles" Command="{Binding ShowParticlesCommand}"
                         IsChecked="{Binding IsParticlesTab, Mode=OneWay}" Padding="18,6" />
+          <!-- M656: geometry from the user's own files. There is no shipped-mesh catalogue behind this
+               one - the tab IS the shelf. -->
+          <ToggleButton Content="Meshes" Command="{Binding ShowMeshesCommand}"
+                        IsChecked="{Binding IsMeshesTab, Mode=OneWay}" Padding="18,6" />
         </StackPanel>
         <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CatalogSummary}" Margin="4,5,12,0"
                    Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
@@ -128,6 +132,47 @@
               </ListBox.ItemTemplate>
             </ListBox>
           </Grid>
+          <Grid IsVisible="{Binding IsMeshesTab}" RowDefinitions="Auto,*">
+            <StackPanel Orientation="Horizontal" Spacing="5" Margin="18,12,12,4"
+                        IsVisible="{Binding CanImport}">
+              <TextBlock Text="Import:" FontSize="10" VerticalAlignment="Center"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+              <Button Content="from a file…" Command="{Binding ImportMeshFileCommand}" Padding="10,3" FontSize="10"
+                      ToolTip.Tip="Shelve meshes out of a .mapgeo, .fbx, .glb, .gltf, .obj, .scb or .sco - you pick which ones" />
+              <Button Content="Remove" Command="{Binding DeleteSelectedMeshCommand}"
+                      IsEnabled="{Binding CanDeleteMesh}" Padding="10,3" FontSize="10"
+                      ToolTip.Tip="Take the selected mesh off your shelf. The file itself is not touched." />
+            </StackPanel>
+            <ListBox Grid.Row="1" ItemsSource="{Binding Meshes}" SelectedItem="{Binding SelectedMesh}"
+                     Margin="10,4,10,10" Background="Transparent">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:WorkshopMeshViewModel">
+                  <Border Padding="11,9" Margin="0,0,0,4" CornerRadius="5"
+                          Background="{DynamicResource ReyPanelAltBrush}">
+                    <StackPanel Spacing="2">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
+                        <Border IsVisible="{Binding CanCopyOriginalMaterial}" CornerRadius="3" Padding="5,1"
+                                VerticalAlignment="Center" Background="{DynamicResource ReyPanelBrush}"
+                                ToolTip.Tip="Its original material can be copied out of the source map's materials.bin">
+                          <TextBlock Text="ORIGINAL MAT" FontSize="8" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource ReyAccentBrush}" />
+                        </Border>
+                        <TextBlock Text="file missing" FontSize="8" VerticalAlignment="Center"
+                                   IsVisible="{Binding IsMissingFile}" Foreground="#FFE05252" />
+                      </StackPanel>
+                      <TextBlock Text="{Binding Detail}" FontSize="9"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <TextBlock Text="{Binding Source}" FontSize="9" TextTrimming="CharacterEllipsis"
+                                 Foreground="{DynamicResource ReyAccentBrush}" ToolTip.Tip="{Binding Source}" />
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+
           <!-- M655: a skin bin or a map's materials.bin can hold dozens of systems. Importing all of
                them because the user pointed at the file is the mistake Add Mesh made with a mapgeo. -->
           <Border IsVisible="{Binding IsChoosingImports}" Background="{DynamicResource ReyPanelBrush}">
@@ -209,6 +254,39 @@
             <TextBox Grid.Row="1" Text="{Binding NewMaterialName}" Margin="0,7,12,0" Padding="8,5" />
             <Button Grid.Column="1" Grid.RowSpan="2" Classes="primary" Content="Add material to map"
                     Command="{Binding AddSelectedMaterialCommand}" IsEnabled="{Binding CanAddMaterial}"
+                    Padding="18,8" VerticalAlignment="Bottom" />
+          </Grid>
+        </Border>
+      </Grid>
+
+      <Grid Grid.Column="1" Margin="24" IsVisible="{Binding IsMeshesTab}" RowDefinitions="Auto,*,Auto">
+        <StackPanel>
+          <TextBlock Text="SHELVED MESH" Classes="cardTitle" />
+          <TextBlock Text="Geometry out of your own files, kept as a pointer rather than a copy — edit the source and the shelf follows it. Adding one opens Add Mesh on that file with this mesh ticked, which is where its material gets set up."
+                     TextWrapping="Wrap" Margin="0,5,0,14" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
+        </StackPanel>
+        <StackPanel Grid.Row="1" Spacing="12">
+          <Border Classes="card">
+            <StackPanel Spacing="6">
+              <TextBlock Text="{Binding SelectedMesh.Name}" FontSize="20" FontWeight="Bold"
+                         TextTrimming="CharacterEllipsis" />
+              <TextBlock Text="{Binding SelectedMesh.Detail}" FontSize="11" />
+              <TextBlock Text="{Binding SelectedMesh.OriginNote}" FontSize="10" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyAccentBrush}" />
+            </StackPanel>
+          </Border>
+          <Border Classes="card">
+            <TextBlock TextWrapping="Wrap" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="No 3D preview here yet — the Workshop has no static-mesh viewport wired. The geometry is shown in the map viewport as soon as it is staged, where the gizmo can move it." />
+          </Border>
+        </StackPanel>
+        <Border Grid.Row="2" Classes="card" Margin="0,18,0,0">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Text="Add Mesh opens on this file with only this mesh ticked. Choose how its material is made there — copy the original, reuse one this map has, or build one from a League shader."
+                       FontSize="10" TextWrapping="Wrap" Margin="0,0,12,0" VerticalAlignment="Center"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+            <Button Grid.Column="1" Classes="primary" Content="Add mesh to map"
+                    Command="{Binding AddSelectedMeshCommand}" IsEnabled="{Binding CanAddMesh}"
                     Padding="18,8" VerticalAlignment="Bottom" />
           </Grid>
         </Border>

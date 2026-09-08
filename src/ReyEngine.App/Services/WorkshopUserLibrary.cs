@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ReyEngine.Core.Hashing;
+using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Particles;
 using ReyEngine.Formats.Vfx;
 
@@ -28,6 +29,29 @@ public sealed record WorkshopUserEntry(
 }
 
 /// <summary>
+/// M656: one mesh the user put on the shelf, inside one of their own files.
+///
+/// <para>A pointer, exactly like <see cref="WorkshopUserEntry"/>: <paramref name="MeshName"/> is looked
+/// up in the file again at add time, so editing the source is picked up and a mesh that has been renamed
+/// away says so instead of adding the wrong geometry.</para>
+/// </summary>
+/// <param name="SourceMaterialsBin">For a mapgeo, the bin its ORIGINAL material can be copied out of -
+/// remembered here so the shelf keeps what M654 made findable rather than asking again every time.</param>
+public sealed record WorkshopUserMesh(
+    string Id,
+    string FilePath,
+    string MeshName,
+    string MaterialName,
+    int VertexCount,
+    int TriangleCount,
+    string? SourceMaterialsBin,
+    DateTime AddedUtc)
+{
+    public bool FileExists => File.Exists(FilePath);
+    public string Detail => $"{VertexCount:n0} verts  |  {TriangleCount:n0} tris  |  {MaterialName}";
+}
+
+/// <summary>
 /// M655: the Workshop's own shelf, beside the catalogue harvested out of the installed game.
 ///
 /// <para>The catalogue is a read-only census of what Riot ships, rebuilt from scratch whenever a patch
@@ -44,6 +68,11 @@ public sealed class WorkshopUserLibrary
 {
     private static readonly JsonSerializerOptions Json = new() { IncludeFields = true, WriteIndented = true };
     private readonly List<WorkshopUserEntry> _entries = new();
+    private readonly List<WorkshopUserMesh> _meshes = new();
+
+    /// <summary>M656: the file grew a second list. Written as an object from now on; an M655 shelf is a
+    /// bare array of particles and is still read, so nobody's shelf is lost by upgrading.</summary>
+    private sealed record Shelf(List<WorkshopUserEntry>? Particles, List<WorkshopUserMesh>? Meshes);
 
     public static string DefaultStorePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -53,6 +82,7 @@ public sealed class WorkshopUserLibrary
     public string StorePath { get; }
 
     public IReadOnlyList<WorkshopUserEntry> Entries => _entries;
+    public IReadOnlyList<WorkshopUserMesh> Meshes => _meshes;
 
     public WorkshopUserLibrary(string? storePath = null)
     {
@@ -63,11 +93,21 @@ public sealed class WorkshopUserLibrary
     private void Load()
     {
         _entries.Clear();
+        _meshes.Clear();
         try
         {
             if (!File.Exists(StorePath)) return;
-            var read = JsonSerializer.Deserialize<List<WorkshopUserEntry>>(File.ReadAllText(StorePath), Json);
-            if (read is not null) _entries.AddRange(read.Where(e => e is not null));
+            string text = File.ReadAllText(StorePath);
+            if (text.TrimStart().StartsWith('['))
+            {
+                // the M655 shape: a bare array of particles
+                var legacy = JsonSerializer.Deserialize<List<WorkshopUserEntry>>(text, Json);
+                if (legacy is not null) _entries.AddRange(legacy.Where(e => e is not null));
+                return;
+            }
+            var read = JsonSerializer.Deserialize<Shelf>(text, Json);
+            if (read?.Particles is not null) _entries.AddRange(read.Particles.Where(e => e is not null));
+            if (read?.Meshes is not null) _meshes.AddRange(read.Meshes.Where(e => e is not null));
         }
         catch { /* a damaged shelf must not stop the Workshop opening */ }
     }
@@ -77,7 +117,7 @@ public sealed class WorkshopUserLibrary
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(StorePath)!);
-            File.WriteAllText(StorePath, JsonSerializer.Serialize(_entries, Json));
+            File.WriteAllText(StorePath, JsonSerializer.Serialize(new Shelf(_entries, _meshes), Json));
         }
         catch { /* the shelf is a convenience; failing to persist it is not fatal this session */ }
     }
@@ -152,6 +192,59 @@ public sealed class WorkshopUserLibrary
             }).OrderBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray();
         }
         catch (Exception ex) { failure = ex.Message; return Array.Empty<WorkshopUserEntry>(); }
+    }
+
+    /// <summary>
+    /// M656: every mesh inside one of the user's mesh files, as shelf candidates. Nothing is added yet.
+    ///
+    /// <para>Read through <see cref="SceneFileLoader"/>, the same code Add Mesh uses, so a format works
+    /// in both windows or in neither. That matters most for a <c>.mapgeo</c>, which is a library of
+    /// hundreds - shelving one rock out of Summoner's Rift is the whole point.</para>
+    /// </summary>
+    public IReadOnlyList<WorkshopUserMesh> ScanMeshFile(string path, out string? failure)
+    {
+        var loaded = SceneFileLoader.Load(path, out failure);
+        if (loaded is null) return Array.Empty<WorkshopUserMesh>();
+        if (loaded.Scene.Meshes.Count == 0) { failure = "no drawable mesh in this file."; return Array.Empty<WorkshopUserMesh>(); }
+
+        var byName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<WorkshopUserMesh>(loaded.Scene.Meshes.Count);
+        foreach (var mesh in loaded.Scene.Meshes)
+        {
+            // A file may name two meshes the same; the shelf must still be able to tell them apart.
+            byName.TryGetValue(mesh.Name, out int seen);
+            byName[mesh.Name] = seen + 1;
+            result.Add(new WorkshopUserMesh(
+                Id: Identity(path, seen == 0 ? mesh.Name : $"{mesh.Name}#{seen}"),
+                FilePath: path,
+                MeshName: mesh.Name,
+                MaterialName: mesh.MaterialName,
+                VertexCount: mesh.Positions.Length / 3,
+                TriangleCount: mesh.Indices.Length / 3,
+                SourceMaterialsBin: loaded.SourceMaterialsBin,
+                AddedUtc: DateTime.UtcNow));
+        }
+        return result;
+    }
+
+    public (int Added, int Replaced) AddMeshes(IEnumerable<WorkshopUserMesh> meshes)
+    {
+        int added = 0, replaced = 0;
+        foreach (var mesh in meshes)
+        {
+            int at = _meshes.FindIndex(x => x.Id == mesh.Id);
+            if (at >= 0) { _meshes[at] = mesh; replaced++; }
+            else { _meshes.Add(mesh); added++; }
+        }
+        if (added > 0 || replaced > 0) Save();
+        return (added, replaced);
+    }
+
+    public bool RemoveMesh(string id)
+    {
+        int removed = _meshes.RemoveAll(x => x.Id == id);
+        if (removed > 0) Save();
+        return removed > 0;
     }
 
     /// <summary>Add entries, replacing any that describe the same file and system. Returns how many rows

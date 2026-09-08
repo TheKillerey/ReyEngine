@@ -56,18 +56,38 @@ public sealed partial class WorkshopParticleViewModel : ObservableObject
           + "Particle Editor after adding.";
 }
 
+/// <summary>M656: one mesh on the user's shelf. There is no shipped-mesh catalogue to sit beside - this
+/// tab is entirely theirs - so it wraps the shelf record directly rather than a template.</summary>
+public sealed partial class WorkshopMeshViewModel : ObservableObject
+{
+    public required WorkshopUserMesh Mesh { get; init; }
+    public string Name => Mesh.MeshName;
+    public string Detail => Mesh.Detail;
+    public string Source => Mesh.FilePath;
+    public bool IsMissingFile => !Mesh.FileExists;
+    public bool CanCopyOriginalMaterial => Mesh.SourceMaterialsBin is { Length: > 0 };
+    public string OriginNote => IsMissingFile
+        ? $"FILE IS GONE - {Mesh.FilePath}"
+        : CanCopyOriginalMaterial
+            ? $"{System.IO.Path.GetFileName(Mesh.FilePath)} - its original material can be copied from "
+              + System.IO.Path.GetFileName(Mesh.SourceMaterialsBin!)
+            : System.IO.Path.GetFileName(Mesh.FilePath);
+}
+
 /// <summary>M655: one candidate of an in-progress import, waiting to be ticked. A champion skin bin or a
 /// map's materials.bin can hold dozens of systems, and adding all of them because the user pointed at the
-/// file is the same mistake Add Mesh made with a mapgeo (M654).</summary>
+/// file is the same mistake Add Mesh made with a mapgeo (M654) - and a mapgeo shelved as MESHES is that
+/// same file again, with 600 candidates in it.</summary>
 public sealed partial class WorkshopPendingImportViewModel : ObservableObject
 {
-    public required WorkshopUserEntry Entry { get; init; }
+    /// <summary>A <see cref="WorkshopUserEntry"/> or a <see cref="WorkshopUserMesh"/>. The panel is the
+    /// same question either way: which of these do you want?</summary>
+    public required object Payload { get; init; }
+    public required string Name { get; init; }
+    public required string Detail { get; init; }
     [ObservableProperty] private bool _include = true;
     public Action? IncludeChanged;
     partial void OnIncludeChanged(bool value) => IncludeChanged?.Invoke();
-    public string Name => Entry.DisplayName;
-    public string Detail => $"{Entry.Emitters} emitter(s)  |  {Entry.VisualEmitters} visual"
-        + (string.IsNullOrWhiteSpace(Entry.ParticlePath) ? "" : $"  |  {Entry.ParticlePath}");
 }
 
 /// <summary>Searchable, de-duplicated library of one proven game material per shader and every unique VFX
@@ -81,10 +101,15 @@ public sealed partial class WorkshopViewModel : ObservableObject
     /// <summary>M655: the installed game's half, kept apart so adding or deleting one of the user's own
     /// effects does not mean re-indexing 200 wads.</summary>
     private IReadOnlyList<WorkshopParticleViewModel> _catalogParticles = Array.Empty<WorkshopParticleViewModel>();
+    private IReadOnlyList<WorkshopMeshViewModel> _allMeshes = Array.Empty<WorkshopMeshViewModel>();
+    /// <summary>M656: true while the pending panel is holding MESHES rather than particles.</summary>
+    private bool _pendingIsMeshes;
     private int _previewGeneration;
 
     [ObservableProperty] private IReadOnlyList<WorkshopMaterialViewModel> _materials = Array.Empty<WorkshopMaterialViewModel>();
     [ObservableProperty] private IReadOnlyList<WorkshopParticleViewModel> _particles = Array.Empty<WorkshopParticleViewModel>();
+    [ObservableProperty] private IReadOnlyList<WorkshopMeshViewModel> _meshes = Array.Empty<WorkshopMeshViewModel>();
+    [ObservableProperty] private WorkshopMeshViewModel? _selectedMesh;
 
     [ObservableProperty] private int _selectedTab;
     [ObservableProperty] private string _search = "";
@@ -108,6 +133,11 @@ public sealed partial class WorkshopViewModel : ObservableObject
     /// time is the thing that makes people not bother.</summary>
     public Func<Task<IReadOnlyList<string>>>? PickTroyBins;
     public Func<Task<string?>>? PickBin;
+    /// <summary>M656: a mesh file (.mapgeo/.fbx/.glb/.gltf/.obj/.scb/.sco) to shelve meshes out of.</summary>
+    public Func<Task<string?>>? PickMeshFile;
+    /// <summary>M656: hand one shelved mesh to the host, which opens Add Mesh on it. Deliberately NOT a
+    /// second implementation of material setup - that window already asks the right questions (M654).</summary>
+    public Func<WorkshopUserMesh, Task<string>>? AddMesh;
 
     public bool CanImport => UserLibrary is not null;
     public ObservableCollection<WorkshopPendingImportViewModel> PendingImports { get; } = new();
@@ -142,6 +172,7 @@ public sealed partial class WorkshopViewModel : ObservableObject
 
     public bool IsMaterialsTab => SelectedTab == 0;
     public bool IsParticlesTab => SelectedTab == 1;
+    public bool IsMeshesTab => SelectedTab == 2;
     public bool CanAddMaterial => !Running && SelectedMaterial is not null && !string.IsNullOrWhiteSpace(NewMaterialName);
     public bool CanAddParticle => !Running && SelectedParticle is not null && !string.IsNullOrWhiteSpace(NewParticleName);
 
@@ -153,6 +184,7 @@ public sealed partial class WorkshopViewModel : ObservableObject
     [RelayCommand] private Task RebuildCatalog() => LoadAsync(true);
     [RelayCommand] private void ShowMaterials() => SelectedTab = 0;
     [RelayCommand] private void ShowParticles() => SelectedTab = 1;
+    [RelayCommand] private void ShowMeshes() => SelectedTab = 2;
 
     private async Task LoadAsync(bool rebuild)
     {
@@ -177,6 +209,7 @@ public sealed partial class WorkshopViewModel : ObservableObject
                  (IReadOnlyList<WorkshopParticleViewModel>)catalog.Particles
                     .Select(x => new WorkshopParticleViewModel { Template = x }).ToArray()));
             RebuildParticleList();
+            RebuildMeshList();
             CatalogSummary = $"{_allMaterials.Count:n0} unique shaders  |  {_catalogParticles.Count:n0} unique particles"
                 + (UserLibrary is { Entries.Count: > 0 } lib ? $"  |  {lib.Entries.Count:n0} of yours" : "")
                 + $"  |  built {catalog.BuiltUtc.ToLocalTime():g}";
@@ -234,14 +267,93 @@ public sealed partial class WorkshopViewModel : ObservableObject
             Status = $"{System.IO.Path.GetFileName(path)}: {failure ?? "no VFX systems in this .bin."}";
             return;
         }
+        _pendingIsMeshes = false;
         PendingImports.Clear();
         foreach (var entry in found)
-            PendingImports.Add(new WorkshopPendingImportViewModel
-            { Entry = entry, IncludeChanged = () => OnPropertyChanged(nameof(PendingSummary)) });
+            PendingImports.Add(Pending(entry, entry.DisplayName,
+                $"{entry.Emitters} emitter(s)  |  {entry.VisualEmitters} visual"
+                + (string.IsNullOrWhiteSpace(entry.ParticlePath) ? "" : $"  |  {entry.ParticlePath}")));
         PendingSource = System.IO.Path.GetFileName(path);
         IsChoosingImports = true;
         RaisePending();
         Status = $"{PendingSource} holds {found.Count:n0} effect(s) - pick the ones you want.";
+    }
+
+    private WorkshopPendingImportViewModel Pending(object payload, string name, string detail) =>
+        new()
+        {
+            Payload = payload, Name = name, Detail = detail,
+            IncludeChanged = () => OnPropertyChanged(nameof(PendingSummary)),
+        };
+
+    // ---- M656: meshes -----------------------------------------------------------------------------
+
+    [RelayCommand]
+    private async Task ImportMeshFile()
+    {
+        if (UserLibrary is null || PickMeshFile is null) return;
+        var path = await PickMeshFile();
+        if (path is null) return;
+        var found = UserLibrary.ScanMeshFile(path, out var failure);
+        if (found.Count == 0)
+        {
+            Status = $"{System.IO.Path.GetFileName(path)}: {failure ?? "no drawable mesh in this file."}";
+            return;
+        }
+        _pendingIsMeshes = true;
+        PendingImports.Clear();
+        foreach (var mesh in found) PendingImports.Add(Pending(mesh, mesh.MeshName, mesh.Detail));
+        PendingSource = System.IO.Path.GetFileName(path);
+        // A mapgeo is a library of hundreds; a model is a model. Same rule as Add Mesh (M654).
+        if (found.Count > AddMeshWindowViewModel.AutoIncludeLimit)
+            foreach (var row in PendingImports) row.Include = false;
+        IsChoosingImports = true;
+        SelectedTab = 2;
+        RaisePending();
+        Status = $"{PendingSource} holds {found.Count:n0} mesh(es) - pick the ones you want."
+            + (found.Count > AddMeshWindowViewModel.AutoIncludeLimit
+                ? $" Nothing is ticked: more than {AddMeshWindowViewModel.AutoIncludeLimit} means this is a library, not a model."
+                : "");
+    }
+
+    private void RebuildMeshList()
+    {
+        _allMeshes = UserLibrary is null
+            ? Array.Empty<WorkshopMeshViewModel>()
+            : UserLibrary.Meshes.Select(m => new WorkshopMeshViewModel { Mesh = m }).ToArray();
+        ApplyFilter();
+        OnPropertyChanged(nameof(CanDeleteMesh));
+        OnPropertyChanged(nameof(CanAddMesh));
+    }
+
+    public bool CanDeleteMesh => UserLibrary is not null && SelectedMesh is not null;
+    /// <summary>A mesh whose file has gone cannot be added - the shelf holds a pointer, not the geometry.</summary>
+    public bool CanAddMesh => !Running && AddMesh is not null && SelectedMesh is { IsMissingFile: false };
+
+    partial void OnSelectedMeshChanged(WorkshopMeshViewModel? value)
+    {
+        OnPropertyChanged(nameof(CanDeleteMesh));
+        OnPropertyChanged(nameof(CanAddMesh));
+    }
+
+    [RelayCommand]
+    private void DeleteSelectedMesh()
+    {
+        if (UserLibrary is null || SelectedMesh is not { } victim) return;
+        string name = victim.Name;
+        if (!UserLibrary.RemoveMesh(victim.Mesh.Id)) { Status = $"'{name}' was already gone from the shelf."; return; }
+        RebuildMeshList();
+        Status = $"Removed '{name}' from your Workshop shelf. The file itself was not touched.";
+    }
+
+    [RelayCommand]
+    private async Task AddSelectedMesh()
+    {
+        if (!CanAddMesh || AddMesh is null || SelectedMesh is not { } chosen) return;
+        Running = true;
+        try { Status = await AddMesh(chosen.Mesh); }
+        catch (Exception ex) { Status = "Mesh was not added: " + ex.Message; }
+        finally { Running = false; OnPropertyChanged(nameof(CanAddMesh)); }
     }
 
     [RelayCommand] private void SelectAllPending() => SetPending(true);
@@ -257,14 +369,30 @@ public sealed partial class WorkshopViewModel : ObservableObject
     private void ConfirmPendingImport()
     {
         if (UserLibrary is null) return;
-        var chosen = PendingImports.Where(x => x.Include).Select(x => x.Entry).ToArray();
+        var chosen = PendingImports.Where(x => x.Include).Select(x => x.Payload).ToArray();
         if (chosen.Length == 0) { Status = "Nothing ticked, so nothing was imported."; return; }
-        var (added, replaced) = UserLibrary.Add(chosen);
+
+        if (_pendingIsMeshes)
+        {
+            var meshes = chosen.OfType<WorkshopUserMesh>().ToArray();
+            var (addedMeshes, replacedMeshes) = UserLibrary.AddMeshes(meshes);
+            IsChoosingImports = false;
+            PendingImports.Clear();
+            RebuildMeshList();
+            SelectedTab = 2;
+            SelectedMesh = Meshes.FirstOrDefault(x => x.Mesh.Id == meshes[0].Id) ?? SelectedMesh;
+            Status = $"Shelved {addedMeshes:n0} mesh(es) from {PendingSource}"
+                + (replacedMeshes > 0 ? $", refreshed {replacedMeshes:n0} already there." : ".");
+            return;
+        }
+
+        var entries = chosen.OfType<WorkshopUserEntry>().ToArray();
+        var (added, replaced) = UserLibrary.Add(entries);
         IsChoosingImports = false;
         PendingImports.Clear();
         RebuildParticleList();
         SelectedTab = 1;
-        SelectedParticle = Particles.FirstOrDefault(x => x.Template.UserEntryId == chosen[0].Id) ?? SelectedParticle;
+        SelectedParticle = Particles.FirstOrDefault(x => x.Template.UserEntryId == entries[0].Id) ?? SelectedParticle;
         Status = $"Imported {added:n0} effect(s) from {PendingSource}"
             + (replaced > 0 ? $", refreshed {replaced:n0} already on the shelf." : ".");
     }
@@ -297,6 +425,7 @@ public sealed partial class WorkshopViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(IsMaterialsTab));
         OnPropertyChanged(nameof(IsParticlesTab));
+        OnPropertyChanged(nameof(IsMeshesTab));
     }
 
     private void ApplyFilter()
@@ -308,8 +437,13 @@ public sealed partial class WorkshopViewModel : ObservableObject
         Particles = _allParticles.Where(p => (!VisualParticlesOnly || p.IsVisual)
                     && (search.Length == 0 || p.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
                         || p.Path.Contains(search, StringComparison.OrdinalIgnoreCase))).ToArray();
+        Meshes = _allMeshes.Where(m => search.Length == 0
+                    || m.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
+                    || m.Mesh.MaterialName.Contains(search, StringComparison.OrdinalIgnoreCase)
+                    || m.Mesh.FilePath.Contains(search, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (SelectedMaterial is null || !Materials.Contains(SelectedMaterial)) SelectedMaterial = Materials.FirstOrDefault();
         if (SelectedParticle is null || !Particles.Contains(SelectedParticle)) SelectedParticle = Particles.FirstOrDefault();
+        if (SelectedMesh is null || !Meshes.Contains(SelectedMesh)) SelectedMesh = Meshes.FirstOrDefault();
     }
 
     partial void OnSelectedMaterialChanged(WorkshopMaterialViewModel? value)
@@ -430,6 +564,8 @@ public sealed partial class WorkshopViewModel : ObservableObject
         OnPropertyChanged(nameof(CanAddMaterial));
         OnPropertyChanged(nameof(CanAddParticle));
         OnPropertyChanged(nameof(CanDeleteParticle));
+        OnPropertyChanged(nameof(CanAddMesh));
+        OnPropertyChanged(nameof(CanDeleteMesh));
         AddSelectedMaterialCommand.NotifyCanExecuteChanged();
         AddSelectedParticleCommand.NotifyCanExecuteChanged();
     }

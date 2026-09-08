@@ -289,32 +289,42 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
 
     public void LoadFile(string path)
     {
-        ImportedScene? scene;
-        string? err = null;
-        string? sourceBin = null;
-        var ext = Path.GetExtension(path).ToLowerInvariant();
-        bool isMapGeo = ext is ".mapgeo";
-        if (isMapGeo)
-        {
-            // M512: a League map is the richest source of League-shaped geometry, and its materials are
-            // already right. The sibling bin is where they live - when it is there.
-            scene = ReyEngine.Formats.MapGeo.MapGeoMeshImporter.ToScene(File.ReadAllBytes(path), out err);
-            string sibling = Path.ChangeExtension(path, null) + ".materials.bin";
-            if (File.Exists(sibling)) sourceBin = sibling;
-        }
-        else if (ext is ".obj" or ".scb" or ".sco")
-            scene = ImportLegacy(path, out err);
-        else
-            scene = SceneMeshImporter.Import(path, out err);
-
-        if (scene is null)
+        // M656: one place decides how a path becomes a scene, because the Workshop's mesh shelf has to
+        // give the same answer for the same extensions.
+        var loaded = SceneFileLoader.Load(path, out string? err);
+        if (loaded is null)
         {
             Reset();
             FilePath = path;
             Status = $"Import failed: {err}";
             return;
         }
-        LoadScene(scene, path, isMapGeo, sourceBin);
+        LoadScene(loaded.Scene, path, loaded.IsMapGeo, loaded.SourceMaterialsBin);
+    }
+
+    /// <summary>
+    /// M656: open a file and tick exactly these meshes by name, for "add this to the map" arriving from
+    /// the Workshop shelf. Returns false when the file no longer holds them - the shelf points at the
+    /// user's own files and they are free to edit them.
+    /// </summary>
+    public bool LoadFileAndSelectOnly(string path, IEnumerable<string> meshNames)
+    {
+        LoadFile(path);
+        if (!HasScene) return false;
+        var wanted = meshNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _suspendRefilter = true;
+        foreach (var row in Meshes) row.Include = wanted.Contains(row.Mesh.Name) && !row.TooLarge;
+        _suspendRefilter = false;
+        RebuildMaterialList();
+        RaiseSelectionSummary();
+        if (IncludedCount == 0)
+        {
+            Status = $"'{Path.GetFileName(path)}' no longer holds {string.Join(", ", wanted.Take(3))} - "
+                   + "it may have been edited since it went on the shelf. Pick what you want below.";
+            return false;
+        }
+        Status = $"{IncludedCount:n0} mesh(es) from your Workshop shelf, ready to add.";
+        return true;
     }
 
     /// <summary>
@@ -474,33 +484,6 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(IncludedCount));
         OnPropertyChanged(nameof(SelectionSummary));
-    }
-
-    /// <summary>.obj/.scb/.sco keep working through the old importers — one mesh, no material info.</summary>
-    private static ImportedScene? ImportLegacy(string path, out string? err)
-    {
-        err = null;
-        try
-        {
-            float[]? pos, nrm = null, uv = null; int[]? idx;
-            if (path.EndsWith(".obj", StringComparison.OrdinalIgnoreCase))
-            {
-                var m = ObjMeshImporter.Import(File.ReadAllText(path), Path.GetFileName(path));
-                if (m is null) { err = "obj parse failed"; return null; }
-                (pos, nrm, uv, idx) = (m.Positions, m.Normals, m.Uvs, m.Indices);
-            }
-            else
-            {
-                var sm = StaticObjectDecoder.Decode(File.ReadAllBytes(path), path);
-                if (sm is null) { err = "scb/sco parse failed"; return null; }
-                (pos, uv, idx) = (sm.Positions, sm.Uvs, Array.ConvertAll(sm.Indices, i => (int)i));
-            }
-            if (pos is null || idx is null) { err = "empty mesh"; return null; }
-            var name = Path.GetFileNameWithoutExtension(path);
-            var mesh = new ImportedSceneMesh(name, "Imported", pos, nrm ?? new float[pos.Length], uv ?? new float[pos.Length / 3 * 2], idx);
-            return new ImportedScene(new[] { mesh }, new[] { new ImportedSceneMaterial("Imported", null) });
-        }
-        catch (Exception ex) { err = ex.Message; return null; }
     }
 
     private static string SanitizeName(string raw)
