@@ -173,6 +173,7 @@ public sealed class ViewportMeshRenderer : IDisposable
         public uint MatCapMask;  // slot 5
         public uint Lightmap;    // slot 6 (map baked lightmap atlas)
         public bool Visible;     // layer/visibility filter (map dragon/baron)
+        public bool BlendWritesDepth;   // M664: blends, but still occludes - see SubmeshMaterial
         public Vector3 BoundsMin;
         public Vector3 BoundsMax;
         public bool HasBounds;
@@ -275,7 +276,17 @@ public sealed class ViewportMeshRenderer : IDisposable
         // instead of the env family's Lambert term. Decided App-side by ExtendedChannelRule.IsExtendedShader
         // - ReyEngine.Rendering does not reference the MapGeo namespace that owns the rule, and every other
         // per-material family flag here (IsFlowmap, IsTerrainBlend, CompositeGround) arrives the same way.
-        bool IsPbrLighting = false)
+        bool IsPbrLighting = false,
+        // M664: this surface BLENDS but is still solid geometry, so it keeps its depth write.
+        //
+        // "blendEnable means no depth write" was measured on MAP materials (M279: a decal that stamped
+        // depth at its own plane rejected the ground it was meant to composite over). A champion is not a
+        // decal. 12 of 174 champions declare a BLENDED default material - Aatrox's is Aatrox_VFXBase_inst,
+        // and all five of his submeshes inherit it - so honouring the map rule there drops every depth
+        // write on the character and he renders see-through, back to front, which the game plainly does
+        // not do. Their blend modes (colour dodge, scrolling overlays, additive glow) are surface effects
+        // painted on solid geometry.
+        bool BlendWritesDepth = false)
     {
         public static readonly SubmeshMaterial Default = new(false, false, Vector2.One, Vector2.Zero, 0f);
     }
@@ -1911,6 +1922,7 @@ void main(){
         _submeshes[index].UsesRim = mat.UsesRim;
         _submeshes[index].UsesSpecular = mat.UsesSpecular;
         _submeshes[index].AlphaMode = mat.AlphaMode;
+        _submeshes[index].BlendWritesDepth = mat.BlendWritesDepth;   // M664
         _submeshes[index].SrcBlendFactor = mat.SrcBlendFactor;
         _submeshes[index].DstBlendFactor = mat.DstBlendFactor;
         _submeshes[index].AlphaCutoff = mat.AlphaCutoff;
@@ -2487,6 +2499,10 @@ void main(){
         CulledSlices = 0;
         CulledProps = 0;
         var m = viewProjection;
+        // M664: declared up here so DrawPropMeshes, defined further down, can be CALLED from inside the
+        // mesh block - a local function may be called before its declaration, but not capture a local
+        // declared after the call.
+        bool propsDrawn = false;
 
         if (_hasMesh)
         {
@@ -2694,6 +2710,10 @@ void main(){
                     if (s.Visible && InView(s)) { DrawSubmesh(s); DrawCalls++; }
                 }
 
+                // M664: the props go in here, between the passes - see DrawPropMeshes for why.
+                DrawPropMeshes();
+                _gl.UseProgram(_meshProgram);   // the prop pass shares the program but rebinds its own VAO
+
                 // Pass 2: transparent modes (2/3) after solids — alpha-blend, depth-test on but NO depth
                 // write, so overlapping glass/water composites without occluding itself. (No back-to-front
                 // sort — acceptable for a preview.)
@@ -2702,10 +2722,13 @@ void main(){
                 if (anyTransparent)
                 {
                     _gl.Enable(EnableCap.Blend);
-                    _gl.DepthMask(false);
                     foreach (var s in _submeshes)
                         if (s.Visible && s.AlphaMode >= 2 && InView(s))
                         {
+                            // M664: per submesh, not once for the pass. Glass and decals must not occlude
+                            // what they composite over; a champion's blended surfaces are solid geometry
+                            // and have to occlude each other or the character turns see-through.
+                            _gl.DepthMask(s.BlendWritesDepth);
                             _gl.BlendFuncSeparate(
                                 GlBlendFactor(MaterialBlendFactors.Source(s.SrcBlendFactor)),
                                 GlBlendFactor(MaterialBlendFactors.Destination(s.DstBlendFactor)),
@@ -2742,8 +2765,18 @@ void main(){
 
         // M41: placed prop meshes (SRU_Baron, dragons, jungle camps…) — each unique geometry instanced at its
         // world transform. Basic lit + diffuse only (props don't use the map's mask/gradient/emissive/lightmap).
-        if (_propMeshInstances.Count > 0 && !wireframe)
+        //
+        // M664: WHEN this runs matters. It used to run after the whole mesh, which is fine while the mesh is
+        // the map and the props are things standing on it - but the character preview draws the CHARACTER as
+        // the mesh and the arena floor as a prop, so a blend-mode transparency like Aatrox's wings composited
+        // against the cleared background and the floor was drawn afterwards. Called between the mesh's opaque
+        // and transparent passes, the floor is already there for the wing to blend over, and a transparent
+        // prop still composites over the mesh's solid parts as before. Idempotent: whichever call site comes
+        // first does the work.
+        void DrawPropMeshes()
         {
+            if (propsDrawn || _propMeshInstances.Count == 0 || wireframe) return;
+            propsDrawn = true;
             _gl.UseProgram(_meshProgram);
             _gl.Uniform3(_mLight, -0.4f, -0.85f, -0.45f);
             _gl.Uniform3(_mBaseColor, 0.62f, 0.66f, 0.74f);
@@ -2806,8 +2839,13 @@ void main(){
                 }
             }
             _gl.Disable(EnableCap.CullFace);
+            // M664: a mirrored placement above left FrontFace on Ccw. That used to be harmless because
+            // nothing else drew afterwards; the transparent pass runs after this now and reads it.
+            _gl.FrontFace(FrontFaceDirection.CW);
             _gl.BindVertexArray(0);
         }
+
+        DrawPropMeshes();   // M664: for a viewport with no mesh at all - the call above never ran
 
         if ((showBounds && _boundsVerts > 0) || (showBones && _boneVerts > 0))
         {

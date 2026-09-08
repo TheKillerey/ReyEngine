@@ -11076,7 +11076,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                MeshPreview.Show(entry.DisplayName, mesh, skeleton, textures);
+                MeshPreview.Show(entry.DisplayName, mesh, skeleton, textures.Textures);
+                // M664: AFTER Show, which clears Materials. Without this a champion drew every submesh
+                // opaque, and a blend-mode-only transparency like Aatrox's wings came out solid black.
+                MeshPreview.Materials = textures.Materials;
                 MeshPreview.SetSubmeshRules(initialHide, clipsByAnm, allClips);
                 MeshPreview.SetAnimations(mesh.CanSkin && skeleton is not null
                     ? FindAnimations(entry, ownAnms)
@@ -11135,13 +11138,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Per-submesh diffuse textures for the model-preview window — NO side effects on the main
     /// viewport's texture/material state (unlike BuildSubmeshTextures, which publishes to it).</summary>
-    private IReadOnlyList<TextureImage?>? TryLoadPreviewDiffuse(WadAssetEntry skn, MeshAsset mesh)
+    /// <summary>M664: the diffuse AND the render state, from one resolve of the skin bin. They were split
+    /// only because the preview never asked for the second one.</summary>
+    private (IReadOnlyList<TextureImage?>? Textures,
+             IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials)
+        TryLoadPreviewDiffuse(WadAssetEntry skn, MeshAsset mesh)
     {
-        if (!ContentLoaded || !skn.IsResolved) return null;
+        if (!ContentLoaded || !skn.IsResolved) return (null, null);
         var binPath = SkinPaths.BinPathForSkn(skn.Path);
-        if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return null;
+        if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return (null, null);
         var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName, ResolveWadPath);
-        return ResolveSubmeshDiffuse(mesh, resolved);   // M642: shared with the character editor's live preview
+        // M642: shared with the character editor's live preview
+        return (ResolveSubmeshDiffuse(mesh, resolved), ResolveSubmeshMaterials(mesh, resolved));
     }
 
     private async Task LoadMeshAsync(WadAssetEntry entry)

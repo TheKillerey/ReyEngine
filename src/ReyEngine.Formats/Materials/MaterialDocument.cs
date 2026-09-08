@@ -100,10 +100,24 @@ public sealed class MaterialDocument
         return map;
     }
 
-    /// <summary>Profile for submeshes with no override — the default StaticMaterialDef's profile.</summary>
+    /// <summary>
+    /// Profile for submeshes with no override — the default StaticMaterialDef's profile.
+    ///
+    /// <para>M664: when the skin declares no default StaticMaterialDef the fallback takes the first one in
+    /// the FILE, and file order is not a statement about anything. Measured over the roster: 162 of 174
+    /// champions have no default StaticMaterialDef, and in 24 of them the first one is a BLENDED material,
+    /// so 92 plain body submeshes inherited a blend state that was never meant for them — Renata's body
+    /// borrowed her glass, Akali's borrowed her kama, Locke's borrowed his glasses. Blended means
+    /// depthWrite off, so those parts also stopped occluding anything behind them.</para>
+    ///
+    /// <para>The fallback therefore skips blended siblings. The 137 skins whose first StaticMaterialDef is
+    /// opaque are unaffected — borrowing an opaque sibling's state is harmless, and it still carries the
+    /// UV transform a converted skin may rely on. Where only blended ones exist, a plain submesh gets the
+    /// neutral profile rather than someone else's glass.</para>
+    /// </summary>
     public MaterialProfile DefaultProfile =>
         Materials.FirstOrDefault(m => m.IsDefault && m.IsStaticMaterialDef)?.Profile
-        ?? Materials.FirstOrDefault(m => m.IsStaticMaterialDef)?.Profile
+        ?? Materials.FirstOrDefault(m => m.IsStaticMaterialDef && m.Profile.DepthWrite)?.Profile
         ?? MaterialProfile.Default;
 
     /// <summary>Map (or any): material name → diffuse texture path (live).</summary>

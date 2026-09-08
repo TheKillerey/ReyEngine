@@ -122,6 +122,7 @@ public sealed partial class MainWindowViewModel
         {
             var resolved = ChampionMaterialResolver.Resolve(bytes, ResolveBinName, ResolveWadPath);
             MeshPreview.Textures = ResolveSubmeshDiffuse(mesh, resolved);
+            MeshPreview.Materials = ResolveSubmeshMaterials(mesh, resolved);   // M664: and its render state
         }
         catch (Exception ex)
         {
@@ -165,6 +166,29 @@ public sealed partial class MainWindowViewModel
     ///
     /// <para>Deliberately NOT <c>BuildSubmeshTextures</c>: that one also publishes the secondary layers
     /// into the MAIN viewport's state, which belongs to whatever map is open there.</para></summary>
+    /// <summary>
+    /// M664: the RENDER STATE per submesh from the same resolved bin — alpha mode, blend factors,
+    /// two-sidedness, UV transform.
+    ///
+    /// <para>The preview window had none of this. <c>Show</c> clears Materials and only the legacy-map
+    /// viewer ever set it again, so a champion drew with every submesh opaque and Riot's blend modes
+    /// ignored. Aatrox's Wings are <c>Shaders/SkinnedMesh/Scrolling_ColorDodge_Masked</c> with
+    /// blendEnable set and a diffuse whose alpha is 100% opaque — the transparency is entirely in the
+    /// blend mode — so the wing drew as its raw texture, and Riot painted the parts meant to dodge away
+    /// black.</para>
+    /// </summary>
+    private IReadOnlyList<ReyEngine.Rendering.ViewportMeshRenderer.SubmeshMaterial>? ResolveSubmeshMaterials(
+        MeshAsset mesh, ChampionMaterialResolver.Result resolved)
+    {
+        if (!resolved.HasAny) return null;
+        var mats = new ReyEngine.Rendering.ViewportMeshRenderer.SubmeshMaterial[mesh.SubMeshes.Count];
+        for (int i = 0; i < mesh.SubMeshes.Count; i++)
+            mats[i] = ToSubmeshMaterial(resolved.Profile(mesh.SubMeshes[i].Material))
+                // M664: a champion blends but still occludes - see SubmeshMaterial.BlendWritesDepth.
+                with { BlendWritesDepth = true };
+        return mats;
+    }
+
     private IReadOnlyList<TextureImage?>? ResolveSubmeshDiffuse(MeshAsset mesh, ChampionMaterialResolver.Result resolved)
     {
         if (!resolved.HasAny) return null;
