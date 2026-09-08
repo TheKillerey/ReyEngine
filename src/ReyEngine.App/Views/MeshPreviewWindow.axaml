@@ -22,6 +22,25 @@
                         ToolTip.Tip="Target dummy — a stand-in unit so targeted spells (Kayn R…) have somewhere to land. Drag its gizmo arrows to move it." />
           <ToggleButton Classes="vp" Content="▦ Grid" IsChecked="{Binding ShowGrid}" ToolTip.Tip="Show the reference grid" />
           <ToggleButton Classes="vp" Content="🔊 SFX" IsChecked="{Binding SfxEnabled}" ToolTip.Tip="Play the clip's sound events (like in-game)" />
+          <!-- M672: the same mode list as the map viewport, bound to both renderers -->
+          <ComboBox SelectedIndex="{Binding PreviewMode}" FontSize="11" MinWidth="120" VerticalAlignment="Center"
+                    ToolTip.Tip="Shading mode. Basic / Riot Approx draw the material (on D3D11 both are Riot's own shaders); the Debug views show one input at a time - Base is the diffuse as painted, unlit">
+            <ComboBoxItem>Basic</ComboBoxItem>
+            <ComboBoxItem>Riot Approx</ComboBoxItem>
+            <ComboBoxItem>Debug · Base</ComboBoxItem>
+            <ComboBoxItem>Debug · Alpha</ComboBoxItem>
+            <ComboBoxItem>Debug · Normals</ComboBoxItem>
+            <ComboBoxItem>Debug · Mask</ComboBoxItem>
+            <ComboBoxItem>Debug · Emissive</ComboBoxItem>
+            <ComboBoxItem>Debug · MatCap</ComboBoxItem>
+            <ComboBoxItem>Debug · UV Checker</ComboBoxItem>
+            <ComboBoxItem>Debug · Specular</ComboBoxItem>
+            <ComboBoxItem>Debug · Vertex Color</ComboBoxItem>
+            <ComboBoxItem>Debug · Lightmap</ComboBoxItem>
+            <ComboBoxItem>Debug · Face Orientation</ComboBoxItem>
+            <ComboBoxItem>Debug · Two-Sided</ComboBoxItem>
+            <ComboBoxItem>Debug · Mirrored</ComboBoxItem>
+          </ComboBox>
           <ToggleButton Classes="vp" Content="⌗ Wire" IsChecked="{Binding Wireframe}" />
           <ToggleButton Classes="vp" Content="🦴 Bones" IsChecked="{Binding ShowBones}" />
           <ToggleButton Classes="vp" Content="✂ Cull" IsChecked="{Binding CullBackfaces}" />
@@ -159,6 +178,7 @@
                              ShowBones="{Binding ShowBones}"
                              Wireframe="{Binding Wireframe}"
                              CullBackfaces="{Binding CullBackfaces}"
+                             PreviewMode="{Binding PreviewMode}"
                              ModelSubmeshVisible="{Binding SubmeshVisible}"
                              ModelScale="{Binding ModelScale}"
                              ModelPosition="{Binding CharacterPosition}"

@@ -73,6 +73,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     [ObservableProperty] private bool _showBones;
     [ObservableProperty] private bool _wireframe;
     [ObservableProperty] private bool _cullBackfaces = true;
+    /// <summary>M672: the shading mode, in the map viewport's numbering (0 Basic, 1 Riot Approx, 2..14
+    /// the debug views - ViewportMeshRenderer's uMode and ShaderPreviewRenderer.DebugMode agree on it).
+    /// One property for both surfaces, as the map window does it: the GL control is bound in XAML, the
+    /// D3D11 surface takes it per frame in RenderDx11Frame. On D3D11 the two shaded modes are the same
+    /// picture - Riot's own shaders draw below the first debug mode - and "Debug · Base" is the diffuse
+    /// as painted, unlit, which is what a plain model viewer shows and what the shaded views are not.</summary>
+    [ObservableProperty] private int _previewMode;
 
     // ---- M55 animation: reuses the same self-ticking inspector VM the main window uses ----
     public AnimationInspectorViewModel Animation { get; } = new();

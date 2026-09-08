@@ -157,6 +157,11 @@ public partial class MeshPreviewWindow
         _dx11.BoneLines = bones;
         _dx11.World = vm.ModelWorld;   // M620: control mode moves the character here too
         _dx11.Wireframe = vm.Wireframe;
+        // M672: the debug views, off the same PreviewMode the GL control is bound to in XAML - the map
+        // window's M661 arrangement. Below FirstDebugMode Riot's own shaders draw, so Basic and Riot
+        // Approx are one picture here; Debug · Base is the diffuse as painted, which is the view a plain
+        // model viewer shows and the one that answers "is it the texture or the shader".
+        _dx11.DebugMode = vm.PreviewMode;
 
         // M633: the window's own Cull toggle, which the GL viewport beside it has honoured all along.
         //

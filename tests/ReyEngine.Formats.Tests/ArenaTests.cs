@@ -155,4 +155,26 @@ public sealed class ArenaTests
         Assert.Equal(42f, c.Position.Y);            // movement is flat; the height it was given stays
         Assert.True(c.Position.X > 100f);
     }
+
+    /// <summary>
+    /// M672. The preview window had no shading-mode selector, so the debug views M661 built (and M671
+    /// fixed for the skinned signatures) were unreachable from the one window that shows characters.
+    /// The mode is one VM property bound to both surfaces, as the map window does it: the GL control in
+    /// XAML, the D3D11 surface per frame.
+    /// </summary>
+    [Fact]
+    public void ThePreviewWindowsShadingModeReachesBothRenderers()
+    {
+        var axaml = Source("src", "ReyEngine.App", "Views", "MeshPreviewWindow.axaml");
+        var dx11 = Source("src", "ReyEngine.App", "Views", "MeshPreviewWindow.Dx11.cs");
+        var vm = Source("src", "ReyEngine.App", "ViewModels", "MeshPreviewViewModel.cs");
+        if (axaml is null || dx11 is null || vm is null) return;
+
+        Assert.Contains("private int _previewMode;", vm);
+        Assert.Contains("SelectedIndex=\"{Binding PreviewMode}\"", axaml);
+        Assert.Contains("<ComboBoxItem>Debug · Base</ComboBoxItem>", axaml);
+        Assert.Contains("PreviewMode=\"{Binding PreviewMode}\"", axaml);
+        Assert.Contains("_dx11.DebugMode = vm.PreviewMode;", dx11);
+    }
+
 }
