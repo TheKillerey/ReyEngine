@@ -77,10 +77,21 @@ public sealed partial class AddMeshMaterialViewModel : ObservableObject
     public Func<string, IReadOnlyList<(string Name, string DefaultPath)>>? SamplersForShader { private get; init; }
     public Func<string, bool>? TextureExists { private get; init; }
 
+    private bool _samplersBuilt;
+
+    /// <summary>M654: build them the first time this card appears and not again. The card list is rebuilt
+    /// on every mesh tick, and a mapgeo selection can carry hundreds of materials - re-deriving every
+    /// one of their sampler sets per click is a visible hitch for no gain.</summary>
+    public void EnsureSamplers()
+    {
+        if (!_samplersBuilt) RefreshSamplers();
+    }
+
     /// <summary>Rebuild the sampler rows for the currently chosen shader, keeping any path the user has
     /// already typed for a sampler of the same name.</summary>
     public void RefreshSamplers()
     {
+        _samplersBuilt = true;
         if (SamplersForShader is null || ShaderIndex < 0 || ShaderIndex >= ShaderChoices.Count)
         { Samplers.Clear(); OnPropertyChanged(nameof(HasSamplers)); return; }
 
@@ -455,7 +466,7 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
         Materials.Clear();
         foreach (var m in _allMaterials)
             if (used.Contains(m.Source.Name)) Materials.Add(m);
-        foreach (var m in Materials) m.RefreshSamplers();
+        foreach (var m in Materials) m.EnsureSamplers();
         OnPropertyChanged(nameof(MaterialsSummary));
     }
 

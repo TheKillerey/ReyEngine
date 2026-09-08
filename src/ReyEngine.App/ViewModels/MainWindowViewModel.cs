@@ -1793,17 +1793,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
 
         _workshopCatalog ??= new WorkshopCatalogService(_resolver.Database, ResolveBinName);
+        // M655: the user's own shelf lives beside the census of the installed game, and outlives it -
+        // the catalogue cache is thrown away whenever a patch changes the wads' fingerprint.
+        _workshopUserLibrary ??= new WorkshopUserLibrary();
         var vm = new WorkshopViewModel(_workshopCatalog, final)
         {
             AddMaterial = ImportWorkshopMaterialAsync,
             AddParticle = ImportWorkshopParticleAsync,
             BuildParticlePreview = BuildWorkshopParticlePreview,   // M420
+            UserLibrary = _workshopUserLibrary,
+            PickTroyBins = () => Dialogs.OpenFilesAsync("Import legacy .troybin effect(s)",
+                new Avalonia.Platform.Storage.FilePickerFileType("Legacy particle")
+                { Patterns = new[] { "*.troybin" } },
+                DialogService.All),
+            PickBin = async () => await Dialogs.OpenFileAsync("Import particles from a .bin",
+                new Avalonia.Platform.Storage.FilePickerFileType("League bin")
+                { Patterns = new[] { "*.bin" } },
+                DialogService.All),
         };
         ShowWorkshopWindow?.Invoke(vm);
         _ = vm.InitializeAsync();
     }
 
     public Action<WorkshopViewModel>? ShowWorkshopWindow;
+
+    /// <summary>M655: kept on the host so the shelf is the same object across Workshop windows.</summary>
+    private WorkshopUserLibrary? _workshopUserLibrary;
 
     /// <summary>
     /// M654: make sure the whole-install index exists, because it is what knows which wad any asset lives
@@ -2012,9 +2027,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var staged = legacy is not null
             ? StageLegacyTroyAssets(legacy.Assets, mapEntry)
-            : StageWorkshopAssets(graph.AssetPaths, mapEntry);
+            : StageWorkshopAssets(graph.AssetPaths, mapEntry, assetsMayBeTheProjectsOwn: template.IsUser);
         if (staged.Missing.Count > 0)
-            throw new InvalidOperationException("Required particle asset(s) were not found in the installed patch: "
+            throw new InvalidOperationException("Required particle asset(s) were not found"
+                + (template.IsUser ? " in this project or in the installed patch: " : " in the installed patch: ")
                 + string.Join(", ", staged.Missing.Take(4)) + (staged.Missing.Count > 4 ? "..." : ""));
         if (!await SaveMapBinBytesAsync(binEntry, placed))
             throw new InvalidOperationException("The edited materials bin could not be saved.");
@@ -2042,8 +2058,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return $"Added '{newName}' at the viewport focus. {graph.ImportedObjects} linked object(s) and {staged.Written} asset(s) imported.";
     }
 
+    /// <param name="assetsMayBeTheProjectsOwn">M655: for an effect imported from one of the user's OWN
+    /// bins, an asset that already resolves in this project is already there - it is a project file, and
+    /// no game wad will ever hold it. Off for a shipped template, where a path can resolve only because a
+    /// game wad is MOUNTED for reference, and skipping it would leave the mod without the asset.</param>
     private (int Written, IReadOnlyList<string> Missing) StageWorkshopAssets(
-        IEnumerable<string> paths, WadAssetEntry destinationMap)
+        IEnumerable<string> paths, WadAssetEntry destinationMap, bool assetsMayBeTheProjectsOwn = false)
     {
         if (_workshopCatalog is null) return (0, paths.ToArray());
         var missing = new List<string>();
@@ -2053,6 +2073,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             string path = raw.Trim().Replace('\\', '/').TrimStart('/');
             if (path.Length == 0 || path.Split('/').Any(part => part == "..")) { missing.Add(raw); continue; }
+            if (assetsMayBeTheProjectsOwn && TextureExistsByPath(path)) continue;
             byte[]? bytes = _workshopCatalog.ReadAsset(path);
             if (bytes is null) { missing.Add(path); continue; }
             sources.Add((path, bytes));

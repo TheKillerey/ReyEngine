@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -29,6 +30,15 @@ public sealed partial class WorkshopParticleViewModel : ObservableObject
     /// <summary>M419. Legacy effects are flagged in the list, not only on import.</summary>
     public bool IsLegacy => Template.IsLegacy;
 
+    /// <summary>M655: brought in by the user rather than harvested out of the installed game.</summary>
+    public bool IsUser => Template.IsUser;
+    public bool IsMissingFile => Template.IsUser && !Template.UserFileExists;
+    public string OriginNote => !Template.IsUser
+        ? ""
+        : Template.UserFileExists
+            ? $"Yours - {System.IO.Path.GetFileName(Template.SourceBinPath)}"
+            : $"Yours - FILE IS GONE ({Template.SourceBinPath})";
+
     /// <summary>M425: set by the host to describe THIS conversion, since a decoded file keeps its real
     /// rates and lifetimes while an undecodable one falls back to defaults. The old wording asserted
     /// "engine defaults" unconditionally, which understated every decoded effect.</summary>
@@ -46,6 +56,20 @@ public sealed partial class WorkshopParticleViewModel : ObservableObject
           + "Particle Editor after adding.";
 }
 
+/// <summary>M655: one candidate of an in-progress import, waiting to be ticked. A champion skin bin or a
+/// map's materials.bin can hold dozens of systems, and adding all of them because the user pointed at the
+/// file is the same mistake Add Mesh made with a mapgeo (M654).</summary>
+public sealed partial class WorkshopPendingImportViewModel : ObservableObject
+{
+    public required WorkshopUserEntry Entry { get; init; }
+    [ObservableProperty] private bool _include = true;
+    public Action? IncludeChanged;
+    partial void OnIncludeChanged(bool value) => IncludeChanged?.Invoke();
+    public string Name => Entry.DisplayName;
+    public string Detail => $"{Entry.Emitters} emitter(s)  |  {Entry.VisualEmitters} visual"
+        + (string.IsNullOrWhiteSpace(Entry.ParticlePath) ? "" : $"  |  {Entry.ParticlePath}");
+}
+
 /// <summary>Searchable, de-duplicated library of one proven game material per shader and every unique VFX
 /// system. The host performs map mutation; this view model owns indexing, filtering and hero previews.</summary>
 public sealed partial class WorkshopViewModel : ObservableObject
@@ -54,6 +78,9 @@ public sealed partial class WorkshopViewModel : ObservableObject
     private readonly string _finalDirectory;
     private IReadOnlyList<WorkshopMaterialViewModel> _allMaterials = Array.Empty<WorkshopMaterialViewModel>();
     private IReadOnlyList<WorkshopParticleViewModel> _allParticles = Array.Empty<WorkshopParticleViewModel>();
+    /// <summary>M655: the installed game's half, kept apart so adding or deleting one of the user's own
+    /// effects does not mean re-indexing 200 wads.</summary>
+    private IReadOnlyList<WorkshopParticleViewModel> _catalogParticles = Array.Empty<WorkshopParticleViewModel>();
     private int _previewGeneration;
 
     [ObservableProperty] private IReadOnlyList<WorkshopMaterialViewModel> _materials = Array.Empty<WorkshopMaterialViewModel>();
@@ -73,6 +100,23 @@ public sealed partial class WorkshopViewModel : ObservableObject
 
     public Func<WorkshopMaterialTemplate, string, Task<string>>? AddMaterial;
     public Func<WorkshopParticleTemplate, string, Task<string>>? AddParticle;
+
+    /// <summary>M655: the user's own shelf. Null leaves the Workshop exactly as it was - a read-only
+    /// census of the installed game.</summary>
+    public WorkshopUserLibrary? UserLibrary { get; init; }
+    /// <summary>Host file pickers. Multi-select for .troybin because importing a folder's worth one at a
+    /// time is the thing that makes people not bother.</summary>
+    public Func<Task<IReadOnlyList<string>>>? PickTroyBins;
+    public Func<Task<string?>>? PickBin;
+
+    public bool CanImport => UserLibrary is not null;
+    public ObservableCollection<WorkshopPendingImportViewModel> PendingImports { get; } = new();
+    [ObservableProperty] private bool _isChoosingImports;
+    [ObservableProperty] private string _pendingSource = "";
+    public int PendingIncluded => PendingImports.Count(x => x.Include);
+    public string PendingSummary => PendingImports.Count == 0
+        ? ""
+        : $"{PendingIncluded:n0} of {PendingImports.Count:n0} ticked in {PendingSource}";
 
     /// <summary>M420: host-supplied builder for the animated preview. The host owns asset resolution,
     /// so the window itself never touches WADs.</summary>
@@ -127,17 +171,124 @@ public sealed partial class WorkshopViewModel : ObservableObject
             // thread. The installed corpus is large enough that even a cache hit would otherwise freeze
             // the Workshop while its JSON is read.
             var catalog = await Task.Run(() => _catalogService.LoadAsync(_finalDirectory, rebuild, progress));
-            (_allMaterials, _allParticles) = await Task.Run(() =>
+            (_allMaterials, _catalogParticles) = await Task.Run(() =>
                 ((IReadOnlyList<WorkshopMaterialViewModel>)catalog.Materials
                     .Select(x => new WorkshopMaterialViewModel { Template = x }).ToArray(),
                  (IReadOnlyList<WorkshopParticleViewModel>)catalog.Particles
                     .Select(x => new WorkshopParticleViewModel { Template = x }).ToArray()));
-            CatalogSummary = $"{_allMaterials.Count:n0} unique shaders  |  {_allParticles.Count:n0} unique particles  |  built {catalog.BuiltUtc.ToLocalTime():g}";
+            RebuildParticleList();
+            CatalogSummary = $"{_allMaterials.Count:n0} unique shaders  |  {_catalogParticles.Count:n0} unique particles"
+                + (UserLibrary is { Entries.Count: > 0 } lib ? $"  |  {lib.Entries.Count:n0} of yours" : "")
+                + $"  |  built {catalog.BuiltUtc.ToLocalTime():g}";
             Status = rebuild ? "Catalog rebuilt from the installed patch." : "Workshop ready.";
-            ApplyFilter();
         }
         catch (Exception ex) { Status = "Workshop unavailable: " + ex.Message; }
         finally { Running = false; RaiseCanAdd(); }
+    }
+
+    /// <summary>The user's own effects sit FIRST: a shelf you can only reach by scrolling past 40,000
+    /// shipped systems is not a shelf.</summary>
+    private void RebuildParticleList()
+    {
+        var mine = UserLibrary is null
+            ? Array.Empty<WorkshopParticleViewModel>()
+            : UserLibrary.ToTemplates().Select(t => new WorkshopParticleViewModel { Template = t }).ToArray();
+        _allParticles = mine.Concat(_catalogParticles).ToArray();
+        ApplyFilter();
+        OnPropertyChanged(nameof(CanDeleteParticle));
+    }
+
+    [RelayCommand]
+    private async Task ImportTroyBins()
+    {
+        if (UserLibrary is null || PickTroyBins is null) return;
+        var paths = await PickTroyBins();
+        if (paths.Count == 0) return;
+        var found = UserLibrary.ScanTroyBins(paths, out var failures);
+        if (found.Count == 0)
+        {
+            Status = failures.Count > 0
+                ? "Nothing imported: " + string.Join("; ", failures.Take(3))
+                : "Nothing imported - those files hold no readable effect.";
+            return;
+        }
+        // A .troybin IS one effect, so there is nothing to choose: add them and say what happened.
+        var (added, replaced) = UserLibrary.Add(found);
+        RebuildParticleList();
+        SelectedTab = 1;
+        SelectedParticle = Particles.FirstOrDefault(x => x.Template.UserEntryId == found[0].Id) ?? SelectedParticle;
+        Status = $"Imported {added:n0} .troybin effect(s)"
+            + (replaced > 0 ? $", refreshed {replaced:n0} already on the shelf" : "")
+            + (failures.Count > 0 ? $". {failures.Count:n0} could not be read: {string.Join("; ", failures.Take(2))}" : ".");
+    }
+
+    [RelayCommand]
+    private async Task ImportBin()
+    {
+        if (UserLibrary is null || PickBin is null) return;
+        var path = await PickBin();
+        if (path is null) return;
+        var found = UserLibrary.ScanBin(path, out var failure);
+        if (found.Count == 0)
+        {
+            Status = $"{System.IO.Path.GetFileName(path)}: {failure ?? "no VFX systems in this .bin."}";
+            return;
+        }
+        PendingImports.Clear();
+        foreach (var entry in found)
+            PendingImports.Add(new WorkshopPendingImportViewModel
+            { Entry = entry, IncludeChanged = () => OnPropertyChanged(nameof(PendingSummary)) });
+        PendingSource = System.IO.Path.GetFileName(path);
+        IsChoosingImports = true;
+        RaisePending();
+        Status = $"{PendingSource} holds {found.Count:n0} effect(s) - pick the ones you want.";
+    }
+
+    [RelayCommand] private void SelectAllPending() => SetPending(true);
+    [RelayCommand] private void SelectNoPending() => SetPending(false);
+
+    private void SetPending(bool include)
+    {
+        foreach (var row in PendingImports) row.Include = include;
+        RaisePending();
+    }
+
+    [RelayCommand]
+    private void ConfirmPendingImport()
+    {
+        if (UserLibrary is null) return;
+        var chosen = PendingImports.Where(x => x.Include).Select(x => x.Entry).ToArray();
+        if (chosen.Length == 0) { Status = "Nothing ticked, so nothing was imported."; return; }
+        var (added, replaced) = UserLibrary.Add(chosen);
+        IsChoosingImports = false;
+        PendingImports.Clear();
+        RebuildParticleList();
+        SelectedTab = 1;
+        SelectedParticle = Particles.FirstOrDefault(x => x.Template.UserEntryId == chosen[0].Id) ?? SelectedParticle;
+        Status = $"Imported {added:n0} effect(s) from {PendingSource}"
+            + (replaced > 0 ? $", refreshed {replaced:n0} already on the shelf." : ".");
+    }
+
+    [RelayCommand]
+    private void CancelPendingImport()
+    {
+        IsChoosingImports = false;
+        PendingImports.Clear();
+        Status = "Import cancelled.";
+    }
+
+    /// <summary>Only the user's own rows can go. A shipped effect is a fact about the installed game and
+    /// removing it from the list would only make the Workshop lie about what is there.</summary>
+    public bool CanDeleteParticle => UserLibrary is not null && SelectedParticle is { IsUser: true };
+
+    [RelayCommand]
+    private void DeleteSelectedParticle()
+    {
+        if (UserLibrary is null || SelectedParticle is not { Template.UserEntryId: { } id } victim) return;
+        string name = victim.Name;
+        if (!UserLibrary.Remove(id)) { Status = $"'{name}' was already gone from the shelf."; return; }
+        RebuildParticleList();
+        Status = $"Removed '{name}' from your Workshop shelf. The file itself was not touched.";
     }
 
     partial void OnSearchChanged(string value) => ApplyFilter();
@@ -190,6 +341,14 @@ public sealed partial class WorkshopViewModel : ObservableObject
     }
 
     partial void OnNewMaterialNameChanged(string value) => RaiseCanAdd();
+    partial void OnIsChoosingImportsChanged(bool value) => RaisePending();
+    partial void OnPendingSourceChanged(string value) => RaisePending();
+
+    private void RaisePending()
+    {
+        OnPropertyChanged(nameof(PendingIncluded));
+        OnPropertyChanged(nameof(PendingSummary));
+    }
     partial void OnNewParticleNameChanged(string value) => RaiseCanAdd();
     partial void OnRunningChanged(bool value) => RaiseCanAdd();
 
@@ -270,6 +429,7 @@ public sealed partial class WorkshopViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(CanAddMaterial));
         OnPropertyChanged(nameof(CanAddParticle));
+        OnPropertyChanged(nameof(CanDeleteParticle));
         AddSelectedMaterialCommand.NotifyCanExecuteChanged();
         AddSelectedParticleCommand.NotifyCanExecuteChanged();
     }

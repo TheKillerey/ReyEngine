@@ -27,7 +27,14 @@ public sealed record WorkshopParticleTemplate(
     bool IsLegacy = false,
     /// <summary>M425: the legacy body decoded, so rates/lifetimes/motion are the file's own values
     /// rather than engine defaults. The UI must not claim "defaults" for these.</summary>
-    bool IsDecoded = false);
+    bool IsDecoded = false,
+    /// <summary>M655: this came off the user's own shelf rather than out of the installed game, so it
+    /// can be deleted and it survives a patch. See <see cref="WorkshopUserLibrary"/>.</summary>
+    bool IsUser = false,
+    string? UserEntryId = null,
+    /// <summary>M655: false when the user's file has moved or been deleted since it was added. The row
+    /// stays listed and says so - quietly dropping it would look like the Workshop lost it.</summary>
+    bool UserFileExists = true);
 
 public sealed record WorkshopCatalog(string Fingerprint, DateTime BuiltUtc,
     IReadOnlyList<WorkshopMaterialTemplate> Materials, IReadOnlyList<WorkshopParticleTemplate> Particles);
@@ -219,8 +226,20 @@ public sealed class WorkshopCatalogService
         return catalog;
     }
 
+    /// <summary>M655: a source that is a plain file on disk, not an archive - the user's own .troybin or
+    /// .bin. Kept in one place so every read path treats the shelf the same way, and so the rule is one
+    /// sentence: an absolute path to an existing file that is not a wad IS the bytes.</summary>
+    private static byte[]? ReadLooseFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        if (path.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase)) return null;
+        try { return Path.IsPathRooted(path) && File.Exists(path) ? File.ReadAllBytes(path) : null; }
+        catch { return null; }
+    }
+
     public byte[]? ReadAsset(string virtualPath)
     {
+        if (ReadLooseFile(virtualPath) is { } loose) return loose;
         ulong hash = HashAlgorithms.WadPath(Normalize(virtualPath));
         if (!_assetWads.TryGetValue(hash, out var wadPath)) return null;
         try { using var wad = WadArchive.Open(wadPath); return wad.Extract(hash); }
@@ -229,6 +248,7 @@ public sealed class WorkshopCatalogService
 
     public byte[]? ReadBin(ulong hash, string sourceWad)
     {
+        if (ReadLooseFile(sourceWad) is { } loose) return loose;
         try { using var wad = WadArchive.Open(sourceWad); return wad.Extract(hash); }
         catch { return null; }
     }
@@ -247,8 +267,15 @@ public sealed class WorkshopCatalogService
             string? wadPath = knownWad;
             if (wadPath is null && !_assetWads.TryGetValue(hash, out wadPath)) continue;
             byte[]? bytes;
-            try { using var wad = WadArchive.Open(wadPath!); bytes = wad.Extract(hash); }
-            catch { continue; }
+            // M655: the ROOT may be one of the user's own files. Its dependencies still resolve through
+            // the whole-install index, which is what makes a custom bin that references shipped textures
+            // importable at all.
+            if (ReadLooseFile(wadPath) is { } loose) bytes = loose;
+            else
+            {
+                try { using var wad = WadArchive.Open(wadPath!); bytes = wad.Extract(hash); }
+                catch { continue; }
+            }
             result.Add(bytes);
             foreach (var dependency in VfxSystemResolver.ExtractDependencies(bytes))
                 queue.Enqueue((HashAlgorithms.WadPath(Normalize(dependency)), null));

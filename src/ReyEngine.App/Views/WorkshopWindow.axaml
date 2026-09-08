@@ -72,10 +72,23 @@
             </ListBox.ItemTemplate>
           </ListBox>
 
-          <Grid IsVisible="{Binding IsParticlesTab}" RowDefinitions="Auto,*">
-            <CheckBox Content="Visual particles only" IsChecked="{Binding VisualParticlesOnly}"
-                      Margin="18,12,12,4" FontSize="10" />
-            <ListBox Grid.Row="1" ItemsSource="{Binding Particles}" SelectedItem="{Binding SelectedParticle}"
+          <Grid IsVisible="{Binding IsParticlesTab}" RowDefinitions="Auto,Auto,*">
+            <!-- M655: your own shelf, beside the census of the installed game. -->
+            <StackPanel Orientation="Horizontal" Spacing="5" Margin="18,12,12,0"
+                        IsVisible="{Binding CanImport}">
+              <TextBlock Text="Import:" FontSize="10" VerticalAlignment="Center"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+              <Button Content=".troybin…" Command="{Binding ImportTroyBinsCommand}" Padding="10,3" FontSize="10"
+                      ToolTip.Tip="One or more legacy .troybin effects from anywhere on disk" />
+              <Button Content="from .bin…" Command="{Binding ImportBinCommand}" Padding="10,3" FontSize="10"
+                      ToolTip.Tip="Every VFX system inside a custom materials.bin or skin .bin - you pick which ones" />
+              <Button Content="Remove" Command="{Binding DeleteSelectedParticleCommand}"
+                      IsEnabled="{Binding CanDeleteParticle}" Padding="10,3" FontSize="10"
+                      ToolTip.Tip="Take the selected effect off your shelf. Only yours can go, and the file itself is not touched." />
+            </StackPanel>
+            <CheckBox Grid.Row="1" Content="Visual particles only" IsChecked="{Binding VisualParticlesOnly}"
+                      Margin="18,8,12,4" FontSize="10" />
+            <ListBox Grid.Row="2" ItemsSource="{Binding Particles}" SelectedItem="{Binding SelectedParticle}"
                      Margin="10,4,10,10" Background="Transparent">
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:WorkshopParticleViewModel">
@@ -95,6 +108,15 @@
                             <TextBlock Text="LEGACY" FontSize="8" FontWeight="SemiBold"
                                        Foreground="{DynamicResource ReyAccentBrush}" />
                           </Border>
+                          <!-- M655: yours, so it can be removed and it survives a patch -->
+                          <Border IsVisible="{Binding IsUser}" CornerRadius="3" Padding="5,1"
+                                  VerticalAlignment="Center" Background="{DynamicResource ReyPanelBrush}"
+                                  ToolTip.Tip="{Binding OriginNote}">
+                            <TextBlock Text="YOURS" FontSize="8" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource ReyAccentBrush}" />
+                          </Border>
+                          <TextBlock Text="file missing" FontSize="8" VerticalAlignment="Center"
+                                     IsVisible="{Binding IsMissingFile}" Foreground="#FFE05252" />
                         </StackPanel>
                         <TextBlock Text="{Binding Path}" FontSize="9" TextTrimming="CharacterEllipsis"
                                    Foreground="{DynamicResource ReyAccentBrush}" />
@@ -106,6 +128,43 @@
               </ListBox.ItemTemplate>
             </ListBox>
           </Grid>
+          <!-- M655: a skin bin or a map's materials.bin can hold dozens of systems. Importing all of
+               them because the user pointed at the file is the mistake Add Mesh made with a mapgeo. -->
+          <Border IsVisible="{Binding IsChoosingImports}" Background="{DynamicResource ReyPanelBrush}">
+            <Grid Margin="14" RowDefinitions="Auto,Auto,*,Auto">
+              <TextBlock Text="WHAT TO IMPORT" Classes="cardTitle" />
+              <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="5" Margin="0,8">
+                <Button Content="Select all" Command="{Binding SelectAllPendingCommand}" Padding="10,3" FontSize="10" />
+                <Button Content="Select none" Command="{Binding SelectNoPendingCommand}" Padding="10,3" FontSize="10" />
+                <TextBlock Text="{Binding PendingSummary}" FontSize="10" VerticalAlignment="Center"
+                           Margin="6,0,0,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+              </StackPanel>
+              <ScrollViewer Grid.Row="2">
+                <ItemsControl ItemsSource="{Binding PendingImports}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:WorkshopPendingImportViewModel">
+                      <CheckBox IsChecked="{Binding Include}" Margin="0,1" FontSize="11">
+                        <StackPanel Spacing="1">
+                          <TextBlock Text="{Binding Name}" FontSize="11" />
+                          <TextBlock Text="{Binding Detail}" FontSize="9"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                        </StackPanel>
+                      </CheckBox>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+              <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="6" Margin="0,10,0,0"
+                          HorizontalAlignment="Right">
+                <Button Content="Cancel" Command="{Binding CancelPendingImportCommand}" Padding="14,5" />
+                <Button Classes="primary" Content="Add to my shelf"
+                        Command="{Binding ConfirmPendingImportCommand}" Padding="14,5" />
+              </StackPanel>
+            </Grid>
+          </Border>
         </Grid>
       </Border>
 
@@ -203,6 +262,10 @@
           <Border Grid.Row="1" Classes="card" Margin="0,16,0,0">
             <StackPanel Spacing="6">
               <TextBlock Text="{Binding SelectedParticle.Detail}" FontSize="11" />
+              <!-- M655: which of the user's files this one is, and whether it is still there -->
+              <TextBlock Text="{Binding SelectedParticle.OriginNote}" FontSize="10" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyAccentBrush}"
+                         IsVisible="{Binding SelectedParticle.IsUser}" />
               <!-- M420: says when the preview is the CONVERTED legacy effect, or absent entirely -->
               <TextBlock Text="{Binding PreviewStatus}" FontSize="10" TextWrapping="Wrap"
                          Foreground="{DynamicResource ReyAccentBrush}"
