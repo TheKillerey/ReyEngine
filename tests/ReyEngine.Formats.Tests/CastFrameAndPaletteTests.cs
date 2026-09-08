@@ -89,7 +89,10 @@ public sealed class CastFrameAndPaletteTests
         if (preview is null) return;
         // Caster and missile systems aim at the cast's aim (M637: the cursor's plan, else the dummy);
         // target systems play at the hit and aim back at the caster.
-        Assert.Contains("Make(h, caster, aim, null)", preview);
+        // M663: the caster's systems also carry a bone, so they ride the animated model instead of
+        // standing where the cast started. Only the caster's - a missile is not bone-bound in game
+        // either, and a target system belongs to whatever it hit.
+        Assert.Contains("Make(h, caster, aim, null, casterBone)", preview);
         Assert.Contains("Make(h, hit, caster, null)", preview);
         Assert.Contains("Make(h, caster, flightEnd, flightEnd)", preview);
         Assert.Contains("BuildItem(def, VfxCastFrame.Toward(at, faceToward, at))", preview);

@@ -365,6 +365,17 @@
                       </StackPanel>
                       <TextBlock Text="Spell composites are assembled from Riot's VFX naming — timing between caster, missile and target is approximate."
                                  FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                      <!-- M663: the composite carries no bone, because Riot's spell scripts are compiled
+                           out of the game files. A clip that authors its own particle event still uses the
+                           bone it names; this only decides where a name-assembled caster effect rides. -->
+                      <TextBlock Text="Caster bone" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,3,0,0" />
+                      <ComboBox HorizontalAlignment="Stretch" FontSize="10"
+                                ItemsSource="{Binding CasterBoneOptions}"
+                                SelectedItem="{Binding SelectedCasterBone, Mode=TwoWay}"
+                                IsVisible="{Binding HasCasterBones}" />
+                      <TextBlock Text="Composite effects have no authored bone — the spell script that binds them ships compiled. The default is Riot's own attachment locator; pick the real one to put an effect on a hand or a weapon."
+                                 FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap"
+                                 IsVisible="{Binding HasCasterBones}" />
                     </StackPanel>
                   </Border>
                   <!-- M95c: voice lines — the skin's authored Play_vo_ events; picking one plays it -->

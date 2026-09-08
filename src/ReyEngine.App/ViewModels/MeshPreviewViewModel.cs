@@ -161,6 +161,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         CurrentAnimation = null;
         AnimationTime = 0;
         Animation.SetSkeleton(skeleton?.BoneCount ?? 0);
+        RebuildCasterBoneOptions();   // M663: this skeleton's joints, and a default among them
         Playback = null;
         SelectedVfx = null;
         ImagePreview = null;    // M120: a model preview replaces a texture preview
@@ -256,13 +257,20 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     [ObservableProperty] private bool _autoSubmeshVisibility = true;
     private IReadOnlyList<string> _initialHide = Array.Empty<string>();
     private IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? _clipsByAnm;
+    /// <summary>M663: EVERY clip, not one per .anm file. Riot points several clips at one file, so the
+    /// by-file view silently drops all but the first - which is fine for "what does the animation now
+    /// playing hide?" and wrong for anything that reads the clip list as a whole.</summary>
+    private IReadOnlyList<Formats.Skeletons.AnimClipInfo> _allClips = Array.Empty<Formats.Skeletons.AnimClipInfo>();
 
-    /// <summary>Provide the skin's initial-hide list + animation-graph clips (keyed by .anm file name).</summary>
+    /// <summary>Provide the skin's initial-hide list + animation-graph clips (keyed by .anm file name),
+    /// and the full clip list beside it.</summary>
     public void SetSubmeshRules(IReadOnlyList<string> initialHide,
-        IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? clipsByAnm)
+        IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? clipsByAnm,
+        IReadOnlyList<Formats.Skeletons.AnimClipInfo>? allClips = null)
     {
         _initialHide = initialHide;
         _clipsByAnm = clipsByAnm;
+        _allClips = allClips ?? clipsByAnm?.Values.ToList() ?? (IReadOnlyList<Formats.Skeletons.AnimClipInfo>)Array.Empty<Formats.Skeletons.AnimClipInfo>();
         ApplyAutoVisibility();
     }
 
@@ -390,6 +398,45 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     /// <summary>Where a system should be anchored: at the dummy for target-bound systems (when the dummy
     /// is enabled), else at the champion's root.</summary>
+    // ---- M663: the bone a name-assembled caster effect rides ----
+
+    /// <summary>Every joint in the loaded skeleton, plus the world-space opt-out at the head.</summary>
+    public ObservableCollection<string> CasterBoneOptions { get; } = new();
+
+    /// <summary>The world-space option's label — chosen, nothing is attached and the old behaviour is back.</summary>
+    public const string NoCasterBone = "(none - world space)";
+
+    /// <summary>
+    /// M663: which bone the composite's caster systems ride. A clip that authors its own ParticleEventData
+    /// always wins over this; this is only for the composite assembled from VFX names, which carries no
+    /// binding at all - see <see cref="Formats.Characters.CasterBone"/> for why the default is a locator
+    /// and not a hand.
+    /// </summary>
+    [ObservableProperty] private string _selectedCasterBone = NoCasterBone;
+
+    /// <summary>False for a preview with no skeleton — then the picker would offer only the opt-out.</summary>
+    [ObservableProperty] private bool _hasCasterBones;
+
+    partial void OnSelectedCasterBoneChanged(string value) => ReplaySelectedOrClip();
+
+    /// <summary>The bone to attach to, or null for world space.</summary>
+    private string? CasterBoneOrNull =>
+        SelectedCasterBone is { Length: > 0 } b && b != NoCasterBone ? b : null;
+
+    private void RebuildCasterBoneOptions()
+    {
+        CasterBoneOptions.Clear();
+        CasterBoneOptions.Add(NoCasterBone);
+        if (Skeleton is not { Joints.Count: > 0 } skel)
+        {
+            SelectedCasterBone = NoCasterBone; HasCasterBones = false; return;
+        }
+        foreach (var j in skel.Joints) CasterBoneOptions.Add(j.Name);
+        HasCasterBones = true;
+        SelectedCasterBone = Formats.Characters.CasterBone.Choose(skel.Joints.Select(j => j.Name))
+                             ?? NoCasterBone;
+    }
+
     private System.Numerics.Vector3 AnchorFor(VfxSystemDefinition def, bool forceDummy = false) =>
         TargetDummyPosition is { } dummy && (forceDummy || IsTargetVfxName(def.Name))
             ? dummy
@@ -503,7 +550,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // along +Z, which is "away from the caster" only when -Z looks back at him. VfxCastFrame holds the
         // axis convention and the evidence for it.
         VfxPlaybackItem? Make(uint hash, System.Numerics.Vector3 at, System.Numerics.Vector3 faceToward,
-            System.Numerics.Vector3? travelTo)
+            System.Numerics.Vector3? travelTo, string? bone = null)
         {
             if (!_vfxDefs.TryGetValue(hash, out var def)) return null;
             float dist = travelTo is { } dst ? (dst - at).Length() : 0f;
@@ -518,6 +565,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                     : ability?.Missiles.Select(m => m.Motion.SecondsFor(dist)).FirstOrDefault(v => v is > 0f)
                       ?? (dist > 1f ? dist / 1800f : 0f),
                 StartDelay = travelTo is not null ? castDelay : 0f,
+                // M663: only the caster side. A missile is not bone-bound in game either - it leaves the
+                // hand and flies - and a target-side system belongs to whatever it hit.
+                AttachBone = bone,
             };
         }
 
@@ -534,7 +584,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         var flightEnd = plan?.TravelTo ?? dummy;
         System.Numerics.Vector3? hitAt = plan is null ? dummy : plan.HitAt;
 
-        foreach (var h in ev.CasterSystems) if (Make(h, caster, aim, null) is { } i) items.Add(i);
+        // M663: the caster's own systems ride a bone. Blitzcrank's Q authors no ParticleEventData anywhere
+        // in his graph - his abilities are spawned by the compiled spell script, which ships in no bin -
+        // so this composite was the ONLY thing placing the effect, and it placed it in world space, where
+        // it stayed while he moved. CasterBone explains why the default is a locator; the picker beside
+        // the events list is there because Riot's files never name the real bone.
+        string? casterBone = CasterBoneOrNull;
+        foreach (var h in ev.CasterSystems) if (Make(h, caster, aim, null, casterBone) is { } i) items.Add(i);
         if (hitAt is { } hit)
             foreach (var h in ev.TargetSystems) if (Make(h, hit, caster, null) is { } i) items.Add(i);
         foreach (var h in ev.MissileSystems) if (Make(h, caster, flightEnd, flightEnd) is { } i) items.Add(i);
@@ -733,9 +789,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     {
         ChampionEvents.Clear();
         _activeEvent = null; _eventBundle = null; _eventPlaybackActive = false;
-        if (_vfxDefs.Count > 0 || _clipsByAnm is { Count: > 0 })
-            foreach (var ev in ChampionEventBuilder.Build(_vfxDefs,
-                         (_clipsByAnm?.Values ?? Enumerable.Empty<Formats.Skeletons.AnimClipInfo>()).ToList()))
+        if (_vfxDefs.Count > 0 || _allClips.Count > 0)
+            foreach (var ev in ChampionEventBuilder.Build(_vfxDefs, _allClips))
                 ChampionEvents.Add(ev);
         HasEvents = ChampionEvents.Count > 0;
     }

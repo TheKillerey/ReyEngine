@@ -83,9 +83,9 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     /// <para>Empty for anything that is not a character. A prop or a map mesh has no champion record, and
     /// four empty ability rows on a lamppost would be worse than no list at all.</para></summary>
     private IReadOnlyList<CharacterAction> BuildCharacterActions(
-        WadAssetEntry skn, IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? clipsByAnm)
+        WadAssetEntry skn, IReadOnlyList<Formats.Skeletons.AnimClipInfo>? allClips)
     {
-        if (clipsByAnm is not { Count: > 0 } || !skn.IsResolved) return Array.Empty<CharacterAction>();
+        if (allClips is not { Count: > 0 } || !skn.IsResolved) return Array.Empty<CharacterAction>();
 
         // M636: the arena needs the install and the readers this window owns; handed over on every
         // character load, because the resolver only exists once the hash database has been read.
@@ -104,8 +104,10 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 ? ChampionRecord.SpellNames(ReadAsset(record.PathHash))
                 : Array.Empty<string>();
 
-            // clipsByAnm is keyed by .anm file name, so its values are this skin's clips exactly once.
-            var actions = CharacterActions.Build(spells, clipsByAnm.Values.ToList());
+            // M663: every clip, de-duplicated by clip NAME. It used to be the by-.anm-file view, on the
+            // assumption that its values were this skin's clips exactly once - Riot points several clips
+            // at one .anm file, so that view had already dropped the base graph's own Spell2.
+            var actions = CharacterActions.Build(spells, allClips);
 
             // M631: and the spell records, so the composite can use the champion's own missile speeds and
             // cast timings instead of the constants it used to invent. Same bin the spell NAMES came from,

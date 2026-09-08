@@ -6852,20 +6852,35 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Anim", $"{entry.DisplayName}: {ex.Message}"); return null; }
     }
 
-    /// <summary>M85: gather the champion's submesh-visibility rules — initialSubmeshToHide from every
-    /// skins/*.bin and per-clip show/hide lists from every animations/*.bin under the champ folder
-    /// (keyed by .anm file name to match the preview's animation entries).</summary>
+    /// <summary>
+    /// M85: gather the champion's submesh-visibility rules — initialSubmeshToHide from every skins/*.bin
+    /// and per-clip show/hide lists from every animations/*.bin under the champ folder.
+    ///
+    /// <para>TWO views of the same clips, because they answer different questions (M663). <b>Clips</b> is
+    /// keyed by .anm FILE NAME, which is what the preview needs: it looks up the visibility and sound
+    /// rules for the animation currently playing, and an animation entry is a file. <b>AllClips</b> is
+    /// every clip, de-duplicated by clip NAME, which is what the action list needs.</para>
+    ///
+    /// <para>They cannot be the same collection. Riot points several clips at ONE .anm file — Blitzcrank's
+    /// base graph names <c>blitzcrank_spell1.anm</c> from Spell1, Spell2 and Spell2_BASE, and Aatrox's has
+    /// 11 such files. Keyed by file, the second clip of each pair is dropped: the base graph's own Spell2
+    /// disappeared, and the W action then matched a clip called Spell2 in some OTHER skin's graph, which
+    /// is how a base-skin Blitzcrank came to play blitzcrank_skin20_spell1.</para>
+    /// </summary>
     private (IReadOnlyList<string> InitialHide, IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? Clips,
-             IReadOnlySet<string> OwnAnms)
+             IReadOnlySet<string> OwnAnms, IReadOnlyList<Formats.Skeletons.AnimClipInfo> AllClips)
         LoadSubmeshRules(WadAssetEntry skn)
     {
         var ownAnms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Keyed by clip NAME and ordered: this skin's own graph goes in first, so where several graphs
+        // define "Spell2" the one that wins is the one this skin actually plays.
+        var byClipName = new Dictionary<string, Formats.Skeletons.AnimClipInfo>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            if (!skn.IsResolved) return (Array.Empty<string>(), null, ownAnms);
+            if (!skn.IsResolved) return (Array.Empty<string>(), null, ownAnms, Array.Empty<Formats.Skeletons.AnimClipInfo>());
             var parts = skn.Path.Split('/');
             int ci = Array.FindIndex(parts, p => p.Equals("characters", StringComparison.OrdinalIgnoreCase));
-            if (ci < 0 || ci + 1 >= parts.Length) return (Array.Empty<string>(), null, ownAnms);
+            if (ci < 0 || ci + 1 >= parts.Length) return (Array.Empty<string>(), null, ownAnms, Array.Empty<Formats.Skeletons.AnimClipInfo>());
             string champ = parts[ci + 1];
             const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
             string animDir = $"characters/{champ}/animations/";
@@ -6886,6 +6901,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     var file = Path.GetFileName(c.AnmPath.Replace('\\', '/'));
                     if (file.Length > 0 && !clips.ContainsKey(file)) clips[file] = c;
                     if (file.Length > 0) ownAnms.Add(file);   // M115: THIS skin's animation set
+                    if (c.Name.Length > 0) byClipName.TryAdd(c.Name, c);   // M663
                 }
 
             foreach (var e in AssetEntries)
@@ -6897,16 +6913,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     {
                         var file = Path.GetFileName(c.AnmPath.Replace('\\', '/'));
                         if (file.Length > 0 && !clips.ContainsKey(file)) clips[file] = c;
+                        if (c.Name.Length > 0) byClipName.TryAdd(c.Name, c);   // M663
                     }
                 }
                 else if (e.Path.Contains(skinDir, OIC) && hide.Count == 0)
                     hide.AddRange(Formats.Skeletons.ChampionAnimationData.ParseInitialHide(GetAssetBytes(e)));
             }
             if (clips.Count > 0)
-                _log.Info("Preview", $"{champ}: {clips.Count} named clip(s) with visibility data, initial-hide: {(hide.Count > 0 ? string.Join(' ', hide) : "(none)")}.");
-            return (hide, clips.Count > 0 ? clips : null, ownAnms);
+                _log.Info("Preview", $"{champ}: {clips.Count} named clip(s) with visibility data, "
+                    + $"{byClipName.Count} distinct clip name(s), initial-hide: {(hide.Count > 0 ? string.Join(' ', hide) : "(none)")}.");
+            return (hide, clips.Count > 0 ? clips : null, ownAnms, byClipName.Values.ToList());
         }
-        catch { return (Array.Empty<string>(), null, ownAnms); }
+        catch { return (Array.Empty<string>(), null, ownAnms, byClipName.Values.ToList()); }
     }
 
     private IEnumerable<AnimationEntryViewModel> FindAnimations(WadAssetEntry skn, IReadOnlySet<string>? currentSkinAnms = null)
@@ -11051,7 +11069,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 return (m, s, t, v);
             });
             // M85: game-accurate submesh visibility — skin bin initial-hide + animation-graph clip lists.
-            var (initialHide, clipsByAnm, ownAnms) = LoadSubmeshRules(entry);
+            var (initialHide, clipsByAnm, ownAnms, allClips) = LoadSubmeshRules(entry);
             await Task.Run(() => LoadChampionAudio(entry));   // M90: clip SFX banks
             // M618: and the D3D11 scene, off the UI thread - it decodes every texture the skin references.
             var dx11 = await Task.Run(() => BuildCharacterDx11Scene(entry));
@@ -11059,13 +11077,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 MeshPreview.Show(entry.DisplayName, mesh, skeleton, textures);
-                MeshPreview.SetSubmeshRules(initialHide, clipsByAnm);
+                MeshPreview.SetSubmeshRules(initialHide, clipsByAnm, allClips);
                 MeshPreview.SetAnimations(mesh.CanSkin && skeleton is not null
                     ? FindAnimations(entry, ownAnms)
                     : Enumerable.Empty<AnimationEntryViewModel>());
                 MeshPreview.SetVfx(vfx.systems, vfx.resourceMap);
                 MeshPreview.SetVoiceEvents(TryLoadVoiceEvents(entry));   // M95c: authored VO lines
-                MeshPreview.SetActions(BuildCharacterActions(entry, clipsByAnm));   // M612: Q/W/E/R, move, recall
+                // M663: the FULL clip list, not the by-file one - see LoadSubmeshRules for what the by-file
+                // view drops.
+                MeshPreview.SetActions(BuildCharacterActions(entry, allClips));   // M612: Q/W/E/R, move, recall
                 MeshPreview.SetDx11Scene(dx11.Scene, dx11.Status);                  // M618: Riot's own shaders
                 // M619: the D3D11 particle driver takes its shaders from here. Opened lazily with the
                 // first scene build, so it is pushed on every load rather than once.

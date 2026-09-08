@@ -87,6 +87,22 @@ public static class CharacterActions
             var exact = Find(clips, n => n.Equals(prefix, StringComparison.OrdinalIgnoreCase));
             var related = clips.Where(c => !ReferenceEquals(c, exact) && IsVariantOf(c.Name, prefix)).ToList();
 
+            // M663: SpellN is not the only convention. Aatrox's graph has no Spell1 or Spell2 anywhere in
+            // his wad - his Q, which has three swings, is named Q1/Q2/Q3 - so both slots came up empty.
+            // Tried second, so a champion that uses both keeps SpellN as its primary.
+            if (exact is null && related.Count == 0)
+                related = clips.Where(c => IsSlotLetterClip(c.Name, slot[0]))
+                    // Ordered, because which one stands in below must not depend on the order the caller
+                    // happened to gather the graphs in. Lowest cast number first (Q1 is the opener),
+                    // then a bare name over a transition, then alphabetically: Aatrox's Q offers only
+                    // Q1_INTO_Idle, Q1_INTO_Run, Q2_..., Q3_... and the opener's recovery is the closest
+                    // thing to a Q he has - the swings themselves are among the 46 clip names in his base
+                    // graph that are unresolved hashes.
+                    .OrderBy(c => CastNumber(c.Name))
+                    .ThenBy(c => c.Name.Contains('_') ? 1 : 0)
+                    .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
             // With no plain SpellN, the first variant stands in - a champion whose Q only exists as
             // Spell1_ToIdle still has a Q worth playing.
             if (exact is null && related.Count > 0)
@@ -140,6 +156,32 @@ public static class CharacterActions
         // never taunts is noise, but an empty Q row on a champion that has a Q is information.
         if (exact is null && kind is CharacterActionKind.Emote or CharacterActionKind.Attack) return;
         actions.Add(new CharacterAction(label, kind, null, exact, related));
+    }
+
+    /// <summary>
+    /// M663: Riot's OTHER ability naming — the slot letter, optionally a cast number, optionally a
+    /// suffix: <c>Q</c>, <c>Q1</c>, <c>Q1_INTO_Idle</c>, <c>Q3_INTO_Run</c>.
+    ///
+    /// <para>The rule is deliberately tight. After the letter it accepts only digits, then either the end
+    /// of the name or an underscore — because a loose prefix test on "R" would swallow <c>Recall</c>,
+    /// <c>Run</c>, <c>Run_Base</c>, <c>Respawn</c> and <c>Recall_Winddown</c>, all of which Aatrox's own
+    /// graph carries, and would put the recall animation under the ultimate for most of the roster.</para>
+    /// </summary>
+    public static bool IsSlotLetterClip(string clipName, char slot)
+    {
+        if (string.IsNullOrEmpty(clipName)) return false;
+        if (char.ToUpperInvariant(clipName[0]) != char.ToUpperInvariant(slot)) return false;
+        int i = 1;
+        while (i < clipName.Length && char.IsAsciiDigit(clipName[i])) i++;
+        return i == clipName.Length || clipName[i] == '_';
+    }
+
+    /// <summary>The digits after the slot letter (Q3 -> 3), or 0 when the name is just the letter.</summary>
+    private static int CastNumber(string clipName)
+    {
+        int i = 1, n = 0;
+        while (i < clipName.Length && char.IsAsciiDigit(clipName[i])) n = n * 10 + (clipName[i++] - '0');
+        return n;
     }
 
     private static AnimClipInfo? Find(IReadOnlyList<AnimClipInfo> clips, Func<string, bool> match) =>
