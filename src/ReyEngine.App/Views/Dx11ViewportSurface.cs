@@ -70,6 +70,23 @@ public sealed class Dx11ViewportSurface : IDisposable
         }
     }
 
+    private IReadOnlyList<bool>? _mirroredSource;
+
+    /// <summary>M661: which mapgeo groups have a mirrored (negative-determinant) source transform, from
+    /// the SAME per-group array the OpenGL viewport reads. Only the Mirrored debug view uses it, and it
+    /// cannot be derived down here: the merged vertex buffer has every transform baked in.</summary>
+    public void ApplyGroupMirrored(IReadOnlyList<bool>? mirrored)
+    {
+        if (ReferenceEquals(_mirroredSource, mirrored)) return;
+        _mirroredSource = mirrored;
+        foreach (var m in _renderer.Materials)
+        {
+            int g = m.MapGroupIndex;
+            if (g < 0) continue;
+            m.SourceMirrored = mirrored is not null && g < mirrored.Count && mirrored[g];
+        }
+    }
+
     /// <summary>M627: why the last frame produced nothing, or null when it produced a frame. The host is
     /// expected to SHOW this - a silent failed frame leaves a stale image on screen that looks live.</summary>
     public string? LastError { get; private set; }
@@ -171,6 +188,11 @@ public sealed class Dx11ViewportSurface : IDisposable
     public bool SortByPipeline { get; set; } = true;
 
     public bool Wireframe { get; set; }
+
+    /// <summary>M661: the viewport's debug view, on the SAME numbering the OpenGL fragment shader uses -
+    /// 0 Basic, 1 RiotApprox, 2..14 the debug views. Riot's own shaders draw for 0 and 1; above that the
+    /// renderer swaps in a generated pixel shader.</summary>
+    public int DebugMode { get; set; }
 
     /// <summary>M460: bind Riot's glow buffer as RT1, blur it with their own mip chain and composite it
     /// with their screen blend. On by default - the glow is already being computed by the shaders this
@@ -495,6 +517,7 @@ public sealed class Dx11ViewportSurface : IDisposable
             // unconditionally. Fog is gated on the toggle, also matching it.
             TimeSeconds = t,
             Wireframe = Wireframe,
+            DebugMode = DebugMode,   // M661
             Bloom = Bloom,
             Shadows = Shadows,   // M465
             MapSunColor = MapSun?.SunColor,

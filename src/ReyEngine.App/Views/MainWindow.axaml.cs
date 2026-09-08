@@ -312,6 +312,9 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         _dx11.LightmapScale = vm.CurrentLightmapScale;
         _dx11.AnimateTime = vm.AnimationsPlaying;
         _dx11.Wireframe = vm.ShowWireframe;
+        // M661: the debug views. The GL viewport is bound to PreviewMode in XAML; this is the same
+        // property, so the two viewports show the same view of the same thing.
+        _dx11.DebugMode = vm.PreviewMode;
         _dx11.CullBackFaces = vm.CullBackfaces;   // M540: the toggle GL has always honoured
         // M559: Game Depth has to stop the REORDERING too, not just restore the depth mask. The client
         // draws map geometry in its own submission order; we group by pipeline to collapse state changes,
@@ -353,6 +356,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         // Per frame for the same reason the highlight is: the selection, the layer combos and the scene
         // rebuild all move independently, and a rebuild would otherwise come back with everything visible.
         _dx11.ApplyGroupVisibility(vm.CurrentModelSubmeshVisible);
+        _dx11.ApplyGroupMirrored(vm.CurrentModelSubmeshMirrored);   // M661: the Mirrored debug view
 
         // M296: the transform gizmo. Dragging already worked under D3D11 - the transparent input border
         // swallows pointer events in both modes and the hit-test is CPU maths against the matrices

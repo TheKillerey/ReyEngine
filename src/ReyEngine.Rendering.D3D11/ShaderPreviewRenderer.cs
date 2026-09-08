@@ -49,6 +49,14 @@ public sealed class PreviewSettings
     /// <summary>Draw with ReyEngine's own shading model instead of Riot's pixel shader, for the A/B.</summary>
     public bool UseComparisonShader;
 
+    /// <summary>
+    /// M661: the viewport's debug view, using the SAME numbering the OpenGL fragment shader's uMode
+    /// uses - 0 Basic, 1 RiotApprox, 2..14 the debug views. Below
+    /// <see cref="ShaderPreviewRenderer.FirstDebugMode"/> nothing happens and Riot's own shaders draw,
+    /// which is what 0 and 1 mean here.
+    /// </summary>
+    public int DebugMode;
+
     /// <summary>M228: the map's own sun and lightmap values, when a map scene supplied them. Null falls
     /// back to the UI sliders and a neutral scale.</summary>
     public Vector4? MapSunColor;
@@ -244,6 +252,12 @@ public sealed unsafe class PreviewMaterial : IDisposable
     internal readonly Dictionary<string, ComPtr<ID3D11ShaderResourceView>> Textures =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>M661: the same textures again, under what the debug views call them. Filled beside
+    /// <see cref="Textures"/> so the debug pass can bind a diffuse or a lightmap to a fixed register
+    /// without knowing this material's own register layout - which is what lets one generated debug
+    /// shader serve every material that shares a vertex signature.</summary>
+    internal readonly Dictionary<DebugSlot, ComPtr<ID3D11ShaderResourceView>> DebugTextures = new();
+
     /// <summary>Values this material authors, e.g. its own TintColor. Beat the renderer's engine values.</summary>
     public Dictionary<string, float[]> Params { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -266,6 +280,13 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// viewports cannot disagree about dragon layers, baron state or render regions. The -1 default is
     /// what keeps a blanket visibility sweep from stomping particle materials that manage their own.</summary>
     public int MapGroupIndex { get; set; } = -1;
+
+    /// <summary>M661: the source mapgeo mesh for this group has a negative-determinant (mirrored)
+    /// transform. Not derivable here - the merged vertex buffer has every transform baked in and the
+    /// per-mesh fact is gone by the time geometry reaches this renderer - so the host publishes it by
+    /// group, out of the SAME per-group array the OpenGL viewport reads. Only the Mirrored debug view
+    /// uses it.</summary>
+    public bool SourceMirrored { get; set; }
 
     /// <summary>M264: read this draw's geometry from the renderer's DYNAMIC buffer rather than the static
     /// scene mesh. Set by anything that rewrites its vertices every frame - particles today.</summary>
@@ -1966,6 +1987,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
     {
         if (!_texPool.TryGetValue(key, out var srv) || srv.Handle is null) return false;
         m.Textures[reflectedName] = srv;
+        RecordDebugSlot(m, reflectedName, srv);   // M661
         return true;
     }
 
@@ -2080,6 +2102,7 @@ float4 psmain_tex(VTexOut i) : SV_Target
         _texPool[key] = made.Value;
         _texAlpha[key] = Formats.Vfx.VfxShaderFlags.TextureUsesAlpha(rgba);
         m.Textures[reflectedName] = made.Value;
+        RecordDebugSlot(m, reflectedName, made.Value);   // M661
     }
 
     /// <summary>Views replaced while something might still hold them. Freed with the rest of the pool.</summary>
@@ -4942,6 +4965,11 @@ float4 psmain(VOut i) : SV_Target
             int boundSource = -1;
 
             bool compare = s.UseComparisonShader && _comparePs.Handle is not null;
+            // M661: the debug views replace Riot's pixel shader with a generated one. Not compatible with
+            // the comparison shader, which is the same trick for a different question, so it wins.
+            bool debugPass = !compare && s.DebugMode >= FirstDebugMode;
+            DebugDraws = 0;
+            DebugFallbacks = 0;
 
             // M245: six planes from the combined view-projection, Gribb-Hartmann. Extracted once per
             // frame, not per slice.
@@ -5090,8 +5118,24 @@ float4 psmain(VOut i) : SV_Target
                 _ctx.PSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
             }
 
+            // M661: AFTER the constant-buffer loops above, not before. The debug constants live at b0 and
+            // the loop binds the material's own buffers at their reflected bind points - which include b0,
+            // so binding first meant Riot's PerFrame buffer replaced the debug one and every mode read the
+            // same garbage as its mode number. Measured: all thirteen views rendered an identical picture
+            // with 0 fallbacks, which looks exactly like "the modes do nothing" and is not.
+            //
+            // Bound after the normal shader is set, so a material whose signature has no debug shader
+            // keeps the one already bound and draws normally, counted as a fallback.
+            bool debugBound = debugPass && BindDebugPass(mat, s, world);
+
             // textures and samplers, at the registers the shader declares
-            if (compare)
+            if (debugBound)
+            {
+                // BindDebugPass bound the five debug slots and the constants at b0/t0..t4. The VERTEX
+                // stage still needs its own resources - the debug shader reads what the material's real
+                // vertex shader interpolates, so that half has to run unchanged.
+            }
+            else if (compare)
             {
                 var cbBytes = new byte[32];
                 var sd = s.SunDirection;
@@ -5424,6 +5468,7 @@ float4 psmain(VOut i) : SV_Target
         _gizmoVb.Dispose();
         _gizmoRaster.Dispose();
         _lightRangeVb.Dispose();
+        DisposeDebugViews();   // M661
         _bakeBoxVb.Dispose();
         _boneVb.Dispose();   // M619
         _dummyVb.Dispose();  // M628

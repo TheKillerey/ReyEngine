@@ -7694,9 +7694,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _hasRenderRegions;
     partial void OnRenderRegionsEnabledChanged(bool value) => ApplyMapVisibility();
 
+    /// <summary>M661: which mapgeo GROUPS come from a mirrored (negative-determinant) mesh. The OpenGL
+    /// viewport folds this into its per-submesh material; the D3D11 viewport has no per-mesh transform to
+    /// read, so it is published here and both read the same array.</summary>
+    public IReadOnlyList<bool>? CurrentModelSubmeshMirrored { get; private set; }
+
     private void ApplyMapVisibility()
     {
-        if (_currentMap is not { } map) { CurrentModelSubmeshVisible = null; return; }
+        if (_currentMap is not { } map)
+        { CurrentModelSubmeshVisible = null; CurrentModelSubmeshMirrored = null; return; }
         var selections = CurrentVisibilitySelections;
         var resolver = _visibilityResolver ??= new MapVisibilityResolver(_mapControllers, _mapVisibility);
         var regionOf = map.Meshes.ToDictionary(m => m.Index, m => m.RegionHash);
@@ -7722,6 +7728,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 vis[i] = false;
         }
         CurrentModelSubmeshVisible = vis;
+
+        // M661: the same groups, by whether their source mesh is mirrored. Built here because this is
+        // where the group -> mesh mapping already is.
+        var mirroredMesh = map.Meshes.ToDictionary(m => m.Index, m => m.IsMirrored);
+        var mirrored = new bool[map.Groups.Count];
+        for (int i = 0; i < mirrored.Length; i++)
+            mirrored[i] = map.Groups[i].MeshIndex >= 0
+                && mirroredMesh.TryGetValue(map.Groups[i].MeshIndex, out var mir) && mir;
+        CurrentModelSubmeshMirrored = mirrored;
         // M385: the grass tint is part of the map STATE, not the map build - Riot swaps it for the
         // mAlternateAssets entry whose visibility flag is active, so it has to follow this.
         RefreshGrassTint();
