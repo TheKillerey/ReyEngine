@@ -2499,10 +2499,25 @@ void main(){
         CulledSlices = 0;
         CulledProps = 0;
         var m = viewProjection;
-        // M664: declared up here so DrawPropMeshes, defined further down, can be CALLED from inside the
-        // mesh block - a local function may be called before its declaration, but not capture a local
+        // M664: declared up here so DrawPropMeshes, defined further down, can be CALLED ahead of the mesh
+        // block - a local function may be called before its declaration, but not capture a local
         // declared after the call.
         bool propsDrawn = false;
+
+        // M668: the props draw FIRST. M664 put them between the mesh's opaque and transparent passes so a
+        // blended champion surface would composite over the arena floor, and that interleave crashed the
+        // editor five times in one evening: DrawPropMeshes ends by unbinding the VAO and along the way
+        // overwrites the MVP, the model matrix and every texture unit, and the transparent pass then ran
+        // DrawSubmesh against nothing - an access violation inside GL.DrawElements, the same stack in all
+        // five Windows event-log entries. It needed props to exist, which is why Locke's Q, E and R died
+        // (they need a target, and the target dummy is a prop) while W, which needs none, did not.
+        //
+        // Drawn here, the mesh block below binds its VAO, EBO, matrices and texture cache afterwards and
+        // owes the props nothing. The ordering M664 wanted survives: the floor and the dummy are on screen
+        // before the mesh's transparent pass blends over them. Props are opaque or alpha-tested and write
+        // depth, so drawing them before the mesh's opaque pass changes nothing the depth test does not
+        // already settle.
+        DrawPropMeshes();
 
         if (_hasMesh)
         {
@@ -2710,10 +2725,6 @@ void main(){
                     if (s.Visible && InView(s)) { DrawSubmesh(s); DrawCalls++; }
                 }
 
-                // M664: the props go in here, between the passes - see DrawPropMeshes for why.
-                DrawPropMeshes();
-                _gl.UseProgram(_meshProgram);   // the prop pass shares the program but rebinds its own VAO
-
                 // Pass 2: transparent modes (2/3) after solids — alpha-blend, depth-test on but NO depth
                 // write, so overlapping glass/water composites without occluding itself. (No back-to-front
                 // sort — acceptable for a preview.)
@@ -2769,10 +2780,13 @@ void main(){
         // M664: WHEN this runs matters. It used to run after the whole mesh, which is fine while the mesh is
         // the map and the props are things standing on it - but the character preview draws the CHARACTER as
         // the mesh and the arena floor as a prop, so a blend-mode transparency like Aatrox's wings composited
-        // against the cleared background and the floor was drawn afterwards. Called between the mesh's opaque
-        // and transparent passes, the floor is already there for the wing to blend over, and a transparent
-        // prop still composites over the mesh's solid parts as before. Idempotent: whichever call site comes
-        // first does the work.
+        // against the cleared background and the floor was drawn afterwards.
+        //
+        // M668: it runs BEFORE the mesh block, not between its passes. The interleave M664 chose left the
+        // transparent pass with no VAO bound and the props' matrices in the uniforms - see the call site.
+        // This block sets up everything it needs and restores FrontFace; it does not restore the mesh
+        // state, and nothing after it may assume it did. Idempotent: whichever call site comes first does
+        // the work, and the trailing call covers a viewport with no mesh at all.
         void DrawPropMeshes()
         {
             if (propsDrawn || _propMeshInstances.Count == 0 || wireframe) return;

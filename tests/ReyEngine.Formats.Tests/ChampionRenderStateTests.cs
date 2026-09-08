@@ -160,28 +160,38 @@ public sealed class ChampionRenderStateTests
         Assert.Contains("with { BlendWritesDepth = true }", champion);
     }
 
-    // ===================================================== the props draw between the two passes
+    // ===================================================== the props draw before the mesh block
 
     /// <summary>
-    /// Order, not state. The arena floor is a PROP and the champion is the mesh, so props drawn after the
-    /// whole mesh left a blend-mode transparency compositing against the cleared background with the floor
-    /// painted in afterwards. Between the passes, the floor is already there to blend over.
+    /// M668. M664 drew the props BETWEEN the mesh's opaque and transparent passes, and that crashed the
+    /// editor: DrawPropMeshes unbinds the VAO and overwrites the matrices and texture units, so the
+    /// transparent pass ran DrawSubmesh against nothing - an access violation inside GL.DrawElements, the
+    /// same stack in five Windows event-log entries. It fired only when props existed, which is why Locke's
+    /// Q, E and R died (they need a target, and the target dummy is a prop) and W did not.
+    ///
+    /// <para>The props now draw before the mesh block, which sets up its own state afterwards. A call
+    /// between the two passes is exactly the shape that crashed, so this pins its absence.</para>
     /// </summary>
     [Fact]
-    public void PropsAreDrawnBetweenTheOpaqueAndTransparentPasses()
+    public void PropsAreDrawnBeforeTheMeshBlockAndNeverBetweenItsPasses()
     {
         var src = Source("src", "ReyEngine.Rendering", "ViewportMeshRenderer.cs");
         if (src.Length == 0) return;
 
-        int call = src.IndexOf("DrawPropMeshes();", StringComparison.Ordinal);
+        int meshBlock = src.IndexOf("        if (_hasMesh)\n        {\n            _gl.Enable(EnableCap.DepthTest);", StringComparison.Ordinal);
+        if (meshBlock < 0) meshBlock = src.IndexOf("        if (_hasMesh)\r\n        {\r\n            _gl.Enable(EnableCap.DepthTest);", StringComparison.Ordinal);
         int pass1 = src.IndexOf("// Pass 1: opaque + cutout", StringComparison.Ordinal);
         int pass2 = src.IndexOf("// Pass 2: transparent modes", StringComparison.Ordinal);
+        int firstCall = src.IndexOf("DrawPropMeshes();", StringComparison.Ordinal);
 
-        Assert.True(pass1 > 0 && pass2 > pass1, "the two mesh passes are no longer where this test expects");
-        Assert.True(call > pass1 && call < pass2,
-            "the prop draw must sit between the opaque and transparent passes");
+        Assert.True(meshBlock > 0 && pass1 > meshBlock && pass2 > pass1, "the mesh block and its passes are no longer where this test expects");
+        Assert.True(firstCall > 0 && firstCall < meshBlock, "the first prop draw must come before the mesh block");
 
-        // A mirrored prop instance flips FrontFace; the transparent pass reads it, so it has to be restored.
+        // and NO call may sit between the two passes - that is the interleave that crashed
+        int between = src.IndexOf("DrawPropMeshes();", pass1, pass2 - pass1, StringComparison.Ordinal);
+        Assert.True(between < 0, "a prop draw between the opaque and transparent passes is the M664 crash");
+
+        // A mirrored prop instance flips FrontFace; the mesh block that follows relies on CW.
         Assert.Contains("_gl.FrontFace(FrontFaceDirection.CW);", src);
     }
 }
