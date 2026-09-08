@@ -1164,7 +1164,10 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         sb.AppendLine("cbuffer CompareCB : register(b0) { float4 gSunDir; float4 gSunColor; };");
         sb.AppendLine("struct PSIn {");
 
-        string uvField = null, normalField = null;
+        // M671: the uv and normal come from the same picker the debug views use - see
+        // PickDebugInterpolators for the signature that broke the inline rule this replaced.
+        var pick = PickDebugInterpolators(vsRefl);
+        string? uvField = pick.Uv, normalField = pick.Normal;
         int n = 0;
         foreach (var o in vsRefl.Outputs)
         {
@@ -1175,11 +1178,6 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
                          || o.Semantic.StartsWith("SV_", StringComparison.OrdinalIgnoreCase);
             string sem = isPos ? "SV_Position" : o.FullSemantic;
             sb.AppendLine("    " + type + " " + field + " : " + sem + ";");
-            if (!isPos && o.Semantic.Equals("TEXCOORD", StringComparison.OrdinalIgnoreCase))
-            {
-                if (comps >= 3 && normalField is null && uvField is not null) normalField = field;
-                else if (comps >= 2 && uvField is null) uvField = field;
-            }
         }
         sb.AppendLine("};");
         sb.AppendLine("float4 main(PSIn i) : SV_Target {");

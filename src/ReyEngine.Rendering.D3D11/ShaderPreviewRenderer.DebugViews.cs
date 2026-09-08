@@ -116,6 +116,50 @@ public sealed unsafe partial class ShaderPreviewRenderer
         return ps;
     }
 
+    /// <summary>M671: which vertex-shader outputs the generated shaders read as the uv, the world normal,
+    /// the vertex colour and the lightmap uv. Field names follow the PSIn struct the generators emit:
+    /// <c>f0</c>, <c>f1</c>, ... in output order, SV_Position included.</summary>
+    public readonly record struct DebugInterpolators(string? Uv, string? Normal, string? Colour, string? LightmapUv);
+
+    private static bool IsPositionOutput(DxbcSignatureElement o) =>
+        o.SystemValueType == 1 || o.Semantic.StartsWith("SV_", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// M661 read the signature in order: the first TEXCOORD with two or more components was the uv, a
+    /// later three-component one the normal, a second two-component one the lightmap's. That is the
+    /// shape of every map vertex shader and of skinnedmesh/diffuse_alpha. It is not the shape of
+    /// skinnedmesh/onsen, whose TEXCOORD0 is the four-wide VERTEX COLOUR and whose uv is TEXCOORD1.xy:
+    /// the rule took the colour as the uv, every pixel sampled texel (0.02, 0.02), and the Diffuse view
+    /// of Locke was one flat brown silhouette (M671, probe: AatroxTrace psdump). The uv is now the first
+    /// TEXCOORD with EXACTLY two components when the signature has one; the wider-first fallback stays
+    /// for a signature that packs its uv into a wider register. The normal and lightmap rules are the
+    /// M661 ones, read after the uv as before.
+    /// </summary>
+    public static DebugInterpolators PickDebugInterpolators(DxbcShader vsRefl)
+    {
+        var outs = vsRefl.Outputs;
+        static bool IsTex(DxbcSignatureElement o) =>
+            !IsPositionOutput(o) && o.Semantic.Equals("TEXCOORD", StringComparison.OrdinalIgnoreCase);
+        static int Comps(DxbcSignatureElement o) => Math.Max(1, o.ComponentCount);
+
+        int uv = -1;
+        for (int i = 0; i < outs.Count && uv < 0; i++) if (IsTex(outs[i]) && Comps(outs[i]) == 2) uv = i;
+        for (int i = 0; i < outs.Count && uv < 0; i++) if (IsTex(outs[i]) && Comps(outs[i]) >= 2) uv = i;
+
+        int normal = -1, lm = -1, colour = -1;
+        for (int i = 0; i < outs.Count; i++)
+        {
+            var o = outs[i];
+            if (colour < 0 && !IsPositionOutput(o) && Comps(o) >= 3
+                && o.Semantic.Equals("COLOR", StringComparison.OrdinalIgnoreCase)) colour = i;
+            if (!IsTex(o) || i <= uv) continue;
+            if (Comps(o) >= 3 && normal < 0) normal = i;
+            else if (Comps(o) >= 2 && lm < 0 && normal < 0) lm = i;
+        }
+        static string? Field(int i) => i < 0 ? null : "f" + i;
+        return new DebugInterpolators(Field(uv), Field(normal), Field(colour), Field(lm));
+    }
+
     /// <summary>
     /// The generated shader. Every branch mirrors the OpenGL fragment shader's <c>uMode</c> arm exactly,
     /// down to the stand-in colours - white for a missing mask, black for a missing emissive, magenta for
@@ -134,27 +178,17 @@ public sealed unsafe partial class ShaderPreviewRenderer
         sb.AppendLine("cbuffer DebugCB : register(b0) { float4 gFlags; float4 gSunDir; };");
         sb.AppendLine("struct PSIn {");
 
-        string? uvField = null, normalField = null, colourField = null, lmUvField = null;
+        // M671: which interpolator is which is decided by PickDebugInterpolators, shared with the
+        // comparison shader so the two generated shaders cannot read one signature two ways.
+        var pick = PickDebugInterpolators(vsRefl);
+        string? uvField = pick.Uv, normalField = pick.Normal, colourField = pick.Colour, lmUvField = pick.LightmapUv;
         int n = 0;
         foreach (var o in vsRefl.Outputs)
         {
             int comps = Math.Max(1, o.ComponentCount);
             string type = comps == 1 ? "float" : "float" + comps;
             string field = "f" + n++;
-            bool isPos = o.SystemValueType == 1 || o.Semantic.StartsWith("SV_", StringComparison.OrdinalIgnoreCase);
-            sb.AppendLine("    " + type + " " + field + " : " + (isPos ? "SV_Position" : o.FullSemantic) + ";");
-            if (isPos) continue;
-
-            if (o.Semantic.Equals("COLOR", StringComparison.OrdinalIgnoreCase) && colourField is null && comps >= 3)
-                colourField = field;
-            else if (o.Semantic.Equals("TEXCOORD", StringComparison.OrdinalIgnoreCase))
-            {
-                // Same heuristic BuildComparisonShader uses: the first 2-component TEXCOORD is the uv, and
-                // a later 3-component one is the world normal. A second 2-component set is the lightmap's.
-                if (comps >= 3 && normalField is null && uvField is not null) normalField = field;
-                else if (comps >= 2 && uvField is null) uvField = field;
-                else if (comps >= 2 && lmUvField is null && normalField is null) lmUvField = field;
-            }
+            sb.AppendLine("    " + type + " " + field + " : " + (IsPositionOutput(o) ? "SV_Position" : o.FullSemantic) + ";");
         }
         sb.AppendLine("    bool front : SV_IsFrontFace;");
         sb.AppendLine("};");

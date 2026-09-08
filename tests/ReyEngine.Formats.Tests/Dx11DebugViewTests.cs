@@ -192,4 +192,70 @@ public class Dx11DebugViewTests
     [Fact]
     public void ModesBelowTwoAreNotDebugModes() =>
         Assert.Equal(2, ShaderPreviewRenderer.FirstDebugMode);
+
+    // ---- which interpolator is which (M671) --------------------------------------------------------
+
+    static DxbcShader Signature(params (string Semantic, uint Index, byte Mask, uint Register, uint SysValue)[] outs) => new()
+    {
+        Bytecode = Array.Empty<byte>(),
+        Outputs = outs.Select(o => new DxbcSignatureElement(o.Semantic, o.Index, o.Register, o.Mask, o.Mask, 3, o.SysValue)).ToList(),
+    };
+
+    /// <summary>
+    /// M671. skinnedmesh/onsen's vertex shader writes its VERTEX COLOUR to TEXCOORD0 (four wide) and the
+    /// uv to TEXCOORD1.xy. M661's rule - the first two-or-more-component TEXCOORD is the uv - took the
+    /// colour, every pixel sampled texel (0.02, 0.02), and the Diffuse debug view of Locke was one flat
+    /// brown silhouette. The signature below is the real one (probe: AatroxTrace psdump Locke).
+    /// </summary>
+    [Fact]
+    public void OnsensFourWideTexcoord0IsNotTheUv()
+    {
+        var vs = Signature(
+            ("SV_Position", 0, 0xF, 0, 1),
+            ("TEXCOORD", 0, 0xF, 1, 0),   // vertex colour
+            ("TEXCOORD", 1, 0x3, 2, 0),   // uv
+            ("TEXCOORD", 2, 0xC, 2, 0),   // fog-of-war uv
+            ("TEXCOORD", 3, 0x7, 3, 0),   // world normal
+            ("TEXCOORD", 4, 0x7, 4, 0),   // world position
+            ("COLOR", 0, 0xF, 5, 0));     // the ambient cube, evaluated per vertex
+        var pick = ShaderPreviewRenderer.PickDebugInterpolators(vs);
+        Assert.Equal("f2", pick.Uv);
+        Assert.Equal("f4", pick.Normal);
+        Assert.Equal("f3", pick.LightmapUv);
+        Assert.Equal("f6", pick.Colour);
+        Assert.Contains("float2 uv = i.f2.xy;", ShaderPreviewRenderer.BuildDebugShaderSource(vs));
+    }
+
+    /// <summary>The shapes M661 was written against keep their answers: a map signature (uv, lightmap
+    /// uv, normal) and skinnedmesh/diffuse_alpha (uv, fog uv, normal, world position, colour).</summary>
+    [Fact]
+    public void TheMapAndDiffuseAlphaShapesAreUnchanged()
+    {
+        var map = ShaderPreviewRenderer.PickDebugInterpolators(Signature(
+            ("SV_Position", 0, 0xF, 0, 1), ("TEXCOORD", 0, 0x3, 1, 0), ("TEXCOORD", 1, 0x3, 2, 0), ("TEXCOORD", 2, 0x7, 3, 0)));
+        Assert.Equal("f1", map.Uv);
+        Assert.Equal("f2", map.LightmapUv);
+        Assert.Equal("f3", map.Normal);
+        Assert.Null(map.Colour);
+
+        var da = ShaderPreviewRenderer.PickDebugInterpolators(Signature(
+            ("SV_Position", 0, 0xF, 0, 1), ("TEXCOORD", 0, 0x3, 1, 0), ("TEXCOORD", 1, 0xC, 1, 0),
+            ("TEXCOORD", 2, 0x7, 2, 0), ("TEXCOORD", 3, 0x7, 3, 0), ("COLOR", 0, 0xF, 4, 0)));
+        Assert.Equal("f1", da.Uv);
+        Assert.Equal("f2", da.LightmapUv);
+        Assert.Equal("f3", da.Normal);
+        Assert.Equal("f5", da.Colour);
+    }
+
+    /// <summary>A signature that packs its uv wider than two keeps the M661 fallback rather than losing
+    /// the uv altogether.</summary>
+    [Fact]
+    public void AWiderUvStillCountsWhenNoTwoWideTexcoordExists()
+    {
+        var p = ShaderPreviewRenderer.PickDebugInterpolators(Signature(
+            ("SV_Position", 0, 0xF, 0, 1), ("TEXCOORD", 0, 0x7, 1, 0), ("TEXCOORD", 1, 0x7, 2, 0)));
+        Assert.Equal("f1", p.Uv);
+        Assert.Equal("f2", p.Normal);
+    }
+
 }
