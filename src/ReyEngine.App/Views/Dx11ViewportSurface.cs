@@ -234,7 +234,7 @@ public sealed class Dx11ViewportSurface : IDisposable
         var restore = new CaptureScope(this, _lastParticleTime, _frozenTime, Wireframe);
         _lastParticleTime = -1f;
         Wireframe = false;
-        _renderer.SetGizmoLines(null, null, null);
+        _renderer.SetGizmoGeometry(null, null, null);
         return restore;
     }
 

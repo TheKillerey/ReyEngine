@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Core.Rendering;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
@@ -60,17 +61,9 @@ public static class ViewportIcons
     /// shows up as "it looks wrong in the other renderer".</para>
     /// </summary>
     public static float CapWorldSize(Vector3 position, Vector3 cameraUp, float worldSize,
-        Matrix4x4 viewProjection, float viewportHeightPx)
-    {
-        if (viewportHeightPx <= 0f || MaxHeightFraction <= 0f || worldSize <= 0f) return worldSize;
-        var c0 = Vector4.Transform(new Vector4(position, 1f), viewProjection);
-        var c1 = Vector4.Transform(new Vector4(position + cameraUp * worldSize, 1f), viewProjection);
-        if (c0.W <= 1e-4f || c1.W <= 1e-4f) return worldSize;      // at or behind the eye
-
-        float px = MathF.Abs(c1.Y / c1.W - c0.Y / c0.W) * 0.5f * viewportHeightPx;
-        float maxPx = viewportHeightPx * MaxHeightFraction;
-        return px > maxPx ? worldSize * (maxPx / px) : worldSize;
-    }
+        Matrix4x4 viewProjection, float viewportHeightPx) =>
+        ScreenSize.CapAtPixels(position, cameraUp, worldSize, viewProjection, viewportHeightPx,
+            viewportHeightPx * MaxHeightFraction);
 
     private static readonly ViewportIconImage?[] Cache = new ViewportIconImage?[Files.Length];
     private static readonly bool[] Tried = new bool[Files.Length];

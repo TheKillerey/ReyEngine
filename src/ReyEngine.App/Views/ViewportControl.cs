@@ -675,9 +675,32 @@ public sealed class ViewportControl : OpenGlControlBase
     /// function, so they were consistently wrong together rather than misaligned. What it cost is size:
     /// at camera angles where the mirrored eye lands near the pivot the arm collapses toward the 10-unit
     /// floor, which is a gizmo of a few pixels.</para>
+    ///
+    /// <para><b>M658: measured in PIXELS.</b> Distance * 0.15 is only constant on screen while neither
+    /// clamp bites, and both of them do: below 67 units of camera distance the 10-unit floor takes over
+    /// and the gizmo grows as you close in, above 33,333 the 5,000 ceiling does the same thing. That is
+    /// the reported "the arrows do not get smaller as I come closer". Asking for a fixed pixel length
+    /// instead removes the question at both ends and is what every other editor does with a handle.</para>
+    ///
+    /// <para>Measured against <c>_lastViewProj</c> - the same MIRRORED matrix the hit test projects
+    /// through - so the drawn arm and the aimed-at arm cannot drift. The mirror is about X and the
+    /// measurement is vertical, so the camera's own up vector is the right probe direction. Falls back to
+    /// the old distance rule before the first frame has cached its matrices.</para>
     /// </summary>
-    private float GizmoArmLength(Vector3 pivot) =>
-        Math.Clamp(Vector3.Distance(_camera.Position, pivot) * 0.15f, 10f, 5000f);
+    private float GizmoArmLength(Vector3 pivot)
+    {
+        if (_lastViewportH > 0)
+        {
+            float world = ReyEngine.Core.Rendering.ScreenSize.WorldSizeForPixels(
+                pivot, _camera.Up, GizmoArmPixels, _lastViewProj, (float)_lastViewportH);
+            if (world > 0f) return world;
+        }
+        return Math.Clamp(Vector3.Distance(_camera.Position, pivot) * 0.15f, 10f, 5000f);
+    }
+
+    /// <summary>M658: how long a gizmo arm is on screen, in pixels, at any camera distance. Roughly a
+    /// tenth of a 1080p viewport - long enough to aim at, short enough not to cover what is being moved.</summary>
+    public static float GizmoArmPixels { get; set; } = 110f;
 
     /// <summary>M296: the arm length the HIT-TEST uses, exposed so the D3D11 viewport draws an arm of
     /// exactly that length. It is derived from the cached mirrored camera position, so anything computing

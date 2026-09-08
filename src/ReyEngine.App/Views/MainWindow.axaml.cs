@@ -359,12 +359,12 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             var az = axes is { Count: 3 } ? axes[2] : System.Numerics.Vector3.UnitZ;
             float arm = Viewport.GizmoArmLengthFor(gizmoPivot);
             int mode = vm.TransformMode;
-            _dx11.Renderer.SetGizmoLines(
+            _dx11.Renderer.SetGizmoGeometry(
                 ReyEngine.Rendering.ViewportMeshRenderer.BuildGizmoAxis(mode, gizmoPivot, ax, arm),
                 ReyEngine.Rendering.ViewportMeshRenderer.BuildGizmoAxis(mode, gizmoPivot, ay, arm),
                 ReyEngine.Rendering.ViewportMeshRenderer.BuildGizmoAxis(mode, gizmoPivot, az, arm));
         }
-        else _dx11.Renderer.SetGizmoLines(null, null, null);
+        else _dx11.Renderer.SetGizmoGeometry(null, null, null);
 
         // M295: props, from the same set the GL viewport binds to. The setter compares by reference, so
         // this is a no-op until the view-model actually republishes the prop set.

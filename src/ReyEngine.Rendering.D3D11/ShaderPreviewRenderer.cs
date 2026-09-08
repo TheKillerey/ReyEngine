@@ -1672,6 +1672,17 @@ float4 psmain_tex(VTexOut i) : SV_Target
         _device.CreateSamplerState(in sd, ref smp);
         _iconSampler = smp;
 
+        // M658: solid gizmo handles, drawn with no culling - see DrawGizmo.
+        if (_gizmoRaster.Handle is null)
+        {
+            var grd = new RasterizerDesc
+            {
+                FillMode = FillMode.Solid, CullMode = CullMode.None, DepthClipEnable = 1,
+            };
+            ComPtr<ID3D11RasterizerState> grs = default;
+            if (_device.CreateRasterizerState(in grd, ref grs) >= 0) _gizmoRaster = grs;
+        }
+
         for (int g = 0; g < _glyphSrv.Length; g++)
         {
             // M657: painted art when it decodes, the M271 drawn glyph when it does not. MakeTexture
@@ -2541,6 +2552,8 @@ float4 psmain(VOut i) : SV_Target
     // M296: the transform gizmo. Position-only line segments per axis, so the overlay pipeline draws it
     // as-is; only the topology differs from the rest of the furniture.
     private ComPtr<ID3D11Buffer> _gizmoVb;
+    /// <summary>M658: culling off, for solid gizmo handles under a winding-reversing mirror.</summary>
+    private ComPtr<ID3D11RasterizerState> _gizmoRaster;
     private int _gizmoVbCapacity;
     private readonly int[] _gizmoAxisVerts = new int[3];
 
@@ -2576,7 +2589,7 @@ float4 psmain(VOut i) : SV_Target
     /// the viewport swallows pointer events in both modes and the hit-test is CPU maths against matrices
     /// SyncPickMatrices refreshes every D3D11 frame. The user simply had nothing to see or aim at.</para>
     /// </summary>
-    public void SetGizmoLines(float[]? x, float[]? y, float[]? z)
+    public void SetGizmoGeometry(float[]? x, float[]? y, float[]? z)
     {
         _gizmoTotalVerts = 0;
         _gizmoAxisVerts[0] = _gizmoAxisVerts[1] = _gizmoAxisVerts[2] = 0;
@@ -2903,15 +2916,18 @@ float4 psmain(VOut i) : SV_Target
         _ctx.IASetInputLayout(_overlayLayout);
         _ctx.VSSetShader(_overlayVs, null, 0);
         _ctx.PSSetShader(_overlayPs, null, 0);
-        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
+        // M658: the handles are solid geometry now, not line segments.
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
 
         uint stride = 3 * sizeof(float), offset = 0;
         _ctx.IASetVertexBuffers(0, 1, ref _gizmoVb, in stride, in offset);
 
         // Depth test OFF, exactly as GL draws it: a gizmo occluded by the thing it moves is a gizmo you
-        // cannot grab, so it is always on top.
+        // cannot grab, so it is always on top. Culling off for the same reason GL turns it off: a mirrored
+        // view reverses winding, and a gizmo that depended on facing would vanish in one viewport only.
         _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
         _ctx.OMSetDepthStencilState(_overlayDepthNoTest, 0);
+        if (_gizmoRaster.Handle is not null) _ctx.RSSetState(_gizmoRaster);
 
         // The same three colours the GL viewport uses - X red, Y green, Z blue.
         var colours = stackalloc Vector4[3];
@@ -2932,8 +2948,9 @@ float4 psmain(VOut i) : SV_Target
             drawn++;
         }
 
-        // Back to triangles: everything else in this renderer assumes it, and topology is device state.
-        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+        // Topology is already triangles (M658). The RASTERIZER is device state too and was swapped for a
+        // no-cull one, so put the frame's own back - otherwise the next pass is silently two-sided.
+        if (_gizmoRaster.Handle is not null && _raster.Handle is not null) _ctx.RSSetState(_raster);
         return drawn;
     }
 
@@ -5339,6 +5356,7 @@ float4 psmain(VOut i) : SV_Target
         _depthCopySrv.Dispose(); _depthCopy.Dispose();
         _gridVs.Dispose(); _gridPs.Dispose(); _gridLayout.Dispose(); _gridVb.Dispose();
         _gizmoVb.Dispose();
+        _gizmoRaster.Dispose();
         _bakeBoxVb.Dispose();
         _boneVb.Dispose();   // M619
         _dummyVb.Dispose();  // M628

@@ -2093,62 +2093,88 @@ void main(){
         _gizmoAxX = ax ?? Vector3.UnitX; _gizmoAxY = ay ?? Vector3.UnitY; _gizmoAxZ = az ?? Vector3.UnitZ;
     }
 
-    /// <summary>Build the line-segment vertices for one gizmo axis handle in the given mode (M42).</summary>
-    /// <summary>M296: public because the D3D11 viewport draws the SAME gizmo from the same builder. It is
+    /// <summary>Segments per turn on anything round in the gizmo. Public so a test can pin the vertex
+    /// budget without restating the number.</summary>
+    public const int GizmoSegments = 20;
+    public const int GizmoRingSegments = 64;
+
+    /// <summary>
+    /// One gizmo axis handle as a TRIANGLE list - 9 floats per triangle (M658). Move is a cylinder shaft
+    /// with a cone head, scale a shaft with a box at the tip, rotate a flat band straddling the ring.
+    ///
+    /// <para>M658: solid, where M42 through M380 drew line segments. A wireframe gizmo reads as a
+    /// scribble over a busy map, and the see-through head is why the move shaft had to stop short of the
+    /// tip - a solid one has nothing to show through. The <b>tip is still exactly
+    /// <c>pivot + axis * arm</c></b>, because that is what <c>HitTestGizmoAxis</c> measures against and
+    /// the two must not drift.</para>
+    ///
+    /// <para>Winding is NOT relied on: both viewports draw the gizmo with culling off. The map viewport
+    /// mirrors world X, which reverses winding, so a gizmo that depended on facing would vanish in one
+    /// viewport and not the other.</para>
+    ///
+    /// <para>M296: public because the D3D11 viewport draws the SAME gizmo from the same builder. It is
     /// pure CPU maths with no GL call in it, so sharing it is what stops the two viewports growing gizmos
-    /// that disagree about where an axis arm ends - and the arm is what the user aims at, so a disagreement
-    /// would be a hit-test that misses.</summary>
+    /// that disagree about where an axis arm ends - and the arm is what the user aims at, so a
+    /// disagreement would be a hit-test that misses.</para>
+    /// </summary>
     public static float[] BuildGizmoAxis(int mode, Vector3 pivot, Vector3 axis, float arm)
     {
         var v = new List<float>();
-        void Seg(Vector3 a, Vector3 b) { v.Add(a.X); v.Add(a.Y); v.Add(a.Z); v.Add(b.X); v.Add(b.Y); v.Add(b.Z); }
+        void P(Vector3 p) { v.Add(p.X); v.Add(p.Y); v.Add(p.Z); }
+        void Tri(Vector3 a, Vector3 b, Vector3 c) { P(a); P(b); P(c); }
+        void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d) { Tri(a, b, c); Tri(a, c, d); }
+
         axis = Vector3.Normalize(axis);
         var u = Vector3.Normalize(MathF.Abs(axis.Y) < 0.99f ? Vector3.Cross(axis, Vector3.UnitY) : Vector3.Cross(axis, Vector3.UnitX));
         var w = Vector3.Cross(axis, u);
+        Vector3 Ring(Vector3 centre, float radius, float t) =>
+            centre + (u * MathF.Cos(t) + w * MathF.Sin(t)) * radius;
 
-        if (mode == 1) // rotate: ring in the plane perpendicular to the axis
+        if (mode == 1) // rotate: a flat band centred ON the hit-test circle, so what is drawn is what is aimed at
         {
-            const int N = 48;
-            Vector3 prev = pivot + u * arm;
-            for (int i = 1; i <= N; i++)
+            const int N = GizmoRingSegments;
+            float inner = arm * 0.98f, outer = arm * 1.02f;
+            for (int i = 0; i < N; i++)
             {
-                float t = i / (float)N * MathF.Tau;
-                var p = pivot + (u * MathF.Cos(t) + w * MathF.Sin(t)) * arm;
-                Seg(prev, p); prev = p;
+                float t0 = i / (float)N * MathF.Tau, t1 = (i + 1) / (float)N * MathF.Tau;
+                Quad(Ring(pivot, inner, t0), Ring(pivot, outer, t0), Ring(pivot, outer, t1), Ring(pivot, inner, t1));
             }
+            return v.ToArray();
         }
-        else // move / scale: an arm from the pivot
-        {
-            var tip = pivot + axis * arm;
-            if (mode == 2) // scale: a small box at the tip
-            {
-                Seg(pivot, tip);
-                float s = arm * 0.06f;
-                Vector3 C(int sx, int sy, int sz) => tip + axis * (sz * s) + u * (sx * s) + w * (sy * s);
-                var c = new[] { C(-1, -1, -1), C(1, -1, -1), C(1, 1, -1), C(-1, 1, -1), C(-1, -1, 1), C(1, -1, 1), C(1, 1, 1), C(-1, 1, 1) };
-                int[,] e = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
-                for (int i = 0; i < 12; i++) Seg(c[e[i, 0]], c[e[i, 1]]);
-            }
-            else // M380: move — a cone arrowhead at the tip, the way every other editor draws translate.
-            {
-                // The shaft stops at the cone base rather than running to the tip, so the line is not
-                // drawn through the inside of the (wireframe, therefore see-through) head.
-                float headLen = arm * 0.16f, headR = arm * 0.05f;
-                var baseC = tip - axis * headLen;
-                Seg(pivot, baseC);
 
-                // Rim + slant per step. The rim closes because step N lands back on the step-0 point,
-                // which is also where that point gets its slant drawn - so all N points get exactly one.
-                const int N = 12;
-                var prev = baseC + u * headR;
-                for (int i = 1; i <= N; i++)
-                {
-                    float t = i / (float)N * MathF.Tau;
-                    var p = baseC + (u * MathF.Cos(t) + w * MathF.Sin(t)) * headR;
-                    Seg(prev, p);
-                    Seg(p, tip);
-                    prev = p;
-                }
+        // move / scale: a shaft from the pivot, with a head at the tip
+        const int Steps = GizmoSegments;
+        var tip = pivot + axis * arm;
+        float shaftR = arm * 0.018f;
+        float headLen = mode == 2 ? 0f : arm * 0.16f;   // scale's shaft runs all the way to the tip
+        var shaftEnd = tip - axis * headLen;
+
+        for (int i = 0; i < Steps; i++)
+        {
+            float t0 = i / (float)Steps * MathF.Tau, t1 = (i + 1) / (float)Steps * MathF.Tau;
+            Quad(Ring(pivot, shaftR, t0), Ring(pivot, shaftR, t1), Ring(shaftEnd, shaftR, t1), Ring(shaftEnd, shaftR, t0));
+            Tri(pivot, Ring(pivot, shaftR, t1), Ring(pivot, shaftR, t0));   // cap the base
+        }
+
+        if (mode == 2) // scale: a solid box at the tip
+        {
+            float s = arm * 0.06f;
+            Vector3 C(int sx, int sy, int sz) => tip + axis * (sz * s) + u * (sx * s) + w * (sy * s);
+            var c = new[] { C(-1, -1, -1), C(1, -1, -1), C(1, 1, -1), C(-1, 1, -1),
+                            C(-1, -1, 1), C(1, -1, 1), C(1, 1, 1), C(-1, 1, 1) };
+            int[] faces = { 0, 1, 2, 3,  5, 4, 7, 6,  4, 0, 3, 7,  1, 5, 6, 2,  3, 2, 6, 7,  4, 5, 1, 0 };
+            for (int f = 0; f < 6; f++)
+                Quad(c[faces[f * 4]], c[faces[f * 4 + 1]], c[faces[f * 4 + 2]], c[faces[f * 4 + 3]]);
+        }
+        else // move: a solid cone
+        {
+            float headR = arm * 0.05f;
+            var baseC = shaftEnd;
+            for (int i = 0; i < Steps; i++)
+            {
+                float t0 = i / (float)Steps * MathF.Tau, t1 = (i + 1) / (float)Steps * MathF.Tau;
+                Tri(Ring(baseC, headR, t0), Ring(baseC, headR, t1), tip);        // side
+                Tri(baseC, Ring(baseC, headR, t1), Ring(baseC, headR, t0));      // cap
             }
         }
         return v.ToArray();
@@ -2885,12 +2911,15 @@ void main(){
             _gl.UseProgram(_lineProgram);
             _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
             _gl.Disable(EnableCap.DepthTest);
-            _gl.LineWidth(2.5f);
+            // M658: the handles are solid now, and culling stays OFF - the map viewport mirrors world X,
+            // which reverses winding, so a gizmo that depended on facing would vanish in one viewport and
+            // not the other.
+            _gl.Disable(EnableCap.CullFace);
             int xN = xg.Length / 3, yN = yg.Length / 3, zN = zg.Length / 3;
-            _gl.Uniform4(_lColor, 0.95f, 0.25f, 0.25f, 1f); _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)xN);         // X red
-            _gl.Uniform4(_lColor, 0.3f, 0.9f, 0.35f, 1f); _gl.DrawArrays(PrimitiveType.Lines, xN, (uint)yN);          // Y green
-            _gl.Uniform4(_lColor, 0.3f, 0.55f, 0.98f, 1f); _gl.DrawArrays(PrimitiveType.Lines, xN + yN, (uint)zN);    // Z blue
-            _gl.LineWidth(1f);
+            _gl.Uniform4(_lColor, 0.95f, 0.25f, 0.25f, 1f); _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)xN);         // X red
+            _gl.Uniform4(_lColor, 0.3f, 0.9f, 0.35f, 1f); _gl.DrawArrays(PrimitiveType.Triangles, xN, (uint)yN);          // Y green
+            _gl.Uniform4(_lColor, 0.3f, 0.55f, 0.98f, 1f); _gl.DrawArrays(PrimitiveType.Triangles, xN + yN, (uint)zN);    // Z blue
+            if (cullBackfaces) _gl.Enable(EnableCap.CullFace);
             _gl.BindVertexArray(0);
         }
 

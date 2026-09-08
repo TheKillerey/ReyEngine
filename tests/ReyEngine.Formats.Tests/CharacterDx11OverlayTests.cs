@@ -140,7 +140,7 @@ public sealed class CharacterDx11OverlayTests
 
         Assert.Contains("_dx11.BoneLines = bones", text);
         Assert.Contains("_dx11.ParticlePlayback = vm.Playback", text);
-        Assert.Contains("SetGizmoLines(", text);
+        Assert.Contains("SetGizmoGeometry(", text);
     }
 
     [Fact]

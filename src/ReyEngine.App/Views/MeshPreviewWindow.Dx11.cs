@@ -204,12 +204,12 @@ public partial class MeshPreviewWindow
         if (vm.DummyGizmoPivot is { } pivot)
         {
             float arm = PreviewViewport.GizmoArmLengthFor(pivot);
-            _dx11.Renderer.SetGizmoLines(
+            _dx11.Renderer.SetGizmoGeometry(
                 Rendering.ViewportMeshRenderer.BuildGizmoAxis(0, pivot, System.Numerics.Vector3.UnitX, arm),
                 Rendering.ViewportMeshRenderer.BuildGizmoAxis(0, pivot, System.Numerics.Vector3.UnitY, arm),
                 Rendering.ViewportMeshRenderer.BuildGizmoAxis(0, pivot, System.Numerics.Vector3.UnitZ, arm));
         }
-        else _dx11.Renderer.SetGizmoLines(null, null, null);
+        else _dx11.Renderer.SetGizmoGeometry(null, null, null);
 
         // M627: BEFORE the render, not after. These are the matrices the dummy gizmo drag and the M613
         // right-click orders raycast against, and they live on the GL control, which is hidden and not
