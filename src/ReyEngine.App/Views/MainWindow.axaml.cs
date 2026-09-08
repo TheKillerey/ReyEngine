@@ -341,6 +341,12 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         // highlight ends up pointing at geometry that is no longer there.
         _dx11.Renderer.SetHighlightRanges(vm.Dx11HighlightRanges);
         _dx11.Renderer.SetIcons(vm.Dx11Icons(Viewport.Camera.Distance));
+        // M659: the same two viewport rules the GL path follows - icons hidden by what is in front of
+        // them unless asked otherwise, and a wire ball at each light showing how far it reaches. Pushed
+        // per frame like the icons themselves, and from the SAME numbers, so the two viewports cannot
+        // disagree about where a light stops.
+        _dx11.Renderer.IconsThroughWalls = vm.IconsThroughWalls;
+        _dx11.Renderer.SetLightRangeLines(vm.Dx11LightRangeLines());
         // M292: dragon / baron / render-region filtering, from the same array the GL viewport binds to.
         // Per frame for the same reason the highlight is: the selection, the layer combos and the scene
         // rebuild all move independently, and a rebuild would otherwise come back with everything visible.

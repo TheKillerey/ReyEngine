@@ -1337,8 +1337,10 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         _ctx.VSSetShader(textured ? _overlayVsTex : _overlayVs, null, 0);
         _ctx.PSSetShader(textured ? _overlayPsTex : _overlayPs, null, 0);
         if (textured) _ctx.PSSetSamplers(0, 1, ref _iconSampler);
-        // Markers are furniture: they must be findable behind geometry, so no depth test at all.
-        _ctx.OMSetDepthStencilState(_overlayDepthNoTest, 0);
+        // M659: depth-TESTED by default (write off, so icons never occlude each other), which is what
+        // makes a marker say where something is rather than only that it exists. IconsThroughWalls is the
+        // old always-on-top behaviour, kept as a toggle.
+        _ctx.OMSetDepthStencilState(IconsThroughWalls ? _overlayDepthNoTest : _overlayDepth, 0);
         var factor = stackalloc float[4] { 0, 0, 0, 0 };
         _ctx.OMSetBlendState(_overlayBlend, factor, 0xFFFFFFFF);
 
@@ -2551,6 +2553,16 @@ float4 psmain(VOut i) : SV_Target
 
     // M296: the transform gizmo. Position-only line segments per axis, so the overlay pipeline draws it
     // as-is; only the topology differs from the rest of the furniture.
+    /// <summary>
+    /// M659: draw the placement icons THROUGH geometry. Off by default - markers used to be drawn with
+    /// no depth test at all, so a particle behind a wall showed anyway and a busy map read as a cloud of
+    /// icons belonging to nothing visible. The GIZMO is not covered by this and stays on top always.
+    /// </summary>
+    public bool IconsThroughWalls { get; set; }
+
+    private ComPtr<ID3D11Buffer> _lightRangeVb;
+    private int _lightRangeVbCapacity, _lightRangeVerts;
+
     private ComPtr<ID3D11Buffer> _gizmoVb;
     /// <summary>M658: culling off, for solid gizmo handles under a winding-reversing mirror.</summary>
     private ComPtr<ID3D11RasterizerState> _gizmoRaster;
@@ -2903,6 +2915,59 @@ float4 psmain(VOut i) : SV_Target
         _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
         _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
         _ctx.Draw((uint)_brushRingVerts, 0);
+
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+        return 1;
+    }
+
+    /// <summary>M659: line segments for the point-light radius rings, in world space.</summary>
+    public void SetLightRangeLines(float[]? verts)
+    {
+        _lightRangeVerts = 0;
+        if (verts is null || verts.Length < 6 || !EnsureOverlay()) return;
+
+        int bytes = verts.Length * sizeof(float);
+        if (_lightRangeVbCapacity < bytes || _lightRangeVb.Handle is null)
+        {
+            _lightRangeVb.Dispose();
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)bytes, Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> vb = default;
+            if (_device.CreateBuffer(in desc, null, ref vb) < 0) { Log("light range buffer failed"); return; }
+            _lightRangeVb = vb; _lightRangeVbCapacity = bytes;
+        }
+
+        var map = new MappedSubresource();
+        if (_ctx.Map(_lightRangeVb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        unsafe { fixed (float* src = verts) System.Buffer.MemoryCopy(src, map.PData, bytes, bytes); }
+        _ctx.Unmap(_lightRangeVb, 0);
+        _lightRangeVerts = verts.Length / 3;
+    }
+
+    /// <summary>M659: how far each dynamic point light reaches. Same visibility rule as the icons - the
+    /// ring belongs to the light marker, and one hidden by the wall it stops at is the useful picture.</summary>
+    private int DrawLightRanges(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (_lightRangeVerts == 0 || _lightRangeVb.Handle is null || !EnsureOverlay()) return 0;
+
+        var mvp = Matrix4x4.Multiply(view, proj);
+        _ctx.IASetInputLayout(_overlayLayout);
+        _ctx.VSSetShader(_overlayVs, null, 0);
+        _ctx.PSSetShader(_overlayPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
+
+        uint stride = 3 * sizeof(float), offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _lightRangeVb, in stride, in offset);
+        _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        _ctx.OMSetDepthStencilState(IconsThroughWalls ? _overlayDepthNoTest : _overlayDepth, 0);
+
+        SetOverlayCb(mvp, new Vector4(1.0f, 0.83f, 0.35f, 0.75f));   // the light icon's own warm yellow
+        _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.Draw((uint)_lightRangeVerts, 0);
 
         _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
         return 1;
@@ -5108,6 +5173,7 @@ float4 psmain(VOut i) : SV_Target
             // M269: editor furniture last, over the finished shading.
             HighlightDraws = DrawHighlight(view, proj);
             IconDraws = DrawIcons(view, proj);
+            IconDraws += DrawLightRanges(view, proj);   // M659
             int gridDraws = DrawBucketGrid(view, proj);   // M293
             gridDraws += DrawNavGridAndFaces(view, proj);   // M569
             int gizmoDraws = DrawGizmo(view, proj);
@@ -5357,6 +5423,7 @@ float4 psmain(VOut i) : SV_Target
         _gridVs.Dispose(); _gridPs.Dispose(); _gridLayout.Dispose(); _gridVb.Dispose();
         _gizmoVb.Dispose();
         _gizmoRaster.Dispose();
+        _lightRangeVb.Dispose();
         _bakeBoxVb.Dispose();
         _boneVb.Dispose();   // M619
         _dummyVb.Dispose();  // M628

@@ -433,6 +433,8 @@
                 DynamicLightOffsetX="{Binding DynamicLightOffsetX}"
                 DynamicLightOffsetZ="{Binding DynamicLightOffsetZ}"
                 ShowLightMarkers="{Binding ShowLightMarkers}"
+                IconsThroughWalls="{Binding IconsThroughWalls}"
+                ShowLightRanges="{Binding ShowLightRanges}"
                 GrassTintTexture="{Binding CurrentGrassTint}"
                 GrassTintRect="{Binding CurrentGrassTintRect}"
                 GrassTintAltTexture="{Binding CurrentGrassTintAlt}"
@@ -686,8 +688,15 @@
                                 ToolTip.Tip="Show a glow icon at each dynamic point light. Turning this off also stops the icons being clickable, so the gizmo stops picking lights - the lights themselves keep lighting the map either way." />
                       <CheckBox IsChecked="{Binding ShowPlaceables}" Content="◈ Probes and placeables" FontSize="11"
                                 ToolTip.Tip="Show markers for cubemap probes and placed characters" />
+                      <!-- M659: how far each light reaches, beside the switch that shows the lights. -->
+                      <CheckBox IsChecked="{Binding ShowLightRanges}" Content="◎ Point-light range" FontSize="11"
+                                IsEnabled="{Binding ShowLightMarkers}"
+                                ToolTip.Tip="Draw a wire ball at each dynamic point light at its radius - the radius the map is actually lit with, so the global radius multiplier is folded in. Needs the light markers to be on." />
 
                       <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,3" />
+                      <!-- M659: markers are depth-tested now. This is the old always-on-top behaviour. -->
+                      <CheckBox IsChecked="{Binding IconsThroughWalls}" Content="👁 Icons through geometry" FontSize="11"
+                                ToolTip.Tip="Icons are hidden by whatever is in front of them, so a marker says WHERE something is. Turn this on to see every icon regardless of what covers it. The transform gizmo is always on top either way." />
                       <CheckBox IsChecked="{Binding ShowBounds}" Content="▣ Bounding boxes" FontSize="11"
                                 ToolTip.Tip="Show bounding boxes" />
                       <CheckBox IsChecked="{Binding ShowBones}" Content="🦴 Skeleton bones" FontSize="11"

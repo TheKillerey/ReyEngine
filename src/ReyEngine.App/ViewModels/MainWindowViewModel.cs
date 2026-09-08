@@ -3096,6 +3096,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public bool HasMapFog => CurrentSunProperties is { } s && s.TryGetFogRange(out _, out _);
     [ObservableProperty] private double _dynamicLightIntensity = 1.0;
     [ObservableProperty] private double _dynamicLightRadiusScale = 1.0;   // M71: global light-radius multiplier
+
+    /// <summary>
+    /// M659: draw the placement icons THROUGH geometry. Off by default, which is the change - markers
+    /// used to be drawn with no depth test at all, so a particle behind a wall or under the terrain
+    /// showed anyway and a busy map read as a cloud of icons belonging to nothing visible.
+    /// </summary>
+    [ObservableProperty] private bool _iconsThroughWalls;
+
+    /// <summary>M659: a wire ball at each dynamic point light showing how far it reaches. Off by default:
+    /// a map with many lights is a lot of circles, and this is a thing you switch on to answer a
+    /// question.</summary>
+    [ObservableProperty] private bool _showLightRanges;
     // M160/M457: point-light falloff shape (0 = Riot's own linear 1-t, 1 = the legacy wide (1-t^2)^2).
     // Kept in sync with BakeSettings.FalloffSoftness so the Dynamic preview and the bake draw the same
     // pools. Defaults to 0 now that index 0 IS Riot's curve.
@@ -6125,6 +6137,46 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     ReyEngine.Core.Assets.ViewportIcon.Light));
         }
         return _dx11IconCache = outp;
+    }
+
+    private float[]? _dx11LightRangeCache;
+    private bool _dx11LightRangeShown;
+    private object? _dx11LightRangeSource;
+    private (double Radius, double Spread, double ScaleX, double ScaleZ, double OffsetX, double OffsetZ) _dx11LightRangeKnobs;
+
+    /// <summary>
+    /// M659: the point-light radius rings for the D3D11 viewport, from the same builder and the same
+    /// numbers the GL viewport uses - two viewports disagreeing about how far a light reaches would be
+    /// worse than not drawing it at all.
+    ///
+    /// <para>Cached against the light list and the fit knobs, because this is called every frame and the
+    /// rings are a few thousand floats.</para>
+    /// </summary>
+    public float[]? Dx11LightRangeLines()
+    {
+        bool shown = ShowLightRanges && ShowLightMarkers;
+        var knobs = (DynamicLightRadiusScale, DynamicLightPositionScale, DynamicLightScaleX,
+                     DynamicLightScaleZ, DynamicLightOffsetX, DynamicLightOffsetZ);
+        if (shown == _dx11LightRangeShown && ReferenceEquals(_dx11LightRangeSource, DynamicLights)
+            && knobs == _dx11LightRangeKnobs)
+            return _dx11LightRangeCache;
+
+        _dx11LightRangeShown = shown;
+        _dx11LightRangeSource = DynamicLights;
+        _dx11LightRangeKnobs = knobs;
+
+        if (!shown || DynamicLights is not { Count: > 0 } lights) return _dx11LightRangeCache = null;
+
+        float radiusScale = (float)DynamicLightRadiusScale;
+        float spread = (float)DynamicLightPositionScale;
+        var scaleXZ = new System.Numerics.Vector2((float)DynamicLightScaleX, (float)DynamicLightScaleZ);
+        var offset = new System.Numerics.Vector2((float)DynamicLightOffsetX, (float)DynamicLightOffsetZ);
+        var rings = new List<float>();
+        foreach (var light in lights)
+            rings.AddRange(Rendering.ViewportMeshRenderer.BuildLightRangeRings(
+                Formats.Baking.BakeLighting.FitPosition(light.Position, spread, scaleXZ, offset),
+                light.Radius * radiusScale));
+        return _dx11LightRangeCache = rings.Count > 0 ? rings.ToArray() : null;
     }
 
     private IReadOnlyList<int>? _dx11HighlightSelection;

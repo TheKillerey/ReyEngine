@@ -147,10 +147,18 @@ public sealed class ViewportToolbarTests
 
         var counted = new HashSet<string>(StringComparer.Ordinal)
         {
-            "ShowSoundIcons", "ShowPropIcons", "ShowParticles", "ShowLightMarkers",
+            "ShowSoundIcons", "ShowPropIcons", "ShowParticles", "ShowLightMarkers", "ShowLightRanges",
             "ShowPlaceables", "ShowBounds", "ShowBones", "ShowBucketGrid", "ShowBakeBox",
         };
-        Assert.Equal(counted, inMenu);
+
+        // M659: the menu holds two kinds of thing. These are not overlays - they change how something
+        // already counted is DRAWN - so counting them would say "one more thing is on" while nothing
+        // extra appears. Listed rather than pattern-matched, so a new checkbox still fails this test
+        // until somebody decides which kind it is.
+        var notCounted = new HashSet<string>(StringComparer.Ordinal) { "IconsThroughWalls" };
+
+        Assert.Equal(counted.Union(notCounted).ToHashSet(StringComparer.Ordinal), inMenu);
+        Assert.Empty(counted.Intersect(notCounted));
     }
 
     [Fact]

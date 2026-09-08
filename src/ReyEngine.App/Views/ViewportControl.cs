@@ -57,6 +57,13 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightOffsetX), 0.0);
     public static readonly StyledProperty<double> DynamicLightOffsetZProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(DynamicLightOffsetZ), 0.0);
+    /// <summary>M659: draw the placement icons through geometry. Off = an icon under a mesh is hidden,
+    /// which is what makes a marker say WHERE something is rather than only that it exists.</summary>
+    public static readonly StyledProperty<bool> IconsThroughWallsProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(IconsThroughWalls));
+    /// <summary>M659: a wire ball at each dynamic point light showing how far it reaches.</summary>
+    public static readonly StyledProperty<bool> ShowLightRangesProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowLightRanges));
     public static readonly StyledProperty<bool> ShowLightMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowLightMarkers), true);   // M71: light position icons
     public static readonly StyledProperty<TextureImage?> GrassTintTextureProperty =
@@ -323,6 +330,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public double DynamicLightOffsetX { get => GetValue(DynamicLightOffsetXProperty); set => SetValue(DynamicLightOffsetXProperty, value); }
     public double DynamicLightOffsetZ { get => GetValue(DynamicLightOffsetZProperty); set => SetValue(DynamicLightOffsetZProperty, value); }
     public bool ShowLightMarkers { get => GetValue(ShowLightMarkersProperty); set => SetValue(ShowLightMarkersProperty, value); }
+    public bool IconsThroughWalls { get => GetValue(IconsThroughWallsProperty); set => SetValue(IconsThroughWallsProperty, value); }
+    public bool ShowLightRanges { get => GetValue(ShowLightRangesProperty); set => SetValue(ShowLightRangesProperty, value); }
     public TextureImage? GrassTintTexture { get => GetValue(GrassTintTextureProperty); set => SetValue(GrassTintTextureProperty, value); }
     public Vector4 GrassTintRect { get => GetValue(GrassTintRectProperty); set => SetValue(GrassTintRectProperty, value); }
     public TextureImage? GrassTintAltTexture { get => GetValue(GrassTintAltTextureProperty); set => SetValue(GrassTintAltTextureProperty, value); }
@@ -972,8 +981,26 @@ public sealed class ViewportControl : OpenGlControlBase
                 for (int i = 0; i < lights.Count; i++)
                     pts[i] = Formats.Baking.BakeLighting.FitPosition(lights[i].Position, spread, scaleXZ, offset);
                 _meshRenderer.SetLightMarkers(pts, _markerSize * 1.2f);
+
+                // M659: how far each one reaches. RadiusScale is folded in because that is the multiplier
+                // the viewport and the bake both apply (BakeLighting.ResolveRadius) - drawing the raw
+                // per-light value would show a range the map does not actually light.
+                if (ShowLightRanges)
+                {
+                    float radiusScale = (float)DynamicLightRadiusScale;
+                    var rings = new List<float>();
+                    for (int i = 0; i < lights.Count; i++)
+                        rings.AddRange(Rendering.ViewportMeshRenderer.BuildLightRangeRings(
+                            pts[i], lights[i].Radius * radiusScale));
+                    _meshRenderer.SetLightRangeLines(rings.Count > 0 ? rings.ToArray() : null);
+                }
+                else _meshRenderer.SetLightRangeLines(null);
             }
-            else _meshRenderer.SetLightMarkers(Array.Empty<Vector3>(), _markerSize);
+            else
+            {
+                _meshRenderer.SetLightMarkers(Array.Empty<Vector3>(), _markerSize);
+                _meshRenderer.SetLightRangeLines(null);
+            }
             _lightMarkersDirty = false;
         }
         if (_particlePlaybackDirty) { RebuildParticleSim(); _particlePlaybackDirty = false; }
@@ -994,6 +1021,7 @@ public sealed class ViewportControl : OpenGlControlBase
         // M657: the renderer caps a placement marker at a fraction of the viewport height, which it can
         // only do if it knows what that height is.
         _meshRenderer?.SetViewportSize((int)w, (int)h);
+        if (_meshRenderer is not null) _meshRenderer.IconsThroughWalls = IconsThroughWalls;   // M659
         _gl.ClearColor(0.039f, 0.051f, 0.075f, 1f);
         // M182 (2.9): the stencil plane must be cleared too. Without this, last frame's mask persists and
         // a mode-2/3 emitter tests against stale values - which reads as particles flickering in and out
@@ -1826,7 +1854,7 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == AnimateWaterProperty || change.Property == LightmapScaleProperty || change.Property == SunPropertiesProperty
                  || change.Property == HighlightSubmeshesProperty || change.Property == PlayPropAnimationsProperty
                  || change.Property == LightmapsEnabledProperty || change.Property == DynamicLightsEnabledProperty
-                 || change.Property == DynamicLightIntensityProperty || change.Property == DynamicLightRadiusScaleProperty)
+                 || change.Property == DynamicLightIntensityProperty)
         { RequestNextFrameRendering(); } // M44/M45/M50b/M54/M69/M70: water + lightmap scale + outline + prop idles + lightmap toggle + dynamic lights
         else if (change.Property == DynamicLightsProperty)   // M70: new Light.dat table -> re-upload + re-mark on the GL thread
         { _dynamicLightsDirty = true; _lightMarkersDirty = true; RequestNextFrameRendering(); }
@@ -1839,8 +1867,12 @@ public sealed class ViewportControl : OpenGlControlBase
         { RequestNextFrameRendering(); }
         else if (change.Property == DynamicLightPositionScaleProperty || change.Property == DynamicLightScaleXProperty
                  || change.Property == DynamicLightScaleZProperty || change.Property == DynamicLightOffsetXProperty
-                 || change.Property == DynamicLightOffsetZProperty || change.Property == ShowLightMarkersProperty)
+                 || change.Property == DynamicLightOffsetZProperty || change.Property == ShowLightMarkersProperty
+                 // M659: the radius rings are built in the same place and move with the same knobs.
+                 || change.Property == ShowLightRangesProperty || change.Property == DynamicLightRadiusScaleProperty)
         { _lightMarkersDirty = true; RequestNextFrameRendering(); }   // M71: light transform moves the icons too
+        else if (change.Property == IconsThroughWallsProperty)
+        { RequestNextFrameRendering(); }   // M659: a draw-state flag - nothing to rebuild
         else if (change.Property == PropMeshesProperty)
         { _propMeshesDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == FocusPointProperty && FocusPoint is { } fp)

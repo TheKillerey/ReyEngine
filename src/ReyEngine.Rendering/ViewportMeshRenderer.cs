@@ -137,6 +137,22 @@ public sealed class ViewportMeshRenderer : IDisposable
     private bool _hasDummy;
     // M639: the cast-range ring - a line list on the ground around the character
     private uint _rangeVao, _rangeVbo;
+    private uint _lightRangeVao, _lightRangeVbo;   // M659: point-light radius rings
+    private int _lightRangeVerts;
+
+    /// <summary>
+    /// M659: draw the placement icons THROUGH geometry.
+    ///
+    /// <para>Off by default, which is the change: markers used to be drawn with no depth test at all
+    /// ("furniture must be findable"), so a particle behind a wall or under the terrain showed anyway and
+    /// a busy map read as a cloud of icons belonging to nothing visible. Depth-tested they say where
+    /// something is; through-walls they say only that it exists, which is occasionally what you want -
+    /// hence the toggle rather than a rule.</para>
+    ///
+    /// <para>The transform gizmo is NOT covered by this and stays on top always: a handle you cannot
+    /// grab because the thing it moves is in front of it is not a handle.</para>
+    /// </summary>
+    public bool IconsThroughWalls { get; set; }
     private int _rangeVerts;
 
     private bool _hasGizmo;
@@ -1052,6 +1068,8 @@ void main() { FragColor = uColor; }";
         _dummyVao = gl.GenVertexArray();
         _dummyVbo = gl.GenBuffer();
         _rangeVao = gl.GenVertexArray();   // M639
+        _lightRangeVao = gl.GenVertexArray();   // M659
+        _lightRangeVbo = gl.GenBuffer();
         _rangeVbo = gl.GenBuffer();
         _particleVao = gl.GenVertexArray();
         _particleVbo = gl.GenBuffer();
@@ -2890,6 +2908,24 @@ void main(){
             _gl.BindVertexArray(0);
         }
 
+        // M659: how far each dynamic point light reaches. Drawn under the same rule as the icons - it
+        // belongs to the light marker, and a radius ring hidden by the wall it stops at is the useful
+        // picture rather than a circle floating over everything.
+        if (_lightRangeVerts > 0)
+        {
+            _gl.UseProgram(_lineProgram);
+            _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
+            if (IconsThroughWalls) _gl.Disable(EnableCap.DepthTest); else _gl.Enable(EnableCap.DepthTest);
+            // Write OFF: the rings are drawn before the icons, and a ring that wrote depth would hide the
+            // very marker it belongs to.
+            _gl.DepthMask(false);
+            _gl.BindVertexArray(_lightRangeVao);
+            _gl.Uniform4(_lColor, 1.0f, 0.83f, 0.35f, 0.75f);   // the light icon's own warm yellow
+            _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_lightRangeVerts);
+            _gl.DepthMask(true);
+            _gl.BindVertexArray(0);
+        }
+
         // Transform gizmo (M42): move arrows / rotate rings / scale arms, along the selected mesh's axes
         // from its pivot (X=red, Y=green, Z=blue), always on top so it stays clickable.
         if (_hasGizmo)
@@ -3023,7 +3059,10 @@ void main(){
             _gl.Uniform1(_mkTex, 0);
             _gl.Uniform1(_mkViewportH, _viewportHeightPx);
             _gl.ActiveTexture(TextureUnit.Texture0);
-            _gl.Disable(EnableCap.DepthTest);
+            // M659: tested against the depth buffer but never WRITING to it - an icon behind a wall is
+            // hidden, and icons do not occlude each other by whichever happened to be drawn first.
+            if (IconsThroughWalls) _gl.Disable(EnableCap.DepthTest);
+            else { _gl.Enable(EnableCap.DepthTest); _gl.DepthMask(false); }
             _gl.Enable(EnableCap.Blend);
             _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
@@ -3039,6 +3078,7 @@ void main(){
             DrawIconSet(_particleSelVao, _particleSelVerts, _icoSparkle, _particleSelSize, 1.0f, 0.92f, 0.25f, 1f,
                 tint: 0.5f, maxPxScale: 2f);   // authored at 2x the normal size (3.2 vs 1.6) - keep the ratio
 
+            _gl.DepthMask(true);
             _gl.Disable(EnableCap.Blend);
             _gl.BindVertexArray(0);
         }
@@ -3088,6 +3128,54 @@ void main(){
     /// <summary>M412: public for the same reason BuildGizmoAxis is (M296) - the D3D11 viewport draws the
     /// SAME box from the same builder, so the two cannot drift.</summary>
     /// <summary>M639: the cast-range ring, as a line list. Null or empty clears it.</summary>
+    /// <summary>M659: line segments for the point-light radius rings, in world space. Null or empty
+    /// clears them.</summary>
+    public unsafe void SetLightRangeLines(float[]? verts)
+    {
+        if (!_ready) return;
+        if (verts is null || verts.Length < 6) { _lightRangeVerts = 0; return; }
+        _gl.BindVertexArray(_lightRangeVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _lightRangeVbo);
+        fixed (float* fp = verts)
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(verts.Length * sizeof(float)), fp, BufferUsageARB.DynamicDraw);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+        _gl.BindVertexArray(0);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        _lightRangeVerts = verts.Length / 3;
+    }
+
+    /// <summary>
+    /// M659: the wire ball that shows how far a point light reaches - three great circles, one per plane.
+    ///
+    /// <para>Public and static for the same reason <see cref="BuildGizmoAxis"/> is (M296): the D3D11
+    /// viewport draws the same indicator from the same builder, and two viewports disagreeing about how
+    /// far a light reaches would be worse than not drawing it.</para>
+    /// </summary>
+    public static float[] BuildLightRangeRings(Vector3 centre, float radius, int segments = 48)
+    {
+        if (radius <= 0f || segments < 3) return Array.Empty<float>();
+        var v = new float[segments * 3 * 6];   // 3 circles, one segment each, 2 points of 3 floats
+        int w = 0;
+        void Seg(Vector3 a, Vector3 b)
+        { v[w++] = a.X; v[w++] = a.Y; v[w++] = a.Z; v[w++] = b.X; v[w++] = b.Y; v[w++] = b.Z; }
+
+        for (int plane = 0; plane < 3; plane++)
+        {
+            var u = plane switch { 0 => Vector3.UnitX, 1 => Vector3.UnitX, _ => Vector3.UnitY };
+            var t = plane switch { 0 => Vector3.UnitZ, 1 => Vector3.UnitY, _ => Vector3.UnitZ };
+            var prev = centre + u * radius;
+            for (int i = 1; i <= segments; i++)
+            {
+                float a = i / (float)segments * MathF.Tau;
+                var p = centre + (u * MathF.Cos(a) + t * MathF.Sin(a)) * radius;
+                Seg(prev, p);
+                prev = p;
+            }
+        }
+        return v;
+    }
+
     public unsafe void SetRangeRingLines(float[]? verts)
     {
         if (!_ready) return;
