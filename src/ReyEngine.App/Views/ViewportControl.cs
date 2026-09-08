@@ -314,6 +314,11 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>Radians about Y. 0 faces +Z — measured against the viewport, see CharacterController.</summary>
     public double ModelYaw { get => GetValue(ModelYawProperty); set => SetValue(ModelYawProperty, value); }
     public IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? ModelSubmeshMaterials { get => GetValue(ModelSubmeshMaterialsProperty); set => SetValue(ModelSubmeshMaterialsProperty, value); }
+
+    /// <summary>M667: (category, message) into the app's log. Set by the host window; null in tests and in
+    /// the map viewport, which has never needed it. Used only for steps that can fault NATIVELY, where a
+    /// managed stack never arrives and the last line written is the whole diagnosis.</summary>
+    public Action<string, string>? Log { get; set; }
     public int MeshVerticesRevision { get => GetValue(MeshVerticesRevisionProperty); set => SetValue(MeshVerticesRevisionProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
@@ -868,6 +873,11 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             if (BackgroundMesh is { } bgm)
             {
+                // M667: the last thing a lost session logged was the arena load. These two lines bracket
+                // the GL upload it leads to - the one step in the chain that can fault natively.
+                Log?.Invoke("Viewport", $"backdrop upload: {bgm.VertexCount:n0} verts, "
+                    + $"{bgm.SubMeshes.Count} submesh(es), colors={bgm.Colors?.Length ?? 0:n0}, "
+                    + $"lmUv={bgm.LightmapUvs?.Length ?? 0:n0}");
                 var subs = bgm.SubMeshes.Select(s => (s.StartIndex, s.IndexCount)).ToList();
                 // M89: pass vertex colours (baked ground shading) + the 2nd UV set (four-blend mask UV).
                 _bgRenderer.SetMesh(bgm.Positions, bgm.Normals, bgm.Uvs, bgm.Indices, bgm.VertexCount,
@@ -876,6 +886,7 @@ public sealed class ViewportControl : OpenGlControlBase
             else _bgRenderer.ClearMesh();
             _bgMeshDirty = false;
             _bgTexDirty = true;
+            Log?.Invoke("Viewport", "backdrop geometry uploaded");
         }
         if (_bgTexDirty && _bgRenderer is { HasMesh: true })   // M88/M89: upload backdrop textures (5 layers)
         {
@@ -890,6 +901,7 @@ public sealed class ViewportControl : OpenGlControlBase
             UploadBgLayer(BackgroundColor3Textures, 4, uploaded);  // COLOR_MAP_3 (matcap slot)
             UploadBgLayer(BackgroundLightmapTextures, 6, uploaded); // M142.9: baked composite ground atlas
             _bgTexDirty = false;
+            Log?.Invoke("Viewport", $"backdrop textures uploaded ({uploaded.Count} distinct)");
 
             // M142.9: per-submesh backdrop materials (composite-ground flag, alpha mode, decal UV clamp).
             var bgMats = BackgroundMaterials;

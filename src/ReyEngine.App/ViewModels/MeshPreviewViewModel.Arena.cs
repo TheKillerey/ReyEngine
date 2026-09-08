@@ -150,10 +150,19 @@ public sealed partial class MeshPreviewViewModel
                 host.ResolveWadPath, l => lines.Add(l)));
             foreach (var l in lines) LogDx11?.Invoke("Arena", l);
 
+            // M667: the apply is breadcrumbed step by step. A session log ended exactly here - after the
+            // loader's own lines and before anything else - with the process gone and no crash.log, which
+            // means a native fault rather than a managed exception. Every data-level cause was measured
+            // and ruled out (mesh channels, index range, submesh ranges, and all 17 textures sized
+            // correctly), so what is left is the apply and the GL upload it triggers. These say which.
+            LogDx11?.Invoke("Arena", $"{key}: applying scene - props");
             _arena = scene;
             _waypoints.Clear();
             RebuildSceneProps();
+            LogDx11?.Invoke("Arena", $"{key}: applying scene - backdrop "
+                + $"({scene.Background.Mesh.VertexCount:n0} verts, {scene.Background.Mesh.SubMeshes.Count} submeshes)");
             SetArenaBackdrop(scene.Background);   // M665: the map draws as the backdrop, before the champion
+            LogDx11?.Invoke("Arena", $"{key}: backdrop handed to the viewport");
 
             // The champion on the spawn, the dummy 400 units into the map on walkable ground, the camera
             // on him. Control mode on: the arena is for playing, and its status line says how.
@@ -168,8 +177,10 @@ public sealed partial class MeshPreviewViewModel
             }
             TargetDummyEnabled = true;
             DummyX = dummyAt.X; DummyY = dummyAt.Y; DummyZ = dummyAt.Z;
+            LogDx11?.Invoke("Arena", $"{key}: dummy placed, enabling control");
             ControlMode = true;
             FocusPoint = scene.Spawn;
+            LogDx11?.Invoke("Arena", $"{key}: applied.");
 
             ArenaStatus = $"{scene.MapKey}: {scene.GroupsDrawn} groups, "
                           + (scene.HasNavGrid ? "navgrid movement" : "flat floor, no navgrid")

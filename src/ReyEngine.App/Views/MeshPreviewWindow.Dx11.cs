@@ -40,6 +40,9 @@ public partial class MeshPreviewWindow
     private void WatchDx11Toggle()
     {
         if (DataContext is not MeshPreviewViewModel vm) return;
+        // M667: the GL viewport's own breadcrumbs go to the same app log as everything else, so a native
+        // fault during a backdrop upload leaves its last step behind in session.log.
+        PreviewViewport.Log ??= (cat, msg) => vm.LogDx11?.Invoke(cat, msg);
         vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName is nameof(MeshPreviewViewModel.UseDx11Preview) && vm.UseDx11Preview)
