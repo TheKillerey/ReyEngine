@@ -4,7 +4,7 @@
         xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         x:Class="ReyEngine.App.Views.AddMeshWindow"
         x:DataType="vm:AddMeshWindowViewModel"
-        Title="ReyEngine — Add Mesh" Width="760" Height="680"
+        Title="ReyEngine — Add Mesh" Width="760" Height="720"
         WindowStartupLocation="CenterOwner"
         WindowDecorations="BorderOnly"
         Background="{DynamicResource ReyBgBrush}">
@@ -37,27 +37,65 @@
           </DockPanel>
         </Border>
 
+        <!-- M654: the source materials bin, for a mapgeo import. Pre-filled from the sibling file when
+             there is one; pickable when there is not, which is the normal case for a mapgeo extracted
+             out of a wad on its own. -->
+        <Border Classes="card" IsVisible="{Binding ShowSourceBinRow}">
+          <StackPanel Spacing="4">
+            <TextBlock Classes="cardTitle" Text="ORIGINAL MATERIALS" />
+            <DockPanel>
+              <Button DockPanel.Dock="Right" Classes="tool" Content="Choose .bin…"
+                      Command="{Binding BrowseSourceBinCommand}" />
+              <TextBlock Text="{Binding SourceBinPath}" FontSize="10" VerticalAlignment="Center"
+                         Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis"
+                         ToolTip.Tip="{Binding SourceBinPath}" />
+            </DockPanel>
+            <TextBlock Text="{Binding SourceBinNote}" FontSize="9" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+          </StackPanel>
+        </Border>
+
         <!-- meshes -->
         <Border Classes="card" IsVisible="{Binding HasScene}">
-          <StackPanel Spacing="4">
-            <TextBlock Classes="cardTitle" Text="MESHES" />
-            <ItemsControl ItemsSource="{Binding Meshes}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                  <DockPanel Margin="0,1">
-                    <TextBlock DockPanel.Dock="Right" Text="over 65,535 verts — skipped" FontSize="9"
-                               Foreground="{DynamicResource ReyWarningBrush}" VerticalAlignment="Center"
-                               IsVisible="{Binding TooLarge}" />
-                    <CheckBox IsChecked="{Binding Include}" FontSize="11" IsEnabled="{Binding !TooLarge}">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock Text="{Binding Mesh.Name}" FontSize="11" />
-                        <TextBlock Text="{Binding Info}" FontSize="9" Opacity="0.55" VerticalAlignment="Center" />
-                      </StackPanel>
-                    </CheckBox>
-                  </DockPanel>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
+          <StackPanel Spacing="6">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Text="{Binding SelectionSummary}" FontSize="9"
+                         VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <TextBlock Classes="cardTitle" Text="MESHES" />
+            </DockPanel>
+            <DockPanel>
+              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4" Margin="6,0,0,0">
+                <Button Classes="tool" Content="Select all" Command="{Binding SelectAllMeshesCommand}"
+                        ToolTip.Tip="Ticks everything the search is showing" />
+                <Button Classes="tool" Content="Select none" Command="{Binding SelectNoMeshesCommand}"
+                        ToolTip.Tip="Unticks everything the search is showing" />
+              </StackPanel>
+              <TextBox Text="{Binding MeshSearch}" FontSize="10" Padding="6,3"
+                       Watermark="Search meshes and materials…" />
+            </DockPanel>
+
+            <ScrollViewer MaxHeight="240">
+              <ItemsControl ItemsSource="{Binding VisibleMeshes}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <DockPanel Margin="0,1">
+                      <TextBlock DockPanel.Dock="Right" Text="over 65,535 verts — skipped" FontSize="9"
+                                 Foreground="{DynamicResource ReyWarningBrush}" VerticalAlignment="Center"
+                                 IsVisible="{Binding TooLarge}" />
+                      <CheckBox IsChecked="{Binding Include}" FontSize="11" IsEnabled="{Binding !TooLarge}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <TextBlock Text="{Binding Mesh.Name}" FontSize="11" />
+                          <TextBlock Text="{Binding Info}" FontSize="9" Opacity="0.55" VerticalAlignment="Center" />
+                        </StackPanel>
+                      </CheckBox>
+                    </DockPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
           </StackPanel>
         </Border>
 
@@ -65,84 +103,105 @@
         <Border Classes="card" IsVisible="{Binding HasScene}">
           <StackPanel Spacing="6">
             <TextBlock Classes="cardTitle" Text="MATERIALS" />
-            <TextBlock Text="Each imported material becomes a map material: reuse one the map already has, or build a new one from a League shader — it gets exactly the samplers and parameters that shader declares, plus your imported texture as diffuse."
+            <TextBlock Text="Each imported material becomes a map material: copy the original out of the source map's bin, reuse one the map already has, or build a new one from a League shader — it gets exactly the samplers and parameters that shader declares, plus your imported texture as diffuse."
                        FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-            <ItemsControl ItemsSource="{Binding Materials}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                  <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8" Margin="0,3">
-                    <StackPanel Spacing="4">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{Binding Source.Name}" FontSize="12" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding TextureNote}" FontSize="9" Opacity="0.6" VerticalAlignment="Center" />
-                      </StackPanel>
-                      <ComboBox SelectedIndex="{Binding Mode}" FontSize="10" HorizontalAlignment="Stretch">
-                        <ComboBoxItem Content="Use an existing map material" />
-                        <ComboBoxItem Content="Create a new material from a League shader" />
-                        <!-- M512: only reachable for a mapgeo import whose sibling bin really has it. -->
-                        <ComboBoxItem Content="Copy the material from the source map"
-                                      IsEnabled="{Binding CanCopyFromSource}" />
-                      </ComboBox>
+            <DockPanel>
+              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="Set all:" FontSize="9" VerticalAlignment="Center"
+                           Foreground="{DynamicResource ReyTextDimBrush}" />
+                <Button Classes="tool" Content="Copy original" Command="{Binding ApplyModeToAllCommand}"
+                        CommandParameter="2" ToolTip.Tip="Every material that really is in the chosen bin" />
+                <Button Classes="tool" Content="New from shader" Command="{Binding ApplyModeToAllCommand}"
+                        CommandParameter="1" />
+                <Button Classes="tool" Content="Existing" Command="{Binding ApplyModeToAllCommand}"
+                        CommandParameter="0" />
+              </StackPanel>
+              <TextBlock Text="{Binding MaterialsSummary}" FontSize="9" VerticalAlignment="Center"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+            </DockPanel>
 
-                      <ComboBox ItemsSource="{Binding ExistingMaterials}" SelectedItem="{Binding ExistingMaterial}"
-                                FontSize="10" HorizontalAlignment="Stretch" IsVisible="{Binding IsExistingMode}" />
-
-                      <StackPanel Spacing="4" IsVisible="{Binding IsCopyMode}">
-                        <TextBlock Text="Copied verbatim from the source map's materials.bin — shader, samplers, macros and render state included."
-                                   FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
-                        <Grid ColumnDefinitions="Auto,*">
-                          <TextBlock Grid.Column="0" Text="Name" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
-                                     Foreground="{DynamicResource ReyTextDimBrush}" />
-                          <TextBox Grid.Column="1" Text="{Binding NewName}" FontSize="10" Padding="4,2"
-                                   ToolTip.Tip="The name it gets in THIS map's bin. Keeping the original name is fine as long as this map has no material by that name." />
-                        </Grid>
-                      </StackPanel>
-
-                      <StackPanel Spacing="4" IsVisible="{Binding IsNewMode}">
-                        <Grid ColumnDefinitions="Auto,*">
-                          <TextBlock Grid.Column="0" Text="Name" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
-                                     Foreground="{DynamicResource ReyTextDimBrush}" />
-                          <TextBox Grid.Column="1" Text="{Binding NewName}" FontSize="10" Padding="4,2" />
-                        </Grid>
-
-                        <!-- M514: the shader's samplers, set up here rather than discovered as an empty
-                             material afterwards. Pre-filled with the shader's declared defaults, which are
-                             often paths Riot does not actually ship. -->
-                        <StackPanel Spacing="2" IsVisible="{Binding HasSamplers}" Margin="0,2,0,0">
-                          <TextBlock Text="TEXTURES" FontSize="8" FontWeight="SemiBold"
-                                     Foreground="{DynamicResource ReyTextDimBrush}" />
-                          <ItemsControl ItemsSource="{Binding Samplers}">
-                            <ItemsControl.ItemTemplate>
-                              <DataTemplate>
-                                <Grid ColumnDefinitions="120,*,Auto" Margin="0,1">
-                                  <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="9" VerticalAlignment="Center"
-                                             TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}"
-                                             Foreground="{DynamicResource ReyTextDimBrush}" />
-                                  <TextBox Grid.Column="1" Text="{Binding Path}" FontSize="9" Padding="4,1"
-                                           Watermark="assets/…/texture.tex" />
-                                  <TextBlock Grid.Column="2" Text="{Binding Note}" FontSize="8" Margin="6,0,0,0"
-                                             VerticalAlignment="Center" IsVisible="{Binding IsMissing}"
-                                             Foreground="#FFE05252" />
-                                </Grid>
-                              </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                          </ItemsControl>
+            <ScrollViewer MaxHeight="420">
+              <ItemsControl ItemsSource="{Binding Materials}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8" Margin="0,3">
+                      <StackPanel Spacing="4">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                          <TextBlock Text="{Binding Source.Name}" FontSize="12" FontWeight="SemiBold"
+                                     TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Source.Name}" />
+                          <TextBlock Text="{Binding TextureNote}" FontSize="9" Opacity="0.6" VerticalAlignment="Center" />
                         </StackPanel>
-                        <Grid ColumnDefinitions="Auto,*">
-                          <TextBlock Grid.Column="0" Text="Shader" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
+                        <ComboBox SelectedIndex="{Binding Mode}" FontSize="10" HorizontalAlignment="Stretch">
+                          <ComboBoxItem Content="Use an existing map material" />
+                          <ComboBoxItem Content="Create a new material from a League shader" />
+                          <!-- M512/M654: reachable exactly when the chosen bin really holds this material. -->
+                          <ComboBoxItem Content="Copy the original material from the source map"
+                                        IsEnabled="{Binding CanCopyFromSource}" />
+                        </ComboBox>
+
+                        <ComboBox ItemsSource="{Binding ExistingMaterials}" SelectedItem="{Binding ExistingMaterial}"
+                                  FontSize="10" HorizontalAlignment="Stretch" IsVisible="{Binding IsExistingMode}" />
+
+                        <StackPanel Spacing="4" IsVisible="{Binding IsCopyMode}">
+                          <TextBlock Text="{Binding CopyNote}" FontSize="9" TextWrapping="Wrap"
                                      Foreground="{DynamicResource ReyTextDimBrush}" />
-                          <ComboBox Grid.Column="1" ItemsSource="{Binding ShaderChoices}" SelectedIndex="{Binding ShaderIndex}"
-                                    FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="380"
-                                    ToolTip.Tip="From the game's own shaders.bin — the material gets exactly the samplers, parameters and defaults this shader declares" />
-                        </Grid>
-                        <CheckBox Content="Use the imported texture as diffuse" IsChecked="{Binding UseImportedTexture}"
-                                  IsEnabled="{Binding HasImportedTexture}" FontSize="10" />
+                          <Grid ColumnDefinitions="Auto,*">
+                            <TextBlock Grid.Column="0" Text="Name" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
+                                       Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <TextBox Grid.Column="1" Text="{Binding NewName}" FontSize="10" Padding="4,2"
+                                     ToolTip.Tip="The name it gets in THIS map's bin. Keeping the original name is fine as long as this map has no material by that name." />
+                          </Grid>
+                        </StackPanel>
+
+                        <StackPanel Spacing="4" IsVisible="{Binding IsNewMode}">
+                          <Grid ColumnDefinitions="Auto,*">
+                            <TextBlock Grid.Column="0" Text="Name" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
+                                       Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <TextBox Grid.Column="1" Text="{Binding NewName}" FontSize="10" Padding="4,2" />
+                          </Grid>
+
+                          <!-- M514: the shader's samplers, set up here rather than discovered as an empty
+                               material afterwards. Pre-filled with the shader's declared defaults, which are
+                               often paths Riot does not actually ship. -->
+                          <StackPanel Spacing="2" IsVisible="{Binding HasSamplers}" Margin="0,2,0,0">
+                            <TextBlock Text="TEXTURES" FontSize="8" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <ItemsControl ItemsSource="{Binding Samplers}">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                  <Grid ColumnDefinitions="120,*,Auto" Margin="0,1">
+                                    <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="9" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}"
+                                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                                    <TextBox Grid.Column="1" Text="{Binding Path}" FontSize="9" Padding="4,1"
+                                             Watermark="assets/…/texture.tex" />
+                                    <TextBlock Grid.Column="2" Text="{Binding Note}" FontSize="8" Margin="6,0,0,0"
+                                               VerticalAlignment="Center" IsVisible="{Binding IsMissing}"
+                                               Foreground="#FFE05252" />
+                                  </Grid>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </StackPanel>
+                          <Grid ColumnDefinitions="Auto,*">
+                            <TextBlock Grid.Column="0" Text="Shader" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"
+                                       Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding ShaderChoices}" SelectedIndex="{Binding ShaderIndex}"
+                                      FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="380"
+                                      ToolTip.Tip="From the game's own shaders.bin — the material gets exactly the samplers, parameters and defaults this shader declares" />
+                          </Grid>
+                          <CheckBox Content="Use the imported texture as diffuse" IsChecked="{Binding UseImportedTexture}"
+                                    IsEnabled="{Binding HasImportedTexture}" FontSize="10" />
+                        </StackPanel>
                       </StackPanel>
-                    </StackPanel>
-                  </Border>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
           </StackPanel>
         </Border>
 

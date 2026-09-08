@@ -120,17 +120,56 @@ public static class MapGeoMeshImporter
 
                 // One entry per SUBMESH: a mapgeo mesh can carry several materials, and the window maps
                 // materials one at a time. Splitting here keeps that mapping honest.
+                //
+                // M654: each entry gets ONLY the vertices its own indices reach, renumbered from zero.
+                // Handing every submesh the parent's whole buffer (what this did until M654) was wrong in
+                // two ways that both show up as "Add Mesh from a mapgeo is broken":
+                //   - the window's size gate and the staging code's bounds both read Positions, so a
+                //     submesh was measured, judged and PLACED as its parent. Measured over Map11's 27
+                //     mapgeos: up to 45 entries per file whose own centre is not the parent's, worst
+                //     1,850 units away from where the gizmo was;
+                //   - the save path casts indices to ushort unchecked, so an index above 65,535 wrapped
+                //     silently. Riot's own meshes never reach that (0 of 601 in base_srx), but a merged
+                //     or ported map is exactly where it would bite, and compaction removes the question.
                 foreach (var submesh in mesh.Submeshes)
                 {
-                    var indices = new List<int>(submesh.IndexCount);
                     int end = submesh.StartIndex + submesh.IndexCount;
+                    var remap = new Dictionary<int, int>();
+                    var indices = new List<int>(submesh.IndexCount);
+                    var order = new List<int>();
                     for (int i = submesh.StartIndex; i < end && i < mesh.Indices.Count; i++)
-                        indices.Add((int)mesh.Indices[i]);
-                    if (indices.Count == 0) continue;
+                    {
+                        int source = (int)mesh.Indices[i];
+                        if (source < 0 || source >= vertexCount) continue;   // a damaged file, not a crash
+                        if (!remap.TryGetValue(source, out int mapped))
+                        {
+                            mapped = order.Count;
+                            remap[source] = mapped;
+                            order.Add(source);
+                        }
+                        indices.Add(mapped);
+                    }
+                    if (indices.Count < 3) continue;
+
+                    var subPositions = new float[order.Count * 3];
+                    var subNormals = new float[order.Count * 3];
+                    var subUvs = new float[order.Count * 2];
+                    for (int i = 0; i < order.Count; i++)
+                    {
+                        int src = order[i];
+                        subPositions[i * 3] = positions[src * 3];
+                        subPositions[i * 3 + 1] = positions[src * 3 + 1];
+                        subPositions[i * 3 + 2] = positions[src * 3 + 2];
+                        subNormals[i * 3] = normals[src * 3];
+                        subNormals[i * 3 + 1] = normals[src * 3 + 1];
+                        subNormals[i * 3 + 2] = normals[src * 3 + 2];
+                        subUvs[i * 2] = uvs[src * 2];
+                        subUvs[i * 2 + 1] = uvs[src * 2 + 1];
+                    }
 
                     string material = string.IsNullOrWhiteSpace(submesh.Material) ? "Imported" : submesh.Material;
                     string name = mesh.Submeshes.Count > 1 ? $"{mesh.Name}_{Short(material)}" : mesh.Name;
-                    meshes.Add(new Meshes.ImportedSceneMesh(name, material, positions, normals, uvs,
+                    meshes.Add(new Meshes.ImportedSceneMesh(name, material, subPositions, subNormals, subUvs,
                         indices.ToArray()));
                     if (seenMaterial.Add(material))
                         materials.Add(new Meshes.ImportedSceneMaterial(material, null));

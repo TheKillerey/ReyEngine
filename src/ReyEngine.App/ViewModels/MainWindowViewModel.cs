@@ -1768,6 +1768,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
             { Patterns = new[] { "*.mapgeo", "*.fbx", "*.glb", "*.gltf", "*.obj", "*.scb", "*.sco" } },
             DialogService.All);
+        // M654: a mapgeo extracted out of a wad on its own has no sibling .materials.bin, and until now
+        // that silently meant the original materials could not be carried over at all.
+        vm.PickBin = async title => await Dialogs.OpenFileAsync(title,
+            new Avalonia.Platform.Storage.FilePickerFileType("Materials bin")
+            { Patterns = new[] { "*.bin" } },
+            DialogService.All);
         vm.Confirmed = plan => _ = ExecuteAddMeshPlanAsync(plan);
         vm.LoadFile(file);
         ShowAddMeshWindow?.Invoke(vm);
@@ -1799,27 +1805,36 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public Action<WorkshopViewModel>? ShowWorkshopWindow;
 
-    private async Task<ShaderMaterialSetup?> LoadCommonShaderSetupAsync(string shader)
+    /// <summary>
+    /// M654: make sure the whole-install index exists, because it is what knows which wad any asset lives
+    /// in. Cached on disk against a wad fingerprint, so the second call in a session is cheap.
+    /// Returns false when there is no game folder to index - the caller decides whether that is fatal.
+    /// </summary>
+    private async Task<bool> EnsureWorkshopIndexAsync()
     {
         string? final = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
-        if (final is null) return null;
+        if (final is null) return false;
         _workshopCatalog ??= new WorkshopCatalogService(_resolver.Database, ResolveBinName);
         if (_commonMaterialCatalogTask is null
             || !string.Equals(_commonMaterialCatalogDirectory, final, StringComparison.OrdinalIgnoreCase))
         {
             _commonMaterialCatalogDirectory = final;
-            _log.Info("Material", "Loading common Riot material setups from the installed patch…");
-            _commonMaterialCatalogTask = Task.Run(
-                () => _workshopCatalog.LoadAsync(final, rebuild: false));
+            _log.Info("Material", "Loading the installed patch's asset index…");
+            _commonMaterialCatalogTask = Task.Run(() => _workshopCatalog.LoadAsync(final, rebuild: false));
         }
-
-        WorkshopCatalog catalog;
-        try { catalog = await _commonMaterialCatalogTask; }
-        catch
+        try { await _commonMaterialCatalogTask; return true; }
+        catch (Exception ex)
         {
             _commonMaterialCatalogTask = null;
-            throw;
+            _log.Warn("Material", $"The installed patch could not be indexed: {ex.Message}");
+            return false;
         }
+    }
+
+    private async Task<ShaderMaterialSetup?> LoadCommonShaderSetupAsync(string shader)
+    {
+        if (!await EnsureWorkshopIndexAsync()) return null;
+        var catalog = await _commonMaterialCatalogTask!;
         var template = catalog.Materials.FirstOrDefault(m =>
             m.Shader.Equals(shader, StringComparison.OrdinalIgnoreCase));
         if (template is not null)
@@ -2493,6 +2508,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var targetBytes = GetAssetBytes(copyTarget);
                 if (targetBytes is null) { _log.Error("AddMesh", "Could not read the materials .bin."); return; }
 
+                var copiedTextures = new List<string>();
                 foreach (var m in toCopy)
                 {
                     byte[] sourceBytes;
@@ -2506,9 +2522,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (imported is null)
                     { _log.Error("AddMesh", $"Material '{m.CopyFromMaterial}': {copyError}"); return; }
                     targetBytes = imported;
+                    copiedTextures.AddRange(TexturePathsOfMaterial(sourceBytes, m.CopyFromMaterial!));
                     _log.Success("AddMesh", $"Copied material '{m.CopyFromMaterial}' from "
                         + $"{Path.GetFileName(m.CopyFromBin)} as '{m.NewName}'.");
                 }
+                // M654: the copy points at the SOURCE map's textures, which are in the source map's wad
+                // and nowhere near this project. Without bringing them across the material lands
+                // structurally perfect and draws untextured - which is exactly what "the original
+                // material was not carried over" looks like from the outside.
+                await StageCopiedMaterialTexturesAsync(copiedTextures, mapEntry);
                 if (!await SaveMapBinBytesAsync(copyTarget, targetBytes))
                 { _log.Error("AddMesh", "Could not save the materials .bin — meshes were NOT staged."); return; }
             }
@@ -2594,6 +2616,72 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 + "Position them with the gizmo, then Save Map Edits.");
         }
         catch (Exception ex) { _log.Error("AddMesh", ex.Message); }
+    }
+
+    /// <summary>
+    /// M654: every texture a material in <paramref name="bin"/> references, by path.
+    ///
+    /// <para>Read through <see cref="Formats.Materials.MaterialDocument"/> rather than by scanning for
+    /// strings, because since patch 16.17 the reference is a WadChunkLink and not a string at all
+    /// (M590) - a string scan would find nothing in any bin the game currently ships.</para>
+    /// </summary>
+    private IReadOnlyList<string> TexturePathsOfMaterial(byte[] bin, string materialName)
+    {
+        try
+        {
+            var doc = Formats.Materials.MaterialDocument.Parse(bin, ResolveBinName, ResolveWadPath);
+            var binding = doc.Materials.FirstOrDefault(m =>
+                m.Name.Equals(materialName, StringComparison.OrdinalIgnoreCase));
+            if (binding is null) return Array.Empty<string>();
+            return binding.Slots.Select(x => x.Path).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("AddMesh", $"Could not read '{materialName}' texture list: {ex.Message}");
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// M654: copy a copied material's textures into the project.
+    ///
+    /// <para>Staged one at a time on purpose. <see cref="StageWorkshopAssets"/> preflights the whole set
+    /// and writes nothing when any single asset is missing, which is right for a particle graph whose
+    /// dependencies must all land together - but wrong here, where a material with nine of its ten
+    /// textures is strictly better than one with none, and the tenth is worth naming rather than
+    /// silently blocking the rest.</para>
+    /// </summary>
+    private async Task<int> StageCopiedMaterialTexturesAsync(IEnumerable<string> paths, WadAssetEntry mapEntry)
+    {
+        var wanted = paths.Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(x => !TextureExistsByPath(x))     // already reachable here - nothing to bring across
+            .ToList();
+        if (wanted.Count == 0) return 0;
+
+        if (!await EnsureWorkshopIndexAsync())
+        {
+            _log.Warn("AddMesh", $"{wanted.Count:n0} texture(s) of the copied material(s) are not in this "
+                + "project and no game folder is set, so they were not brought across: "
+                + string.Join(", ", wanted.Take(4)) + (wanted.Count > 4 ? " …" : ""));
+            return 0;
+        }
+
+        int written = 0;
+        var missing = new List<string>();
+        foreach (string path in wanted)
+        {
+            var staged = StageWorkshopAssets(new[] { path }, mapEntry);
+            written += staged.Written;
+            missing.AddRange(staged.Missing);
+        }
+        if (written > 0)
+            _log.Success("AddMesh", $"Brought {written:n0} texture(s) across with the copied material(s).");
+        if (missing.Count > 0)
+            _log.Warn("AddMesh", $"{missing.Count:n0} texture(s) of the copied material(s) are not in the "
+                + "installed patch, so those surfaces will draw untextured: "
+                + string.Join(", ", missing.Take(4)) + (missing.Count > 4 ? " …" : ""));
+        return written;
     }
 
     /// <summary>Decode a png/jpg blob and write it into the project folder as an uncompressed DDS.
