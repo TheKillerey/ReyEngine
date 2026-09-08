@@ -9,23 +9,31 @@ using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.MapGeo;
+using ReyEngine.Formats.Lighting;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Meta;
 
 namespace ReyEngine.App.Services;
 
-/// <summary>A shipped map, loaded as an ARENA for the playable character: its geometry as one prop, the
-/// navigation grid that says where a unit may walk and how high the ground is, and a spawn point on it.</summary>
+/// <summary>A shipped map, loaded as an ARENA for the playable character: the map itself as the
+/// viewport's BACKDROP, the navigation grid that says where a unit may walk and how high the ground is,
+/// and a spawn point on it.</summary>
 public sealed record ArenaScene(
     string MapKey,
-    PropMesh Geometry,
+    MapPreviewBackground Background,
+    /// <summary>M665: the same floor as a plain prop, for the D3D11 host, which has no backdrop channel.
+    /// Diffuse only - what the GL viewport drew before this milestone. Exactly one of the two is used per
+    /// renderer, never both, or the floor draws twice.</summary>
+    PropMesh Dx11Geometry,
     NavGrid? Nav,
     Vector3 Spawn,
     Vector3 BoundsMin,
     Vector3 BoundsMax,
     int GroupsDrawn,
     int GroupsHiddenByLayer,
-    int TexturesMissing)
+    int TexturesMissing,
+    int LightmappedGroups)
 {
     public bool HasNavGrid => Nav is not null;
 }
@@ -33,12 +41,16 @@ public sealed record ArenaScene(
 /// <summary>
 /// M636: turn a shipped map WAD into an arena the character window can stand a champion on.
 ///
-/// <para>The map goes in through the PROP pipeline - one <see cref="PropMesh"/> carrying the whole mapgeo
-/// with one submesh per material group and that group's diffuse - because that is the one path both
-/// renderers already draw a textured, depth-tested mesh through beside the champion (M628 put the practice
-/// dummy on it). It is honest about what that costs: no lightmaps, no map shaders, no water, no bushes
-/// swaying. The main viewport still renders a map properly; this is a floor to play on, and it says so in
-/// its name.</para>
+/// <para>M665: the map goes in as the viewport's BACKDROP, which is a second full
+/// <c>ViewportMeshRenderer</c> - same shader, same six texture slots, same per-submesh material state as
+/// the map viewport - and is drawn before the champion. It used to go through the PROP pipeline, which
+/// carries one diffuse per material group and nothing else, and the cost of that was measured rather than
+/// guessed: on Map30 three blended, two alpha-cutout and two two-sided groups drew as flat opaque and 6 of
+/// 21 groups' baked lightmaps were never bound; on Map11, 78, 137 and 72. The resolving is shared with the
+/// map viewport through <see cref="MapSubmeshResources"/>, so the two cannot drift.</para>
+///
+/// <para>Still not the map viewport: no map shaders of Riot's own, no grass tint, and the sun comes from
+/// the preview's Bright slider rather than the map's MapSunProperties.</para>
 ///
 /// <para>Read-only throughout: the map WAD is opened from the game install and nothing is written.</para>
 /// </summary>
@@ -100,43 +112,92 @@ public static class ArenaLoader
 
         // Materials sit beside the geometry under the same stem.
         string stem = geo.Path[..^".mapgeo".Length];
-        MaterialDocument? materials = null;
+        byte[]? materialsBin = null;
         ulong binHash = HashAlgorithms.WadPath(stem + ".materials.bin");
         if (wad.TryGetEntry(binHash, out _))
         {
-            try { materials = MaterialDocument.Parse(wad.Extract(binHash), resolveBinName, resolveWadPath); }
-            catch (Exception ex) { log?.Invoke($"{mapKey}: materials.bin would not parse ({ex.Message}); the arena draws untextured."); }
+            try { materialsBin = wad.Extract(binHash); }
+            catch (Exception ex) { log?.Invoke($"{mapKey}: materials.bin would not read ({ex.Message}); the arena draws untextured."); }
         }
-        var bindings = materials?.Materials.ToDictionary(m => m.Name, m => m, StringComparer.OrdinalIgnoreCase)
-                       ?? new Dictionary<string, MaterialBinding>(StringComparer.OrdinalIgnoreCase);
 
-        // One submesh per visible material group, with that group's diffuse. Layer rule: a group that is
-        // on every layer (0 / 255) or on the FIRST layer draws; the others are the map's variants (dragon
-        // pits, seasonal swaps) and would draw on top of each other. MapVisibility.VisibleForMask is the
-        // same rule with the axis's initial mask folded in; the arena has no axis to consult.
-        var textures = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
-        var submeshes = new List<PropSubmesh>(map.Groups.Count);
-        int hidden = 0, missing = 0;
-        foreach (var g in map.Groups)
+        // M665: resolved exactly as the map viewport resolves it - diffuse, the baked lightmap, the
+        // flow/terrain layers and the per-group render state - through the shared builder.
+        var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var materialToTexture = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var profiles = new Dictionary<string, MaterialProfile>(StringComparer.OrdinalIgnoreCase);
+        if (materialsBin is not null)
         {
+            try { materialToTexture = MapGeoMaterialResolver.Resolve(materialsBin, names, resolveWadPath); }
+            catch (Exception ex) { log?.Invoke($"{mapKey}: material->texture resolve failed ({ex.Message})."); }
+            try { profiles = MaterialProfiles.ForMapMaterials(materialsBin, names, resolveBinName, resolveWadPath); }
+            catch (Exception ex) { log?.Invoke($"{mapKey}: material profiles failed ({ex.Message})."); }
+        }
+
+        int missing = 0;
+        var res = MapSubmeshResources.Build(map, materialToTexture, profiles, geo.Path, path =>
+        {
+            var img = TryDecode(wad, path);
+            if (img is null) missing++;
+            return img;
+        });
+
+        // Layer rule: a group that is on every layer (0 / 255) or on the FIRST layer draws; the others are
+        // the map's variants (dragon pits, seasonal swaps) and would draw on top of each other.
+        // MapVisibility.VisibleForMask is the same rule with the axis's initial mask folded in; the arena
+        // has no axis to consult.
+        var keep = new List<int>(map.Groups.Count);
+        int hidden = 0;
+        for (int i = 0; i < map.Groups.Count; i++)
+        {
+            var g = map.Groups[i];
             if (!(g.VisibilityFlags is 0 or 255 || (g.VisibilityFlags & 1) != 0)) { hidden++; continue; }
             if (g.IndexCount <= 0) continue;
-
-            TextureImage? diffuse = null;
-            string? path = DiffusePathFor(g, bindings);
-            if (path is not null)
-            {
-                if (!textures.TryGetValue(path, out diffuse))
-                {
-                    diffuse = TryDecode(wad, path);
-                    textures[path] = diffuse;
-                    if (diffuse is null) missing++;
-                }
-            }
-            submeshes.Add(new PropSubmesh(g.StartIndex, g.IndexCount, diffuse));
+            keep.Add(i);
         }
 
-        var geometry = new PropMesh("arena|" + mapKey, map.Positions, map.Normals, map.Uvs, map.Indices, submeshes);
+        // Filtered together, so submesh N of the mesh and entry N of every layer array stay the same group.
+        T[] Pick<T>(T[] all) => keep.Select(i => all[i]).ToArray();
+        var mesh = new MeshAsset
+        {
+            Positions = map.Positions,
+            Normals = map.Normals,
+            Uvs = map.Uvs,
+            Colors = map.Colors,
+            LightmapUvs = map.LightmapUvs,       // the baked-light UV set - without it nothing lights
+            BakedPaintUvs = map.BakedPaintUvs,
+            Indices = map.Indices,
+            VertexCount = map.VertexCount,
+            SubMeshes = keep.Select(i => new SubMeshInfo(map.Groups[i].Material,
+                map.Groups[i].StartIndex, map.Groups[i].IndexCount, 0)).ToList(),
+            BoundsMin = map.BoundsMin,
+            BoundsMax = map.BoundsMax,
+        };
+
+        // The D3D11 host has no backdrop, so it still gets a prop - built from the same kept groups and
+        // the same resolved diffuse, so the two renderers at least draw the same geometry and textures.
+        var dx11Geometry = new PropMesh("arena|" + mapKey, map.Positions, map.Normals, map.Uvs, map.Indices,
+            keep.Select(i => new PropSubmesh(map.Groups[i].StartIndex, map.Groups[i].IndexCount, res.Diffuse[i]))
+                .ToList());
+
+        var mats = Pick(res.Materials);
+        var lightmaps = Pick(res.Lightmaps);
+        int lit = lightmaps.Count(t => t is not null);
+        var background = new MapPreviewBackground(
+            MapName: mapKey,
+            Mesh: mesh,
+            SubmeshTextures: Pick(res.Diffuse),
+            SubmeshBlend: new TextureImage?[keep.Count],   // mapgeo has no NVR four-blend layer
+            SubmeshColor1: Pick(res.FlowGradients),        // slot 2: flow normal / terrain middle
+            SubmeshColor2: Pick(res.TerrainTops),          // slot 3
+            SubmeshColor3: Pick(res.TerrainExtras),        // slot 4
+            SubmeshDoubleSided: mats.Select(m => m.DoubleSided).ToList(),
+            Lights: Array.Empty<PointLight>(),
+            MeshCount: keep.Count,
+            MissingTextures: missing,
+            SubmeshMaterials: mats,
+            SubmeshMask: Pick(res.FlowMasks),              // slot 1: flow map / terrain blend mask
+            SubmeshLightmap: lightmaps);
 
         // The navgrid, opportunistically - a map that ships none still loads as a floor at y = 0.
         NavGrid? nav = null;
@@ -153,9 +214,13 @@ public static class ArenaLoader
         var (min, max) = Bounds(map.Positions);
         var spawn = SpawnFor(nav, min, max);
 
-        log?.Invoke($"{mapKey}: {submeshes.Count} group(s) drawn, {hidden} on other layers, "
-                    + $"{textures.Count} texture(s), {missing} missing; spawn at ({spawn.X:0}, {spawn.Y:0}, {spawn.Z:0}).");
-        return new ArenaScene(mapKey, geometry, nav, spawn, min, max, submeshes.Count, hidden, missing);
+        log?.Invoke($"{mapKey}: {keep.Count} group(s) drawn, {hidden} on other layers, "
+                    + $"{res.UniqueTextures} texture(s), {missing} missing, {lit} with baked light"
+                    + (res.TerrainGroups > 0 ? $", {res.TerrainGroups} terrain-blend" : "")
+                    + (res.FlowGroups > 0 ? $", {res.FlowGroups} water" : "")
+                    + $"; spawn at ({spawn.X:0}, {spawn.Y:0}, {spawn.Z:0}).");
+        return new ArenaScene(mapKey, background, dx11Geometry, nav, spawn, min, max,
+            keep.Count, hidden, missing, lit);
     }
 
     /// <summary>Near the low-X / low-Z corner - the blue fountain on Summoner's Rift and the Abyss - snapped

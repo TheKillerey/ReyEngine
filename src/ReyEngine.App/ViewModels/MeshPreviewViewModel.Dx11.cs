@@ -101,6 +101,7 @@ public sealed partial class MeshPreviewViewModel
 
     partial void OnUseDx11PreviewChanged(bool value)
     {
+        RebuildSceneProps();   // M665: the arena floor is a prop under D3D11 and the backdrop under GL
         if (!value) { Dx11Status = ""; return; }
 
         // M620: only when nothing more specific has been said. This used to overwrite unconditionally,

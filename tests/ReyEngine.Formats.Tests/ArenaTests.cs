@@ -67,10 +67,13 @@ public sealed class ArenaTests
             lines.Add);
 
         Assert.Equal("Map11", scene.MapKey);
-        Assert.True(scene.Geometry.Indices.Length > 1_000_000, "the base mapgeo has hundreds of thousands of triangles");
+        // M665: the floor is the viewport's BACKDROP now, so the assertions read it rather than the prop
+        // the D3D11 host still gets. Both are built from the same kept groups.
+        Assert.True(scene.Background.Mesh.Indices.Length > 1_000_000, "the base mapgeo has hundreds of thousands of triangles");
         Assert.True(scene.GroupsDrawn > 100, $"only {scene.GroupsDrawn} groups drawn");
-        Assert.True(scene.Geometry.Submeshes.Count(s => s.Texture is not null) > scene.GroupsDrawn / 2,
+        Assert.True(scene.Background.SubmeshTextures.Count(t => t is not null) > scene.GroupsDrawn / 2,
             "most groups should have resolved a diffuse");
+        Assert.Equal(scene.GroupsDrawn, scene.Dx11Geometry.Submeshes.Count);
         Assert.True(scene.HasNavGrid, "Summoner's Rift ships a navgrid");
 
         // The spawn is on walkable ground, inside the map, at the grid's height for that cell.

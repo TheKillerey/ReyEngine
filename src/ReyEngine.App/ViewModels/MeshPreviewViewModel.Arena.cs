@@ -93,11 +93,46 @@ public sealed partial class MeshPreviewViewModel
 
     private void RebuildSceneProps()
     {
+        // M665: in GL the arena floor is the viewport's BACKDROP - a full second renderer carrying the
+        // map's own materials and baked lightmaps - so it must NOT also be a prop there or it draws twice.
+        // The D3D11 host has no backdrop channel, so under it the floor stays the diffuse-only prop it has
+        // always been. Exactly one of the two per renderer.
         var list = new List<PropInstanceData>();
-        if (_arena is { } arena) list.Add(new PropInstanceData(arena.Geometry, Matrix4x4.Identity));
+        if (UseDx11Preview && _arena is { } arena)
+            list.Add(new PropInstanceData(arena.Dx11Geometry, Matrix4x4.Identity));
         if (DummyProps is { } dummy) list.AddRange(dummy.Instances);
         SceneProps = list.Count > 0 ? new PropRenderSet(list) : null;
     }
+
+    /// <summary>
+    /// M665: put the backdrop at the origin while an arena owns it.
+    ///
+    /// <para>The champion-preview backdrop defaults to (-6400, -60, 2000) rotated 180 - numbers chosen to
+    /// place a champion nicely inside an NVR room. An arena's navgrid, spawn and click-to-move all speak
+    /// world coordinates, so the floor has to be exactly where the mapgeo says it is or the character
+    /// walks on nothing.</para>
+    /// </summary>
+    private void SetArenaBackdrop(Services.MapPreviewBackground? bg)
+    {
+        if (bg is not null)
+        {
+            BackgroundOffsetX = 0; BackgroundOffsetY = 0; BackgroundOffsetZ = 0; BackgroundRotation = 0;
+        }
+        else if (_arenaOwnsBackdrop)
+        {
+            ResetBackgroundOffset();   // hand the NVR backdrop its own placement back
+        }
+        _arenaOwnsBackdrop = bg is not null;
+        SetBackground(bg);
+        BackgroundVisible = true;
+    }
+
+    /// <summary>M665: an arena is using the backdrop as its floor, so nothing else may replace it. The
+    /// champion load path streams an NVR backdrop in (or clears it) after every Show, which would
+    /// otherwise delete the map out from under a character standing on it.</summary>
+    public bool ArenaOwnsBackdrop => _arenaOwnsBackdrop;
+
+    private bool _arenaOwnsBackdrop;
 
     [RelayCommand]
     private async Task LoadArenaAsync()
@@ -118,6 +153,7 @@ public sealed partial class MeshPreviewViewModel
             _arena = scene;
             _waypoints.Clear();
             RebuildSceneProps();
+            SetArenaBackdrop(scene.Background);   // M665: the map draws as the backdrop, before the champion
 
             // The champion on the spawn, the dummy 400 units into the map on walkable ground, the camera
             // on him. Control mode on: the arena is for playing, and its status line says how.
@@ -137,6 +173,7 @@ public sealed partial class MeshPreviewViewModel
 
             ArenaStatus = $"{scene.MapKey}: {scene.GroupsDrawn} groups, "
                           + (scene.HasNavGrid ? "navgrid movement" : "flat floor, no navgrid")
+                          + (scene.LightmappedGroups > 0 ? $", {scene.LightmappedGroups} baked-lit" : ", no baked light")
                           + (scene.TexturesMissing > 0 ? $", {scene.TexturesMissing} texture(s) missing" : "")
                           + ". Right-click to move, the dummy to attack, Q W E R to cast.";
             OnPropertyChanged(nameof(HasArena));
@@ -156,6 +193,7 @@ public sealed partial class MeshPreviewViewModel
         _arena = null;
         _waypoints.Clear();
         RebuildSceneProps();
+        SetArenaBackdrop(null);   // M665: and give the backdrop back to whatever owned it
         ArenaStatus = "";
         OnPropertyChanged(nameof(HasArena));
         OnPropertyChanged(nameof(ArenaName));

@@ -11113,6 +11113,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         try
         {
+            // M665: an arena IS the backdrop. Streaming the NVR room in here - or clearing it, which is
+            // what happens when the feature is off - would delete the map the character is standing on.
+            if (MeshPreview.ArenaOwnsBackdrop) return;
             string folder = Settings.PreviewBackgroundMapFolder;
             if (!Settings.PreviewBackgroundEnabled || !Services.MapPreviewLoader.IsNvrMapFolder(folder))
             {
@@ -11137,9 +11140,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Per-submesh diffuse textures for the model-preview window — NO side effects on the main
-    /// viewport's texture/material state (unlike BuildSubmeshTextures, which publishes to it).</summary>
-    /// <summary>M664: the diffuse AND the render state, from one resolve of the skin bin. They were split
-    /// only because the preview never asked for the second one.</summary>
+    /// viewport's texture/material state (unlike BuildSubmeshTextures, which publishes to it).
+    ///
+    /// <para>M664: the render state comes back with them, from the one resolve this already did. They were
+    /// split only because the preview never asked for the second one.</para></summary>
     private (IReadOnlyList<TextureImage?>? Textures,
              IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials)
         TryLoadPreviewDiffuse(WadAssetEntry skn, MeshAsset mesh)
@@ -11811,138 +11815,54 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Per-group diffuse textures from resolved map material→texture map (override-aware loads).
-    /// Also publishes the per-group preview materials (UV transform + specular flag) from the profiles (M32).</summary>
+    /// Also publishes the per-group preview materials (UV transform + specular flag) from the profiles (M32).
+    ///
+    /// <para>M665: the resolving itself now lives in <see cref="Services.MapSubmeshResources"/>, which owns
+    /// no state. What is left here is what was always view-model business: publishing the result into the
+    /// main window's map fields, the grass tint, and the log line.</para></summary>
     private IReadOnlyList<TextureImage?> BuildMapTextures(MapGeoAsset map, Dictionary<string, string> materialToTexture,
         Dictionary<string, MaterialProfile> profilesByName, int materialCount, string? mapGeoPath)
     {
-        var cache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
-        TextureImage? Load(string path)
-        {
-            if (cache.TryGetValue(path, out var hit)) return hit;
-            return cache[path] = LoadTextureByPath(path);
-        }
-
         _currentMapProfiles = profilesByName; // M34: cache for the mesh inspector's render-state rows
 
-        var result = new TextureImage?[map.Groups.Count];
-        var lightmaps = new TextureImage?[map.Groups.Count];
-        var flowMaps = new TextureImage?[map.Groups.Count];    // slot 1: flow map or terrain RGB blend mask
-        var flowNormals = new TextureImage?[map.Groups.Count]; // slot 2: flow normal or terrain middle layer
-        var terrainTops = new TextureImage?[map.Groups.Count];   // slot 3 (emissive reused by terrain branch)
-        var terrainExtras = new TextureImage?[map.Groups.Count]; // slot 4 (matcap reused by terrain branch)
-        var submeshMats = new ViewportMeshRenderer.SubmeshMaterial[map.Groups.Count];
-        var terrainWorldTransform = MapGeoMaterialResolver.TerrainBlendWorldTransformFor(map,
-            profilesByName.Where(x => x.Value.TerrainWorldProjectedMask).Select(x => x.Key));
-        // Per-mesh mirrored (negative-determinant) flag, for the two-sided/mirrored render state (M34).
-        var mirroredByMesh = map.Meshes.ToDictionary(m => m.Index, m => m.IsMirrored);
-        int lmGroups = 0, flowGroups = 0, terrainGroups = 0, bakedPaintGroups = 0;
-        for (int i = 0; i < map.Groups.Count; i++)
-        {
-            var group = map.Groups[i];
-            var matName = group.Material;
-            string? Override(params string[] names)
+        var res = Services.MapSubmeshResources.Build(map, materialToTexture, profilesByName, mapGeoPath,
+            LoadTextureByPath,
+            onFlowGroup: (matName, prof, flowMap, flowNormal) =>
             {
-                foreach (string name in names)
-                    if (group.TextureOverrides.TryGetValue(name, out string? value)
-                        && !string.IsNullOrWhiteSpace(value)) return value;
-                return null;
-            }
-            if (materialToTexture.TryGetValue(matName, out var path))
-                result[i] = Load(path);
-            if (profilesByName.TryGetValue(matName, out var prof))
-            {
-                submeshMats[i] = ToSubmeshMaterial(prof, terrainWorldTransform);
-                LogUvTransform(prof, matName);
-
-                // Shader 0xe25b830f: load the opaque terrain splat layers. Renderer slots are deliberately
-                // reused because regular emissive/matcap effects are disabled inside the terrain branch.
-                if (prof.IsTerrainBlend)
+                // M44 diagnostic: confirm detection + texture loads for the first few. Channel histogram of
+                // the flow map (B = water mask, R = phase, G = flow) so the shader's channel mapping can be
+                // sanity-checked against the real texture values.
+                string gstat = "";
+                if (flowMap is { } fmImg && fmImg.Rgba.Length >= 4)
                 {
-                    string? bottom = Override("Bottom_Texture") ?? prof.TerrainBottomPath;
-                    string? middle = Override("Middle_Texture") ?? prof.TerrainMiddlePath;
-                    string? top = Override("Top_Texture") ?? prof.TerrainTopPath;
-                    string? extras = Override("Extras_Texture") ?? prof.TerrainExtrasPath;
-                    if (!string.IsNullOrEmpty(bottom)) result[i] = Load(bottom);
-                    string? terrainMask = prof.TerrainMaskPath;
-                    if (prof.TerrainWorldProjectedMask && !string.IsNullOrEmpty(mapGeoPath))
-                        terrainMask = MapGeoMaterialResolver.TerrainBlendTexturePathFor(mapGeoPath);
-                    if (!string.IsNullOrEmpty(terrainMask)) flowMaps[i] = Load(terrainMask);
-                    if (!string.IsNullOrEmpty(middle)) flowNormals[i] = Load(middle);
-                    if (!string.IsNullOrEmpty(top)) terrainTops[i] = Load(top);
-                    if (!string.IsNullOrEmpty(extras)) terrainExtras[i] = Load(extras);
-                    terrainGroups++;
-                }
-
-                // M44 flowmap river water: load the Flow_Map + Flowing_Normal textures into the mask/gradient
-                // slots the water shader samples (slots 1/2). Falls back to a flat animated look if missing.
-                if (prof.IsFlowmap)
-                {
-                    if (!string.IsNullOrEmpty(prof.FlowMapPath)) flowMaps[i] = Load(prof.FlowMapPath);
-                    if (!string.IsNullOrEmpty(prof.FlowNormalPath)) flowNormals[i] = Load(prof.FlowNormalPath);
-                    flowGroups++;
-                    if (flowGroups <= 3)   // M44 diagnostic: confirm detection + texture loads for the first few
+                    long cnt = 0, bHi = 0; double rSum = 0, gSum = 0, bSum = 0;
+                    var px = fmImg.Rgba;
+                    for (int o = 0; o + 2 < px.Length; o += 64)   // every 16th pixel
                     {
-                        // Channel histogram of the flow map (B = water mask, R = phase, G = flow) so the
-                        // shader's channel mapping can be sanity-checked against the real texture values.
-                        string gstat = "";
-                        if (flowMaps[i] is { } fmImg && fmImg.Rgba.Length >= 4)
-                        {
-                            long cnt = 0, bHi = 0; double rSum = 0, gSum = 0, bSum = 0;
-                            var px = fmImg.Rgba;
-                            for (int o = 0; o + 2 < px.Length; o += 64)   // every 16th pixel
-                            {
-                                rSum += px[o]; gSum += px[o + 1]; bSum += px[o + 2]; cnt++;
-                                if (px[o + 2] > 128) bHi++;
-                            }
-                            if (cnt > 0) gstat = $" R={rSum / cnt / 255.0:0.00} G={gSum / cnt / 255.0:0.00} " +
-                                                 $"B={bSum / cnt / 255.0:0.00} (water {bHi * 100 / cnt}%)";
-                        }
-                        _log.Info("Water", $"flowmap '{matName}': flowMap={(flowMaps[i] is not null ? "OK" : "miss")} " +
-                                           $"normal={(flowNormals[i] is not null ? "OK" : "miss")} " +
-                                           $"speed={prof.FlowSpeed:0.###} alpha={prof.WaterAlpha:0.##}{gstat}");
+                        rSum += px[o]; gSum += px[o + 1]; bSum += px[o + 2]; cnt++;
+                        if (px[o + 2] > 128) bHi++;
                     }
+                    if (cnt > 0) gstat = $" R={rSum / cnt / 255.0:0.00} G={gSum / cnt / 255.0:0.00} " +
+                                         $"B={bSum / cnt / 255.0:0.00} (water {bHi * 100 / cnt}%)";
                 }
-            }
-            else submeshMats[i] = ViewportMeshRenderer.SubmeshMaterial.Default;
+                _log.Info("Water", $"flowmap '{matName}': flowMap={(flowMap is not null ? "OK" : "miss")} " +
+                                   $"normal={(flowNormal is not null ? "OK" : "miss")} " +
+                                   $"speed={prof.FlowSpeed:0.###} alpha={prof.WaterAlpha:0.##}{gstat}");
+            });
 
-            // Mapgeo v17+ can replace any authored material sampler per mesh. Legacy ports depend on
-            // this to share one material per shader role while retaining every object's own texture.
-            // Apply this after the material profile so the mesh override remains authoritative.
-            if (Override("DiffuseTexture", "Diffuse_Texture", "_MainTex") is { } diffuseOverride)
-                result[i] = Load(diffuseOverride);
+        // Only the materials a group actually uses, which is what the loop this replaced logged.
+        foreach (var g in map.Groups)
+            if (profilesByName.TryGetValue(g.Material, out var gp)) LogUvTransform(gp, g.Material);
 
-            if (mirroredByMesh.TryGetValue(map.Groups[i].MeshIndex, out var mir) && mir)
-                submeshMats[i] = submeshMats[i] with { Mirrored = true };
-
-            // M319/M320: DefaultEnv_Flat_BakedTerrain deliberately points its material sampler at
-            // black.tex. The actual atlas is a per-MESH BAKED_DIFFUSE_TEXTURE override in mapgeo.
-            // Its final UV is decoded separately from raw Texcoord7 and selected by UsesBakedPaint;
-            // ordinary material UV transforms continue to operate on Texcoord0.
-            var bakedPaintPath = map.Groups[i].BakedPaintTexture;
-            if (!string.IsNullOrEmpty(bakedPaintPath))
-            {
-                var bakedPaint = Load(bakedPaintPath);
-                if (bakedPaint is not null) result[i] = bakedPaint;
-                submeshMats[i] = submeshMats[i] with
-                {
-                    UsesBakedPaint = true,
-                };
-                if (bakedPaint is not null) bakedPaintGroups++;
-            }
-
-            // Baked lightmap: the group's BakedLight atlas (mesh already carries the uv7*scale+bias UVs).
-            var lmPath = map.Groups[i].LightmapTexture;
-            if (!string.IsNullOrEmpty(lmPath)) { lightmaps[i] = Load(lmPath); if (lightmaps[i] is not null) lmGroups++; }
-        }
-        CurrentModelSubmeshMaterials = submeshMats;
-        CurrentModelLightmapTextures = lmGroups > 0 ? lightmaps : null;
+        CurrentModelSubmeshMaterials = res.Materials;
+        CurrentModelLightmapTextures = res.HasLightmaps ? res.Lightmaps : null;
 
         // M78: any VertexDeform+USE_GRASS_TINT_MAP group → publish the map's world-space grass tint.
-        int gtGroups = submeshMats.Count(m => m.UsesGrassTint);
+        int gtGroups = res.Materials.Count(m => m.UsesGrassTint);
         if (gtGroups > 0)
         {
             var gtPath = FindGrassTintTexturePath();
-            CurrentGrassTint = gtPath is not null ? Load(gtPath) : null;
+            CurrentGrassTint = gtPath is not null ? LoadTextureByPath(gtPath) : null;
             // M365b: the terrain-blend canvas, not a second one derived from the whole scene.
             //
             // This used to be (BoundsMin.X, BoundsMin.Z, 1/spanX, 1/spanZ), which was wrong three ways:
@@ -11955,8 +11875,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             //
             // Repacked, not reinterpreted: the transform is uv = world.xz * scale + bias, and this shader
             // wants uv = (world.xz - origin) * scale, so origin = -bias / scale.
-            float gtScale = terrainWorldTransform.X != 0f ? terrainWorldTransform.X : 1f / 16000f;
-            float gtOrigin = -terrainWorldTransform.Z / gtScale;
+            float gtScale = res.TerrainWorldTransform.X != 0f ? res.TerrainWorldTransform.X : 1f / 16000f;
+            float gtOrigin = -res.TerrainWorldTransform.Z / gtScale;
             CurrentGrassTintRect = new System.Numerics.Vector4(gtOrigin, gtOrigin, gtScale, gtScale);
             _log.Info("GrassTint", gtPath is not null
                 ? $"{gtGroups} grass-tint group(s) — {gtPath} — canvas origin {gtOrigin:0.#}, "
@@ -11966,21 +11886,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         else CurrentGrassTint = null;
         // Stash map-only secondary layers. A later ClearSecondaryTextures() on the load path wipes the channels,
         // so the UI-thread load code republishes them from these fields.
-        _mapFlowMasks = flowGroups + terrainGroups > 0 ? flowMaps : null;
-        _mapFlowGrads = flowGroups + terrainGroups > 0 ? flowNormals : null;
-        _mapTerrainTops = terrainGroups > 0 ? terrainTops : null;
-        _mapTerrainExtras = terrainGroups > 0 ? terrainExtras : null;
+        _mapFlowMasks = res.HasFlowOrTerrain ? res.FlowMasks : null;
+        _mapFlowGrads = res.HasFlowOrTerrain ? res.FlowGradients : null;
+        _mapTerrainTops = res.TerrainGroups > 0 ? res.TerrainTops : null;
+        _mapTerrainExtras = res.TerrainGroups > 0 ? res.TerrainExtras : null;
         PublishMapMaterialLayers();
 
-        int unique = cache.Values.Count(v => v is not null);
-        int spec = submeshMats.Count(m => m.UsesSpecular);
-        _log.Success("MapGeo", $"Loaded {unique} unique textures ({materialToTexture.Count}/{materialCount} materials resolved)" +
+        int spec = res.Materials.Count(m => m.UsesSpecular);
+        _log.Success("MapGeo", $"Loaded {res.UniqueTextures} unique textures ({materialToTexture.Count}/{materialCount} materials resolved)" +
                                (spec > 0 ? $", {spec} group(s) with specular." : ".") +
-                               (lmGroups > 0 ? $" {lmGroups} group(s) with baked lightmaps." : "") +
-                               (flowGroups > 0 ? $" {flowGroups} flowmap-water group(s)." : "") +
-                               (terrainGroups > 0 ? $" {terrainGroups} terrain-blend group(s)." : "") +
-                               (bakedPaintGroups > 0 ? $" {bakedPaintGroups} baked-terrain group(s)." : ""));
-        return result;
+                               (res.LightmapGroups > 0 ? $" {res.LightmapGroups} group(s) with baked lightmaps." : "") +
+                               (res.FlowGroups > 0 ? $" {res.FlowGroups} flowmap-water group(s)." : "") +
+                               (res.TerrainGroups > 0 ? $" {res.TerrainGroups} terrain-blend group(s)." : "") +
+                               (res.BakedPaintGroups > 0 ? $" {res.BakedPaintGroups} baked-terrain group(s)." : ""));
+        return res.Diffuse;
     }
 
     /// <summary>Find the skin .bin for a .skn, resolve per-submesh diffuse textures, decode them.</summary>
@@ -12434,52 +12353,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .First();
     }
 
+    /// <summary>M665: moved to <see cref="Services.MapSubmeshResources"/> so the arena builds its floor's
+    /// render state with the very same code the map viewport does. Kept as a forwarder because a dozen
+    /// call sites read better without the namespace.</summary>
     private static ViewportMeshRenderer.SubmeshMaterial ToSubmeshMaterial(MaterialProfile p,
         System.Numerics.Vector4 terrainWorldMaskTransform = default) =>
-        new(p.UsesRim, p.UsesSpecular, p.UvScale, p.UvOffset, p.UvRotationDegrees,
-            AlphaMode: p.RenderMode switch
-            {
-                MaterialRenderMode.Cutout => 1,
-                MaterialRenderMode.Transparent => 2,
-                MaterialRenderMode.TransparentCutout => 3,
-                _ => 0,
-            },
-            DoubleSided: p.DoubleSided,
-            Tint: p.Tint,
-            TintTextured: p.TintTextured,
-            AlphaCutoff: p.AlphaCutoff ?? 0.35f,
-            ClampU: p.ClampU,
-            ClampV: p.ClampV,
-            IsFlowmap: p.IsFlowmap,
-            FlowSpeed: p.FlowSpeed,
-            FlowStrength: p.FlowStrength,
-            FlowTile: p.FlowTile,
-            ColorInside: p.ColorInside,
-            ColorOutside: p.ColorOutside,
-            WaterAlpha: p.WaterAlpha,
-            IsTerrainBlend: p.IsTerrainBlend,
-            TerrainBottomTiling: p.TerrainBottomTiling,
-            TerrainMiddleTiling: p.TerrainMiddleTiling,
-            TerrainTopTiling: p.TerrainTopTiling,
-            TerrainExtrasTiling: p.TerrainExtrasTiling,
-            TerrainWorldScale: p.TerrainWorldScale,
-            TerrainMaskMultipliers: new System.Numerics.Vector3(
-                p.TerrainRMaskMultiplier, p.TerrainGMaskMultiplier, p.TerrainBMaskMultiplier),
-            TerrainWorldProjectedMask: p.TerrainWorldProjectedMask,
-            TerrainWorldMaskTransform: terrainWorldMaskTransform,
-            TerrainBlendPowers: p.TerrainBlendPowers,
-            TerrainUseTop: p.TerrainUseTop,
-            TerrainUseExtras: p.TerrainUseExtras,
-            TerrainUseAlphaOverlay: p.TerrainUseAlphaOverlay,
-            TerrainOverlayRange: p.TerrainOverlayRange,
-            UsesGrassTint: p.UsesGrassTint,    // M78
-            EmissiveColor: p.EmissiveColor,       // M376: additive glow, gated on the intensity below
-            EmissiveIntensity: p.EmissiveIntensity,
-            NoBakedLighting: p.NoBakedLighting,   // M150: shaderMacros NO_BAKED_LIGHTING
-            DisableDepthFog: p.DisableDepthFog,   //           DISABLE_DEPTH_FOG
-            SrcBlendFactor: p.SrcBlendFactor,
-            DstBlendFactor: p.DstBlendFactor,
-            IsPbrLighting: p.IsPbrShader);   // M458: Mantis submeshes run Riot's GGX BRDF for point lights
+        Services.MapSubmeshResources.ToSubmeshMaterial(p, terrainWorldMaskTransform);
 
     private readonly HashSet<string> _loggedUvTransforms = new(StringComparer.Ordinal);
 
