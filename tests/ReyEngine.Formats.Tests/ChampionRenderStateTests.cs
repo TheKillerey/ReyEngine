@@ -1,6 +1,7 @@
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Skeletons;
 
 namespace ReyEngine.Formats.Tests;
 
@@ -133,6 +134,52 @@ public sealed class ChampionRenderStateTests
         Assert.True(offenders.Count == 0,
             $"{offenders.Count} champion(s) take their default from a material that is not the skin's own: "
             + string.Join(", ", offenders.Take(20)));
+    }
+
+    // ===================================================== the hide list is the loaded skin's own
+
+    /// <summary>
+    /// M669. The preview took initialSubmeshToHide from the first skins/*.bin in asset order that had one,
+    /// not from the loaded skin. Locke's base skin declares VFX_Head, VFX_Hair and VFX_Smoke hidden - the
+    /// overlay shells his W form uses - and the preview instead applied a later skin's list, hiding
+    /// Recall_Page and Recall_Nail (which skin0 does not have) and drawing the three shells over his body
+    /// as a second translucent copy of himself. Both readers of the same bin must agree, and the preview
+    /// must read the SAME bin the D3D11 path reads.
+    /// </summary>
+    [Fact]
+    public void TheTwoReadersOfASkinsHideListAgreeOnTheRealBins()
+    {
+        if (!Installed || Database.Value is null) return;
+        var database = Database.Value!;
+        var resolver = new WadPathResolver(database);
+        string? Bin(uint h) => database.TryGetBinName(h, out var n) ? n : null;
+        string? Wad(ulong h) => database.TryGetPath(h, out var p) ? p : null;
+
+        string wadPath = Path.Combine(Champions, "Locke.wad.client");
+        if (!File.Exists(wadPath)) return;
+        using var archive = WadArchive.Open(wadPath, resolver);
+        ulong skin0 = HashAlgorithms.WadPath("data/characters/locke/skins/skin0.bin");
+        if (!archive.TryGetEntry(skin0, out _)) return;
+        var bytes = archive.Extract(skin0);
+
+        var viaPreview = ChampionAnimationData.ParseInitialHide(bytes);
+        var viaDx11 = MaterialDocument.Parse(bytes, Bin, Wad).SkinMesh?.InitialSubmeshesToHide ?? Array.Empty<string>();
+
+        Assert.Equal(
+            viaDx11.OrderBy(x => x, StringComparer.OrdinalIgnoreCase),
+            viaPreview.OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
+        // and the base skin does hide its VFX shells - that is Riot's data, the reason the fix matters
+        Assert.Contains(viaDx11, x => x.Equals("VFX_Smoke", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ThePreviewReadsTheLoadedSkinsOwnHideListBeforeScanningSiblings()
+    {
+        var vm = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs");
+        if (vm.Length == 0) return;
+        int own = vm.IndexOf("ParseInitialHide(GetAssetBytes(ownSkinBin))", StringComparison.Ordinal);
+        int scan = vm.IndexOf("e.Path.Contains(skinDir, OIC) && hide.Count == 0", StringComparison.Ordinal);
+        Assert.True(own > 0 && scan > own, "the loaded skin's own list must be read before any sibling is scanned");
     }
 
     // ===================================================== blending and occluding are separate questions

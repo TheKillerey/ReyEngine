@@ -6902,6 +6902,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M86: this skin's OWN animation graph first (named in the skin bin's dependency list) —
             // clips merge first-wins, and other skins' graphs carry other skins' effect keys.
             var skinBinPath = SkinPaths.BinPathForSkn(skn.Path);
+            // M669: THIS skin's own initialSubmeshToHide, before anything else is consulted. The scan below
+            // used to supply it - the first skins/*.bin in asset order that yielded a non-empty list, which
+            // for Locke was a later skin's: it hid Recall_Page and Recall_Nail, submeshes his base skin does
+            // not have, and never hid the VFX_Head, VFX_Hair and VFX_Smoke shells his base skin declares.
+            // Drawn, those shells wrap the body in a second translucent copy of itself, which is what "the
+            // material is not correct" looked like. The D3D11 path always read skin0's own list.
+            if (skinBinPath is not null && TryResolveEntry(HashAlgorithms.WadPath(skinBinPath), out var ownSkinBin))
+                hide.AddRange(Formats.Skeletons.ChampionAnimationData.ParseInitialHide(GetAssetBytes(ownSkinBin)));
             if (skinBinPath is not null && TryResolveEntry(HashAlgorithms.WadPath(skinBinPath), out var skinBinEntry)
                 && VfxSystemResolver.ExtractDependencies(GetAssetBytes(skinBinEntry))
                     .FirstOrDefault(d => d.Contains("/animations/", OIC)) is { } graphPath
@@ -6926,8 +6934,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                         if (c.Name.Length > 0) byClipName.TryAdd(c.Name, c);   // M663
                     }
                 }
+                // M669: only a skin that declares no list of its own falls back to a sibling's. Kept for
+                // the skins that name their submeshes the same way; it is a guess and is logged as one.
                 else if (e.Path.Contains(skinDir, OIC) && hide.Count == 0)
+                {
                     hide.AddRange(Formats.Skeletons.ChampionAnimationData.ParseInitialHide(GetAssetBytes(e)));
+                    if (hide.Count > 0) _log.Info("Preview", $"{champ}: no initialSubmeshToHide of its own - borrowed {Path.GetFileName(e.Path)}'s.");
+                }
             }
             if (clips.Count > 0)
                 _log.Info("Preview", $"{champ}: {clips.Count} named clip(s) with visibility data, "
