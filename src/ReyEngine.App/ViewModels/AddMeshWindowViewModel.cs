@@ -275,7 +275,7 @@ public sealed partial class AddMeshWindowViewModel : ObservableObject
     private async Task Browse()
     {
         if (PickFile is null) return;
-        var path = await PickFile("Import mesh (.fbx / .glb / .gltf / .obj / .scb / .sco)");
+        var path = await PickFile("Import mesh (.mapgeo / .fbx / .glb / .gltf / .obj / .scb / .sco / .skn)");
         if (path is not null) LoadFile(path);
     }
 

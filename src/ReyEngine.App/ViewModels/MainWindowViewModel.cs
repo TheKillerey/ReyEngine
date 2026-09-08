@@ -1736,7 +1736,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task AddMeshToMap()
     {
         if (_currentMap is null) { _log.Warn("AddMesh", "Open a map (.mapgeo) first."); return; }
-        var file = await Dialogs.OpenFileAsync("Import mesh (.mapgeo / .fbx / .glb / .gltf / .obj / .scb / .sco)",
+        var file = await Dialogs.OpenFileAsync("Import mesh (.mapgeo / .fbx / .glb / .gltf / .obj / .scb / .sco / .skn)",
             new Avalonia.Platform.Storage.FilePickerFileType("Mesh")
             { Patterns = Formats.Meshes.SceneFileLoader.Extensions.Select(e => "*" + e).ToArray() },
             DialogService.All);

@@ -138,7 +138,7 @@
               <TextBlock Text="Import:" FontSize="10" VerticalAlignment="Center"
                          Foreground="{DynamicResource ReyTextDimBrush}" />
               <Button Content="from a file…" Command="{Binding ImportMeshFileCommand}" Padding="10,3" FontSize="10"
-                      ToolTip.Tip="Shelve meshes out of a .mapgeo, .fbx, .glb, .gltf, .obj, .scb or .sco - you pick which ones" />
+                      ToolTip.Tip="Shelve meshes out of a .mapgeo, .fbx, .glb, .gltf, .obj, .scb, .sco or .skn - you pick which ones. A .skn comes in as plain geometry; its skeleton is not read." />
               <Button Content="Remove" Command="{Binding DeleteSelectedMeshCommand}"
                       IsEnabled="{Binding CanDeleteMesh}" Padding="10,3" FontSize="10"
                       ToolTip.Tip="Take the selected mesh off your shelf. The file itself is not touched." />
