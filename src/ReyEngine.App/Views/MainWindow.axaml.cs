@@ -89,7 +89,9 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     /// <summary>M293: last bucket-grid array handed to D3D11, compared by REFERENCE. The array is
     /// multi-megabyte and is rebuilt only when the grid actually changes, so re-uploading it every frame
     /// would dominate the frame for a buffer whose contents are identical.</summary>
-    private float[]? _lastDx11BucketGrid;
+    /// <summary>M660: one guard per overlay. See <see cref="Services.Dx11OverlayGate"/> for what the
+    /// single inline guard this replaces was quietly gating.</summary>
+    private readonly Services.Dx11OverlayGate _dx11Overlays = new();
     private (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max)? _lastDx11BakeBox;   // M412
     private Services.SkyboxSpec? _lastDx11Skybox;
     private bool _dx11FrameQueued;
@@ -380,14 +382,19 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         // M293: the bucket grid, from the same array the GL viewport is bound to. Re-uploaded only when
         // the ARRAY ITSELF changes - it is multi-megabyte, and the GL host guards it the same way for the
         // same reason. Toggling the grid off publishes null, which clears it.
-        if (!ReferenceEquals(_lastDx11BucketGrid, vm.BucketGridLines))
-        {
-            _lastDx11BucketGrid = vm.BucketGridLines;
+        if (_dx11Overlays.Changed(Services.Dx11OverlayGate.Overlay.BucketGrid, vm.BucketGridLines))
             _dx11.Renderer.SetBucketGrid(vm.BucketGridLines);
-            // M569: the navgrid layers and the face selection, which existed only in the GL viewport.
+
+        // M569/M660: the navgrid layers and the face selection. Each on ITS OWN guard - both of these
+        // used to sit inside the bucket grid's `if`, so they were published only when the BUCKET GRID
+        // changed identity. Switching the navgrid overlay on therefore never reached D3D11 and the layer
+        // simply never drew, while the GL viewport (which guards each separately) showed it fine.
+        if (_dx11Overlays.Changed(Services.Dx11OverlayGate.Overlay.NavGridCells, vm.BushCellLines)
+            | _dx11Overlays.Changed(Services.Dx11OverlayGate.Overlay.NavGridLayers, vm.BushCellLayers))
             _dx11.Renderer.SetNavGridCells(vm.BushCellLines, vm.BushCellLayers);
+
+        if (_dx11Overlays.Changed(Services.Dx11OverlayGate.Overlay.SelectedFaces, vm.SelectedFaceLines))
             _dx11.Renderer.SetSelectedFaces(vm.SelectedFaceLines);
-        }
         // M412: the bake-volume preview - 72 floats, value-compared, from the SAME BuildBoxLines the GL
         // side draws, so the two viewports show the identical box.
         if (_lastDx11BakeBox != vm.BakeBox)
