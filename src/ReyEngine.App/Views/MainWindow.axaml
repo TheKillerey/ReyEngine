@@ -660,6 +660,7 @@
                    Editor decoration drawn over the map. The count on the button is what keeps this
                    readable while the menu is shut - it is exactly this menu's toggles and nothing else. -->
               <Button Classes="tool" FontSize="11" Padding="8,3"
+                      Classes.newFeature="{Binding NewFeature[light-range]}"
                       ToolTip.Tip="Editor decoration drawn over the map: placement icons, light markers, bounds, bones and the grids. The number is how many are on.">
                 <StackPanel Orientation="Horizontal" Spacing="5">
                   <TextBlock Text="◉ Overlays ▾" VerticalAlignment="Center" />
@@ -785,9 +786,11 @@
                       <TextBlock Text="MAP TOOLS" FontSize="10" FontWeight="Bold" LetterSpacing="1.2"
                                  Foreground="{DynamicResource ReyAccentBrush}" />
                       <Button Classes="tool" Content="➕ Add Mesh…" Command="{Binding AddMeshToMapCommand}"
+                              Classes.newFeature="{Binding NewFeature[add-mesh-library]}"
                               HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" FontSize="11"
-                              ToolTip.Tip="Import a mesh (.obj / .scb / .sco) and append it to this map. Place it with the gizmo, pick its material in the inspector, then Save to Mod." />
+                              ToolTip.Tip="Import a mesh (.mapgeo / .fbx / .glb / .gltf / .obj / .scb / .sco / .skn) and append it to this map. Place it with the gizmo, pick its material in the inspector, then Save to Mod." />
                       <Button Classes="tool" Content="🧰 Workshop…" Command="{Binding OpenWorkshopCommand}"
+                              Classes.newFeature="{Binding NewFeature[workshop-shelf]}"
                               HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" FontSize="11"
                               ToolTip.Tip="Add a complete Riot material or particle template directly to this map" />
                       <Button Classes="tool" Content="⟳ Reload Map" Command="{Binding ReloadMapCommand}"

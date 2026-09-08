@@ -23,14 +23,14 @@ public sealed record NewFeature(string Id, string Version, string Label);
 public static class NewFeatures
 {
     /// <summary>The release whose highlights are currently on offer. Bump alongside the app version.</summary>
-    public const string CurrentVersion = "0.4.2";
+    public const string CurrentVersion = "0.4.3";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
     ///
     /// <para>Each id is bound by one control in the UI, so this list and the marked controls have to move
     /// together: an entry with nothing bound to it glows nowhere, and a control bound to an id that is not
-    /// here goes quiet (see <see cref="IsNew"/>). Twelve entries for twelve controls.</para>
+    /// here goes quiet (see <see cref="IsNew"/>). Fifteen entries for fifteen controls.</para>
     ///
     /// <para>What is NOT here is the point of the list — see the class remarks. Internal work, research,
     /// renderer plumbing and anything unfinished stays out, however large it was.</para>
@@ -59,6 +59,12 @@ public static class NewFeatures
         // 0.4.2. The switcher window is not new, but what it can do is: it now shows and can carry the
         // turret / minion / nexus skins a map skin forces, which is the thing a user reported missing.
         new("map-skin-units",   "0.4.2", "Map Skin Switcher — see and carry a map skin's turret, minion and nexus skins"),
+        // 0.4.3. Three entry points in this window whose CAPABILITY changed, not three new windows. The
+        // gizmo, the icons and the D3D11 debug views are the rest of this release and have no control of
+        // their own to glow on - they are how everything already here is drawn.
+        new("workshop-shelf",   "0.4.3", "Workshop — keep your own .troybin effects, custom-bin particles and meshes on a shelf"),
+        new("add-mesh-library", "0.4.3", "Add Mesh — search a whole mapgeo, import .skn, and carry the original material across"),
+        new("light-range",      "0.4.3", "Overlays — see how far each point light reaches, and hide icons behind geometry"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever
