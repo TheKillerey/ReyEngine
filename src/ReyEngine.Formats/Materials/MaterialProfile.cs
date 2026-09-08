@@ -276,7 +276,17 @@ public static class MaterialProfiles
         static bool IsClamp(int a) => a == 1 || a == 3 || a == 4;
         bool clampU = IsClamp(b.DiffuseAddressU), clampV = IsClamp(b.DiffuseAddressV);
 
-        var flow = ClassifyFlowmap(b);
+        // M670: river water is a MAP material. The rule below fires on a sampler named *Flow* plus a
+        // FlowmapSpeed parameter, which is exactly how Flowmap_River is authored (M44) - and exactly how
+        // Locke's Shaders/SkinnedMesh/Onsen is authored too: a FlowmapTex sampler and FlowmapSpeed /
+        // FlowSpeed parameters that drive a surface distortion, not water. Every one of his five
+        // materials classified as a river, and the GL viewport drew his whole body through the water
+        // branch: Color_Inside's default (0.44, 0.87, 0.92) at alpha 0.9 - a flat, translucent, cyan
+        // silhouette with no texture. A champion skin is never water; the classifier is not consulted.
+        var flow = sourceKind == MaterialSourceKind.ChampionSkin
+            ? (IsFlowmap: false, Speed: 0f, Strength: 0f, Tile: default(Vector2), Inside: default(Vector4),
+               Outside: default(Vector4), Alpha: 1f, FlowMapPath: (string?)null, FlowNormalPath: (string?)null)
+            : ClassifyFlowmap(b);
 
         // M78: VertexDeform + USE_GRASS_TINT_MAP → world-space grass tint multiplies the diffuse.
         string shaderName = b.RenderShader ?? b.ShaderName ?? "";

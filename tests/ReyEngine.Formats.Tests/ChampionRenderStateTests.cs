@@ -182,6 +182,65 @@ public sealed class ChampionRenderStateTests
         Assert.True(own > 0 && scan > own, "the loaded skin's own list must be read before any sibling is scanned");
     }
 
+    // ===================================================== a champion is never river water
+
+    /// <summary>
+    /// M670. Locke's five Onsen materials all classified as Flowmap_River water, because Onsen authors a
+    /// FlowmapTex sampler and FlowmapSpeed/FlowSpeed parameters for a surface distortion and those are
+    /// the exact tokens the M44 river rule keys on. The GL viewport then drew his body through the water
+    /// branch - a flat translucent cyan silhouette. Pinned on the real bin, with the real map water kept
+    /// alive by the sibling test so the gate cannot quietly take the river with it.
+    /// </summary>
+    [Fact]
+    public void AChampionSkinNeverClassifiesAsRiverWater()
+    {
+        if (!Installed || Database.Value is null) return;
+        var database = Database.Value!;
+        var resolver = new WadPathResolver(database);
+        string? Bin(uint h) => database.TryGetBinName(h, out var n) ? n : null;
+        string? Wad(ulong h) => database.TryGetPath(h, out var p) ? p : null;
+
+        string wadPath = Path.Combine(Champions, "Locke.wad.client");
+        if (!File.Exists(wadPath)) return;
+        using var archive = WadArchive.Open(wadPath, resolver);
+        ulong skin0 = HashAlgorithms.WadPath("data/characters/locke/skins/skin0.bin");
+        if (!archive.TryGetEntry(skin0, out _)) return;
+
+        var doc = MaterialDocument.Parse(archive.Extract(skin0), Bin, Wad);
+        var statics = doc.Materials.Where(m => m.IsStaticMaterialDef).ToList();
+        Assert.NotEmpty(statics);
+        // the trigger really is there - this is not a test of a material that never looked like water
+        Assert.Contains(statics, m => m.Slots.Any(sl => sl.SamplerName.Contains("Flow", StringComparison.OrdinalIgnoreCase)));
+        foreach (var m in statics)
+            Assert.False(m.Profile.IsFlowmap, $"{m.Name} classified as river water");
+    }
+
+    [Fact]
+    public void MapRiverWaterStillClassifiesAsWater()
+    {
+        const string maps = @"C:\Riot Games\League of Legends\Game\DATA\FINAL\Maps\Shipping";
+        if (!Directory.Exists(maps) || Database.Value is null) return;
+        var database = Database.Value!;
+        var resolver = new WadPathResolver(database);
+        string? Bin(uint h) => database.TryGetBinName(h, out var n) ? n : null;
+        string? Wad(ulong h) => database.TryGetPath(h, out var p) ? p : null;
+
+        // Measured (M670 water census): the Rift plays its river on the BLOOM variant bins - base_srx
+        // carries none. Map12 bloom.materials.bin holds nine Flowmap_River materials, the most anywhere.
+        string wadPath = Path.Combine(maps, "Map12.wad.client");
+        if (!File.Exists(wadPath)) return;
+        using var archive = WadArchive.Open(wadPath, resolver);
+        var bin = archive.Entries.FirstOrDefault(e => e.IsResolved
+            && e.Path.EndsWith("/bloom.materials.bin", StringComparison.OrdinalIgnoreCase));
+        if (bin is null) return;
+
+        var doc = MaterialDocument.Parse(archive.Extract(bin.PathHash), Bin, Wad);
+        var names = doc.Materials.Select(m => m.Name).ToList();
+        var profiles = MaterialProfiles.ForMapMaterials(archive.Extract(bin.PathHash), names, Bin, Wad);
+        // M44 measured the Rift's river as Flowmap_River; the gate above must leave it as water
+        Assert.Contains(profiles.Values, p => p.IsFlowmap);
+    }
+
     // ===================================================== blending and occluding are separate questions
 
     [Fact]
