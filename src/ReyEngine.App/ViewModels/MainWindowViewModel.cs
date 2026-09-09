@@ -1009,6 +1009,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private CubemapProbeViewModel? _selectedProbe;
     [ObservableProperty] private string _selectedPlaceableInfo = "";
     public ObservableCollection<string> PropSkinChoices { get; } = new();
+    /// <summary>M677: the selected prop's character clips, by .anm file name, with the idle entry first.</summary>
+    public ObservableCollection<string> PropAnimationChoices { get; } = new();
 
     partial void OnCurrentModelProbesChanged(IReadOnlyList<MapCubemapProbe>? value)
     { MapContent.SetProbes(value ?? Array.Empty<MapCubemapProbe>()); UpdatePlaceableMarkers(); }
@@ -1031,7 +1033,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         var snapshot = MapContent.AllProps
             .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved)
-            .Select(p => p.Prop with { Skin = p.EffectiveSkin, VisibilityFlags = p.EffectiveVisibilityFlags })
+            .Select(p => (Prop: p.Prop with { Skin = p.EffectiveSkin, VisibilityFlags = p.EffectiveVisibilityFlags },
+                          Clip: p.EffectiveAnimation))   // M677: the placement's chosen clip, null for the idle
             .ToList();
         var (set, resolved, failed) = await System.Threading.Tasks.Task.Run(() => BuildPropRenderSet(snapshot));
         if (!ShowPropMeshes) return;   // toggled off while decoding
@@ -1042,24 +1045,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Decode each unique prop skin once (mesh + per-submesh diffuse) and place an instance per
     /// placement. Runs off the UI thread. Returns the set + resolved/failed counts (logged on return).</summary>
-    private (PropRenderSet? set, int resolved, int failed) BuildPropRenderSet(IReadOnlyList<MapAnimatedProp> props)
+    private (PropRenderSet? set, int resolved, int failed) BuildPropRenderSet(
+        IReadOnlyList<(MapAnimatedProp Prop, string? Clip)> props)
     {
+        // M677: one mesh per (skin, clip). The pose is per mesh in both renderers, so two placements of one
+        // skin that should play different clips need two meshes - the geometry is uploaded twice, which is
+        // the price of the choice and is paid only when it is made.
         var meshBySkin = new Dictionary<string, PropMesh?>(StringComparer.OrdinalIgnoreCase);
         var texByPath = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
         var instances = new List<PropInstanceData>();
         int failed = 0;
-        foreach (var p in props)
+        foreach (var (p, clip) in props)
         {
             if (string.IsNullOrEmpty(p.Skin)) { failed++; continue; }
-            if (!meshBySkin.TryGetValue(p.Skin, out var mesh))
-                meshBySkin[p.Skin] = mesh = TryBuildPropMesh(p.Skin, texByPath);
+            string key = clip is null ? p.Skin : p.Skin + "|" + clip;
+            if (!meshBySkin.TryGetValue(key, out var mesh))
+                meshBySkin[key] = mesh = TryBuildPropMesh(p.Skin, texByPath, clip);
             if (mesh is not null) instances.Add(PropInstanceData.Place(mesh, p.Transform));   // M676: skinScale under it
             else failed++;
         }
         return (instances.Count > 0 ? new PropRenderSet(instances) : null, instances.Count, failed);
     }
 
-    private PropMesh? TryBuildPropMesh(string skin, Dictionary<string, TextureImage?> texCache)
+    private PropMesh? TryBuildPropMesh(string skin, Dictionary<string, TextureImage?> texCache, string? clip = null)
     {
         try
         {
@@ -1102,7 +1110,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 {
                     var sklBytes = ReadAssetByPath(sklPath);
                     if (sklBytes is not null) skeleton = SkeletonDecoder.Decode(sklBytes);
-                    if (skeleton is not null) idle = TryFindIdleClip(skin);
+                    // M677: the chosen clip when there is one, the idle otherwise - and the idle when the
+                    // chosen name resolves to nothing, rather than a prop frozen in bind pose.
+                    if (skeleton is not null) idle = (clip is not null ? TryFindClip(skin, clip) : null) ?? TryFindIdleClip(skin);
                 }
                 catch { skeleton = null; idle = null; }
             }
@@ -1112,6 +1122,41 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 SknBytes = sknBytes, SkinBinBytes = binBytes, SkinScale = skinScale,   // M676
             };
         }
+        catch { return null; }
+    }
+
+    /// <summary>M677: the .anm files a prop's character ships, by file name - what the prop card offers.
+    /// The animation graph's clip names would be the game's vocabulary, but a placed mob's graph is not
+    /// always present in the map wad and the files always are; the idle picker (M54) reads the same set.</summary>
+    private IReadOnlyList<string> PropClipNames(string skin)
+    {
+        const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+        var parts = skin.ToLowerInvariant().Split('/');
+        int ci = Array.IndexOf(parts, "characters");
+        if (ci < 0 || ci + 1 >= parts.Length) return Array.Empty<string>();
+        string marker = $"characters/{parts[ci + 1]}/";
+        return AssetEntries
+            .Where(e => e.IsResolved && e.Path.EndsWith(".anm", OIC) && e.Path.Contains(marker, OIC))
+            .Select(e => Path.GetFileNameWithoutExtension(e.Path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>M677: one of the character's .anm files by name (as <see cref="PropClipNames"/> lists them).
+    /// Null when there is no such file or it will not decode.</summary>
+    private AnimationClip? TryFindClip(string skin, string name)
+    {
+        const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+        var parts = skin.ToLowerInvariant().Split('/');
+        int ci = Array.IndexOf(parts, "characters");
+        if (ci < 0 || ci + 1 >= parts.Length) return null;
+        string marker = $"characters/{parts[ci + 1]}/";
+        var entry = AssetEntries.FirstOrDefault(e => e.IsResolved && e.Path.EndsWith(".anm", OIC)
+            && e.Path.Contains(marker, OIC)
+            && Path.GetFileNameWithoutExtension(e.Path).Equals(name, OIC));
+        if (entry is null) return null;
+        try { return AnimationDecoder.Decode(ReadAsset(entry.PathHash), entry.DisplayName); }
         catch { return null; }
     }
 
@@ -1230,10 +1275,42 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     partial void OnSelectedPropTreeItemChanged(object? value)
     { if (value is AnimatedPropViewModel p) SelectedPropNode = p; }
+
+    /// <summary>M677: the selected placed prop in the character window - the same skin, opened the way the
+    /// character browser opens a champion (<see cref="ICharacterBrowserHost.OpenSkin"/>), so its materials,
+    /// clips and drivers can be inspected and edited there. The map wad already holds the assets, which is
+    /// why nothing has to be mounted first.</summary>
+    [RelayCommand]
+    private void OpenPropInCharacterEditor()
+    {
+        if (SelectedPropNode is not { } node) return;
+        string skin = node.EffectiveSkin;
+        try
+        {
+            var binBytes = ReadAssetByPath("data/" + skin.ToLowerInvariant() + ".bin");
+            if (binBytes is null) { _log.Warn("Props", $"{skin}: the skin bin is not in this map."); return; }
+            var meshRef = SkinMeshExtractor.Extract(binBytes, ResolveWadPath);
+            if (meshRef?.SimpleSkin is not { Length: > 0 } sknPath)
+            { _log.Warn("Props", $"{skin}: the skin names no mesh."); return; }
+            if (!TryResolveEntry(BinTexturePath.HashOfReference(sknPath), out var entry))
+            { _log.Warn("Props", $"{skin}: {sknPath} is not in this map."); return; }
+
+            _log.Info("Props", $"{node.Prop.CharacterName} / {node.EffectiveSkinName} — {Path.GetFileName(sknPath)}");
+            ShowMeshPreviewWindow?.Invoke();
+            _ = LoadMeshPreviewAsync(entry);
+            TryLoadMaterialBin(entry, alsoRawBin: true);
+        }
+        catch (Exception ex) { _log.Error("Props", ex.Message); }
+    }
     partial void OnSelectedPropNodeChanged(AnimatedPropViewModel? value)
     {
         PropSkinChoices.Clear();
+        PropAnimationChoices.Clear();
         if (value is not { } p) return;
+        // M677: the clips this character ships, idle first. The list follows the SKIN in play - a swapped
+        // skin of the same character has the same animations, so the character is enough.
+        PropAnimationChoices.Add(AnimatedPropViewModel.IdleChoice);
+        foreach (string clip in PropClipNames(p.EffectiveSkin)) PropAnimationChoices.Add(clip);
         var marker = $"characters/{p.Prop.CharacterName}/skins/";
         foreach (var path in AssetEntries.Where(e => e.IsResolved
                      && e.Path.Contains(marker, StringComparison.OrdinalIgnoreCase)

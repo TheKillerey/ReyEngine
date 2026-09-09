@@ -165,6 +165,22 @@ public sealed partial class AnimatedPropViewModel : MapOutlinerItemViewModel
     [ObservableProperty] private string? _editedSkin;
     [ObservableProperty] private int? _editedVisibilityFlags;
 
+    /// <summary>M677: the entry in the animation list that means "the idle, as the game plays it".</summary>
+    public const string IdleChoice = "(idle)";
+
+    /// <summary>M677: which of the character's clips this placement plays in the viewport. Viewer state,
+    /// not a map edit: the game plays the idle and the map has nowhere to say otherwise, so this never
+    /// counts as an edit and is never saved - it exists so a camp can be seen attacking or a dragon
+    /// landing without opening the character window. Null or <see cref="IdleChoice"/> is the idle.</summary>
+    [ObservableProperty] private string? _editedAnimation;
+
+    /// <summary>The clip name to play, or null for the idle.</summary>
+    public string? EffectiveAnimation =>
+        string.IsNullOrWhiteSpace(EditedAnimation) || EditedAnimation == IdleChoice ? null : EditedAnimation.Trim();
+
+    partial void OnEditedAnimationChanged(string? value)
+    { OnPropertyChanged(nameof(EffectiveAnimation)); StateChanged?.Invoke(this); }
+
     public string EffectiveSkin
     {
         get
