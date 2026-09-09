@@ -5193,7 +5193,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (BuildMaterialBrowserContext() is { } fresh) ShowMaterialBrowserWindow?.Invoke(fresh);
                 },
                 Presets: BuildMaterialPresetService(binEntry),
-                Repair: () => RepairMaterialWireForms(binEntry));
+                Repair: () => RepairMaterialWireForms(binEntry),
+                RemoveUnused: names => RemoveUnusedMaterialsAsync(binEntry, map.Groups.Select(g => g.Material), names));
         }
         catch (Exception ex) { _log.Error("Materials", "Could not audit the materials: " + ex.Message); return null; }
     }
@@ -5228,31 +5229,134 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (issues.Any(i => i.Category == "container-wire-form"))
             { _log.Error("Materials", "The repair did not take — not saved."); return; }
 
-            string savedTo;
-            if (TryWriteToProjectFile(binEntry, bytes, out var projectFile)) savedTo = projectFile;
-            else
-            {
-                savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
-                _overrides.Set(new ProjectAssetOverride
-                {
-                    PathHash = binEntry.PathHash,
-                    ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
-                    OverrideFile = savedTo,
-                    AddedUtc = DateTime.UtcNow.ToString("o"),
-                });
-                _overrides.SaveTo(Project);
-            }
-            SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
-            Project.IsDirty = true;
-            if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
-            UpdateTitle();
-            NotifyMaterialsChanged();
+            string savedTo = SaveMaterialsBin(binEntry, bytes);
 
             foreach (string line in repaired.Take(10)) _log.Info("Materials", "  " + line);
             _log.Success("Materials", $"Repaired {repaired.Count:n0} material container(s) the client would "
                                     + $"have skipped. Saved to {savedTo}.");
         }
         catch (Exception ex) { _log.Error("Materials", "Repair failed: " + ex.Message); }
+    }
+
+    /// <summary>M675: one materials.bin write for every edit made from the Materials window - the project
+    /// file when the bin is one, the override store otherwise - plus the bookkeeping that makes the change
+    /// visible: node status, dirty flag, title, and the materials revision both viewports watch. Returns
+    /// where the bytes went.</summary>
+    private string SaveMaterialsBin(WadAssetEntry binEntry, byte[] bytes)
+    {
+        string savedTo;
+        if (TryWriteToProjectFile(binEntry, bytes, out var projectFile)) savedTo = projectFile;
+        else
+        {
+            savedTo = ProjectWorkspace.StoreOverrideBytes(Project, binEntry.PathHash, bytes, ".bin");
+            _overrides.Set(new ProjectAssetOverride
+            {
+                PathHash = binEntry.PathHash,
+                ResolvedPath = binEntry.IsResolved ? binEntry.Path : null,
+                OverrideFile = savedTo,
+                AddedUtc = DateTime.UtcNow.ToString("o"),
+            });
+            _overrides.SaveTo(Project);
+        }
+        SetNodeStatus(binEntry.PathHash, AssetStatus.Modified);
+        Project.IsDirty = true;
+        if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
+        UpdateTitle();
+        NotifyMaterialsChanged();
+        return savedTo;
+    }
+
+    /// <summary>
+    /// M675: remove the StaticMaterialDefs no mesh uses from the map's materials.bin, from the Materials
+    /// window.
+    ///
+    /// <para>The window's "unused" is "no mesh in this mapgeo draws it", which is necessary but not
+    /// sufficient: a VFX system or a prop can still link a material by hash, and removing one of those is
+    /// the classic way to make a map crash on load. So the decision belongs to
+    /// <see cref="Formats.Materials.MapMaterialFactory.PlanUnusedStaticMaterials"/> - reachability from
+    /// every non-material object plus the mapgeo's names - and the candidates the window hands over only
+    /// NARROW it. The plan is shown and confirmed before anything is written, the bin as it was goes to
+    /// <c>.reyengine/cleanup/</c> beside the file cleanups' own backups, and the removed names go to the
+    /// log. Returns true when the bin changed.</para>
+    /// </summary>
+    private async Task<bool> RemoveUnusedMaterialsAsync(WadAssetEntry binEntry, IEnumerable<string> usedMaterials,
+        IReadOnlyList<string> candidates)
+    {
+        if (!GuardEditable(binEntry)) return false;
+        if (Project.ProjectFilePath is null && Project.SourceWadPath is null)
+        { _log.Warn("Materials", "Create or open a project before removing materials."); return false; }
+
+        static string Short(string s) { int i = s.LastIndexOf('/'); return i >= 0 ? s[(i + 1)..] : s; }
+        try
+        {
+            byte[] before = ReadAsset(binEntry.PathHash);
+            var used = usedMaterials.Where(n => !string.IsNullOrWhiteSpace(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var plan = Formats.Materials.MapMaterialFactory.PlanUnusedStaticMaterials(before, used, candidates, out var planError);
+            if (plan is null) { _log.Error("Materials", "Could not plan the cleanup: " + planError); return false; }
+
+            string Name(uint h) => candidates.FirstOrDefault(c => Formats.Materials.MapMaterialFactory.MaterialHash(c) == h)
+                                   ?? ResolveBinName(h) ?? $"0x{h:x8}";
+            if (plan.Remove.Count == 0)
+            {
+                _log.Info("Materials", plan.KeptByLink.Count > 0
+                    ? $"Nothing to remove: the {plan.KeptByLink.Count:n0} material(s) no mesh uses are still linked from "
+                      + "other objects in the bin (VFX, props), and the game needs those."
+                    : "Nothing to remove: every material in the bin is drawn by a mesh.");
+                return false;
+            }
+
+            var names = plan.Remove.Select(Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            string listed = string.Join("\n", names.Take(12).Select(n => "  " + Short(n)))
+                            + (names.Count > 12 ? $"\n  … and {names.Count - 12:n0} more" : "");
+            string kept = plan.KeptByLink.Count > 0
+                ? $" {plan.KeptByLink.Count:n0} other unused material(s) stay: a VFX system, prop or another object still links to them."
+                : "";
+            if (PromptOwner is not null && !await Views.PromptWindow.ConfirmAsync(PromptOwner, "Remove Unused Materials",
+                    $"Remove {names.Count:n0} material(s) from {binEntry.DisplayName}?\n\n"
+                    + "No mesh in this map uses them and nothing else in the bin links to them." + kept
+                    + "\n\nA copy of the bin as it is now goes to .reyengine/cleanup/ first.\n\n" + listed,
+                    "Remove"))
+                return false;
+
+            var after = Formats.Materials.MapMaterialFactory.RemoveUnusedStaticMaterials(before, used,
+                out int removed, out var error, candidates);
+            if (after is null) { _log.Error("Materials", "Cleanup failed: " + error); return false; }
+            if (removed == 0) { _log.Info("Materials", "Nothing was removed."); return false; }
+
+            string? backup = BackupMaterialsBin(binEntry, before, names);
+            string savedTo = SaveMaterialsBin(binEntry, after);
+            foreach (string n in names.Take(20)) _log.Info("Materials", "  removed " + Short(n));
+            if (names.Count > 20) _log.Info("Materials", $"  … and {names.Count - 20:n0} more (all of them in the backup's removed.txt)");
+            _log.Success("Materials", $"Removed {removed:n0} unused material(s) from {binEntry.DisplayName}. Saved to {savedTo}."
+                                    + (backup is null ? "" : $" Backup: {backup}."));
+            return true;
+        }
+        catch (Exception ex) { _log.Error("Materials", "Cleanup failed: " + ex.Message); return false; }
+    }
+
+    /// <summary>The bin as it was before a cleanup, under the same <c>.reyengine/cleanup/</c> root the file
+    /// cleanups use, with the removed names beside it. Null when there is no project folder to keep it in
+    /// or the copy fails - logged, not fatal, because the removal was confirmed.</summary>
+    private string? BackupMaterialsBin(WadAssetEntry binEntry, byte[] before, IReadOnlyList<string> removedNames)
+    {
+        if (Project.RootPath is null) return null;
+        try
+        {
+            string dir = System.IO.Path.Combine(ReyEngine.Core.Cleanup.CleanupExecutor.BackupRoot(Project.RootPath),
+                "materials-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+            Directory.CreateDirectory(dir);
+            string file = System.IO.Path.GetFileName(binEntry.IsResolved ? binEntry.Path : binEntry.DisplayName);
+            foreach (char c in System.IO.Path.GetInvalidFileNameChars()) file = file.Replace(c, '_');
+            File.WriteAllBytes(System.IO.Path.Combine(dir, file), before);
+            File.WriteAllLines(System.IO.Path.Combine(dir, "removed.txt"), removedNames);
+            return dir;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Materials", "The bin could not be backed up first: " + ex.Message);
+            return null;
+        }
     }
 
     /// <summary>

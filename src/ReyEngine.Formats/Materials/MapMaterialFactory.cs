@@ -11,6 +11,10 @@ namespace ReyEngine.Formats.Materials;
 /// a from-scratch object would need the full property schema; a clone keeps every switch, technique
 /// and render-state block of a material that provably works on this map.
 /// </summary>
+/// <summary>M675: the outcome of an unused-material cleanup before it happens. Hashes rather than names,
+/// because a material the hash database cannot name is still a material.</summary>
+public sealed record UnusedMaterialPlan(IReadOnlyList<uint> Remove, IReadOnlyList<uint> KeptByLink, int MaterialCount);
+
 public static class MapMaterialFactory
 {
     private static readonly uint StaticMaterialClass = HashAlgorithms.Fnv1a("StaticMaterialDef");
@@ -56,32 +60,15 @@ public static class MapMaterialFactory
     /// props, or other retained systems survive. This deliberately does not mean "delete every original
     /// material"; doing that is a common source of game crashes.</summary>
     public static byte[]? RemoveUnusedStaticMaterials(byte[] materialsBin,
-        IEnumerable<string> usedMapGeoMaterials, out int removedCount, out string? error)
+        IEnumerable<string> usedMapGeoMaterials, out int removedCount, out string? error,
+        IReadOnlyCollection<string>? onlyMaterials = null)
     {
         removedCount = 0;
         error = null;
         try
         {
             var tree = SafeBinTree.Parse(materialsBin);
-            var materialHashes = tree.Objects
-                .Where(pair => pair.Value.ClassHash == StaticMaterialClass)
-                .Select(pair => pair.Key).ToHashSet();
-            if (materialHashes.Count == 0) return materialsBin;
-
-            var reachable = new HashSet<uint>();
-            var queue = new Queue<uint>();
-            foreach (uint hash in tree.Objects.Keys.Where(hash => !materialHashes.Contains(hash))) queue.Enqueue(hash);
-            foreach (string name in usedMapGeoMaterials.Where(name => !string.IsNullOrWhiteSpace(name)))
-                queue.Enqueue(HashAlgorithms.Fnv1a(name));
-
-            while (queue.Count > 0)
-            {
-                uint hash = queue.Dequeue();
-                if (!reachable.Add(hash) || !tree.Objects.TryGetValue(hash, out var obj)) continue;
-                foreach (var property in obj.Properties.Values) EnqueueLinks(property, queue);
-            }
-
-            foreach (uint hash in materialHashes.Where(hash => !reachable.Contains(hash)).ToList())
+            foreach (uint hash in Plan(tree, usedMapGeoMaterials, onlyMaterials).Remove)
             {
                 tree.Objects.Remove(hash);
                 removedCount++;
@@ -95,6 +82,59 @@ public static class MapMaterialFactory
             return result;
         }
         catch (Exception ex) { error = ex.Message; return null; }
+    }
+
+    /// <summary>M675: what <see cref="RemoveUnusedStaticMaterials"/> would remove, and what it would keep
+    /// although no mesh uses it, without touching the bin - so a confirmation can name them first.
+    /// <paramref name="onlyMaterials"/> narrows the removal to those names (the rows a user ticked); null
+    /// means every unreachable material. A name may be the <c>0x........</c> form an unresolved hash is
+    /// shown under, which is matched as the hash itself.</summary>
+    public static UnusedMaterialPlan? PlanUnusedStaticMaterials(byte[] materialsBin,
+        IEnumerable<string> usedMapGeoMaterials, IReadOnlyCollection<string>? onlyMaterials, out string? error)
+    {
+        error = null;
+        try { return Plan(SafeBinTree.Parse(materialsBin), usedMapGeoMaterials, onlyMaterials); }
+        catch (Exception ex) { error = ex.Message; return null; }
+    }
+
+    /// <summary>A material name as its object hash. MaterialDocument shows a material the hash database
+    /// cannot name as <c>0x{hash:x8}</c>; hashing that string would name nothing.</summary>
+    public static uint MaterialHash(string name) =>
+        name.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+        && uint.TryParse(name.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out uint hex)
+            ? hex
+            : HashAlgorithms.Fnv1a(name);
+
+    private static UnusedMaterialPlan Plan(BinTree tree, IEnumerable<string> usedMapGeoMaterials,
+        IReadOnlyCollection<string>? onlyMaterials)
+    {
+        var materialHashes = tree.Objects
+            .Where(pair => pair.Value.ClassHash == StaticMaterialClass)
+            .Select(pair => pair.Key).ToHashSet();
+        var used = usedMapGeoMaterials.Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(MaterialHash).ToHashSet();
+
+        // Roots: every non-material object, and every material the mapgeo names. Whatever a root links
+        // to - through structs, containers, maps and optionals - is reachable and stays.
+        var reachable = new HashSet<uint>();
+        var queue = new Queue<uint>();
+        foreach (uint hash in tree.Objects.Keys.Where(hash => !materialHashes.Contains(hash))) queue.Enqueue(hash);
+        foreach (uint hash in used) queue.Enqueue(hash);
+        while (queue.Count > 0)
+        {
+            uint hash = queue.Dequeue();
+            if (!reachable.Add(hash) || !tree.Objects.TryGetValue(hash, out var obj)) continue;
+            foreach (var property in obj.Properties.Values) EnqueueLinks(property, queue);
+        }
+
+        var candidates = onlyMaterials?.Select(MaterialHash).ToHashSet();
+        var remove = materialHashes
+            .Where(hash => !reachable.Contains(hash) && (candidates is null || candidates.Contains(hash)))
+            .OrderBy(hash => hash).ToList();
+        var keptByLink = materialHashes
+            .Where(hash => reachable.Contains(hash) && !used.Contains(hash))
+            .OrderBy(hash => hash).ToList();
+        return new UnusedMaterialPlan(remove, keptByLink, materialHashes.Count);
     }
 
     private static void EnqueueLinks(BinTreeProperty property, Queue<uint> queue)

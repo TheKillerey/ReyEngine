@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Formats.Materials;
@@ -76,7 +77,10 @@ public sealed record MaterialBrowserContext(
     Action<IReadOnlyList<string>>? SelectMeshesUsing = null,
     Action? Refresh = null,
     MaterialPresetService? Presets = null,
-    Action? Repair = null);
+    Action? Repair = null,
+    // M675: remove these materials from the bin when the bin's own object graph agrees they are
+    // unreachable, after asking. True when the bin changed, so the window knows whether to reload.
+    Func<IReadOnlyList<string>, Task<bool>>? RemoveUnused = null);
 
 /// <summary>One material's line in the diff preview.</summary>
 public sealed class MaterialPlanRowViewModel
@@ -147,12 +151,13 @@ public sealed partial class MaterialBrowserViewModel : ObservableObject
             // longer the preview of what will happen. Drop it rather than let a stale diff be applied.
             vm.PropertyChanged += (_, e) =>
             {
-                if (e.PropertyName == nameof(MaterialRowViewModel.IsSelected)) ClearPreview();
+                if (e.PropertyName == nameof(MaterialRowViewModel.IsSelected)) { ClearPreview(); NotifyUnusedChanged(); }
             };
             _all.Add(vm);
         }
         ApplyFilter();
         LoadPresets();
+        NotifyUnusedChanged();
     }
 
     private void ApplyFilter()
@@ -209,6 +214,44 @@ public sealed partial class MaterialBrowserViewModel : ObservableObject
             if (ticked.Count > 0) return ticked;
             return SelectedRow is { } one ? new[] { one.Row } : Array.Empty<MaterialAuditRow>();
         }
+    }
+
+    // ---- M675: remove unused materials --------------------------------------------------------------
+
+    /// <summary>The materials a cleanup is asked about: the ticked rows when any are ticked - the way to keep
+    /// kit materials meant for later placement - otherwise every row; in both cases only those no mesh
+    /// uses. The bin's own object graph has the final say (a VFX system or prop can still link one), which
+    /// is why the app, not this window, decides what actually goes: see
+    /// MapMaterialFactory.PlanUnusedStaticMaterials.</summary>
+    public IReadOnlyList<string> UnusedCandidates()
+    {
+        var ticked = _all.Where(r => r.IsSelected).ToList();
+        var pool = ticked.Count > 0 ? ticked : _all;
+        return pool.Where(r => r.MeshCount == 0).Select(r => r.FullName).ToList();
+    }
+
+    public int UnusedCandidateCount => UnusedCandidates().Count;
+    public bool CanRemoveUnused => _context?.RemoveUnused is not null && UnusedCandidateCount > 0;
+    public string RemoveUnusedLabel => _all.Any(r => r.IsSelected)
+        ? $"Remove unused ({UnusedCandidateCount:n0} ticked)"
+        : $"Remove unused ({UnusedCandidateCount:n0})";
+
+    private void NotifyUnusedChanged()
+    {
+        OnPropertyChanged(nameof(UnusedCandidateCount));
+        OnPropertyChanged(nameof(CanRemoveUnused));
+        OnPropertyChanged(nameof(RemoveUnusedLabel));
+    }
+
+    /// <summary>Hand the candidates to the app, which plans against the bin, asks, backs up and writes.
+    /// Reload only when something was removed, so a cancelled prompt keeps the ticks.</summary>
+    [RelayCommand]
+    private async Task RemoveUnusedAsync()
+    {
+        if (_context?.RemoveUnused is not { } remove) return;
+        var names = UnusedCandidates();
+        if (names.Count == 0) return;
+        if (await remove(names)) _context.Refresh?.Invoke();
     }
 
     // ---- M504: presets + bulk apply ---------------------------------------------------------------

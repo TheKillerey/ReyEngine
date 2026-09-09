@@ -60,6 +60,10 @@
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="12,8">
       <DockPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+          <!-- M675: the cleanup. Ticks narrow it; the bin's object graph decides what is really unreachable. -->
+          <Button Classes="tool" Content="{Binding RemoveUnusedLabel}" Command="{Binding RemoveUnusedCommand}"
+                  IsEnabled="{Binding CanRemoveUnused}" FontSize="11" Padding="10,4" Foreground="#FFE05252"
+                  ToolTip.Tip="Remove the materials no mesh in this map uses from the materials.bin. Ticked rows narrow it to those rows; nothing ticked means every unused one. Materials another object in the bin still links to (VFX, props) are kept, and a copy of the bin goes to .reyengine/cleanup/ first." />
           <Button Classes="tool" Content="Tick all shown" Command="{Binding SelectAllShownCommand}"
                   FontSize="11" Padding="10,4" />
           <Button Classes="tool" Content="Clear ticks" Command="{Binding ClearSelectionCommand}"
