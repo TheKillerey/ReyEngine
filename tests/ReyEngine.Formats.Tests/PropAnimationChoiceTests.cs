@@ -60,6 +60,16 @@ public sealed class PropAnimationChoiceTests
         Assert.Contains("PropAnimationChoices.Add(AnimatedPropViewModel.IdleChoice);", main);
     }
 
+    /// <summary>The inspector view binds by reflection (no x:DataType), so a misspelt member passes the
+    /// build and fails only when the card is shown. These are the three names the card binds.</summary>
+    [Fact]
+    public void TheCardsBindingsResolveByReflection()
+    {
+        Assert.NotNull(typeof(MainWindowViewModel).GetProperty("PropAnimationChoices"));
+        Assert.NotNull(typeof(MainWindowViewModel).GetProperty("OpenPropInCharacterEditorCommand"));
+        Assert.NotNull(typeof(AnimatedPropViewModel).GetProperty("EditedAnimation"));
+    }
+
     private static string? Source(params string[] parts)
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)

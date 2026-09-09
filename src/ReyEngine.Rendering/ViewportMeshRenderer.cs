@@ -120,7 +120,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private sealed class PropGeometry
     {
         public uint Vao, Vbo, Ebo;
-        public (int Start, int Count, uint Tex)[] Submeshes = System.Array.Empty<(int, int, uint)>();
+        public SubmeshDraw[] Submeshes = System.Array.Empty<SubmeshDraw>();   // M678: the same record THE mesh draws by
         public float[]? Interleaved;   // M54: cached stride-8 stream so idle animation can re-skin pos/normals
         public Vector3 BoundsMin, BoundsMax;
     }
@@ -1553,7 +1553,7 @@ void main(){
     /// <summary>Register a unique prop mesh's geometry (M41). Returns a handle to instance with
     /// <see cref="AddPropInstance"/>. Submeshes carry their diffuse texture id (0 = untextured).</summary>
     public unsafe int RegisterPropGeometry(float[] positions, float[] normals, float[] uvs, uint[] indices,
-        IReadOnlyList<(int start, int count, uint tex)> submeshes)
+        IReadOnlyList<PropSubmeshSpec> submeshes)
     {
         if (!_ready) return -1;
         int vc = positions.Length / 3;
@@ -1587,7 +1587,17 @@ void main(){
         fixed (uint* p = indices) _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), p, BufferUsageARB.StaticDraw);
         _gl.BindVertexArray(0);
 
-        g.Submeshes = submeshes.Select(s => (s.start, s.count, s.tex)).ToArray();
+        // M678: a draw record per submesh, as THE mesh has one - the material's render state through the
+        // same mapping, and the pre-M678 cutout for a submesh that brings no material.
+        g.Submeshes = submeshes.Select(spec =>
+        {
+            var d = SubmeshDraw.Create(spec.Start, spec.Count);
+            d.Texture = spec.Texture; d.Mask = spec.Mask; d.Gradient = spec.Gradient;
+            d.Emissive = spec.Emissive; d.MatCap = spec.MatCap; d.MatCapMask = spec.MatCapMask;
+            if (spec.Material is { } mat) ApplyMaterial(ref d, in mat);
+            else { d.AlphaMode = 1; d.AlphaCutoff = 0.35f; }   // cutout so fur/wing alpha reads
+            return d;
+        }).ToArray();
         _propGeoms.Add(g);
         return _propGeoms.Count - 1;
     }
@@ -1914,52 +1924,164 @@ void main(){
     private IReadOnlyList<int>? _highlightSubmeshes;
     public void SetSubmeshHighlight(IReadOnlyList<int>? groupIndices) => _highlightSubmeshes = groupIndices;
 
+    /// <summary>M678: one submesh's material state - render state, uniforms, the seven texture layers - as
+    /// THE mesh's passes have set it since M32, hoisted so the placed props set exactly the same state per
+    /// submesh instead of the fixed diffuse-only block they had. <paramref name="b"/> is the caller's
+    /// binding cache: a layer already bound is not bound again. The draw itself stays with the caller.</summary>
+    private void ApplySubmesh(in SubmeshDraw s, bool cullBackfaces, ref LayerBindings b)
+    {
+        // M34 render state: cull the back faces of single-sided (cullEnable=true) materials; render
+        // two-sided (cullEnable=false) materials both sides. The master toggle can force everything
+        // two-sided (cullBackfaces=false). A face renders two-sided exactly when it is NOT culled,
+        // and then the shader flips its backface normals so they light correctly.
+        bool cull = cullBackfaces && !s.DoubleSided;
+        if (cull) _gl.Enable(EnableCap.CullFace); else _gl.Disable(EnableCap.CullFace);
+        _gl.Uniform1(_mTwoSided, cull ? 0 : 1);
+        _gl.Uniform1(_mMirrored, s.Mirrored ? 1 : 0);
+        // M32 per-material: UV transform + rim/specular gates (identity/off by default).
+        _gl.Uniform4(_mUvScaleOffset, s.UvScaleOffset.X, s.UvScaleOffset.Y, s.UvScaleOffset.Z, s.UvScaleOffset.W);
+        _gl.Uniform1(_mUvRot, s.UvRotationRadians);
+        _gl.Uniform1(_mUsesRim, s.UsesRim ? 1 : 0);
+        _gl.Uniform1(_mUsesSpec, s.UsesSpecular ? 1 : 0);
+        _gl.Uniform1(_mUsesBakedPaint, (s.UsesBakedPaint && _hasBakedPaintUv) ? 1 : 0);
+        _gl.Uniform1(_mAlphaMode, s.AlphaMode);   // M34: 0 opaque · 1 cutout · 2 transparent
+        _gl.Uniform1(_mAlphaCutoff, s.AlphaCutoff);
+        _gl.Uniform1(_mHasGrassTint, (s.UsesGrassTint && _grassTintTex != 0) ? 1 : 0);   // M78
+        _gl.Uniform2(_mClampUv, s.ClampUv.X, s.ClampUv.Y);
+        _gl.Uniform4(_mTint, s.Tint.X, s.Tint.Y, s.Tint.Z, s.Tint.W);
+        _gl.Uniform1(_mTintTextured, s.TintTextured ? 1 : 0);
+        // M44 flowmap river water: animated flowing water (Flow_Map on slot 1, normal on slot 2).
+        _gl.Uniform1(_mIsFlowmap, s.IsFlowmap ? 1 : 0);
+        if (s.IsFlowmap)
+        {
+            _gl.Uniform1(_mFlowSpeed, s.FlowSpeed);
+            _gl.Uniform1(_mFlowStrength, s.FlowStrength);
+            _gl.Uniform2(_mFlowTile, s.FlowTile.X, s.FlowTile.Y);
+            _gl.Uniform4(_mColorInside, s.ColorInside.X, s.ColorInside.Y, s.ColorInside.Z, s.ColorInside.W);
+            _gl.Uniform4(_mColorOutside, s.ColorOutside.X, s.ColorOutside.Y, s.ColorOutside.Z, s.ColorOutside.W);
+            _gl.Uniform1(_mWaterAlpha, s.WaterAlpha);
+        }
+        _gl.Uniform1(_mIsTerrainBlend, s.IsTerrainBlend ? 1 : 0);
+        if (s.IsTerrainBlend)
+        {
+            _gl.Uniform1(_mTerrainWorldScale, s.TerrainWorldScale);
+            _gl.Uniform2(_mTerrainBottomTiling, s.TerrainBottomTiling.X, s.TerrainBottomTiling.Y);
+            _gl.Uniform2(_mTerrainMiddleTiling, s.TerrainMiddleTiling.X, s.TerrainMiddleTiling.Y);
+            _gl.Uniform2(_mTerrainTopTiling, s.TerrainTopTiling.X, s.TerrainTopTiling.Y);
+            _gl.Uniform2(_mTerrainExtrasTiling, s.TerrainExtrasTiling.X, s.TerrainExtrasTiling.Y);
+            _gl.Uniform3(_mTerrainMaskMultipliers, s.TerrainMaskMultipliers.X,
+                s.TerrainMaskMultipliers.Y, s.TerrainMaskMultipliers.Z);
+            _gl.Uniform1(_mTerrainWorldMask, s.TerrainWorldProjectedMask ? 1 : 0);
+            _gl.Uniform4(_mTerrainWorldMaskTransform, s.TerrainWorldMaskTransform.X,
+                s.TerrainWorldMaskTransform.Y, s.TerrainWorldMaskTransform.Z,
+                s.TerrainWorldMaskTransform.W);
+            _gl.Uniform3(_mTerrainBlendPowers, s.TerrainBlendPowers.X,
+                s.TerrainBlendPowers.Y, s.TerrainBlendPowers.Z);
+            _gl.Uniform1(_mTerrainUseTop, s.TerrainUseTop ? 1 : 0);
+            _gl.Uniform1(_mTerrainUseExtras, s.TerrainUseExtras ? 1 : 0);
+            _gl.Uniform1(_mTerrainUseAlphaOverlay, s.TerrainUseAlphaOverlay ? 1 : 0);
+            _gl.Uniform2(_mTerrainOverlayRange, s.TerrainOverlayRange.X, s.TerrainOverlayRange.Y);
+        }
+        _gl.Uniform1(_mCompositeGround, s.CompositeGround ? 1 : 0);   // M142: Map10 baked ground
+        // M150: DISABLE_DEPTH_FOG excludes this surface from the scene's distance fog.
+        _gl.Uniform1(_mFogEnabled, (_fogEnabled && !s.DisableDepthFog) ? 1 : 0);
+        BindLayer(0, s.Texture, ref b.B0, b.Any, _mHasTex);
+        BindLayer(1, s.Mask, ref b.B1, b.Any, _mHasMask);
+        BindLayer(2, s.Gradient, ref b.B2, b.Any, _mHasGradient);
+        BindLayer(3, s.Emissive, ref b.B3, b.Any, _mHasEmissive);
+        BindLayer(4, s.MatCap, ref b.B4, b.Any, _mHasMatCap);
+        BindLayer(5, s.MatCapMask, ref b.B5, b.Any, _mHasMatCapMask);
+        BindLayer(6, s.Lightmap, ref b.B6, b.Any, -1);
+        // M150: NO_BAKED_LIGHTING makes the surface ignore the baked lightmap entirely.
+        _gl.Uniform1(_mHasLightmap,
+            (_lightmapsEnabled && s.Lightmap != 0 && _hasLightmapUv && !s.NoBakedLighting) ? 1 : 0);
+        // M375: pushed SEPARATELY from uHasLightmap. That flag folds three different reasons
+        // into one zero - no atlas, no UV, or opted out - and the shader needs the last one
+        // apart: only NO_BAKED_LIGHTING means no lighting term at all.
+        _gl.Uniform1(_mNoBakedLighting, s.NoBakedLighting ? 1 : 0);
+        // M458: Mantis submeshes run Riot's GGX BRDF for point lights; everything else keeps
+        // the env family's Lambert term untouched.
+        _gl.Uniform1(_mPbrLighting, s.IsPbrLighting ? 1 : 0);
+        _gl.Uniform3(_mEmissiveColor, s.EmissiveColor.X, s.EmissiveColor.Y, s.EmissiveColor.Z);   // M376
+        _gl.Uniform1(_mEmissiveIntensity, s.EmissiveIntensity);
+        b.Any = true;
+    }
+
+    /// <summary>M678: which texture each of the seven layers currently holds, so consecutive submeshes that
+    /// share a layer skip the rebind. Started fresh per draw block: the units are global, but a block that
+    /// begins with an empty cache binds every layer on its first submesh and is correct regardless of what
+    /// the previous block left on them.</summary>
+    private struct LayerBindings { public uint B0, B1, B2, B3, B4, B5, B6; public bool Any; }
+
+    private void BindLayer(int unit, uint texture, ref uint bound, bool any, int hasUniform)
+    {
+        if (any && texture == bound) return;
+        _gl.ActiveTexture(TextureUnit.Texture0 + unit);
+        _gl.BindTexture(TextureTarget.Texture2D, texture != 0 ? texture : _whiteTex);
+        if (hasUniform >= 0) _gl.Uniform1(hasUniform, texture != 0 ? 1 : 0);
+        bound = texture;
+    }
+
+    /// <summary>M678: a SubmeshMaterial onto a draw record - THE mesh's (<see cref="SetSubmeshMaterial"/>)
+    /// and a placed prop's alike, so the two cannot drift apart field by field.</summary>
+    private static void ApplyMaterial(ref SubmeshDraw d, in SubmeshMaterial mat)
+    {
+        d.UvScaleOffset = new Vector4(mat.UvScale.X, mat.UvScale.Y, mat.UvOffset.X, mat.UvOffset.Y);
+        d.UvRotationRadians = mat.UvRotationDegrees * (MathF.PI / 180f);
+        d.UsesRim = mat.UsesRim;
+        d.UsesSpecular = mat.UsesSpecular;
+        d.AlphaMode = mat.AlphaMode;
+        d.BlendWritesDepth = mat.BlendWritesDepth;   // M664
+        d.SrcBlendFactor = mat.SrcBlendFactor;
+        d.DstBlendFactor = mat.DstBlendFactor;
+        d.AlphaCutoff = mat.AlphaCutoff;
+        d.UsesGrassTint = mat.UsesGrassTint;   // M78
+        d.EmissiveColor = mat.EmissiveColor ?? Vector4.One;   // M376
+        d.EmissiveIntensity = mat.EmissiveIntensity;
+        d.DoubleSided = mat.DoubleSided;
+        d.Tint = mat.Tint ?? Vector4.One;
+        d.TintTextured = mat.TintTextured;
+        d.Mirrored = mat.Mirrored;
+        d.ClampUv = new Vector2(mat.ClampU ? 1f : 0f, mat.ClampV ? 1f : 0f);
+        d.IsFlowmap = mat.IsFlowmap;
+        d.FlowSpeed = mat.FlowSpeed;
+        d.FlowStrength = mat.FlowStrength;
+        d.FlowTile = mat.FlowTile;
+        d.ColorInside = mat.ColorInside;
+        d.ColorOutside = mat.ColorOutside;
+        d.WaterAlpha = mat.WaterAlpha;
+        d.IsTerrainBlend = mat.IsTerrainBlend;
+        d.TerrainBottomTiling = mat.TerrainBottomTiling;
+        d.TerrainMiddleTiling = mat.TerrainMiddleTiling;
+        d.TerrainTopTiling = mat.TerrainTopTiling;
+        d.TerrainExtrasTiling = mat.TerrainExtrasTiling;
+        d.TerrainWorldScale = mat.TerrainWorldScale;
+        d.TerrainMaskMultipliers = mat.TerrainMaskMultipliers;
+        d.TerrainWorldProjectedMask = mat.TerrainWorldProjectedMask;
+        d.TerrainWorldMaskTransform = mat.TerrainWorldMaskTransform;
+        d.TerrainBlendPowers = mat.TerrainBlendPowers;
+        d.TerrainUseTop = mat.TerrainUseTop;
+        d.TerrainUseExtras = mat.TerrainUseExtras;
+        d.TerrainUseAlphaOverlay = mat.TerrainUseAlphaOverlay;
+        d.TerrainOverlayRange = mat.TerrainOverlayRange;
+        d.CompositeGround = mat.CompositeGround;   // M142
+        d.NoBakedLighting = mat.NoBakedLighting;   // M150
+        d.DisableDepthFog = mat.DisableDepthFog;
+        d.UsesBakedPaint = mat.UsesBakedPaint;
+        d.IsPbrLighting = mat.IsPbrLighting;   // M458
+    }
+
+    /// <summary>M678: what a placed prop's submesh brings to <see cref="RegisterPropGeometry"/>: its index
+    /// range, the seven-layer texture set the character window resolves (0 = none), and the material's
+    /// render state. A null material keeps the pre-M678 draw - opaque, cut out at 0.35 - which is what an
+    /// added mesh or a prop without a skin bin still gets.</summary>
+    public readonly record struct PropSubmeshSpec(int Start, int Count, uint Texture, uint Mask = 0, uint Gradient = 0,
+        uint Emissive = 0, uint MatCap = 0, uint MatCapMask = 0, SubmeshMaterial? Material = null);
+
     public void SetSubmeshMaterial(int index, SubmeshMaterial mat)
     {
         if (!_ready || !_hasMesh || index < 0 || index >= _submeshes.Length) return;
-        _submeshes[index].UvScaleOffset = new Vector4(mat.UvScale.X, mat.UvScale.Y, mat.UvOffset.X, mat.UvOffset.Y);
-        _submeshes[index].UvRotationRadians = mat.UvRotationDegrees * (MathF.PI / 180f);
-        _submeshes[index].UsesRim = mat.UsesRim;
-        _submeshes[index].UsesSpecular = mat.UsesSpecular;
-        _submeshes[index].AlphaMode = mat.AlphaMode;
-        _submeshes[index].BlendWritesDepth = mat.BlendWritesDepth;   // M664
-        _submeshes[index].SrcBlendFactor = mat.SrcBlendFactor;
-        _submeshes[index].DstBlendFactor = mat.DstBlendFactor;
-        _submeshes[index].AlphaCutoff = mat.AlphaCutoff;
-        _submeshes[index].UsesGrassTint = mat.UsesGrassTint;   // M78
-        _submeshes[index].EmissiveColor = mat.EmissiveColor ?? Vector4.One;   // M376
-        _submeshes[index].EmissiveIntensity = mat.EmissiveIntensity;
-        _submeshes[index].DoubleSided = mat.DoubleSided;
-        _submeshes[index].Tint = mat.Tint ?? Vector4.One;
-        _submeshes[index].TintTextured = mat.TintTextured;
-        _submeshes[index].Mirrored = mat.Mirrored;
-        _submeshes[index].ClampUv = new Vector2(mat.ClampU ? 1f : 0f, mat.ClampV ? 1f : 0f);
-        _submeshes[index].IsFlowmap = mat.IsFlowmap;
-        _submeshes[index].FlowSpeed = mat.FlowSpeed;
-        _submeshes[index].FlowStrength = mat.FlowStrength;
-        _submeshes[index].FlowTile = mat.FlowTile;
-        _submeshes[index].ColorInside = mat.ColorInside;
-        _submeshes[index].ColorOutside = mat.ColorOutside;
-        _submeshes[index].WaterAlpha = mat.WaterAlpha;
-        _submeshes[index].IsTerrainBlend = mat.IsTerrainBlend;
-        _submeshes[index].TerrainBottomTiling = mat.TerrainBottomTiling;
-        _submeshes[index].TerrainMiddleTiling = mat.TerrainMiddleTiling;
-        _submeshes[index].TerrainTopTiling = mat.TerrainTopTiling;
-        _submeshes[index].TerrainExtrasTiling = mat.TerrainExtrasTiling;
-        _submeshes[index].TerrainWorldScale = mat.TerrainWorldScale;
-        _submeshes[index].TerrainMaskMultipliers = mat.TerrainMaskMultipliers;
-        _submeshes[index].TerrainWorldProjectedMask = mat.TerrainWorldProjectedMask;
-        _submeshes[index].TerrainWorldMaskTransform = mat.TerrainWorldMaskTransform;
-        _submeshes[index].TerrainBlendPowers = mat.TerrainBlendPowers;
-        _submeshes[index].TerrainUseTop = mat.TerrainUseTop;
-        _submeshes[index].TerrainUseExtras = mat.TerrainUseExtras;
-        _submeshes[index].TerrainUseAlphaOverlay = mat.TerrainUseAlphaOverlay;
-        _submeshes[index].TerrainOverlayRange = mat.TerrainOverlayRange;
-        _submeshes[index].CompositeGround = mat.CompositeGround;   // M142
-        _submeshes[index].NoBakedLighting = mat.NoBakedLighting;   // M150
-        _submeshes[index].DisableDepthFog = mat.DisableDepthFog;
-        _submeshes[index].UsesBakedPaint = mat.UsesBakedPaint;
-        _submeshes[index].IsPbrLighting = mat.IsPbrLighting;   // M458
+        ApplyMaterial(ref _submeshes[index], mat);
         _drawOrderDirty = true;
     }
 
@@ -2502,7 +2624,7 @@ void main(){
         // M664: declared up here so DrawPropMeshes, defined further down, can be CALLED ahead of the mesh
         // block - a local function may be called before its declaration, but not capture a local
         // declared after the call.
-        bool propsDrawn = false;
+        bool propsDrawn = false, transparentPropsDrawn = false;
 
         // M668: the props draw FIRST. M664 put them between the mesh's opaque and transparent passes so a
         // blended champion surface would composite over the arena floor, and that interleave crashed the
@@ -2517,7 +2639,7 @@ void main(){
         // before the mesh's transparent pass blends over them. Props are opaque or alpha-tested and write
         // depth, so drawing them before the mesh's opaque pass changes nothing the depth test does not
         // already settle.
-        DrawPropMeshes();
+        DrawPropMeshes(false);
 
         if (_hasMesh)
         {
@@ -2627,95 +2749,11 @@ void main(){
                 }
 
                 EnsureDrawOrder();
-                bool haveBindings = false;
-                uint bound0 = 0, bound1 = 0, bound2 = 0, bound3 = 0, bound4 = 0, bound5 = 0, bound6 = 0;
+                var layers = new LayerBindings();
                 void DrawSubmesh(SubmeshDraw s)
                 {
-                    // M34 render state: cull the back faces of single-sided (cullEnable=true) materials; render
-                    // two-sided (cullEnable=false) materials both sides. The master toggle can force everything
-                    // two-sided (cullBackfaces=false). A face renders two-sided exactly when it is NOT culled,
-                    // and then the shader flips its backface normals so they light correctly.
-                    bool cull = cullBackfaces && !s.DoubleSided;
-                    if (cull) _gl.Enable(EnableCap.CullFace); else _gl.Disable(EnableCap.CullFace);
-                    _gl.Uniform1(_mTwoSided, cull ? 0 : 1);
-                    _gl.Uniform1(_mMirrored, s.Mirrored ? 1 : 0);
-                    // M32 per-material: UV transform + rim/specular gates (identity/off by default).
-                    _gl.Uniform4(_mUvScaleOffset, s.UvScaleOffset.X, s.UvScaleOffset.Y, s.UvScaleOffset.Z, s.UvScaleOffset.W);
-                    _gl.Uniform1(_mUvRot, s.UvRotationRadians);
-                    _gl.Uniform1(_mUsesRim, s.UsesRim ? 1 : 0);
-                    _gl.Uniform1(_mUsesSpec, s.UsesSpecular ? 1 : 0);
-                    _gl.Uniform1(_mUsesBakedPaint, (s.UsesBakedPaint && _hasBakedPaintUv) ? 1 : 0);
-                    _gl.Uniform1(_mAlphaMode, s.AlphaMode);   // M34: 0 opaque · 1 cutout · 2 transparent
-                    _gl.Uniform1(_mAlphaCutoff, s.AlphaCutoff);
-                    _gl.Uniform1(_mHasGrassTint, (s.UsesGrassTint && _grassTintTex != 0) ? 1 : 0);   // M78
-                    _gl.Uniform2(_mClampUv, s.ClampUv.X, s.ClampUv.Y);
-                    _gl.Uniform4(_mTint, s.Tint.X, s.Tint.Y, s.Tint.Z, s.Tint.W);
-                    _gl.Uniform1(_mTintTextured, s.TintTextured ? 1 : 0);
-                    // M44 flowmap river water: animated flowing water (Flow_Map on slot 1, normal on slot 2).
-                    _gl.Uniform1(_mIsFlowmap, s.IsFlowmap ? 1 : 0);
-                    if (s.IsFlowmap)
-                    {
-                        _gl.Uniform1(_mFlowSpeed, s.FlowSpeed);
-                        _gl.Uniform1(_mFlowStrength, s.FlowStrength);
-                        _gl.Uniform2(_mFlowTile, s.FlowTile.X, s.FlowTile.Y);
-                        _gl.Uniform4(_mColorInside, s.ColorInside.X, s.ColorInside.Y, s.ColorInside.Z, s.ColorInside.W);
-                        _gl.Uniform4(_mColorOutside, s.ColorOutside.X, s.ColorOutside.Y, s.ColorOutside.Z, s.ColorOutside.W);
-                        _gl.Uniform1(_mWaterAlpha, s.WaterAlpha);
-                    }
-                    _gl.Uniform1(_mIsTerrainBlend, s.IsTerrainBlend ? 1 : 0);
-                    if (s.IsTerrainBlend)
-                    {
-                        _gl.Uniform1(_mTerrainWorldScale, s.TerrainWorldScale);
-                        _gl.Uniform2(_mTerrainBottomTiling, s.TerrainBottomTiling.X, s.TerrainBottomTiling.Y);
-                        _gl.Uniform2(_mTerrainMiddleTiling, s.TerrainMiddleTiling.X, s.TerrainMiddleTiling.Y);
-                        _gl.Uniform2(_mTerrainTopTiling, s.TerrainTopTiling.X, s.TerrainTopTiling.Y);
-                        _gl.Uniform2(_mTerrainExtrasTiling, s.TerrainExtrasTiling.X, s.TerrainExtrasTiling.Y);
-                        _gl.Uniform3(_mTerrainMaskMultipliers, s.TerrainMaskMultipliers.X,
-                            s.TerrainMaskMultipliers.Y, s.TerrainMaskMultipliers.Z);
-                        _gl.Uniform1(_mTerrainWorldMask, s.TerrainWorldProjectedMask ? 1 : 0);
-                        _gl.Uniform4(_mTerrainWorldMaskTransform, s.TerrainWorldMaskTransform.X,
-                            s.TerrainWorldMaskTransform.Y, s.TerrainWorldMaskTransform.Z,
-                            s.TerrainWorldMaskTransform.W);
-                        _gl.Uniform3(_mTerrainBlendPowers, s.TerrainBlendPowers.X,
-                            s.TerrainBlendPowers.Y, s.TerrainBlendPowers.Z);
-                        _gl.Uniform1(_mTerrainUseTop, s.TerrainUseTop ? 1 : 0);
-                        _gl.Uniform1(_mTerrainUseExtras, s.TerrainUseExtras ? 1 : 0);
-                        _gl.Uniform1(_mTerrainUseAlphaOverlay, s.TerrainUseAlphaOverlay ? 1 : 0);
-                        _gl.Uniform2(_mTerrainOverlayRange, s.TerrainOverlayRange.X, s.TerrainOverlayRange.Y);
-                    }
-                    _gl.Uniform1(_mCompositeGround, s.CompositeGround ? 1 : 0);   // M142: Map10 baked ground
-                    // M150: DISABLE_DEPTH_FOG excludes this surface from the scene's distance fog.
-                    _gl.Uniform1(_mFogEnabled, (_fogEnabled && !s.DisableDepthFog) ? 1 : 0);
-                    BindLayer(0, s.Texture, ref bound0, _mHasTex);
-                    BindLayer(1, s.Mask, ref bound1, _mHasMask);
-                    BindLayer(2, s.Gradient, ref bound2, _mHasGradient);
-                    BindLayer(3, s.Emissive, ref bound3, _mHasEmissive);
-                    BindLayer(4, s.MatCap, ref bound4, _mHasMatCap);
-                    BindLayer(5, s.MatCapMask, ref bound5, _mHasMatCapMask);
-                    BindLayer(6, s.Lightmap, ref bound6, -1);
-                    // M150: NO_BAKED_LIGHTING makes the surface ignore the baked lightmap entirely.
-                    _gl.Uniform1(_mHasLightmap,
-                        (_lightmapsEnabled && s.Lightmap != 0 && _hasLightmapUv && !s.NoBakedLighting) ? 1 : 0);
-                    // M375: pushed SEPARATELY from uHasLightmap. That flag folds three different reasons
-                    // into one zero - no atlas, no UV, or opted out - and the shader needs the last one
-                    // apart: only NO_BAKED_LIGHTING means no lighting term at all.
-                    _gl.Uniform1(_mNoBakedLighting, s.NoBakedLighting ? 1 : 0);
-                    // M458: Mantis submeshes run Riot's GGX BRDF for point lights; everything else keeps
-                    // the env family's Lambert term untouched.
-                    _gl.Uniform1(_mPbrLighting, s.IsPbrLighting ? 1 : 0);
-                    _gl.Uniform3(_mEmissiveColor, s.EmissiveColor.X, s.EmissiveColor.Y, s.EmissiveColor.Z);   // M376
-                    _gl.Uniform1(_mEmissiveIntensity, s.EmissiveIntensity);
+                    ApplySubmesh(in s, cullBackfaces, ref layers);   // M678: the same state the placed props set
                     _gl.DrawElements(PrimitiveType.Triangles, (uint)s.Count, DrawElementsType.UnsignedInt, (void*)(s.Start * sizeof(uint)));
-                    haveBindings = true;
-
-                    void BindLayer(int unit, uint texture, ref uint bound, int hasUniform)
-                    {
-                        if (haveBindings && texture == bound) return;
-                        _gl.ActiveTexture(TextureUnit.Texture0 + unit);
-                        _gl.BindTexture(TextureTarget.Texture2D, texture != 0 ? texture : _whiteTex);
-                        if (hasUniform >= 0) _gl.Uniform1(hasUniform, texture != 0 ? 1 : 0);
-                        bound = texture;
-                    }
                 }
 
                 // Pass 1: opaque + cutout (AlphaMode 0/1) with depth writes on.
@@ -2787,10 +2825,21 @@ void main(){
         // This block sets up everything it needs and restores FrontFace; it does not restore the mesh
         // state, and nothing after it may assume it did. Idempotent: whichever call site comes first does
         // the work, and the trailing call covers a viewport with no mesh at all.
-        void DrawPropMeshes()
+        void DrawPropMeshes(bool transparent)
         {
-            if (propsDrawn || _propMeshInstances.Count == 0 || wireframe) return;
-            propsDrawn = true;
+            if ((transparent ? transparentPropsDrawn : propsDrawn) || _propMeshInstances.Count == 0 || wireframe) return;
+            if (transparent) transparentPropsDrawn = true; else propsDrawn = true;
+            // M678: a prop submesh is opaque or cut out unless its material blends, so the transparent pass
+            // is usually empty and has to cost nothing - and an empty pass must not touch GL state either.
+            bool any = false;
+            foreach (var (geo, _) in _propMeshInstances)
+            {
+                foreach (var sub in _propGeoms[geo].Submeshes)
+                    if ((sub.AlphaMode >= 2) == transparent) { any = true; break; }
+                if (any) break;
+            }
+            if (!any) return;
+
             _gl.UseProgram(_meshProgram);
             _gl.Uniform3(_mLight, -0.4f, -0.85f, -0.45f);
             _gl.Uniform3(_mBaseColor, 0.62f, 0.66f, 0.74f);
@@ -2798,40 +2847,34 @@ void main(){
             _gl.Uniform1(_mHasVertexColor, 0);
             _gl.Uniform1(_mVertexBakedLight, 0);   // M89: props never use the NVR baked-light term
             _gl.Uniform1(_mVertexLightmap, 0);     // M142.4: props are not NVR statics
-            _gl.Uniform1(_mFogEnabled, _fogEnabled ? 1 : 0);   // M145: props sit in the same fog as the map
             _gl.Uniform4(_mFogColor, _fogColor.X, _fogColor.Y, _fogColor.Z, _fogColor.W);
             _gl.Uniform2(_mFogStartEnd, _fogStartEnd.X, _fogStartEnd.Y);
             _gl.Uniform1(_mNvrFourBlend, 0);
-            _gl.Uniform1(_mCompositeGround, 0);    // M142: props are not composite ground
             _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);
             _gl.UniformMatrix4(_mView, 1, false, in view.M11);
             _gl.Uniform1(_mTex, 0); _gl.Uniform1(_mMask, 1); _gl.Uniform1(_mGradient, 2);
             _gl.Uniform1(_mEmissive, 3); _gl.Uniform1(_mMatCap, 4); _gl.Uniform1(_mMatCapMask, 5); _gl.Uniform1(_mLightmap, 6);
-            _gl.Uniform1(_mHasMask, 0); _gl.Uniform1(_mHasGradient, 0); _gl.Uniform1(_mHasEmissive, 0);
-            _gl.Uniform1(_mHasMatCap, 0); _gl.Uniform1(_mHasMatCapMask, 0); _gl.Uniform1(_mHasLightmap, 0);
-            _gl.Uniform1(_mNoBakedLighting, 0);   // M375: props are lit; never leak a stale opt-out
-            // M458: props are not Mantis - never leak a stale PBR flag out of the map pass either. The
-            // roughness/metal constants are pushed with the per-frame light block, which this path shares.
-            _gl.Uniform1(_mPbrLighting, 0);
+            // M458: the roughness/metal constants are pushed with the per-frame light block, which this
+            // path shares; the PBR gate itself is per submesh below.
             _gl.Uniform1(_mPbrRoughness, DefaultPbrRoughness);
             _gl.Uniform1(_mPbrMetal, DefaultPbrMetal);
-            _gl.Uniform1(_mEmissiveIntensity, 0f);   // M376: and never leak a stale glow
-            _gl.Uniform1(_mHasGrassTint, 0);   // M78: props never grass-tint
-            _gl.Uniform1(_mUsesRim, 0); _gl.Uniform1(_mUsesSpec, 0);
-            _gl.Uniform1(_mUsesBakedPaint, 0);
-            _gl.Uniform1(_mAlphaMode, 1); _gl.Uniform1(_mAlphaCutoff, 0.35f);   // cutout so fur/wing alpha reads
-            _gl.Uniform4(_mUvScaleOffset, 1f, 1f, 0f, 0f); _gl.Uniform1(_mUvRot, 0f);
-            _gl.Uniform2(_mClampUv, 0f, 0f); _gl.Uniform4(_mTint, 1f, 1f, 1f, 1f); _gl.Uniform1(_mTintTextured, 0); _gl.Uniform1(_mMirrored, 0);
-            _gl.Uniform1(_mIsFlowmap, 0);   // M44: props never flow
-            for (int u = 1; u <= 6; u++) { _gl.ActiveTexture(TextureUnit.Texture0 + u); _gl.BindTexture(TextureTarget.Texture2D, _whiteTex); }
+            // M678: everything per material - cull and two-sidedness, alpha mode, tint, rim, the seven
+            // texture layers, the fog opt-out, emissive, flowmap and terrain gates - is ApplySubmesh's, the
+            // very state THE mesh's passes set. The diffuse-only block this replaced pinned all of it to one
+            // fixed value per frame, which is why a dragon's wings or a camp's glow never read here.
 
             _gl.Enable(EnableCap.DepthTest);
             bool propCull = cullBackfaces;
-            if (propCull) { _gl.Enable(EnableCap.CullFace); _gl.CullFace(TriangleFace.Back); } else _gl.Disable(EnableCap.CullFace);
-            _gl.Uniform1(_mTwoSided, propCull ? 0 : 1);
+            bool blendWas = _gl.IsEnabled(EnableCap.Blend);
+            if (transparent) _gl.Enable(EnableCap.Blend);
 
             foreach (var (geo, model) in _propMeshInstances)
             {
+                var g = _propGeoms[geo];
+                bool wanted = false;
+                foreach (var sub in g.Submeshes) if ((sub.AlphaMode >= 2) == transparent) { wanted = true; break; }
+                if (!wanted) continue;
+
                 var mvp = model * m;
                 _gl.UniformMatrix4(_mMvp, 1, false, in mvp.M11);
                 _gl.UniformMatrix4(_mModel, 1, false, in model.M11);
@@ -2839,19 +2882,31 @@ void main(){
                 // so pick the front-face winding per instance to keep culling + two-sided lighting correct.
                 _gl.FrontFace(model.GetDeterminant() < 0 ? FrontFaceDirection.Ccw : FrontFaceDirection.CW);
 
-                var g = _propGeoms[geo];
                 if (!ViewFrustum.FromOpenGl(model * m).Intersects(g.BoundsMin, g.BoundsMax))
                 { CulledProps++; continue; }
                 _gl.BindVertexArray(g.Vao);
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, g.Ebo);
-                foreach (var (start, count, tex) in g.Submeshes)
+                var layers = new LayerBindings();
+                for (int i = 0; i < g.Submeshes.Length; i++)
                 {
-                    _gl.ActiveTexture(TextureUnit.Texture0);
-                    _gl.BindTexture(TextureTarget.Texture2D, tex != 0 ? tex : _whiteTex);
-                    _gl.Uniform1(_mHasTex, tex != 0 ? 1 : 0);
-                    _gl.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)(start * sizeof(uint)));
+                    ref readonly var sub = ref g.Submeshes[i];
+                    if ((sub.AlphaMode >= 2) != transparent) continue;
+                    if (transparent)
+                    {
+                        // M664's rule for a champion holds for a prop, whose materials come from the same
+                        // resolver: a blended surface is solid geometry and keeps its depth write.
+                        _gl.DepthMask(sub.BlendWritesDepth);
+                        _gl.BlendFuncSeparate(
+                            GlBlendFactor(MaterialBlendFactors.Source(sub.SrcBlendFactor)),
+                            GlBlendFactor(MaterialBlendFactors.Destination(sub.DstBlendFactor)),
+                            BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+                    }
+                    ApplySubmesh(in sub, propCull, ref layers);
+                    _gl.DrawElements(PrimitiveType.Triangles, (uint)sub.Count, DrawElementsType.UnsignedInt, (void*)(sub.Start * sizeof(uint)));
                 }
             }
+            _gl.DepthMask(true);
+            if (transparent && !blendWas) _gl.Disable(EnableCap.Blend);
             _gl.Disable(EnableCap.CullFace);
             // M664: a mirrored placement above left FrontFace on Ccw. That used to be harmless because
             // nothing else drew afterwards; the transparent pass runs after this now and reads it.
@@ -2859,7 +2914,10 @@ void main(){
             _gl.BindVertexArray(0);
         }
 
-        DrawPropMeshes();   // M664: for a viewport with no mesh at all - the call above never ran
+        DrawPropMeshes(false);   // M664: for a viewport with no mesh at all - the call above never ran
+        // M678: a prop's BLENDED submeshes, after the mesh's own transparent pass - the same order the
+        // mesh gives its solid and blended surfaces, and never between the mesh's passes (M668).
+        DrawPropMeshes(true);
 
         if ((showBounds && _boundsVerts > 0) || (showBones && _boneVerts > 0))
         {

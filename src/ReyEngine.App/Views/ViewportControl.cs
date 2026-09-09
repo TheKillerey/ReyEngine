@@ -1563,16 +1563,18 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             if (!geoByMesh.TryGetValue(inst.Mesh, out var handle))
             {
-                var subs = inst.Mesh.Submeshes.Select(s =>
+                uint Upload(TextureImage? img)
                 {
-                    uint tex = 0;
-                    if (s.Texture is { } img)
-                    {
-                        if (!texByImage.TryGetValue(img, out tex))
-                            tex = texByImage[img] = _meshRenderer.UploadPropTexture(img.Rgba, img.Width, img.Height);
-                    }
-                    return (s.Start, s.Count, tex);
-                }).ToList();
+                    if (img is null) return 0;
+                    if (!texByImage.TryGetValue(img, out uint tex))
+                        tex = texByImage[img] = _meshRenderer.UploadPropTexture(img.Rgba, img.Width, img.Height);
+                    return tex;
+                }
+                // M678: every layer the character window would bind for this submesh, and its material's
+                // render state - the diffuse alone was the whole of it before.
+                var subs = inst.Mesh.Submeshes.Select(s => new ViewportMeshRenderer.PropSubmeshSpec(
+                    s.Start, s.Count, Upload(s.Texture), Upload(s.Mask), Upload(s.Gradient), Upload(s.Emissive),
+                    Upload(s.MatCap), Upload(s.MatCapMask), s.Material)).ToList();
                 handle = _meshRenderer.RegisterPropGeometry(inst.Mesh.Positions, inst.Mesh.Normals, inst.Mesh.Uvs, inst.Mesh.Indices, subs);
                 geoByMesh[inst.Mesh] = handle;
                 if (inst.Mesh.CanAnimate) _animatedPropGeoms.Add((handle, inst.Mesh));   // M54 idle playback

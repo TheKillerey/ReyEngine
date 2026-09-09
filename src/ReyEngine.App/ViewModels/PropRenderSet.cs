@@ -6,7 +6,18 @@ using ReyEngine.Core.Decoding;
 namespace ReyEngine.App.ViewModels;
 
 /// <summary>One submesh of a resolved prop mesh (M41): index range + its decoded diffuse (null = untextured).</summary>
-public sealed record PropSubmesh(int Start, int Count, TextureImage? Texture);
+public sealed record PropSubmesh(int Start, int Count, TextureImage? Texture)
+{
+    /// <summary>M678: the other layers the character window binds - mask, gradient, emissive, matcap and
+    /// its mask - and the material's render state, resolved by the same ChampionMaterialResolver and
+    /// MaterialProfile the window uses. Null layers are unbound; a null material is the pre-M678 draw.</summary>
+    public TextureImage? Mask { get; init; }
+    public TextureImage? Gradient { get; init; }
+    public TextureImage? Emissive { get; init; }
+    public TextureImage? MatCap { get; init; }
+    public TextureImage? MatCapMask { get; init; }
+    public ReyEngine.Rendering.ViewportMeshRenderer.SubmeshMaterial? Material { get; init; }
+}
 
 /// <summary>
 /// A decoded prop mesh (M41), shared by reference across every placement of the same skin so the viewport

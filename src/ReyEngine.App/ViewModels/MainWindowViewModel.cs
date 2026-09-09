@@ -1096,8 +1096,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (texCache.TryGetValue(path, out var img)) return img;
                 return texCache[path] = LoadTextureByPath(path);
             }
+            // M678: the same layers and render state the character window resolves for this skin (M664),
+            // so a prop in the GL viewport blends, cuts out, tints and glows as the window shows it.
             var subs = mesh.SubMeshes
-                .Select(s => new PropSubmesh(s.StartIndex, s.IndexCount, Tex(mat.For(s.Material) ?? meshRef.DefaultTexture)))
+                .Select(s => new PropSubmesh(s.StartIndex, s.IndexCount, Tex(mat.For(s.Material) ?? meshRef.DefaultTexture))
+                {
+                    Mask = Tex(mat.ForMask(s.Material)),
+                    Gradient = Tex(mat.ForGradient(s.Material)),
+                    Emissive = Tex(mat.ForEmissive(s.Material)),
+                    MatCap = Tex(mat.ForMatCap(s.Material)),
+                    MatCapMask = Tex(mat.ForMatCapMask(s.Material)),
+                    Material = mat.HasAny ? ToSubmeshMaterial(mat.Profile(s.Material)) with { BlendWritesDepth = true } : null,
+                })
                 .ToList();
 
             // M54: idle-animation payload — the character's skeleton + a best-match idle .anm, so the

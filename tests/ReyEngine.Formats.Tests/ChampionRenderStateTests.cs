@@ -288,14 +288,18 @@ public sealed class ChampionRenderStateTests
         if (meshBlock < 0) meshBlock = src.IndexOf("        if (_hasMesh)\r\n        {\r\n            _gl.Enable(EnableCap.DepthTest);", StringComparison.Ordinal);
         int pass1 = src.IndexOf("// Pass 1: opaque + cutout", StringComparison.Ordinal);
         int pass2 = src.IndexOf("// Pass 2: transparent modes", StringComparison.Ordinal);
-        int firstCall = src.IndexOf("DrawPropMeshes();", StringComparison.Ordinal);
+        int firstCall = src.IndexOf("DrawPropMeshes(false);", StringComparison.Ordinal);
 
         Assert.True(meshBlock > 0 && pass1 > meshBlock && pass2 > pass1, "the mesh block and its passes are no longer where this test expects");
         Assert.True(firstCall > 0 && firstCall < meshBlock, "the first prop draw must come before the mesh block");
 
         // and NO call may sit between the two passes - that is the interleave that crashed
-        int between = src.IndexOf("DrawPropMeshes();", pass1, pass2 - pass1, StringComparison.Ordinal);
+        int between = src.IndexOf("DrawPropMeshes(", pass1, pass2 - pass1, StringComparison.Ordinal);
         Assert.True(between < 0, "a prop draw between the opaque and transparent passes is the M664 crash");
+
+        // M678: the blended prop surfaces draw AFTER the mesh's transparent pass, never inside it
+        int transparentProps = src.IndexOf("DrawPropMeshes(true);", StringComparison.Ordinal);
+        Assert.True(transparentProps > pass2, "the transparent prop pass must follow the mesh's own");
 
         // A mirrored prop instance flips FrontFace; the mesh block that follows relies on CW.
         Assert.Contains("_gl.FrontFace(FrontFaceDirection.CW);", src);
