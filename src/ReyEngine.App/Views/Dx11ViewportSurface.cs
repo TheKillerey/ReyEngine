@@ -335,7 +335,7 @@ public sealed class Dx11ViewportSurface : IDisposable
         {
             if (ReferenceEquals(_propMeshes, value)) return;   // rebuilt only when the set really changes
             _propMeshes = value;
-            Props?.Load(value, PreparePropScene);
+            Props?.Load(value, PreparePropScene, PropLightingAt);
         }
     }
     private PropRenderSet? _propMeshes;
@@ -345,6 +345,11 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// model, which owns the asset readers; null keeps every prop on the diffuse-only draw. Set BEFORE
     /// <see cref="PropMeshes"/>, whose setter loads.</summary>
     public Func<PropMesh, PreparedCharacterScene?>? PreparePropScene { get; set; }
+
+    /// <summary>M680: the map's lightgrid at a world position, as the props are lit by it. Supplied by the
+    /// window from the main view model, which owns the map; null keeps every prop on the neutral cube.
+    /// Set BEFORE <see cref="PropMeshes"/>, like <see cref="PreparePropScene"/>.</summary>
+    public Func<System.Numerics.Vector3, PropLighting?>? PropLightingAt { get; set; }
 
     /// <summary>M295: play prop idle animations. Off leaves them in whatever pose they last held, which
     /// is bind pose until something ticks them.</summary>
@@ -386,7 +391,7 @@ public sealed class Dx11ViewportSurface : IDisposable
         // M295: a scene rebuild calls ClearMaterials, which takes the prop materials with it AND releases
         // the mesh geometry their handles point at. Reloading is not an optimisation here - without it the
         // handles would dangle into another scene's geometry list.
-        Props?.Load(_propMeshes, PreparePropScene);
+        Props?.Load(_propMeshes, PreparePropScene, PropLightingAt);
     }
 
     /// <summary>Last frame's particle counts, for the viewport's detail tooltip. Empty when nothing is
@@ -654,7 +659,7 @@ public sealed class Dx11ViewportSurface : IDisposable
         if (Props is null)
         {
             Props = new D3D11MapProps(_renderer, ShaderCache);
-            if (_propMeshes is not null) Props.Load(_propMeshes, PreparePropScene);
+            if (_propMeshes is not null) Props.Load(_propMeshes, PreparePropScene, PropLightingAt);
         }
     }
 

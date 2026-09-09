@@ -421,6 +421,11 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// see ResolveCb.</summary>
     public IReadOnlyList<Matrix4x4>? CharacterInstances { get; set; }
 
+    /// <summary>M680: per placement, the LIGHTGRID_COLORS a placed prop is lit by - the map's lightgrid
+    /// sampled where it stands - aligned with <see cref="CharacterInstances"/>. A null entry, or no list,
+    /// leaves that placement on the neutral stand-in the character window uses.</summary>
+    public IReadOnlyList<float[]?>? CharacterInstanceAmbient { get; set; }
+
     /// <summary>The key <see cref="Textures"/> holds a distortion emitter's normal map under. Reserved
     /// rather than a real sampler name because no shader in Riot's cache declares this stage - it belongs
     /// to our own pipeline. Routed through the ordinary texture pool so its lifetime is pooled like every
@@ -3444,9 +3449,16 @@ float4 psmain(VOut i) : SV_Target
         _ctx.IASetVertexBuffers(0, 1, ref geom.Vb, in stride, in offset);
         _ctx.IASetIndexBuffer(geom.Ib, Format.FormatR32Uint, 0);
 
-        foreach (var placement in placements)
+        for (int i = 0; i < placements.Count; i++)
         {
+            var placement = placements[i];
             _instanceWorld = placement;
+            // M680: the ambient cube of THIS placement. Params win over the stand-in in the fill, and the
+            // material is its own (ResolveCb), so the per-draw block re-uploads with it every placement.
+            if (mat.CharacterInstanceAmbient is { } ambient && i < ambient.Count && ambient[i] is { } cube)
+                mat.Params["LIGHTGRID_COLORS"] = cube;
+            else
+                mat.Params.Remove("LIGHTGRID_COLORS");
             foreach (var cb in mat.VsRefl.ConstantBuffers)
             {
                 if (cb.BindPoint < 0) continue;

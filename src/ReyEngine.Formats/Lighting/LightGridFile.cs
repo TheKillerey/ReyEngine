@@ -72,6 +72,47 @@ public sealed class LightGridFile
         return g;
     }
 
+    /// <summary>M680: the six ambient-cube colours at a world position, bilinear over the four nearest
+    /// cells. The grid is anchored at the world origin and spans WorldSizeX/Z - the format has no origin
+    /// field, and the baker lays cells out exactly so (cell (cx, cz) is centred at
+    /// ((cx + 0.5) / Width * WorldSizeX, (cz + 0.5) / Height * WorldSizeZ)). Beyond the edge the edge
+    /// cell holds. In file order: +x, -x, +y, -y, +z, -z.</summary>
+    public Vector3[] SampleAmbient(Vector3 world)
+    {
+        var result = new Vector3[Directions];
+        if (Width <= 0 || Height <= 0 || Samples.Length < Width * Height * Directions) return result;
+        float fx = Math.Clamp(world.X / MathF.Max(WorldSizeX, 1e-3f) * Width - 0.5f, 0f, Width - 1f);
+        float fz = Math.Clamp(world.Z / MathF.Max(WorldSizeZ, 1e-3f) * Height - 0.5f, 0f, Height - 1f);
+        int x0 = (int)MathF.Floor(fx), z0 = (int)MathF.Floor(fz);
+        int x1 = Math.Min(x0 + 1, Width - 1), z1 = Math.Min(z0 + 1, Height - 1);
+        float tx = fx - x0, tz = fz - z0;
+        for (int d = 0; d < Directions; d++)
+        {
+            Vector3 c00 = Samples[(z0 * Width + x0) * Directions + d], c10 = Samples[(z0 * Width + x1) * Directions + d];
+            Vector3 c01 = Samples[(z1 * Width + x0) * Directions + d], c11 = Samples[(z1 * Width + x1) * Directions + d];
+            result[d] = Vector3.Lerp(Vector3.Lerp(c00, c10, tx), Vector3.Lerp(c01, c11, tx), tz);
+        }
+        return result;
+    }
+
+    /// <summary>M680: a cube as the character vertex shaders take it - LIGHTGRID_COLORS, six float4 in
+    /// file order, which is the order the shader indexes by the sign of the normal (x: 0/1, y: 2/3,
+    /// z: 4/5; measured on skinnedmesh/onsen vs blob 3).</summary>
+    public static float[] ToLightGridColors(IReadOnlyList<Vector3> cube)
+    {
+        var f = new float[Directions * 4];
+        for (int d = 0; d < Directions && d < cube.Count; d++)
+        {
+            f[d * 4] = cube[d].X; f[d * 4 + 1] = cube[d].Y; f[d * 4 + 2] = cube[d].Z; f[d * 4 + 3] = 1f;
+        }
+        return f;
+    }
+
+    /// <summary>M680: LIGHTGRID_SCALE as the engine builds it (M443, 0x14132bd08): x = header[24] * 4,
+    /// the cube's own scale; y = lightGridCharacterFullBrightIntensity, which the shader multiplies
+    /// self-illumination by.</summary>
+    public float[] LightGridScale => new[] { FullBrightScale * 4f, CharacterFullBrightIntensity, 0f, 0f };
+
     public static bool LooksLikeLightGrid(byte[] data)
     {
         if (data.Length < HeaderSize + CellSize) return false;

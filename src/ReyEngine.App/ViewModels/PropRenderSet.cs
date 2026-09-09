@@ -73,5 +73,9 @@ public sealed record PropInstanceData(PropMesh Mesh, Matrix4x4 Transform)
         new(mesh, mesh.SkinScale is > 0f and not 1f ? Matrix4x4.CreateScale(mesh.SkinScale) * placement : placement);
 }
 
+/// <summary>M680: what the map lights a placement with - the lightgrid's ambient cube where it stands,
+/// as LIGHTGRID_COLORS (six float4, file order), and the grid's LIGHTGRID_SCALE.</summary>
+public sealed record PropLighting(float[] LightGridColors, float[] LightGridScale);
+
 /// <summary>The full set of placed prop meshes to render for the current map (M41).</summary>
 public sealed record PropRenderSet(IReadOnlyList<PropInstanceData> Instances);

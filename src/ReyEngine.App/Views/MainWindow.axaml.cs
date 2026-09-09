@@ -381,6 +381,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         // M295: props, from the same set the GL viewport binds to. The setter compares by reference, so
         // this is a no-op until the view-model actually republishes the prop set.
         _dx11.PreparePropScene ??= vm.PreparePropDx11Scene;   // M676: ahead of the set, whose setter loads
+        _dx11.PropLightingAt ??= vm.PropLightingAt;           // M680: likewise
         _dx11.PropMeshes = vm.CurrentPropMeshes;
         _dx11.PlayPropAnimations = vm.PlayPropAnimations;
 

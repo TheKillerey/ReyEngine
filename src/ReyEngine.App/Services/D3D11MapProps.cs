@@ -55,6 +55,9 @@ public sealed class D3D11MapProps
         /// <summary>M676: the Riot path's materials, which take the pose each frame.</summary>
         public readonly List<PreviewMaterial> Materials = new();
         public readonly List<Matrix4x4> Instances = new();
+        /// <summary>M680: per placement, the lightgrid's cube where it stands (null = the stand-in).</summary>
+        public readonly List<float[]?> Ambient = new();
+        public float[]? LightGridScale;
     }
     private readonly List<PropGeom> _geoms = new();
     private readonly HashSet<string> _textureKeys = new(StringComparer.Ordinal);
@@ -90,7 +93,8 @@ public sealed class D3D11MapProps
     /// <summary>Build materials for a prop set. Safe to call with null - that is "props are switched off",
     /// which just clears. <paramref name="prepare"/> is the host's way from a prop mesh to a D3D11 character
     /// scene (M676); null, or a null result, keeps that mesh on the diffuse-only draw.</summary>
-    public void Load(PropRenderSet? set, Func<PropMesh, PreparedCharacterScene?>? prepare = null)
+    public void Load(PropRenderSet? set, Func<PropMesh, PreparedCharacterScene?>? prepare = null,
+        Func<Vector3, PropLighting?>? lightingAt = null)
     {
         Clear();
         if (set is null || set.Instances.Count == 0) { Report = "no props"; return; }
@@ -110,8 +114,23 @@ public sealed class D3D11MapProps
             }
             if (g is null) continue;
             g.Instances.Add(inst.Transform);
+            // M680: the lightgrid where this placement stands. The list rides beside Instances, and the
+            // Riot path's materials read both per placement; the diffuse-only draw has no ambient cube.
+            PropLighting? lighting = null;
+            if (g.RiotGeometryId >= 0 && lightingAt is not null)
+                try { lighting = lightingAt(inst.Transform.Translation); } catch { lighting = null; }
+            g.Ambient.Add(lighting?.LightGridColors);
+            g.LightGridScale ??= lighting?.LightGridScale;
             PropInstanceCount++;
         }
+
+        // M680: the cube per placement and the grid's scale, onto every material of the Riot path
+        foreach (var g in _geoms)
+            foreach (var mat in g.Materials)
+            {
+                mat.CharacterInstanceAmbient = g.Ambient;
+                if (g.LightGridScale is { } scale) mat.Params["LIGHTGRID_SCALE"] = scale;
+            }
 
         // The diffuse-only draw for whatever the Riot path did not take. One material per (mesh, submesh):
         // a prop's submeshes carry their own diffuse, so they cannot share a material even though they
@@ -163,8 +182,10 @@ public sealed class D3D11MapProps
             }
         }
 
+        int lit = _geoms.Sum(g => g.Ambient.Count(a => a is not null));
         Report = $"{_geoms.Count} prop mesh(es), {PropInstanceCount} placement(s)"
                + (RiotShaderMeshes > 0 ? $", {RiotShaderMeshes} on Riot's shaders" : "")
+               + (lit > 0 ? $", {lit} lit by the lightgrid" : "")
                + (SkippedProps > 0 ? $", {SkippedProps} skipped" : "")
                + (sb.Length > 0 ? "\n" + sb : "");
     }

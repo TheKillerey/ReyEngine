@@ -179,7 +179,7 @@ public sealed class PropRiotShaderTests
         int prepare = window.IndexOf("_dx11.PreparePropScene ??= vm.PreparePropDx11Scene;", StringComparison.Ordinal);
         int props = window.IndexOf("_dx11.PropMeshes = vm.CurrentPropMeshes;", StringComparison.Ordinal);
         Assert.True(prepare > 0 && props > prepare, "PreparePropScene must be supplied before PropMeshes is set");
-        Assert.Contains("Props?.Load(value, PreparePropScene);", surface);
+        Assert.Contains("Props?.Load(value, PreparePropScene, PropLightingAt);", surface);   // M680: and the lightgrid
     }
 
     private static string? Source(params string[] parts)

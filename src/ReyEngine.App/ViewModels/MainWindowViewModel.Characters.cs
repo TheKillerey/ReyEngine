@@ -226,6 +226,50 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
         catch { return null; }
     }
 
+    /// <summary>M680: the map's lightgrid, read once per map on first ask. The bin names it
+    /// (MapBakeProperties.lightGridFileName, 180 of 180 shipped maps); a map without one, or with a file
+    /// that is not a modern grid, leaves the props on the neutral cube and says so once.</summary>
+    private (string? Map, Formats.Lighting.LightGridFile? Grid) _propLightGrid;
+
+    private Formats.Lighting.LightGridFile? PropLightGrid()
+    {
+        string? mapPath = _currentMapEntry?.Path;
+        if (mapPath is null) return null;
+        if (_propLightGrid.Map == mapPath) return _propLightGrid.Grid;
+
+        Formats.Lighting.LightGridFile? grid = null;
+        try
+        {
+            if (TryResolveMaterialsBin(mapPath, out var binEntry)
+                && Formats.MapGeo.MapBakeProperties.Read(ReadAsset(binEntry.PathHash)) is { } bake
+                && bake.File.Length > 0)
+            {
+                var bytes = ReadAssetByPath(bake.File);
+                if (bytes is not null && Formats.Lighting.LightGridFile.LooksLikeLightGrid(bytes))
+                {
+                    grid = Formats.Lighting.LightGridFile.Read(bytes);
+                    _log.Info("Props", $"Lightgrid {grid.Width}x{grid.Height} over {grid.WorldSizeX:0}x{grid.WorldSizeZ:0} "
+                                     + $"(cube scale {grid.FullBrightScale * 4f:0.##}, self-illum {grid.CharacterFullBrightIntensity:0.##}): "
+                                     + "placed mobs and props take their ambient cube from it.");
+                }
+                else _log.Info("Props", $"{bake.File}: not readable as a lightgrid - props keep the neutral ambient cube.");
+            }
+            else _log.Info("Props", "This map declares no lightgrid - props keep the neutral ambient cube.");
+        }
+        catch (Exception ex) { _log.Warn("Props", "Lightgrid not read: " + ex.Message); }
+        _propLightGrid = (mapPath, grid);
+        return grid;
+    }
+
+    /// <summary>M680: what the map lights a placement with - see <see cref="PropLighting"/>. Null when the
+    /// map has no lightgrid.</summary>
+    internal PropLighting? PropLightingAt(System.Numerics.Vector3 world)
+    {
+        var grid = PropLightGrid();
+        if (grid is null) return null;
+        return new PropLighting(Formats.Lighting.LightGridFile.ToLightGridColors(grid.SampleAmbient(world)), grid.LightGridScale);
+    }
+
     /// <summary>Make a champion WAD readable without disturbing whatever is already open. True when the
     /// assets can now be read.</summary>
     private bool MakeCharacterWadReadable(string wadPath)
