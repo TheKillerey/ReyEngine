@@ -146,7 +146,10 @@ public sealed class Dx11ReanchorTests
 
         Assert.Contains("item.AttachBone is { Length: > 0 } bone", text);
         Assert.Contains("item.TravelTo is not { } destination", text);
-        Assert.Contains("sim.SetBeamTarget(_beamTarget)", text);
+        // M674 made the beam target per item - a Blitzcrank return cable ends at the cast origin, not at
+        // the dummy - with the host target as the fallback. The symptom this guards is unchanged: it is
+        // still supplied every frame.
+        Assert.Contains("sim.SetBeamTarget(item.BeamTarget ?? _beamTarget)", text);
     }
 
     [Fact]
