@@ -409,6 +409,18 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// with <see cref="MeshGeometryId"/>.</summary>
     public int? RiotMeshGeometryId { get; set; }
 
+    /// <summary>M676: a skinning palette of this material's own, for a skinned mesh that is not THE mesh -
+    /// a placed prop drawn through Riot's character shaders. Null reads the frame's
+    /// <see cref="PreviewSettings.BonePalette"/> as before, which is what the character window sets.</summary>
+    public Matrix4x4[]? BonePalette { get; set; }
+
+    /// <summary>M676: draw this material once per world transform - the placements of a prop. Needs
+    /// <see cref="RiotMeshGeometryId"/> to point at a SKINNED geometry (the PreviewMesh overload of
+    /// <see cref="ShaderPreviewRenderer.CreateRiotMeshGeometry(PreviewMesh)"/>). The bones and mWorld
+    /// constants are refilled per placement, and a material with this set never shares a constant buffer -
+    /// see ResolveCb.</summary>
+    public IReadOnlyList<Matrix4x4>? CharacterInstances { get; set; }
+
     /// <summary>The key <see cref="Textures"/> holds a distortion emitter's normal map under. Reserved
     /// rather than a real sampler name because no shader in Riot's cache declares this stage - it belongs
     /// to our own pipeline. Routed through the ordinary texture pool so its lifetime is pooled like every
@@ -3273,6 +3285,11 @@ float4 psmain(VOut i) : SV_Target
     }
     private readonly List<RiotMeshGeom?> _riotMeshGeoms = new();
 
+    /// <summary>M676: the placement being drawn while a <see cref="PreviewMaterial.CharacterInstances"/>
+    /// material is mid-loop; the bones and mWorld fills read it ahead of the frame's World. Null outside
+    /// that loop, which is every other draw.</summary>
+    private Matrix4x4? _instanceWorld;
+
     /// <summary>
     /// Upload a mesh primitive in the layout Riot's <c>particlesystem/mesh_vs</c> declares - POSITION0,
     /// NORMAL0, TEXCOORD0 - which is <see cref="PreviewVertex"/>, the same vertex the material path builds
@@ -3306,7 +3323,22 @@ float4 psmain(VOut i) : SV_Target
             };
         }
 
-        var geom = new RiotMeshGeom { VertexCount = vertexCount, IndexCount = idx.Length };
+        return RegisterRiotGeometry(verts, idx);
+    }
+
+    /// <summary>M676: a SKINNED mesh in the same store - the vertices exactly as <see cref="SetMesh"/> takes
+    /// them, blend indices and weights included - for a placed prop drawn through Riot's character shaders
+    /// with <see cref="PreviewMaterial.CharacterInstances"/>. Immutable: the pose is the bone palette's
+    /// job, not a per-frame vertex upload's, which is also why one geometry serves every placement.</summary>
+    public int CreateRiotMeshGeometry(PreviewMesh mesh)
+    {
+        if (mesh.Vertices.Length == 0 || mesh.Indices.Length < 3) return -1;
+        return RegisterRiotGeometry(mesh.Vertices, mesh.Indices);
+    }
+
+    private int RegisterRiotGeometry(PreviewVertex[] verts, uint[] idx)
+    {
+        var geom = new RiotMeshGeom { VertexCount = verts.Length, IndexCount = idx.Length };
         var vdesc = new BufferDesc
         {
             ByteWidth = (uint)(verts.Length * PreviewVertex.SizeInBytes),
@@ -3390,6 +3422,53 @@ float4 psmain(VOut i) : SV_Target
     /// a non-zero birth rotation - (0,180,0), (1,90,90), (-90,0,0), (90,0,0) - and both renderers used to
     /// draw every one of them unrotated.</para>
     /// </summary>
+    /// <summary>
+    /// M676: a placed prop, once per placement. The material's pipeline, textures and samplers are bound by
+    /// the loop; this binds the prop's own skinned geometry and then, per placement, refills EVERY constant
+    /// buffer of the material with that placement as the world - the bones (skin * placement) and mWorld
+    /// read <see cref="_instanceWorld"/> - and draws the material's index range.
+    ///
+    /// <para>Every buffer, not just the bones: a skinned shader may take mWorld, its inverse or the mesh
+    /// centre from a per-draw block, and ResolveCb gives a CharacterInstances material buffers of its own,
+    /// so nothing here disturbs another material's. The debug constants (M661) sit at b0 and are re-bound
+    /// after the material's own, per placement, for the same reason the loop binds them after.</para>
+    /// </summary>
+    private void DrawCharacterInstances(PreviewMaterial mat, int geometryId, IReadOnlyList<Matrix4x4> placements,
+        PreviewSettings s, Matrix4x4 view, Matrix4x4 proj, List<string>? unbound, bool debugBound, Matrix4x4 frameWorld)
+    {
+        if (geometryId < 0 || geometryId >= _riotMeshGeoms.Count || _riotMeshGeoms[geometryId] is not { } geom) return;
+        uint count = mat.IndexCount < 0 ? (uint)geom.IndexCount : (uint)mat.IndexCount;
+        if (count == 0 || placements.Count == 0) return;
+
+        uint stride = PreviewVertex.SizeInBytes, offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref geom.Vb, in stride, in offset);
+        _ctx.IASetIndexBuffer(geom.Ib, Format.FormatR32Uint, 0);
+
+        foreach (var placement in placements)
+        {
+            _instanceWorld = placement;
+            foreach (var cb in mat.VsRefl.ConstantBuffers)
+            {
+                if (cb.BindPoint < 0) continue;
+                var buf = ResolveCb(mat, cb, mat.VsCbs, s, placement, view, proj, unbound);
+                if (buf.Handle is null) continue;
+                _ctx.VSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
+            }
+            foreach (var cb in mat.PsRefl.ConstantBuffers)
+            {
+                if (cb.BindPoint < 0) continue;
+                var buf = ResolveCb(mat, cb, mat.PsCbs, s, placement, view, proj, unbound);
+                if (buf.Handle is null) continue;
+                _ctx.PSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
+            }
+            if (debugBound) BindDebugPass(mat, s, frameWorld);
+            _ctx.DrawIndexed(count, (uint)Math.Max(0, mat.StartIndex), 0);
+            DrawCalls++;
+            GeometryDraws++;
+        }
+        _instanceWorld = null;
+    }
+
     private void DrawRiotMeshInstances(PreviewMaterial mat, int geometryId, PreviewSettings s,
         Matrix4x4 world, Matrix4x4 view, Matrix4x4 proj, List<string>? unbound)
     {
@@ -4175,7 +4254,7 @@ float4 psmain(VOut i) : SV_Target
         {
             int rows = Math.Clamp(s.BoneMatrixRows, 3, 4);
             int stride = rows * 16;
-            var palette = s.BonePalette;
+            var palette = mat?.BonePalette ?? s.BonePalette;   // M676: a prop's own palette, else the frame's
 
             // M615: the whole reason this reduces to the M216 constant is what makes it safe. With no
             // animation every skinning matrix is identity, so skin * view IS view, and an animated palette
@@ -4185,9 +4264,11 @@ float4 psmain(VOut i) : SV_Target
             {
                 // M620: the model transform belongs here, ahead of the view - it is the only matrix a
                 // skinned character shader multiplies by. Identity World leaves this exactly as it was.
+                // M676: a CharacterInstances material is mid-loop over its placements, and the placement
+                // is the model transform - not the frame's World, which is the character window's one model.
                 BonePose.View or BonePose.ViewTransposed =>
-                    s.World.IsIdentity ? view : s.World * view,
-                _ => s.World,
+                    (_instanceWorld ?? s.World).IsIdentity ? view : (_instanceWorld ?? s.World) * view,
+                _ => _instanceWorld ?? s.World,
             };
             bool transpose = s.BonePose is BonePose.ViewTransposed or BonePose.WorldTransposed;
 
@@ -4253,11 +4334,11 @@ float4 psmain(VOut i) : SV_Target
             {
                 data = v.Name.ToUpperInvariant() switch
                 {
-                    "WORLD_MATRIX" or "MWORLD" => Mat(world, s),
+                    "WORLD_MATRIX" or "MWORLD" => Mat(_instanceWorld ?? world, s),   // M676: per placement
                     "VIEW_PROJECTION_MATRIX" or "MVIEWPROJ" => Mat(vp, s),
                     "MVIEW" => Mat(view, s),
                     "MVIEWINV" => Mat(Invert(view), s),
-                    "MWORLDINV" => Mat(Invert(world), s),
+                    "MWORLDINV" => Mat(Invert(_instanceWorld ?? world), s),
                     // the ambient cube a character is lit by when it is not standing on a baked lightgrid.
                     // Neutral rather than zero: zero renders the model black and looks like a load failure.
                     "LIGHTGRID_COLORS" => new[]
@@ -5159,6 +5240,16 @@ float4 psmain(VOut i) : SV_Target
             }
             BindResources(mat, mat.VsRefl, pixel: false);
 
+            // M676: a placed prop - Riot's skinned shaders over a geometry of its own, drawn once per
+            // placement with the bones posed for that placement. Ahead of the emitter branch below, which
+            // reads the same geometry id as a per-particle mesh.
+            if (mat.CharacterInstances is { } placements && mat.RiotMeshGeometryId is { } propGeometry)
+            {
+                DrawCharacterInstances(mat, propGeometry, placements, s, view, proj, unboundConstants, debugBound, world);
+                boundSource = -1;
+                continue;
+            }
+
             // M640: a Riot-shader mesh emitter takes everything bound above and draws its own geometry once
             // per particle; the shared vertex source is left unbound for whoever comes next.
             if (mat.RiotMeshGeometryId is { } riotGeometry)
@@ -5301,8 +5392,12 @@ float4 psmain(VOut i) : SV_Target
         Dictionary<int, ComPtr<ID3D11Buffer>> own, PreviewSettings s,
         Matrix4x4 world, Matrix4x4 view, Matrix4x4 proj, List<string>? unbound)
     {
-        bool materialSpecific = false;
-        if (mat.Params.Count > 0)
+        // M676: a material posed by a palette of its own, or drawn once per placement, cannot share a
+        // buffer another material filled from the frame's World and palette - its bones and mWorld are its
+        // own and are refilled per draw. The invariant above holds: the fill reads mat.BonePalette and
+        // _instanceWorld only on this path, and this path never shares.
+        bool materialSpecific = mat.CharacterInstances is not null || mat.BonePalette is not null;
+        if (!materialSpecific && mat.Params.Count > 0)
             foreach (var v in cb.Variables)
                 if (mat.Params.ContainsKey(v.Name)) { materialSpecific = true; break; }
 

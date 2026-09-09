@@ -1053,7 +1053,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (string.IsNullOrEmpty(p.Skin)) { failed++; continue; }
             if (!meshBySkin.TryGetValue(p.Skin, out var mesh))
                 meshBySkin[p.Skin] = mesh = TryBuildPropMesh(p.Skin, texByPath);
-            if (mesh is not null) instances.Add(new PropInstanceData(mesh, p.Transform));
+            if (mesh is not null) instances.Add(PropInstanceData.Place(mesh, p.Transform));   // M676: skinScale under it
             else failed++;
         }
         return (instances.Count > 0 ? new PropRenderSet(instances) : null, instances.Count, failed);
@@ -1072,6 +1072,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             var mesh = SkinnedMeshDecoder.Decode(sknBytes);
             var mat = ChampionMaterialResolver.Resolve(binBytes, ResolveBinName, ResolveWadPath);
+
+            // M676: the skin's own scale, which the game applies to the whole model and this preview never
+            // did - Baron and the camps drew at the mesh's authored size whatever the bin said.
+            float skinScale = 1f;
+            try
+            {
+                var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName, ResolveWadPath);
+                if (doc.SkinMesh?.SkinScale is { } authored && authored > 0f) skinScale = authored;
+            }
+            catch { /* an unparseable skin keeps scale 1 rather than losing the prop */ }
             TextureImage? Tex(string? path)
             {
                 if (string.IsNullOrEmpty(path)) return null;
@@ -1097,7 +1107,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 catch { skeleton = null; idle = null; }
             }
             return new PropMesh(skin, mesh.Positions, mesh.Normals, mesh.Uvs, mesh.Indices, subs)
-            { SknMesh = mesh, Skeleton = skeleton, IdleClip = idle };
+            {
+                SknMesh = mesh, Skeleton = skeleton, IdleClip = idle,
+                SknBytes = sknBytes, SkinBinBytes = binBytes, SkinScale = skinScale,   // M676
+            };
         }
         catch { return null; }
     }

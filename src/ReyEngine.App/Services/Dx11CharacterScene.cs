@@ -231,8 +231,23 @@ public static class Dx11CharacterScene
         renderer.GameVersion = gameVersion;
         renderer.ClearMaterials();
         renderer.SetMesh(scene.Mesh);
+        CommitSlices(renderer, scene);
 
-        int ok = 0;
+        // The RENDERER's count, not the local one. Returning what this method built rather than what the
+        // renderer holds is what let the bug hide: the window logged "after commit: 0 material(s)" and,
+        // three lines later, "5 material(s) drawing". A return value that cannot disagree with the
+        // renderer cannot tell that lie again.
+        return renderer.MaterialCount;
+    }
+
+    /// <summary>M676: build and register one material per slice over whatever geometry the caller arranged -
+    /// THE mesh for the character window (<see cref="Commit"/>), or a geometry of the prop's own for a map
+    /// placement, where <paramref name="configure"/> points each material at it. Returns the materials
+    /// registered, so a caller sharing the renderer with a map can take exactly its own back out.</summary>
+    public static List<PreviewMaterial> CommitSlices(ShaderPreviewRenderer renderer, PreparedCharacterScene scene,
+        Action<PreviewMaterial>? configure = null)
+    {
+        var made = new List<PreviewMaterial>();
         foreach (var slice in scene.Slices)
         {
             var mat = renderer.BuildMaterial(slice.Material, slice.Vs, slice.Ps, slice.Start, slice.Count,
@@ -288,15 +303,11 @@ public static class Dx11CharacterScene
             // only path into the renderer's draw list, and without this line every character material was
             // built, textured, parameterised - and then dropped on the floor. Nothing drew, and nothing
             // was disposed either, so each scene leaked its constant buffers as well.
+            configure?.Invoke(mat);
             renderer.AddMaterial(mat);
-            ok++;
+            made.Add(mat);
         }
-
-        // The RENDERER's count, not the local one. Returning what this method built rather than what the
-        // renderer holds is what let the bug hide: the window logged "after commit: 0 material(s)" and,
-        // three lines later, "5 material(s) drawing". A return value that cannot disagree with the
-        // renderer cannot tell that lie again.
-        return renderer.MaterialCount;
+        return made;
     }
 
     // ---- resolution ---------------------------------------------------------------------------------

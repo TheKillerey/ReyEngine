@@ -62,7 +62,10 @@ public sealed class CharacterDx11MovementTests
         if (!File.Exists(renderer)) return;
 
         string text = File.ReadAllText(renderer);
-        Assert.Contains("s.World.IsIdentity ? view : s.World * view", text);
+        // M676: the model transform is the placement while a placed prop is mid-loop over its placements
+        // (_instanceWorld), and the frame's World otherwise - either way it lands in the bone palette.
+        Assert.Contains("(_instanceWorld ?? s.World).IsIdentity ? view : (_instanceWorld ?? s.World) * view", text);
+        Assert.Contains("_ => _instanceWorld ?? s.World,", text);
     }
 
     [Fact]

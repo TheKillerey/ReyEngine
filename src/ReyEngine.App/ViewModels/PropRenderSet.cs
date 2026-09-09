@@ -20,6 +20,15 @@ public sealed record PropMesh(
     IReadOnlyList<PropSubmesh> Submeshes)
 {
     public ReyEngine.Formats.Meshes.MeshAsset? SknMesh { get; init; }
+    /// <summary>M676: the .skn and the skin .bin as read, for a renderer that runs Riot's own shaders over
+    /// the prop - the D3D11 path prepares a Dx11CharacterScene from exactly these, as the character window
+    /// does. Null for an added mesh, or a prop whose bin was not found; those keep the diffuse-only draw.</summary>
+    public byte[]? SknBytes { get; init; }
+    public byte[]? SkinBinBytes { get; init; }
+    /// <summary>M676: the skin's own <c>skinScale</c> (SkinMeshDataProperties), 1 when unauthored. The game
+    /// scales the whole model by it; every placement is composed with it in
+    /// <see cref="PropInstanceData.Place"/>.</summary>
+    public float SkinScale { get; init; } = 1f;
     public ReyEngine.Formats.Skeletons.SkeletonAsset? Skeleton { get; init; }
     public ReyEngine.Formats.Animation.AnimationClip? IdleClip { get; init; }
     public bool CanAnimate => SknMesh is { CanSkin: true } && Skeleton is not null && IdleClip is not null;
@@ -43,7 +52,15 @@ public sealed record PropMesh(
 }
 
 /// <summary>One placed prop: a shared mesh at a world transform.</summary>
-public sealed record PropInstanceData(PropMesh Mesh, Matrix4x4 Transform);
+public sealed record PropInstanceData(PropMesh Mesh, Matrix4x4 Transform)
+{
+    /// <summary>M676: a placement of <paramref name="mesh"/> at <paramref name="placement"/> with the skin's
+    /// own scale applied first - the game composes skinScale under the placement, so a 0.8 Baron is 0.8 of
+    /// the placement, not 0.8 of the world. Both renderers read the composed transform and know nothing
+    /// of the scale.</summary>
+    public static PropInstanceData Place(PropMesh mesh, Matrix4x4 placement) =>
+        new(mesh, mesh.SkinScale is > 0f and not 1f ? Matrix4x4.CreateScale(mesh.SkinScale) * placement : placement);
+}
 
 /// <summary>The full set of placed prop meshes to render for the current map (M41).</summary>
 public sealed record PropRenderSet(IReadOnlyList<PropInstanceData> Instances);

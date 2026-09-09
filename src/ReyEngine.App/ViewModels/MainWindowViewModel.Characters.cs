@@ -207,6 +207,25 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
         }
     }
 
+    /// <summary>M676: the D3D11 scene for a placed prop - Riot's shaders, the skin's textures, parameters and
+    /// drivers at rest - prepared exactly as <see cref="BuildCharacterDx11Scene"/> prepares a champion for
+    /// the character window. Null when the mesh carries no bytes (an added mesh) or the shader cache is not
+    /// readable; the D3D11 prop driver then keeps its diffuse-only draw for that mesh.</summary>
+    internal Services.PreparedCharacterScene? PreparePropDx11Scene(PropMesh mesh)
+    {
+        if (mesh.SknBytes is null) return null;
+        if (OpenDx11ShaderCache(out _) is not { } cache) return null;
+        try
+        {
+            return Services.Dx11CharacterScene.Prepare(mesh.SknBytes, mesh.SkinBinBytes, cache, ShaderPerms(),
+                readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
+                resolveBinName: ResolveBinName,
+                resolveWadPath: ResolveWadPath,
+                fallbackShader: Services.Dx11CharacterScene.DefaultCharacterShader);
+        }
+        catch { return null; }
+    }
+
     /// <summary>Make a champion WAD readable without disturbing whatever is already open. True when the
     /// assets can now be read.</summary>
     private bool MakeCharacterWadReadable(string wadPath)
