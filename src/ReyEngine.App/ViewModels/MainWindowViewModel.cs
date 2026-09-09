@@ -1015,7 +1015,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnCurrentModelProbesChanged(IReadOnlyList<MapCubemapProbe>? value)
     { MapContent.SetProbes(value ?? Array.Empty<MapCubemapProbe>()); UpdatePlaceableMarkers(); }
     partial void OnCurrentModelPropsChanged(IReadOnlyList<MapAnimatedProp>? value)
-    { MapContent.SetProps(value ?? Array.Empty<MapAnimatedProp>()); UpdatePlaceableMarkers(); _ = RefreshPropMeshesAsync(); }
+    {
+        _propClipTables.Clear();   // M679: another map, another set of skins and graphs
+        MapContent.SetProps(value ?? Array.Empty<MapAnimatedProp>()); UpdatePlaceableMarkers(); _ = RefreshPropMeshesAsync();
+    }
 
     // ---- M41: render the placed prop meshes (SRU_Baron, dragons, camps…) at their placements ----
     [ObservableProperty] private bool _showPropMeshes;
@@ -1135,63 +1138,67 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch { return null; }
     }
 
-    /// <summary>M677: the .anm files a prop's character ships, by file name - what the prop card offers.
-    /// The animation graph's clip names would be the game's vocabulary, but a placed mob's graph is not
-    /// always present in the map wad and the files always are; the idle picker (M54) reads the same set.</summary>
-    private IReadOnlyList<string> PropClipNames(string skin)
+    /// <summary>M679: the clips a placed skin plays, from its OWN animation graph (see
+    /// <see cref="Formats.Characters.PropAnimations"/>), cached per skin for the life of the loaded map.
+    /// The folder scan the prop card and the idle picker used until M679 is the fallback for a skin with
+    /// no graph. Read from the prop builder's background task as well as the UI thread.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<Formats.Skeletons.AnimClipInfo>> _propClipTables
+        = new(StringComparer.OrdinalIgnoreCase);
+
+    private IReadOnlyList<Formats.Skeletons.AnimClipInfo> PropClipTable(string skin)
     {
-        const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
-        var parts = skin.ToLowerInvariant().Split('/');
-        int ci = Array.IndexOf(parts, "characters");
-        if (ci < 0 || ci + 1 >= parts.Length) return Array.Empty<string>();
-        string marker = $"characters/{parts[ci + 1]}/";
-        return AssetEntries
-            .Where(e => e.IsResolved && e.Path.EndsWith(".anm", OIC) && e.Path.Contains(marker, OIC))
-            .Select(e => Path.GetFileNameWithoutExtension(e.Path))
+        if (_propClipTables.TryGetValue(skin, out var cached)) return cached;
+        IReadOnlyList<Formats.Skeletons.AnimClipInfo> clips = Array.Empty<Formats.Skeletons.AnimClipInfo>();
+        try
+        {
+            var binBytes = ReadAssetByPath("data/" + skin.ToLowerInvariant() + ".bin");
+            if (binBytes is not null)
+                clips = Formats.Characters.PropAnimations.ResolveClips(binBytes, ReadAssetByPath, ResolveBinName, ResolveWadPath);
+        }
+        catch { }
+        if (clips.Count == 0)
+        {
+            const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+            var parts = skin.ToLowerInvariant().Split('/');
+            int ci = Array.IndexOf(parts, "characters");
+            if (ci >= 0 && ci + 1 < parts.Length)
+            {
+                string marker = $"characters/{parts[ci + 1]}/";
+                clips = Formats.Characters.PropAnimations.FromFiles(AssetEntries
+                    .Where(e => e.IsResolved && e.Path.EndsWith(".anm", OIC) && e.Path.Contains(marker, OIC))
+                    .Select(e => e.Path));
+            }
+        }
+        _propClipTables[skin] = clips;
+        return clips;
+    }
+
+    /// <summary>M677/M679: what the prop card offers - the graph's clip names, idle-ranked first.</summary>
+    private IReadOnlyList<string> PropClipNames(string skin) =>
+        PropClipTable(skin).Select(Formats.Characters.PropAnimations.DisplayName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToList();
-    }
 
-    /// <summary>M677: one of the character's .anm files by name (as <see cref="PropClipNames"/> lists them).
-    /// Null when there is no such file or it will not decode.</summary>
-    private AnimationClip? TryFindClip(string skin, string name)
+    private AnimationClip? DecodePropClip(Formats.Skeletons.AnimClipInfo? clip)
     {
-        const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
-        var parts = skin.ToLowerInvariant().Split('/');
-        int ci = Array.IndexOf(parts, "characters");
-        if (ci < 0 || ci + 1 >= parts.Length) return null;
-        string marker = $"characters/{parts[ci + 1]}/";
-        var entry = AssetEntries.FirstOrDefault(e => e.IsResolved && e.Path.EndsWith(".anm", OIC)
-            && e.Path.Contains(marker, OIC)
-            && Path.GetFileNameWithoutExtension(e.Path).Equals(name, OIC));
-        if (entry is null) return null;
-        try { return AnimationDecoder.Decode(ReadAsset(entry.PathHash), entry.DisplayName); }
-        catch { return null; }
-    }
-
-    /// <summary>M54: pick the best idle .anm for a prop skin ("characters/<name>/..."): prefer idle1/
-    /// idle_base, then any idle. Null when the character ships no idle animation.</summary>
-    private AnimationClip? TryFindIdleClip(string skin)
-    {
-        const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
-        var parts = skin.ToLowerInvariant().Split('/');
-        int ci = Array.IndexOf(parts, "characters");
-        if (ci < 0 || ci + 1 >= parts.Length) return null;
-        string marker = $"characters/{parts[ci + 1]}/";
-        WadAssetEntry? best = null; int bestScore = 0;
-        foreach (var e in AssetEntries)
+        if (clip is null) return null;
+        try
         {
-            if (!e.IsResolved || !e.Path.EndsWith(".anm", OIC) || !e.Path.Contains(marker, OIC)) continue;
-            var n = Path.GetFileNameWithoutExtension(e.Path);
-            int score = n.Contains("idle1", OIC) || n.Contains("idle_base", OIC) || n.Contains("idle01", OIC) ? 3
-                : n.Contains("idle", OIC) ? 2 : 0;
-            if (score > bestScore) { bestScore = score; best = e; }
+            var bytes = ReadAssetByPath(clip.AnmPath);
+            return bytes is null ? null : AnimationDecoder.Decode(bytes, Formats.Characters.PropAnimations.DisplayName(clip));
         }
-        if (best is null) return null;
-        try { return AnimationDecoder.Decode(ReadAsset(best.PathHash), best.DisplayName); }
         catch { return null; }
     }
+
+    /// <summary>M677/M679: the named clip, as the card listed it.</summary>
+    private AnimationClip? TryFindClip(string skin, string name) =>
+        DecodePropClip(Formats.Characters.PropAnimations.Find(PropClipTable(skin), name));
+
+    /// <summary>M54/M679: the idle a placed skin plays - its graph's base idle, else a bored one, else any.
+    /// Null when the character ships no idle animation.</summary>
+    private AnimationClip? TryFindIdleClip(string skin) =>
+        DecodePropClip(Formats.Characters.PropAnimations.PickIdle(PropClipTable(skin)));
     partial void OnShowPlaceablesChanged(bool value) => UpdatePlaceableMarkers();
 
     // ---- M123: independent icon toggles - audio + mob icons no longer all-or-nothing ----
