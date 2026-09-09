@@ -140,6 +140,36 @@ public sealed class OnsenCharacterTests
     // ===================================================== the runtime drivers
 
     [Fact]
+    public void OmittedMaterialValuesAreZeroAndRemainSparseUntilEdited()
+    {
+        using var f = Locke();
+        if (f is null) return; // Same local-data requirement as the other real-skin tests here.
+        var doc = MaterialDocument.Parse(f.SkinBin, f.BinName, f.WadPath);
+        var body = doc.Materials.Single(m => m.Name.EndsWith("Locke_Body_inst", StringComparison.OrdinalIgnoreCase));
+        var distortion = Assert.Single(body.Parameters, p => p.Name == "DiffuseTexDistortIntensity");
+        Assert.True(distortion.TryGetVector4(out var zero));
+        Assert.Equal(Vector4.Zero, zero);
+        Assert.False(doc.IsDirty);
+        var original = doc.Serialize();
+
+        distortion.Apply("0.25, 0, 0, 0");
+        Assert.True(doc.IsDirty);
+        var edited = MaterialDocument.Parse(doc.Serialize(), f.BinName, f.WadPath);
+        var saved = edited.Materials.Single(m => m.Name == body.Name).Parameters.Single(p => p.Name == distortion.Name);
+        Assert.True(saved.TryGetVector4(out var value));
+        Assert.Equal(0.25f, value.X);
+        distortion.Revert();
+        Assert.False(doc.IsDirty);
+        Assert.Equal(original, doc.Serialize());
+
+        var scene = Dx11CharacterScene.Prepare(f.Skn, f.SkinBin, f.Cache, new ShaderPermutationIndex(Final),
+            f.Read, f.BinName, f.WadPath, fallbackShader: Dx11CharacterScene.DefaultCharacterShader);
+        Assert.NotNull(scene);
+        Assert.Equal(0f, scene.Slices.First(s => s.Submesh == "Body").Parameters
+            .Single(p => p.Name == "DiffuseTexDistortIntensity").Value[0]);
+    }
+
+    [Fact]
     public void LockesMaterialsDriveTheirDissolveAndTransitionAtRuntime()
     {
         if (Locke() is not { } f) return;

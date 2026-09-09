@@ -278,9 +278,17 @@ public sealed class MaterialDocument
                 paramContainer = pv;
                 foreach (var el in pv.Elements)
                     if (el is BinTreeStruct ps
-                        && Field(ps.Properties, "name") is BinTreeString pn
-                        && Field(ps.Properties, "value") is { } valProp)
-                        parameters.Add(new MaterialParameter(pn.Value, valProp, ps));
+                        && Field(ps.Properties, "name") is BinTreeString pn)
+                    {
+                        // M673: a named entry with no value is an authored zero (the schema's
+                        // Vec4 default), not an absent parameter inheriting the shader default.
+                        // Locke disables diffuse distortion this way. Keep the zero detached until
+                        // edited so merely reading the material preserves its sparse encoding.
+                        var value = Field(ps.Properties, "value");
+                        parameters.Add(new MaterialParameter(pn.Value,
+                            value ?? new BinTreeVector4(HashAlgorithms.Fnv1a("value"), System.Numerics.Vector4.Zero),
+                            ps, value is null));
+                    }
             }
 
             // Shader feature switches (StaticMaterialSwitchDef: 'name' + optional 'on'; absent 'on' = true).
@@ -1387,6 +1395,7 @@ public sealed class TextureSlot
 public sealed class MaterialParameter
 {
     private readonly BinTreeProperty _prop;
+    private readonly bool _omittedValue;
 
     public string Name { get; }
     public string OriginalText { get; }
@@ -1396,11 +1405,12 @@ public sealed class MaterialParameter
     internal BinTreeProperty? Element { get; }
     public bool IsRemovable => Element is not null;
 
-    public MaterialParameter(string name, BinTreeProperty prop, BinTreeProperty? element = null)
+    public MaterialParameter(string name, BinTreeProperty prop, BinTreeProperty? element = null, bool omittedValue = false)
     {
         Name = name;
         _prop = prop;
         Element = element;
+        _omittedValue = omittedValue;
         OriginalText = BinValueEditor.Format(prop, _ => null);
         TypeName = prop.Type.ToString();
     }
@@ -1423,6 +1433,15 @@ public sealed class MaterialParameter
     }
 
     /// <summary>Apply text (throws on invalid input — caller keeps the old value).</summary>
-    public void Apply(string text) => BinValueEditor.Apply(_prop, text);
-    public void Revert() { try { BinValueEditor.Apply(_prop, OriginalText); } catch { } }
+    public void Apply(string text)
+    {
+        BinValueEditor.Apply(_prop, text);
+        if (_omittedValue && Element is BinTreeStruct owner)
+        {
+            uint hash = HashAlgorithms.Fnv1a("value");
+            if (IsDirty) owner.Properties[hash] = _prop;
+            else owner.Properties.Remove(hash);
+        }
+    }
+    public void Revert() { try { Apply(OriginalText); } catch { } }
 }
