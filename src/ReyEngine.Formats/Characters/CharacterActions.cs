@@ -91,15 +91,14 @@ public static class CharacterActions
             // his wad - his Q, which has three swings, is named Q1/Q2/Q3 - so both slots came up empty.
             // Tried second, so a champion that uses both keeps SpellN as its primary.
             if (exact is null && related.Count == 0)
-                related = clips.Where(c => IsSlotLetterClip(c.Name, slot[0]))
+                related = clips.Where(c => IsSlotLetterClip(SlotClipName(c, slot[0]), slot[0]))
                     // Ordered, because which one stands in below must not depend on the order the caller
                     // happened to gather the graphs in. Lowest cast number first (Q1 is the opener),
-                    // then a bare name over a transition, then alphabetically: Aatrox's Q offers only
-                    // Q1_INTO_Idle, Q1_INTO_Run, Q2_..., Q3_... and the opener's recovery is the closest
-                    // thing to a Q he has - the swings themselves are among the 46 clip names in his base
-                    // graph that are unresolved hashes.
-                    .OrderBy(c => CastNumber(c.Name))
-                    .ThenBy(c => c.Name.Contains('_') ? 1 : 0)
+                    // then a bare cast over a transition. M674 also uses the filename behind unresolved
+                    // graph keys: Aatrox's actual ground_q1/2/3 swings must beat Q1_INTO_Idle and friends.
+                    .OrderBy(c => CastNumber(SlotClipName(c, slot[0])))
+                    .ThenBy(c => SlotClipName(c, slot[0]).Contains('_') ? 1 : 0)
+                    .ThenBy(c => c.AnmPath.Contains("_ult_", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
                     .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
@@ -174,6 +173,18 @@ public static class CharacterActions
         int i = 1;
         while (i < clipName.Length && char.IsAsciiDigit(clipName[i])) i++;
         return i == clipName.Length || clipName[i] == '_';
+    }
+
+    /// <summary>A hash-only graph key can still point at a named cast file. Only use whole
+    /// filename tokens, and only for unresolved keys; SpellN graph names remain authoritative.</summary>
+    public static string SlotClipName(AnimClipInfo clip, char slot)
+    {
+        if (!clip.Name.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) return clip.Name;
+        string file = System.IO.Path.GetFileNameWithoutExtension(clip.AnmPath.Replace('\\', '/'));
+        var tokens = file.Split('_');
+        for (int i = 0; i < tokens.Length; i++)
+            if (IsSlotLetterClip(tokens[i], slot)) return string.Join("_", tokens.Skip(i));
+        return clip.Name;
     }
 
     /// <summary>The digits after the slot letter (Q3 -> 3), or 0 when the name is just the letter.</summary>

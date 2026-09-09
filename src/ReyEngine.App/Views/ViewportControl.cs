@@ -429,6 +429,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly Dictionary<VfxPlaybackItem, VfxParticleSimulator> _particleSimCache = new(ReferenceEqualityComparer.Instance);
     /// <summary>M116: per travelling item, seconds since its playback started (drives caster→target flight).</summary>
     private readonly Dictionary<VfxPlaybackItem, float> _travelElapsed = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<VfxParticleSimulator> _expiredTravelSims = new();
     private readonly Dictionary<TextureImage, uint> _particleTextureCache = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<VfxParticleSimulator.EmitterState, VfxMeshAnimation> _particleMeshAnimations = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<VfxParticleSimulator> _wantedParticleSims = new(ReferenceEqualityComparer.Instance);
@@ -1269,6 +1270,7 @@ public sealed class ViewportControl : OpenGlControlBase
                     if (item.TravelTo is not { } dest || item.TravelSeconds <= 0f) continue;
                     float elapsed = (_travelElapsed.TryGetValue(item, out var te) ? te : 0f) + dt;
                     _travelElapsed[item] = elapsed;
+                    if (item.EndTime is { } end && elapsed >= end) _expiredTravelSims.Add(sim);
                     float t01 = Math.Clamp((elapsed - item.StartDelay) / item.TravelSeconds, 0f, 1f);
                     var pos = Vector3.Lerp(item.WorldPos, dest, t01);
                     // M635: the aim travels with it - same as the D3D11 driver, or the two viewports
@@ -1308,11 +1310,13 @@ public sealed class ViewportControl : OpenGlControlBase
                     _autoStopElapsed = 0f;
                 }
             }
+            foreach (var (beamItem, beamSim) in _particleSimCache)
+                beamSim.SetBeamTarget(beamItem.BeamTarget ?? TargetDummyPosition);
             foreach (var psim in _particleSims)
             {
+                if (_expiredTravelSims.Contains(psim)) continue;
                 // M183 (2.5): beams terminate at the M114 practice dummy. Pushed every frame rather than
                 // at build time so dragging the dummy moves live beams instead of needing a replay.
-                psim.SetBeamTarget(TargetDummyPosition);
                 psim.Update(dt);
                 prend.Render(psim, viewProj, view, _camera.EffectiveNear, _camera.Far);
             }
@@ -1726,6 +1730,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _autoStopElapsed = 0f;   // M186: a rebuilt playback starts its cycle over
         _particleSimCache.Clear();
         _travelElapsed.Clear();
+        _expiredTravelSims.Clear();
         _particleTextureCache.Clear();
         _particleCubemapCache.Clear();
         _particleMeshAnimations.Clear();

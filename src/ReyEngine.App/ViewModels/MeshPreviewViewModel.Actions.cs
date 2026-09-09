@@ -56,6 +56,7 @@ public sealed class CharacterActionRowViewModel(CharacterAction action)
 /// </summary>
 public sealed partial class MeshPreviewViewModel
 {
+    private readonly Dictionary<string, int> _nextAbilityCast = new(StringComparer.OrdinalIgnoreCase);
     public ObservableCollection<CharacterActionRowViewModel> Actions { get; } = new();
 
     [ObservableProperty] private CharacterActionRowViewModel? _selectedAction;
@@ -67,6 +68,7 @@ public sealed partial class MeshPreviewViewModel
     public void SetActions(IReadOnlyList<CharacterAction> actions)
     {
         Actions.Clear();
+        _nextAbilityCast.Clear();
         SelectedAction = null;
         foreach (var action in actions) Actions.Add(new CharacterActionRowViewModel(action));
 
@@ -124,9 +126,17 @@ public sealed partial class MeshPreviewViewModel
             ? action.Label[..1]
             : action.Label.StartsWith("Crit", StringComparison.OrdinalIgnoreCase) ? "CRIT" : "BA1";
 
-        return ChampionEvents.FirstOrDefault(e =>
+        var primary = ChampionEvents.FirstOrDefault(e =>
                    string.Equals(e.Name, slot, StringComparison.OrdinalIgnoreCase))
                ?? ChampionEvents.FirstOrDefault(e =>
                    e.Name.StartsWith(slot + " ", StringComparison.OrdinalIgnoreCase));
+        if (primary is not null) return primary;
+        var casts = ChampionEvents.Where(e => e.Name.Length > slot.Length
+                   && e.Name.StartsWith(slot, StringComparison.OrdinalIgnoreCase)
+                   && char.IsAsciiDigit(e.Name[slot.Length])).ToList();
+        if (casts.Count == 0) return null;
+        int next = _nextAbilityCast.GetValueOrDefault(slot);
+        _nextAbilityCast[slot] = (next + 1) % casts.Count;
+        return casts[next % casts.Count];
     }
 }

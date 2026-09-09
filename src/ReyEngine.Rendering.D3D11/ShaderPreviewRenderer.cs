@@ -385,6 +385,9 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// non-uniform scale, shear - which the particle layout (position + one scalar scale + a Y spin)
     /// simply cannot represent.</summary>
     public IReadOnlyList<Matrix4x4>? MeshModels { get; set; }
+    /// <summary>Per-particle world matrices for constrained geometry such as a tether mesh.
+    /// Unlike prop MeshModels, these retain each particle's colour and erosion drive.</summary>
+    public IReadOnlyList<Matrix4x4>? MeshParticleTransforms { get; set; }
 
     /// <summary>M295: which slice of the mesh's index buffer this material draws. A prop's submeshes each
     /// carry their own diffuse, so one uploaded geometry is drawn by several materials over different
@@ -3430,6 +3433,7 @@ float4 psmain(VOut i) : SV_Target
                         * Matrix4x4.CreateRotationY(inst[o + 9])
                         * basis
                         * Matrix4x4.CreateTranslation(pos);
+            if (mat.MeshParticleTransforms is { } transforms && i < transforms.Count) model = transforms[i];
             mat.Params["mWorld"] = Mat(model, s);
             mat.Params["kColorFactor"] = colour;
             // M641: the erosion drive. Riot's mesh_ps reads it from cAlphaErosionParams.x - the slot the

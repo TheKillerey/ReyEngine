@@ -505,6 +505,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         _activeEvent = ev;
         _eventPlaybackActive = true;
         if (ev.NeedsTarget && !TargetDummyEnabled) TargetDummyEnabled = true;   // _tar plays ONLY on the dummy
+        if (ev.NeedsTarget)
+        {
+            var aim = _castPlan?.Aim ?? TargetDummyPosition ?? CharacterPosition;
+            var direction = aim - CharacterPosition;
+            if (direction.X * direction.X + direction.Z * direction.Z > 1e-6f)
+                CharacterYaw = MathF.Atan2(direction.X, direction.Z);
+        }
         _eventBundle = BuildEventBundle(ev);
         LogDx11?.Invoke("Event", $"'{ev.Name}': composite {_eventBundle.Count} item(s), "
             + $"clip {(ev.ClipAnmFile ?? "(none)")}");
@@ -515,7 +522,12 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             : null;
         if (entry is not null)
         {
-            if (ReferenceEquals(Animation.SelectedAnimation, entry)) ApplyClipParticles();  // re-fire same clip
+            if (ReferenceEquals(Animation.SelectedAnimation, entry))
+            {
+                Animation.Time = 0;
+                ApplyClipParticles();
+                Animation.Play();
+            }
             else Animation.SelectedAnimation = entry;                                        // ClipChanged runs the full path
         }
         else
@@ -528,7 +540,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// for the one shipped CharacterRecord that has no spells at all.</summary>
     private IReadOnlyList<Formats.Characters.AbilitySlot> _abilities = Array.Empty<Formats.Characters.AbilitySlot>();
 
-    public void SetAbilities(IReadOnlyList<Formats.Characters.AbilitySlot> abilities) => _abilities = abilities;
+    public void SetAbilities(IReadOnlyList<Formats.Characters.AbilitySlot> abilities)
+    {
+        _abilities = abilities;
+        RebuildChampionEvents();
+    }
 
     /// <summary>The ability slot this event belongs to, by its Q/W/E/R label. The event builder names a
     /// composite after its slot letter, which is the only thing the two lists share.</summary>
@@ -578,6 +594,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             return BuildItem(def, VfxCastFrame.Toward(at, faceToward, at)) with
             {
                 TravelTo = travelTo,
+                BeamTarget = travelTo is not null && def.Emitters.Any(e => e.Beam is not null && e.IsMeshPrimitive)
+                    ? at : null,
                 // M631: the champion's own numbers where it authored them. The fallbacks are the old
                 // constants, kept for the 20 slots that author no motion at all and the ones with no
                 // record to read - a guess is still better than an instant hit.
@@ -613,13 +631,29 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         foreach (var h in ev.CasterSystems) if (Make(h, caster, aim, null, casterBone) is { } i) items.Add(i);
         if (hitAt is { } hit)
             foreach (var h in ev.TargetSystems) if (Make(h, hit, caster, null) is { } i) items.Add(i);
-        foreach (var h in ev.MissileSystems) if (Make(h, caster, flightEnd, flightEnd) is { } i) items.Add(i);
+        foreach (var h in ev.MissileSystems)
+            if (Make(h, caster, flightEnd, flightEnd) is { } i)
+            {
+                var returns = ev.ReturnMissileSystems.Where(back => _vfxDefs[back].Name.Equals(
+                    _vfxDefs[h].Name + "_return", StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (returns.Length == 0) { items.Add(i); continue; }
+                float arrival = i.StartDelay + i.TravelSeconds;
+                items.Add(i with { EndTime = arrival });
+                foreach (var back in returns)
+                    if (Make(back, flightEnd, caster, caster) is { } returning)
+                        items.Add(returning with
+                        {
+                            StartDelay = arrival,
+                            EndTime = arrival + returning.TravelSeconds,
+                            BeamTarget = caster,
+                        });
+            }
 
         // M631: the missile the spell record NAMES, when the token rule did not already find it. The
         // record says which system is the missile outright - 280 of 692 slots do - where the tokens infer
         // it from a substring of the system's name and classify only about three quarters of the corpus.
-        // Added rather than substituted: a system the tokens found and the record does not name is still
-        // that spell's missile, and dropping it would trade one incomplete answer for another.
+        // RebuildChampionEvents already prefers resolved record missiles over name matches. This pass
+        // also reaches authored systems whose names contain no spell token; it must not duplicate them.
         if (ability is not null)
             foreach (var missile in ability.Missiles)
             {
@@ -810,7 +844,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         ChampionEvents.Clear();
         _activeEvent = null; _eventBundle = null; _eventPlaybackActive = false;
         if (_vfxDefs.Count > 0 || _allClips.Count > 0)
-            foreach (var ev in ChampionEventBuilder.Build(_vfxDefs, _allClips))
+            foreach (var ev in ChampionEventBuilder.Build(_vfxDefs, _allClips,
+                         _abilities.ToDictionary(a => a.Slot, a => (IReadOnlyList<uint>)a.Missiles
+                             .Select(m => _vfxResourceMap.TryGetValue(m.MissileEffectKey, out var h) ? h : 0u)
+                             .Where(h => _vfxDefs.ContainsKey(h)).Distinct().ToList(), StringComparer.OrdinalIgnoreCase)))
                 ChampionEvents.Add(ev);
         HasEvents = ChampionEvents.Count > 0;
     }

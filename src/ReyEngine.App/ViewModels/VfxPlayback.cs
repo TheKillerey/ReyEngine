@@ -66,6 +66,12 @@ public sealed record VfxPlaybackItem(
     /// <see cref="TravelSeconds"/> (after <see cref="StartDelay"/>) — missiles fly caster → target.</summary>
     public Vector3? TravelTo { get; init; }
     public float TravelSeconds { get; init; }
+
+    /// <summary>A travelling tether connects back to its launch point, rather than to the
+    /// preview's target dummy ahead of the projectile.</summary>
+    public Vector3? BeamTarget { get; init; }
+    /// <summary>Optional end of this playback phase, measured from the start of the whole cast.</summary>
+    public float? EndTime { get; init; }
 }
 
 /// <summary>

@@ -109,6 +109,8 @@ public sealed class D3D11MapParticles
         public ReyEngine.Formats.Meshes.VfxMeshAnimation? Animation { get; init; }
         /// <summary>M640: set when the slice draws through Riot's mesh_vs/mesh_ps; GeometryId is -1 then.</summary>
         public int RiotGeometryId { get; init; } = -1;
+        public Vector2? BeamZRange { get; init; }
+        public List<Matrix4x4> BeamTransforms { get; } = new();
     }
     private readonly List<MeshSlice> _meshSlices = new();
     /// <summary>M640: the mesh shader pair, read once per rebuild. Null when the cache lacks it, in which
@@ -327,6 +329,8 @@ public sealed class D3D11MapParticles
                 // with exactly that reason recorded; they now build a ribbon slice of their own.
                 if (def.Beam is not null || def.Trail is not null)
                 {
+                    if (def.Beam is not null && def.IsMeshPrimitive && item.BeamTarget is not null
+                        && BuildMeshSlice(item, sim, es, def, tocs, sb)) continue;
                     if (!BuildRibbonSlice(item, sim, es, def, tocs, sb)) SkippedBeamTrailEmitters++;
                     continue;
                 }
@@ -479,13 +483,23 @@ public sealed class D3D11MapParticles
         // this frame rather than from where it was last frame.
         Reanchor(dt);
 
-        foreach (var (_, sim) in _active)
+        for (int i = _active.Count - 1; i >= 0; i--)
+        {
+            var (item, sim) = _active[i];
+            if (item.EndTime is { } end && _travelElapsed.GetValueOrDefault(item) >= end)
+            {
+                _active.RemoveAt(i);
+                _activeSet.Remove(sim);
+            }
+        }
+
+        foreach (var (item, sim) in _active)
         {
             // M630: beams terminate at the target. The map host still passes null - it has no dummy to
             // bind - and the simulator then resolves endpoints from the emitter's own authored target
             // offset, which is Riot's pattern for untargeted beams. So this is inert for maps and is the
             // whole of "the cast points at the dummy" for a character.
-            sim.SetBeamTarget(_beamTarget);
+            sim.SetBeamTarget(item.BeamTarget ?? _beamTarget);
             sim.Update(dt);
         }
         TickMeshSlices();
@@ -586,6 +600,9 @@ public sealed class D3D11MapParticles
                     {
                         Material = riotMat, Def = def, Owner = sim, State = es,
                         GeometryId = -1, RiotGeometryId = riotId,
+                        BeamZRange = def.Beam is null ? null : new Vector2(
+                            Enumerable.Range(0, mesh.Positions.Length / 3).Min(v => mesh.Positions[v * 3 + 2]),
+                            Enumerable.Range(0, mesh.Positions.Length / 3).Max(v => mesh.Positions[v * 3 + 2])),
                     });
                     RiotMeshEmitters++;
                     return true;
@@ -595,6 +612,9 @@ public sealed class D3D11MapParticles
             }
         }
 
+        // The legacy mesh pipeline cannot carry a per-particle constrained transform.
+        // Let the caller use its ribbon fallback when Riot's mesh shader is unavailable.
+        if (def.Beam is not null) return false;
         int geometryId = _renderer.CreateMeshGeometry(mesh.Positions, mesh.Uvs,
             mesh.Indices is { Length: > 0 } ? mesh.Indices : null);
         if (geometryId < 0)
@@ -643,6 +663,15 @@ public sealed class D3D11MapParticles
             mat.MeshRight = es.PlacementRight;
             mat.MeshUp = es.PlacementUp;
             mat.MeshForward = es.PlacementForward;
+            if (ms.BeamZRange is { } range)
+            {
+                mat.Visible = es.HasBeamEndpoints;
+                ms.BeamTransforms.Clear();
+                for (int i = 0; i < es.InstanceCount; i++)
+                    ms.BeamTransforms.Add(VfxBeamMesh.Transform(es.BeamSource, es.BeamTarget, range,
+                        new Vector2(es.Instances[i * 19 + 3], es.Instances[i * 19 + 4])));
+                mat.MeshParticleTransforms = ms.BeamTransforms;
+            }
 
             // M47c: mesh particles animate by scrolling their texture along the mesh UVs; M117: texDiv is
             // fractional tiling. Both taken from the GL path verbatim (VfxParticleRenderer.cs:949-960) -

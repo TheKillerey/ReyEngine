@@ -18,6 +18,7 @@ public sealed class ChampionEvent
     public IReadOnlyList<uint> CasterSystems { get; init; } = Array.Empty<uint>();
     public IReadOnlyList<uint> TargetSystems { get; init; } = Array.Empty<uint>();
     public IReadOnlyList<uint> MissileSystems { get; init; } = Array.Empty<uint>();
+    public IReadOnlyList<uint> ReturnMissileSystems { get; init; } = Array.Empty<uint>();
     public bool NeedsTarget => TargetSystems.Count > 0 || MissileSystems.Count > 0;
     public bool HasSystems => CasterSystems.Count > 0 || NeedsTarget;
 
@@ -28,6 +29,7 @@ public sealed class ChampionEvent
             var parts = new List<string>();
             if (CasterSystems.Count > 0) parts.Add($"{CasterSystems.Count} caster");
             if (MissileSystems.Count > 0) parts.Add($"{MissileSystems.Count} missile");
+            if (ReturnMissileSystems.Count > 0) parts.Add($"{ReturnMissileSystems.Count} return");
             if (TargetSystems.Count > 0) parts.Add($"{TargetSystems.Count} target");
             if (ClipAnmFile is not null) parts.Add(System.IO.Path.GetFileNameWithoutExtension(ClipAnmFile));
             return parts.Count > 0 ? string.Join(" · ", parts) : "";
@@ -57,7 +59,8 @@ public static class ChampionEventBuilder
 
     public static List<ChampionEvent> Build(
         IReadOnlyDictionary<uint, VfxSystemDefinition> systems,
-        IReadOnlyCollection<AnimClipInfo> clips)
+        IReadOnlyCollection<AnimClipInfo> clips,
+        IReadOnlyDictionary<string, IReadOnlyList<uint>>? authoredMissiles = null)
     {
         var events = new List<ChampionEvent>();
 
@@ -81,7 +84,7 @@ public static class ChampionEventBuilder
             }
             if (spell is null) continue;   // idles/transforms/etc. — covered by clip events
 
-            // Q1/Q2… collapse into one spell; passive normalizes to P.
+            // Group by ability first; numbered casts are split into separate playback events below.
             string spellKey = spell.ToUpperInvariant() switch
             {
                 "Q1" or "Q2" or "Q3" => "Q",
@@ -100,15 +103,37 @@ public static class ChampionEventBuilder
                      .OrderBy(kv => kv.Key.Form, StringComparer.OrdinalIgnoreCase)
                      .ThenBy(kv => SpellRank(kv.Key.Spell)))
         {
-            string? clip = FindClip(clips, ClipPrefixFor(key.Spell), key.Form);
-            events.Add(new ChampionEvent
+            // Numbered casts are separate events, not simultaneous emitters. Require numbered
+            // cast systems as evidence before interpreting indicator/trail suffixes as cast numbers.
+            var casts = g.Cas.Select(h => CastVariant(systems[h].Name, key.Spell, castOnly: true))
+                .Where(n => n > 0).Distinct().OrderBy(n => n).ToArray();
+            if (casts.Length < 2) casts = new[] { 0 };
+            foreach (int cast in casts)
             {
-                Name = key.Form.Length > 0 ? $"{key.Spell} ({key.Form})" : key.Spell,
-                ClipAnmFile = clip,
-                CasterSystems = g.Cas,
-                TargetSystems = g.Tar,
-                MissileSystems = g.Mis,
-            });
+                string spell = cast > 0 ? key.Spell + cast : key.Spell;
+                List<uint> Select(List<uint> hashes) => hashes.Where(h =>
+                {
+                    string name = systems[h].Name;
+                    // The local-player indicator and the ally-view copy are alternatives.
+                    if (name.EndsWith("_Ally", StringComparison.OrdinalIgnoreCase)
+                        && systems.Values.Any(s => s.Name.Equals(name[..^5], StringComparison.OrdinalIgnoreCase))) return false;
+                    int n = CastVariant(name, key.Spell, castOnly: false);
+                    return cast == 0 || n == 0 || n == cast;
+                }).ToList();
+                var missiles = authoredMissiles is not null
+                    && authoredMissiles.TryGetValue(key.Spell, out var own) && own.Count > 0
+                    ? own.Where(systems.ContainsKey).Distinct().ToList() : Select(g.Mis);
+                events.Add(new ChampionEvent
+                {
+                    Name = key.Form.Length > 0 ? $"{spell} ({key.Form})" : spell,
+                    ClipAnmFile = FindClip(clips, ClipPrefixFor(key.Spell), key.Form, spell),
+                    CasterSystems = Select(g.Cas).Where(h => !missiles.Contains(h)).ToList(),
+                    TargetSystems = Select(g.Tar),
+                    MissileSystems = missiles,
+                    ReturnMissileSystems = g.Mis.Where(h => !missiles.Contains(h)
+                        && missiles.Any(m => systems[h].Name.Equals(systems[m].Name + "_return", StringComparison.OrdinalIgnoreCase))).ToList(),
+                });
+            }
         }
 
         // ---- authored animation sequences (recalls, emotes, transforms — clips with their own events) ----
@@ -129,18 +154,46 @@ public static class ChampionEventBuilder
 
     /// <summary>The cast clip for a spell: prefer the form-specific variant (Spell4_Air_Slayer for
     /// Slayer), else the form-free one, shortest name winning inside each bucket.</summary>
-    private static string? FindClip(IReadOnlyCollection<AnimClipInfo> clips, string? prefix, string form)
+    private static int CastVariant(string name, string spell, bool castOnly)
+    {
+        var tokens = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        foreach (string token in tokens)
+        {
+            if (token.StartsWith(spell, StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(token[spell.Length..], out int explicitCast) && explicitCast is > 0 and <= 9)
+                return explicitCast;
+            if (token.StartsWith("cas", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(token[3..], out int cast) && cast is > 0 and <= 9) return cast;
+        }
+        if (!castOnly)
+            for (int i = 0; i + 1 < tokens.Length; i++)
+                if ((tokens[i].Equals("indicator", StringComparison.OrdinalIgnoreCase)
+                     || tokens[i].Equals("trail", StringComparison.OrdinalIgnoreCase))
+                    && int.TryParse(tokens[i + 1], out int cast) && cast is > 0 and <= 9) return cast;
+        return 0;
+    }
+
+    private static string? FindClip(IReadOnlyCollection<AnimClipInfo> clips, string? prefix, string form, string spell)
     {
         if (prefix is null) return null;
         var candidates = clips.Where(c => c.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (candidates.Count == 0 && spell.Length > 0 && "QWER".Contains(spell[0]))
+            candidates = clips.Where(c =>
+            {
+                string n = Characters.CharacterActions.SlotClipName(c, spell[0]);
+                return spell.Length > 1
+                    ? n.Equals(spell, StringComparison.OrdinalIgnoreCase) || n.StartsWith(spell + "_", StringComparison.OrdinalIgnoreCase)
+                    : Characters.CharacterActions.IsSlotLetterClip(n, spell[0]);
+            }).OrderBy(c => Characters.CharacterActions.SlotClipName(c, spell[0]).Contains('_') ? 1 : 0)
+              .ThenBy(c => c.AnmPath.Contains("_ult_", StringComparison.OrdinalIgnoreCase) ? 1 : 0).ToList();
         if (candidates.Count == 0) return null;
 
         bool HasForm(AnimClipInfo c) => form.Length > 0 && c.Name.Contains(form, StringComparison.OrdinalIgnoreCase);
         bool HasAnyForm(AnimClipInfo c) => FormTokens.Any(f => c.Name.Contains(f, StringComparison.OrdinalIgnoreCase));
 
         var best = candidates.Where(HasForm).OrderBy(c => c.Name.Length).FirstOrDefault()
-                   ?? candidates.Where(c => !HasAnyForm(c)).OrderBy(c => c.Name.Length).FirstOrDefault()
-                   ?? candidates.OrderBy(c => c.Name.Length).First();
+                   ?? candidates.Where(c => !HasAnyForm(c)).OrderBy(c => Characters.CharacterActions.SlotClipName(c, spell[0]).Length).FirstOrDefault()
+                   ?? candidates.First();
         var file = System.IO.Path.GetFileName(best.AnmPath.Replace('\\', '/'));
         return file.Length > 0 ? file : null;
     }

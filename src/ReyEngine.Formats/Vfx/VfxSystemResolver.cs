@@ -542,7 +542,10 @@ public static class VfxSystemResolver
     private static VfxBeamDefinition? ReadBeam(BinTreeProperty? primitive)
     {
         if (primitive is not BinTreeStruct prim || prim.ClassHash != C_primBeam) return null;
-        if (Get(prim.Properties, F_mBeam) is not BinTreeStruct b) return null;
+        // The primitive class still defines a beam when its embedded settings are all defaults.
+        // Blitzcrank's return cable omits mBeam; treating it as an ordinary mesh draws a crossbar.
+        if (Get(prim.Properties, F_mBeam) is not BinTreeStruct b)
+            return new VfxBeamDefinition(Vector3.Zero, Vector3.Zero, Vector3.Zero, -1, null, false, -1, -1);
         var bp = b.Properties;
         return new VfxBeamDefinition(
             ReadValueVec3OrZero(Get(bp, F_mBirthTilingSize)),
