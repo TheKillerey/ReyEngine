@@ -180,7 +180,7 @@
                                              Watermark="assets/…/texture.tex" />
                                     <TextBlock Grid.Column="2" Text="{Binding Note}" FontSize="8" Margin="6,0,0,0"
                                                VerticalAlignment="Center" IsVisible="{Binding IsMissing}"
-                                               Foreground="#FFE05252" />
+                                               Foreground="{DynamicResource ReyErrorBrush}" />
                                   </Grid>
                                 </DataTemplate>
                               </ItemsControl.ItemTemplate>

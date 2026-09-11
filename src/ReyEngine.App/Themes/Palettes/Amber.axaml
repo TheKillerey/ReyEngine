@@ -33,6 +33,16 @@
   <Color x:Key="ReyError">#FF6B6B</Color>
   <Color x:Key="ReySuccess">#3DD68C</Color>
 
+  <!-- M686: the signal colours as soft fills (badges, warning strips, error boxes), and two veils -
+       derived from the colours above so a palette carries its own tints -->
+  <Color x:Key="ReyErrorSoft">#26FF6B6B</Color>
+  <Color x:Key="ReyWarningSoft">#33FFB454</Color>
+  <Color x:Key="ReySuccessSoft">#1F3DD68C</Color>
+  <Color x:Key="ReySuccessSoftHover">#333DD68C</Color>
+  <Color x:Key="ReyAccent2Soft">#4D4C8DFF</Color>
+  <Color x:Key="ReyBgVeil">#E60B0A08</Color>
+  <Color x:Key="ReyPanelClear">#00131110</Color>
+
   <!-- text -->
   <Color x:Key="ReyTextBright">#F2F2F5</Color>
   <Color x:Key="ReyText">#C9C9D1</Color>
@@ -66,6 +76,12 @@
   <SolidColorBrush x:Key="ReyTextDimBrush" Color="{StaticResource ReyTextDim}" />
   <SolidColorBrush x:Key="ReySelectionBrush" Color="{StaticResource ReySelection}" />
   <SolidColorBrush x:Key="ReyHoverBrush" Color="{StaticResource ReyHover}" />
+  <SolidColorBrush x:Key="ReyErrorSoftBrush" Color="{StaticResource ReyErrorSoft}" />
+  <SolidColorBrush x:Key="ReyWarningSoftBrush" Color="{StaticResource ReyWarningSoft}" />
+  <SolidColorBrush x:Key="ReySuccessSoftBrush" Color="{StaticResource ReySuccessSoft}" />
+  <SolidColorBrush x:Key="ReySuccessSoftHoverBrush" Color="{StaticResource ReySuccessSoftHover}" />
+  <SolidColorBrush x:Key="ReyAccent2SoftBrush" Color="{StaticResource ReyAccent2Soft}" />
+  <SolidColorBrush x:Key="ReyBgVeilBrush" Color="{StaticResource ReyBgVeil}" />
 
   <!-- Fluent theme tint: steer Avalonia's built-in controls onto the Crimson palette. -->
   <Color x:Key="SystemAccentColor">#FFB454</Color>

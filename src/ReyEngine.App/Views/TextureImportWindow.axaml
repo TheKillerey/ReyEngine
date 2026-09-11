@@ -27,7 +27,7 @@
                              TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
                 </StackPanel>
                 <TextBlock Grid.Column="1" Text="!" FontWeight="Bold" VerticalAlignment="Center"
-                           Foreground="#E06C6C" IsVisible="{Binding !CanConvert}"
+                           Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding !CanConvert}"
                            ToolTip.Tip="This file could not be decoded and will be skipped." />
               </Grid>
             </DataTemplate>

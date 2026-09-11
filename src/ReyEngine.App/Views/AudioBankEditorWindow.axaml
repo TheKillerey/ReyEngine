@@ -59,8 +59,8 @@
 
     <DockPanel>
       <!-- read-only banner -->
-      <Border DockPanel.Dock="Top" Background="#26FF5555" Padding="10,6" IsVisible="{Binding HasReadOnlyReason}">
-        <TextBlock Text="{Binding ReadOnlyReason}" Foreground="#FF7B72" FontSize="11" TextWrapping="Wrap" />
+      <Border DockPanel.Dock="Top" Background="{DynamicResource ReyErrorSoftBrush}" Padding="10,6" IsVisible="{Binding HasReadOnlyReason}">
+        <TextBlock Text="{Binding ReadOnlyReason}" Foreground="{DynamicResource ReyErrorBrush}" FontSize="11" TextWrapping="Wrap" />
       </Border>
 
       <!-- column header -->
@@ -87,7 +87,7 @@
                            IsVisible="{Binding HasUsedBy}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding UsedBy}" />
                 <Border Background="{DynamicResource ReyAccent2Brush}" CornerRadius="3" Padding="5,1"
                         IsVisible="{Binding IsChanged}">
-                  <TextBlock Text="{Binding StateText}" FontSize="9" Foreground="#08221E" />
+                  <TextBlock Text="{Binding StateText}" FontSize="9" Foreground="{DynamicResource ReyOnAccentBrush}" />
                 </Border>
               </StackPanel>
             </Grid>

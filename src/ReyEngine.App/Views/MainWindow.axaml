@@ -14,9 +14,6 @@
 
   <Window.Resources>
     <conv:LogLevelToBrushConverter x:Key="LevelToBrush" />
-    <conv:BoolToBrushConverter x:Key="SelectionHighlight" TrueBrush="#3336E2C2" FalseBrush="Transparent" />
-    <conv:BoolToBrushConverter x:Key="ActiveTabUnderline" TrueBrush="#36E2C2" FalseBrush="Transparent" />
-    <conv:BoolToBrushConverter x:Key="ActiveTabBg" TrueBrush="#1A36E2C2" FalseBrush="Transparent" />
   </Window.Resources>
 
   <!-- M683/M685: the user's picture sits behind this DockPanel, in a layer WindowBackdrop puts under
@@ -280,10 +277,10 @@
     </Border>
 
     <!-- ============ INSPECTION-MODE BANNER (M11) ============ -->
-    <Border DockPanel.Dock="Top" Background="#2A2113" BorderBrush="#FFB454" BorderThickness="0,0,0,1"
+    <Border DockPanel.Dock="Top" Background="{DynamicResource ReyWarningSoftBrush}" BorderBrush="{DynamicResource ReyWarningBrush}" BorderThickness="0,0,0,1"
             Padding="10,4" IsVisible="{Binding InspectionMode}">
       <TextBlock Text="🔍 Single-WAD inspection mode — open a project folder (File ▸ Open Project Folder) to edit and build mods."
-                 Foreground="#FFD9A0" FontSize="11" />
+                 Foreground="{DynamicResource ReyWarningBrush}" FontSize="11" />
     </Border>
 
     <!-- ============ STATUS BAR (M39) ============ -->
@@ -349,12 +346,13 @@
                   </ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                      <!-- M39: document tab — translucent cyan when active + accent underline -->
+                      <!-- M39/M686: document tab — the palette's hover fill when active + accent underline,
+                           by class (Border.docTab.active / Border.docTabLine.active in ReyTheme) -->
                       <Border Margin="2,3,0,0" CornerRadius="4,4,0,0" ClipToBounds="True"
-                              Background="{Binding IsActive, Converter={StaticResource ActiveTabBg}}">
+                              Classes="docTab" Classes.active="{Binding IsActive}">
                         <DockPanel>
                           <Border DockPanel.Dock="Bottom" Height="2" CornerRadius="1"
-                                  Background="{Binding IsActive, Converter={StaticResource ActiveTabUnderline}}" />
+                                  Classes="docTabLine" Classes.active="{Binding IsActive}" />
                           <StackPanel Orientation="Horizontal" Margin="8,4,4,3" Spacing="4">
                             <Button Background="Transparent" BorderThickness="0" Padding="0"
                                     Command="{Binding $parent[ItemsControl].DataContext.ActivateDocumentCommand}" CommandParameter="{Binding}"
@@ -672,7 +670,7 @@
                   <Border Background="{DynamicResource ReyAccentBrush}" CornerRadius="7" Padding="5,0"
                           MinWidth="16" VerticalAlignment="Center" IsVisible="{Binding HasActiveOverlays}">
                     <TextBlock Text="{Binding OverlayBadge}" FontSize="9" FontWeight="Bold"
-                               Foreground="#0B0F14" HorizontalAlignment="Center" />
+                               Foreground="{DynamicResource ReyOnAccentBrush}" HorizontalAlignment="Center" />
                   </Border>
                 </StackPanel>
                 <Button.Flyout>
@@ -1139,8 +1137,8 @@
                   <Border CornerRadius="7" Padding="5,0" VerticalAlignment="Center"
                           IsVisible="{Binding HasUnseenConsoleProblems}"
                           Background="{DynamicResource ReyCardBrush}"
-                          BorderBrush="#FFE05252" BorderThickness="1">
-                    <TextBlock Text="{Binding UnseenConsoleProblems}" FontSize="9" Foreground="#FFE05252" />
+                          BorderBrush="{DynamicResource ReyErrorBrush}" BorderThickness="1">
+                    <TextBlock Text="{Binding UnseenConsoleProblems}" FontSize="9" Foreground="{DynamicResource ReyErrorBrush}" />
                   </Border>
                 </StackPanel>
               </TabItem.Header>

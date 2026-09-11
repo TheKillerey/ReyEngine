@@ -116,7 +116,7 @@
           </Grid>
         </Border>
 
-        <Border Background="#101216" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1"
+        <Border Background="{DynamicResource ReyBgBrush}" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1"
                 CornerRadius="6" ClipToBounds="True">
           <Panel x:Name="PreviewSurface" Focusable="True" Background="#01000000"
                  Cursor="Hand">

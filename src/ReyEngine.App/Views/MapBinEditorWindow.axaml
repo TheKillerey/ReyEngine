@@ -157,7 +157,7 @@
                             BorderBrush="{DynamicResource ReyBorderBrush}" Background="{Binding Swatch}"
                             IsVisible="{Binding IsColor}" VerticalAlignment="Center"
                             ToolTip.Tip="Live colour preview (values are R, G, B[, A] in 0–1)" />
-                    <TextBlock Text="⚠ invalid" FontSize="10" Foreground="#FFB454" VerticalAlignment="Center"
+                    <TextBlock Text="⚠ invalid" FontSize="10" Foreground="{DynamicResource ReyWarningBrush}" VerticalAlignment="Center"
                                IsVisible="{Binding HasError}" />
                   </StackPanel>
                 </Grid>

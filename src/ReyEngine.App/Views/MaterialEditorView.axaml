@@ -19,15 +19,15 @@
                    Foreground="{DynamicResource ReyAccent2Brush}" TextWrapping="Wrap" />
       </Border>
       <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="6" IsVisible="{Binding HasUnresolved}">
-        <TextBlock Text="⚠ Some texture paths don't resolve in this WAD — see the ⚠ slots below." Foreground="#FFB454" FontSize="11" TextWrapping="Wrap" />
+        <TextBlock Text="⚠ Some texture paths don't resolve in this WAD — see the ⚠ slots below." Foreground="{DynamicResource ReyWarningBrush}" FontSize="11" TextWrapping="Wrap" />
       </Border>
       <!-- M125: the tolerant reader had to repair this bin — red banner, details + fix in the Issues window -->
-      <Border Background="#26FF5555" CornerRadius="4" Padding="6" IsVisible="{Binding HasBinIssues}">
+      <Border Background="{DynamicResource ReyErrorSoftBrush}" CornerRadius="4" Padding="6" IsVisible="{Binding HasBinIssues}">
         <DockPanel>
           <Button DockPanel.Dock="Right" Classes="tool" Content="View Issues"
                   Command="{Binding ShowIssuesCommand}" VerticalAlignment="Center"
                   ToolTip.Tip="Every repaired problem, where it lives, and a one-click fix" />
-          <TextBlock Text="{Binding BinIssuesLabel}" Foreground="#FF7B72" FontSize="11"
+          <TextBlock Text="{Binding BinIssuesLabel}" Foreground="{DynamicResource ReyErrorBrush}" FontSize="11"
                      TextWrapping="Wrap" VerticalAlignment="Center" />
         </DockPanel>
       </Border>
@@ -60,7 +60,7 @@
             <ComboBox.ItemTemplate>
               <DataTemplate x:DataType="vm:MaterialBindingViewModel">
                 <StackPanel Orientation="Horizontal" Spacing="5">
-                  <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="11" VerticalAlignment="Center"
+                  <TextBlock Text="⚠" Foreground="{DynamicResource ReyErrorBrush}" FontSize="11" VerticalAlignment="Center"
                              IsVisible="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}" />
                   <TextBlock Text="●" Foreground="{DynamicResource ReyAccent2Brush}" FontSize="10"
                              VerticalAlignment="Center" IsVisible="{Binding IsDirty}"
@@ -142,9 +142,9 @@
                     <StackPanel Spacing="2" Margin="0,3,0,0">
                       <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" MinWidth="110" />
-                        <TextBlock Text="{Binding Presence}" FontSize="9" Foreground="#E5A227"
+                        <TextBlock Text="{Binding Presence}" FontSize="9" Foreground="{DynamicResource ReyWarningBrush}"
                                    IsVisible="{Binding Presence, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock Text="— mixed —" FontSize="9" Foreground="#E5A227" IsVisible="{Binding Mixed}" />
+                        <TextBlock Text="— mixed —" FontSize="9" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding Mixed}" />
                       </StackPanel>
                       <Grid ColumnDefinitions="*,Auto">
                         <TextBox Grid.Column="0" Text="{Binding EditedText}" Watermark="{Binding ValueLabel}" FontSize="10" Padding="4,1"
@@ -154,7 +154,7 @@
                         <Button Grid.Column="1" Content="✓ all" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" Margin="3,0,0,0"
                                 ToolTip.Tip="Write this path into every picked material that has this sampler" />
                       </Grid>
-                      <TextBlock Text="{Binding Error}" FontSize="9" Foreground="#FF6B6B" TextWrapping="Wrap" IsVisible="{Binding HasError}" />
+                      <TextBlock Text="{Binding Error}" FontSize="9" Foreground="{DynamicResource ReyErrorBrush}" TextWrapping="Wrap" IsVisible="{Binding HasError}" />
                     </StackPanel>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
@@ -169,9 +169,9 @@
                     <StackPanel Spacing="2" Margin="0,3,0,0">
                       <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" MinWidth="110" />
-                        <TextBlock Text="{Binding Presence}" FontSize="9" Foreground="#E5A227"
+                        <TextBlock Text="{Binding Presence}" FontSize="9" Foreground="{DynamicResource ReyWarningBrush}"
                                    IsVisible="{Binding Presence, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock Text="— mixed —" FontSize="9" Foreground="#E5A227" IsVisible="{Binding Mixed}" />
+                        <TextBlock Text="— mixed —" FontSize="9" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding Mixed}" />
                       </StackPanel>
                       <Grid ColumnDefinitions="*,Auto">
                         <TextBox Grid.Column="0" Text="{Binding EditedText}" Watermark="{Binding ValueLabel}" FontSize="10" Padding="4,1"
@@ -181,7 +181,7 @@
                         <Button Grid.Column="1" Content="✓ all" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" Margin="3,0,0,0"
                                 ToolTip.Tip="Write this value into every picked material that has this parameter. A value one of them cannot take rolls the whole edit back." />
                       </Grid>
-                      <TextBlock Text="{Binding Error}" FontSize="9" Foreground="#FF6B6B" TextWrapping="Wrap" IsVisible="{Binding HasError}" />
+                      <TextBlock Text="{Binding Error}" FontSize="9" Foreground="{DynamicResource ReyErrorBrush}" TextWrapping="Wrap" IsVisible="{Binding HasError}" />
                     </StackPanel>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
@@ -275,13 +275,13 @@
                   <StackPanel Grid.Column="1" Spacing="5" Margin="10,0,0,0">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <!-- M125: red name + ⚠ when this material's bin object needed repairs -->
-                  <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="12" VerticalAlignment="Center"
+                  <TextBlock Text="⚠" Foreground="{DynamicResource ReyErrorBrush}" FontSize="12" VerticalAlignment="Center"
                              IsVisible="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}" />
                   <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"
                              Classes.issue="{Binding HasIssue}" ToolTip.Tip="{Binding IssueTip}">
                     <TextBlock.Styles>
                       <Style Selector="TextBlock"><Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" /></Style>
-                      <Style Selector="TextBlock.issue"><Setter Property="Foreground" Value="#FF7B72" /></Style>
+                      <Style Selector="TextBlock.issue"><Setter Property="Foreground" Value="{DynamicResource ReyErrorBrush}" /></Style>
                     </TextBlock.Styles>
                   </TextBlock>
                   <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
@@ -292,13 +292,13 @@
                 </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="6">
                       <Border Background="{DynamicResource ReyAccentBrush}" CornerRadius="3" Padding="5,1">
-                        <TextBlock Text="{Binding ProfileLabel}" Foreground="#08221E" FontSize="9" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding ProfileLabel}" Foreground="{DynamicResource ReyOnAccentBrush}" FontSize="9" FontWeight="SemiBold" />
                       </Border>
                       <TextBlock Text="{Binding FeatureSummary}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" VerticalAlignment="Center" />
-                      <Border Background="#4D8A5AF0" CornerRadius="3" Padding="5,1" VerticalAlignment="Center" IsVisible="{Binding UsesSpecular}">
+                      <Border Background="{DynamicResource ReyAccent2SoftBrush}" CornerRadius="3" Padding="5,1" VerticalAlignment="Center" IsVisible="{Binding UsesSpecular}">
                         <TextBlock Text="SPECULAR" Foreground="{DynamicResource ReyTextBrush}" FontSize="8" FontWeight="SemiBold" />
                       </Border>
-                      <TextBlock Text="⚠ profile unresolved" Foreground="#FFB454" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding ProfileUnresolved}" />
+                      <TextBlock Text="⚠ profile unresolved" Foreground="{DynamicResource ReyWarningBrush}" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding ProfileUnresolved}" />
                     </StackPanel>
                   </StackPanel>
                 </Grid>
@@ -355,8 +355,8 @@
                         <StackPanel Orientation="Horizontal" Spacing="6">
                           <TextBlock Text="{Binding SamplerName}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" MinWidth="110" VerticalAlignment="Center" />
                           <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" IsVisible="{Binding IsDiffuse}" ToolTip.Tip="Diffuse" />
-                          <TextBlock Text="⚠" Foreground="#FFB454" FontSize="11" VerticalAlignment="Center" IsVisible="{Binding Unresolved}" ToolTip.Tip="Path not found in this WAD" />
-                          <TextBlock Text="?" Foreground="#FFB454" FontSize="11" VerticalAlignment="Center" IsVisible="{Binding NotInShader}"
+                          <TextBlock Text="⚠" Foreground="{DynamicResource ReyWarningBrush}" FontSize="11" VerticalAlignment="Center" IsVisible="{Binding Unresolved}" ToolTip.Tip="Path not found in this WAD" />
+                          <TextBlock Text="?" Foreground="{DynamicResource ReyWarningBrush}" FontSize="11" VerticalAlignment="Center" IsVisible="{Binding NotInShader}"
                                      ToolTip.Tip="The selected shader declares no sampler by this name — it will be ignored" />
                           <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
                         </StackPanel>
@@ -533,8 +533,8 @@
                             <Border Grid.Column="2" Padding="4,0" CornerRadius="3" Margin="4,0,0,0"
                                     VerticalAlignment="Center" IsVisible="{Binding IsFatal}"
                                     Background="{DynamicResource ReyCardBrush}"
-                                    BorderBrush="#FFE05252" BorderThickness="1">
-                              <TextBlock Text="{Binding StatusLabel}" FontSize="8" Foreground="#FFE05252" />
+                                    BorderBrush="{DynamicResource ReyErrorBrush}" BorderThickness="1">
+                              <TextBlock Text="{Binding StatusLabel}" FontSize="8" Foreground="{DynamicResource ReyErrorBrush}" />
                             </Border>
                             <Border Grid.Column="2" Padding="4,0" CornerRadius="3" Margin="4,0,0,0"
                                     VerticalAlignment="Center" IsVisible="{Binding IsWarning}"
@@ -556,7 +556,7 @@
                     <TextBlock Text="ADD SHADER MACRO" FontSize="8" FontWeight="SemiBold"
                                Foreground="{DynamicResource ReyTextDimBrush}" />
                     <TextBlock Text="Macros select precompiled DX11 permutations. Unsupported combinations can crash in-game."
-                               FontSize="8" TextWrapping="Wrap" Foreground="#FFB454" />
+                               FontSize="8" TextWrapping="Wrap" Foreground="{DynamicResource ReyWarningBrush}" />
                     <ItemsControl ItemsSource="{Binding MissingMacros}">
                       <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                       <ItemsControl.ItemTemplate>
@@ -579,7 +579,7 @@
                                          VerticalAlignment="Center"
                                          Foreground="{DynamicResource ReyTextDimBrush}" />
                               <TextBlock Text="{Binding StatusLabel}" FontSize="8" IsVisible="{Binding IsFatal}"
-                                         VerticalAlignment="Center" Foreground="#FFE05252" />
+                                         VerticalAlignment="Center" Foreground="{DynamicResource ReyErrorBrush}" />
                             </StackPanel>
                           </Button>
                         </DataTemplate>
@@ -621,7 +621,7 @@
                           <!-- M646: a dynamicMaterial driver overrides this value in the game -->
                           <TextBlock Text="⚡" FontSize="10" VerticalAlignment="Center" Foreground="{DynamicResource ReyAccent2Brush}"
                                      IsVisible="{Binding IsDriven}" ToolTip.Tip="{Binding DrivenNote}" />
-                          <TextBlock Text="{Binding ErrorText}" Foreground="#FF6B6B" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding HasError}" />
+                          <TextBlock Text="{Binding ErrorText}" Foreground="{DynamicResource ReyErrorBrush}" FontSize="9" VerticalAlignment="Center" IsVisible="{Binding HasError}" />
                         </StackPanel>
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>

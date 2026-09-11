@@ -203,7 +203,7 @@
                              DynamicLightIntensity="{Binding BackgroundLightIntensity}"
                              ShowLightMarkers="False" />
       <!-- M120: texture preview overlay - the window is the single preview surface for images too -->
-      <Border Background="#E60D1117" IsVisible="{Binding HasImagePreview}">
+      <Border Background="{DynamicResource ReyBgVeilBrush}" IsVisible="{Binding HasImagePreview}">
         <DockPanel Margin="14">
           <DockPanel DockPanel.Dock="Top">
             <Button DockPanel.Dock="Right" Classes="tool" Content="✕ Close image" FontSize="11" Padding="8,3"
@@ -499,11 +499,11 @@
                                 Command="{Binding ResetDummyCommand}" ToolTip.Tip="Back to 350 units in front" />
                       </Grid>
                       <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" >
-                        <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyAxisXBrush}" />
                         <TextBox Grid.Column="1" Text="{Binding DummyX, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
-                        <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisYBrush}" />
                         <TextBox Grid.Column="3" Text="{Binding DummyY, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
-                        <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisZBrush}" />
                         <TextBox Grid.Column="5" Text="{Binding DummyZ, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
                       </Grid>
                       <CheckBox Content="Play selected VFX at dummy" IsChecked="{Binding PlaySelectedAtDummy}" FontSize="10"

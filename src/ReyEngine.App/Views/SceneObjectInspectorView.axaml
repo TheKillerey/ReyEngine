@@ -14,31 +14,31 @@
 
         <TextBlock Text="Position" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
         <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
-          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyAxisXBrush}" />
           <TextBox Grid.Column="1" Text="{Binding MeshMoveX}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisYBrush}" />
           <TextBox Grid.Column="3" Text="{Binding MeshMoveY}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisZBrush}" />
           <TextBox Grid.Column="5" Text="{Binding MeshMoveZ}" FontSize="10" Padding="3,1" />
         </Grid>
 
         <TextBlock Text="Rotation (degrees)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
         <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
-          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyAxisXBrush}" />
           <TextBox Grid.Column="1" Text="{Binding MeshRotateX}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisYBrush}" />
           <TextBox Grid.Column="3" Text="{Binding MeshRotateY}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisZBrush}" />
           <TextBox Grid.Column="5" Text="{Binding MeshRotateZ}" FontSize="10" Padding="3,1" />
         </Grid>
 
         <TextBlock Text="Scale" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
         <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
-          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyAxisXBrush}" />
           <TextBox Grid.Column="1" Text="{Binding MeshScaleX}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisYBrush}" />
           <TextBox Grid.Column="3" Text="{Binding MeshScaleY}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisZBrush}" />
           <TextBox Grid.Column="5" Text="{Binding MeshScaleZ}" FontSize="10" Padding="3,1" />
         </Grid>
 
@@ -83,33 +83,33 @@
 
         <TextBlock Text="Move Δ (world)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
         <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
-          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyAxisXBrush}" />
           <TextBox Grid.Column="1" Text="{Binding BatchMoveX}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisYBrush}" />
           <TextBox Grid.Column="3" Text="{Binding BatchMoveY}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisZBrush}" />
           <TextBox Grid.Column="5" Text="{Binding BatchMoveZ}" FontSize="10" Padding="3,1" />
         </Grid>
         <Button Content="Move Selection" Command="{Binding ApplyBatchMoveCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
 
         <TextBlock Text="Rotate Δ (degrees, about center)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
-          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyAxisXBrush}" />
           <TextBox Grid.Column="1" Text="{Binding BatchRotateX}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisYBrush}" />
           <TextBox Grid.Column="3" Text="{Binding BatchRotateY}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisZBrush}" />
           <TextBox Grid.Column="5" Text="{Binding BatchRotateZ}" FontSize="10" Padding="3,1" />
         </Grid>
         <Button Content="Rotate Selection" Command="{Binding ApplyBatchRotateCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
 
         <TextBlock Text="Scale Δ (about center)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
-          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyAxisXBrush}" />
           <TextBox Grid.Column="1" Text="{Binding BatchScaleX}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisYBrush}" />
           <TextBox Grid.Column="3" Text="{Binding BatchScaleY}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisZBrush}" />
           <TextBox Grid.Column="5" Text="{Binding BatchScaleZ}" FontSize="10" Padding="3,1" />
         </Grid>
         <Button Content="Scale Selection" Command="{Binding ApplyBatchScaleCommand}" FontSize="11" Padding="8,2" HorizontalAlignment="Left" />
@@ -149,7 +149,7 @@
                   HorizontalAlignment="Stretch" FontSize="10"
                   ToolTip.Tip="Every material this map's materials.bin defines. Choosing one queues the swap; Save Map Edits writes it into the mapgeo." />
         <TextBlock IsVisible="{Binding SelectedMeshHasSeveralMaterials}" FontSize="9" TextWrapping="Wrap"
-                   Foreground="#FFB454"
+                   Foreground="{DynamicResource ReyWarningBrush}"
                    Text="This mesh has more than one submesh material — the chosen one replaces ALL of them." />
         <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding SelectedMeshMaterialChanged}">
           <TextBlock Text="changed — Save Map Edits to write it" FontSize="9" VerticalAlignment="Center"
@@ -209,7 +209,7 @@
         <TextBox Text="{Binding SelectedParticleNode.EditedTint}" FontSize="10" Padding="3,1"
                  Watermark="1, 1, 1, 1"
                  ToolTip.Tip="Multiplies the particle colour. Every shipped value is between 0 and 1, so this can darken or fade but not brighten. Leave empty to keep the authored tint." />
-        <TextBlock Text="Needs four numbers, e.g. 1, 0.97, 0.84, 0.6" FontSize="9" Foreground="#E5645B"
+        <TextBlock Text="Needs four numbers, e.g. 1, 0.97, 0.84, 0.6" FontSize="9" Foreground="{DynamicResource ReyErrorBrush}"
                    IsVisible="{Binding SelectedParticleNode.TintIsInvalid, FallbackValue=False}" />
 
         <!-- M205: re-link. A map defines a few hundred systems, so the list is filtered rather than raw. -->
@@ -220,16 +220,16 @@
                   DisplayMemberBinding="{Binding Name}"
                   FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="260"
                   ToolTip.Tip="Point this placement at a different VFX system. Choosing its current system clears the edit." />
-        <TextBlock Text="Re-linked — Save to Mod will repoint it." FontSize="9" Foreground="#E5A227"
+        <TextBlock Text="Re-linked — Save to Mod will repoint it." FontSize="9" Foreground="{DynamicResource ReyWarningBrush}"
                    IsVisible="{Binding SelectedParticleNode.IsRelinked, FallbackValue=False}" />
 
         <TextBlock Text="Position" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <Grid ColumnDefinitions="14,*,14,*,14,*">
-          <TextBlock Grid.Column="0" Text="X" FontSize="10" Foreground="#E5645B" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" Foreground="{DynamicResource ReyAxisXBrush}" VerticalAlignment="Center" />
           <TextBox Grid.Column="1" Text="{Binding ParticleMoveX}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="2" Text="Y" FontSize="10" Foreground="#53C67A" VerticalAlignment="Center" Margin="3,0,0,0" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" Foreground="{DynamicResource ReyAxisYBrush}" VerticalAlignment="Center" Margin="3,0,0,0" />
           <TextBox Grid.Column="3" Text="{Binding ParticleMoveY}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="4" Text="Z" FontSize="10" Foreground="#4C9FE8" VerticalAlignment="Center" Margin="3,0,0,0" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" Foreground="{DynamicResource ReyAxisZBrush}" VerticalAlignment="Center" Margin="3,0,0,0" />
           <TextBox Grid.Column="5" Text="{Binding ParticleMoveZ}" FontSize="10" Padding="3,1" />
         </Grid>
         <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
@@ -243,7 +243,7 @@
         <Button Classes="tool" Content="⧉ Duplicate" Command="{Binding DuplicateParticlePlacementCommand}"
                 FontSize="10" Padding="6,2" HorizontalAlignment="Left" Margin="0,2,0,0"
                 ToolTip.Tip="Create a copy of this placement, offset so you can see it. It is written to the .bin on Save to Mod." />
-        <TextBlock Text="New placement — Save to Mod will add it." FontSize="9" Foreground="#53C67A"
+        <TextBlock Text="New placement — Save to Mod will add it." FontSize="9" Foreground="{DynamicResource ReySuccessBrush}"
                    IsVisible="{Binding SelectedParticleNode.IsNew, FallbackValue=False}" />
 
         <!-- M204: delete is a toggle, not an immediate action - it stops rendering at once but nothing
@@ -251,7 +251,7 @@
         <ToggleButton Classes="vp" Content="🗑 Mark for deletion" IsChecked="{Binding SelectedParticleNode.IsRemoved}"
                       FontSize="10" Padding="6,2" HorizontalAlignment="Left" Margin="0,2,0,0"
                       ToolTip.Tip="Remove this placement from the map. It disappears from the viewport immediately; the .bin changes only on Save to Mod." />
-        <TextBlock Text="Marked for deletion — Save to Mod will remove it." FontSize="9" Foreground="#E5A227"
+        <TextBlock Text="Marked for deletion — Save to Mod will remove it." FontSize="9" Foreground="{DynamicResource ReyWarningBrush}"
                    IsVisible="{Binding SelectedParticleNode.IsRemoved, FallbackValue=False}" />
       </StackPanel>
     </Border>
@@ -283,7 +283,7 @@
           </TextBox>
           <Button Grid.Column="1" Content="Apply" Command="{Binding ApplyBatchTintCommand}" FontSize="10" Padding="7,1" Margin="3,0,0,0" />
         </Grid>
-        <TextBlock Text="Needs four numbers, e.g. 1, 0.97, 0.84, 0.6" FontSize="9" Foreground="#E5645B"
+        <TextBlock Text="Needs four numbers, e.g. 1, 0.97, 0.84, 0.6" FontSize="9" Foreground="{DynamicResource ReyErrorBrush}"
                    IsVisible="{Binding BatchTintInvalid}" />
 
         <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
@@ -388,7 +388,7 @@
         <!-- M516: the mesh names a material the map does not have. Until now this was silent: the mesh
              drew with a fallback and the picker could not even offer the name it was carrying. -->
         <TextBlock IsVisible="{Binding AddedMeshMaterialMissing}" FontSize="9" TextWrapping="Wrap"
-                   Foreground="#FFE05252"
+                   Foreground="{DynamicResource ReyErrorBrush}"
                    Text="This mesh names a material the map does not have — it will draw untextured. Pick one above, or create it in the Materials tab." />
         <TextBlock Text="{Binding SelectedAddedMesh.Material}" FontSize="9" TextWrapping="Wrap"
                    IsVisible="{Binding AddedMeshMaterialMissing}"

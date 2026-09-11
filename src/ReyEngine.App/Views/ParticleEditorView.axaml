@@ -25,7 +25,7 @@
             <Button Classes="tool" Content="💾 Save Override" Command="{Binding SaveOverrideCommand}"
                     IsEnabled="{Binding IsEditable}" ToolTip.Tip="Write the edited particle .bin to the project override" />
             <!-- M125: this bin needed repairs while loading — details + fix in the Issues window -->
-            <Button Classes="tool" Content="{Binding BinIssuesLabel}" Foreground="#FF7B72"
+            <Button Classes="tool" Content="{Binding BinIssuesLabel}" Foreground="{DynamicResource ReyErrorBrush}"
                     Command="{Binding ShowIssuesCommand}" IsVisible="{Binding HasBinIssues}"
                     ToolTip.Tip="Problems were repaired while reading this bin — affected systems are marked red. Click for details and a one-click fix." />
             <Button Classes="tool" Content="⟲ Restart" Command="{Binding RestartCommand}" ToolTip.Tip="Restart the preview simulation" />
@@ -57,12 +57,12 @@
                   <StackPanel Margin="2" ToolTip.Tip="{Binding IssueTip}">
                     <StackPanel Orientation="Horizontal" Spacing="4">
                       <!-- M125: red name + ⚠ when this system's bin object needed repairs -->
-                      <TextBlock Text="⚠" Foreground="#FF7B72" FontSize="10" VerticalAlignment="Center"
+                      <TextBlock Text="⚠" Foreground="{DynamicResource ReyErrorBrush}" FontSize="10" VerticalAlignment="Center"
                                  IsVisible="{Binding HasIssue}" />
                       <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis"
                                  Classes.issue="{Binding HasIssue}">
                         <TextBlock.Styles>
-                          <Style Selector="TextBlock.issue"><Setter Property="Foreground" Value="#FF7B72" /></Style>
+                          <Style Selector="TextBlock.issue"><Setter Property="Foreground" Value="{DynamicResource ReyErrorBrush}" /></Style>
                         </TextBlock.Styles>
                       </TextBlock>
                     </StackPanel>
@@ -97,7 +97,7 @@
                         </DockPanel>
                       </Border>
                       <!-- particle sprite preview (Particle Town texture strip) -->
-                      <Border DockPanel.Dock="Top" Background="#10141B" Height="52" IsVisible="{Binding HasThumbnail}">
+                      <Border DockPanel.Dock="Top" Background="{DynamicResource ReyBgBrush}" Height="52" IsVisible="{Binding HasThumbnail}">
                         <Image Source="{Binding Thumbnail}" Stretch="Uniform" Margin="3" />
                       </Border>
                       <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -281,16 +281,16 @@
                         Command="{Binding ApplyEditCommand}" CommandParameter="{Binding SelectedProperty}"
                         IsEnabled="{Binding SelectedProperty.IsReadOnly, Converter={x:Static BoolConverters.Not}, FallbackValue=False}" />
                 <TextBlock Text="{Binding SelectedProperty.ErrorText, FallbackValue=''}" FontSize="10"
-                           Foreground="#E5645B" TextWrapping="Wrap"
+                           Foreground="{DynamicResource ReyErrorBrush}" TextWrapping="Wrap"
                            IsVisible="{Binding SelectedProperty.ErrorText, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}" />
                 <TextBlock Text="{Binding SelectedProperty.ReadOnlyReason, FallbackValue=''}" FontSize="10" Opacity="0.5" TextWrapping="Wrap"
                            IsVisible="{Binding SelectedProperty.IsReadOnly, FallbackValue=False}" />
                 <!-- M191 (3.7): editable, saved, but not visible in the preview -->
-                <Border Background="#221E1408" BorderBrush="#55C9A227" BorderThickness="1" CornerRadius="3"
+                <Border Background="{DynamicResource ReyWarningSoftBrush}" BorderBrush="{DynamicResource ReyWarningBrush}" BorderThickness="1" CornerRadius="3"
                         Padding="6,4" Margin="0,8,0,0"
                         IsVisible="{Binding SelectedProperty.IgnoredByPreview, FallbackValue=False}">
                   <StackPanel Spacing="2">
-                    <TextBlock Text="○ NOT SHOWN IN THE PREVIEW" FontSize="9" FontWeight="Bold" Foreground="#C9A227" />
+                    <TextBlock Text="○ NOT SHOWN IN THE PREVIEW" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource ReyWarningBrush}" />
                     <TextBlock Text="{Binding SelectedProperty.PreviewNote, FallbackValue=''}" FontSize="10"
                                Opacity="0.75" TextWrapping="Wrap" />
                   </StackPanel>

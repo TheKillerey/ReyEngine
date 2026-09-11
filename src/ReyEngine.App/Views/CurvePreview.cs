@@ -36,7 +36,7 @@ public sealed class CurvePreview : Control
     {
         var b = Bounds;
         // frame + quarter grid
-        ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x10, 0x14, 0x1B)), new Rect(b.Size));
+        ctx.FillRectangle(ReyEngine.App.Services.ThemeService.Brush("ReyBgBrush", "#10141B"), new Rect(b.Size));   // M686: the palette's ground
         for (int i = 1; i < 4; i++)
         {
             double x = b.Width * i / 4.0, y = b.Height * i / 4.0;

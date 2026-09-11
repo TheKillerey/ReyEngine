@@ -120,7 +120,7 @@
                                        Foreground="{DynamicResource ReyAccentBrush}" />
                           </Border>
                           <TextBlock Text="file missing" FontSize="8" VerticalAlignment="Center"
-                                     IsVisible="{Binding IsMissingFile}" Foreground="#FFE05252" />
+                                     IsVisible="{Binding IsMissingFile}" Foreground="{DynamicResource ReyErrorBrush}" />
                         </StackPanel>
                         <TextBlock Text="{Binding Path}" FontSize="9" TextTrimming="CharacterEllipsis"
                                    Foreground="{DynamicResource ReyAccentBrush}" />
@@ -160,7 +160,7 @@
                                      Foreground="{DynamicResource ReyAccentBrush}" />
                         </Border>
                         <TextBlock Text="file missing" FontSize="8" VerticalAlignment="Center"
-                                   IsVisible="{Binding IsMissingFile}" Foreground="#FFE05252" />
+                                   IsVisible="{Binding IsMissingFile}" Foreground="{DynamicResource ReyErrorBrush}" />
                       </StackPanel>
                       <TextBlock Text="{Binding Detail}" FontSize="9"
                                  Foreground="{DynamicResource ReyTextDimBrush}" />
@@ -228,8 +228,8 @@
               <Border VerticalAlignment="Bottom" Padding="18,24,18,14">
                 <Border.Background>
                   <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
-                    <GradientStop Offset="0" Color="#00101014" />
-                    <GradientStop Offset="1" Color="#F0101014" />
+                    <GradientStop Offset="0" Color="{DynamicResource ReyPanelClear}" />
+                    <GradientStop Offset="1" Color="{DynamicResource ReyPanel}" />
                   </LinearGradientBrush>
                 </Border.Background>
                 <StackPanel>
@@ -325,8 +325,8 @@
               <Border VerticalAlignment="Bottom" Padding="18,24,18,14">
                 <Border.Background>
                   <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
-                    <GradientStop Offset="0" Color="#00101014" />
-                    <GradientStop Offset="1" Color="#F0101014" />
+                    <GradientStop Offset="0" Color="{DynamicResource ReyPanelClear}" />
+                    <GradientStop Offset="1" Color="{DynamicResource ReyPanel}" />
                   </LinearGradientBrush>
                 </Border.Background>
                 <StackPanel>

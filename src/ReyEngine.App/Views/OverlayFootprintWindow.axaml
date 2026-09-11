@@ -19,8 +19,8 @@
                      Text="Mod loaders overlay files by path hash across EVERY game WAD containing that path — shared assets (character/item textures) exist in dozens of WADs, so each one must be patched. The wider the overlay, the slower the patch step and the higher the risk of loader failures." />
         </StackPanel>
 
-        <Border Background="#26FF5555" CornerRadius="4" Padding="8" IsVisible="{Binding HasWarning}">
-          <TextBlock Text="{Binding WarningText}" Foreground="#FF7B72" FontSize="11" TextWrapping="Wrap" />
+        <Border Background="{DynamicResource ReyErrorSoftBrush}" CornerRadius="4" Padding="8" IsVisible="{Binding HasWarning}">
+          <TextBlock Text="{Binding WarningText}" Foreground="{DynamicResource ReyErrorBrush}" FontSize="11" TextWrapping="Wrap" />
         </Border>
 
         <!-- fan-out sources: what to trim -->

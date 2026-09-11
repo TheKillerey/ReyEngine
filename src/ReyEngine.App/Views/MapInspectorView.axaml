@@ -20,11 +20,11 @@
         <TextBlock Text="Nudge (world units, added to the current position)" FontSize="9"
                    Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,2,0,0" />
         <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
-          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="#E5645B" />
+          <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyAxisXBrush}" />
           <TextBox Grid.Column="1" Text="{Binding LegacyNudgeX}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#53C67A" />
+          <TextBlock Grid.Column="2" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisYBrush}" />
           <TextBox Grid.Column="3" Text="{Binding LegacyNudgeY}" FontSize="10" Padding="3,1" />
-          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="#4C9FE8" />
+          <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisZBrush}" />
           <TextBox Grid.Column="5" Text="{Binding LegacyNudgeZ}" FontSize="10" Padding="3,1" />
         </Grid>
         <Button Classes="tool" Content="Nudge Imported Geometry" HorizontalAlignment="Left"
@@ -51,8 +51,8 @@
                                  Foreground="{DynamicResource ReyTextDimBrush}" />
                       <!-- M436: 5 of the 9 features appear in 0 shipped map bins. MapGameplayTexture is
                            one, and adding it as a bare marker breaks the client. -->
-                      <Border IsVisible="{Binding IsUnshipped}" Background="#5A2D2D" CornerRadius="2" Padding="4,0">
-                        <TextBlock Text="{Binding ShippedLabel}" FontSize="9" Foreground="#F0B3B3" />
+                      <Border IsVisible="{Binding IsUnshipped}" Background="{DynamicResource ReyErrorSoftBrush}" CornerRadius="2" Padding="4,0">
+                        <TextBlock Text="{Binding ShippedLabel}" FontSize="9" Foreground="{DynamicResource ReyErrorBrush}" />
                       </Border>
                       <TextBlock IsVisible="{Binding !IsUnshipped}" Text="{Binding ShippedLabel}" FontSize="9"
                                  VerticalAlignment="Center" Foreground="{DynamicResource ReyTextDimBrush}" />

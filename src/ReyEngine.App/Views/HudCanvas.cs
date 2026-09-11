@@ -70,9 +70,20 @@ public sealed class HudCanvas : Control
     private static readonly IPen FramePen = new ImmutablePen(new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0x55, 0x66, 0x77)), 1);
     private static readonly IBrush PlaceholderFill = new ImmutableSolidColorBrush(Color.FromArgb(0x22, 0x8a, 0xd0, 0xff));
     private static readonly IPen PlaceholderPen = new ImmutablePen(new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0x8a, 0xd0, 0xff)), 1);
-    private static readonly ImmutableSolidColorBrush GuideBrush = new(Color.FromArgb(0xAA, 0xFF, 0xB4, 0x54));
-    private static readonly IPen GuidePen = new ImmutablePen(GuideBrush, 1.5, new ImmutableDashStyle(new double[] { 4, 4 }, 0));
-    private static readonly IPen SelPen = new ImmutablePen(new ImmutableSolidColorBrush(Color.FromRgb(0x35, 0xd0, 0x8a)), 2);
+    // M686: the guide (warning) and the selection (success) take the palette's colours; refreshed once
+    // per Render so a palette switch shows on the next frame, allocated once per frame, not per item
+    private static readonly ImmutableDashStyle GuideDash = new(new double[] { 4, 4 }, 0);
+    private IBrush GuideBrush = new ImmutableSolidColorBrush(Color.FromArgb(0xAA, 0xFF, 0xB4, 0x54));
+    private IPen GuidePen = new ImmutablePen(new ImmutableSolidColorBrush(Color.FromArgb(0xAA, 0xFF, 0xB4, 0x54)), 1.5, GuideDash);
+    private IPen SelPen = new ImmutablePen(new ImmutableSolidColorBrush(Color.FromRgb(0x35, 0xd0, 0x8a)), 2);
+
+    private void RefreshPalettePens()
+    {
+        var warning = ReyEngine.App.Services.ThemeService.Brush("ReyWarningBrush", "#FFB454") is ISolidColorBrush w ? w.Color : Color.FromRgb(0xFF, 0xB4, 0x54);
+        GuideBrush = new ImmutableSolidColorBrush(warning, 0.67);
+        GuidePen = new Pen(GuideBrush, 1.5, GuideDash);   // Pen, not ImmutablePen: the palette's brush is mutable
+        SelPen = new Pen(ReyEngine.App.Services.ThemeService.Brush("ReySuccessBrush", "#35D08A"), 2);
+    }
     private static readonly IPen SelShadowPen = new ImmutablePen(new ImmutableSolidColorBrush(Color.FromArgb(0x66, 0, 0, 0)), 4);
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs e)
@@ -205,7 +216,8 @@ public sealed class HudCanvas : Control
     {
         // backdrop first (always safe), then guard the rest — a draw exception must dim the canvas,
         // not crash the process.
-        ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x12, 0x16, 0x1d)), new Rect(Bounds.Size));
+        ctx.FillRectangle(ReyEngine.App.Services.ThemeService.Brush("ReyBgBrush", "#12161D"), new Rect(Bounds.Size));
+        RefreshPalettePens();
         try { RenderCore(ctx); }
         catch (Exception ex)
         {
@@ -219,7 +231,7 @@ public sealed class HudCanvas : Control
             {
                 var txt = new FormattedText("HUD render error — see the console.",
                     System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                    Typeface.Default, 12, new SolidColorBrush(Color.FromRgb(0xFF, 0x7B, 0x72)));
+                    Typeface.Default, 12, ReyEngine.App.Services.ThemeService.Brush("ReyErrorBrush", "#FF7B72"));
                 ctx.DrawText(txt, new Point(12, 12));
             }
             catch { /* even the error text failed — nothing more we can safely do */ }

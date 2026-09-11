@@ -110,6 +110,65 @@ public sealed class ThemeLookTests
         Assert.Contains("ThemeService.Apply(vm.Settings);", code);
     }
 
+    /// <summary>M686: no view carries a colour of its own any more - every hex value that meant "error",
+    /// "warning", "success", "accent" or "the ground" is a palette brush now, the active tab and the
+    /// selected outliner row are classes styled from the palette, and the axis labels share three
+    /// brushes defined once. What stays hard-coded is listed here on purpose: neutral black/white veils,
+    /// the near-transparent hit-test panel, Windows' own close-button red, and the "new feature" glow
+    /// (a BoxShadow cannot take a resource).</summary>
+    [Fact]
+    public void TheViewsCarryNoColoursOfTheirOwn()
+    {
+        var dir = Source("src", "ReyEngine.App", "Views");
+        var theme = Source("src", "ReyEngine.App", "Themes", "ReyTheme.axaml");
+        if (dir is null || theme is null) return;
+        var allowed = new[] { "20000000", "33FFFFFF", "22FFFFFF", "01000000", "C42B1C", "8B7CF7" };
+        var offenders = new System.Collections.Generic.List<string>();
+        foreach (string file in Directory.GetFiles(dir, "*.axaml").Append(Path.Combine(Path.GetDirectoryName(dir)!, "Themes", "ReyTheme.axaml")))
+        {
+            string text = File.ReadAllText(file);
+            // the three axis brushes are DEFINED in the theme, the one place a literal is the point
+            bool isTheme = Path.GetFileName(file) == "ReyTheme.axaml";
+            foreach (Match m in Regex.Matches(text, "=\"#([0-9A-Fa-f]{6,8})\""))
+                if (!allowed.Contains(m.Groups[1].Value.ToUpperInvariant())
+                    && !(isTheme && new[] { "E5645B", "53C67A", "4C9FE8" }.Contains(m.Groups[1].Value.ToUpperInvariant())))
+                    offenders.Add(Path.GetFileName(file) + ": #" + m.Groups[1].Value);
+            // the axis labels are the three shared brushes, never a literal
+            foreach (Match m in Regex.Matches(text, "Text=\"[XYZ]\"[^>]*Foreground=\"([^\"]*)\""))
+                Assert.Matches("^\\{DynamicResource ReyAxis[XYZ]Brush\\}$", m.Groups[1].Value);
+        }
+        Assert.True(offenders.Count == 0, string.Join("; ", offenders));
+
+        // the tab and the row: classes, not converters
+        Assert.Contains("<Style Selector=\"Border.docTab.active\">", theme);
+        Assert.Contains("<Style Selector=\"Border.docTabLine.active\">", theme);
+        Assert.Contains("<Style Selector=\"Border.outRow.selected\">", theme);
+        Assert.Contains("x:Key=\"ReyAxisXBrush\"", theme);
+        var main = Source("src", "ReyEngine.App", "Views", "MainWindow.axaml");
+        var outliner = Source("src", "ReyEngine.App", "Views", "MapOutlinerView.axaml");
+        Assert.NotNull(main); Assert.NotNull(outliner);
+        Assert.Contains("Classes=\"docTab\" Classes.active=\"{Binding IsActive}\"", main);
+        Assert.Contains("Classes=\"docTabLine\" Classes.active=\"{Binding IsActive}\"", main);
+        Assert.Equal(6, Regex.Matches(outliner!, "Classes=\"outRow\" Classes.selected=\"\\{Binding IsSelected\\}\"").Count);
+        Assert.DoesNotContain("BoolToBrushConverter", main);
+        Assert.DoesNotContain("BoolToBrushConverter", outliner);
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(dir)!, "Converters", "BoolToBrushConverter.cs")));
+
+        // every palette carries the soft fills the views now ask for
+        var palettes = Source("src", "ReyEngine.App", "Themes", "Palettes");
+        Assert.NotNull(palettes);
+        foreach (var preset in ThemeService.Presets)
+        {
+            string text = File.ReadAllText(Path.Combine(palettes!, preset.Name + ".axaml"));
+            foreach (string key in new[] { "ReyErrorSoft", "ReyWarningSoft", "ReySuccessSoft", "ReySuccessSoftHover", "ReyAccent2Soft", "ReyBgVeil", "ReyPanelClear" })
+                Assert.Contains("x:Key=\"" + key + "\"", text);
+            // the soft fill is the palette's OWN colour under an alpha, not a copy of Crimson's
+            var error = Regex.Match(text, "x:Key=\"ReyError\">#([0-9A-Fa-f]{6})<").Groups[1].Value;
+            var soft = Regex.Match(text, "x:Key=\"ReyErrorSoft\">#([0-9A-Fa-f]{8})<").Groups[1].Value;
+            Assert.Equal(error.ToUpperInvariant(), soft.Substring(2).ToUpperInvariant());
+        }
+    }
+
     /// <summary>M685: the viewport chrome. The NavGrid split button sits in the toolbar row at the tool
     /// buttons' size and colours; the flyouts and tooltips paint the palette, not Fluent's greys; the
     /// orbit/pan hint is out of the toolbar's way at the bottom right.</summary>

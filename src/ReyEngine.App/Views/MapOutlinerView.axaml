@@ -1,11 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
-             xmlns:conv="clr-namespace:ReyEngine.App.Converters"
              x:Class="ReyEngine.App.Views.MapOutlinerView">
-  <UserControl.Resources>
-    <conv:BoolToBrushConverter x:Key="SelectionHighlight" TrueBrush="#3336E2C2" FalseBrush="Transparent" />
-  </UserControl.Resources>
 
   <!-- M51: ONE unified hierarchy (Unity/Unreal style) — plain folders (Meshes / Particles / Mobs /
        Probes) in a single tree; select any object type here. No per-category collapse sections. -->
@@ -101,12 +97,12 @@
           </StackPanel>
         </TreeDataTemplate>
         <DataTemplate DataType="vm:MapPieceViewModel">
-          <Border Background="{Binding IsSelected, Converter={StaticResource SelectionHighlight}}"
+          <Border Classes="outRow" Classes.selected="{Binding IsSelected}"
                   CornerRadius="2" Padding="3,0" Margin="-3,0">
             <StackPanel Orientation="Horizontal" Spacing="5">
               <TextBlock Text="🧊" FontSize="9" VerticalAlignment="Center" />
-              <TextBlock Text="OFF" FontSize="8" Foreground="#E5A227" IsVisible="{Binding IsDisabled}" />
-              <TextBlock Text="DEL" FontSize="8" Foreground="#E5645B" IsVisible="{Binding IsRemoved}" />
+              <TextBlock Text="OFF" FontSize="8" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding IsDisabled}" />
+              <TextBlock Text="DEL" FontSize="8" Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding IsRemoved}" />
               <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}"
                          TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
             </StackPanel>
@@ -125,11 +121,11 @@
           </StackPanel>
         </TreeDataTemplate>
         <DataTemplate DataType="vm:ParticlePlacementViewModel">
-          <Border Background="{Binding IsSelected, Converter={StaticResource SelectionHighlight}}" CornerRadius="2" Padding="3,0" Margin="-3,0">
+          <Border Classes="outRow" Classes.selected="{Binding IsSelected}" CornerRadius="2" Padding="3,0" Margin="-3,0">
             <StackPanel Orientation="Horizontal" Spacing="5">
-              <TextBlock Text="✦" FontSize="9" Foreground="#36E2C2" VerticalAlignment="Center" />
-              <TextBlock Text="OFF" FontSize="8" Foreground="#E5A227" IsVisible="{Binding IsDisabled}" />
-              <TextBlock Text="DEL" FontSize="8" Foreground="#E5645B" IsVisible="{Binding IsRemoved}" />
+              <TextBlock Text="✦" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
+              <TextBlock Text="OFF" FontSize="8" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding IsDisabled}" />
+              <TextBlock Text="DEL" FontSize="8" Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding IsRemoved}" />
               <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
                          TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
             </StackPanel>
@@ -144,11 +140,11 @@
           </StackPanel>
         </TreeDataTemplate>
         <DataTemplate DataType="vm:AnimatedPropViewModel">
-          <Border Background="{Binding IsSelected, Converter={StaticResource SelectionHighlight}}" CornerRadius="2" Padding="3,0" Margin="-3,0">
+          <Border Classes="outRow" Classes.selected="{Binding IsSelected}" CornerRadius="2" Padding="3,0" Margin="-3,0">
             <StackPanel Orientation="Horizontal" Spacing="5">
               <TextBlock Text="🐾" FontSize="9" VerticalAlignment="Center" />
-              <TextBlock Text="OFF" FontSize="8" Foreground="#E5A227" IsVisible="{Binding IsDisabled}" />
-              <TextBlock Text="DEL" FontSize="8" Foreground="#E5645B" IsVisible="{Binding IsRemoved}" />
+              <TextBlock Text="OFF" FontSize="8" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding IsDisabled}" />
+              <TextBlock Text="DEL" FontSize="8" Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding IsRemoved}" />
               <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
                          TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
             </StackPanel>
@@ -156,30 +152,30 @@
         </DataTemplate>
 
         <DataTemplate DataType="vm:CubemapProbeViewModel">
-          <Border Background="{Binding IsSelected, Converter={StaticResource SelectionHighlight}}" CornerRadius="2" Padding="3,0" Margin="-3,0"><StackPanel Orientation="Horizontal" Spacing="5">
+          <Border Classes="outRow" Classes.selected="{Binding IsSelected}" CornerRadius="2" Padding="3,0" Margin="-3,0"><StackPanel Orientation="Horizontal" Spacing="5">
             <TextBlock Text="🪞" FontSize="9" VerticalAlignment="Center" />
-            <TextBlock Text="OFF" FontSize="8" Foreground="#E5A227" IsVisible="{Binding IsDisabled}" />
-            <TextBlock Text="DEL" FontSize="8" Foreground="#E5645B" IsVisible="{Binding IsRemoved}" />
+            <TextBlock Text="OFF" FontSize="8" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding IsDisabled}" />
+            <TextBlock Text="DEL" FontSize="8" Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding IsRemoved}" />
             <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
                        TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
           </StackPanel></Border>
         </DataTemplate>
 
         <DataTemplate DataType="vm:MapSoundViewModel">
-          <Border Background="{Binding IsSelected, Converter={StaticResource SelectionHighlight}}" CornerRadius="2" Padding="3,0" Margin="-3,0"><StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding EventName}">
+          <Border Classes="outRow" Classes.selected="{Binding IsSelected}" CornerRadius="2" Padding="3,0" Margin="-3,0"><StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding EventName}">
             <TextBlock Text="🔊" FontSize="9" VerticalAlignment="Center" />
-            <TextBlock Text="OFF" FontSize="8" Foreground="#E5A227" IsVisible="{Binding IsDisabled}" />
-            <TextBlock Text="DEL" FontSize="8" Foreground="#E5645B" IsVisible="{Binding IsRemoved}" />
+            <TextBlock Text="OFF" FontSize="8" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding IsDisabled}" />
+            <TextBlock Text="DEL" FontSize="8" Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding IsRemoved}" />
             <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
                        TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
           </StackPanel></Border>
         </DataTemplate>
 
         <DataTemplate DataType="vm:AddedMapMeshViewModel">
-          <Border Background="{Binding IsSelected, Converter={StaticResource SelectionHighlight}}" CornerRadius="2" Padding="3,0" Margin="-3,0"><StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding Info}">
+          <Border Classes="outRow" Classes.selected="{Binding IsSelected}" CornerRadius="2" Padding="3,0" Margin="-3,0"><StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding Info}">
             <TextBlock Text="➕" FontSize="9" VerticalAlignment="Center" />
-            <TextBlock Text="OFF" FontSize="8" Foreground="#E5A227" IsVisible="{Binding IsDisabled}" />
-            <TextBlock Text="DEL" FontSize="8" Foreground="#E5645B" IsVisible="{Binding IsRemoved}" />
+            <TextBlock Text="OFF" FontSize="8" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding IsDisabled}" />
+            <TextBlock Text="DEL" FontSize="8" Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding IsRemoved}" />
             <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
                        TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
           </StackPanel></Border>
@@ -196,7 +192,7 @@
 
         <DataTemplate DataType="vm:BucketGridViewModel">
           <StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding Info}">
-            <TextBlock Text="⌗" FontSize="9" Foreground="#9E73F2" VerticalAlignment="Center" />
+            <TextBlock Text="⌗" FontSize="9" Foreground="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" />
             <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
                        TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
           </StackPanel>

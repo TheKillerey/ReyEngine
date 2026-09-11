@@ -65,8 +65,8 @@
                             Command="{Binding NavigateCommand}" IsVisible="{Binding CanGoTo}"
                             ToolTip.Tip="Jump to this object in its editor" />
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                      <Border Background="#33FF5555" CornerRadius="3" Padding="5,2" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Kind}" FontSize="9" FontWeight="SemiBold" Foreground="#FF7B72" />
+                      <Border Background="{DynamicResource ReyErrorSoftBrush}" CornerRadius="3" Padding="5,2" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Kind}" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource ReyErrorBrush}" />
                       </Border>
                       <TextBlock Text="{Binding ObjectName}" FontSize="12" FontWeight="SemiBold"
                                  VerticalAlignment="Center" TextTrimming="CharacterEllipsis"

@@ -95,7 +95,7 @@
             <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="TEXTURE" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
-                <Border Background="#10141B" CornerRadius="3" Height="120" IsVisible="{Binding InspTexturePreview, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="3" Height="120" IsVisible="{Binding InspTexturePreview, Converter={x:Static ObjectConverters.IsNotNull}}">
                   <Image Source="{Binding InspTexturePreview}" Stretch="Uniform" Margin="4" />
                 </Border>
                 <TextBlock Text="{Binding InspTexture}" FontSize="9" TextWrapping="Wrap"

@@ -93,13 +93,13 @@
     <Setter Property="Foreground" Value="{DynamicResource ReyOnAccentBrush}" />
   </Style>
   <Style Selector="Border.badge.violet">
-    <Setter Property="Background" Value="#4D6C5CE7" />
+    <Setter Property="Background" Value="{DynamicResource ReyAccent2SoftBrush}" />
   </Style>
   <Style Selector="Border.badge.violet > TextBlock">
     <Setter Property="Foreground" Value="{DynamicResource ReyTextBrightBrush}" />
   </Style>
   <Style Selector="Border.badge.warn">
-    <Setter Property="Background" Value="#33FFB454" />
+    <Setter Property="Background" Value="{DynamicResource ReyWarningSoftBrush}" />
   </Style>
   <Style Selector="Border.badge.warn > TextBlock">
     <Setter Property="Foreground" Value="{DynamicResource ReyWarningBrush}" />
@@ -161,7 +161,7 @@
 
   <!-- M72: success/confirm action (Save Settings) — dark-green fill, bright green edge, like the reference -->
   <Style Selector="Button.success">
-    <Setter Property="Background" Value="#1F3DD68C" />
+    <Setter Property="Background" Value="{DynamicResource ReySuccessSoftBrush}" />
     <Setter Property="Foreground" Value="{DynamicResource ReySuccessBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource ReySuccessBrush}" />
     <Setter Property="BorderThickness" Value="1" />
@@ -172,7 +172,7 @@
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
   <Style Selector="Button.success:pointerover /template/ ContentPresenter">
-    <Setter Property="Background" Value="#333DD68C" />
+    <Setter Property="Background" Value="{DynamicResource ReySuccessSoftHoverBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource ReySuccessBrush}" />
   </Style>
   <Style Selector="Button.success:disabled">
@@ -480,6 +480,11 @@
          (Fluent dark #33FFFFFF: the washed-out white bar) as a LOCAL value in the template,
          which no Style can reach. The resource key is the only lever. -->
     <SolidColorBrush x:Key="SystemControlBackgroundBaseLowBrush" Color="{DynamicResource ReyHeader}" />
+    <!-- M686: the X/Y/Z labels beside transform fields. Red/green/blue is the gizmo's convention in every
+         3D tool and does not belong to a palette, so it lives here once instead of in 27 TextBlocks. -->
+    <SolidColorBrush x:Key="ReyAxisXBrush" Color="#E5645B" />
+    <SolidColorBrush x:Key="ReyAxisYBrush" Color="#53C67A" />
+    <SolidColorBrush x:Key="ReyAxisZBrush" Color="#4C9FE8" />
   </Styles.Resources>
 
   <!-- SystemControlBackgroundBaseLowBrush is shared with exactly one other control we use:
@@ -611,10 +616,27 @@
 
   <!-- The "NEW" pill, for putting next to a highlighted control's label. Reuses the badge vocabulary. -->
   <Style Selector="Border.badge.new">
-    <Setter Property="Background" Value="#4D8B7CF7" />
+    <Setter Property="Background" Value="{DynamicResource ReyAccent2SoftBrush}" />
   </Style>
   <Style Selector="Border.badge.new > TextBlock">
     <Setter Property="Foreground" Value="{DynamicResource ReyAccent2Brush}" />
+  </Style>
+
+  <!-- ── document tabs and outliner rows (M686) ───────────────────────────────
+       These were BoolToBrushConverters holding Kalista's cyan from before the palettes existed, so the
+       active tab and the selected outliner row stayed cyan under every palette and ignored a custom
+       accent. A class bound to the view-model flag, styled here, follows both. -->
+  <Style Selector="Border.docTab.active">
+    <Setter Property="Background" Value="{DynamicResource ReyHoverBrush}" />
+  </Style>
+  <Style Selector="Border.docTabLine">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="Border.docTabLine.active">
+    <Setter Property="Background" Value="{DynamicResource ReyAccentBrush}" />
+  </Style>
+  <Style Selector="Border.outRow.selected">
+    <Setter Property="Background" Value="{DynamicResource ReySelectionBrush}" />
   </Style>
 
   <!-- ── popups (M685) ──────────────────────────────────────────────────────────

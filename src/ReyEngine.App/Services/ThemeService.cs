@@ -145,6 +145,16 @@ public static class ThemeService
         return merged[0].TryGetResource(key, app.ActualThemeVariant, out var v) && v is Color c ? c : null;
     }
 
+    // ---- M686: palette colours for code that draws ----------------------------------------------
+
+    /// <summary>A palette brush by key, looked up when asked so the next frame after a palette switch
+    /// paints the new one; the fallback keeps headless and pre-startup callers alive.</summary>
+    public static IBrush Brush(string key, string fallbackHex)
+    {
+        if (Application.Current is { } app && app.TryGetResource(key, app.ActualThemeVariant, out var v) && v is IBrush b) return b;
+        return new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(fallbackHex));
+    }
+
     // ---- colour arithmetic, public for the tests -------------------------------------------------
     public static Color WithAlpha(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
     public static Color Mix(Color a, Color b, double t) => Color.FromArgb(a.A,

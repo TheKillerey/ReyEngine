@@ -30,7 +30,7 @@ public sealed class UvCanvas : Control
     /// <summary>An optional second channel drawn dimmer behind it, for comparing UV0 against UV7.</summary>
     public Vector2[]? CompareSegments { get => GetValue(CompareSegmentsProperty); set => SetValue(CompareSegmentsProperty, value); }
 
-    private static readonly IBrush Background = new SolidColorBrush(Color.FromRgb(0x10, 0x14, 0x1B));
+    private static IBrush Background => ReyEngine.App.Services.ThemeService.Brush("ReyBgBrush", "#10141B");   // M686: the palette's ground
     private static readonly IBrush InsideFill = new SolidColorBrush(Color.FromArgb(28, 90, 160, 220));
     private static readonly IPen UnitPen = new Pen(new SolidColorBrush(Color.FromArgb(150, 120, 170, 210)), 1.4);
     private static readonly IPen GridPen = new Pen(new SolidColorBrush(Color.FromArgb(40, 130, 150, 170)), 1);

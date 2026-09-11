@@ -5,21 +5,17 @@ using ReyEngine.Core.Diagnostics;
 
 namespace ReyEngine.App.Converters;
 
+/// <summary>Console line colours. M686: the palette's signal brushes, looked up per line so they follow
+/// the theme (the old constants were Kalista's cyan and greys under every palette).</summary>
 public sealed class LogLevelToBrushConverter : IValueConverter
 {
-    private static readonly IBrush Error = new SolidColorBrush(Color.Parse("#FF6B6B"));
-    private static readonly IBrush Warning = new SolidColorBrush(Color.Parse("#FFC857"));
-    private static readonly IBrush Success = new SolidColorBrush(Color.Parse("#36E2C2"));
-    private static readonly IBrush Info = new SolidColorBrush(Color.Parse("#9AA7B8"));
-    private static readonly IBrush Trace = new SolidColorBrush(Color.Parse("#5A6678"));
-
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
     {
-        LogLevel.Error => Error,
-        LogLevel.Warning => Warning,
-        LogLevel.Success => Success,
-        LogLevel.Trace => Trace,
-        _ => Info,
+        LogLevel.Error => ReyEngine.App.Services.ThemeService.Brush("ReyErrorBrush", "#FF6B6B"),
+        LogLevel.Warning => ReyEngine.App.Services.ThemeService.Brush("ReyWarningBrush", "#FFC857"),
+        LogLevel.Success => ReyEngine.App.Services.ThemeService.Brush("ReySuccessBrush", "#3DD68C"),
+        LogLevel.Trace => ReyEngine.App.Services.ThemeService.Brush("ReyTextDimBrush", "#5A6678"),
+        _ => ReyEngine.App.Services.ThemeService.Brush("ReyTextBrush", "#9AA7B8"),
     };
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
