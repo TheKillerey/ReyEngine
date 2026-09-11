@@ -55,12 +55,32 @@ jobs:
           Compress-Archive -Path publish/win-x64/* -DestinationPath "dist/$name" -CompressionLevel Optimal
           "name=$name" >> $env:GITHUB_OUTPUT
 
+      # M684: the same files as a per-user MSI (installer/Package.wxs). The MSI's version is the tag
+      # without its "v" - MSI versions are numeric, so a tag that is not x.y.z stops the build here
+      # rather than shipping an installer that cannot upgrade the previous one.
+      - name: Build MSI
+        id: msi
+        shell: pwsh
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "tag '$env:TAG' is not vX.Y.Z; the MSI needs a numeric version" }
+          dotnet build installer/ReyEngine.Installer.wixproj -c Release --nologo `
+            -p:ProductVersion=$version -p:PublishDir="$PWD/publish/win-x64"
+          if ($LASTEXITCODE -ne 0) { throw "the WiX build failed (exit $LASTEXITCODE)" }
+          $built = Get-ChildItem installer/bin -Recurse -Filter ReyEngine.msi | Select-Object -First 1
+          if (-not $built) { throw "no ReyEngine.msi under installer/bin" }
+          $name = "ReyEngine-$env:TAG-win-x64.msi"
+          Copy-Item $built.FullName "dist/$name"
+          "name=$name" >> $env:GITHUB_OUTPUT
+
       - name: Upload build artifact (for SignPath)
         id: upload
         uses: actions/upload-artifact@v4
         with:
           name: reyengine-win-x64
-          path: dist/${{ steps.package.outputs.name }}
+          path: |
+            dist/${{ steps.package.outputs.name }}
+            dist/${{ steps.msi.outputs.name }}
           if-no-files-found: error
 
       # --- signing (runs only when SignPath credentials are configured) ---
@@ -78,13 +98,16 @@ jobs:
           output-artifact-directory: dist-signed
           skip-decompress: true
 
-      - name: Choose release asset (signed if available)
+      - name: Choose release assets (signed if available)
         id: asset
         shell: pwsh
         run: |
-          $name = "${{ steps.package.outputs.name }}"
-          if (Test-Path "dist-signed/$name") { "path=dist-signed/$name" >> $env:GITHUB_OUTPUT }
-          else { "path=dist/$name" >> $env:GITHUB_OUTPUT }
+          $zip = "${{ steps.package.outputs.name }}"
+          $msi = "${{ steps.msi.outputs.name }}"
+          $zipPath = if (Test-Path "dist-signed/$zip") { "dist-signed/$zip" } else { "dist/$zip" }
+          $msiPath = if (Test-Path "dist-signed/$msi") { "dist-signed/$msi" } else { "dist/$msi" }
+          "path=$zipPath" >> $env:GITHUB_OUTPUT
+          "msi=$msiPath" >> $env:GITHUB_OUTPUT
 
       # Hand-written changelogs live at docs/release-notes/<tag>.md and ship as the release body. When a
       # tag has no such file the release falls back to GitHub's auto-generated commit list, so a release
@@ -114,5 +137,7 @@ jobs:
           prerelease: true
           body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: ${{ steps.notes.outputs.generate }}
-          files: ${{ steps.asset.outputs.path }}
+          files: |
+            ${{ steps.asset.outputs.path }}
+            ${{ steps.asset.outputs.msi }}
           fail_on_unmatched_files: true

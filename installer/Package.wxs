@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  M684: ReyEngine as a per-user MSI.
+
+  Why per-user: the app lives under %LocalAppData%\Programs\ReyEngine, so installing and - the point -
+  updating never asks for elevation. The in-app updater (UpdateApplier) runs "msiexec /i <new msi>
+  /passive /norestart" on the MSI it downloaded and restarts the app; a MajorUpgrade keeps the folder,
+  the shortcuts and the settings the user made. The portable zip keeps working next to this: an MSI
+  install writes HKCU\Software\ReyEngine\InstallKind = msi, which is how the updater knows to take the
+  .msi asset instead of the zip.
+
+  AUTOUPDATE (public property, "1" or "0"):
+    msiexec /i ReyEngine-vX.Y.Z-win-x64.msi AUTOUPDATE=0     - ask before installing releases (default 1)
+  It lands in HKCU\Software\ReyEngine\AutoUpdate, which UpdateService.EffectiveMode reads as the
+  default when the user has not chosen a mode in Settings (an explicit choice there always wins). The
+  options page shows it as a checkbox; a later upgrade reads the value back from the registry, so a
+  silent upgrade run by the app keeps the choice instead of resetting it.
+
+  Files come from the self-contained publish folder (PublishDir, see the .wixproj) - every file under
+  it, one component each. Version is the release tag without its "v".
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="ReyEngine"
+           Manufacturer="TheKillerey"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="662724e7-88e6-4e3c-aec5-1059ec1cb4a1"
+           Scope="perUser"
+           Language="1033"
+           Compressed="yes"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="ReyEngine - League of Legends asset editor" Manufacturer="TheKillerey" />
+
+    <!-- one product on the machine: a newer MSI replaces the older one in place, the same version
+         reinstalls over itself (the updater may retry a download), an older one is refused. The old
+         product is removed AFTER the new files are in (afterInstallExecute): an upgrade the in-app
+         updater runs unattended must leave the previous version in place when it fails, and the default
+         schedule leaves neither. Same-version reinstalls raise ICE61, suppressed in the project. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallExecute"
+                  DowngradeErrorMessage="A newer version of ReyEngine is already installed. Uninstall it first to go back." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="ReyEngineIcon" SourceFile="..\src\ReyEngine.App\Assets\reyengine.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ReyEngineIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/TheKillerey/ReyEngine" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/TheKillerey/ReyEngine/wiki" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- the two choices the options page offers; both read back from the previous install so an
+         upgrade keeps them, both settable from the command line -->
+    <Property Id="AUTOUPDATE" Value="1" Secure="yes">
+      <RegistrySearch Id="ExistingAutoUpdate" Root="HKCU" Key="Software\ReyEngine" Name="AutoUpdate" Type="raw" />
+    </Property>
+    <Property Id="DESKTOPSHORTCUT" Value="1" Secure="yes">
+      <RegistrySearch Id="ExistingDesktopShortcut" Root="HKCU" Key="Software\ReyEngine" Name="DesktopShortcut" Type="raw" />
+    </Property>
+    <!-- an unticked checkbox clears its property; the registry must still get an explicit "0" so the
+         next upgrade finds the choice (an absent value would fall back to the default) -->
+    <SetProperty Id="AUTOUPDATE" Action="SetAutoUpdateOff" Value="0" Sequence="execute" Before="InstallInitialize" Condition="NOT AUTOUPDATE" />
+    <SetProperty Id="DESKTOPSHORTCUT" Action="SetDesktopShortcutOff" Value="0" Sequence="execute" Before="InstallInitialize" Condition="NOT DESKTOPSHORTCUT" />
+
+    <!-- "Start ReyEngine now" on the last page -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Start ReyEngine now" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <!-- WixShellExec formats this value itself when Finish is clicked, so the folder the wizard ended
+         with is the one launched (a SetProperty would be scheduled at 1295, before the wizard shows at
+         1297, and hold the default folder). The compiler's WIX1077 about the reference is suppressed
+         in the project for that reason. -->
+    <Property Id="WixShellExecTarget" Value="[INSTALLFOLDER]ReyEngine.App.exe" />
+    <CustomAction Id="LaunchReyEngine" DllEntry="WixShellExec" Impersonate="yes" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
+
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <UIRef Id="WixUI_ReyEngine" />
+
+    <Feature Id="Main" Title="ReyEngine" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="RegistryMarks" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="ReyEngine" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+  </Fragment>
+
+  <Fragment>
+    <!-- every file the publish produced, subfolders included (blender\, data\, ...) -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.PublishDir)\**" />
+    </ComponentGroup>
+
+    <!-- what the app reads: the install kind (so the updater takes the .msi asset), where it is, and the
+         two choices; the key path is a registry value because a per-user package keeps no file key
+         paths -->
+    <Component Id="RegistryMarks" Directory="INSTALLFOLDER">
+      <RegistryKey Root="HKCU" Key="Software\ReyEngine">
+        <RegistryValue Name="InstallKind" Type="string" Value="msi" KeyPath="yes" />
+        <RegistryValue Name="InstallDir" Type="string" Value="[INSTALLFOLDER]" />
+        <RegistryValue Name="InstallVersion" Type="string" Value="[ProductVersion]" />
+        <RegistryValue Name="AutoUpdate" Type="string" Value="[AUTOUPDATE]" />
+        <RegistryValue Name="DesktopShortcut" Type="string" Value="[DESKTOPSHORTCUT]" />
+      </RegistryKey>
+      <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+      <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+    </Component>
+
+    <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder">
+      <Shortcut Id="StartMenuReyEngine" Name="ReyEngine" Description="League of Legends asset editor"
+                Target="[INSTALLFOLDER]ReyEngine.App.exe" WorkingDirectory="INSTALLFOLDER" Icon="ReyEngineIcon" />
+      <RegistryValue Root="HKCU" Key="Software\ReyEngine\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="DesktopShortcut" Directory="DesktopFolder" Condition="DESKTOPSHORTCUT = &quot;1&quot;">
+      <Shortcut Id="DesktopReyEngine" Name="ReyEngine" Description="League of Legends asset editor"
+                Target="[INSTALLFOLDER]ReyEngine.App.exe" WorkingDirectory="INSTALLFOLDER" Icon="ReyEngineIcon" />
+      <RegistryValue Root="HKCU" Key="Software\ReyEngine\Shortcuts" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+  </Fragment>
+
+  <Fragment>
+    <!-- WixUI_InstallDir with the licence page dropped (MIT, in the repository) and one page
+         of ours between the folder and the summary: automatic updates, desktop shortcut. -->
+    <UI Id="WixUI_ReyEngine">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+      <DialogRef Id="BrowseDlg" />
+      <DialogRef Id="DiskCostDlg" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+
+      <Dialog Id="ReyOptionsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Updates and shortcuts" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="How ReyEngine keeps itself current, and where to find it." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="AutoUpdateBox" Type="CheckBox" X="25" Y="62" Width="330" Height="17"
+                 Property="AUTOUPDATE" CheckBoxValue="1" Text="Install new releases automatically" />
+        <Control Id="AutoUpdateText" Type="Text" X="40" Y="80" Width="310" Height="36" NoPrefix="yes"
+                 Text="ReyEngine checks GitHub for a new release when it starts. Ticked, it downloads and installs the release by itself and restarts. Unticked, it shows the release notes and asks first. Either way this can be changed later under Settings > General > Updates." />
+
+        <Control Id="DesktopBox" Type="CheckBox" X="25" Y="128" Width="330" Height="17"
+                 Property="DESKTOPSHORTCUT" CheckBoxValue="1" Text="Put a shortcut on the desktop" />
+        <Control Id="DesktopText" Type="Text" X="40" Y="146" Width="310" Height="24" NoPrefix="yes"
+                 Text="A Start menu entry is always created." />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="InstallDirDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <Publish Dialog="BrowseDlg" Control="OK" Event="DoAction" Value="WixUIValidatePath_$(sys.BUILDARCHSHORT)" Order="3" Condition="NOT WIXUI_DONTVALIDATEPATH" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="SpawnDialog" Value="InvalidDirDlg" Order="4" Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
+
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchReyEngine" Order="998" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Condition="NOT Installed" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="WixUIValidatePath_$(sys.BUILDARCHSHORT)" Order="2" Condition="NOT WIXUI_DONTVALIDATEPATH" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SpawnDialog" Value="InvalidDirDlg" Order="3" Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ReyOptionsDlg" Order="4" Condition="WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
+
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ReyOptionsDlg" Order="1" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
+
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+    </UI>
+
+    <UIRef Id="WixUI_Common" />
+  </Fragment>
+</Wix>

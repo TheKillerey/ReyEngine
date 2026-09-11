@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- M684: the per-user MSI. Built by the release workflow from the self-contained publish folder:
+
+       dotnet publish src/ReyEngine.App/ReyEngine.App.csproj -c Release -r win-x64 -o publish/win-x64   (self-contained, as release.yml does)
+       dotnet build installer/ReyEngine.Installer.wixproj -c Release -p:ProductVersion=0.4.4 -p:PublishDir=publish/win-x64
+
+     ProductVersion is the release tag without its "v" (MSI versions are numeric x.y.z). PublishDir defaults to
+     ../publish/win-x64 so a local build after a local publish needs no arguments. -->
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputName>ReyEngine</OutputName>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\publish\win-x64</PublishDir>
+    <PublishDir>$([System.IO.Path]::GetFullPath('$(PublishDir)').TrimEnd('\'))</PublishDir>
+    <DefineConstants>$(DefineConstants);ProductVersion=$(ProductVersion);PublishDir=$(PublishDir)</DefineConstants>
+    <!-- A per-user package keeps its files under the profile, where ICE38/ICE64/ICE91 insist on
+         per-machine conventions (registry key paths for every file, RemoveFile rows); the package is
+         per-user on purpose, so those three are noise here. ICE61 objects to same-version upgrades,
+         which the in-app updater relies on to re-run a download. WIX1077 is the "[INSTALLFOLDER]" in
+         WixShellExecTarget, which that custom action formats itself (see Package.wxs). -->
+    <SuppressIces>ICE38;ICE61;ICE64;ICE91</SuppressIces>
+    <SuppressSpecificWarnings>1077</SuppressSpecificWarnings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+</Project>

@@ -77,7 +77,7 @@
 ## Getting started
 
 1. Install [League of Legends](https://www.leagueoflegends.com) (LIVE and/or PBE).
-2. Download the latest release from [Releases](https://github.com/TheKillerey/ReyEngine/releases) and unzip, or build from source:
+2. Download the latest release from [Releases](https://github.com/TheKillerey/ReyEngine/releases): the `.msi` installs for the current user (no administrator rights) under `%LocalAppData%\Programs\ReyEngine` and can keep itself up to date; the `.zip` is the same build as a portable folder. Or build from source:
    ```
    dotnet build src/ReyEngine.App/ReyEngine.App.csproj -c Release
    ```
@@ -108,12 +108,12 @@ Every signed release is built automatically by GitHub Actions from this public r
 
 ReyEngine does not transfer any personal data to networked systems. It makes a few outbound network requests, all initiated by the user or clearly disclosed:
 
-- **Update check** — on startup (and via *Help ▸ About*), it queries the public GitHub Releases API for this repository to see whether a newer version exists. Only the request itself is sent; no personal or usage data is transmitted.
+- **Update check** — on startup (and via *Help ▸ About*), it queries the public GitHub Releases API for this repository to see whether a newer version exists. Only the request itself is sent; no personal or usage data is transmitted. A new release is shown with its changelog; *Settings ▸ General ▸ Updates* chooses between installing it automatically, asking first, or only opening the download page. The MSI takes the same choice on its options page or as `msiexec /i ReyEngine-vX.Y.Z-win-x64.msi AUTOUPDATE=0`.
 - **Hash sync** — when you choose to sync hash tables, it downloads public hash lists from [CommunityDragon](https://communitydragon.org).
 - **Project patch update** — for projects with automatic patch rebasing enabled, opening the project checks CommunityDragon's public patch list and downloads the old Riot `.bin` originals needed for a local three-way merge. No project files are uploaded.
 - **Setup downloads** — the setup wizard downloads [vgmstream](https://github.com/vgmstream/vgmstream) and the optional [map asset pack](https://github.com/TheKillerey/ReyEngine/releases/tag/maps) from GitHub when you click their buttons.
 
-ReyEngine only reads your local League of Legends installation and writes to the project/output folders you select. Uninstall by deleting the extracted program folder.
+ReyEngine only reads your local League of Legends installation and writes to the project/output folders you select. Uninstall an MSI install from Windows' *Installed apps*, or delete the extracted zip folder.
 
 ## Legal
 
