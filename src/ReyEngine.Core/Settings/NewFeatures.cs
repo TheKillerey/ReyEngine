@@ -23,7 +23,7 @@ public sealed record NewFeature(string Id, string Version, string Label);
 public static class NewFeatures
 {
     /// <summary>The release whose highlights are currently on offer. Bump alongside the app version.</summary>
-    public const string CurrentVersion = "0.4.3";
+    public const string CurrentVersion = "0.4.4";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
@@ -65,6 +65,11 @@ public static class NewFeatures
         new("workshop-shelf",   "0.4.3", "Workshop — keep your own .troybin effects, custom-bin particles and meshes on a shelf"),
         new("add-mesh-library", "0.4.3", "Add Mesh — search a whole mapgeo, import .skn, and carry the original material across"),
         new("light-range",      "0.4.3", "Overlays — see how far each point light reaches, and hide icons behind geometry"),
+        // 0.4.4. Two entry points in this window whose capability changed. The installer, the update dialog,
+        // the material cleanup and the props are the rest of this release and have no control here to glow
+        // on: the first two arrive by themselves, the other two live inside windows of their own.
+        new("blender-addon",    "0.4.4", "Install the Blender add-on from here — every Blender on this PC, one click"),
+        new("look",             "0.4.4", "Preferences — eight palettes, an accent of your own, a picture behind the editor, and how updates arrive"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever

@@ -85,7 +85,8 @@
         <Separator />
         <MenuItem Header="Clear Console" Command="{Binding ClearConsoleCommand}" />
         <Separator />
-        <MenuItem Header="Preferences…" Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+," />
+        <MenuItem Header="Preferences…" Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+,"
+                  Classes.newFeature="{Binding NewFeature[look]}" />
       </MenuItem>
       <MenuItem Header="_View">
         <!-- M519: the two panes share one dock now, so there has to be a way to ask for the one that
@@ -110,6 +111,7 @@
                   ToolTip.Tip="Serve the open map's meshes to Blender on 127.0.0.1 so they can be edited there and their placements pushed back. Install tools/blender/reyengine_bridge.py in Blender, then use the ReyEngine tab in its 3D-view sidebar. Geometry only - materials stay here." />
         <MenuItem Header="{Binding BlenderLinkStatus}" IsEnabled="False" />
         <MenuItem Header="Install Blender add-on…" Command="{Binding OpenBlenderAddonSetupCommand}"
+                  Classes.newFeature="{Binding NewFeature[blender-addon]}"
                   ToolTip.Tip="Put the ReyEngine Bridge add-on into every Blender on this PC from here, instead of Edit ▸ Preferences ▸ Add-ons ▸ Install… by hand." />
         <Separator />
         <MenuItem Header="Character Editor…" Command="{Binding OpenCharacterBrowserCommand}"
