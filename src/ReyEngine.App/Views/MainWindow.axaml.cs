@@ -492,16 +492,11 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     private async void OnCheckUpdates(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         var r = await ReyEngine.App.Services.UpdateService.CheckAsync();
-        if (DataContext is not MainWindowViewModel vm) return;
         if (!r.Success)
             await PromptWindow.ConfirmAsync(this, "Check for Updates",
                 $"Could not check for updates.\n\n{r.Error}\n\n(If no GitHub release is published yet, this is expected.)", "OK");
         else if (r.UpdateAvailable)
-        {
-            if (await PromptWindow.ConfirmAsync(this, "Update Available",
-                $"A newer version is available: {r.LatestVersion}\nYou have {AppInfo.DisplayVersion}.\n\nOpen the download page?", "Open"))
-                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(r.ReleaseUrl!) { UseShellExecute = true }); } catch { }
-        }
+            await OfferUpdateAsync(r, manualCheck: true);
         else
             await PromptWindow.ConfirmAsync(this, "Check for Updates",
                 $"You're up to date ({AppInfo.DisplayVersion}).", "OK");
@@ -512,10 +507,29 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     {
         await System.Threading.Tasks.Task.Delay(3000);   // let the app settle first
         var r = await ReyEngine.App.Services.UpdateService.CheckAsync();
-        if (r is { Success: true, UpdateAvailable: true }
-            && await PromptWindow.ConfirmAsync(this, "Update Available",
-                $"ReyEngine {r.LatestVersion} is available (you have {AppInfo.DisplayVersion}).\n\nOpen the download page?", "Open"))
-            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(r.ReleaseUrl!) { UseShellExecute = true }); } catch { }
+        if (r is { Success: true, UpdateAvailable: true }) await OfferUpdateAsync(r, manualCheck: false);
+    }
+
+    /// <summary>M681: a newer release, offered the way the user asked for. The manual mode at startup is
+    /// the pre-M681 prompt that opens the download page; everything else - ask, auto, and any check the
+    /// user started from the menu - goes through the update dialog, which shows the changelog and can
+    /// install the build here. The checkbox in that dialog writes the mode back into the settings.</summary>
+    private async System.Threading.Tasks.Task OfferUpdateAsync(ReyEngine.App.Services.UpdateService.UpdateCheck r, bool manualCheck)
+    {
+        var settings = (DataContext as MainWindowViewModel)?.Settings ?? ReyEngine.Core.Settings.EditorSettings.Load();
+        string mode = ReyEngine.App.Services.UpdateService.EffectiveMode(settings.UpdateMode);
+        if (mode == ReyEngine.App.Services.UpdateService.ModeManual && !manualCheck)
+        {
+            if (await PromptWindow.ConfirmAsync(this, "Update Available",
+                    $"ReyEngine {r.LatestVersion} is available (you have {AppInfo.DisplayVersion}).\n\nOpen the download page?", "Open"))
+                ReyEngine.App.Services.UpdateService.OpenReleasePage(r);
+            return;
+        }
+        await UpdateWindow.ShowAsync(this, r, mode, chosen =>
+        {
+            settings.UpdateMode = chosen;
+            try { settings.Save(); } catch { }
+        });
     }
 
     /// <summary>M39 custom title bar: drag to move, double-click to maximize/restore — but ONLY from

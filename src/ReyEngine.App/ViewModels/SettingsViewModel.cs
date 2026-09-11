@@ -95,6 +95,17 @@ public sealed partial class SettingsViewModel : ObservableObject
     // is a quiet-period save, never a per-edit one.
     [ObservableProperty] private bool _autoSaveEdits;
     [ObservableProperty] private int _autoSaveDelaySeconds = 5;
+
+    /// <summary>M681: the update mode, as an index into UpdateService.Modes (0 ask, 1 auto, 2 manual).</summary>
+    [ObservableProperty] private int _updateModeIndex;
+    /// <summary>What an installer asked for, when one did - shown so a choice the user never made is not
+    /// mistaken for one they did.</summary>
+    public string UpdateModeHint => UpdateService.InstallerAutoUpdateDefault switch
+    {
+        true => "The installer set automatic updates as the default for this install.",
+        false => "The installer set asking as the default for this install.",
+        _ => "The changelog is shown in every mode but manual, which only opens the download page.",
+    };
     [ObservableProperty] private string _projectsDirectory = "";   // M133
     [ObservableProperty] private string _wwiseConsolePath = "";    // M138
     [ObservableProperty] private string _wwiseProjectPath = "";
@@ -199,6 +210,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         CullBackfacesDefault = s.CullBackfacesDefault;
         AutoSaveEdits = s.AutoSaveEdits;                       // M503c
         AutoSaveDelaySeconds = s.EffectiveAutoSaveDelaySeconds;
+        UpdateModeIndex = UpdateService.IndexOfMode(UpdateService.EffectiveMode(s.UpdateMode));   // M681
         ProjectsDirectory = s.ProjectsDirectory;
         WwiseConsolePath = s.WwiseConsolePath;
         WwiseProjectPath = s.WwiseProjectPath;
@@ -231,6 +243,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             PanSensitivity = PanSensitivity, ZoomSensitivity = ZoomSensitivity,
             InvertLookY = InvertLookY, FlySpeed = FlySpeed, CullBackfacesDefault = CullBackfacesDefault,
             AutoSaveEdits = AutoSaveEdits, AutoSaveDelaySeconds = AutoSaveDelaySeconds,   // M503c
+            UpdateMode = UpdateService.ModeAtIndex(UpdateModeIndex),   // M681
             Theme = _theme,
             PreviewBackgroundMapFolder = PreviewBackgroundMapFolder, PreviewBackgroundEnabled = PreviewBackgroundEnabled,
             ProjectsDirectory = ProjectsDirectory.Trim(),

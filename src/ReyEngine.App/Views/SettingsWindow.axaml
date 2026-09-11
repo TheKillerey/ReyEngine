@@ -110,6 +110,20 @@
                          Text="Respects each material's cullEnable flag on load. Turn off to force two-sided rendering everywhere." />
             </StackPanel>
           </Border>
+          <!-- M681 -->
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="settingsTitle" Text="UPDATES" />
+              <TextBlock Classes="settingsDesc"
+                         Text="What happens when a newer release is found at startup." />
+              <ComboBox SelectedIndex="{Binding UpdateModeIndex}" MinWidth="300" FontSize="12" Margin="0,4,0,0">
+                <ComboBoxItem>Ask me — show the changelog, I decide</ComboBoxItem>
+                <ComboBoxItem>Install automatically</ComboBoxItem>
+                <ComboBoxItem>Manual — only open the download page</ComboBoxItem>
+              </ComboBox>
+              <TextBlock Classes="settingsDesc" Text="{Binding UpdateModeHint}" />
+            </StackPanel>
+          </Border>
           <!-- M503c -->
           <Border Classes="settingsCard">
             <StackPanel Spacing="8">

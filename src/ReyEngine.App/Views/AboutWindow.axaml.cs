@@ -42,8 +42,14 @@ public partial class AboutWindow : Window
             UpdateStatus.Text = $"Could not check for updates ({r.Error}). If no release is published yet, this is expected.";
         else if (r.UpdateAvailable)
         {
-            UpdateStatus.Text = $"Update available: {r.LatestVersion} (you have {AppInfo.DisplayVersion}). Opening the release page…";
-            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(r.ReleaseUrl!) { UseShellExecute = true }); } catch { }
+            // M681: the changelog and the install live in the update dialog; this line only reports.
+            UpdateStatus.Text = $"Update available: {r.LatestVersion} (you have {AppInfo.DisplayVersion}).";
+            var settings = ReyEngine.Core.Settings.EditorSettings.Load();
+            await UpdateWindow.ShowAsync(this, r, UpdateService.EffectiveMode(settings.UpdateMode), chosen =>
+            {
+                settings.UpdateMode = chosen;
+                try { settings.Save(); } catch { }
+            });
         }
         else UpdateStatus.Text = $"You're up to date ({AppInfo.DisplayVersion}).";
     }

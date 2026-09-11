@@ -36,6 +36,13 @@ public sealed class EditorSettings
     /// <summary>UI theme palette name (Themes/Palettes/*.axaml). Unknown names fall back to the default.</summary>
     public string Theme { get; set; } = "Crimson";
 
+    // ---- updates (M681) ----
+    /// <summary>How a newer release is handled when one is found: <c>ask</c> shows the changelog and asks,
+    /// <c>auto</c> downloads and installs it, <c>manual</c> opens the download page (the pre-M681 way).
+    /// Empty means the user never chose, and the effective mode then comes from the installer's default
+    /// (an MSI can set it) or falls back to <c>ask</c> - see UpdateService.EffectiveMode.</summary>
+    public string UpdateMode { get; set; } = "";
+
     // ---- character-preview backdrop (M88) ----
     /// <summary>Path to a legacy League LEVELS/&lt;Map&gt; folder (containing Scene/room.nvr) used as the
     /// 3D backdrop behind previewed characters. Empty disables the feature.</summary>
@@ -135,6 +142,7 @@ public sealed class EditorSettings
         PanSensitivity = s.PanSensitivity; ZoomSensitivity = s.ZoomSensitivity;
         InvertLookY = s.InvertLookY; FlySpeed = s.FlySpeed; CullBackfacesDefault = s.CullBackfacesDefault;
         Theme = s.Theme;
+        UpdateMode = s.UpdateMode;   // M681
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder; PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
         FirstRunCompleted = s.FirstRunCompleted;
         LastSeenFeatureVersion = s.LastSeenFeatureVersion;   // M593
