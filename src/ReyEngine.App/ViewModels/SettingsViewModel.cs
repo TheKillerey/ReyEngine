@@ -243,6 +243,82 @@ public sealed partial class SettingsViewModel : ObservableObject
             BlenderStatus = $"Installed for {BlenderInstalls.Count(r => r.Install.AddonInstalled)} of {BlenderInstalls.Count} Blender version(s).";
     }
 
+    // ---- M683: the user's own layer - accent, picture, glass - applied LIVE like the palette ----------
+
+    /// <summary>The accent as the picker holds it; <see cref="AccentIsCustom"/> says whether it is the
+    /// user's or the palette's (the picker always shows something).</summary>
+    [ObservableProperty] private Avalonia.Media.Color _accentColor = Avalonia.Media.Colors.Transparent;
+    [ObservableProperty] private bool _accentIsCustom;
+    [ObservableProperty] private string _backgroundImagePath = "";
+    [ObservableProperty] private double _backgroundOpacityPercent = 35;
+    [ObservableProperty] private double _backgroundGlassPercent = 50;
+    [ObservableProperty] private int _backgroundStretchIndex;
+    private bool _lookLoading;
+
+    public bool HasBackgroundImage => !string.IsNullOrWhiteSpace(BackgroundImagePath);
+    public string BackgroundImageHint => HasBackgroundImage
+        ? (System.IO.File.Exists(BackgroundImagePath) ? "png, jpg, bmp, webp - and a gif shows its first frame." : "That file does not exist.")
+        : "No picture. Pick one to see the editor through it.";
+
+    partial void OnAccentColorChanged(Avalonia.Media.Color value)
+    {
+        if (_lookLoading) return;
+        AccentIsCustom = true;
+        ApplyLook();
+    }
+    partial void OnBackgroundImagePathChanged(string value)
+    { OnPropertyChanged(nameof(HasBackgroundImage)); OnPropertyChanged(nameof(BackgroundImageHint)); if (!_lookLoading) ApplyLook(); }
+    partial void OnBackgroundOpacityPercentChanged(double value) { if (!_lookLoading) ApplyLook(); }
+    partial void OnBackgroundGlassPercentChanged(double value) { if (!_lookLoading) ApplyLook(); }
+    partial void OnBackgroundStretchIndexChanged(int value) { if (!_lookLoading) ApplyLook(); }
+
+    /// <summary>Back to the palette's own accent.</summary>
+    [RelayCommand]
+    private void ResetAccent()
+    {
+        AccentIsCustom = false;
+        _lookLoading = true;
+        try { AccentColor = PaletteAccent(); } finally { _lookLoading = false; }
+        ApplyLook();
+    }
+
+    [RelayCommand]
+    private void ClearBackgroundImage() => BackgroundImagePath = "";
+
+    /// <summary>The settings as the look controls hold them - what Apply and Save read.</summary>
+    public EditorSettings LookSettings() => new()
+    {
+        Theme = _theme,
+        ThemeAccent = AccentIsCustom ? ToHex(AccentColor) : "",
+        BackgroundImagePath = BackgroundImagePath.Trim(),
+        BackgroundImageOpacity = Math.Clamp(BackgroundOpacityPercent / 100.0, 0, 1),
+        BackgroundGlass = Math.Clamp(BackgroundGlassPercent / 100.0, 0, 1),
+        BackgroundImageStretch = BackgroundStretchIndex,
+    };
+
+    private void ApplyLook() => ThemeService.Apply(LookSettings());
+
+    private void LoadLook(EditorSettings s)
+    {
+        _lookLoading = true;
+        try
+        {
+            AccentIsCustom = Avalonia.Media.Color.TryParse(s.ThemeAccent ?? "", out var accent) && !string.IsNullOrWhiteSpace(s.ThemeAccent);
+            AccentColor = AccentIsCustom ? accent : PaletteAccent();
+            BackgroundImagePath = s.BackgroundImagePath ?? "";
+            BackgroundOpacityPercent = Math.Round(Math.Clamp(s.BackgroundImageOpacity, 0, 1) * 100);
+            BackgroundGlassPercent = Math.Round(Math.Clamp(s.BackgroundGlass, 0, 1) * 100);
+            BackgroundStretchIndex = Math.Clamp(s.BackgroundImageStretch, 0, 3);
+        }
+        finally { _lookLoading = false; }
+    }
+
+    private Avalonia.Media.Color PaletteAccent() =>
+        Avalonia.Media.Color.TryParse(ThemeService.Presets.FirstOrDefault(p => string.Equals(p.Name, _theme, StringComparison.OrdinalIgnoreCase))?.Accent ?? "#E5484D", out var c)
+            ? c : Avalonia.Media.Colors.Red;
+
+    public static string ToHex(Avalonia.Media.Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+
     // M72: theme choice — applied LIVE while browsing so the user sees it; Cancel reverts.
     private string _theme = ThemeService.DefaultTheme;
     private readonly string _originalTheme;
@@ -301,7 +377,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         // theme: reflect + live-apply (LoadFrom also runs on Reset to Defaults)
         _theme = s.Theme;
         foreach (var t in Themes) t.IsSelected = string.Equals(t.Name, _theme, StringComparison.OrdinalIgnoreCase);
-        ThemeService.Apply(_theme);
+        LoadLook(s);        // M683: the user's layer, then the whole look at once
+        ApplyLook();
     }
 
     /// <summary>Build an EditorSettings from the current edited state.</summary>
@@ -325,6 +402,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             AutoSaveEdits = AutoSaveEdits, AutoSaveDelaySeconds = AutoSaveDelaySeconds,   // M503c
             UpdateMode = UpdateService.ModeAtIndex(UpdateModeIndex),   // M681
             Theme = _theme,
+            ThemeAccent = LookSettings().ThemeAccent, BackgroundImagePath = LookSettings().BackgroundImagePath,   // M683
+            BackgroundImageOpacity = LookSettings().BackgroundImageOpacity, BackgroundGlass = LookSettings().BackgroundGlass,
+            BackgroundImageStretch = BackgroundStretchIndex,
             PreviewBackgroundMapFolder = PreviewBackgroundMapFolder, PreviewBackgroundEnabled = PreviewBackgroundEnabled,
             ProjectsDirectory = ProjectsDirectory.Trim(),
             WwiseConsolePath = WwiseConsolePath.Trim(), WwiseProjectPath = WwiseProjectPath.Trim(),
@@ -342,7 +422,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         if (item is null) return;
         foreach (var t in Themes) t.IsSelected = ReferenceEquals(t, item);
         _theme = item.Name;
-        ThemeService.Apply(_theme);
+        if (!AccentIsCustom) { _lookLoading = true; try { AccentColor = PaletteAccent(); } finally { _lookLoading = false; } }   // M683: after _theme, so the picker shows THIS palette
+        ApplyLook();   // M683: the palette under the user's layer
     }
 
     /// <summary>Begin capturing a new key for a row (cancels any other in-progress capture).</summary>
@@ -379,7 +460,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private void Cancel()
     {
         Saved = false;
-        ThemeService.Apply(_originalTheme);   // M72: revert any live theme preview
+        ThemeService.Apply(_source);   // M72/M683: revert any live preview - palette, accent, picture, glass
         CloseRequested?.Invoke();
     }
 }

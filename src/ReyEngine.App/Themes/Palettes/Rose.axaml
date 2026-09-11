@@ -1,0 +1,118 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- ============================================================================
+       ReyEngine · ROSE palette (M683)
+       Plum-black surfaces, rose primary accent - dusk pink on the dark.
+       Every palette file defines the SAME keys — ThemeService swaps them live.
+       ============================================================================ -->
+
+  <!-- surfaces -->
+  <Color x:Key="ReyBg">#0B080B</Color>            <!-- window / viewport backdrop -->
+  <Color x:Key="ReyPanel">#131013</Color>          <!-- side panels -->
+  <Color x:Key="ReyPanelAlt">#1A151A</Color>       <!-- nested cards / inputs -->
+  <Color x:Key="ReyHeader">#0E0B0E</Color>         <!-- header / toolbar / status -->
+  <Color x:Key="ReyCard">#161216</Color>           <!-- inspector cards -->
+  <Color x:Key="ReyGlass">#CC131013</Color>        <!-- translucent HUD overlays -->
+
+  <!-- lines -->
+  <Color x:Key="ReyBorder">#2B222B</Color>
+  <Color x:Key="ReyBorderSoft">#211A21</Color>
+  <Color x:Key="ReyBorderAccent">#5A2A45</Color>   <!-- red-tinted panel edge -->
+
+  <!-- accents -->
+  <Color x:Key="ReyAccent">#F472B6</Color>
+  <Color x:Key="ReyAccentHover">#F896CA</Color>
+  <Color x:Key="ReyAccentDeep">#5A2244</Color>
+  <Color x:Key="ReyOnAccent">#FFF3FA</Color>       <!-- text on red fills -->
+  <Color x:Key="ReyAccent2">#8B7CF7</Color>
+  <Color x:Key="ReyAccent2Hover">#A79BFA</Color>
+
+  <!-- signals -->
+  <Color x:Key="ReyWarning">#FFB454</Color>
+  <Color x:Key="ReyError">#FF6B6B</Color>
+  <Color x:Key="ReySuccess">#3DD68C</Color>
+
+  <!-- text -->
+  <Color x:Key="ReyTextBright">#F2F2F5</Color>
+  <Color x:Key="ReyText">#C9C9D1</Color>
+  <Color x:Key="ReyTextDim">#75757F</Color>
+
+  <!-- selection / hover fills (translucent red) -->
+  <Color x:Key="ReySelection">#33F472B6</Color>
+  <Color x:Key="ReyHover">#14F472B6</Color>
+
+  <!-- brushes -->
+  <SolidColorBrush x:Key="ReyBgBrush" Color="{StaticResource ReyBg}" />
+  <SolidColorBrush x:Key="ReyPanelBrush" Color="{StaticResource ReyPanel}" />
+  <SolidColorBrush x:Key="ReyPanelAltBrush" Color="{StaticResource ReyPanelAlt}" />
+  <SolidColorBrush x:Key="ReyHeaderBrush" Color="{StaticResource ReyHeader}" />
+  <SolidColorBrush x:Key="ReyCardBrush" Color="{StaticResource ReyCard}" />
+  <SolidColorBrush x:Key="ReyGlassBrush" Color="{StaticResource ReyGlass}" />
+  <SolidColorBrush x:Key="ReyBorderBrush" Color="{StaticResource ReyBorder}" />
+  <SolidColorBrush x:Key="ReyBorderSoftBrush" Color="{StaticResource ReyBorderSoft}" />
+  <SolidColorBrush x:Key="ReyBorderAccentBrush" Color="{StaticResource ReyBorderAccent}" />
+  <SolidColorBrush x:Key="ReyAccentBrush" Color="{StaticResource ReyAccent}" />
+  <SolidColorBrush x:Key="ReyAccentHoverBrush" Color="{StaticResource ReyAccentHover}" />
+  <SolidColorBrush x:Key="ReyAccentDeepBrush" Color="{StaticResource ReyAccentDeep}" />
+  <SolidColorBrush x:Key="ReyOnAccentBrush" Color="{StaticResource ReyOnAccent}" />
+  <SolidColorBrush x:Key="ReyAccent2Brush" Color="{StaticResource ReyAccent2}" />
+  <SolidColorBrush x:Key="ReyAccent2HoverBrush" Color="{StaticResource ReyAccent2Hover}" />
+  <SolidColorBrush x:Key="ReyWarningBrush" Color="{StaticResource ReyWarning}" />
+  <SolidColorBrush x:Key="ReyErrorBrush" Color="{StaticResource ReyError}" />
+  <SolidColorBrush x:Key="ReySuccessBrush" Color="{StaticResource ReySuccess}" />
+  <SolidColorBrush x:Key="ReyTextBrightBrush" Color="{StaticResource ReyTextBright}" />
+  <SolidColorBrush x:Key="ReyTextBrush" Color="{StaticResource ReyText}" />
+  <SolidColorBrush x:Key="ReyTextDimBrush" Color="{StaticResource ReyTextDim}" />
+  <SolidColorBrush x:Key="ReySelectionBrush" Color="{StaticResource ReySelection}" />
+  <SolidColorBrush x:Key="ReyHoverBrush" Color="{StaticResource ReyHover}" />
+
+  <!-- Fluent theme tint: steer Avalonia's built-in controls onto the Crimson palette. -->
+  <Color x:Key="SystemAccentColor">#F472B6</Color>
+  <Color x:Key="SystemAccentColorDark1">#D6649F</Color>
+  <Color x:Key="SystemAccentColorDark2">#B45486</Color>
+  <Color x:Key="SystemAccentColorDark3">#92446D</Color>
+  <Color x:Key="SystemAccentColorLight1">#F896CA</Color>
+  <Color x:Key="SystemAccentColorLight2">#FBB2D9</Color>
+  <Color x:Key="SystemAccentColorLight3">#FCCDE7</Color>
+
+  <SolidColorBrush x:Key="TextControlBackground" Color="{StaticResource ReyPanelAlt}" />
+  <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="{StaticResource ReyPanelAlt}" />
+  <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="{StaticResource ReyPanelAlt}" />
+  <SolidColorBrush x:Key="TextControlBorderBrush" Color="{StaticResource ReyBorder}" />
+  <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="{StaticResource ReyBorderAccent}" />
+  <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="{StaticResource ReyAccent}" />
+  <SolidColorBrush x:Key="TextControlForeground" Color="{StaticResource ReyText}" />
+  <SolidColorBrush x:Key="TextControlForegroundFocused" Color="{StaticResource ReyTextBright}" />
+  <SolidColorBrush x:Key="TextControlPlaceholderForeground" Color="{StaticResource ReyTextDim}" />
+  <SolidColorBrush x:Key="TextControlSelectionHighlightColor" Color="{StaticResource ReySelection}" />
+
+  <SolidColorBrush x:Key="ComboBoxBackground" Color="{StaticResource ReyPanelAlt}" />
+  <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="{StaticResource ReyPanelAlt}" />
+  <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="{StaticResource ReyBorder}" />
+  <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="{StaticResource ReyBorderAccent}" />
+  <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="{StaticResource ReyPanelAlt}" />
+  <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="{StaticResource ReyBorder}" />
+
+  <SolidColorBrush x:Key="MenuFlyoutPresenterBackground" Color="{StaticResource ReyPanelAlt}" />
+  <SolidColorBrush x:Key="MenuFlyoutPresenterBorderBrush" Color="{StaticResource ReyBorder}" />
+
+  <SolidColorBrush x:Key="TabItemHeaderSelectedPipeFill" Color="{StaticResource ReyAccent}" />
+  <SolidColorBrush x:Key="TabItemHeaderForegroundSelected" Color="{StaticResource ReyAccent}" />
+
+  <SolidColorBrush x:Key="ButtonBackground" Color="{StaticResource ReyPanelAlt}" />
+  <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="{StaticResource ReyBorder}" />
+  <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="{StaticResource ReyBorderSoft}" />
+  <SolidColorBrush x:Key="ButtonForeground" Color="{StaticResource ReyText}" />
+  <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="{StaticResource ReyTextBright}" />
+  <SolidColorBrush x:Key="ButtonBorderBrush" Color="{StaticResource ReyBorder}" />
+
+  <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="{StaticResource ReyAccentDeep}" />
+  <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="{StaticResource ReyAccentDeep}" />
+  <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="{StaticResource ReyAccentHover}" />
+
+  <SolidColorBrush x:Key="ScrollBarThumbFill" Color="{StaticResource ReyBorder}" />
+  <SolidColorBrush x:Key="ScrollBarThumbFillPointerOver" Color="{StaticResource ReyBorderAccent}" />
+  <SolidColorBrush x:Key="ScrollBarThumbBackgroundColor" Color="{StaticResource ReyBorder}" />
+
+</ResourceDictionary>

@@ -19,6 +19,11 @@
     <conv:BoolToBrushConverter x:Key="ActiveTabBg" TrueBrush="#1A36E2C2" FalseBrush="Transparent" />
   </Window.Resources>
 
+  <!-- M683: the user's picture behind everything. The layer is a Border whose Background is an ImageBrush
+       set from code (ApplyBackdrop); the panels over it turn see-through through ThemeService's glass
+       overrides, so the picture shows "a little" - the amount is theirs to set. -->
+  <Panel>
+  <Border x:Name="BackdropLayer" IsHitTestVisible="False" />
   <DockPanel>
 
     <!-- ============ TOP APP BAR (M39: custom title bar — brand + menu + project) ============ -->
@@ -1247,4 +1252,5 @@
 
     </Grid>
   </DockPanel>
+  </Panel>
 </Window>

@@ -30,6 +30,22 @@ public partial class SettingsWindow : Window
     }
 
     // M133: pick the projects folder (where new projects and .fantome imports are created).
+    /// <summary>M683: the picture behind the editor.</summary>
+    private async void OnPickBackgroundImage(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is not ViewModels.SettingsViewModel vm) return;
+        var picked = await StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+        {
+            Title = "Background picture",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new Avalonia.Platform.Storage.FilePickerFileType("Pictures") { Patterns = new[] { "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.webp" } },
+            },
+        });
+        if (picked.Count > 0 && picked[0].TryGetLocalPath() is { } path) vm.BackgroundImagePath = path;
+    }
+
     private async void OnBrowseProjectsFolder(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is not SettingsViewModel vm) return;

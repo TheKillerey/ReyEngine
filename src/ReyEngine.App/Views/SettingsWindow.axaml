@@ -269,6 +269,52 @@
               </ItemsControl>
             </StackPanel>
           </Border>
+
+          <!-- M683: an accent of the user's own -->
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="10">
+              <TextBlock Classes="settingsTitle" Text="ACCENT COLOUR" />
+              <TextBlock Classes="settingsDesc"
+                         Text="The highlight colour over the chosen palette - buttons, selection, active tabs. Pick one of your own, or keep the palette's." />
+              <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+                <ColorPicker Grid.Column="0" Color="{Binding AccentColor, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+                <Button Grid.Column="1" Classes="tool" Content="Palette default" Command="{Binding ResetAccentCommand}"
+                        IsEnabled="{Binding AccentIsCustom}" Margin="8,0,0,0" VerticalAlignment="Center" />
+              </Grid>
+            </StackPanel>
+          </Border>
+
+          <!-- M683: a picture behind the editor -->
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="10">
+              <TextBlock Classes="settingsTitle" Text="BACKGROUND PICTURE" />
+              <TextBlock Classes="settingsDesc"
+                         Text="A picture of your own behind the whole editor - the panels turn see-through so it shows a little. Applied live; Save keeps it." />
+              <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,4,0,0">
+                <TextBox Grid.Column="0" Text="{Binding BackgroundImagePath}" Watermark="No picture" FontSize="11.5" />
+                <Button Grid.Column="1" Classes="tool" Content="Browse…" Click="OnPickBackgroundImage" Margin="6,0,0,0" />
+                <Button Grid.Column="2" Classes="tool" Content="Clear" Command="{Binding ClearBackgroundImageCommand}"
+                        IsEnabled="{Binding HasBackgroundImage}" Margin="6,0,0,0" />
+              </Grid>
+              <TextBlock Classes="settingsDesc" Text="{Binding BackgroundImageHint}" />
+              <Grid ColumnDefinitions="120,*,52" RowDefinitions="Auto,Auto,Auto" IsEnabled="{Binding HasBackgroundImage}">
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Picture opacity" FontSize="12" VerticalAlignment="Center" />
+                <Slider Grid.Row="0" Grid.Column="1" Minimum="0" Maximum="100" Value="{Binding BackgroundOpacityPercent}" TickFrequency="5" />
+                <TextBlock Grid.Row="0" Grid.Column="2" Classes="mono" Text="{Binding BackgroundOpacityPercent, StringFormat={}{0:0}%}" VerticalAlignment="Center" TextAlignment="Right" />
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Panel glass" FontSize="12" VerticalAlignment="Center"
+                           ToolTip.Tip="How see-through the side panels and cards become over the picture. 0 keeps them solid." />
+                <Slider Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="100" Value="{Binding BackgroundGlassPercent}" TickFrequency="5" />
+                <TextBlock Grid.Row="1" Grid.Column="2" Classes="mono" Text="{Binding BackgroundGlassPercent, StringFormat={}{0:0}%}" VerticalAlignment="Center" TextAlignment="Right" />
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Fit" FontSize="12" VerticalAlignment="Center" />
+                <ComboBox Grid.Row="2" Grid.Column="1" SelectedIndex="{Binding BackgroundStretchIndex}" MinWidth="200" FontSize="12" Margin="0,4,0,0">
+                  <ComboBoxItem>Cover the window</ComboBoxItem>
+                  <ComboBoxItem>Fit inside the window</ComboBoxItem>
+                  <ComboBoxItem>Stretch to the window</ComboBoxItem>
+                  <ComboBoxItem>Tile</ComboBoxItem>
+                </ComboBox>
+              </Grid>
+            </StackPanel>
+          </Border>
         </StackPanel>
 
         <!-- PREVIEW (M88) -->

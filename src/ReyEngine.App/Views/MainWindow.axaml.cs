@@ -107,6 +107,10 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         LoadBranding();
         TitleVersionText.Text = AppInfo.DisplayVersion;   // M81
         _ = AutoCheckUpdatesAsync();                      // M81: silent startup check
+        // M683: the picture, now and whenever Settings changes it live
+        ApplyBackdrop(ReyEngine.App.Services.ThemeService.Backdrop);
+        ReyEngine.App.Services.ThemeService.BackdropChanged += spec =>
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => ApplyBackdrop(spec));
 
         DataContextChanged += (_, _) =>
         {
@@ -483,6 +487,41 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             r.SetSkyMesh(mp, spec.MeshUvs ?? Array.Empty<float>(), mi,
                 spec.MeshTexture?.Rgba, spec.MeshTexture?.Width ?? 0, spec.MeshTexture?.Height ?? 0);
         else r.ClearSky();
+    }
+
+    // ---- M683: the picture behind the editor ----
+
+    /// <summary>Show (or clear) the backdrop the theme service describes. A picture that will not load
+    /// clears the layer rather than throwing - a bad path in Settings must not take the window down.</summary>
+    private void ApplyBackdrop(ReyEngine.App.Services.ThemeService.BackdropSpec? spec)
+    {
+        if (spec is null || string.IsNullOrWhiteSpace(spec.Path) || !System.IO.File.Exists(spec.Path))
+        {
+            BackdropLayer.Background = null;
+            return;
+        }
+        try
+        {
+            var bitmap = new Avalonia.Media.Imaging.Bitmap(spec.Path);
+            BackdropLayer.Background = new Avalonia.Media.ImageBrush(bitmap)
+            {
+                Opacity = spec.Opacity,
+                Stretch = spec.Stretch switch
+                {
+                    1 => Avalonia.Media.Stretch.Uniform,
+                    2 => Avalonia.Media.Stretch.Fill,
+                    3 => Avalonia.Media.Stretch.None,
+                    _ => Avalonia.Media.Stretch.UniformToFill,
+                },
+                TileMode = spec.Stretch == 3 ? Avalonia.Media.TileMode.Tile : Avalonia.Media.TileMode.None,
+                AlignmentX = Avalonia.Media.AlignmentX.Center,
+                AlignmentY = Avalonia.Media.AlignmentY.Center,
+            };
+        }
+        catch
+        {
+            BackdropLayer.Background = null;
+        }
     }
 
     // ---- M81: About + updates ----
@@ -1070,7 +1109,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         else
         {
             // M72: window closed without saving (Cancel or the OS close button) — undo any live theme preview.
-            ReyEngine.App.Services.ThemeService.Apply(vm.Settings.Theme);
+            ReyEngine.App.Services.ThemeService.Apply(vm.Settings);   // M683: accent, glass and picture too
         }
     }
 
