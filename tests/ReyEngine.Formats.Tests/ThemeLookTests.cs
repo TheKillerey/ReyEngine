@@ -89,17 +89,71 @@ public sealed class ThemeLookTests
     }
 
     [Fact]
-    public void TheMainWindowCarriesTheLayerAndFollowsSettingsLive()
+    public void EveryWindowCarriesTheLayerAndFollowsSettingsLive()
     {
         var xaml = Source("src", "ReyEngine.App", "Views", "MainWindow.axaml");
         var code = Source("src", "ReyEngine.App", "Views", "MainWindow.axaml.cs");
         var app = Source("src", "ReyEngine.App", "App.axaml.cs");
-        if (xaml is null || code is null || app is null) return;
-        Assert.Contains("<Border x:Name=\"BackdropLayer\" IsHitTestVisible=\"False\" />", xaml);
-        Assert.Contains("ThemeService.BackdropChanged +=", code);
+        var hook = Source("src", "ReyEngine.App", "Services", "WindowBackdrop.cs");
+        if (xaml is null || code is null || app is null || hook is null) return;
+        // M685: the layer is put under EVERY window's content by one hook, installed before the first
+        // window exists; the main window no longer carries a layer of its own
+        Assert.Contains("WindowBackdrop.Install();", app);
+        Assert.True(app.IndexOf("WindowBackdrop.Install();", StringComparison.Ordinal) < app.IndexOf("new MainWindow", StringComparison.Ordinal));
+        Assert.Contains("ContentControl.ContentProperty.Changed.AddClassHandler<Window>", hook);
+        Assert.Contains("ThemeService.BackdropChanged += OnBackdropChanged;", hook);
+        Assert.Contains("ThemeService.BackdropChanged -= OnBackdropChanged;", hook);
+        Assert.DoesNotContain("BackdropLayer", xaml);
+        Assert.DoesNotContain("ApplyBackdrop", code);
         // startup and Cancel restore the WHOLE look, not the palette alone
         Assert.Contains("ThemeService.Apply(ReyEngine.Core.Settings.EditorSettings.Load());", app);
         Assert.Contains("ThemeService.Apply(vm.Settings);", code);
+    }
+
+    /// <summary>M685: the viewport chrome. The NavGrid split button sits in the toolbar row at the tool
+    /// buttons' size and colours; the flyouts and tooltips paint the palette, not Fluent's greys; the
+    /// orbit/pan hint is out of the toolbar's way at the bottom right.</summary>
+    [Fact]
+    public void TheViewportChromeMatchesTheToolbar()
+    {
+        var theme = Source("src", "ReyEngine.App", "Themes", "ReyTheme.axaml");
+        var xaml = Source("src", "ReyEngine.App", "Views", "MainWindow.axaml");
+        if (theme is null || xaml is null) return;
+
+        int split = theme.IndexOf("<Style Selector=\"SplitButton.vp\">", StringComparison.Ordinal);
+        Assert.True(split >= 0, "no SplitButton.vp style");
+        string splitStyle = theme.Substring(split, theme.IndexOf("</Style>", split, StringComparison.Ordinal) - split);
+        foreach (string setter in new[]
+                 {
+                     "Property=\"Padding\" Value=\"8,3\"", "Property=\"FontSize\" Value=\"11\"", "Property=\"MinHeight\" Value=\"0\"",
+                     "Property=\"Background\" Value=\"{DynamicResource ReyPanelAltBrush}\"",
+                     "Property=\"BorderBrush\" Value=\"{DynamicResource ReyBorderBrush}\"", "Property=\"CornerRadius\" Value=\"4\"",
+                 })
+            Assert.Contains(setter, splitStyle);
+        // the template's 32px secondary and the double border at the seam are trimmed
+        Assert.Contains("SplitButton.vp /template/ Button#PART_SecondaryButton", theme);
+        Assert.Contains("Property=\"BorderThickness\" Value=\"1,1,0,1\"", theme);
+        Assert.Contains("Property=\"BorderThickness\" Value=\"0,1,1,1\"", theme);
+        Assert.Contains("<SplitButton Classes=\"vp\" Content=\"🌿 NavGrid\"", xaml);
+
+        // popups: the menu's opaque panel colour, which every palette defines
+        foreach (string selector in new[] { "FlyoutPresenter", "ToolTip" })
+        {
+            int at = theme.IndexOf("<Style Selector=\"" + selector + "\">", StringComparison.Ordinal);
+            Assert.True(at >= 0, "no " + selector + " style");
+            string style = theme.Substring(at, theme.IndexOf("</Style>", at, StringComparison.Ordinal) - at);
+            Assert.Contains("Property=\"Background\" Value=\"{DynamicResource MenuFlyoutPresenterBackground}\"", style);
+        }
+        var dir = Source("src", "ReyEngine.App", "Themes", "Palettes");
+        if (dir is not null)
+            foreach (var preset in ThemeService.Presets)
+                Assert.Contains("x:Key=\"MenuFlyoutPresenterBackground\"", File.ReadAllText(Path.Combine(dir, preset.Name + ".axaml")));
+
+        // the hint bar
+        int hint = xaml.IndexOf("<TextBlock Text=\"VIEWPORT\"", StringComparison.Ordinal);
+        Assert.True(hint > 0);
+        string before = xaml.Substring(Math.Max(0, hint - 400), 400);
+        Assert.Contains("HorizontalAlignment=\"Right\" VerticalAlignment=\"Bottom\"", before);
     }
 
     private static string? Source(params string[] parts)

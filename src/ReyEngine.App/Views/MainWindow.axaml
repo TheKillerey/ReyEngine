@@ -19,11 +19,9 @@
     <conv:BoolToBrushConverter x:Key="ActiveTabBg" TrueBrush="#1A36E2C2" FalseBrush="Transparent" />
   </Window.Resources>
 
-  <!-- M683: the user's picture behind everything. The layer is a Border whose Background is an ImageBrush
-       set from code (ApplyBackdrop); the panels over it turn see-through through ThemeService's glass
+  <!-- M683/M685: the user's picture sits behind this DockPanel, in a layer WindowBackdrop puts under
+       every window's content; the panels over it turn see-through through ThemeService's glass
        overrides, so the picture shows "a little" - the amount is theirs to set. -->
-  <Panel>
-  <Border x:Name="BackdropLayer" IsHitTestVisible="False" />
   <DockPanel>
 
     <!-- ============ TOP APP BAR (M39: custom title bar — brand + menu + project) ============ -->
@@ -838,8 +836,10 @@
                       ToolTip.Tip="Frame the camera on the loaded content" />
             </WrapPanel>
 
+            <!-- M685: bottom-right, out of the way - top-left is where the toolbar wraps to and where the
+                 gizmo bar sits, and the hint was under both. -->
             <Border Classes="glass" Padding="9,4"
-                    HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10" IsHitTestVisible="False">
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10" IsHitTestVisible="False">
               <StackPanel Orientation="Horizontal" Spacing="7">
                 <TextBlock Text="VIEWPORT" FontSize="9" FontWeight="SemiBold" LetterSpacing="1.5"
                            Foreground="{DynamicResource ReyAccentBrush}" VerticalAlignment="Center" />
@@ -1252,5 +1252,4 @@
 
     </Grid>
   </DockPanel>
-  </Panel>
 </Window>

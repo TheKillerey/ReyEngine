@@ -314,6 +314,48 @@
     <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyAccentHoverBrush}" />
   </Style>
 
+  <!-- M685: the viewport's split button (NavGrid) in the same row as Button.tool at 11px / 8,3. Fluent's
+       SplitButton is 32px tall with its own translucent greys; its two inner buttons take Background,
+       BorderBrush, Padding and CornerRadius from the SplitButton by TemplateBinding, so the outer style
+       sets the look and the /template/ styles trim what the template hard-codes (a 32px secondary,
+       a full border on both halves - the seam keeps the separator line only). -->
+  <Style Selector="SplitButton.vp">
+    <Setter Property="Background" Value="{DynamicResource ReyPanelAltBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Padding" Value="8,3" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Margin" Value="0,0,4,0" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="SplitButton.vp /template/ Button#PART_PrimaryButton">
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="BorderThickness" Value="1,1,0,1" />
+  </Style>
+  <Style Selector="SplitButton.vp /template/ Button#PART_SecondaryButton">
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Padding" Value="5,0" />
+    <Setter Property="BorderThickness" Value="0,1,1,1" />
+  </Style>
+  <Style Selector="SplitButton.vp /template/ Border#SeparatorBorder">
+    <Setter Property="Background" Value="{DynamicResource ReyBorderBrush}" />
+    <Setter Property="Margin" Value="0" />
+  </Style>
+  <Style Selector="SplitButton.vp /template/ Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyBorderBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccentBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource ReyTextBrightBrush}" />
+  </Style>
+  <Style Selector="SplitButton.vp /template/ Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ReyAccentDeepBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccentBrush}" />
+  </Style>
+
   <!-- ── menu bar ───────────────────────────────────────────────────────────── -->
 
   <Style Selector="Menu > MenuItem">
@@ -573,6 +615,29 @@
   </Style>
   <Style Selector="Border.badge.new > TextBlock">
     <Setter Property="Foreground" Value="{DynamicResource ReyAccent2Brush}" />
+  </Style>
+
+  <!-- ── popups (M685) ──────────────────────────────────────────────────────────
+       The flyouts the viewport buttons open (Display, Overlays, NavGrid, Sky) and every tooltip took
+       Fluent's own FlyoutPresenter/ToolTip greys - the one surface in the editor that ignored the
+       palette. They take the menu's colours now: the palettes define MenuFlyoutPresenterBackground as
+       an OPAQUE panel colour, so a popup over the 3D view stays readable when the glass slider makes
+       the docked panels see-through. -->
+  <Style Selector="FlyoutPresenter">
+    <Setter Property="Background" Value="{DynamicResource MenuFlyoutPresenterBackground}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderAccentBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="12" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" />
+  </Style>
+  <Style Selector="ToolTip">
+    <Setter Property="Background" Value="{DynamicResource MenuFlyoutPresenterBackground}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Foreground" Value="{DynamicResource ReyTextBrush}" />
+    <Setter Property="Padding" Value="8,5" />
   </Style>
 
 </Styles>
