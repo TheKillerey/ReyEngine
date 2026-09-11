@@ -66,6 +66,12 @@
             <TextBlock Text="Preview" VerticalAlignment="Center" />
           </StackPanel>
         </ListBoxItem>
+        <ListBoxItem>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="🧩" FontSize="13" Width="18" TextAlignment="Center" />
+            <TextBlock Text="Blender" VerticalAlignment="Center" />
+          </StackPanel>
+        </ListBoxItem>
       </ListBox>
 
       <!-- ── content ────────────────────────────────────────────────────── -->
@@ -312,6 +318,38 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- BLENDER (M682) -->
+        <StackPanel Spacing="14" IsVisible="{Binding ShowBlender}">
+          <Border Classes="settingsCard">
+            <StackPanel Spacing="10">
+              <TextBlock Classes="settingsTitle" Text="BLENDER ADD-ON" />
+              <TextBlock Classes="settingsDesc"
+                         Text="The ReyEngine Bridge add-on lets Blender pull a map's meshes from the running editor and push placements and shapes back (Tools ▸ Blender Link). Install it into each Blender version here - it is copied into that version's scripts\addons and switched on when its blender.exe can be found." />
+              <TextBlock Classes="mono" Text="{Binding BlenderAddonSource}" TextWrapping="Wrap" />
+              <ItemsControl ItemsSource="{Binding BlenderInstalls}" Margin="0,4,0,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:BlenderInstallRowViewModel">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,4">
+                      <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Name}" FontSize="12" />
+                        <TextBlock Text="{Binding Detail}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" MaxWidth="360" />
+                      </StackPanel>
+                      <Button Grid.Column="1" Content="{Binding ActionLabel}" Command="{Binding InstallCommand}"
+                              IsEnabled="{Binding !Busy}" MinWidth="110" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
+                <TextBlock Grid.Column="0" Text="{Binding BlenderStatus}" FontSize="10.5" TextWrapping="Wrap"
+                           Foreground="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="primary" Content="Install for all" Command="{Binding InstallBlenderEverywhereCommand}"
+                        IsVisible="{Binding HasBlenderInstalls}" Padding="14,4" Margin="8,0,0,0" />
+              </Grid>
             </StackPanel>
           </Border>
         </StackPanel>

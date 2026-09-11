@@ -39,6 +39,10 @@
     <Content Include="Assets\reyengine.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- M682: the Blender add-on ships beside the exe so Settings can install it into Blender. -->
+    <Content Include="..\..\tools\blender\reyengine_bridge.py" Link="blender\reyengine_bridge.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

@@ -1,12 +1,45 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.App.Services;
 using ReyEngine.Core.Settings;
 
 namespace ReyEngine.App.ViewModels;
+
+/// <summary>M682: one Blender version in Settings ▸ Blender, with the add-on's state there.</summary>
+public sealed partial class BlenderInstallRowViewModel : ObservableObject
+{
+    private readonly Func<BlenderInstallRowViewModel, Task> _install;
+
+    public BlenderInstallRowViewModel(BlenderAddonInstaller.BlenderInstall install, string? shipped,
+        Func<BlenderInstallRowViewModel, Task> installAction)
+    {
+        Install = install;
+        _install = installAction;
+        Refresh(shipped);
+    }
+
+    public BlenderAddonInstaller.BlenderInstall Install { get; }
+    public string Name => "Blender " + Install.Version;
+    [ObservableProperty] private string _detail = "";
+    [ObservableProperty] private string _actionLabel = "Install";
+    [ObservableProperty] private bool _busy;
+
+    public void Refresh(string? shipped)
+    {
+        bool installed = Install.AddonInstalled;
+        bool current = Install.AddonCurrent(shipped);
+        Detail = (installed ? (current ? "add-on installed, up to date" : "add-on installed, older copy") : "add-on not installed")
+                 + (Install.Executable is null ? " · blender.exe not found, enable by hand" : "");
+        ActionLabel = installed ? (current ? "Reinstall" : "Update") : "Install";
+    }
+
+    [RelayCommand]
+    private Task InstallAsync() => _install(this);
+}
 
 /// <summary>One selectable theme card in Settings ▸ Theme (M72).</summary>
 public sealed partial class ThemeItemViewModel : ObservableObject
@@ -147,13 +180,15 @@ public sealed partial class SettingsViewModel : ObservableObject
             p.IsSelected = string.Equals(value, p.InstallDir, StringComparison.OrdinalIgnoreCase);
     }
 
-    // M72: sidebar section switching (0 General · 1 Camera · 2 Controls · 3 Theme · 4 Preview)
+    // M72: sidebar section switching (0 General · 1 Camera · 2 Controls · 3 Theme · 4 Preview · 5 Blender)
     [ObservableProperty] private int _selectedSection;
     public bool ShowGeneral => SelectedSection == 0;
     public bool ShowCamera => SelectedSection == 1;
     public bool ShowControls => SelectedSection == 2;
     public bool ShowTheme => SelectedSection == 3;
     public bool ShowPreview => SelectedSection == 4;
+    public bool ShowBlender => SelectedSection == 5;   // M682
+    public const int BlenderSection = 5;
     partial void OnSelectedSectionChanged(int value)
     {
         OnPropertyChanged(nameof(ShowGeneral));
@@ -161,6 +196,51 @@ public sealed partial class SettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowControls));
         OnPropertyChanged(nameof(ShowTheme));
         OnPropertyChanged(nameof(ShowPreview));
+        OnPropertyChanged(nameof(ShowBlender));
+        if (value == BlenderSection) RefreshBlender();
+    }
+
+    // ---- M682: the Blender add-on, installed from here -----------------------------------------------
+
+    public ObservableCollection<BlenderInstallRowViewModel> BlenderInstalls { get; } = new();
+    [ObservableProperty] private string _blenderStatus = "";
+    /// <summary>The add-on this build ships, or a plain statement that it is missing.</summary>
+    public string BlenderAddonSource => BlenderAddonInstaller.ShippedAddonPath() ?? "(the add-on file is missing from this build)";
+    public bool HasBlenderInstalls => BlenderInstalls.Count > 0;
+
+    public void RefreshBlender()
+    {
+        string? shipped = BlenderAddonInstaller.ShippedAddonPath();
+        BlenderInstalls.Clear();
+        foreach (var install in BlenderAddonInstaller.Discover())
+            BlenderInstalls.Add(new BlenderInstallRowViewModel(install, shipped, InstallBlenderAsync));
+        OnPropertyChanged(nameof(HasBlenderInstalls));
+        OnPropertyChanged(nameof(BlenderAddonSource));
+        BlenderStatus = BlenderInstalls.Count == 0
+            ? "No Blender found: it creates %AppData%\\Blender Foundation\\Blender\\<version> on its first start."
+            : shipped is null ? "The add-on file is missing from this build - reinstall ReyEngine." : "";
+    }
+
+    private async Task InstallBlenderAsync(BlenderInstallRowViewModel row)
+    {
+        string? shipped = BlenderAddonInstaller.ShippedAddonPath();
+        if (shipped is null) { BlenderStatus = "The add-on file is missing from this build."; return; }
+        row.Busy = true;
+        try
+        {
+            var result = await BlenderAddonInstaller.InstallAsync(row.Install, shipped, enable: true);
+            row.Refresh(shipped);
+            BlenderStatus = result.Message;
+        }
+        finally { row.Busy = false; }
+    }
+
+    [RelayCommand]
+    private async Task InstallBlenderEverywhere()
+    {
+        foreach (var row in BlenderInstalls.ToList()) await InstallBlenderAsync(row);
+        if (BlenderInstalls.Count > 0)
+            BlenderStatus = $"Installed for {BlenderInstalls.Count(r => r.Install.AddonInstalled)} of {BlenderInstalls.Count} Blender version(s).";
     }
 
     // M72: theme choice — applied LIVE while browsing so the user sees it; Cancel reverts.

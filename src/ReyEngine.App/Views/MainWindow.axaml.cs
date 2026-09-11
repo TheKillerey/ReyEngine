@@ -1058,6 +1058,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     private async void ShowSettings(MainWindowViewModel vm)
     {
         var settings = new SettingsViewModel(vm.Settings.Clone());
+        if (vm.PendingSettingsSection is { } section) { settings.SelectedSection = section; vm.PendingSettingsSection = null; }   // M682
         var win = new SettingsWindow { DataContext = settings };
         settings.CloseRequested += () => win.Close();
         await win.ShowDialog(this);

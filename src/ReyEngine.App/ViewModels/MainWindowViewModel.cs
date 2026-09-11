@@ -15027,6 +15027,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void OpenSettings() => RequestSettings?.Invoke();
 
+    /// <summary>M682: which section the next Settings window opens on; null is the first. Read and cleared
+    /// by the window that shows it.</summary>
+    public int? PendingSettingsSection { get; set; }
+
+    /// <summary>M682: Tools ▸ Install Blender add-on… - Settings, on the Blender section.</summary>
+    [RelayCommand]
+    private void OpenBlenderAddonSetup()
+    {
+        PendingSettingsSection = SettingsViewModel.BlenderSection;
+        RequestSettings?.Invoke();
+    }
+
     /// <summary>Called by the view after the Preferences dialog is saved: persist + let the view re-apply.</summary>
     public void ApplyEditorSettings(SettingsViewModel vm)
     {
