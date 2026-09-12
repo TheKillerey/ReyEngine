@@ -70,7 +70,12 @@ public static class MetaDefaultProperty
             // M407: Color is four floats like Vec4 and every bit as constructible. It was declined only
             // because it was never listed - 310 declared properties across the meta database are Color,
             // making it the single largest refused type, and the editor now draws a swatch for them.
-            or "Color" => true,
+            or "Color"
+            // M706: a File is one 64-bit chunk link, as constructible as U64, and the schema's default for
+            // every one of them is "0x0" - the empty link the game already assumes when the field is
+            // absent. Declining it kept the texture settings of a skin (emissiveTexture, glossTexture,
+            // reflectionMap) unaddable, which is most of what a character's look is made of.
+            or "File" => true,
         _ => false,
     };
 
@@ -123,6 +128,9 @@ public static class MetaDefaultProperty
                     break;
                 // Recorded as a hex STRING ("0x0"), not a number - parsing it as one silently yields 0.
                 case "Hash": property = new BinTreeHash(nameHash, AsHash(v)); break;
+                // M706: the same hex-string form, 64 bits wide. Zero is "no chunk", which is what the
+                // field's absence means, so adding it at the default changes nothing until a path is set.
+                case "File": property = new BinTreeWadChunkLink(nameHash, AsChunkLink(v)); break;
                 case "Vec2":
                 {
                     var f = AsFloats(v, 2);
@@ -181,6 +189,18 @@ public static class MetaDefaultProperty
     private static double AsF64(JsonElement v) => v.ValueKind == JsonValueKind.Number
         ? v.GetDouble()
         : throw new FormatException($"expected a number, got {v.ValueKind}");
+
+    /// <summary>M706: a 64-bit chunk link, recorded the same way a hash is - a hex STRING.</summary>
+    private static ulong AsChunkLink(JsonElement v)
+    {
+        if (v.ValueKind == JsonValueKind.Number) return (ulong)AsI64(v);
+        if (v.ValueKind != JsonValueKind.String) throw new FormatException("expected a chunk-link string");
+        var s = (v.GetString() ?? "").AsSpan();
+        if (s.Length > 2 && (s[1] == 'x' || s[1] == 'X')) s = s[2..];
+        return ulong.TryParse(s, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong h)
+            ? h
+            : throw new FormatException("chunk link was not hexadecimal");
+    }
 
     private static uint AsHash(JsonElement v)
     {

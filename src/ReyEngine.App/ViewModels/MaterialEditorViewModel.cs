@@ -494,7 +494,22 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         // childTechniques, type - and what the game assumes when they are absent.
         Schema = MetaSchemaPanelViewModel.Build(
             model.ClassHash, model.PresentHashes, owner.DeclaredProperties, owner.ClassName,
-            model.TryAddDefaultProperty, model.CanAddSchemaField);
+            AddSchemaField, model.CanAddSchemaField);
+    }
+
+    /// <summary>M706: write the field AND show it. The document appends the row; this puts it on screen and
+    /// marks the document edited, so the value can be set straight away instead of after a reload.</summary>
+    private bool AddSchemaField(uint nameHash, string fieldType, string? defaultJson, out string? reason)
+    {
+        int slotsBefore = Model.Slots.Count, paramsBefore = Model.Parameters.Count;
+        if (!Model.TryAddDefaultProperty(nameHash, fieldType, defaultJson, out reason)) return false;
+        for (int i = slotsBefore; i < Model.Slots.Count; i++)
+            Slots.Add(new TextureSlotViewModel(Model.Slots[i], Owner!) { Binding = this });
+        for (int i = paramsBefore; i < Model.Parameters.Count; i++)
+            Parameters.Add(Row(Model.Parameters[i]));
+        OnPropertyChanged(nameof(HasParameters));
+        Owner?.NotifyChanged();
+        return true;
     }
 
     /// <summary>M368: fields StaticMaterialDef declares that this material omits, with their defaults.

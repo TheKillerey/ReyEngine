@@ -223,7 +223,7 @@ public sealed class MaterialDocument
                 if (skinSlots.Count > 0 || skinSettings.Count > 0)
                     materials.Add(new MaterialBinding(
                         "(skin default texture)", "SkinMeshDataProperties", Array.Empty<string>(), isDefault: true,
-                        skinSlots, skinSettings) { SettingsStruct = smp });
+                        skinSlots, skinSettings) { SettingsStruct = smp, ResolveName = resolve });
 
                 // The default material applies to every submesh not covered by an override.
                 if (Field(smp.Properties, "material") is BinTreeObjectLink defMat) defaultMaterialHash = defMat.Value;
@@ -405,6 +405,7 @@ public sealed class MaterialDocument
                 ObjectPathHash = pathHash,
                 DynamicParameters = dynamicParameters,
                 MaterialObject = isStaticMat ? o : null,
+                ResolveName = resolve,   // M706
                 SamplerContainer = samplers,
                 NameFieldHash = nameFieldHash,
                 PathFieldHash = pathFieldHash,
@@ -513,6 +514,9 @@ public sealed class MaterialBinding
     internal uint PathFieldHash { get; init; }
     /// <summary>M590: 64-bit wad-path lookup for WadChunkLink texture references.</summary>
     internal Func<ulong, string?>? ResolveWadPath { get; init; }
+
+    /// <summary>M706: field-name lookup, so a field added from the schema can be labelled like the rest.</summary>
+    internal Func<uint, string?>? ResolveName { get; init; }
     // M55: the live paramValues container — enables add/remove of parameters.
     private BinTreeContainer? _paramContainer;
     internal BinTreeContainer? ParamContainer { get => _paramContainer; init => _paramContainer = value; }
@@ -632,6 +636,13 @@ public sealed class MaterialBinding
             return false;
         target[nameHash] = prop!;
         _schemaPropertyAdded = true;
+        // M706: give it a row. Writing the field and never showing it is what "added" used to mean - the
+        // schema panel said so and the editor still listed nothing, so the value the user came to set was
+        // in the bin and out of reach until the document was parsed again.
+        string fieldName = ResolveName?.Invoke(nameHash) ?? $"0x{nameHash:x8}";
+        if (BinTexturePath.Is(prop!)) _slots.Add(new TextureSlot(fieldName, prop!, null, ResolveWadPath));
+        else if (BinValueEditor.KindOf(prop!) != BinValueKind.ReadOnly)
+            _params.Add(new MaterialParameter(fieldName, prop!));
         return true;
     }
 

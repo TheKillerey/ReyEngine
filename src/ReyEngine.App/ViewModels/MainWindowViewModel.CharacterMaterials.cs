@@ -95,8 +95,15 @@ public sealed partial class MainWindowViewModel
         if (Formats.Characters.CharacterMaterialBinder.PickShader(editor.Catalog) is not { } shader)
         { _log.Error("Material", "No shader catalogue is loaded - pick a game environment in the Materials tab first."); return; }
 
-        if (Formats.Characters.CharacterMaterialBinder.SkinObjectPath(bytes, ResolveBinName) is not { } skinPath)
-        { _log.Error("Material", "This bin's skin object has no name in the hash database, so a material cannot be named after it."); return; }
+        // M706: the dictionary first, then the bin's own path - a character somebody made is not in the
+        // dictionary, and those are the ones with no material to begin with.
+        if (Formats.Characters.CharacterMaterialBinder.SkinObjectPath(bytes, ResolveBinName,
+                binEntry.IsResolved ? binEntry.Path : null) is not { } skinPath)
+        {
+            _log.Error("Material", "This bin's skin object could not be named: the hash database does not know it, "
+                + "and its path does not match the file it is in. Nothing to name a material after.");
+            return;
+        }
 
         // what the submesh draws with today: its own texture override, else the skin's default
         string? diffuse = Formats.Characters.CharacterMaterialBinder.Overrides(bytes)

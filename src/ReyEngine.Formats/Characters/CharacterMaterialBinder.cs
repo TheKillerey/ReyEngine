@@ -74,21 +74,50 @@ public static class CharacterMaterialBinder
         return $"{skinObjectPath.TrimEnd('/')}/Materials/{char.ToUpperInvariant(clean[0])}{clean[1..]}_inst";
     }
 
-    /// <summary>The skin's own object path, as the hash database spells it - the placement and the
-    /// material names are both built from it. Null when the bin holds no skin object, or the dictionary
-    /// cannot name it.</summary>
-    public static string? SkinObjectPath(byte[] skinBin, Func<uint, string?>? resolveBinName)
+    /// <summary>
+    /// The skin's own object path - what the material is named after, and what a placement stores.
+    ///
+    /// <para>The hash database is asked first, because it spells the path the way Riot does. It does not
+    /// know a character somebody made, though, and those are exactly the ones this is for: M706 was
+    /// reported on a custom urf_ghost, where "no name in the hash database" stopped the whole feature.
+    /// So the FILE says it instead - <c>data/characters/urf/skins/skin0.bin</c> is
+    /// <c>Characters/Urf/Skins/Skin0</c> - and the derivation is only accepted when it hashes to the
+    /// object actually in the bin, which is proof rather than a guess.</para>
+    /// </summary>
+    public static string? SkinObjectPath(byte[] skinBin, Func<uint, string?>? resolveBinName, string? binPath = null)
     {
-        if (resolveBinName is null) return null;
+        uint objectHash = 0;
         try
         {
             foreach (var o in SafeBinTree.Parse(skinBin).Objects.Values)
-                if (o.ClassHash == SkinClass && resolveBinName(o.PathHash) is { Length: > 0 } name)
-                    return name;
+                if (o.ClassHash == SkinClass) { objectHash = o.PathHash; break; }
         }
-        catch { /* an unreadable bin names nothing */ }
+        catch { return null; }
+        if (objectHash == 0) return null;
+
+        if (resolveBinName?.Invoke(objectHash) is { Length: > 0 } known) return known;
+        if (ObjectPathFromBinPath(binPath) is { } derived && HashAlgorithms.Fnv1a(derived) == objectHash) return derived;
         return null;
     }
+
+    /// <summary>
+    /// The object path a skin bin's own file path implies: <c>data/characters/urf/skins/skin0.bin</c> ->
+    /// <c>Characters/Urf/Skins/Skin0</c>. Riot's own casing differs (URF), which costs nothing: every bin
+    /// name is hashed case-insensitively, and the caller proves the result against the bin anyway.
+    /// </summary>
+    public static string? ObjectPathFromBinPath(string? binPath)
+    {
+        if (string.IsNullOrWhiteSpace(binPath)) return null;
+        string path = binPath.Replace('\\', '/').Trim('/');
+        if (path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) path = path[..^4];
+        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries).ToList();
+        if (parts.Count > 0 && parts[0].Equals("data", StringComparison.OrdinalIgnoreCase)) parts.RemoveAt(0);
+        if (parts.Count < 2) return null;
+        return string.Join('/', parts.Select(Capitalise));
+    }
+
+    private static string Capitalise(string segment) =>
+        segment.Length == 0 ? segment : char.ToUpperInvariant(segment[0]) + segment[1..];
 
     /// <summary>Every materialOverride entry the skin carries.</summary>
     public static IReadOnlyList<CharacterSubmeshMaterial> Overrides(byte[] skinBin, Func<uint, string?>? resolveBinName = null)
