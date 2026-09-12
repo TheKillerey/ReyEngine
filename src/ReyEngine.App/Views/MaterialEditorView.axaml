@@ -52,6 +52,29 @@
            Advanced - instead of one nested stack. Every block inside the sections is
            the previous markup verbatim, so no editing capability is lost; pieces
            moved out of the shader group keep their CanChangeShader gate. -->
+      <!-- M704: a submesh drawing from the skin's own block has no shader to change. Offering it a
+           material of its own belongs here, where that is discovered. -->
+      <Border Classes="card" IsVisible="{Binding CanAddSubmeshMaterial}">
+        <StackPanel Spacing="4">
+          <TextBlock Text="SUBMESH WITHOUT ITS OWN MATERIAL" Classes="cardTitle" />
+          <TextBlock TextWrapping="Wrap" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                     Text="These draw from the skin's own block, which has no shader to change. Give one a material and its shader, samplers and parameters become ordinary edits - it starts on the texture it already draws with, so nothing changes look." />
+          <ItemsControl ItemsSource="{Binding AddableSubmeshes}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:AddableSubmeshViewModel">
+                <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                  <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="11" VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis" />
+                  <Button Grid.Column="1" Classes="tool" Content="+ material" FontSize="10" Padding="8,2"
+                          Command="{Binding AddMaterialCommand}" IsEnabled="{Binding !Busy}"
+                          ToolTip.Tip="Author a material for this submesh from its current texture and select it - then its shader can be changed here" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+
       <StackPanel Spacing="6">
         <Grid ColumnDefinitions="*,Auto">
           <ComboBox Grid.Column="0" HorizontalAlignment="Stretch" FontSize="11"

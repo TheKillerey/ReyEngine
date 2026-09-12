@@ -57,5 +57,8 @@ public sealed partial class MeshPreviewViewModel
                 m.Model.Submeshes.Any(sub => sub.Equals(row.Name, StringComparison.OrdinalIgnoreCase)));
         }
         if (SelectedSubmesh is { } selected && !Submeshes.Contains(selected)) SelectedSubmesh = null;
+        // M704: the Materials tab offers the same step for the submeshes that have no material of their
+        // own, because that tab is where a person finds out the default block has no shader to change.
+        MaterialEditor.SetAddableSubmeshes(Submeshes.Where(r => !r.HasOwnMaterial).Select(r => r.Name));
     }
 }

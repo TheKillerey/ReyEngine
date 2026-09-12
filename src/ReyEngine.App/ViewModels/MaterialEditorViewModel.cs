@@ -10,6 +10,9 @@ using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.Shaders;
 using MacroSupport = ReyEngine.Formats.MapGeo.LegacyMapPorter.MacroSupport;
 
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 namespace ReyEngine.App.ViewModels;
 
 public sealed partial class TextureSlotViewModel : ViewModelBase
@@ -1226,6 +1229,23 @@ internal sealed class BulkCommonMaterialSetupCommand : IEditorCommand
 /// paths + numeric params on a live BinTree (via <see cref="MaterialDocument"/>); Apply re-resolves
 /// textures into the viewport live, Save writes the edited .bin into the project override layer.
 /// </summary>
+/// <summary>M704: one submesh that could be given a material of its own, with the button's command.</summary>
+public sealed partial class AddableSubmeshViewModel : ObservableObject
+{
+    public required string Name { get; init; }
+    public Func<string, Task>? Add;
+    [ObservableProperty] private bool _busy;
+
+    [RelayCommand]
+    private async Task AddMaterial()
+    {
+        if (Add is not { } add || Busy) return;
+        Busy = true;
+        try { await add(Name); }
+        finally { Busy = false; }
+    }
+}
+
 public sealed partial class MaterialEditorViewModel : ViewModelBase
 {
     private MaterialDocument? _doc;
@@ -1287,6 +1307,29 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
     /// <summary>M701: what the shader list was narrowed to, and why - shown under the picker.</summary>
     [ObservableProperty] private string _shaderListNote = "";
+
+    /// <summary>
+    /// M704: the submeshes of this skin that have no material of their own, offered in the Materials tab.
+    ///
+    /// <para>A character with one submesh - most props and most characters - draws from the skin's own
+    /// block, which the editor shows as a material with no technique and therefore no shader to change.
+    /// The offer to author a real one has to be where the person is looking when they find that out.
+    /// Empty for a map's materials, which always have one.</para>
+    /// </summary>
+    public ObservableCollection<AddableSubmeshViewModel> AddableSubmeshes { get; } = new();
+    public bool CanAddSubmeshMaterial => AddSubmeshMaterial is not null && AddableSubmeshes.Count > 0;
+
+    /// <summary>Host hook: author a material for this submesh. Null outside the character window.</summary>
+    public Func<string, Task>? AddSubmeshMaterial;
+
+    /// <summary>Replace the offer list; the host recomputes it whenever the skin's materials change.</summary>
+    public void SetAddableSubmeshes(IEnumerable<string> submeshes)
+    {
+        AddableSubmeshes.Clear();
+        foreach (var name in submeshes)
+            AddableSubmeshes.Add(new AddableSubmeshViewModel { Name = name, Add = AddSubmeshMaterial });
+        OnPropertyChanged(nameof(CanAddSubmeshMaterial));
+    }
     /// <summary>Only shaders currently assigned in this document; used by the bulk replacement source.</summary>
     public ObservableCollection<string> UsedShaders { get; } = new();
     private readonly Dictionary<string, HashSet<string>> _shaderSamplers = new(StringComparer.OrdinalIgnoreCase);

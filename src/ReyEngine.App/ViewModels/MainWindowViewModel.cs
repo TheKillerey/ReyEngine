@@ -6551,7 +6551,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // override path. See MainWindowViewModel.CharacterMaterials.cs.
         WireMaterialEditor(MaterialEditor, ApplyMaterialToViewport, SaveMaterialOverride);
         WireMaterialEditor(MeshPreview.MaterialEditor, ApplyCharacterMaterialsToPreview, SaveCharacterMaterialOverride);
-        MeshPreview.AddSubmeshMaterial = AddCharacterSubmeshMaterialAsync;   // M703
+        // M703/M704: the submesh row in the outliner and the offer in the Materials tab are the same step
+        MeshPreview.AddSubmeshMaterial = row => AddCharacterSubmeshMaterialAsync(row.Name);
+        MeshPreview.MaterialEditor.AddSubmeshMaterial = AddCharacterSubmeshMaterialAsync;
         MeshPreview.RequestDriverState = () => RebuildCharacterDx11Scene();   // M647: the state switch
         Inspector.CopyHandler = Dialogs.CopyAsync;   // M351c: copy button beside the asset path
         InitShaderEnvironments();

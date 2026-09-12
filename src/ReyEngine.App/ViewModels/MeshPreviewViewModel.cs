@@ -212,7 +212,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             t.AddMaterial = AddSubmeshMaterial;   // M703
             Submeshes.Add(t);
         }
-        HasSubmeshes = Submeshes.Count > 1;
+        // M704: ONE submesh is still a submesh. The card was hidden below two, which is most props and
+        // most characters - urf_ghost, the golem, the trinket all have exactly one - so everything the
+        // card offers, the material a submesh has among it, was unreachable exactly where it was needed.
+        HasSubmeshes = Submeshes.Count > 0;
         RebuildSubmeshVisibility();
         RefreshOutliner();   // M643: material names, selection and outline follow the new mesh
     }

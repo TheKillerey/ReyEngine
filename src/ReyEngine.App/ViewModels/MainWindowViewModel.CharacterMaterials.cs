@@ -83,7 +83,7 @@ public sealed partial class MainWindowViewModel
     /// draws with so the model does not change appearance, points the submesh at it, saves, and selects
     /// it in the editor, where its shader and parameters are then ordinary edits.</para>
     /// </summary>
-    private async Task AddCharacterSubmeshMaterialAsync(SubmeshToggleViewModel row)
+    private async Task AddCharacterSubmeshMaterialAsync(string submeshName)
     {
         var editor = MeshPreview.MaterialEditor;
         if (editor.BinEntry is not { } binEntry) { _log.Warn("Material", "No skin bin is open, so there is nothing to add a material to."); return; }
@@ -100,11 +100,11 @@ public sealed partial class MainWindowViewModel
 
         // what the submesh draws with today: its own texture override, else the skin's default
         string? diffuse = Formats.Characters.CharacterMaterialBinder.Overrides(bytes)
-            .FirstOrDefault(o => o.Submesh.Equals(row.Name, StringComparison.OrdinalIgnoreCase))?.Texture;
+            .FirstOrDefault(o => o.Submesh.Equals(submeshName, StringComparison.OrdinalIgnoreCase))?.Texture;
         diffuse ??= Formats.Meshes.SkinMeshExtractor.Extract(bytes, ResolveWadPath)?.DefaultTexture;
 
         var updated = Formats.Characters.CharacterMaterialBinder.AddMaterial(
-            bytes, skinPath, row.Name, shader, diffuse, out var error, out var materialPath);
+            bytes, skinPath, submeshName, shader, diffuse, out var error, out var materialPath);
         if (updated is null) { _log.Error("Material", error ?? "The material could not be added."); return; }
 
         // reload the editor on the new bytes, keeping the baseline it was opened against so the save
@@ -119,7 +119,7 @@ public sealed partial class MainWindowViewModel
             ?? editor.Materials.FirstOrDefault(m => m.Name.EndsWith(materialPath[(materialPath.LastIndexOf('/') + 1)..], StringComparison.OrdinalIgnoreCase));
         ApplyCharacterMaterialsToPreview();
         await SaveCharacterMaterialOverride();
-        _log.Success("Material", $"'{row.Name}' now has its own material ({materialPath}) on {shader.Name}. "
+        _log.Success("Material", $"'{submeshName}' now has its own material ({materialPath}) on {shader.Name}. "
             + "Change its shader and parameters here - the list offers the shaders a character can be drawn with.");
     }
 
