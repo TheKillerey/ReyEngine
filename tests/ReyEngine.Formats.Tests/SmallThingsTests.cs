@@ -113,6 +113,25 @@ public sealed class SmallThingsTests
         finally { field.SetValue(null, before); }
     }
 
+    /// <summary>M692: the asset's identity card, preview, details and note live INSIDE the inspector's
+    /// Overview tab, not above the Overview / Materials / Shaders strip, and the strip shows for every
+    /// asset (the card is what an asset without a body still needs).</summary>
+    [Fact]
+    public void TheAssetCardLivesInTheOverviewTab()
+    {
+        var main = Source("src", "ReyEngine.App", "Views", "MainWindow.axaml");
+        var inspector = Source("src", "ReyEngine.App", "Views", "InspectorView.axaml");
+        if (main is null || inspector is null) return;
+        Assert.DoesNotContain("<views:InspectorHeaderView />", main);
+        Assert.DoesNotContain("Inspector.Details", main);
+        int tab = inspector.IndexOf("Text=\"Overview\"", StringComparison.Ordinal);
+        int card = inspector.IndexOf("<views:InspectorHeaderView />", StringComparison.Ordinal);
+        int details = inspector.IndexOf("Inspector.Details", StringComparison.Ordinal);
+        int mesh = inspector.IndexOf("Text=\"MESH\"", StringComparison.Ordinal);
+        Assert.True(tab > 0 && card > tab && details > card && mesh > details, "card, details, then the geometry cards, all under Overview");
+        Assert.Contains("IsVisible=\"{Binding Inspector.HasAsset}\"", inspector.Substring(0, card));
+    }
+
     [Fact]
     public void NoViewUsesTheObsoleteWatermark()
     {

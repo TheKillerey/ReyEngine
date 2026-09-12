@@ -1220,29 +1220,9 @@
               <TabItem.Header><TextBlock Text="Asset" FontSize="12" /></TabItem.Header>
               <ScrollViewer>
                 <StackPanel Margin="8" Spacing="8">
-                  <!-- M351c: the asset identity card. -->
-                  <views:InspectorHeaderView />
-
-                  <!-- texture preview (M90: closable — there was no way back out of it) -->
-                  <Border Background="{DynamicResource ReyBgBrush}" CornerRadius="4" Padding="8"
-                          IsVisible="{Binding Inspector.HasPreview}">
-                    <StackPanel Spacing="6">
-                      <Button Classes="tool" Content="✕ Close preview" HorizontalAlignment="Right" FontSize="10" Padding="6,2"
-                              Command="{Binding Inspector.ClearPreviewCommand}" />
-                      <Image Source="{Binding Inspector.PreviewImage}" Stretch="Uniform" MaxHeight="340" />
-                    </StackPanel>
-                  </Border>
-
-                  <TextBlock Text="{Binding Inspector.Details}" Foreground="{DynamicResource ReyTextDimBrush}"
-                             FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" TextWrapping="Wrap" />
-
-                  <!-- note (e.g. bin placeholder) -->
-                  <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="8"
-                          IsVisible="{Binding Inspector.HasNote}">
-                    <TextBlock Text="{Binding Inspector.Note}" Foreground="{DynamicResource ReyAccent2Brush}"
-                               FontSize="11" TextWrapping="Wrap" />
-                  </Border>
-
+                  <!-- M692: the asset's identity card, preview, details and note moved INTO the Overview
+                       tab (InspectorView) - they were above the Overview / Materials / Shaders strip, so
+                       every tab carried them and Overview held only the geometry cards. -->
                   <!-- M471: the SELECTION's materials, moved next to the material editor below it. These
                        two were previously separated by the entire map section. -->
                   <views:SelectionMaterialsView />
