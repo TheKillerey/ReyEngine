@@ -179,25 +179,25 @@ public sealed class VfxDrawOrderTests
     // ================================================================ both hosts read the one key
 
     [Fact]
-    public void TheHostsWhoseOrderIsRealUseTheSharedKey()
+    public void AllThreeHostsUseTheSharedKey()
     {
+        // one key, three hosts, so the viewports cannot drift into disagreeing about layering
         string? gl = Source("src", "ReyEngine.Rendering", "Vfx", "VfxParticleRenderer.cs");
         Assert.NotNull(gl);
         Assert.Contains("OrderBy(static e => ReyEngine.Formats.Vfx.VfxDrawOrder.KeyFor(e.Def))", gl);
 
         // the particle editor's own Direct3D 11 preview registered one material per emitter in authored
-        // order and so had no draw order at all before this
+        // order and so had no draw order at all before M709
         string? preview = Source("src", "ReyEngine.App", "Services", "D3D11ParticlePlayback.cs");
         Assert.NotNull(preview);
         Assert.Contains("VfxDrawOrder.KeyFor(_sim.Emitters[i].Def)", preview);
 
-        // the D3D11 MAP host is deliberately not on the key: its slice sort runs after every material has
-        // already been registered, so it reaches the quad budget and not the picture. Giving it a key it
-        // cannot honour would move which emitters starve and change nothing on screen.
+        // the map viewport reached the key in M710, once its registration became the ordered seam. Before
+        // that its slice sort ran AFTER every material was registered, so it reached the quad budget and
+        // never the picture - see MapParticleDrawOrderTests.
         string? map = Source("src", "ReyEngine.App", "Services", "D3D11MapParticles.cs");
         Assert.NotNull(map);
-        Assert.DoesNotContain("VfxDrawOrder", map);
-        Assert.Contains("_slices.OrderBy(static s => s.Def.Pass).ToList();", map);
+        Assert.Contains("_pending.OrderBy(static e => VfxDrawOrder.KeyFor(e.Def))", map);
     }
 
     [Fact]

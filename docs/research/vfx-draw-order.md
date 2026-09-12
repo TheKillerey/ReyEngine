@@ -105,13 +105,15 @@ Three particle hosts, and only two of them had a draw order at all.
   through one control: one sorted loop dispatching quads, meshes, beams and trails alike. The key goes here.
 - **The Direct3D 11 preview window**: registered one material per emitter in authored order, so it had no
   draw order before this - not even `pass`. Now sorted, by the same key.
-- **The Direct3D 11 map viewport**: draws in build order, placement-major then authored emitter. Its
-  `OrderBy(s => s.Def.Pass)` runs *after* every material has been handed to the renderer, and the renderer
-  keeps a non-pipeline-sortable material in submission order - so that sort reaches the quad budget's
-  packing and never the picture. `pass` has never ordered this host. Giving it a key it cannot honour would
-  move which emitters starve under the budget and change nothing on screen, so it is left alone and the
-  comment that claimed otherwise is corrected. Making that host order-bearing is its own change with its own
-  measurement.
+- **The Direct3D 11 map viewport**, which reached the key in M710 and could not before. It drew in build
+  order, placement-major then authored emitter. Its `OrderBy(s => s.Def.Pass)` runs *after* every material
+  has been handed to the renderer, and the renderer keeps a non-pipeline-sortable material in submission
+  order - so that sort reaches the quad budget's packing and never the picture. `pass` had never ordered
+  this host at all. M710 collects the four channels' registrations and flushes them once, sorted, which is
+  the only seam that exists here and the only shape that reaches quads, Riot meshes, legacy meshes and
+  ribbons together. Its scope stays a documented divergence from OpenGL: this host shares one slice per
+  emitter definition across every placement of it, which is what lets a map carry thousands of placements,
+  so it sorts across the map rather than inside one system.
 
 ## Loose ends
 

@@ -79,6 +79,23 @@ public sealed class D3D11MapParticles
     /// system does not retry a permutation that failed identically for the first.</summary>
     private readonly HashSet<VfxEmitterDefinition> _noPipeline = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<PreviewMaterial> _mine = new(ReferenceEqualityComparer.Instance);
+    /// <summary>M710: materials built during a rebuild, waiting to be handed to the renderer in DRAW order.
+    ///
+    /// <para>The renderer draws a material that does not write depth in the order it was given one, and
+    /// every particle material is one of those. So the order a rebuild calls AddMaterial in IS this host's
+    /// draw order, and until M710 that order was whatever the build happened to walk: placement-major, then
+    /// authored emitter. <c>pass</c> never reached the picture at all, on the 79.7% of emitters that author
+    /// it. Collecting here and registering once, sorted, is what makes the order real - and it is the only
+    /// shape that reaches all four channels, because quads, Riot meshes, legacy meshes and ribbons register
+    /// from four different places and draw from one list.</para></summary>
+    private readonly List<(PreviewMaterial Mat, VfxEmitterDefinition Def)> _pending = new();
+
+    /// <summary>Build-time registration: remember the material for the sorted flush, and for removal.</summary>
+    private void Register(PreviewMaterial mat, VfxEmitterDefinition def)
+    {
+        _pending.Add((mat, def));
+        _mine.Add(mat);
+    }
     /// <summary>The per-slice live lists, in slice order, built once per rebuild. <see cref="Pack"/> wants a
     /// list of lists and this frame loop must not allocate one per frame.</summary>
     private readonly List<IReadOnlyList<VfxParticleSimulator.EmitterState>> _liveBySlice = new();
@@ -282,6 +299,9 @@ public sealed class D3D11MapParticles
         // costs seconds - a particle selection click must not do that.
         _renderer.RemoveMaterials(m => _mine.Contains(m));
         _mine.Clear();
+        // M710: cleared beside _mine so a rebuild that returns early - no playback, no shader toc - cannot
+        // leak its half-built materials into the next one's draw order.
+        _pending.Clear();
         _slices.Clear();
         foreach (int id in _meshSlices.Where(s => s.GeometryId >= 0).Select(s => s.GeometryId).Distinct())
             _renderer.ReleaseMeshGeometry(id);
@@ -374,8 +394,7 @@ public sealed class D3D11MapParticles
                     continue;
                 }
 
-                _renderer.AddMaterial(mat);
-                _mine.Add(mat);
+                Register(mat, def);
                 var slice = new Slice { Material = mat, Def = def };
                 slice.Sources.Add((sim, es));
                 _byEmitter[def] = slice;
@@ -383,21 +402,29 @@ public sealed class D3D11MapParticles
             }
         }
 
-        // M709 corrects what this sort was believed to do. It does NOT decide what draws first: every
-        // material was already handed to the renderer by AddMaterial inside the build loop above, and
-        // ShaderPreviewRenderer keeps a material with SortableByPipeline false in submission order. So the
-        // map viewport draws particles in BUILD order - placement-major, then authored emitter - and
-        // `pass` has never reached its picture at all. What this line really orders is the slice list that
-        // Tick walks and that the quad budget packs, where the order decides which slice gets which range
-        // of the shared buffer and, only when over budget, which slice is thinned first.
+        // M710: the draw order of this host, at the one moment it exists. Everything above only BUILT
+        // materials; a material that does not write depth is drawn in the order the renderer was handed it,
+        // so this loop is the picture's order and nothing downstream can change it.
         //
-        // It is left on `pass` rather than given M709's key on purpose: a key that cannot change the
-        // picture and can change which emitters starve is worse than no key. Making this host order-bearing
-        // means sorting the REGISTRATION, which is its own change with its own measurement.
+        // M709 established the key: the ground layer first, then the authored pass, with a stable sort
+        // leaving authored order as the tiebreak. Four channels register from four different places and
+        // draw from one list, so they are ordered together here rather than four times over.
         //
-        // OrderBy is stable; List.Sort is not, and an unstable sort here would reshuffle same-pass emitters
-        // from frame to frame, which for the packing ranges is churn for nothing.
-        _slices = _slices.OrderBy(static s => s.Def.Pass).ToList();
+        // The scope is a documented divergence from the OpenGL viewport, which sorts inside one simulator.
+        // This host shares one slice per emitter DEFINITION across every placement of it - that sharing is
+        // the whole reason the map can carry thousands of placements - so it cannot sort per placement
+        // without multiplying the draw count by the placement count. It sorts across the map instead.
+        foreach (var pending in _pending.OrderBy(static e => VfxDrawOrder.KeyFor(e.Def)))
+            _renderer.AddMaterial(pending.Mat);
+        _pending.Clear();
+
+        // The slice list takes the SAME key, so the quad budget's ranges and its thinning follow the order
+        // the frame actually draws in. Pack thins the last slices first, and "last" is meant to be the
+        // draws on top; under a different key from the one above it would have meant something else.
+        //
+        // OrderBy is stable; List.Sort is not, and an unstable sort here would reshuffle same-key emitters
+        // from frame to frame, which for additive draws IS the image.
+        _slices = _slices.OrderBy(static s => VfxDrawOrder.KeyFor(s.Def)).ToList();
         foreach (var sl in _slices) _liveBySlice.Add(sl.Live);
         if (_ranges.Length < _slices.Count) _ranges = new PackedRange[_slices.Count];
 
@@ -626,8 +653,7 @@ public sealed class D3D11MapParticles
                     // The authored flag, as GL applies it (absent = cull). Gated on the window's Cull
                     // toggle by the renderer like every other per-material cull.
                     riotMat.CullBackFaces = !def.DisableBackfaceCull;
-                    _renderer.AddMaterial(riotMat);
-                    _mine.Add(riotMat);
+                    Register(riotMat, def);
                     _meshSlices.Add(new MeshSlice
                     {
                         Material = riotMat, Def = def, Owner = sim, State = es,
@@ -667,8 +693,7 @@ public sealed class D3D11MapParticles
         mat.UsesDynamicMesh = false;      // its geometry is its own, not the shared quad buffer
         mat.CullBackFaces = !def.DisableBackfaceCull;   // M640: the authored flag, as on the Riot path
         mat.Visible = false;              // until a Tick finds it active and gives it particles
-        _renderer.AddMaterial(mat);
-        _mine.Add(mat);
+        Register(mat, def);
         _meshSlices.Add(new MeshSlice
         {
             Material = mat, Def = def, Owner = sim, State = es,
@@ -791,8 +816,7 @@ public sealed class D3D11MapParticles
         mat.RibbonId = ribbonId;
         mat.UsesDynamicMesh = false;      // its geometry is its own, not the shared quad buffer
         mat.Visible = false;              // until a Tick finds it active and gives it a strip
-        _renderer.AddMaterial(mat);
-        _mine.Add(mat);
+        Register(mat, def);
         _ribbonSlices.Add(new RibbonSlice
         {
             Material = mat, Owner = sim, State = es, RibbonId = ribbonId, IsBeam = def.Beam is not null,
