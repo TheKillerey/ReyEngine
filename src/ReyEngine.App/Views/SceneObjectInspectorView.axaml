@@ -202,19 +202,19 @@
              until touched, so leaving one blank means "leave it as authored" rather than "clear it". -->
         <TextBlock Text="Rename" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <TextBox Text="{Binding SelectedParticleNode.EditedName}" FontSize="10" Padding="3,1"
-                 Watermark="{Binding SelectedParticleNode.Name}"
+                 PlaceholderText="{Binding SelectedParticleNode.Name}"
                  ToolTip.Tip="Rename this placement. Leave empty to keep the authored name." />
 
         <TextBlock Text="Tint (colorModulate — r, g, b, a)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <TextBox Text="{Binding SelectedParticleNode.EditedTint}" FontSize="10" Padding="3,1"
-                 Watermark="1, 1, 1, 1"
+                 PlaceholderText="1, 1, 1, 1"
                  ToolTip.Tip="Multiplies the particle colour. Every shipped value is between 0 and 1, so this can darken or fade but not brighten. Leave empty to keep the authored tint." />
         <TextBlock Text="Needs four numbers, e.g. 1, 0.97, 0.84, 0.6" FontSize="9" Foreground="{DynamicResource ReyErrorBrush}"
                    IsVisible="{Binding SelectedParticleNode.TintIsInvalid, FallbackValue=False}" />
 
         <!-- M205: re-link. A map defines a few hundred systems, so the list is filtered rather than raw. -->
         <TextBlock Text="VFX system" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
-        <TextBox Text="{Binding RelinkFilter}" FontSize="10" Padding="3,1" Watermark="Filter systems…"
+        <TextBox Text="{Binding RelinkFilter}" FontSize="10" Padding="3,1" PlaceholderText="Filter systems…"
                  ToolTip.Tip="Narrow the list below" />
         <ComboBox ItemsSource="{Binding RelinkChoices}" SelectedItem="{Binding SelectedRelinkChoice}"
                   DisplayMemberBinding="{Binding Name}"
@@ -268,7 +268,7 @@
 
         <TextBlock Text="VFX system (all selected)" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <TextBlock Text="{Binding BatchRelinkLabel}" FontSize="10" Foreground="{DynamicResource ReyTextBrush}" TextTrimming="CharacterEllipsis" />
-        <TextBox Text="{Binding RelinkFilter}" FontSize="10" Padding="3,1" Watermark="Filter systems…"
+        <TextBox Text="{Binding RelinkFilter}" FontSize="10" Padding="3,1" PlaceholderText="Filter systems…"
                  ToolTip.Tip="Narrow the list below" />
         <ComboBox ItemsSource="{Binding RelinkChoices}" SelectedItem="{Binding BatchRelinkChoice}"
                   DisplayMemberBinding="{Binding Name}" PlaceholderText="Point every selected placement at…"
@@ -277,7 +277,7 @@
 
         <TextBlock Text="Tint (colorModulate — r, g, b, a) for all selected" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
         <Grid ColumnDefinitions="*,Auto">
-          <TextBox Grid.Column="0" Text="{Binding BatchTint}" Watermark="{Binding BatchTintLabel}" FontSize="10" Padding="3,1"
+          <TextBox Grid.Column="0" Text="{Binding BatchTint}" PlaceholderText="{Binding BatchTintLabel}" FontSize="10" Padding="3,1"
                    ToolTip.Tip="Four numbers between 0 and 1. Empty puts every placement back to its authored tint.">
             <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyBatchTintCommand}" /></TextBox.KeyBindings>
           </TextBox>
@@ -328,7 +328,7 @@
           <Button Classes="tool" Grid.Column="1" Content="🎯 Focus" Command="{Binding FocusSelectedPlaceableCommand}"
                   FontSize="10" Padding="6,1" ToolTip.Tip="Frame the camera on this light" />
         </Grid>
-        <TextBox Text="{Binding SelectedLight.Name}" FontSize="11" Watermark="Light name" />
+        <TextBox Text="{Binding SelectedLight.Name}" FontSize="11" PlaceholderText="Light name" />
         <TextBlock Text="Drag the viewport gizmo to move it." FontSize="9"
                    Foreground="{DynamicResource ReyTextDimBrush}" />
 
@@ -414,7 +414,7 @@
         <ComboBox ItemsSource="{Binding PropSkinChoices}" SelectedItem="{Binding SelectedPropNode.EditedSkin}"
                   FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="260"
                   ToolTip.Tip="Only skin bins shipped for this exact character are listed" />
-        <TextBox Text="{Binding SelectedPropNode.EditedSkin}" Watermark="{Binding SelectedPropNode.Prop.Skin}"
+        <TextBox Text="{Binding SelectedPropNode.EditedSkin}" PlaceholderText="{Binding SelectedPropNode.Prop.Skin}"
                  FontSize="10" Padding="3,1"
                  ToolTip.Tip="Full skin path without data/ and .bin. Leave empty to keep the authored skin." />
         <TextBlock Text="{Binding SelectedPropNode.EffectiveSkin}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" />

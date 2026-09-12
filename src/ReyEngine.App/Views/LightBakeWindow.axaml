@@ -250,7 +250,7 @@
               <TextBlock Grid.Column="0" Text="Theme token" VerticalAlignment="Center" FontSize="11"
                          Foreground="{DynamicResource ReyTextBrush}"
                          ToolTip.Tip="Optional, e.g. kiwi16_9 → 0.kiwi16_9.tex. Empty writes the base atlases the map already samples." />
-              <TextBox Grid.Column="1" Text="{Binding ThemeToken}" FontSize="11" Watermark="(base)" />
+              <TextBox Grid.Column="1" Text="{Binding ThemeToken}" FontSize="11" PlaceholderText="(base)" />
             </Grid>
             <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
                        Text="Baked atlases are written back to the exact paths the mapgeo references, so they drop straight into the map. Meshes whose material sets NO_BAKED_LIGHTING are skipped — they read the lightgrid instead." />

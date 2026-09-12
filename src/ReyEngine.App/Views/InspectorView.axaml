@@ -219,7 +219,7 @@
                             <AutoCompleteBox Grid.Row="1" Grid.Column="1"
                                              Text="{Binding MaterialEditor.BulkTargetShader, Mode=TwoWay}"
                                              ItemsSource="{Binding MaterialEditor.KnownShaders}" FilterMode="Contains"
-                                             Watermark="Shaders/StaticMesh/..." FontSize="10" />
+                                             PlaceholderText="Shaders/StaticMesh/..." FontSize="10" />
                           </Grid>
                           <TextBlock Text="{Binding MaterialEditor.BulkShaderSummary}" FontSize="9"
                                      TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />

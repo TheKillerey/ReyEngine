@@ -71,7 +71,7 @@
                         ToolTip.Tip="Unticks everything the search is showing" />
               </StackPanel>
               <TextBox Text="{Binding MeshSearch}" FontSize="10" Padding="6,3"
-                       Watermark="Search meshes and materials…" />
+                       PlaceholderText="Search meshes and materials…" />
             </DockPanel>
 
             <ScrollViewer MaxHeight="240">
@@ -177,7 +177,7 @@
                                                TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}"
                                                Foreground="{DynamicResource ReyTextDimBrush}" />
                                     <TextBox Grid.Column="1" Text="{Binding Path}" FontSize="9" Padding="4,1"
-                                             Watermark="assets/…/texture.tex" />
+                                             PlaceholderText="assets/…/texture.tex" />
                                     <TextBlock Grid.Column="2" Text="{Binding Note}" FontSize="8" Margin="6,0,0,0"
                                                VerticalAlignment="Center" IsVisible="{Binding IsMissing}"
                                                Foreground="{DynamicResource ReyErrorBrush}" />

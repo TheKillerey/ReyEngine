@@ -32,7 +32,7 @@
         </StackPanel>
         <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CatalogSummary}" Margin="4,5,12,0"
                    Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
-        <TextBox Grid.Column="2" Grid.RowSpan="2" Text="{Binding Search}" Watermark="Search shader, material or particle..."
+        <TextBox Grid.Column="2" Grid.RowSpan="2" Text="{Binding Search}" PlaceholderText="Search shader, material or particle..."
                  VerticalAlignment="Center" Padding="11,7" />
         <Button Grid.Column="3" Grid.RowSpan="2" Content="Rebuild from patch" Command="{Binding RebuildCatalogCommand}"
                 Margin="8,0,0,0" VerticalAlignment="Center" Padding="12,7"

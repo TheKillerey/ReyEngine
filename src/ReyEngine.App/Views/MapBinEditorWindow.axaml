@@ -48,7 +48,7 @@
       <!-- left: objects grouped by class -->
       <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}">
         <DockPanel>
-          <TextBox DockPanel.Dock="Top" Margin="8,8,8,4" Watermark="Search objects / classes…"
+          <TextBox DockPanel.Dock="Top" Margin="8,8,8,4" PlaceholderText="Search objects / classes…"
                    Text="{Binding Search, Mode=TwoWay}" FontSize="11" />
           <TreeView ItemsSource="{Binding Groups}" SelectionChanged="OnObjectSelection" Margin="4,0,0,4">
             <TreeView.DataTemplates>

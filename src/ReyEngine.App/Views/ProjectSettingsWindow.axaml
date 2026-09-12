@@ -17,27 +17,27 @@
                  Foreground="{DynamicResource ReyTextDimBrush}" />
 
       <TextBlock Text="Name" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
-      <TextBox Text="{Binding ModName}" Watermark="My Mod Name" />
+      <TextBox Text="{Binding ModName}" PlaceholderText="My Mod Name" />
 
       <TextBlock Text="Author" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
-      <TextBox Text="{Binding Author}" Watermark="Your name" />
+      <TextBox Text="{Binding Author}" PlaceholderText="Your name" />
 
       <TextBlock Text="Version" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
-      <TextBox Text="{Binding Version}" Watermark="1.0.0" Width="160" HorizontalAlignment="Left" />
+      <TextBox Text="{Binding Version}" PlaceholderText="1.0.0" Width="160" HorizontalAlignment="Left" />
 
       <TextBlock Text="Description" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
       <TextBox Text="{Binding Description}" AcceptsReturn="True" Height="64" TextWrapping="Wrap" />
 
       <TextBlock Text="Heart URL (optional)" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
-      <TextBox Text="{Binding Heart}" Watermark="https://…" />
+      <TextBox Text="{Binding Heart}" PlaceholderText="https://…" />
 
       <TextBlock Text="Home URL (optional)" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
-      <TextBox Text="{Binding Home}" Watermark="https://…" />
+      <TextBox Text="{Binding Home}" PlaceholderText="https://…" />
 
       <!-- M470: a workshop slug is not derivable from the mod name - "Old Summoner's Rift - Day" lives in
            a folder called oldriftday - so adopting an existing mod needs an explicit field. -->
       <TextBlock Text="LTK Manager workshop mod (optional)" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
-      <TextBox Text="{Binding LtkWorkshopSlug}" Watermark="oldriftday"
+      <TextBox Text="{Binding LtkWorkshopSlug}" PlaceholderText="oldriftday"
                ToolTip.Tip="Which mod in LTK Manager's workshop folder 'Send to LTK Manager' updates, by its mod.config.json name. Leave empty to derive it from the mod name and record it on the first send. Set it to an existing slug (the folder name under your workshop path) to adopt a mod you already ship, instead of creating a duplicate." />
 
       <TextBlock Text="Thumbnail (PNG/JPG)" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
@@ -75,7 +75,7 @@
       <TextBlock Text="RIOT PATCH UPDATES" FontSize="11" FontWeight="SemiBold"
                  Foreground="{DynamicResource ReyTextDimBrush}" />
       <TextBlock Text="Project base patch" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
-      <TextBox Text="{Binding RiotPatchVersion}" Width="160" HorizontalAlignment="Left" Watermark="16.15"
+      <TextBox Text="{Binding RiotPatchVersion}" Width="160" HorizontalAlignment="Left" PlaceholderText="16.15"
                ToolTip.Tip="The Riot patch whose originals this project currently targets. Legacy projects may need this set once." />
       <CheckBox Content="Automatically rebase when the installed Riot patch changes"
                 IsChecked="{Binding AutoUpdateOnRiotPatch}" FontSize="11" />

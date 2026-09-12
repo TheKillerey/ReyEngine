@@ -270,7 +270,7 @@
         <Border Width="1" Height="18" Background="{DynamicResource ReyBorderBrush}" Margin="5,0" VerticalAlignment="Center" />
         <!-- hash lookup -->
         <TextBox Width="230" VerticalAlignment="Center" Margin="0,0,4,0"
-                 Watermark="path or string to hash…"
+                 PlaceholderText="path or string to hash…"
                  Text="{Binding HashInput, Mode=TwoWay}" />
         <Button Classes="tool" Command="{Binding HashLookupCommand}" ToolTip.Tip="Resolve a path or hash">
           <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="🔎" FontSize="11"/><TextBlock Text="Hash Lookup"/></StackPanel>
@@ -952,7 +952,7 @@
                         FontSize="11" MinWidth="98" Margin="2,4" ToolTip.Tip="Filter by asset type" />
               <ToggleButton Grid.Column="5" Classes="vp" Content="☰" FontSize="12" Padding="8,3" Margin="2,4"
                             IsChecked="{Binding ContentBrowser.ListView}" ToolTip.Tip="Toggle grid / list view" />
-              <TextBox Grid.Column="6" Width="150" Watermark="🔎 Search…" Text="{Binding ContentBrowser.Filter}"
+              <TextBox Grid.Column="6" Width="150" PlaceholderText="🔎 Search…" Text="{Binding ContentBrowser.Filter}"
                        FontSize="11" Margin="4,4,8,4" Padding="6,2" />
             </Grid>
             <!-- folder tree + tiles -->

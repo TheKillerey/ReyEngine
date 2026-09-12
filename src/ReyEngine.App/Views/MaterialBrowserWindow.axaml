@@ -27,7 +27,7 @@
                   FontSize="11" Padding="10,4" ToolTip.Tip="Re-read the map's materials and re-run the checks." />
         </StackPanel>
         <StackPanel Orientation="Horizontal" Spacing="10">
-          <TextBox Text="{Binding Filter}" Watermark="filter by name, shader, texture or problem…"
+          <TextBox Text="{Binding Filter}" PlaceholderText="filter by name, shader, texture or problem…"
                    FontSize="11" MinWidth="280" Padding="6,2"
                    ToolTip.Tip="Also searches the findings — type 'tint' or 'cooked' to pull up exactly those rows." />
           <CheckBox Content="Only with findings" IsChecked="{Binding OnlyIssues}" FontSize="11"
@@ -106,7 +106,7 @@
 
           <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
             <TextBox Grid.Column="0" Text="{Binding NewPresetName}" FontSize="11" Padding="6,2"
-                     Watermark="name for a new preset…" />
+                     PlaceholderText="name for a new preset…" />
             <Button Grid.Column="1" Classes="tool" Content="Capture" FontSize="11" Padding="10,4"
                     Command="{Binding CapturePresetCommand}"
                     ToolTip.Tip="Snapshot the HIGHLIGHTED material — shader, samplers, parameters, switches, macros and render state." />

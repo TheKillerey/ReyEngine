@@ -56,7 +56,7 @@
           <TextBlock DockPanel.Dock="Top" Text="MAP, MOB / PROP &amp; LIGHTMAP TEXTURES" FontSize="10" FontWeight="Bold"
                      Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,0,0,8" />
 
-          <TextBox DockPanel.Dock="Top" Text="{Binding Filter}" Watermark="Filter by name or folder…"
+          <TextBox DockPanel.Dock="Top" Text="{Binding Filter}" PlaceholderText="Filter by name or folder…"
                    FontSize="11" Margin="0,0,0,6" />
 
           <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">

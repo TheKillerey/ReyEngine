@@ -66,7 +66,7 @@
             <Border Classes="card" IsVisible="{Binding Browser, Converter={x:Static ObjectConverters.IsNotNull}}">
               <StackPanel Spacing="4">
                 <TextBlock Classes="cardTitle" Text="CHARACTER" />
-                <TextBox Text="{Binding Browser.Search}" Watermark="Search champions" FontSize="11" Padding="4,2" />
+                <TextBox Text="{Binding Browser.Search}" PlaceholderText="Search champions" FontSize="11" Padding="4,2" />
                 <ListBox ItemsSource="{Binding Browser.Champions}" SelectedItem="{Binding Browser.SelectedChampion}"
                          Height="180" Background="{DynamicResource ReyBgBrush}"
                          BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">

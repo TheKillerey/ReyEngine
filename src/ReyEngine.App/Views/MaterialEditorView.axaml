@@ -31,7 +31,7 @@
                      TextWrapping="Wrap" VerticalAlignment="Center" />
         </DockPanel>
       </Border>
-      <TextBox Watermark="Search materials / textures…" Text="{Binding Search}" FontSize="11" Padding="4,2" />
+      <TextBox PlaceholderText="Search materials / textures…" Text="{Binding Search}" FontSize="11" Padding="4,2" />
       <StackPanel Orientation="Horizontal" Spacing="10">
         <CheckBox Content="Only unresolved" IsChecked="{Binding OnlyUnresolved}" FontSize="11" />
         <CheckBox Content="Show modified only" IsChecked="{Binding ShowModifiedOnly}" FontSize="11"
@@ -125,7 +125,7 @@
                 <TextBlock Text="{Binding BulkShaderLabel}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
                 <Grid ColumnDefinitions="*,Auto">
                   <AutoCompleteBox Grid.Column="0" Text="{Binding BulkShader}" FontSize="10"
-                                   ItemsSource="{Binding KnownShaders}" FilterMode="Contains" Watermark="Shaders/StaticMesh/…" />
+                                   ItemsSource="{Binding KnownShaders}" FilterMode="Contains" PlaceholderText="Shaders/StaticMesh/…" />
                   <Button Grid.Column="1" Content="Set on all" Command="{Binding ApplyBulkShaderCommand}" FontSize="10" Padding="7,1" Margin="3,0,0,0"
                           ToolTip.Tip="Switch every picked material with a technique pass to this shader, adding the sampler slots it declares - one undo step" />
                 </Grid>
@@ -147,7 +147,7 @@
                         <TextBlock Text="— mixed —" FontSize="9" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding Mixed}" />
                       </StackPanel>
                       <Grid ColumnDefinitions="*,Auto">
-                        <TextBox Grid.Column="0" Text="{Binding EditedText}" Watermark="{Binding ValueLabel}" FontSize="10" Padding="4,1"
+                        <TextBox Grid.Column="0" Text="{Binding EditedText}" PlaceholderText="{Binding ValueLabel}" FontSize="10" Padding="4,1"
                                  FontFamily="Cascadia Mono, Consolas, monospace">
                           <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" /></TextBox.KeyBindings>
                         </TextBox>
@@ -174,7 +174,7 @@
                         <TextBlock Text="— mixed —" FontSize="9" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding Mixed}" />
                       </StackPanel>
                       <Grid ColumnDefinitions="*,Auto">
-                        <TextBox Grid.Column="0" Text="{Binding EditedText}" Watermark="{Binding ValueLabel}" FontSize="10" Padding="4,1"
+                        <TextBox Grid.Column="0" Text="{Binding EditedText}" PlaceholderText="{Binding ValueLabel}" FontSize="10" Padding="4,1"
                                  FontFamily="Cascadia Mono, Consolas, monospace">
                           <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" /></TextBox.KeyBindings>
                         </TextBox>
@@ -310,7 +310,7 @@
                   <Grid ColumnDefinitions="*,Auto">
                     <AutoCompleteBox Grid.Column="0" Text="{Binding EditedShader}" FontSize="10"
                                      ItemsSource="{Binding Owner.KnownShaders}" FilterMode="Contains"
-                                     Watermark="Shaders/StaticMesh/…" />
+                                     PlaceholderText="Shaders/StaticMesh/…" />
                     <Button Grid.Column="1" Content="Set" Command="{Binding ApplyShaderCommand}" FontSize="10" Padding="7,1" Margin="3,0,0,0"
                             ToolTip.Tip="Switch to this shader and auto-add the sampler slots materials of that shader use" />
                   </Grid>
@@ -592,7 +592,7 @@
                   <StackPanel>
                   <!-- M55: add a parameter (clones an existing one's schema; edit the value after) -->
                   <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,4" IsVisible="{Binding CanEditParameters}">
-                    <TextBox Grid.Column="0" Text="{Binding NewParamName}" Watermark="new param name (e.g. AlphaTestValue)"
+                    <TextBox Grid.Column="0" Text="{Binding NewParamName}" PlaceholderText="new param name (e.g. AlphaTestValue)"
                              FontSize="10" Padding="4,1">
                       <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding AddParameterCommand}" /></TextBox.KeyBindings>
                     </TextBox>

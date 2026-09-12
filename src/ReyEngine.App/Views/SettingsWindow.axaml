@@ -88,7 +88,7 @@
                          Text="Where new projects and .fantome imports are created. Empty = Documents\ReyEngine Projects. Tip: a plain local folder (e.g. D:\ReyEngineProjects) avoids OneDrive sync locks and churn on large staging trees." />
               <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
                 <TextBox Grid.Column="0" Text="{Binding ProjectsDirectory}" FontSize="12"
-                         Watermark="Documents\ReyEngine Projects (default)" />
+                         PlaceholderText="Documents\ReyEngine Projects (default)" />
                 <Button Grid.Column="1" Content="Browse…" Margin="6,0,0,0" Click="OnBrowseProjectsFolder" />
               </Grid>
             </StackPanel>
@@ -100,9 +100,9 @@
               <TextBlock Classes="settingsDesc"
                          Text="League ships Wwise Vorbis audio only, so importing ordinary audio needs Wwise's own encoder. Leave these empty to auto-detect an LtMAO install (it bundles both) or a Wwise installation." />
               <TextBlock Text="WwiseConsole.exe" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
-              <TextBox Text="{Binding WwiseConsolePath}" FontSize="12" Watermark="auto-detect" />
+              <TextBox Text="{Binding WwiseConsolePath}" FontSize="12" PlaceholderText="auto-detect" />
               <TextBlock Text="Wwise project (.wproj)" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
-              <TextBox Text="{Binding WwiseProjectPath}" FontSize="12" Watermark="auto-detect" />
+              <TextBox Text="{Binding WwiseProjectPath}" FontSize="12" PlaceholderText="auto-detect" />
             </StackPanel>
           </Border>
           <Border Classes="settingsCard">
@@ -291,7 +291,7 @@
               <TextBlock Classes="settingsDesc"
                          Text="A picture of your own behind the whole editor - the panels turn see-through so it shows a little. Applied live; Save keeps it." />
               <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,4,0,0">
-                <TextBox Grid.Column="0" Text="{Binding BackgroundImagePath}" Watermark="No picture" FontSize="11.5" />
+                <TextBox Grid.Column="0" Text="{Binding BackgroundImagePath}" PlaceholderText="No picture" FontSize="11.5" />
                 <Button Grid.Column="1" Classes="tool" Content="Browse…" Click="OnPickBackgroundImage" Margin="6,0,0,0" />
                 <Button Grid.Column="2" Classes="tool" Content="Clear" Command="{Binding ClearBackgroundImageCommand}"
                         IsEnabled="{Binding HasBackgroundImage}" Margin="6,0,0,0" />
@@ -329,7 +329,7 @@
               <TextBlock Classes="settingsDesc" Text="Map folder" Margin="0,4,0,0" />
               <Grid ColumnDefinitions="*,Auto">
                 <TextBox Grid.Column="0" Text="{Binding PreviewBackgroundMapFolder}"
-                         Watermark="e.g. Documents\ReyEngine Projects\Maps\Map8" />
+                         PlaceholderText="e.g. Documents\ReyEngine Projects\Maps\Map8" />
                 <Button Grid.Column="1" Content="Browse…" Margin="8,0,0,0" Click="OnBrowsePreviewMap" />
               </Grid>
             </StackPanel>

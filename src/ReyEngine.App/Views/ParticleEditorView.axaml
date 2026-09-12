@@ -49,7 +49,7 @@
             <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="SYSTEMS" />
             <!-- M197 (4.5): map VFX bins carry thousands of systems; a flat list is unusable without this -->
             <TextBox DockPanel.Dock="Top" Text="{Binding SystemFilter, Mode=TwoWay}" Margin="4,3"
-                     FontSize="10" Padding="4,2" Watermark="Filter systems..." />
+                     FontSize="10" Padding="4,2" PlaceholderText="Filter systems..." />
             <ListBox ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem}"
                      Background="Transparent" Padding="2">
               <ListBox.ItemTemplate>

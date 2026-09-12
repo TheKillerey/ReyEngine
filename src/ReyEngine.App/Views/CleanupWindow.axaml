@@ -70,7 +70,7 @@
     <!-- Toolbar: search, type filter, bulk selection -->
     <Border DockPanel.Dock="Top" Margin="14,0,14,6" IsVisible="{Binding HasScanned}">
       <Grid ColumnDefinitions="*,Auto,Auto,Auto">
-        <TextBox Grid.Column="0" Text="{Binding SearchText}" Watermark="Search path or reason…"
+        <TextBox Grid.Column="0" Text="{Binding SearchText}" PlaceholderText="Search path or reason…"
                  FontSize="11" />
         <ComboBox Grid.Column="1" ItemsSource="{Binding TypeFilters}"
                   SelectedItem="{Binding SelectedTypeFilter}" MinWidth="120" Margin="8,0,0,0"
