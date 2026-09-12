@@ -129,6 +129,9 @@
                   <Button Grid.Column="1" Content="Set on all" Command="{Binding ApplyBulkShaderCommand}" FontSize="10" Padding="7,1" Margin="3,0,0,0"
                           ToolTip.Tip="Switch every picked material with a technique pass to this shader, adding the sampler slots it declares - one undo step" />
                 </Grid>
+                <TextBlock Text="{Binding ShaderListNote}" FontSize="9" TextWrapping="Wrap"
+                           Foreground="{DynamicResource ReyTextDimBrush}"
+                           IsVisible="{Binding ShaderListNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <TextBlock Text="{Binding BulkPickShaderStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap"
                            IsVisible="{Binding BulkPickShaderStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
               </StackPanel>
@@ -314,6 +317,10 @@
                     <Button Grid.Column="1" Content="Set" Command="{Binding ApplyShaderCommand}" FontSize="10" Padding="7,1" Margin="3,0,0,0"
                             ToolTip.Tip="Switch to this shader and auto-add the sampler slots materials of that shader use" />
                   </Grid>
+                  <!-- M701: which family the list was narrowed to, and why -->
+                  <TextBlock Text="{Binding Owner.ShaderListNote}" FontSize="9" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyTextDimBrush}"
+                             IsVisible="{Binding Owner.ShaderListNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                   <TextBlock Text="{Binding ShaderChangeStatus}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}"
                              TextWrapping="Wrap" IsVisible="{Binding ShaderChangeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                   <TextBlock Text="{Binding ShaderDefSummary}" FontSize="9" TextWrapping="Wrap"

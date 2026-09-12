@@ -149,6 +149,9 @@ public sealed partial class MainWindowViewModel
         if (!await SaveMapBinBytesAsync(binEntry, written))
             throw new InvalidOperationException("The edited materials bin could not be saved.");
 
+        // M701: show what was just added. The prop-mesh overlay is off by default, so a placement made
+        // with it off is a marker and nothing else - which reads exactly like the placement having failed.
+        ShowPropMeshes = true;
         FinishWorkshopMutation();
         await LoadMapGeoAsync(mapEntry);
         if (MapContent.AllProps.FirstOrDefault(p => p.Prop.Id == id) is { } added) SelectedPropNode = added;

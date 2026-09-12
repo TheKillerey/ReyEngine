@@ -1284,6 +1284,9 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     // ---- M52: shader selector — swap the pass shader + auto-add the samplers that shader uses ----
     /// <summary>Distinct shaders seen in the loaded document (the realistic choices for this map/skin).</summary>
     public ObservableCollection<string> KnownShaders { get; } = new();
+
+    /// <summary>M701: what the shader list was narrowed to, and why - shown under the picker.</summary>
+    [ObservableProperty] private string _shaderListNote = "";
     /// <summary>Only shaders currently assigned in this document; used by the bulk replacement source.</summary>
     public ObservableCollection<string> UsedShaders { get; } = new();
     private readonly Dictionary<string, HashSet<string>> _shaderSamplers = new(StringComparer.OrdinalIgnoreCase);
@@ -1428,10 +1431,18 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
 
         var used = new SortedSet<string>(_shaderSamplers.Keys, StringComparer.OrdinalIgnoreCase);
         foreach (var n in used) UsedShaders.Add(n);
-        var names = new SortedSet<string>(used, StringComparer.OrdinalIgnoreCase);
-        if (Catalog is not null)
-            foreach (var sh in Catalog.Shaders) names.Add(sh.Name);
+        // M701: offer the family this material is DRAWN with, not all 350 shaders the client has. A map
+        // material is fed by a static draw and a character material by a skinned one; crossing them is
+        // the "Missing shader constant WORLD_MATRIX" error, with nothing drawn. Whatever the file already
+        // uses stays in the list whichever family it is in.
+        var names = new SortedSet<string>(
+            ShaderFamilies.Offer(Catalog?.Shaders.Select(sh => sh.Name) ?? Enumerable.Empty<string>(), used, Kind),
+            StringComparer.OrdinalIgnoreCase);
         foreach (var n in names) KnownShaders.Add(n);
+        ShaderListNote = Catalog is null
+            ? ""
+            : $"{names.Count:n0} {ShaderFamilies.NameFor(Kind)} shader(s) - the family "
+              + (Kind == MaterialSourceKind.ChampionSkin ? "a character" : "map geometry") + " draws with.";
 
         BulkSourceShader = previousSource is not null && used.Contains(previousSource)
             ? previousSource
@@ -1535,6 +1546,14 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         vm.RaiseShaderChanged();
         vm.RefreshShaderDef(Catalog);
         IsDirty = _doc?.IsDirty ?? true;
+        // M701: the other family is not refused - two shipped character materials really are on a UI
+        // shader - but it is never applied silently, because in game it draws nothing.
+        if (ShaderFamilies.Warning(shader, Kind) is { } familyWarning)
+        {
+            vm.ShaderChangeStatus = familyWarning;
+            Warn?.Invoke($"{vm.Name}: {familyWarning}");
+            return;
+        }
         vm.ShaderChangeStatus = def is not null
             ? added > 0
                 ? $"Shader set. Added {added} sampler slot(s) this shader declares, pre-filled with its default textures."
