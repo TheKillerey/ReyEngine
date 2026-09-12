@@ -1034,21 +1034,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             PublishAddedMeshPreview();   // keep any added meshes visible even with props off
             return;
         }
-        var snapshot = MapContent.AllProps
-            .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved)
-            .Select(p => (Prop: p.Prop with { Skin = p.EffectiveSkin, VisibilityFlags = p.EffectiveVisibilityFlags },
+        var visible = MapContent.AllProps
+            .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved).ToList();
+        var snapshot = visible
+            .Select(p => (Prop: p.Prop with { Skin = p.EffectiveSkin, VisibilityFlags = p.EffectiveVisibilityFlags,
+                                              Transform = p.CurrentTransform, Position = p.CurrentPosition },   // M699
                           Clip: p.EffectiveAnimation))   // M677: the placement's chosen clip, null for the idle
             .ToList();
-        var (set, resolved, failed) = await System.Threading.Tasks.Task.Run(() => BuildPropRenderSet(snapshot));
+        var (set, owners, resolved, failed) = await System.Threading.Tasks.Task.Run(() => BuildPropRenderSet(snapshot));
         if (!ShowPropMeshes) return;   // toggled off while decoding
         _propInstances = set?.Instances ?? (IReadOnlyList<PropInstanceData>)System.Array.Empty<PropInstanceData>();   // M79
+        // M699: which placement each instance came from, so a gizmo drag moves it without decoding anything again
+        _propInstanceOwners = owners.Select(i => visible[i]).ToList();
         PublishAddedMeshPreview();      // props + added meshes combined
         _log.Info("Props", $"Rendering {resolved} prop mesh(es); {failed} couldn't be resolved (shown as markers).");
     }
 
     /// <summary>Decode each unique prop skin once (mesh + per-submesh diffuse) and place an instance per
     /// placement. Runs off the UI thread. Returns the set + resolved/failed counts (logged on return).</summary>
-    private (PropRenderSet? set, int resolved, int failed) BuildPropRenderSet(
+    private (PropRenderSet? set, IReadOnlyList<int> owners, int resolved, int failed) BuildPropRenderSet(
         IReadOnlyList<(MapAnimatedProp Prop, string? Clip)> props)
     {
         // M677: one mesh per (skin, clip). The pose is per mesh in both renderers, so two placements of one
@@ -1058,16 +1062,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var texByPath = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
         var instances = new List<PropInstanceData>();
         int failed = 0;
-        foreach (var (p, clip) in props)
+        var owners = new List<int>(props.Count);   // M699: instance i belongs to props[owners[i]]
+        for (int i = 0; i < props.Count; i++)
         {
+            var (p, clip) = props[i];
             if (string.IsNullOrEmpty(p.Skin)) { failed++; continue; }
             string key = clip is null ? p.Skin : p.Skin + "|" + clip;
             if (!meshBySkin.TryGetValue(key, out var mesh))
                 meshBySkin[key] = mesh = TryBuildPropMesh(p.Skin, texByPath, clip);
-            if (mesh is not null) instances.Add(PropInstanceData.Place(mesh, p.Transform));   // M676: skinScale under it
+            if (mesh is not null) { instances.Add(PropInstanceData.Place(mesh, p.Transform)); owners.Add(i); }   // M676: skinScale under it
             else failed++;
         }
-        return (instances.Count > 0 ? new PropRenderSet(instances) : null, instances.Count, failed);
+        return (instances.Count > 0 ? new PropRenderSet(instances) : null, owners, instances.Count, failed);
     }
 
     private PropMesh? TryBuildPropMesh(string skin, Dictionary<string, TextureImage?> texCache, string? clip = null)
@@ -1323,7 +1329,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         PropSkinChoices.Clear();
         PropAnimationChoices.Clear();
-        if (value is not { } p) return;
+        if (value is not { } p)
+        {
+            // M699: the gizmo followed this prop, so it goes away with it unless something else is selected
+            if (_selection.IsEmpty && SelectedParticleNode is null && SelectedSound is null && SelectedAddedMesh is null
+                && SelectedLight is null) GizmoPivot = null;
+            return;
+        }
         // M677: the clips this character ships, idle first. The list follows the SKIN in play - a swapped
         // skin of the same character has the same animations, so the character is enough.
         PropAnimationChoices.Add(AnimatedPropViewModel.IdleChoice);
@@ -1344,6 +1356,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedParticleNode is not null) SelectedParticleNode = null;   // M76: viewport picks bypass the tree item
         if (SelectedSound is not null) SelectedSound = null;   // M56
         SelectedParticleMarker = p.Position;   // M55b: highlight only — camera stays (use Focus)
+        GizmoPivot = p.CurrentPosition;        // M699: the gizmo drives props too
         SelectedPlaceableInfo = $"{p.Name}\n{p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
     }
     partial void OnSelectedProbeChanged(CubemapProbeViewModel? value)
@@ -1713,13 +1726,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>True when the gizmo should operate on a placement (no mesh selected, placement is).</summary>
     public bool HasPlacementGizmoTarget => SelectedParticleNode is not null || SelectedSound is not null
-                                           || SelectedAddedMesh is not null || SelectedLight is not null;   // M154
+                                           || SelectedAddedMesh is not null || SelectedLight is not null   // M154
+                                           || SelectedPropNode is not null;                                // M699
 
     /// <summary>Drag-start state for the active placement (sounds report identity rotation/scale).
     /// M154: a light has no offset model — it stores an absolute position, so it reports that as the
     /// "offset" and DragSelectedPlacementTo writes start+delta straight back as the new position.</summary>
     public (System.Numerics.Vector3 Offset, System.Numerics.Vector3 Rotation, System.Numerics.Vector3 Scale) PlacementDragStart =>
         SelectedParticleNode is { } p ? (p.Offset, p.RotationDegrees, p.Scale)
+        : SelectedPropNode is { } r ? (r.Offset, r.RotationDegrees, r.Scale)   // M699
         : SelectedAddedMesh is { } a ? (a.Offset, a.RotationDegrees, a.Scale)
         : SelectedLight is { } l ? (l.Position, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One)
         : (SelectedSound?.Offset ?? System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One);
@@ -1732,7 +1747,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public void BeginPlacementDrag()
     {
         _placementDragTarget = (object?)SelectedParticleNode ?? (object?)SelectedSound
-                               ?? (object?)SelectedAddedMesh ?? SelectedLight;   // M154
+                               ?? (object?)SelectedAddedMesh ?? (object?)SelectedLight   // M154
+                               ?? SelectedPropNode;                                       // M699
         if (_placementDragTarget is { } t) _placementDragBefore = PlacementTransformCommand.State.Capture(t);
     }
 
@@ -1759,8 +1775,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (ReferenceEquals(l, SelectedLight)) GizmoPivot = l.Position;
                 RepublishLights();
                 break;
+            case AnimatedPropViewModel r:   // M699
+                if (ReferenceEquals(r, SelectedPropNode))
+                {
+                    SelectedParticleMarker = r.CurrentPosition;
+                    GizmoPivot = r.CurrentPosition;
+                    SelectedPlaceableInfo = $"{r.Name}\n{r.Info}\n({r.Position.X:0}, {r.Position.Y:0}, {r.Position.Z:0})";
+                }
+                UpdatePlaceableMarkers();
+                RefreshPropInstanceTransforms();
+                break;
         }
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits) || MapContent.Sounds.Any(v => v.IsMoved);
+        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits) || MapContent.Sounds.Any(v => v.IsMoved)
+                           || MapContent.AllProps.Any(v => v.HasEdits);   // M699
     }
 
     public void DragSelectedPlacementTo(System.Numerics.Vector3 absoluteOffset)
@@ -1793,6 +1820,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             GizmoPivot = s.Position;
             UpdatePlaceableMarkers();
         }
+        else if (SelectedPropNode is { } r)   // M699
+        {
+            r.Offset = absoluteOffset;
+            SelectedParticleMarker = r.CurrentPosition;
+            GizmoPivot = r.CurrentPosition;
+            // the coordinates in the panel tick with the drag, which is how you land on a number
+        SelectedPlaceableInfo = $"{r.Name}\n{r.Info}\n({r.Position.X:0}, {r.Position.Y:0}, {r.Position.Z:0})";
+            UpdatePlaceableMarkers();
+            RefreshPropInstanceTransforms();
+        }
     }
 
     /// <summary>Extra local rotation for the selected particle/added-mesh (sounds are point emitters — no-op).</summary>
@@ -1800,6 +1837,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (SelectedParticleNode is { } p) p.RotationDegrees = rotationDegrees;
         else if (SelectedAddedMesh is { } a) { a.RotationDegrees = rotationDegrees; GizmoPivot = a.PivotWorld; PublishAddedMeshPreview(); }
+        else if (SelectedPropNode is { } r) { r.RotationDegrees = rotationDegrees; RefreshPropInstanceTransforms(); }   // M699
     }
 
     /// <summary>Extra local scale for the selected particle/added-mesh (sounds are point emitters — no-op).</summary>
@@ -1807,6 +1845,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (SelectedParticleNode is { } p) p.Scale = scale;
         else if (SelectedAddedMesh is { } a) { a.Scale = scale; GizmoPivot = a.PivotWorld; PublishAddedMeshPreview(); }
+        else if (SelectedPropNode is { } r) { r.Scale = scale; RefreshPropInstanceTransforms(); }   // M699
     }
 
     public void EndPlacementDrag()
@@ -3003,6 +3042,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentPropMeshes = instances.Count > 0 ? new PropRenderSet(instances) : null;
     }
     private IReadOnlyList<PropInstanceData> _propInstances = System.Array.Empty<PropInstanceData>();
+
+    /// <summary>M699: the placement each prop instance was built from, in instance order.</summary>
+    private IReadOnlyList<AnimatedPropViewModel> _propInstanceOwners = System.Array.Empty<AnimatedPropViewModel>();
+
+    /// <summary>
+    /// M699: move the already-decoded prop instances to where their placements now are.
+    ///
+    /// <para>A drag runs every frame, and rebuilding the render set means decoding every mesh and texture
+    /// again - seconds on a map with 94 placements. The meshes do not change when a prop moves, only the
+    /// matrices do, so the instances are rebuilt from the meshes they already hold. The skin's own scale
+    /// goes back under the placement through the same Place() the build uses, so a dragged prop keeps the
+    /// size it had.</para>
+    /// </summary>
+    private void RefreshPropInstanceTransforms()
+    {
+        if (_propInstanceOwners.Count != _propInstances.Count) return;   // a rebuild is in flight - it will carry the move
+        var updated = new PropInstanceData[_propInstances.Count];
+        for (int i = 0; i < updated.Length; i++)
+            updated[i] = PropInstanceData.Place(_propInstances[i].Mesh, _propInstanceOwners[i].CurrentTransform);
+        _propInstances = updated;
+        PublishAddedMeshPreview();   // props + added meshes, republished together
+    }
     [ObservableProperty] private IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? _currentModelSubmeshMaterials; // M32
     [ObservableProperty] private TextureImage? _currentGrassTint;                    // M78: map grass-tint texture
     [ObservableProperty] private System.Numerics.Vector4 _currentGrassTintRect;      // M78: minX, minZ, 1/spanX, 1/spanZ
@@ -10688,6 +10749,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         placementEdits.AddRange(editedProps.Where(p => p.Prop.Id.IsValid).Select(p => new MapPlacementEdit(p.Prop.Id)
         {
+            Transform = p.IsMoved ? p.CurrentTransform : null,   // M699: null leaves the authored one alone
             Skin = !string.IsNullOrWhiteSpace(p.EditedSkin)
                 && !p.EffectiveSkin.Equals(p.Prop.Skin, StringComparison.OrdinalIgnoreCase) ? p.EffectiveSkin : null,
             VisibilityFlags = p.EditedVisibilityFlags,

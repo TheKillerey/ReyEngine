@@ -161,7 +161,8 @@ public sealed partial class AnimatedPropViewModel : MapOutlinerItemViewModel
     public string Name => EffectiveSkinName.Equals("Skin0", StringComparison.OrdinalIgnoreCase)
         ? Prop.CharacterName : $"{Prop.CharacterName} / {EffectiveSkinName}";
     public string Info => Prop.CharacterRecord;
-    public Vector3 Position => Prop.Position;
+    /// <summary>M699: where the prop IS, edits included - every marker, pick test and info line reads it.</summary>
+    public Vector3 Position => CurrentPosition;
     [ObservableProperty] private string? _editedSkin;
     [ObservableProperty] private int? _editedVisibilityFlags;
 
@@ -193,8 +194,36 @@ public sealed partial class AnimatedPropViewModel : MapOutlinerItemViewModel
     }
     public string EffectiveSkinName => EffectiveSkin.Contains('/') ? EffectiveSkin[(EffectiveSkin.LastIndexOf('/') + 1)..] : EffectiveSkin;
     public int EffectiveVisibilityFlags => EditedVisibilityFlags ?? Prop.VisibilityFlags;
-    public bool HasEdits => IsRemoved || EditedVisibilityFlags is not null
+    public bool HasEdits => IsRemoved || IsMoved || EditedVisibilityFlags is not null
         || (!string.IsNullOrWhiteSpace(EditedSkin) && !EffectiveSkin.Equals(Prop.Skin, StringComparison.OrdinalIgnoreCase));
+
+    // M699: the move/rotate/scale model every other placement already had. A prop was the one kind of
+    // placement the gizmo could not touch - you could import a character and place it, and then not put
+    // it where it belongs. Same fields, same composition rule and same writer verb as a particle.
+    public Vector3 Offset;                                   // accumulated move (world space), default zero
+    public Vector3 RotationDegrees;                          // extra local rotation on top of the authored transform
+    public Vector3 Scale = Vector3.One;                      // extra local scale multiplier
+    public Vector3 CurrentPosition => Prop.Position + Offset;
+    public Matrix4x4 CurrentTransform
+    {
+        get
+        {
+            // Extra scale+rotation compose in the placement's local space BEFORE the authored transform
+            // (row-vector convention: v * Delta * Original), then the translation is overridden. The skin's
+            // own skinScale is applied under this by PropInstanceData.Place, exactly as the game does.
+            var transform = Prop.Transform;
+            if (RotationDegrees != Vector3.Zero || Scale != Vector3.One)
+            {
+                const float d2r = MathF.PI / 180f;
+                var delta = Matrix4x4.CreateScale(Scale) *
+                            Matrix4x4.CreateFromYawPitchRoll(RotationDegrees.Y * d2r, RotationDegrees.X * d2r, RotationDegrees.Z * d2r);
+                transform = delta * transform;
+            }
+            transform.Translation = CurrentPosition;
+            return transform;
+        }
+    }
+    public bool IsMoved => Offset != Vector3.Zero || RotationDegrees != Vector3.Zero || Scale != Vector3.One;
 
     partial void OnEditedSkinChanged(string? value)
     { OnPropertyChanged(nameof(Name)); OnPropertyChanged(nameof(EffectiveSkin)); OnPropertyChanged(nameof(EffectiveSkinName)); OnPropertyChanged(nameof(HasEdits)); StateChanged?.Invoke(this); }
