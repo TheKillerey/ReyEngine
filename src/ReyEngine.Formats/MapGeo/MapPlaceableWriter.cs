@@ -46,6 +46,19 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     /// <summary>The Wwise event a MapAudio placement plays. The bin stores the NAME; the bank stores only
     /// its FNV-1 hash, so a typo here is a placement that loads and stays silent.</summary>
     public string? EventName { get; init; }
+
+    /// <summary>M696: create a decorative character placement - the form every scenery character on
+    /// Map11 / Map12 / Map453 has (119 of 119 measured): transform, a hashed name, a <c>Character</c>
+    /// pointer naming the record and the skin, and a <c>CharacterMesh</c> with the idle to play. No team,
+    /// no attackable unit: the game draws and animates it and nothing can target it. Requires
+    /// <see cref="Transform"/>, <see cref="CharacterRecord"/> and <see cref="Skin"/>.</summary>
+    public bool CreateCharacter { get; init; }
+
+    /// <summary>The record a created character placement names, e.g. "Characters/MyProp/CharacterRecords/Root".</summary>
+    public string? CharacterRecord { get; init; }
+
+    /// <summary>The clip a created character placement idles with; "Idle1" when unset, Riot's own default.</summary>
+    public string? IdleAnimation { get; init; }
 }
 
 /// <summary>
@@ -208,6 +221,15 @@ public static class MapPlaceableWriter
     private static readonly uint MapAudioClass = HashAlgorithms.Fnv1a("MapAudio");
     private static readonly uint F_eventName = HashAlgorithms.Fnv1a("eventName");
 
+    // M696: the decorative character placement. Its class has no name in the hash database; the value is
+    // the one every such placement carries on the shipped maps (26 on Map453, 33 on Map12, 60 on Map11).
+    private const uint CharacterItemClass = 0x9aa5b4bcu;
+    private static readonly uint F_Character = HashAlgorithms.Fnv1a("Character");
+    private static readonly uint F_CharacterMesh = HashAlgorithms.Fnv1a("CharacterMesh");
+    private static readonly uint F_IdleAnimationName = HashAlgorithms.Fnv1a("IdleAnimationName");
+    private static readonly uint SkinCharacterGeComponentDefClass = HashAlgorithms.Fnv1a("SkinCharacterGeComponentDef");
+    private static readonly uint CharacterMeshGeComponentDefClass = HashAlgorithms.Fnv1a("CharacterMeshGeComponentDef");
+
     private static bool TryApply(BinTree tree, MapPlacementEdit edit)
     {
         if (!edit.Id.IsValid) return false;
@@ -270,6 +292,32 @@ public static class MapPlaceableWriter
                     .Append(new(new BinTreeHash(0, edit.Id.ItemKey), sound)));
             container.Properties[F_items] = items;
         }
+        else if (edit.CreateCharacter)
+        {
+            if (items.Any(e => e.Key is BinTreeHash k && k.Value == edit.Id.ItemKey)
+                || edit.Transform is null || string.IsNullOrWhiteSpace(edit.CharacterRecord) || string.IsNullOrWhiteSpace(edit.Skin)) return false;
+            // Field for field the shipped scenery placement: the name is a HASH (never a string on this
+            // class), Character is a POINTER and CharacterMesh an EMBED - the client drops a property whose
+            // wire form disagrees with the class, and a dropped Character is an invisible prop.
+            var character = new BinTreeStruct(0, CharacterItemClass, new BinTreeProperty[]
+            {
+                new BinTreeMatrix44(F_transform, edit.Transform.Value),
+                new BinTreeHash(F_name, HashAlgorithms.Fnv1a(edit.Name ?? edit.Skin!)),
+                new BinTreeStruct(F_Character, SkinCharacterGeComponentDefClass, new BinTreeProperty[]
+                {
+                    new BinTreeString(F_characterRecord, edit.CharacterRecord!),
+                    new BinTreeString(F_skin, edit.Skin!),
+                }),
+                new BinTreeEmbedded(F_CharacterMesh, CharacterMeshGeComponentDefClass, new BinTreeProperty[]
+                {
+                    new BinTreeString(F_IdleAnimationName, string.IsNullOrWhiteSpace(edit.IdleAnimation) ? "Idle1" : edit.IdleAnimation!),
+                }),
+            });
+            items = new BinTreeMap(F_items, items.KeyType, items.ValueType,
+                items.Select(e => new KeyValuePair<BinTreeProperty, BinTreeProperty>(e.Key, e.Value))
+                    .Append(new(new BinTreeHash(0, edit.Id.ItemKey), character)));
+            container.Properties[F_items] = items;
+        }
 
         BinTreeProperty? key = null, value = null;
         foreach (var e in items)
@@ -288,7 +336,13 @@ public static class MapPlaceableWriter
         if (edit.Transform is { } m) s.Properties[F_transform] = new BinTreeMatrix44(F_transform, m);
         if (edit.ColorModulate is { } c) s.Properties[F_colorModulate] = new BinTreeVector4(F_colorModulate, c);
         if (edit.SystemLink is { } link) s.Properties[F_system] = new BinTreeObjectLink(F_system, link);
-        if (edit.Name is { } n) s.Properties[F_name] = new BinTreeString(F_name, n);
+        // The name's WIRE FORM belongs to the placement's class, not to the edit: particles and sounds
+        // carry a string, the scenery character class carries a hash (119 of 119 measured). Writing the
+        // wrong one is a property the client silently drops - the same rule as the visibility flags below.
+        if (edit.Name is { } n)
+            s.Properties[F_name] = s.Properties.GetValueOrDefault(F_name) is BinTreeHash
+                ? new BinTreeHash(F_name, HashAlgorithms.Fnv1a(n))
+                : new BinTreeString(F_name, n);
         if (edit.EventName is { } ev && !edit.CreateSound) s.Properties[F_eventName] = new BinTreeString(F_eventName, ev);
         if (edit.VisibilityFlags is { } visibility)
         {
@@ -318,7 +372,7 @@ public static class MapPlaceableWriter
         var editedByContainer = edits.GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
         // M206: a clone's key is absent from `before` on purpose, so it must not read as an intruder.
-        var addedByContainer = edits.Where(e => e.CloneOf is not null || e.CreateParticle || e.CreateSound)
+        var addedByContainer = edits.Where(e => e.CloneOf is not null || e.CreateParticle || e.CreateSound || e.CreateCharacter)
             .GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
 
