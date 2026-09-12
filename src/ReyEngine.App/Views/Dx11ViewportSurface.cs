@@ -287,6 +287,10 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// clipping exactly as the preview does.</param>
     public byte[]? RenderCaptureFrame(CinematicPose pose, int width, int height, float timeSeconds, OrbitCamera camera)
     {
+        // M693: the immediate context is the live viewport's; a frame from any other thread races it.
+        // Loud, because the failure it prevents was silent - a sky that came and went during exports.
+        if (!Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+            throw new InvalidOperationException("RenderCaptureFrame must run on the UI thread, where the live viewport renders.");
         if (!_ready || width <= 0 || height <= 0) return null;
         // The live camera's own near/far, so a captured frame clips exactly as the preview it was framed
         // in - see CinematicPose.Projection.

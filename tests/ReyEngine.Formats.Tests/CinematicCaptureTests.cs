@@ -192,6 +192,122 @@ public sealed class CinematicCaptureTests : IDisposable
         Assert.Equal(planned, calls.Select(c => c.T).ToList());
     }
 
+    /// <summary>M693: the run copies each frame out of the renderer's buffer before asking for the next,
+    /// never re-enters the renderer, and encodes behind it. A renderer that REUSES one buffer and paints
+    /// a different colour per frame is the proof: every PNG must carry its own frame's colour.</summary>
+    [Fact]
+    public async Task FramesAreCopiedOutOfAReusedBufferAndTheRendererIsNeverReentered()
+    {
+        var settings = Settings(fps: 10);
+        var shared = new byte[settings.Width * settings.Height * 4];
+        int inFlight = 0, maxInFlight = 0, calls = 0;
+        CinematicFrameRendererAsync render = async (pose, w, h, t) =>
+        {
+            int now = Interlocked.Increment(ref inFlight);
+            maxInFlight = Math.Max(maxInFlight, now);
+            await Task.Delay(3);
+            byte shade = (byte)(Interlocked.Increment(ref calls) * 20);
+            for (int i = 0; i < w * h; i++) { shared[i * 4] = shade; shared[i * 4 + 1] = 0; shared[i * 4 + 2] = 0; shared[i * 4 + 3] = 255; }
+            Interlocked.Decrement(ref inFlight);
+            return shared;
+        };
+        var rendered = new List<int>();
+        var result = await CinematicCapture.RunAsync(Shot(1f), settings, render, null, n => { lock (rendered) rendered.Add(n); });
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(10, result.FramesWritten);
+        Assert.Equal(1, maxInFlight);
+        Assert.Equal(Enumerable.Range(1, 10), rendered);
+        for (int i = 1; i <= 10; i++)
+        {
+            using var image = Image.Load<Bgra32>(Path.Combine(_dir, $"Shot_{i:D6}.png"));
+            Assert.Equal((byte)(i * 20), image[0, 0].B);   // frame i's own shade, not a later frame's
+        }
+    }
+
+    /// <summary>M693: the encoders run behind the renderer. With a renderer that answers instantly and
+    /// an encoder that takes real time, frames are rendered ahead of the files landing - and every file
+    /// still lands.</summary>
+    [Fact]
+    public async Task EncodingRunsBehindTheRendererAndEveryFrameStillLands()
+    {
+        var calls = new List<(int, int, float)>();
+        int renderedAtFirstWrite = -1, rendered = 0;
+        var progress = new SynchronousProgress<(int Done, int Total)>(p =>
+        {
+            if (p.Done == 1) renderedAtFirstWrite = Volatile.Read(ref rendered);
+        });
+        var result = await CinematicCapture.RunAsync(Shot(2f), Settings(w: 256, h: 128, fps: 15),
+            (pose, w, h, t) => Task.FromResult(Solid(calls)(pose, w, h, t)), progress, n => Volatile.Write(ref rendered, n));
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(30, result.FramesWritten);
+        Assert.Equal(30, Directory.GetFiles(_dir, "*.png").Length);
+        Assert.True(renderedAtFirstWrite >= 1, "the first write reported before any frame rendered");
+        Assert.True(CinematicCapture.MaxEncodesInFlight >= 1);
+    }
+
+    /// <summary>M693: cancelling while encodes are in flight leaves no truncated PNG - every file on
+    /// disk decodes, and the count on disk is the count reported.</summary>
+    [Fact]
+    public async Task CancellingWhileEncodesAreInFlightLeavesNoTruncatedPng()
+    {
+        using var cts = new CancellationTokenSource();
+        int rendered = 0;
+        var calls = new List<(int, int, float)>();
+        var solid = Solid(calls);
+        CinematicFrameRendererAsync render = (pose, w, h, t) =>
+        {
+            if (Interlocked.Increment(ref rendered) == 6) cts.Cancel();
+            return Task.FromResult(solid(pose, w, h, t));
+        };
+        var result = await CinematicCapture.RunAsync(Shot(2f), Settings(w: 256, h: 128, fps: 15), render, null, null, cts.Token);
+
+        Assert.True(result.Cancelled);
+        var files = Directory.GetFiles(_dir, "*.png");
+        Assert.Equal(result.FramesWritten, files.Length);
+        foreach (var file in files)
+        {
+            using var image = Image.Load<Bgra32>(file);   // a truncated png throws here
+            Assert.Equal(256, image.Width);
+        }
+    }
+
+    /// <summary>The host contract: a capture frame runs on the UI thread, where the live viewport
+    /// renders, and the run loop never calls the synchronous renderer from wherever its awaits landed.</summary>
+    [Fact]
+    public void TheHostRendersCaptureFramesOnTheUiThreadAndShowsTheShotAsItGoes()
+    {
+        var main = Source("src", "ReyEngine.App", "Views", "MainWindow.axaml.cs");
+        var surface = Source("src", "ReyEngine.App", "Views", "Dx11ViewportSurface.cs");
+        var vm = Source("src", "ReyEngine.App", "ViewModels", "CinematicWindowViewModel.cs");
+        if (main is null || surface is null || vm is null) return;
+        Assert.Contains("Dispatcher.UIThread.InvokeAsync(() =>", main);
+        Assert.Contains("DispatcherPriority.Background).GetTask()", main);
+        Assert.Contains("_dx11.PreviewPose = pose;", main);
+        Assert.Contains("if (!Avalonia.Threading.Dispatcher.UIThread.CheckAccess())", surface);
+        Assert.Contains("_host.RenderFrameAsync(pose, w, h, t)", vm);
+        Assert.DoesNotContain("(pose, w, h, t) => _host.RenderFrame(pose, w, h, t)", vm);
+        Assert.Contains("if (!wasPreviewing) _host.PreviewPose(null);", vm);
+    }
+
+    private sealed class SynchronousProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> _handler;
+        public SynchronousProgress(Action<T> handler) => _handler = handler;
+        public void Report(T value) => _handler(value);
+    }
+
+    private static string? Source(params string[] parts)
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            string path = Path.Combine(new[] { dir.FullName }.Concat(parts).ToArray());
+            if (File.Exists(path)) return File.ReadAllText(path);
+        }
+        return null;
+    }
+
     [Fact]
     public async Task CancellingStopsAndKeepsTheFramesAlreadyWritten()
     {
@@ -217,7 +333,7 @@ public sealed class CinematicCaptureTests : IDisposable
     [Fact]
     public async Task ARendererThatReturnsNothingFailsTheFrameRatherThanWritingABrokenImage()
     {
-        var result = await CinematicCapture.RunAsync(Shot(1f), Settings(), (p, w, h, t) => null);
+        var result = await CinematicCapture.RunAsync(Shot(1f), Settings(), (CinematicFrameRenderer)((p, w, h, t) => null));   // M693: null fits both delegates
 
         Assert.False(result.Success);
         Assert.Contains("no pixels", result.Error!, StringComparison.OrdinalIgnoreCase);

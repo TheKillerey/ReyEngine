@@ -61,6 +61,12 @@ public sealed record CinematicCaptureResult(
 /// Returning null fails the capture at that frame rather than writing a broken image.</summary>
 public delegate ReadOnlyMemory<byte>? CinematicFrameRenderer(CinematicPose pose, int width, int height, float timeSeconds);
 
+/// <summary>M693: the same, awaited. The host marshals each frame onto its render thread at a priority
+/// that lets the rest of the editor breathe; the run loop itself never touches the renderer's thread.
+/// The buffer returned may be the renderer's own reused one - the run copies it before the next
+/// frame is asked for.</summary>
+public delegate Task<ReadOnlyMemory<byte>?> CinematicFrameRendererAsync(CinematicPose pose, int width, int height, float timeSeconds);
+
 /// <summary>
 /// M604: turn a shot into a numbered PNG sequence, one frame at a FIXED time step.
 ///
@@ -109,11 +115,40 @@ public static class CinematicCapture
     /// <summary>
     /// Run the capture. Reports <c>(framesDone, framesTotal)</c> as it goes.
     /// </summary>
-    public static async Task<CinematicCaptureResult> RunAsync(
+    public static Task<CinematicCaptureResult> RunAsync(
         CinematicShot shot,
         CinematicCaptureSettings settings,
         CinematicFrameRenderer render,
         IProgress<(int Done, int Total)>? progress = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(render);
+        return RunAsync(shot, settings, (pose, w, h, t) => Task.FromResult(render(pose, w, h, t)), progress, null, ct);
+    }
+
+    /// <summary>How many frames may be encoding while the next ones render: half the cores, at most
+    /// four. A frame of 1080p is 8 MB of BGRA plus the encoder's own working set, and the point is to
+    /// keep the renderer busy, not to fill memory with frames waiting for a core.</summary>
+    public static int MaxEncodesInFlight => Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
+
+    /// <summary>
+    /// Run the capture. Reports <c>(framesWritten, framesTotal)</c> as files land; <paramref name="onRendered"/>
+    /// hears each frame the moment it has been rendered, which runs ahead of the writes.
+    ///
+    /// <para>M693: the run used to render a frame, then await its PNG, then render the next - so the
+    /// renderer idled through every encode, and, worse, the awaits continued on the thread pool, which
+    /// put every frame after the first onto a pool thread while the live viewport drew on the UI thread:
+    /// two threads in one Direct3D 11 context. Now the renderer is asked through
+    /// <see cref="CinematicFrameRendererAsync"/>, whose host marshals the call where it belongs, the
+    /// pixels are copied out of the renderer's reused buffer, and the copy is encoded on the pool with up
+    /// to <see cref="MaxEncodesInFlight"/> frames in flight while the next frame renders.</para>
+    /// </summary>
+    public static async Task<CinematicCaptureResult> RunAsync(
+        CinematicShot shot,
+        CinematicCaptureSettings settings,
+        CinematicFrameRendererAsync render,
+        IProgress<(int Done, int Total)>? progress = null,
+        Action<int>? onRendered = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(shot);
@@ -126,62 +161,70 @@ public static class CinematicCapture
         var frames = Plan(shot, settings);
         int renderWidth = settings.Width * settings.SuperSample;
         int renderHeight = settings.Height * settings.SuperSample;
+        int expected = renderWidth * renderHeight * 4;
 
         try { Directory.CreateDirectory(settings.OutputDirectory); }
         catch (Exception ex)
         { return new CinematicCaptureResult(0, frames.Count, settings.OutputDirectory, false, $"Output folder: {ex.Message}"); }
 
         int written = 0;
+        string? error = null;
+        bool cancelled = false;
+        using var slots = new SemaphoreSlim(MaxEncodesInFlight);
+        var encodes = new List<Task>();
+
         foreach (var frame in frames)
         {
-            if (ct.IsCancellationRequested)
-                return new CinematicCaptureResult(written, frames.Count, settings.OutputDirectory, true);
+            if (ct.IsCancellationRequested) { cancelled = true; break; }
 
             var pose = shot.Sample(frame.TimeSeconds);
             ReadOnlyMemory<byte>? pixels;
-            try { pixels = render(pose, renderWidth, renderHeight, frame.TimeSeconds); }
-            catch (Exception ex)
-            {
-                return new CinematicCaptureResult(written, frames.Count, settings.OutputDirectory, false,
-                    $"Frame {frame.Index}: {ex.Message}");
-            }
+            try { pixels = await render(pose, renderWidth, renderHeight, frame.TimeSeconds).ConfigureAwait(false); }
+            catch (OperationCanceledException) { cancelled = true; break; }
+            catch (Exception ex) { error = $"Frame {frame.Index}: {ex.Message}"; break; }
 
-            if (pixels is not { } data)
-                return new CinematicCaptureResult(written, frames.Count, settings.OutputDirectory, false,
-                    $"Frame {frame.Index}: the renderer produced no pixels.");
-
-            int expected = renderWidth * renderHeight * 4;
+            if (pixels is not { } data) { error = $"Frame {frame.Index}: the renderer produced no pixels."; break; }
             if (data.Length < expected)
-                return new CinematicCaptureResult(written, frames.Count, settings.OutputDirectory, false,
-                    $"Frame {frame.Index}: expected {expected:n0} bytes of BGRA, got {data.Length:n0}.");
+            { error = $"Frame {frame.Index}: expected {expected:n0} bytes of BGRA, got {data.Length:n0}."; break; }
+
+            // the renderer hands back its own buffer, which the next frame overwrites: copy before asking
+            byte[] copy = data[..expected].ToArray();
+            onRendered?.Invoke(frame.Index + 1);
+
+            try { await slots.WaitAsync(ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { cancelled = true; break; }
 
             string target = Path.Combine(settings.OutputDirectory, frame.FileName);
-            try
+            string fileName = frame.FileName;
+            encodes.Add(Task.Run(async () =>
             {
-                await WritePngAsync(data[..expected], renderWidth, renderHeight,
-                    settings.Width, settings.Height, target, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // A cancelled save leaves a TRUNCATED png behind, and a truncated frame in the middle of
-                // a sequence is worse than a missing one: the folder still imports, and the damage shows
-                // up as one corrupt frame in the finished video. Remove it so the count on disk matches
-                // the count reported.
-                TryDelete(target);
-                return new CinematicCaptureResult(written, frames.Count, settings.OutputDirectory, true);
-            }
-            catch (Exception ex)
-            {
-                TryDelete(target);
-                return new CinematicCaptureResult(written, frames.Count, settings.OutputDirectory, false,
-                    $"Writing {frame.FileName}: {ex.Message}");
-            }
+                try
+                {
+                    // A frame that was rendered is finished even when the run is cancelled: at most
+                    // MaxEncodesInFlight are pending, they take well under a second, and a cancelled save
+                    // would leave a TRUNCATED png behind - a truncated frame in the middle of a sequence is
+                    // worse than a missing one, the folder still imports and the damage shows up as one
+                    // corrupt frame in the finished video. Cancelling stops the RENDERING.
+                    await WritePngAsync(copy, renderWidth, renderHeight, settings.Width, settings.Height, target, CancellationToken.None).ConfigureAwait(false);
+                    int done = Interlocked.Increment(ref written);
+                    progress?.Report((done, frames.Count));
+                }
+                catch (Exception ex)
+                {
+                    TryDelete(target);
+                    Interlocked.CompareExchange(ref error, $"Writing {fileName}: {ex.Message}", null);
+                }
+                finally { slots.Release(); }
+            }, CancellationToken.None));
 
-            written++;
-            progress?.Report((written, frames.Count));
+            if (Volatile.Read(ref error) is not null) break;
         }
 
-        return new CinematicCaptureResult(written, frames.Count, settings.OutputDirectory, false);
+        // every frame that was handed to an encoder either lands or is deleted before this returns
+        await Task.WhenAll(encodes).ConfigureAwait(false);
+        if (Volatile.Read(ref error) is { } failed)
+            return new CinematicCaptureResult(written, frames.Count, settings.OutputDirectory, false, failed);
+        return new CinematicCaptureResult(written, frames.Count, settings.OutputDirectory, cancelled || ct.IsCancellationRequested);
     }
 
     private static void TryDelete(string path)

@@ -51,6 +51,26 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         ReyEngine.Core.Cinematics.CinematicPose pose, int width, int height, float timeSeconds) =>
         _dx11?.RenderCaptureFrame(pose, width, height, timeSeconds, Viewport.Camera);
 
+    /// <summary>M693: one capture frame on the UI thread at Background priority - below input, layout and
+    /// the live viewport's own frame, so the editor keeps answering and the viewport draws the shot as
+    /// it is captured (the pose is handed to the live view first). The run loop calls this from a pool
+    /// thread; before M693 it called RenderFrame there directly, and the second frame onwards rendered
+    /// into the D3D11 context from a thread the live viewport was not on.</summary>
+    System.Threading.Tasks.Task<byte[]?> ReyEngine.App.ViewModels.ICinematicHost.RenderFrameAsync(
+        ReyEngine.Core.Cinematics.CinematicPose pose, int width, int height, float timeSeconds) =>
+        Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (_dx11 is null) return null;
+            _dx11.PreviewPose = pose;
+            QueueDx11Frame();
+            return _dx11.RenderCaptureFrame(pose, width, height, timeSeconds, Viewport.Camera);
+        }, DispatcherPriority.Background).GetTask();
+
+    void ReyEngine.App.ViewModels.ICinematicHost.ReportCapture(string? status)
+    {
+        if (DataContext is MainWindowViewModel vm) vm.Status = status ?? "Capture finished.";
+    }
+
     /// <summary>
     /// M576 (Avalonia 12): a drag payload is now a typed <see cref="DataFormat"/> rather than a string key
     /// on an untyped DataObject. In-process is the right kind for this one - the node is a live view model

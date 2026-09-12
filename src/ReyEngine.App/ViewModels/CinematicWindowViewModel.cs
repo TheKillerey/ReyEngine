@@ -32,6 +32,15 @@ public interface ICinematicHost
 
     /// <summary>One frame, BGRA top-down. Null when the renderer produced nothing.</summary>
     byte[]? RenderFrame(CinematicPose pose, int width, int height, float timeSeconds);
+
+    /// <summary>M693: the same frame, rendered where the host's renderer lives and at a priority that
+    /// lets input and the live viewport through between frames. The default runs it inline, which is
+    /// right for a host that is already on its render thread.</summary>
+    Task<byte[]?> RenderFrameAsync(CinematicPose pose, int width, int height, float timeSeconds)
+        => Task.FromResult(RenderFrame(pose, width, height, timeSeconds));
+
+    /// <summary>M693: a line for the host's status bar while a capture runs; null when it ends.</summary>
+    void ReportCapture(string? status) { }
 }
 
 /// <summary>One keyframe, as a row the panel can show and edit.</summary>
@@ -451,26 +460,41 @@ public sealed partial class CinematicWindowViewModel : ObservableObject
         bool wasPreviewing = Previewing;
         Previewing = false;
 
-        var progress = new Progress<(int Done, int Total)>(p =>
+        int rendered = 0, total = 0;
+        void Show(int done)
         {
-            Progress = p.Total == 0 ? 0 : 100.0 * p.Done / p.Total;
-            ProgressText = $"{p.Done:n0} / {p.Total:n0}";
-        });
+            Progress = total == 0 ? 0 : 100.0 * done / total;
+            ProgressText = $"rendered {rendered:n0} · written {done:n0} / {total:n0}";
+            _host.ReportCapture($"Capturing {shot.Name}: frame {rendered:n0} of {total:n0} rendered, {done:n0} written");
+        }
+        int writtenSoFar = 0;
+        var progress = new Progress<(int Done, int Total)>(p => { total = p.Total; writtenSoFar = p.Done; Show(p.Done); });
+        var renderedProgress = new Progress<int>(n => { rendered = n; Show(writtenSoFar); });
+        total = CinematicCapture.Plan(shot, settings).Count;
 
         CinematicCaptureResult result;
         // The scope has to outlive every frame: it holds the particle clock aside so walking the shot's
         // timeline does not hand the live viewport one enormous delta when the capture ends.
         using (var scope = _host.BeginCapture())
         {
+            // M693: each frame is rendered where the host's renderer lives (the UI thread, at background
+            // priority, so the editor stays responsive and the live viewport shows the shot as it goes),
+            // and the PNGs are encoded behind the renderer instead of in front of it.
             result = await CinematicCapture.RunAsync(shot, settings,
-                (pose, w, h, t) => _host.RenderFrame(pose, w, h, t),
-                progress, _capture.Token).ConfigureAwait(true);
+                async (pose, w, h, t) =>
+                {
+                    var bytes = await _host.RenderFrameAsync(pose, w, h, t).ConfigureAwait(false);
+                    return bytes is { } b ? (ReadOnlyMemory<byte>?)b : null;
+                },
+                progress, n => ((IProgress<int>)renderedProgress).Report(n), _capture.Token).ConfigureAwait(true);
         }
 
         Capturing = false;
         _capture.Dispose();
         _capture = null;
         Previewing = wasPreviewing;
+        if (!wasPreviewing) _host.PreviewPose(null);   // the live viewport followed the shot; hand the camera back
+        _host.ReportCapture(null);
 
         Status = result switch
         {
