@@ -383,14 +383,20 @@ public sealed class D3D11MapParticles
             }
         }
 
-        // Authored pass order, globally rather than per system. OrderBy is stable; List.Sort is not, and an
-        // unstable sort here would reshuffle same-pass emitters from frame to frame, which for additive
-        // draws IS the image.
+        // M709 corrects what this sort was believed to do. It does NOT decide what draws first: every
+        // material was already handed to the renderer by AddMaterial inside the build loop above, and
+        // ShaderPreviewRenderer keeps a material with SortableByPipeline false in submission order. So the
+        // map viewport draws particles in BUILD order - placement-major, then authored emitter - and
+        // `pass` has never reached its picture at all. What this line really orders is the slice list that
+        // Tick walks and that the quad budget packs, where the order decides which slice gets which range
+        // of the shared buffer and, only when over budget, which slice is thinned first.
         //
-        // Global rather than per system IS a documented divergence from the GL viewport, which sorts within
-        // each simulator. For one previewed system the two are identical; across a whole map, additive glows
-        // from different placements interleave differently. Reverting to placement-major would multiply the
-        // draw count by the placement count, which is the cost this whole design exists to avoid.
+        // It is left on `pass` rather than given M709's key on purpose: a key that cannot change the
+        // picture and can change which emitters starve is worse than no key. Making this host order-bearing
+        // means sorting the REGISTRATION, which is its own change with its own measurement.
+        //
+        // OrderBy is stable; List.Sort is not, and an unstable sort here would reshuffle same-pass emitters
+        // from frame to frame, which for the packing ranges is churn for nothing.
         _slices = _slices.OrderBy(static s => s.Def.Pass).ToList();
         foreach (var sl in _slices) _liveBySlice.Add(sl.Live);
         if (_ranges.Length < _slices.Count) _ranges = new PackedRange[_slices.Count];

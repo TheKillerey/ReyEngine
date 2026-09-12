@@ -192,6 +192,11 @@ public static class VfxSystemResolver
     private static readonly uint F_stencilRef        = HashAlgorithms.Fnv1a("stencilRef");
     // M184 (2.11 / 2.10)
     private static readonly uint F_disableBackfaceCull = HashAlgorithms.Fnv1a("disableBackfaceCull");
+    // M709: isGroundLayer left the parked table when it started deciding draw order, and a parked field is
+    // un-badged by being declared HERE - VfxPreviewCoverage reflects over this class's static uint fields,
+    // and the PF() helper it used to be read through is a method, which reflection cannot see. Removing the
+    // parked entry without this would swap one false note for another.
+    private static readonly uint F_isGroundLayer       = HashAlgorithms.Fnv1a("isGroundLayer");
     private static readonly uint F_paletteAddressMode  = HashAlgorithms.Fnv1a("PaletteTextureAddressMode");
     // M185 (2.15) the Linger curve set. Class VfxLingerDefinitionData = 0x9b19f2b5.
     private static readonly uint F_linger              = HashAlgorithms.Fnv1a("Linger");
@@ -973,7 +978,7 @@ public static class VfxSystemResolver
             SortEmittersByPos            = GetBoolOrNull(p, PF("SortEmittersByPos")),
             WriteAlphaOnly               = GetBoolOrNull(p, PF("WriteAlphaOnly")),
             DoesCastShadow               = GetBoolOrNull(p, PF("doesCastShadow")),
-            IsGroundLayer                = GetBoolOrNull(p, PF("isGroundLayer")),
+            IsGroundLayer                = GetBoolOrNull(p, F_isGroundLayer),
             ColorblindVisibility         = GetU8(p, PF("colorblindVisibility")),
             StencilReferenceId           = GetHash(p, PF("StencilReferenceId")),
             FalloffTexture               = GetString(p, PF("falloffTexture")),

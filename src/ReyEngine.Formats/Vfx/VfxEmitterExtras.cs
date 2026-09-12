@@ -33,9 +33,12 @@ namespace ReyEngine.Formats.Vfx;
 ///   <item><c>isRotationEnabled</c> - declared false, written true 63,857/63,857</item>
 /// </list>
 ///
-/// <para><b>Polarity is not semantics, and the semantics are still unknown.</b> Knowing that
-/// <c>isGroundLayer</c> means "true" does not say what the renderer should do differently, and the corpus
-/// cannot settle it: <c>isUniformScale</c> was tested directly and 89.3% of the emitters carrying it ship
+/// <para><b>Polarity is not semantics, and the semantics are mostly still unknown.</b> Knowing that
+/// <c>isGroundLayer</c> meant "true" did not say what the renderer should do differently, and the corpus
+/// could not settle it - it took a measurement of the running game, which arrived in M709 by way of
+/// ltk-manager's own renderer and took that field out of this table. The point the paragraph was making
+/// stands for the rest of them, and the route out is the one isGroundLayer took: an outside measurement,
+/// not a harder look at the same files. <c>isUniformScale</c> was tested directly and 89.3% of the emitters carrying it ship
 /// an anisotropic scale - but so do 80.7% of the emitters without it, so the data shape does not correlate
 /// with the flag. Wiring a renderer on the name alone would reshape 177,296 emitters on a guess, which is
 /// the M354 mistake. The remaining route is a frame capture of the live client, and
@@ -99,7 +102,17 @@ public sealed record VfxEmitterExtras
     public bool? WriteAlphaOnly { get; init; }
     /// <summary>5,696, always true.</summary>
     public bool? DoesCastShadow { get; init; }
-    /// <summary>260,835, always true. Named as though it flattens the effect onto terrain.</summary>
+    /// <summary>
+    /// 260,835 occurrences, always true. M709 settled what it does: the emitter draws in the engine's
+    /// <c>Render_Ground_Layer</c> display list, which runs BEFORE the default one, so it is layered under
+    /// everything that is not also on that list whatever its <c>pass</c> says. Read it through
+    /// <see cref="VfxDrawOrder"/> rather than here - the ordering key owns the stencil exclusion, and a
+    /// second reader would not.
+    ///
+    /// <para>The name suggested it flattens the effect onto terrain. It does not, or at least not only:
+    /// the engine has a <c>ground_layer</c> technique that projects these onto the ground, and that is a
+    /// separate thing this editor still does not build. The classification is what was ported.</para>
+    /// </summary>
     public bool? IsGroundLayer { get; init; }
     /// <summary>133. Meaning UNKNOWN.</summary>
     public int? ColorblindVisibility { get; init; }
@@ -207,7 +220,9 @@ public static class VfxParkedEmitterFields
     public static readonly IReadOnlyList<string> Names = new[]
     {
         "miscRenderFlags", "importance", "depthBiasFactors", "renderPhaseOverride", "SortEmittersByPos",
-        "WriteAlphaOnly", "doesCastShadow", "isGroundLayer", "colorblindVisibility", "StencilReferenceId",
+        // M709: isGroundLayer is gone from here - it decides draw order now, and a field that changes the
+        // picture must not carry a badge saying the viewport will not change.
+        "WriteAlphaOnly", "doesCastShadow", "colorblindVisibility", "StencilReferenceId",
         "falloffTexture", "modulationFactor", "censorModulateValue", "sliceTechniqueRange", "isTexturePixelated",
         "isUniformScale", "isLocalOrientation", "particleIsLocalOrientation", "IsEmitterSpace",
         "isRotationEnabled", "hasPostRotateOrientation", "postRotateOrientationAxis", "rotationOverride",

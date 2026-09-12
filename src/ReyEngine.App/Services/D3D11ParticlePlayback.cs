@@ -102,7 +102,12 @@ public sealed class D3D11ParticlePlayback
         // then indexed _sim.Emitters, which threw out of range on the very first Tick - the crash on
         // loading a particle. Taking the definition off EmitterState keeps index and definition in step
         // by construction, so they cannot drift apart again.
-        for (int i = 0; i < _sim.Emitters.Count; i++)
+        // M709: draw order, at last, on this host too - it registered one material per emitter in authored
+        // order and so composited in whatever order the bin happened to list. The INDEX sequence is sorted
+        // rather than the emitter list, because EmitterIndex has to stay the simulator's own index: Tick
+        // reads _sim.Emitters[sl.EmitterIndex], and M236 was the last time those two drifted apart.
+        foreach (int i in Enumerable.Range(0, _sim.Emitters.Count)
+                     .OrderBy(i => ReyEngine.Formats.Vfx.VfxDrawOrder.KeyFor(_sim.Emitters[i].Def)))
         {
             var e = _sim.Emitters[i].Def;
 

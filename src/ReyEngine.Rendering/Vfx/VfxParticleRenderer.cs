@@ -358,11 +358,18 @@ public sealed class VfxParticleRenderer
         // M174 (1.3): draw in authored `pass` order. 1,114,110 emitters (79.7%) carry `pass`, with 2,913
         // distinct values across the full I16 range, and until now it was discarded entirely - so layered
         // effects composited in container order and additive glows landed under the sprites they belong
-        // over. OrderBy is a STABLE sort, which gives container order as the tiebreak for free.
+        // over. OrderBy is a STABLE sort, which gives container order as the tiebreak for free - and that
+        // tiebreak is the authored index, which is the engine's own last key.
         //
-        // Whether Riot sorts globally or per-system is UNKNOWN; this sorts within the whole frame's emitter
-        // list, which matches per-system ordering whenever one system is previewed at a time.
-        foreach (var es in sim.Emitters.OrderBy(static e => e.Def.Pass))
+        // M709: `pass` is no longer the FIRST key. A ground-layer emitter draws in a display list of its
+        // own that runs before the default one, so it is promoted whatever its pass says; see
+        // VfxDrawOrder, which owns the key so that the Direct3D 11 hosts cannot drift from this one.
+        //
+        // The old note here said it was UNKNOWN whether Riot sorts globally or per-system. It is answerable
+        // now and the answer is per system: the reference renderer ranks a child system's emitters after
+        // the whole of its parent's and does not order two systems against each other at all. That is what
+        // this loop does - it sees one simulator - so the scope agrees rather than approximating.
+        foreach (var es in sim.Emitters.OrderBy(static e => ReyEngine.Formats.Vfx.VfxDrawOrder.KeyFor(e.Def)))
         {
             if (es.InstanceCount == 0) continue;
             // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
@@ -548,9 +555,17 @@ public sealed class VfxParticleRenderer
     /// The test modes do NOT write (StencilMask 0). A mask that also rewrote the buffer would change what
     /// later emitters in the same frame see, and nothing suggests the tests are meant to be destructive.
     ///
-    /// ORDERING: this only works because M174 (1.3) draws emitters in authored `pass` order, so a writer
-    /// with a lower pass has already run by the time a tester reads. Emitters that share a pass fall back
-    /// to container order, which is the authored order in the bin.</summary>
+    /// ORDERING: this only works because emitters draw in an order that puts a writer before the testers
+    /// that read its mask - authored `pass` order since M174 (1.3), with emitters sharing a pass falling
+    /// back to container order, which is the authored order in the bin.
+    ///
+    /// M709 put the ground layer ahead of `pass` and had to protect that, because a mode-2 tester reading
+    /// a mask nobody has written yet draws NOTHING. Measured over the installed game: 1,908 system
+    /// occurrences hold both a writer and a tester, and promoting ground-layer emitters would separate a
+    /// pair in 19 of them, costing 49 testers their visuals. So VfxDrawOrder never promotes an emitter
+    /// that carries a stencil mode at all, which takes that count to zero. The invariant this paragraph
+    /// describes is therefore still the one the draw order maintains, and it is maintained deliberately
+    /// rather than by luck.</summary>
     private void ApplyStencil(ReyEngine.Formats.Vfx.VfxEmitterDefinition def)
     {
         switch (def.StencilMode)

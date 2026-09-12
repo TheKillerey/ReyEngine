@@ -80,6 +80,10 @@ public class VfxPreviewCoverageTests
     // M209: applied since the winding was settled in the app (CW). It sat in the badged list from M191
     // to M208 because it was parsed but deliberately not applied.
     [InlineData("disableBackfaceCull")]
+    // M709: isGroundLayer decides draw order now - the emitter goes in a display list that draws before the
+    // default one. It was parked from M193 to M708 because its polarity was readable and its meaning was
+    // not; a measurement of the running game settled the meaning.
+    [InlineData("isGroundLayer")]
     public void RenderedFieldsAreNotBadged(string field) =>
         Assert.True(VfxPreviewCoverage.IgnoredNote(H(field)) is null,
             $"'{field}' IS rendered but got badged - over-badging trains the user to ignore the badge");

@@ -590,7 +590,7 @@ public sealed class ParticleEmitterEntry
             "bindWeight", "emitOffset", "shape", "SpawnShape",
             "translationOverride", "rotationOverride", "scaleOverride",
             "rotation0", "isRotationEnabled", "hasPostRotateOrientation", "postRotateOrientationAxis",
-            "isFollowingTerrain", "useNavmeshMask", "isGroundLayer");
+            "isFollowingTerrain", "useNavmeshMask");
 
         Add("Velocity",
             "velocity", "worldAcceleration", "acceleration", "drag",
@@ -606,7 +606,9 @@ public sealed class ParticleEmitterEntry
             "censorModifiers", "censorModulateValue", "colorblindVisibility");
 
         Add("Render",
-            "blendMode", "pass", "miscRenderFlags", "alphaRef", "isDirectionOriented", "primitive",
+            // M709: isGroundLayer sat under Position with the terrain flags, on the reading that its name
+            // suggested. It decides draw order, so it belongs beside the other key that does.
+            "blendMode", "pass", "isGroundLayer", "miscRenderFlags", "alphaRef", "isDirectionOriented", "primitive",
             "isRandomStartFrame", "depthBiasFactors", "renderPhaseOverride", "meshRenderFlags",
             "stencilMode", "stencilRef", "StencilReferenceId", "disableBackfaceCull", "WriteAlphaOnly",
             "softParticleParams", "reflectionDefinition", "distortionDefinition", "alphaErosionDefinition",
